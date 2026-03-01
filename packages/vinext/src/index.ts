@@ -1661,6 +1661,10 @@ hydrate();
 
   const imageImportDimCache = new Map<string, { width: number; height: number }>();
 
+  // Shared state for the MDX proxy plugin. Populated during config() if MDX
+  // files are detected and @mdx-js/rollup is installed.
+  let mdxDelegate: Plugin | null = null;
+
   const plugins: (Plugin | Promise<Plugin[]>)[] = [
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos
     // that use @/*, #/*, or baseUrl imports work out of the box.
@@ -1836,18 +1840,17 @@ hydrate();
           (p: any) => p && typeof p === "object" && typeof p.name === "string" &&
             (p.name === "@mdx-js/rollup" || p.name === "mdx"),
         );
-        const mdxPlugins: any[] = [];
         if (!hasMdxPlugin && hasMdxFiles(root, hasAppDir ? appDir : null, hasPagesDir ? pagesDir : null)) {
           try {
             const mdxRollup = await import("@mdx-js/rollup");
-            const mdxPlugin = mdxRollup.default ?? mdxRollup;
+            const mdxFactory = mdxRollup.default ?? mdxRollup;
             const mdxOpts: Record<string, unknown> = {};
             if (nextConfig.mdx) {
               if (nextConfig.mdx.remarkPlugins) mdxOpts.remarkPlugins = nextConfig.mdx.remarkPlugins;
               if (nextConfig.mdx.rehypePlugins) mdxOpts.rehypePlugins = nextConfig.mdx.rehypePlugins;
               if (nextConfig.mdx.recmaPlugins) mdxOpts.recmaPlugins = nextConfig.mdx.recmaPlugins;
             }
-            mdxPlugins.push(mdxPlugin(mdxOpts));
+            mdxDelegate = mdxFactory(mdxOpts);
             if (nextConfig.mdx) {
               console.log("[vinext] Auto-injected @mdx-js/rollup with remark/rehype plugins from next.config");
             } else {
@@ -2076,11 +2079,6 @@ hydrate();
           };
         }
 
-        // Add auto-injected MDX plugin if needed
-        if (mdxPlugins.length > 0) {
-          viteConfig.plugins = mdxPlugins;
-        }
-
         return viteConfig;
       },
 
@@ -2192,6 +2190,26 @@ hydrate();
     },
     // Shim React canary/experimental APIs (ViewTransition, addTransitionType)
     // that exist in Next.js's bundled React canary but not in stable React 19.
+    // Proxy plugin for @mdx-js/rollup. The real MDX plugin is created lazily
+    // during config() (when MDX files are detected), but plugins returned from
+    // config() run too late — after vite:import-analysis. This top-level proxy
+    // with enforce:"pre" ensures MDX transforms run at the correct stage.
+    {
+      name: "vinext:mdx",
+      enforce: "pre",
+      resolveId(id, importer, options) {
+        if (!mdxDelegate?.resolveId) return;
+        const hook = mdxDelegate.resolveId;
+        const fn = typeof hook === "function" ? hook : hook.handler;
+        return fn.call(this, id, importer, options);
+      },
+      transform(code, id, options) {
+        if (!mdxDelegate?.transform) return;
+        const hook = mdxDelegate.transform;
+        const fn = typeof hook === "function" ? hook : hook.handler;
+        return fn.call(this, code, id, options);
+      },
+    },
     // Provides graceful no-op fallbacks so projects using these APIs degrade
     // instead of crashing with "does not provide an export named 'ViewTransition'".
     {
