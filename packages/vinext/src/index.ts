@@ -1,5 +1,5 @@
 import type { Plugin, UserConfig, ViteDevServer } from "vite";
-import { parseAst } from "vite";
+import { loadEnv, parseAst } from "vite";
 import { pagesRouter, apiRouter, invalidateRouteCache, matchRoute, patternToNextFormat as pagesPatternToNextFormat, type Route } from "./routing/pages-router.js";
 import { appRouter, invalidateAppRouteCache } from "./routing/app-router.js";
 import { createSSRHandler } from "./server/dev-server.js";
@@ -35,6 +35,7 @@ import {
 } from "./config/config-matchers.js";
 import { scanMetadataFiles } from "./server/metadata-routes.js";
 import { staticExportPages } from "./build/static-export.js";
+import { detectPackageManager } from "./utils/project.js";
 import tsconfigPaths from "vite-tsconfig-paths";
 import MagicString from "magic-string";
 import path from "node:path";
@@ -583,6 +584,7 @@ export default function vinext(options: VinextOptions = {}): Plugin[] {
   let middlewarePath: string | null = null;
   let instrumentationPath: string | null = null;
   let hasCloudflarePlugin = false;
+  let hasNitroPlugin = false;
 
   // Resolve shim paths - works both from source (.ts) and built (.js)
   const shimsDir = path.resolve(__dirname, "shims");
@@ -655,6 +657,13 @@ export default function vinext(options: VinextOptions = {}): Plugin[] {
       rewrites: nextConfig?.rewrites ?? { beforeFiles: [], afterFiles: [], fallback: [] },
       headers: nextConfig?.headers ?? [],
       i18n: nextConfig?.i18n ?? null,
+      images: {
+        deviceSizes: nextConfig?.images?.deviceSizes,
+        imageSizes: nextConfig?.images?.imageSizes,
+        dangerouslyAllowSVG: nextConfig?.images?.dangerouslyAllowSVG,
+        contentDispositionType: nextConfig?.images?.contentDispositionType,
+        contentSecurityPolicy: nextConfig?.images?.contentSecurityPolicy,
+      },
     });
 
     // Generate middleware code if middleware.ts exists
@@ -1642,7 +1651,7 @@ hydrate();
     if (!resolvedRscPath) {
       throw new Error(
         "vinext: App Router detected but @vitejs/plugin-rsc is not installed.\n" +
-        "Run: npm install -D @vitejs/plugin-rsc",
+        "Run: " + detectPackageManager(process.cwd()) + " @vitejs/plugin-rsc",
       );
     }
     const rscImport = import(pathToFileURL(resolvedRscPath).href);
@@ -1676,8 +1685,22 @@ hydrate();
       name: "vinext:config",
       enforce: "pre",
 
-      async config(config) {
+      async config(config, env) {
         root = config.root ?? process.cwd();
+
+        // Load .env files into process.env before anything else.
+        // Next.js loads .env files before evaluating next.config.js, so
+        // env vars are available in config, server-side code, and as
+        // NEXT_PUBLIC_* defines for the client bundle.
+        // Pass '' as prefix to load ALL vars, not just VITE_-prefixed ones.
+        const mode = env?.mode ?? "development";
+        const envDir = config.envDir ?? root;
+        const dotenvVars = loadEnv(mode, envDir, "");
+        for (const [key, value] of Object.entries(dotenvVars)) {
+          if (process.env[key] === undefined) {
+            process.env[key] = value;
+          }
+        }
 
         // Resolve the base directory for app/pages detection.
         // If appDir is provided, resolve it (supports both relative and absolute paths).
@@ -1743,6 +1766,11 @@ hydrate();
             JSON.stringify(imageSizes),
           );
         }
+        // Expose dangerouslyAllowSVG flag for the image shim's auto-skip logic.
+        // When false (default), .svg sources bypass the optimization endpoint.
+        defines["process.env.__VINEXT_IMAGE_DANGEROUSLY_ALLOW_SVG"] = JSON.stringify(
+          String(nextConfig.images?.dangerouslyAllowSVG ?? false),
+        );
         // Draft mode secret — generated once at build time so the
         // __prerender_bypass cookie is consistent across all server
         // instances (e.g. multiple Cloudflare Workers isolates).
@@ -1756,6 +1784,7 @@ hydrate();
           "next/link": path.join(shimsDir, "link"),
           "next/head": path.join(shimsDir, "head"),
           "next/router": path.join(shimsDir, "router"),
+          "next/compat/router": path.join(shimsDir, "compat-router"),
           "next/image": path.join(shimsDir, "image"),
           "next/legacy/image": path.join(shimsDir, "legacy-image"),
           "next/dynamic": path.join(shimsDir, "dynamic"),
@@ -1821,6 +1850,11 @@ hydrate();
             p.name === "vite-plugin-cloudflare" || p.name.startsWith("vite-plugin-cloudflare:")
           ),
         );
+        hasNitroPlugin = pluginsFlat.some(
+          (p: any) => p && typeof p === "object" && typeof p.name === "string" && (
+            p.name === "nitro" || p.name.startsWith("nitro:")
+          ),
+        );
 
         // Resolve PostCSS string plugin names that Vite can't handle.
         // Next.js projects commonly use array-form plugins like
@@ -1860,7 +1894,7 @@ hydrate();
             // @mdx-js/rollup not installed — warn but don't fail
             console.warn(
               "[vinext] MDX files detected but @mdx-js/rollup is not installed. " +
-              "Install it with: npm install -D @mdx-js/rollup"
+              "Install it with: " + detectPackageManager(process.cwd()) + " @mdx-js/rollup"
             );
           }
         }
@@ -1873,7 +1907,7 @@ hydrate();
         // In multi-env builds, manualChunks must only be set per-environment
         // (on the client env), not globally — otherwise it leaks into RSC/SSR
         // environments where it can cause asset resolution issues.
-        const isMultiEnv = hasAppDir || hasCloudflarePlugin;
+        const isMultiEnv = hasAppDir || hasCloudflarePlugin || hasNitroPlugin;
 
         const viteConfig: UserConfig = {
           // Disable Vite's default HTML serving - we handle all routing
@@ -1937,8 +1971,8 @@ hydrate();
           },
           // Externalize React packages from SSR transform — they are CJS and
           // must be loaded natively by Node, not through Vite's ESM evaluator.
-          // Skip when targeting Cloudflare Workers (they bundle everything).
-          ...(hasCloudflarePlugin ? {} : {
+          // Skip when targeting bundled runtimes (Cloudflare/Nitro bundle everything).
+          ...(hasCloudflarePlugin || hasNitroPlugin ? {} : {
             ssr: {
               external: ["react", "react-dom", "react-dom/server"],
             },
@@ -1991,14 +2025,14 @@ hydrate();
 
           viteConfig.environments = {
             rsc: {
-              ...(hasCloudflarePlugin ? {} : {
+              ...(hasCloudflarePlugin || hasNitroPlugin ? {} : {
                 resolve: {
                   // Externalize native/heavy packages so the RSC environment
                   // loads them natively via Node rather than through Vite's
                   // ESM module evaluator (which can't handle native addons).
                   // Note: Do NOT externalize react/react-dom here — they must
                   // be bundled with the "react-server" condition for RSC.
-                  // Skip when targeting Cloudflare Workers.
+                  // Skip when targeting bundled runtimes (Cloudflare/Nitro).
                   external: [
                     "satori",
                     "@resvg/resvg-js",
@@ -2285,12 +2319,33 @@ hydrate();
       configureServer(server: ViteDevServer) {
         // Watch pages directory for file additions/removals to invalidate route cache.
         const pageExtensions = /\.(tsx?|jsx?|mdx)$/;
+
+        /**
+         * Invalidate the virtual RSC entry module in Vite's module graph.
+         *
+         * The App Router route table is baked into the virtual RSC entry
+         * at generation time. When routes are added or removed, clearing
+         * the route cache alone is not enough: the virtual module must
+         * also be invalidated so Vite re-calls the load() hook to
+         * regenerate the entry with the updated route table.
+         */
+        function invalidateRscEntryModule() {
+          const rscEnv = server.environments["rsc"];
+          if (!rscEnv) return;
+          const mod = rscEnv.moduleGraph.getModuleById(RESOLVED_RSC_ENTRY);
+          if (mod) {
+            rscEnv.moduleGraph.invalidateModule(mod);
+            rscEnv.hot.send({ type: "full-reload" });
+          }
+        }
+
         server.watcher.on("add", (filePath: string) => {
           if (hasPagesDir && filePath.startsWith(pagesDir) && pageExtensions.test(filePath)) {
             invalidateRouteCache(pagesDir);
           }
           if (hasAppDir && filePath.startsWith(appDir) && pageExtensions.test(filePath)) {
             invalidateAppRouteCache();
+            invalidateRscEntryModule();
           }
         });
         server.watcher.on("unlink", (filePath: string) => {
@@ -2299,6 +2354,7 @@ hydrate();
           }
           if (hasAppDir && filePath.startsWith(appDir) && pageExtensions.test(filePath)) {
             invalidateAppRouteCache();
+            invalidateRscEntryModule();
           }
         });
 
@@ -2983,7 +3039,7 @@ hydrate();
           if (!resolvedRscTransformsPath) {
             throw new Error(
               "vinext: 'use cache' requires @vitejs/plugin-rsc to be installed.\n" +
-              "Run: npm install -D @vitejs/plugin-rsc",
+              "Run: " + detectPackageManager(process.cwd()) + " @vitejs/plugin-rsc",
             );
           }
           const { transformWrapExport, transformHoistInlineDirective } = await import(pathToFileURL(resolvedRscTransformsPath).href);
@@ -3131,6 +3187,37 @@ hydrate();
           } catch {
             // @vercel/og not installed — nothing to copy
           }
+        },
+      },
+    },
+    // Write image config JSON for the App Router production server.
+    // The App Router RSC entry doesn't export vinextConfig (that's a Pages
+    // Router pattern), so we write a separate JSON file at build time that
+    // prod-server.ts reads at startup for SVG/security header config.
+    {
+      name: "vinext:image-config",
+      apply: "build",
+      enforce: "post",
+      writeBundle: {
+        sequential: true,
+        order: "post",
+        handler(options) {
+          const envName = this.environment?.name;
+          if (envName !== "rsc") return;
+
+          const outDir = options.dir;
+          if (!outDir) return;
+
+          const imageConfig = {
+            dangerouslyAllowSVG: nextConfig?.images?.dangerouslyAllowSVG,
+            contentDispositionType: nextConfig?.images?.contentDispositionType,
+            contentSecurityPolicy: nextConfig?.images?.contentSecurityPolicy,
+          };
+
+          fs.writeFileSync(
+            path.join(outDir, "image-config.json"),
+            JSON.stringify(imageConfig),
+          );
         },
       },
     },
@@ -3347,7 +3434,8 @@ export function matchConfigPattern(
   if (
     pattern.includes("(") ||
     pattern.includes("\\") ||
-    /:[\w-]+[*+][^/]/.test(pattern)
+    /:[\w-]+[*+][^/]/.test(pattern) ||
+    /:[\w-]+\./.test(pattern)
   ) {
     try {
       // Extract named params and their constraints from the pattern.
@@ -3461,7 +3549,7 @@ function applyRedirects(
   pathname: string,
   res: any,
   redirects: NextRedirect[],
-  ctx?: RequestContext,
+  ctx: RequestContext,
 ): boolean {
   const result = matchRedirect(pathname, redirects, ctx);
   if (result) {
@@ -3546,7 +3634,7 @@ async function proxyExternalRewriteNode(
 function applyRewrites(
   pathname: string,
   rewrites: NextRewrite[],
-  ctx?: RequestContext,
+  ctx: RequestContext,
 ): string | null {
   const dest = matchRewrite(pathname, rewrites, ctx);
   if (dest) {
@@ -3563,7 +3651,7 @@ function applyHeaders(
   pathname: string,
   res: any,
   headers: NextHeader[],
-  ctx?: RequestContext,
+  ctx: RequestContext,
 ): void {
   const matched = matchHeaders(pathname, headers, ctx);
   for (const header of matched) {

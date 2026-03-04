@@ -916,7 +916,7 @@ ${generateNormalizePathCode("modern")}
 
 // ── Config pattern matching (redirects, rewrites, headers) ──────────────
 function __matchConfigPattern(pathname, pattern) {
-  if (pattern.includes("(") || pattern.includes("\\\\") || /:[\\w-]+[*+][^/]/.test(pattern)) {
+  if (pattern.includes("(") || pattern.includes("\\\\") || /:[\\w-]+[*+][^/]/.test(pattern) || /:[\\w-]+\\./.test(pattern)) {
     try {
       const paramNames = [];
       const regexStr = pattern
@@ -2611,6 +2611,24 @@ export async function handleSsr(rscStream, navContext, fontData) {
   }
   }); // end _runWithNavCtx
 }
+
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("//")) {
+      return new Response("404 Not Found", { status: 404 });
+    }
+    const rscModule = await import.meta.viteRsc.loadModule("rsc", "index");
+    const result = await rscModule.default(request);
+    if (result instanceof Response) {
+      return result;
+    }
+    if (result === null || result === undefined) {
+      return new Response("Not Found", { status: 404 });
+    }
+    return new Response(String(result), { status: 200 });
+  },
+};
 `;
 }
 
