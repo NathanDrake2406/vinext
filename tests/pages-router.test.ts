@@ -711,8 +711,11 @@ describe("Plugin config", () => {
     const mdxProxy = plugins.find((p) => p.name === "vinext:mdx");
     expect(mdxProxy).toBeDefined();
     expect(mdxProxy.enforce).toBe("pre");
+    // Proxy forwards config and transform to the delegate (@mdx-js/rollup)
+    expect(typeof mdxProxy.config).toBe("function");
+    expect(typeof mdxProxy.transform).toBe("function");
     // Proxy should be inert when no MDX files are detected (mdxDelegate is null)
-    expect(mdxProxy.resolveId("./foo.ts", undefined, {})).toBeUndefined();
+    expect(mdxProxy.config({}, { command: "build", mode: "production" })).toBeUndefined();
     expect(mdxProxy.transform("code", "./foo.ts", {})).toBeUndefined();
   });
 });

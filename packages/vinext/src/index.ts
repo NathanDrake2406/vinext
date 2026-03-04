@@ -2222,20 +2222,21 @@ hydrate();
         }
       },
     },
-    // Shim React canary/experimental APIs (ViewTransition, addTransitionType)
-    // that exist in Next.js's bundled React canary but not in stable React 19.
     // Proxy plugin for @mdx-js/rollup. The real MDX plugin is created lazily
-    // during config() (when MDX files are detected), but plugins returned from
-    // config() run too late — after vite:import-analysis. This top-level proxy
-    // with enforce:"pre" ensures MDX transforms run at the correct stage.
+    // during vinext:config's config() (when MDX files are detected), but
+    // plugins returned from config() hooks run too late in the pipeline —
+    // after vite:import-analysis. This top-level proxy with enforce:"pre"
+    // ensures MDX transforms run at the correct stage. Both vinext:config
+    // and this proxy are enforce:"pre", and vinext:config comes first in
+    // the array, so mdxDelegate is already set when this proxy's hooks fire.
     {
       name: "vinext:mdx",
       enforce: "pre",
-      resolveId(id, importer, options) {
-        if (!mdxDelegate?.resolveId) return;
-        const hook = mdxDelegate.resolveId;
+      config(config, env) {
+        if (!mdxDelegate?.config) return;
+        const hook = mdxDelegate.config;
         const fn = typeof hook === "function" ? hook : hook.handler;
-        return fn.call(this, id, importer, options);
+        return fn.call(this, config, env);
       },
       transform(code, id, options) {
         if (!mdxDelegate?.transform) return;
@@ -2244,6 +2245,8 @@ hydrate();
         return fn.call(this, code, id, options);
       },
     },
+    // Shim React canary/experimental APIs (ViewTransition, addTransitionType)
+    // that exist in Next.js's bundled React canary but not in stable React 19.
     // Provides graceful no-op fallbacks so projects using these APIs degrade
     // instead of crashing with "does not provide an export named 'ViewTransition'".
     {
