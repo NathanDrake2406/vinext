@@ -304,6 +304,26 @@ async function buildApp() {
     return;
   }
 
+  // ── Pre-render static pages (non-export builds) ────────────────
+  console.log("  Pre-rendering static pages...\n");
+
+  const { prerenderStaticPages } = await import(
+    /* @vite-ignore */ "./build/static-export.js"
+  );
+
+  const prerenderResult = await prerenderStaticPages({ root: process.cwd() });
+
+  if (prerenderResult.warnings.length > 0) {
+    for (const w of prerenderResult.warnings) console.log(`  Warning: ${w}`);
+  }
+  if (prerenderResult.skipped.length > 0) {
+    console.log(`  Skipped ${prerenderResult.skipped.length} route(s) (dynamic or errored)`);
+  }
+
+  if (prerenderResult.pageCount > 0) {
+    console.log(`\n  Pre-rendered ${prerenderResult.pageCount} static page(s)\n`);
+  }
+
   console.log("\n  Build complete. Run `vinext start` to start the production server.\n");
 }
 
