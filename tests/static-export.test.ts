@@ -13,6 +13,7 @@ import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { createServer, type Server } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { startFixtureServer as startFixtureServerHelper } from "./helpers.js";
 
 const PAGES_FIXTURE = path.resolve(import.meta.dirname, "./fixtures/pages-basic");
 const APP_FIXTURE = path.resolve(import.meta.dirname, "./fixtures/app-basic");
@@ -222,8 +223,10 @@ describe("Static export — App Router (served via HTTP)", () => {
   const exportDir = path.resolve(APP_FIXTURE, "out-e2e");
 
   beforeAll(async () => {
-    // 1. Start Vite dev server for the fixture
-    const vite = await startFixtureServer(APP_FIXTURE, { appRouter: true });
+    // 1. Start Vite dev server for the fixture (use shared helper which
+    //    passes configFile: false + explicit plugins — avoids RSC timing
+    //    issues when loading via configFile in non-browser test clients)
+    const vite = await startFixtureServerHelper(APP_FIXTURE, { appRouter: true });
     viteServer = vite.server;
     viteBaseUrl = vite.baseUrl;
 
