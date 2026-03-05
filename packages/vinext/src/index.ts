@@ -1753,7 +1753,8 @@ hydrate();
         instrumentationPath = findInstrumentationFile(root);
 
         // Load next.config.js if present (always from project root, not src/)
-        const rawConfig = await loadNextConfig(root);
+        const phase = env?.command === "build" ? "phase-production-build" : "phase-development-server";
+        const rawConfig = await loadNextConfig(root, phase);
         nextConfig = await resolveNextConfig(rawConfig);
 
         // Merge env from next.config.js with NEXT_PUBLIC_* env vars
