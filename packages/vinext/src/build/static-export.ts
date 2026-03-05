@@ -815,16 +815,31 @@ export async function runStaticExport(
   }
 
   // 3. Start a temporary Vite dev server
-  const { default: vinextPlugin } = await import("../index.js");
   const vite = await import("vite");
-  const server = await vite.createServer({
-    root,
-    configFile: false,
-    plugins: [vinextPlugin({ appDir: root })],
-    optimizeDeps: { holdUntilCrawlEnd: true },
-    server: { port: 0, cors: false },
-    logLevel: "silent",
-  });
+  const hasViteConfig = ["vite.config.ts", "vite.config.js", "vite.config.mjs"]
+    .some((f) => fs.existsSync(path.join(root, f)));
+
+  let serverConfig: Record<string, unknown>;
+  if (hasViteConfig) {
+    // Use the project's vite config so user plugins/aliases/transforms are available
+    serverConfig = {
+      root,
+      optimizeDeps: { holdUntilCrawlEnd: true },
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    };
+  } else {
+    const { default: vinextPlugin } = await import("../index.js");
+    serverConfig = {
+      root,
+      configFile: false,
+      plugins: [vinextPlugin({ appDir: root })],
+      optimizeDeps: { holdUntilCrawlEnd: true },
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    };
+  }
+  const server = await vite.createServer(serverConfig);
   await server.listen();
 
   try {
@@ -1000,16 +1015,30 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
   if (!isAppRouter && !pagesDir) return [];
 
   // Start a temporary Vite dev server for module inspection
-  const { default: vinextPlugin } = await import("../index.js");
   const vite = await import("vite");
-  const server = await vite.createServer({
-    root,
-    configFile: false,
-    plugins: [vinextPlugin({ appDir: root })],
-    optimizeDeps: { holdUntilCrawlEnd: true },
-    server: { port: 0, cors: false },
-    logLevel: "silent",
-  });
+  const hasViteConfig = ["vite.config.ts", "vite.config.js", "vite.config.mjs"]
+    .some((f) => fs.existsSync(path.join(root, f)));
+
+  let serverConfig: Record<string, unknown>;
+  if (hasViteConfig) {
+    serverConfig = {
+      root,
+      optimizeDeps: { holdUntilCrawlEnd: true },
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    };
+  } else {
+    const { default: vinextPlugin } = await import("../index.js");
+    serverConfig = {
+      root,
+      configFile: false,
+      plugins: [vinextPlugin({ appDir: root })],
+      optimizeDeps: { holdUntilCrawlEnd: true },
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    };
+  }
+  const server = await vite.createServer(serverConfig);
   await server.listen();
 
   try {
@@ -1025,8 +1054,9 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
         try {
           const pageModule = await server.ssrLoadModule(route.pagePath);
 
-          // Skip force-dynamic pages
+          // Skip dynamic/request-dependent pages
           if (pageModule.dynamic === "force-dynamic") continue;
+          if (pageModule.revalidate !== undefined && pageModule.revalidate !== false) continue;
 
           if (route.isDynamic) {
             // Need generateStaticParams to expand
@@ -1073,6 +1103,16 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
 
           // Skip pages with getServerSideProps
           if (typeof pageModule.getServerSideProps === "function") continue;
+
+          // Skip ISR pages (getStaticProps with revalidate)
+          if (typeof pageModule.getStaticProps === "function") {
+            try {
+              const propsResult = await pageModule.getStaticProps({});
+              if (propsResult?.revalidate) continue;
+            } catch {
+              continue; // Skip if getStaticProps fails
+            }
+          }
 
           if (route.isDynamic) {
             // Need getStaticPaths with fallback: false

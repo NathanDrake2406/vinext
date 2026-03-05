@@ -337,12 +337,12 @@ async function start() {
   });
 
   // Reject static export builds — they don't need a production server
-  const outExportDir = path.resolve(process.cwd(), "out");
-  const distServerDir = path.resolve(process.cwd(), "dist", "server");
-  if (
-    fs.existsSync(path.join(outExportDir, "index.html")) &&
-    !fs.existsSync(distServerDir)
-  ) {
+  const { loadNextConfig, resolveNextConfig } = await import(
+    /* @vite-ignore */ "./config/next-config.js"
+  );
+  const startRawConfig = await loadNextConfig(process.cwd());
+  const startResolvedConfig = await resolveNextConfig(startRawConfig);
+  if (startResolvedConfig.output === "export") {
     console.error(
       '\n  "vinext start" does not work with "output: export" configuration.',
     );

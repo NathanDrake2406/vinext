@@ -576,15 +576,6 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
       return;
     }
 
-    // Pre-rendered HTML — serve build-time rendered pages before hitting RSC/SSR
-    const appPrerenderedDir = path.join(path.dirname(rscEntryPath), "pages");
-    const appPrerenderedFile = resolvePrerenderedHtml(appPrerenderedDir, pathname);
-    if (appPrerenderedFile) {
-      const html = fs.readFileSync(appPrerenderedFile, "utf-8");
-      sendCompressed(req, res, html, "text/html; charset=utf-8", 200, {}, compress);
-      return;
-    }
-
     try {
       // Convert Node.js request to Web Request and call the RSC handler
       const request = nodeToWebRequest(req);
@@ -748,17 +739,6 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       }
       res.writeHead(404);
       res.end("Image not found");
-      return;
-    }
-
-    // ── 1b. Pre-rendered HTML ──────────────────────────────────
-    // Check if a pre-rendered HTML file exists for this pathname.
-    // These are generated during `vinext build` for static pages.
-    const pagesPrerenderedDir = path.join(path.dirname(serverEntryPath), "pages");
-    const pagesPrerenderedFile = resolvePrerenderedHtml(pagesPrerenderedDir, pathname);
-    if (pagesPrerenderedFile) {
-      const html = fs.readFileSync(pagesPrerenderedFile, "utf-8");
-      sendCompressed(req, res, html, "text/html; charset=utf-8", 200, {}, compress);
       return;
     }
 
@@ -928,6 +908,18 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
           resolvedUrl = rewritten;
           resolvedPathname = rewritten.split("?")[0];
         }
+      }
+
+      // ── 7b. Pre-rendered HTML ─────────────────────────────────────
+      // Serve build-time rendered static pages. Placed after middleware,
+      // basePath stripping, redirects, and rewrites so those all run first.
+      const pagesPrerenderedDir = path.join(path.dirname(serverEntryPath), "pages");
+      const pagesPrerenderedFile = resolvePrerenderedHtml(pagesPrerenderedDir, resolvedPathname);
+      if (pagesPrerenderedFile) {
+        const html = fs.readFileSync(pagesPrerenderedFile, "utf-8");
+        const prerenderedHeaders: Record<string, string> = { ...middlewareHeaders };
+        sendCompressed(req, res, html, "text/html; charset=utf-8", 200, prerenderedHeaders, compress);
+        return;
       }
 
       // ── 8. API routes ─────────────────────────────────────────────
