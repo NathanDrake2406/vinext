@@ -901,9 +901,9 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             if (Array.isArray(existing)) {
               existing.push(h.value);
             } else if (existing) {
-              (middlewareHeaders as any)[lk] = [existing, h.value];
+              middlewareHeaders[lk] = [existing as string, h.value];
             } else {
-              (middlewareHeaders as any)[lk] = [h.value];
+              middlewareHeaders[lk] = [h.value];
             }
           } else if (lk === "vary" && middlewareHeaders[lk]) {
             middlewareHeaders[lk] += ", " + h.value;

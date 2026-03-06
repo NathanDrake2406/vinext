@@ -158,6 +158,8 @@ export default {
             } else {
               middlewareHeaders[lk] = [h.value];
             }
+          } else if (lk === "vary" && middlewareHeaders[lk]) {
+            middlewareHeaders[lk] += ", " + h.value;
           } else {
             middlewareHeaders[lk] = h.value;
           }
