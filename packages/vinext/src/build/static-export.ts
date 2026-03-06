@@ -46,7 +46,7 @@ async function createTempViteServer(
   const vite = await import("vite");
   const hasViteConfig = VITE_CONFIG_FILES.some((f) => fs.existsSync(path.join(root, f)));
 
-  let serverConfig: Record<string, unknown>;
+  let serverConfig: import("vite").InlineConfig;
   if (hasViteConfig) {
     serverConfig = {
       root,
@@ -969,12 +969,15 @@ export async function prerenderStaticPages(
   }
 
   // Collect static routes using a temporary Vite dev server
-  const staticUrls = await collectStaticRoutes(root, isAppRouter);
+  const collected = await collectStaticRoutes(root, isAppRouter);
+  result.skipped.push(...collected.skipped);
 
-  if (staticUrls.length === 0) {
+  if (collected.urls.length === 0) {
     result.warnings.push("No static routes found — nothing to pre-render");
     return result;
   }
+
+  const staticUrls = collected.urls;
 
   // Start temp production server in-process
   const { startProdServer } = await import("../server/prod-server.js");
@@ -1029,7 +1032,12 @@ export async function prerenderStaticPages(
  * Collect static routes by starting a temporary Vite dev server and
  * inspecting page module exports.
  */
-async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<string[]> {
+interface CollectedRoutes {
+  urls: string[];
+  skipped: string[];
+}
+
+async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<CollectedRoutes> {
   // Detect source directories
   const appDirCandidates = [
     path.join(root, "app"),
@@ -1043,14 +1051,15 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
   const appDir = appDirCandidates.find((d) => fs.existsSync(d));
   const pagesDir = pagesDirCandidates.find((d) => fs.existsSync(d));
 
-  if (isAppRouter && !appDir) return [];
-  if (!isAppRouter && !pagesDir) return [];
+  if (isAppRouter && !appDir) return { urls: [], skipped: [] };
+  if (!isAppRouter && !pagesDir) return { urls: [], skipped: [] };
 
   // Only need ssrLoadModule for module inspection — no HTTP listener needed
   const server = await createTempViteServer(root);
 
   try {
     const urls: string[] = [];
+    const skipped: string[] = [];
 
     if (isAppRouter && appDir) {
       const routes = await appRouter(appDir);
@@ -1063,11 +1072,17 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
           const pageModule = await server.ssrLoadModule(route.pagePath);
 
           // Skip dynamic/request-dependent pages
-          if (pageModule.dynamic === "force-dynamic") continue;
+          if (pageModule.dynamic === "force-dynamic") {
+            skipped.push(`${route.pattern} (force-dynamic)`);
+            continue;
+          }
           // revalidate: 0 means "always revalidate" (force-dynamic equivalent) — skip.
           // Positive revalidate values (ISR) are fine to pre-render; the revalidation
           // simply won't run without a server.
-          if (pageModule.revalidate === 0) continue;
+          if (pageModule.revalidate === 0) {
+            skipped.push(`${route.pattern} (revalidate: 0)`);
+            continue;
+          }
 
           if (route.isDynamic) {
             // Need generateStaticParams to expand
@@ -1080,8 +1095,8 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
           } else {
             urls.push(route.pattern);
           }
-        } catch {
-          // Skip routes that fail to load
+        } catch (e) {
+          skipped.push(`${route.pattern} (failed to load: ${(e as Error).message})`);
         }
       }
     } else if (pagesDir) {
@@ -1095,7 +1110,10 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
           const pageModule = await server.ssrLoadModule(route.filePath);
 
           // Skip pages with getServerSideProps
-          if (typeof pageModule.getServerSideProps === "function") continue;
+          if (typeof pageModule.getServerSideProps === "function") {
+            skipped.push(`${route.pattern} (getServerSideProps)`);
+            continue;
+          }
 
           // Skip dynamic pages (getStaticProps with revalidate: 0 means force-dynamic)
           if (typeof pageModule.getStaticProps === "function") {
@@ -1103,9 +1121,13 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
               const propsResult = await pageModule.getStaticProps({});
               // revalidate: 0 means "always revalidate" (force-dynamic) — skip.
               // Positive values (ISR) are fine to pre-render.
-              if (propsResult?.revalidate === 0) continue;
+              if (propsResult?.revalidate === 0) {
+                skipped.push(`${route.pattern} (revalidate: 0)`);
+                continue;
+              }
             } catch {
-              continue; // Skip if getStaticProps fails
+              skipped.push(`${route.pattern} (getStaticProps failed)`);
+              continue;
             }
           }
 
@@ -1127,13 +1149,13 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
           } else {
             urls.push(route.pattern);
           }
-        } catch {
-          // Skip routes that fail to load
+        } catch (e) {
+          skipped.push(`${route.pattern} (failed to load: ${(e as Error).message})`);
         }
       }
     }
 
-    return urls;
+    return { urls, skipped };
   } finally {
     await server.close();
   }
