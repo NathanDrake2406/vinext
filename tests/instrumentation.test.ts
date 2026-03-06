@@ -2,17 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { findInstrumentationFile } from "../packages/vinext/src/server/instrumentation.js";
 
-// Each describe block re-imports via vi.resetModules() to get fresh module-level state.
+// The runInstrumentation/reportRequestError describe blocks re-import via
+// vi.resetModules() to get fresh module-level state (_onRequestError).
+// findInstrumentationFile is a pure function — no reset needed.
 
 describe("findInstrumentationFile", () => {
   let tmpDir: string;
-  let findInstrumentationFile: typeof import("../packages/vinext/src/server/instrumentation.js").findInstrumentationFile;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    const mod = await import("../packages/vinext/src/server/instrumentation.js");
-    findInstrumentationFile = mod.findInstrumentationFile;
+  beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-instr-"));
   });
 

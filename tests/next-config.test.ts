@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadNextConfig } from "../packages/vinext/src/config/next-config.js";
+import { PHASE_PRODUCTION_BUILD, PHASE_DEVELOPMENT_SERVER } from "../packages/vinext/src/shims/constants.js";
 
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vinext-config-test-"));
@@ -24,8 +25,8 @@ describe("loadNextConfig phase argument", () => {
       `export default (phase) => ({ env: { RECEIVED_PHASE: phase } });\n`,
     );
 
-    const config = await loadNextConfig(tmpDir, "phase-production-build");
-    expect(config?.env?.RECEIVED_PHASE).toBe("phase-production-build");
+    const config = await loadNextConfig(tmpDir, PHASE_PRODUCTION_BUILD);
+    expect(config?.env?.RECEIVED_PHASE).toBe(PHASE_PRODUCTION_BUILD);
   });
 
   it("defaults to phase-development-server when no phase is provided", async () => {
@@ -36,7 +37,7 @@ describe("loadNextConfig phase argument", () => {
     );
 
     const config = await loadNextConfig(tmpDir);
-    expect(config?.env?.RECEIVED_PHASE).toBe("phase-development-server");
+    expect(config?.env?.RECEIVED_PHASE).toBe(PHASE_DEVELOPMENT_SERVER);
   });
 
   it("ignores phase for object-form config", async () => {
@@ -46,7 +47,7 @@ describe("loadNextConfig phase argument", () => {
       `export default { env: { STATIC: "yes" } };\n`,
     );
 
-    const config = await loadNextConfig(tmpDir, "phase-production-build");
+    const config = await loadNextConfig(tmpDir, PHASE_PRODUCTION_BUILD);
     expect(config?.env?.STATIC).toBe("yes");
   });
 });
