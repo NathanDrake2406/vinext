@@ -635,8 +635,13 @@ export async function proxyExternalRequest(
   const originalUrl = new URL(request.url);
   const targetUrl = new URL(externalUrl);
 
-  // SSRF protection: block requests to private/internal network addresses
-  if (isPrivateHostname(targetUrl.hostname)) {
+  // SSRF protection: block requests to private/internal network addresses.
+  // In development/test, localhost proxying is allowed for local upstream
+  // servers — the protection targets production deployments where rewrites
+  // to cloud metadata or internal services would be exploitable.
+  const isDev = process.env.NODE_ENV !== "production";
+  const isLocalhost = targetUrl.hostname === "localhost" || targetUrl.hostname === "127.0.0.1" || targetUrl.hostname === "::1" || targetUrl.hostname === "[::1]";
+  if (isPrivateHostname(targetUrl.hostname) && !(isDev && isLocalhost)) {
     console.warn(`[vinext] Blocked external rewrite to private address: ${targetUrl.hostname}`);
     return new Response("Forbidden", { status: 403 });
   }
