@@ -621,9 +621,20 @@ function startLocalServer(root: string, port: number): ChildProcess {
   const prodServerPath = path.resolve(thisDir, "..", "server", "prod-server.js");
   const outDir = path.join(root, "dist");
 
-  // Escape backslashes for Windows paths inside the JS string
-  const escapedProdServer = prodServerPath.replace(/\\/g, "\\\\");
-  const escapedOutDir = outDir.replace(/\\/g, "\\\\");
+  // Escape paths for safe embedding in JavaScript string literals.
+  // Must escape backslash, double-quote, backtick, $, and newlines to
+  // prevent code injection via crafted directory names.
+  function escapeJsString(s: string): string {
+    return s
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/`/g, "\\`")
+      .replace(/\$/g, "\\$")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r");
+  }
+  const escapedProdServer = escapeJsString(prodServerPath);
+  const escapedOutDir = escapeJsString(outDir);
 
   const script = [
     `import("file://${escapedProdServer}")`,
