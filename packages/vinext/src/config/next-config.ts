@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import fs from "node:fs";
+import { PHASE_DEVELOPMENT_SERVER } from "../shims/constants.js";
 
 export interface HasCondition {
   type: "header" | "cookie" | "query" | "host";
@@ -177,7 +178,7 @@ function isCjsError(e: unknown): boolean {
  * Unwrap the config value from a loaded module, calling it if it's a
  * function-form config (Next.js supports `module.exports = (phase, opts) => config`).
  */
-async function unwrapConfig(mod: any, phase: string = "phase-development-server"): Promise<NextConfig> {
+async function unwrapConfig(mod: any, phase: string = PHASE_DEVELOPMENT_SERVER): Promise<NextConfig> {
   const config = mod.default ?? mod;
   if (typeof config === "function") {
     const result = await config(phase, {
@@ -197,7 +198,7 @@ async function unwrapConfig(mod: any, phase: string = "phase-development-server"
  * back to loading it via `createRequire` so that CJS config files (common in
  * the Next.js ecosystem for plugin wrappers like nextra, @next/mdx, etc.) work.
  */
-export async function loadNextConfig(root: string, phase: string = "phase-development-server"): Promise<NextConfig | null> {
+export async function loadNextConfig(root: string, phase: string = PHASE_DEVELOPMENT_SERVER): Promise<NextConfig | null> {
   for (const filename of CONFIG_FILES) {
     const configPath = path.join(root, filename);
     if (!fs.existsSync(configPath)) continue;

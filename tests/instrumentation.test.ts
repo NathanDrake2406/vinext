@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,10 @@ describe("findInstrumentationFile", () => {
     const mod = await import("../packages/vinext/src/server/instrumentation.js");
     findInstrumentationFile = mod.findInstrumentationFile;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-instr-"));
+  });
+
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("returns the path when a file exists at root", () => {
