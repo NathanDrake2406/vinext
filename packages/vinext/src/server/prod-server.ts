@@ -116,8 +116,9 @@ function mergeResponseHeaders(
   const merged: Record<string, string | string[]> = { ...middlewareHeaders };
 
   // Copy all non-Set-Cookie headers from the response (response wins on conflict)
+  // Headers.forEach() always yields lowercase keys
   response.headers.forEach((v, k) => {
-    if (k.toLowerCase() === "set-cookie") return;
+    if (k === "set-cookie") return;
     merged[k] = v;
   });
 
@@ -821,7 +822,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             // using getSetCookie() for cookies and forEach for the rest.
             const respHeaders: Record<string, string | string[]> = {};
             result.response.headers.forEach((value: string, key: string) => {
-              if (key.toLowerCase() === "set-cookie") return; // handled below
+              if (key === "set-cookie") return; // handled below
               respHeaders[key] = value;
             });
             const setCookies = result.response.headers.getSetCookie?.() ?? [];
@@ -836,7 +837,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // Use an array for Set-Cookie to preserve multiple values.
         if (result.responseHeaders) {
           for (const [key, value] of result.responseHeaders) {
-            if (key.toLowerCase() === "set-cookie") {
+            if (key === "set-cookie") {
               const existing = middlewareHeaders[key];
               if (Array.isArray(existing)) {
                 existing.push(value);

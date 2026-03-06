@@ -569,7 +569,7 @@ export default {
         // Use an array for Set-Cookie to preserve multiple values.
         if (result.responseHeaders) {
           for (const [key, value] of result.responseHeaders) {
-            if (key.toLowerCase() === "set-cookie") {
+            if (key === "set-cookie") {
               const existing = middlewareHeaders[key];
               if (Array.isArray(existing)) {
                 existing.push(value);
@@ -732,7 +732,7 @@ function mergeHeaders(
   // Response headers overlay them (higher precedence), except Set-Cookie
   // which is additive (both middleware and response cookies should be sent).
   response.headers.forEach((v, k) => {
-    if (k.toLowerCase() === "set-cookie") return;
+    if (k === "set-cookie") return;
     merged.set(k, v);
   });
   const responseCookies = response.headers.getSetCookie?.() ?? [];

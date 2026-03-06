@@ -77,7 +77,7 @@ export default {
 
       // Run middleware
       let resolvedUrl = urlWithQuery;
-      const middlewareHeaders: Record<string, string> = {};
+      const middlewareHeaders: Record<string, string | string[]> = {};
       let middlewareRewriteStatus: number | undefined;
       if (typeof runMiddleware === "function") {
         const result = await runMiddleware(request);
@@ -94,9 +94,22 @@ export default {
           }
         }
 
+        // Collect middleware response headers to merge into final response.
+        // Use an array for Set-Cookie to preserve multiple values.
         if (result.responseHeaders) {
           for (const [key, value] of result.responseHeaders) {
-            middlewareHeaders[key] = value;
+            if (key === "set-cookie") {
+              const existing = middlewareHeaders[key];
+              if (Array.isArray(existing)) {
+                existing.push(value);
+              } else if (existing) {
+                middlewareHeaders[key] = [existing as string, value];
+              } else {
+                middlewareHeaders[key] = [value];
+              }
+            } else {
+              middlewareHeaders[key] = value;
+            }
           }
         }
         if (result.rewriteUrl) {
@@ -110,7 +123,7 @@ export default {
       const mwReqHeaders: Record<string, string> = {};
       for (const key of Object.keys(middlewareHeaders)) {
         if (key.startsWith(mwReqPrefix)) {
-          mwReqHeaders[key.slice(mwReqPrefix.length)] = middlewareHeaders[key];
+          mwReqHeaders[key.slice(mwReqPrefix.length)] = middlewareHeaders[key] as string;
           delete middlewareHeaders[key];
         }
       }
@@ -216,15 +229,28 @@ export default {
 /**
  * Merge middleware/config headers into a response.
  * Response headers take precedence over middleware headers.
+ * Uses getSetCookie() to preserve multiple Set-Cookie values.
  */
 function mergeHeaders(
   response: Response,
-  extraHeaders: Record<string, string>,
+  extraHeaders: Record<string, string | string[]>,
   statusOverride?: number,
 ): Response {
   if (!Object.keys(extraHeaders).length && !statusOverride) return response;
-  const merged: Record<string, string> = { ...extraHeaders };
-  response.headers.forEach((v, k) => { merged[k] = v; });
+  const merged = new Headers();
+  for (const [k, v] of Object.entries(extraHeaders)) {
+    if (Array.isArray(v)) {
+      for (const item of v) merged.append(k, item);
+    } else {
+      merged.set(k, v);
+    }
+  }
+  response.headers.forEach((v, k) => {
+    if (k === "set-cookie") return;
+    merged.set(k, v);
+  });
+  const responseCookies = response.headers.getSetCookie?.() ?? [];
+  for (const cookie of responseCookies) merged.append("set-cookie", cookie);
   return new Response(response.body, {
     status: statusOverride ?? response.status,
     statusText: response.statusText,
