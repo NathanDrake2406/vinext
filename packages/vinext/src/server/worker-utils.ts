@@ -8,8 +8,9 @@
 
 /**
  * Merge middleware/config headers into a response.
- * Response headers take precedence over middleware headers.
- * Uses getSetCookie() to preserve multiple Set-Cookie values.
+ * Response headers take precedence over middleware headers for all headers
+ * except Set-Cookie, which is additive (both middleware and response cookies
+ * are preserved). Uses getSetCookie() to preserve multiple Set-Cookie values.
  */
 export function mergeHeaders(
   response: Response,

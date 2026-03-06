@@ -633,22 +633,30 @@ export default {
       let resolvedPathname = resolvedUrl.split("?")[0];
 
       // ── 4. Apply custom headers from next.config.js ───────────────
-      // Config headers are additive for multi-value headers (Vary,
-      // Set-Cookie) and override for everything else. Vary values are
-      // comma-joined per HTTP spec. Set-Cookie values are comma-joined
-      // here because middlewareHeaders is a flat Record<string, string>;
-      // mergeHeaders() downstream handles multi-value expansion.
-      if (configHeaders.length) {
-        const matched = matchHeaders(resolvedPathname, configHeaders, reqCtx);
-        for (const h of matched) {
-          const lk = h.key.toLowerCase();
-          if ((lk === "vary" || lk === "set-cookie") && middlewareHeaders[lk]) {
-            middlewareHeaders[lk] += ", " + h.value;
-          } else {
-            middlewareHeaders[lk] = h.value;
-          }
-        }
-      }
+       // Config headers are additive for multi-value headers (Vary,
+       // Set-Cookie) and override for everything else. Vary values are
+       // comma-joined per HTTP spec. Set-Cookie values are accumulated
+       // as arrays (RFC 6265 forbids comma-joining cookies).
+       if (configHeaders.length) {
+         const matched = matchHeaders(resolvedPathname, configHeaders, reqCtx);
+         for (const h of matched) {
+           const lk = h.key.toLowerCase();
+           if (lk === "set-cookie") {
+             const existing = middlewareHeaders[lk];
+             if (Array.isArray(existing)) {
+               existing.push(h.value);
+             } else if (existing) {
+               middlewareHeaders[lk] = [existing as string, h.value];
+             } else {
+               middlewareHeaders[lk] = [h.value];
+             }
+           } else if (lk === "vary" && middlewareHeaders[lk]) {
+             middlewareHeaders[lk] += ", " + h.value;
+           } else {
+             middlewareHeaders[lk] = h.value;
+           }
+         }
+       }
 
       // ── 5. Apply redirects from next.config.js ────────────────────
       if (configRedirects.length) {
@@ -729,9 +737,10 @@ export default {
 
 /**
  * Merge middleware/config headers into a response.
- * Response headers take precedence over middleware headers, matching
- * the behavior in prod-server.ts. Uses getSetCookie() to preserve
- * multiple Set-Cookie values.
+  * Response headers take precedence over middleware headers for all headers
+  * except Set-Cookie, which is additive (both middleware and response cookies
+  * are preserved). Matches the behavior in prod-server.ts. Uses getSetCookie()
+  * to preserve multiple Set-Cookie values.
  */
 function mergeHeaders(
   response: Response,
