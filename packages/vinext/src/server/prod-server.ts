@@ -105,6 +105,37 @@ function createCompressor(encoding: "br" | "gzip" | "deflate"): zlib.BrotliCompr
 }
 
 /**
+ * Merge middleware headers and a Web Response's headers into a single
+ * record suitable for Node.js `res.writeHead()`. Uses `getSetCookie()`
+ * to preserve multiple Set-Cookie values instead of flattening them.
+ */
+function mergeResponseHeaders(
+  middlewareHeaders: Record<string, string | string[]>,
+  response: Response,
+): Record<string, string | string[]> {
+  const merged: Record<string, string | string[]> = { ...middlewareHeaders };
+
+  // Copy all non-Set-Cookie headers from the response (response wins on conflict)
+  // Headers.forEach() always yields lowercase keys
+  response.headers.forEach((v, k) => {
+    if (k === "set-cookie") return;
+    merged[k] = v;
+  });
+
+  // Preserve multiple Set-Cookie headers using getSetCookie()
+  const responseCookies = response.headers.getSetCookie?.() ?? [];
+  if (responseCookies.length > 0) {
+    const existing = merged["set-cookie"];
+    const mwCookies = existing
+      ? (Array.isArray(existing) ? existing : [existing])
+      : [];
+    merged["set-cookie"] = [...mwCookies, ...responseCookies];
+  }
+
+  return merged;
+}
+
+/**
  * Send a compressed response if the content type is compressible and the
  * client supports compression. Otherwise send uncompressed.
  */
@@ -114,7 +145,7 @@ function sendCompressed(
   body: string | Buffer,
   contentType: string,
   statusCode: number,
-  extraHeaders: Record<string, string> = {},
+  extraHeaders: Record<string, string | string[]> = {},
   compress: boolean = true,
 ): void {
   const buf = typeof body === "string" ? Buffer.from(body) : body;
@@ -126,11 +157,12 @@ function sendCompressed(
     // Merge Accept-Encoding into existing Vary header from extraHeaders instead
     // of overwriting. Preserves Vary values set by the App Router for content
     // negotiation (e.g. "RSC, Accept").
-    const existingVary = extraHeaders["Vary"] ?? extraHeaders["vary"];
+    const rawVary = extraHeaders["Vary"] ?? extraHeaders["vary"];
+    const existingVary = Array.isArray(rawVary) ? rawVary.join(", ") : rawVary;
     let varyValue: string;
     if (existingVary) {
-      const existing = String(existingVary).toLowerCase();
-      varyValue = existing.includes("accept-encoding") ? String(existingVary) : existingVary + ", Accept-Encoding";
+      const existing = existingVary.toLowerCase();
+      varyValue = existing.includes("accept-encoding") ? existingVary : existingVary + ", Accept-Encoding";
     } else {
       varyValue = "Accept-Encoding";
     }
@@ -773,7 +805,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       // ── 4. Run middleware ─────────────────────────────────────────
       let resolvedUrl = url;
-      const middlewareHeaders: Record<string, string> = {};
+      const middlewareHeaders: Record<string, string | string[]> = {};
       let middlewareRewriteStatus: number | undefined;
       if (typeof runMiddleware === "function") {
         const result = await runMiddleware(webRequest);
@@ -793,7 +825,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             // using getSetCookie() for cookies and forEach for the rest.
             const respHeaders: Record<string, string | string[]> = {};
             result.response.headers.forEach((value: string, key: string) => {
-              if (key.toLowerCase() === "set-cookie") return; // handled below
+              if (key === "set-cookie") return; // handled below
               respHeaders[key] = value;
             });
             const setCookies = result.response.headers.getSetCookie?.() ?? [];
@@ -808,14 +840,14 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // Use an array for Set-Cookie to preserve multiple values.
         if (result.responseHeaders) {
           for (const [key, value] of result.responseHeaders) {
-            if (key.toLowerCase() === "set-cookie") {
+            if (key === "set-cookie") {
               const existing = middlewareHeaders[key];
               if (Array.isArray(existing)) {
                 existing.push(value);
               } else if (existing) {
-                (middlewareHeaders as any)[key] = [existing, value];
+                middlewareHeaders[key] = [existing as string, value];
               } else {
-                (middlewareHeaders as any)[key] = [value];
+                middlewareHeaders[key] = [value];
               }
             } else {
               middlewareHeaders[key] = value;
@@ -842,7 +874,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       for (const key of Object.keys(middlewareHeaders)) {
         if (key.startsWith(mwReqPrefix)) {
           const realName = key.slice(mwReqPrefix.length);
-          webRequest.headers.set(realName, middlewareHeaders[key]);
+          webRequest.headers.set(realName, middlewareHeaders[key] as string);
           delete middlewareHeaders[key];
         } else if (key.startsWith("x-middleware-")) {
           delete middlewareHeaders[key];
@@ -869,9 +901,9 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             if (Array.isArray(existing)) {
               existing.push(h.value);
             } else if (existing) {
-              (middlewareHeaders as any)[lk] = [existing, h.value];
+              middlewareHeaders[lk] = [existing as string, h.value];
             } else {
-              (middlewareHeaders as any)[lk] = [h.value];
+              middlewareHeaders[lk] = [h.value];
             }
           } else if (lk === "vary" && middlewareHeaders[lk]) {
             middlewareHeaders[lk] += ", " + h.value;
@@ -928,8 +960,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // default to application/octet-stream rather than text/html when
         // the handler doesn't set an explicit Content-Type.
         const ct = response.headers.get("content-type") ?? "application/octet-stream";
-        const responseHeaders: Record<string, string> = { ...middlewareHeaders };
-        response.headers.forEach((v, k) => { responseHeaders[k] = v; });
+        const responseHeaders = mergeResponseHeaders(middlewareHeaders, response);
 
         sendCompressed(req, res, responseBody, ct, middlewareRewriteStatus ?? response.status, responseHeaders, compress);
         return;
@@ -977,8 +1008,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       // Merge middleware + config headers into the response
       const responseBody = Buffer.from(await response.arrayBuffer());
       const ct = response.headers.get("content-type") ?? "text/html";
-      const responseHeaders: Record<string, string> = { ...middlewareHeaders };
-      response.headers.forEach((v, k) => { responseHeaders[k] = v; });
+      const responseHeaders = mergeResponseHeaders(middlewareHeaders, response);
 
       sendCompressed(req, res, responseBody, ct, middlewareRewriteStatus ?? response.status, responseHeaders, compress);
     } catch (e) {
@@ -1001,4 +1031,4 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 }
 
 // Export helpers for testing
-export { sendCompressed, negotiateEncoding, COMPRESSIBLE_TYPES, COMPRESS_THRESHOLD, resolveHost, trustedHosts, trustProxy, nodeToWebRequest };
+export { sendCompressed, negotiateEncoding, COMPRESSIBLE_TYPES, COMPRESS_THRESHOLD, resolveHost, trustedHosts, trustProxy, nodeToWebRequest, mergeResponseHeaders };

@@ -2769,6 +2769,105 @@ describe("production server compression", () => {
   });
 });
 
+describe("Set-Cookie header preservation in prod-server", () => {
+  it("mergeResponseHeaders preserves multiple Set-Cookie from response", async () => {
+    const { mergeResponseHeaders } = await import(
+      "../packages/vinext/src/server/prod-server.js"
+    );
+
+    const middlewareHeaders: Record<string, string | string[]> = {};
+    const response = new Response("ok", {
+      headers: [
+        ["set-cookie", "a=1; Path=/"],
+        ["set-cookie", "b=2; Path=/"],
+        ["content-type", "text/html"],
+      ],
+    });
+
+    const merged = mergeResponseHeaders(middlewareHeaders, response);
+    expect(merged["set-cookie"]).toEqual(["a=1; Path=/", "b=2; Path=/"]);
+    expect(merged["content-type"]).toBe("text/html");
+  });
+
+  it("mergeResponseHeaders merges middleware and response Set-Cookie", async () => {
+    const { mergeResponseHeaders } = await import(
+      "../packages/vinext/src/server/prod-server.js"
+    );
+
+    const middlewareHeaders: Record<string, string | string[]> = {
+      "set-cookie": ["mw=1; Path=/"],
+    };
+    const response = new Response("ok", {
+      headers: [
+        ["set-cookie", "resp=2; Path=/"],
+      ],
+    });
+
+    const merged = mergeResponseHeaders(middlewareHeaders, response);
+    expect(merged["set-cookie"]).toEqual(["mw=1; Path=/", "resp=2; Path=/"]);
+  });
+
+  it("mergeResponseHeaders handles middleware cookie as plain string", async () => {
+    const { mergeResponseHeaders } = await import(
+      "../packages/vinext/src/server/prod-server.js"
+    );
+
+    const middlewareHeaders: Record<string, string | string[]> = {
+      "set-cookie": "mw=1; Path=/",
+    };
+    const response = new Response("ok", {
+      headers: [
+        ["set-cookie", "resp=2; Path=/"],
+      ],
+    });
+
+    const merged = mergeResponseHeaders(middlewareHeaders, response);
+    expect(merged["set-cookie"]).toEqual(["mw=1; Path=/", "resp=2; Path=/"]);
+  });
+
+  it("mergeResponseHeaders does not duplicate non-Set-Cookie headers", async () => {
+    const { mergeResponseHeaders } = await import(
+      "../packages/vinext/src/server/prod-server.js"
+    );
+
+    const middlewareHeaders: Record<string, string | string[]> = {
+      "x-custom": "from-middleware",
+    };
+    const response = new Response("ok", {
+      headers: [
+        ["x-custom", "from-response"],
+        ["content-type", "text/html"],
+      ],
+    });
+
+    const merged = mergeResponseHeaders(middlewareHeaders, response);
+    // Response headers should override middleware headers for non-Set-Cookie
+    expect(merged["x-custom"]).toBe("from-response");
+  });
+
+  it("sendCompressed passes array-valued Set-Cookie to writeHead", async () => {
+    const { sendCompressed } = await import(
+      "../packages/vinext/src/server/prod-server.js"
+    );
+
+    let writtenHeaders: Record<string, string | string[]> = {};
+    const req = { headers: {} };
+    const res = {
+      writeHead: (_status: number, headers: Record<string, string | string[]>) => {
+        writtenHeaders = headers;
+      },
+      end: () => {},
+    };
+
+    const extraHeaders: Record<string, string | string[]> = {
+      "set-cookie": ["a=1; Path=/", "b=2; Path=/"],
+    };
+
+    sendCompressed(req as any, res as any, "small body", "text/html", 200, extraHeaders, false);
+    expect(writtenHeaders["set-cookie"]).toEqual(["a=1; Path=/", "b=2; Path=/"]);
+  });
+});
+
 describe("host header poisoning prevention", () => {
   it("resolveHost ignores X-Forwarded-Host by default", async () => {
     const { resolveHost } = await import(
