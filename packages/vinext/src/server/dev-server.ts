@@ -16,6 +16,11 @@ import type { CachedPagesValue } from "../shims/cache.js";
 import { runWithFetchCache } from "../shims/fetch-cache.js";
 import { _runWithCacheState } from "../shims/cache.js";
 import { runWithPrivateCache } from "../shims/cache-runtime.js";
+/** Sanitize a value for HTTP Link header to prevent CRLF injection. */
+function sanitizeLinkHeaderValue(value: string): string {
+  return value.replace(/[\r\n\0<>]/g, "");
+}
+
 // Import server-only state modules to register ALS-backed accessors.
 // These modules must be imported before any rendering occurs.
 import { runWithRouterState } from "../shims/router-state.js";
@@ -805,7 +810,7 @@ hydrate();
       // This lets the browser (and CDN) start fetching font files before parsing HTML.
       if (allFontPreloads.length > 0) {
         extraHeaders["Link"] = allFontPreloads
-          .map((p) => `<${p.href}>; rel=preload; as=font; type=${p.type}; crossorigin`)
+          .map((p) => `<${sanitizeLinkHeaderValue(p.href)}>; rel=preload; as=font; type=${sanitizeLinkHeaderValue(p.type)}; crossorigin`)
           .join(", ");
       }
 
