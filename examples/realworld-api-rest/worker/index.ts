@@ -148,7 +148,19 @@ export default {
       if (configHeaders.length) {
         const matched = matchHeaders(resolvedPathname, configHeaders);
         for (const h of matched) {
-          middlewareHeaders[h.key.toLowerCase()] = h.value;
+          const lk = h.key.toLowerCase();
+          if (lk === "set-cookie") {
+            const existing = middlewareHeaders[lk];
+            if (Array.isArray(existing)) {
+              existing.push(h.value);
+            } else if (existing) {
+              middlewareHeaders[lk] = [existing as string, h.value];
+            } else {
+              middlewareHeaders[lk] = [h.value];
+            }
+          } else {
+            middlewareHeaders[lk] = h.value;
+          }
         }
       }
 
