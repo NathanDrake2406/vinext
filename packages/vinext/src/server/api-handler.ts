@@ -146,11 +146,22 @@ function enhanceApiObjects(
   };
 
   apiRes.redirect = function (statusOrUrl: number | string, url?: string) {
+    let status: number;
+    let location: string;
     if (typeof statusOrUrl === "string") {
-      this.writeHead(307, { Location: statusOrUrl });
+      status = 307;
+      location = statusOrUrl;
     } else {
-      this.writeHead(statusOrUrl, { Location: url! });
+      status = statusOrUrl;
+      location = url!;
     }
+    // Sanitize the redirect URL to prevent open redirect via protocol-relative
+    // URLs (//evil.com) or backslash variants (\/evil.com). Browsers treat
+    // these as absolute URLs pointing to the attacker's domain.
+    if (location && !location.startsWith("http://") && !location.startsWith("https://")) {
+      location = location.replace(/^[\\/]+/, "/");
+    }
+    this.writeHead(status, { Location: location });
     this.end();
   };
 
