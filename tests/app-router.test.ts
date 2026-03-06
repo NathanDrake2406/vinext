@@ -2056,7 +2056,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       redirects: [{ source: "/old", destination: "/new", permanent: true }],
     });
     // The redirect check should appear before middleware and route matching
-    const redirectIdx = code.indexOf("__applyConfigRedirects(pathname");
+    const redirectIdx = code.indexOf("__redir = __applyConfigRedirects(__redirPathname");
     const routeMatchIdx = code.indexOf("matchRoute(cleanPathname");
     expect(redirectIdx).toBeGreaterThan(-1);
     expect(routeMatchIdx).toBeGreaterThan(-1);
@@ -2076,6 +2076,28 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(beforeIdx).toBeGreaterThan(-1);
     expect(routeMatchIdx).toBeGreaterThan(-1);
     expect(beforeIdx).toBeLessThan(routeMatchIdx);
+  });
+
+  it("strips .rsc suffix before matching beforeFiles rewrite rules", () => {
+    // RSC (soft-nav) requests arrive as /some/path.rsc but rewrite patterns
+    // are defined without the extension. The generated code must strip .rsc
+    // before calling __applyConfigRewrites for beforeFiles, just like it does
+    // for redirects.
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
+      rewrites: {
+        beforeFiles: [{ source: "/old", destination: "/new" }],
+        afterFiles: [],
+        fallback: [],
+      },
+    });
+    // The generated code should use a .rsc-stripped pathname variable when
+    // calling __applyConfigRewrites for beforeFiles, not the raw `pathname`.
+    const rewritePathIdx = code.indexOf("__rewritePathname");
+    expect(rewritePathIdx).toBeGreaterThan(-1);
+    // The .rsc stripping assignment must appear before the beforeFiles rewrite call
+    const beforeFilesCallIdx = code.indexOf("__applyConfigRewrites(__rewritePathname");
+    expect(beforeFilesCallIdx).toBeGreaterThan(-1);
+    expect(rewritePathIdx).toBeLessThan(beforeFilesCallIdx);
   });
 
   it("applies afterFiles rewrites in the handler code", () => {

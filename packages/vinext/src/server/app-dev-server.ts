@@ -1271,6 +1271,12 @@ export default async function handler(request) {
 }
 
 async function _handleRequest(request, __reqCtx) {
+  const __reqStart = process.env.NODE_ENV !== "production" ? performance.now() : 0;
+  let __compileEnd;
+  let __renderEnd;
+  // __reqStart is included in the timing header so the Node logging middleware
+  // can compute true compile time as: handlerStart - middlewareStart.
+  // Format: "handlerStart,compileMs,renderMs" - all as integers (ms). Dev-only.
   const url = new URL(request.url);
 
   // ── Cross-origin request protection ─────────────────────────────────
@@ -1317,7 +1323,11 @@ async function _handleRequest(request, __reqCtx) {
 
   // ── Apply redirects from next.config.js ───────────────────────────────
   if (__configRedirects.length) {
-    const __redir = __applyConfigRedirects(pathname, __reqCtx);
+    // Strip .rsc suffix before matching redirect rules - RSC (client-side nav) requests
+    // arrive as /some/path.rsc but redirect patterns are defined without it (e.g.
+    // /some/path). Without this, soft-nav fetches bypass all config redirects.
+    const __redirPathname = pathname.endsWith(".rsc") ? pathname.slice(0, -4) : pathname;
+    const __redir = __applyConfigRedirects(__redirPathname, __reqCtx);
     if (__redir) {
       const __redirDest = __sanitizeDestination(
         __basePath && !__redir.destination.startsWith(__basePath)
@@ -1333,7 +1343,9 @@ async function _handleRequest(request, __reqCtx) {
 
   // ── Apply beforeFiles rewrites from next.config.js ────────────────────
   if (__configRewrites.beforeFiles && __configRewrites.beforeFiles.length) {
-    const __rewritten = __applyConfigRewrites(pathname, __configRewrites.beforeFiles, __reqCtx);
+    // Strip .rsc suffix before matching rewrite rules — same reason as redirects above.
+    const __rewritePathname = pathname.endsWith(".rsc") ? pathname.slice(0, -4) : pathname;
+    const __rewritten = __applyConfigRewrites(__rewritePathname, __configRewrites.beforeFiles, __reqCtx);
     if (__rewritten) {
       if (__isExternalUrl(__rewritten)) {
         setHeadersContext(null);
@@ -2115,6 +2127,9 @@ async function _handleRequest(request, __reqCtx) {
     console.error = _origConsoleError;
   }
 
+  // Mark end of compile phase: route matching, middleware, tree building are done.
+  if (process.env.NODE_ENV !== "production") __compileEnd = performance.now();
+
   // Render to RSC stream
   const rscStream = renderToReadableStream(element, { onError: rscOnError });
 
@@ -2143,6 +2158,21 @@ async function _handleRequest(request, __reqCtx) {
         responseHeaders[key] = value;
       }
     }
+    // Attach internal timing header so the dev server middleware can log it.
+    // Format: "handlerStart,compileMs,renderMs"
+    //   handlerStart - absolute performance.now() when _handleRequest began,
+    //                  used by the logging middleware to compute true compile
+    //                  time as (handlerStart - middlewareReqStart).
+    //   compileMs    - time inside the handler before renderToReadableStream.
+    //                  -1 sentinel means compile time is not measured.
+    //   renderMs     - -1 sentinel for RSC-only (soft-nav) responses, since
+    //                  rendering is handled asynchronously by the client. The
+    //                  logging middleware computes render time as totalMs - compileMs.
+    if (process.env.NODE_ENV !== "production") {
+      const handlerStart = Math.round(__reqStart);
+      const compileMs = __compileEnd !== undefined ? Math.round(__compileEnd - __reqStart) : -1;
+      responseHeaders["x-vinext-timing"] = handlerStart + "," + compileMs + ",-1";
+    }
     return new Response(rscStream, { status: _middlewareRewriteStatus || 200, headers: responseHeaders });
   }
 
@@ -2169,6 +2199,8 @@ async function _handleRequest(request, __reqCtx) {
   try {
     const ssrEntry = await import.meta.viteRsc.loadModule("ssr", "index");
     htmlStream = await ssrEntry.handleSsr(rscStream, _getNavigationContext(), fontData);
+    // Shell render complete; Suspense boundaries stream asynchronously
+    if (process.env.NODE_ENV !== "production") __renderEnd = performance.now();
   } catch (ssrErr) {
     const specialResponse = await handleRenderError(ssrErr);
     if (specialResponse) return specialResponse;
@@ -2198,6 +2230,22 @@ async function _handleRequest(request, __reqCtx) {
       for (const [key, value] of _middlewareResponseHeaders) {
         response.headers.append(key, value);
       }
+    }
+    // Attach internal timing header so the dev server middleware can log it.
+    // Format: "handlerStart,compileMs,renderMs"
+    //   handlerStart - absolute performance.now() when _handleRequest began,
+    //                  used by the logging middleware to compute true compile
+    //                  time as (handlerStart - middlewareReqStart).
+    //   compileMs    - time inside the handler before renderToReadableStream.
+    //   renderMs     - time from renderToReadableStream to handleSsr completion,
+    //                  or -1 sentinel if not measured (falls back to totalMs - compileMs).
+    if (process.env.NODE_ENV !== "production") {
+      const handlerStart = Math.round(__reqStart);
+      const compileMs = __compileEnd !== undefined ? Math.round(__compileEnd - __reqStart) : -1;
+      const renderMs = __renderEnd !== undefined && __compileEnd !== undefined
+        ? Math.round(__renderEnd - __compileEnd)
+        : -1;
+      response.headers.set("x-vinext-timing", handlerStart + "," + compileMs + "," + renderMs);
     }
     // Apply custom status code from middleware rewrite
     if (_middlewareRewriteStatus) {
@@ -2951,7 +2999,12 @@ async function main() {
   // Checks the prefetch cache (populated by <Link> IntersectionObserver and
   // router.prefetch()) before making a network request. This makes navigation
   // near-instant for prefetched routes.
-  window.__VINEXT_RSC_NAVIGATE__ = async function navigateRsc(href) {
+  window.__VINEXT_RSC_NAVIGATE__ = async function navigateRsc(href, __redirectDepth) {
+    if ((__redirectDepth || 0) > 10) {
+      console.error("[vinext] Too many RSC redirects — aborting navigation to prevent infinite loop.");
+      window.location.href = href;
+      return;
+    }
     try {
       const url = new URL(href, window.location.origin);
       const rscUrl = toRscUrl(url.pathname + url.search);
@@ -2975,6 +3028,20 @@ async function main() {
           headers: { Accept: "text/x-component" },
           credentials: "include",
         });
+      }
+
+      // Detect if fetch followed a redirect: compare the final response URL to
+      // what we requested. If they differ, the server issued a 3xx — push the
+      // canonical destination URL into history before rendering.
+      const __finalUrl = new URL(navResponse.url);
+      const __requestedUrl = new URL(rscUrl, window.location.origin);
+      if (__finalUrl.pathname !== __requestedUrl.pathname) {
+        // Strip .rsc suffix from the final URL to get the page path for history.
+        // Use replaceState instead of pushState: the caller (navigateImpl) already
+        // pushed the pre-redirect URL; replacing it avoids a stale history entry.
+        const __destPath = __finalUrl.pathname.replace(/\\.rsc$/, "") + __finalUrl.search;
+        window.history.replaceState(null, "", __destPath);
+        return window.__VINEXT_RSC_NAVIGATE__(__destPath, (__redirectDepth || 0) + 1);
       }
 
       // Update useParams() with route params from the server before re-rendering
