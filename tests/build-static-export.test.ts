@@ -1,11 +1,8 @@
 /**
- * Failing tests for runStaticExport() — the high-level orchestrator that
+ * Tests for runStaticExport() — the high-level orchestrator that
  * takes a project root, starts a temporary Vite dev server, scans routes,
  * runs the appropriate static export (Pages or App Router), and returns
  * a StaticExportResult.
- *
- * runStaticExport() does NOT exist yet. These tests define the contract
- * and should fail with an import error until the implementation lands.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";

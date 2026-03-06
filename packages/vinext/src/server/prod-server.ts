@@ -669,6 +669,11 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     contentSecurityPolicy: vinextConfig.images.contentSecurityPolicy,
   } : undefined;
 
+  // Pre-rendered HTML directory (written by `vinext build` pre-rendering step).
+  // Check existence once at startup to avoid per-request fs.existsSync calls.
+  const pagesPrerenderedDir = path.join(path.dirname(serverEntryPath), "pages");
+  const hasPrerenderedPages = fs.existsSync(pagesPrerenderedDir);
+
   const server = createServer(async (req, res) => {
     const rawUrl = req.url ?? "/";
     // Normalize backslashes (browsers treat /\ as //), then decode and normalize path.
@@ -913,10 +918,11 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       // ── 7b. Pre-rendered HTML ─────────────────────────────────────
       // Serve build-time rendered static pages. Placed after middleware,
       // basePath stripping, redirects, and rewrites so those all run first.
-      const pagesPrerenderedDir = path.join(path.dirname(serverEntryPath), "pages");
-      const pagesPrerenderedFile = resolvePrerenderedHtml(pagesPrerenderedDir, resolvedPathname);
+      const pagesPrerenderedFile = hasPrerenderedPages
+        ? resolvePrerenderedHtml(pagesPrerenderedDir, resolvedPathname)
+        : null;
       if (pagesPrerenderedFile) {
-        const html = fs.readFileSync(pagesPrerenderedFile, "utf-8");
+        const html = await fs.promises.readFile(pagesPrerenderedFile, "utf-8");
         const prerenderedHeaders: Record<string, string> = { ...middlewareHeaders };
         sendCompressed(req, res, html, "text/html; charset=utf-8", 200, prerenderedHeaders, compress);
         return;

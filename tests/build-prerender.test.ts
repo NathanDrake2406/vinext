@@ -148,7 +148,6 @@ describe("prerenderStaticPages — function exists", () => {
   });
 
   it("PrerenderResult type is returned", async () => {
-    // This will fail because prerenderStaticPages doesn't exist yet
     const { prerenderStaticPages } = await import(
       "../packages/vinext/src/build/static-export.js"
     );

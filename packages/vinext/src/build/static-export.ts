@@ -934,9 +934,9 @@ export interface PrerenderResult {
  * Vite dev server, fetches each static page, and writes the HTML to
  * dist/server/pages/.
  *
- * Prefers starting the prod server in-process via `startProdServer()`.
- * Falls back to a subprocess when the in-process import fails (e.g. when
- * running from compiled JS where the import path differs).
+ * Only runs for Pages Router builds. App Router builds skip pre-rendering
+ * because the App Router prod server delegates entirely to the RSC handler
+ * (which manages its own middleware, auth, and streaming pipeline).
  */
 export async function prerenderStaticPages(
   options: PrerenderOptions,
@@ -968,8 +968,15 @@ export async function prerenderStaticPages(
     return result;
   }
 
+  // App Router prod server delegates entirely to the RSC handler which manages
+  // its own middleware, auth, and streaming pipeline. Pre-rendered HTML files
+  // would never be served, so skip pre-rendering for App Router builds.
+  if (isAppRouter) {
+    return result;
+  }
+
   // Collect static routes using a temporary Vite dev server
-  const collected = await collectStaticRoutes(root, isAppRouter);
+  const collected = await collectStaticRoutes(root, false);
   result.skipped.push(...collected.skipped);
 
   if (collected.urls.length === 0) {
@@ -1118,7 +1125,7 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
           // Skip dynamic pages (getStaticProps with revalidate: 0 means force-dynamic)
           if (typeof pageModule.getStaticProps === "function") {
             try {
-              const propsResult = await pageModule.getStaticProps({});
+              const propsResult = await pageModule.getStaticProps({ params: {} });
               // revalidate: 0 means "always revalidate" (force-dynamic) — skip.
               // Positive values (ISR) are fine to pre-render.
               if (propsResult?.revalidate === 0) {
