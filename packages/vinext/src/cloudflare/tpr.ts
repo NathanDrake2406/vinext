@@ -549,6 +549,13 @@ async function prerenderRoutes(
       const batch = routes.slice(i, i + FETCH_CONCURRENCY);
       const promises = batch.map(async (routePath) => {
         try {
+          // Validate route path to prevent SSRF via poisoned analytics data.
+          // Only allow paths starting with / and without traversal sequences.
+          if (!routePath.startsWith("/") || routePath.includes("..") || routePath.includes("\0")) {
+            console.warn(`  TPR: Skipping invalid route path: ${routePath.slice(0, 100)}`);
+            failedCount++;
+            return;
+          }
           const response = await fetch(`http://127.0.0.1:${port}${routePath}`, {
             headers: {
               "User-Agent": "vinext-tpr/1.0",
