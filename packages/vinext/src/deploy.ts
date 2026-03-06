@@ -574,7 +574,7 @@ export default {
               if (Array.isArray(existing)) {
                 existing.push(value);
               } else if (existing) {
-                middlewareHeaders[key] = [existing, value];
+                middlewareHeaders[key] = [existing as string, value];
               } else {
                 middlewareHeaders[key] = [value];
               }
