@@ -2764,6 +2764,24 @@ describe("Set-Cookie header preservation in prod-server", () => {
     expect(merged["set-cookie"]).toEqual(["mw=1; Path=/", "resp=2; Path=/"]);
   });
 
+  it("mergeResponseHeaders handles middleware cookie as plain string", async () => {
+    const { mergeResponseHeaders } = await import(
+      "../packages/vinext/src/server/prod-server.js"
+    );
+
+    const middlewareHeaders: Record<string, string | string[]> = {
+      "set-cookie": "mw=1; Path=/",
+    };
+    const response = new Response("ok", {
+      headers: [
+        ["set-cookie", "resp=2; Path=/"],
+      ],
+    });
+
+    const merged = mergeResponseHeaders(middlewareHeaders, response);
+    expect(merged["set-cookie"]).toEqual(["mw=1; Path=/", "resp=2; Path=/"]);
+  });
+
   it("mergeResponseHeaders does not duplicate non-Set-Cookie headers", async () => {
     const { mergeResponseHeaders } = await import(
       "../packages/vinext/src/server/prod-server.js"

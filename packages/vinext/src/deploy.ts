@@ -601,7 +601,7 @@ export default {
       for (const key of Object.keys(middlewareHeaders)) {
         if (key.startsWith(mwReqPrefix)) {
           const realName = key.slice(mwReqPrefix.length);
-          mwReqHeaders[realName] = middlewareHeaders[key];
+          mwReqHeaders[realName] = middlewareHeaders[key] as string;
           delete middlewareHeaders[key];
         } else if (key.startsWith("x-middleware-")) {
           delete middlewareHeaders[key];

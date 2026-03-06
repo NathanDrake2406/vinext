@@ -156,11 +156,12 @@ function sendCompressed(
     // Merge Accept-Encoding into existing Vary header from extraHeaders instead
     // of overwriting. Preserves Vary values set by the App Router for content
     // negotiation (e.g. "RSC, Accept").
-    const existingVary = extraHeaders["Vary"] ?? extraHeaders["vary"];
+    const rawVary = extraHeaders["Vary"] ?? extraHeaders["vary"];
+    const existingVary = Array.isArray(rawVary) ? rawVary.join(", ") : rawVary;
     let varyValue: string;
     if (existingVary) {
-      const existing = String(existingVary).toLowerCase();
-      varyValue = existing.includes("accept-encoding") ? String(existingVary) : existingVary + ", Accept-Encoding";
+      const existing = existingVary.toLowerCase();
+      varyValue = existing.includes("accept-encoding") ? existingVary : existingVary + ", Accept-Encoding";
     } else {
       varyValue = "Accept-Encoding";
     }
