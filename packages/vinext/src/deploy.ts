@@ -548,7 +548,7 @@ export default {
 
       // ── 3. Run middleware ──────────────────────────────────────────
       let resolvedUrl = urlWithQuery;
-      const middlewareHeaders: Record<string, string> = {};
+      const middlewareHeaders: Record<string, string | string[]> = {};
       let middlewareRewriteStatus: number | undefined;
       if (typeof runMiddleware === "function") {
         const result = await runMiddleware(request);
@@ -565,10 +565,22 @@ export default {
           }
         }
 
-        // Collect middleware response headers to merge into final response
+        // Collect middleware response headers to merge into final response.
+        // Use an array for Set-Cookie to preserve multiple values.
         if (result.responseHeaders) {
           for (const [key, value] of result.responseHeaders) {
-            middlewareHeaders[key] = value;
+            if (key.toLowerCase() === "set-cookie") {
+              const existing = middlewareHeaders[key];
+              if (Array.isArray(existing)) {
+                existing.push(value);
+              } else if (existing) {
+                middlewareHeaders[key] = [existing, value];
+              } else {
+                middlewareHeaders[key] = [value];
+              }
+            } else {
+              middlewareHeaders[key] = value;
+            }
           }
         }
 
@@ -699,18 +711,32 @@ export default {
 /**
  * Merge middleware/config headers into a response.
  * Response headers take precedence over middleware headers, matching
- * the behavior in prod-server.ts.
+ * the behavior in prod-server.ts. Uses getSetCookie() to preserve
+ * multiple Set-Cookie values.
  */
 function mergeHeaders(
   response: Response,
-  extraHeaders: Record<string, string>,
+  extraHeaders: Record<string, string | string[]>,
   statusOverride?: number,
 ): Response {
   if (!Object.keys(extraHeaders).length && !statusOverride) return response;
-  // Middleware/config headers go in first (lower precedence), then
-  // response headers overlay them (higher precedence).
-  const merged: Record<string, string> = { ...extraHeaders };
-  response.headers.forEach((v, k) => { merged[k] = v; });
+  const merged = new Headers();
+  // Middleware/config headers go in first (lower precedence)
+  for (const [k, v] of Object.entries(extraHeaders)) {
+    if (Array.isArray(v)) {
+      for (const item of v) merged.append(k, item);
+    } else {
+      merged.set(k, v);
+    }
+  }
+  // Response headers overlay them (higher precedence), except Set-Cookie
+  // which is additive (both middleware and response cookies should be sent).
+  response.headers.forEach((v, k) => {
+    if (k.toLowerCase() === "set-cookie") return;
+    merged.set(k, v);
+  });
+  const responseCookies = response.headers.getSetCookie?.() ?? [];
+  for (const cookie of responseCookies) merged.append("set-cookie", cookie);
   return new Response(response.body, {
     status: statusOverride ?? response.status,
     statusText: response.statusText,

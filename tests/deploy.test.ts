@@ -542,9 +542,9 @@ describe("generatePagesRouterWorkerEntry", () => {
     expect(content).toContain("mergeHeaders");
     expect(content).toContain("middlewareHeaders");
     // Response headers must override middleware headers (matching prod-server).
-    // mergeHeaders should spread extraHeaders first, then overlay response headers.
-    expect(content).toContain("{ ...extraHeaders }");
-    expect(content).toContain("response.headers.forEach");
+    // mergeHeaders uses Headers API and getSetCookie() to preserve multi-value cookies.
+    expect(content).toContain("merged.set(k, v)");
+    expect(content).toContain("getSetCookie");
   });
 
   it("preserves x-middleware-request-* headers for prod request override handling", () => {
