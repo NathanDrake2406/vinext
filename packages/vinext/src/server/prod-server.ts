@@ -797,7 +797,10 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         duplex: hasBody ? "half" : undefined,
       });
 
-      // Build request context for has/missing condition matching
+      // Build request context for has/missing condition matching.
+      // headers and redirects run before middleware and use this pre-middleware
+      // snapshot. beforeFiles, afterFiles, and fallback all run after middleware
+      // per the Next.js execution order, so they use postMwReqCtx below.
       const reqCtx: RequestContext = requestContextFromRequest(webRequest);
 
       // ── 4. Run middleware ─────────────────────────────────────────
@@ -878,13 +881,35 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         }
       }
 
+      // Rebuild context after middleware has unpacked x-middleware-request-*
+      // headers into webRequest. Used only for afterFiles and fallback rewrites,
+      // which run after middleware in the App Router execution order.
+      const postMwReqCtx: RequestContext = requestContextFromRequest(webRequest);
+
       let resolvedPathname = resolvedUrl.split("?")[0];
 
       // ── 5. Apply custom headers from next.config.js ───────────────
+      // Config headers are additive for multi-value headers (Vary,
+      // Set-Cookie) and override for everything else. Set-Cookie values
+      // are stored as arrays (RFC 6265 forbids comma-joining cookies).
       if (configHeaders.length) {
         const matched = matchHeaders(resolvedPathname, configHeaders, reqCtx);
         for (const h of matched) {
-          middlewareHeaders[h.key.toLowerCase()] = h.value;
+          const lk = h.key.toLowerCase();
+          if (lk === "set-cookie") {
+            const existing = middlewareHeaders[lk];
+            if (Array.isArray(existing)) {
+              existing.push(h.value);
+            } else if (existing) {
+              (middlewareHeaders as any)[lk] = [existing, h.value];
+            } else {
+              (middlewareHeaders as any)[lk] = [h.value];
+            }
+          } else if (lk === "vary" && middlewareHeaders[lk]) {
+            middlewareHeaders[lk] += ", " + h.value;
+          } else {
+            middlewareHeaders[lk] = h.value;
+          }
         }
       }
 
@@ -908,7 +933,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       // ── 7. Apply beforeFiles rewrites from next.config.js ─────────
       if (configRewrites.beforeFiles?.length) {
-        const rewritten = matchRewrite(resolvedPathname, configRewrites.beforeFiles, reqCtx);
+        const rewritten = matchRewrite(resolvedPathname, configRewrites.beforeFiles, postMwReqCtx);
         if (rewritten) {
           if (isExternalUrl(rewritten)) {
             const proxyResponse = await proxyExternalRequest(webRequest, rewritten);
@@ -931,7 +956,10 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
         // Merge middleware + config headers into the response
         const responseBody = Buffer.from(await response.arrayBuffer());
-        const ct = response.headers.get("content-type") ?? "text/html";
+        // API routes may return arbitrary data (JSON, binary, etc.), so
+        // default to application/octet-stream rather than text/html when
+        // the handler doesn't set an explicit Content-Type.
+        const ct = response.headers.get("content-type") ?? "application/octet-stream";
         const responseHeaders = mergeResponseHeaders(middlewareHeaders, response);
 
         sendCompressed(req, res, responseBody, ct, middlewareRewriteStatus ?? response.status, responseHeaders, compress);
@@ -940,7 +968,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       // ── 9. Apply afterFiles rewrites from next.config.js ──────────
       if (configRewrites.afterFiles?.length) {
-        const rewritten = matchRewrite(resolvedPathname, configRewrites.afterFiles, reqCtx);
+        const rewritten = matchRewrite(resolvedPathname, configRewrites.afterFiles, postMwReqCtx);
         if (rewritten) {
           if (isExternalUrl(rewritten)) {
             const proxyResponse = await proxyExternalRequest(webRequest, rewritten);
@@ -959,7 +987,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
         // ── 11. Fallback rewrites (if SSR returned 404) ─────────────
         if (response && response.status === 404 && configRewrites.fallback?.length) {
-          const fallbackRewrite = matchRewrite(resolvedPathname, configRewrites.fallback, reqCtx);
+          const fallbackRewrite = matchRewrite(resolvedPathname, configRewrites.fallback, postMwReqCtx);
           if (fallbackRewrite) {
             if (isExternalUrl(fallbackRewrite)) {
               const proxyResponse = await proxyExternalRequest(webRequest, fallbackRewrite);

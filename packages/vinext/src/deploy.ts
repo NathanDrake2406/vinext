@@ -543,7 +543,11 @@ export default {
       }
 
       // Build request context for has/missing condition matching.
-      // Created before middleware runs, matching prod-server ordering.
+      // headers and redirects run before middleware, so they use this
+      // pre-middleware snapshot. beforeFiles, afterFiles, and fallback
+      // rewrites run after middleware (App Router order), so they use
+      // postMwReqCtx created after x-middleware-request-* headers are
+      // unpacked into request.
       const reqCtx = requestContextFromRequest(request);
 
       // ── 3. Run middleware ──────────────────────────────────────────
@@ -621,13 +625,28 @@ export default {
         });
       }
 
+      // Rebuild context after middleware has unpacked x-middleware-request-*
+      // headers into the cloned request. Used only for afterFiles and fallback
+      // rewrites, which run after middleware in the App Router execution order.
+      const postMwReqCtx = requestContextFromRequest(request);
+
       let resolvedPathname = resolvedUrl.split("?")[0];
 
       // ── 4. Apply custom headers from next.config.js ───────────────
+      // Config headers are additive for multi-value headers (Vary,
+      // Set-Cookie) and override for everything else. Vary values are
+      // comma-joined per HTTP spec. Set-Cookie values are comma-joined
+      // here because middlewareHeaders is a flat Record<string, string>;
+      // mergeHeaders() downstream handles multi-value expansion.
       if (configHeaders.length) {
         const matched = matchHeaders(resolvedPathname, configHeaders, reqCtx);
         for (const h of matched) {
-          middlewareHeaders[h.key.toLowerCase()] = h.value;
+          const lk = h.key.toLowerCase();
+          if ((lk === "vary" || lk === "set-cookie") && middlewareHeaders[lk]) {
+            middlewareHeaders[lk] += ", " + h.value;
+          } else {
+            middlewareHeaders[lk] = h.value;
+          }
         }
       }
 
@@ -649,7 +668,7 @@ export default {
 
       // ��─ 6. Apply beforeFiles rewrites from next.config.js ─────────
       if (configRewrites.beforeFiles?.length) {
-        const rewritten = matchRewrite(resolvedPathname, configRewrites.beforeFiles, reqCtx);
+        const rewritten = matchRewrite(resolvedPathname, configRewrites.beforeFiles, postMwReqCtx);
         if (rewritten) {
           if (isExternalUrl(rewritten)) {
             return proxyExternalRequest(request, rewritten);
@@ -669,7 +688,7 @@ export default {
 
       // ── 8. Apply afterFiles rewrites from next.config.js ──────────
       if (configRewrites.afterFiles?.length) {
-        const rewritten = matchRewrite(resolvedPathname, configRewrites.afterFiles, reqCtx);
+        const rewritten = matchRewrite(resolvedPathname, configRewrites.afterFiles, postMwReqCtx);
         if (rewritten) {
           if (isExternalUrl(rewritten)) {
             return proxyExternalRequest(request, rewritten);
@@ -686,7 +705,7 @@ export default {
 
         // ── 10. Fallback rewrites (if SSR returned 404) ─────────────
         if (response && response.status === 404 && configRewrites.fallback?.length) {
-          const fallbackRewrite = matchRewrite(resolvedPathname, configRewrites.fallback, reqCtx);
+          const fallbackRewrite = matchRewrite(resolvedPathname, configRewrites.fallback, postMwReqCtx);
           if (fallbackRewrite) {
             if (isExternalUrl(fallbackRewrite)) {
               return proxyExternalRequest(request, fallbackRewrite);

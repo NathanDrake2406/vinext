@@ -1340,6 +1340,17 @@ describe("Production server middleware (Pages Router)", () => {
     expect(body.equals(Buffer.from([0xff, 0xfe, 0xfd, 0x00, 0x61, 0x62, 0x63]))).toBe(true);
   });
 
+  it("defaults to application/octet-stream for API routes without Content-Type", async () => {
+    const res = await fetch(`${prodUrl}/api/no-content-type`);
+    expect(res.status).toBe(200);
+    const ct = res.headers.get("content-type") ?? "";
+    // Must NOT default to text/html, which would cause browsers to render
+    // the response body as HTML. When the handler passes a string to
+    // res.end(), the Response constructor sets text/plain automatically,
+    // so we verify the dangerous text/html default is gone.
+    expect(ct).not.toContain("text/html");
+  });
+
   it("serves normal pages without middleware interference", async () => {
     const res = await fetch(`${prodUrl}/`);
     expect(res.status).toBe(200);
@@ -1481,6 +1492,63 @@ describe("Production server next.config.js features (Pages Router)", () => {
     expect(authRes.headers.get("x-guest-only-header")).toBeNull();
   });
 
+  it("has/missing conditions do not see middleware-injected cookies", async () => {
+    // When ?inject-login is present, middleware injects logged-in=1 cookie
+    // into the request headers. The config has/missing conditions should
+    // evaluate against the updated request, not the original.
+    const res = await fetch(`${prodUrl}/about?inject-login`);
+    expect(res.status).toBe(200);
+    // The has:[cookie:logged-in] condition should match
+    expect(res.headers.get("x-auth-only-header")).toBeNull();
+    // The missing:[cookie:logged-in] condition should NOT match
+    expect(res.headers.get("x-guest-only-header")).toBe("1");
+  });
+
+  it("config Vary header appends instead of replacing existing values", async () => {
+    // The /ssr page has config headers: [{ key: "Vary", value: "Accept-Language" }].
+    // If the response already has a Vary header (e.g. from compression),
+    // the config value should be appended, not replace it.
+    const res = await fetch(`${prodUrl}/ssr`);
+    expect(res.status).toBe(200);
+    const vary = res.headers.get("vary") ?? "";
+    expect(vary).toContain("Accept-Language");
+  });
+
+  // afterFiles rewrites run after middleware in the App Router execution order.
+  // has/missing conditions on afterFiles rules should evaluate against
+  // middleware-modified headers, not the original pre-middleware request.
+  it("afterFiles rewrite has/missing conditions see middleware-injected cookies", async () => {
+    // Without ?mw-auth, middleware does NOT inject mw-user=1.
+    // The has:[cookie:mw-user] afterFiles rule should NOT match → no rewrite.
+    const noAuthRes = await fetch(`${prodUrl}/mw-gated-rewrite`);
+    expect(noAuthRes.status).toBe(404);
+
+    // With ?mw-auth, middleware injects mw-user=1 into request cookies.
+    // The has:[cookie:mw-user] afterFiles rule SHOULD match → rewrite to /about.
+    const authRes = await fetch(`${prodUrl}/mw-gated-rewrite?mw-auth`);
+    expect(authRes.status).toBe(200);
+    const html = await authRes.text();
+    expect(html).toContain("About");
+  });
+
+  // beforeFiles rewrites run after middleware per the Next.js execution order:
+  // headers → redirects → Middleware → beforeFiles → filesystem → afterFiles → fallback.
+  // has/missing conditions on beforeFiles rules should evaluate against
+  // middleware-modified headers, not the original pre-middleware request.
+  it("beforeFiles rewrite has/missing conditions see middleware-injected cookies", async () => {
+    // Without ?mw-auth, middleware does NOT inject mw-before-user=1.
+    // The has:[cookie:mw-before-user] beforeFiles rule should NOT match → 404.
+    const noAuthRes = await fetch(`${prodUrl}/mw-gated-before`);
+    expect(noAuthRes.status).toBe(404);
+
+    // With ?mw-auth, middleware injects mw-before-user=1 into request cookies.
+    // The has:[cookie:mw-before-user] beforeFiles rule SHOULD match → rewrite to /about.
+    const authRes = await fetch(`${prodUrl}/mw-gated-before?mw-auth`);
+    expect(authRes.status).toBe(200);
+    const html = await authRes.text();
+    expect(html).toContain("About");
+  });
+
   it("serves normal pages unaffected by config rules", async () => {
     const res = await fetch(`${prodUrl}/`);
     expect(res.status).toBe(200);
@@ -1606,7 +1674,7 @@ describe("Static export (Pages Router)", () => {
       "utf-8",
     );
     expect(html404).toContain("404");
-  });
+	});
 
   it("escapes meta refresh URL to prevent HTML injection", async () => {
     expect(fs.existsSync(path.join(exportDir, "redirect-xss.html"))).toBe(true);

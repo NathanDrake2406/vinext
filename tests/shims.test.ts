@@ -963,6 +963,85 @@ describe("next/cache shim", () => {
     // Should accept multiple tags without throwing
     expect(() => cacheTag("tag1", "tag2", "tag3")).not.toThrow();
   });
+
+  it("unstable_cache re-fetches when entry is stale (time-expired)", async () => {
+    const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+
+    setCacheHandler(new MemoryCacheHandler());
+
+    let callCount = 0;
+    const fn = async () => {
+      callCount++;
+      return "value-" + callCount;
+    };
+
+    // Use a very short revalidate (1 second)
+    const cached = unstable_cache(fn, ["stale-test"], {
+      revalidate: 1,
+    });
+
+    const r1 = await cached();
+    expect(r1).toBe("value-1");
+    expect(callCount).toBe(1);
+
+    // Cached call should still return the same value
+    const r2 = await cached();
+    expect(r2).toBe("value-1");
+    expect(callCount).toBe(1);
+
+    // Manually expire the entry by advancing time past revalidate window.
+    // We do this by patching the entry's revalidateAt in the handler.
+    const handler = (await import("../packages/vinext/src/shims/cache.js")).getCacheHandler();
+    const store = (handler as any).store as Map<string, any>;
+    for (const [, entry] of store) {
+      if (entry.revalidateAt) {
+        entry.revalidateAt = Date.now() - 1000; // expired 1 second ago
+      }
+    }
+
+    // Next call should re-fetch because entry is now stale
+    const r3 = await cached();
+    expect(r3).toBe("value-2");
+    expect(callCount).toBe(2);
+
+    setCacheHandler(new MemoryCacheHandler());
+  });
+
+  it("unstable_cache with no revalidate option caches indefinitely", async () => {
+    const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+
+    setCacheHandler(new MemoryCacheHandler());
+
+    let callCount = 0;
+    const fn = async () => {
+      callCount++;
+      return "result-" + callCount;
+    };
+
+    // No revalidate option (should cache indefinitely, not expire at t=0)
+    const cached = unstable_cache(fn, ["no-revalidate-test"]);
+
+    const r1 = await cached();
+    expect(r1).toBe("result-1");
+    expect(callCount).toBe(1);
+
+    // Should return cached value (not re-fetch)
+    const r2 = await cached();
+    expect(r2).toBe("result-1");
+    expect(callCount).toBe(1);
+
+    // Even after "time passes", should still be cached (not stale)
+    const handler = (await import("../packages/vinext/src/shims/cache.js")).getCacheHandler();
+    const store = (handler as any).store as Map<string, any>;
+    for (const [, entry] of store) {
+      // revalidateAt should be null (indefinite) not 0 or past timestamp
+      expect(entry.revalidateAt).toBeNull();
+    }
+
+    setCacheHandler(new MemoryCacheHandler());
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4829,6 +4908,36 @@ describe("basePath config validation", () => {
   });
 });
 
+describe("pageExtensions config", () => {
+  it("resolveNextConfig defaults pageExtensions to Next.js defaults", async () => {
+    const { resolveNextConfig } = await import(
+      "../packages/vinext/src/config/next-config.js"
+    );
+    const config = await resolveNextConfig({});
+    expect(config.pageExtensions).toEqual(["tsx", "ts", "jsx", "js"]);
+  });
+
+  it("resolveNextConfig reads pageExtensions from config", async () => {
+    const { resolveNextConfig } = await import(
+      "../packages/vinext/src/config/next-config.js"
+    );
+    const config = await resolveNextConfig({
+      pageExtensions: ["js", "jsx", "ts", "tsx", "mdx"],
+    });
+    expect(config.pageExtensions).toEqual(["js", "jsx", "ts", "tsx", "mdx"]);
+  });
+
+  it("resolveNextConfig strips leading dots and whitespace from pageExtensions entries", async () => {
+    const { resolveNextConfig } = await import(
+      "../packages/vinext/src/config/next-config.js"
+    );
+    const config = await resolveNextConfig({
+      pageExtensions: [".tsx", " ts ", "tsx", "", ".mdx"],
+    });
+    expect(config.pageExtensions).toEqual(["tsx", "ts", "tsx", "mdx"]);
+  });
+});
+
 describe("cacheComponents config (Next.js 16)", () => {
   it("resolveNextConfig defaults cacheComponents to false", async () => {
     const { resolveNextConfig } = await import(
@@ -6725,6 +6834,45 @@ describe("next/script SSR rendering", () => {
     expect(html).toContain("console.log('hello')");
   });
 
+  it("beforeInteractive escapes </script> in dangerouslySetInnerHTML", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const Script = (await import("../packages/vinext/src/shims/script.js")).default;
+
+    const html = renderToStaticMarkup(
+      React.createElement(Script, {
+        strategy: "beforeInteractive",
+        id: "escape-test",
+        dangerouslySetInnerHTML: {
+          __html: 'var x = "</script><img src=x onerror=alert(1)>";',
+        },
+      }),
+    );
+    // The raw </script> must NOT appear — it would break the tag boundary
+    expect(html).not.toContain("</script><img");
+    // The escaped form should be present instead
+    expect(html).toContain("<\\/script>");
+  });
+
+  it("beforeInteractive escapes </script> case-insensitively", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const Script = (await import("../packages/vinext/src/shims/script.js")).default;
+
+    const html = renderToStaticMarkup(
+      React.createElement(Script, {
+        strategy: "beforeInteractive",
+        id: "case-test",
+        dangerouslySetInnerHTML: {
+          __html: 'var x = "</SCRIPT><img src=x onerror=alert(1)>";',
+        },
+      }),
+    );
+    // Mixed-case </SCRIPT> must also be escaped
+    expect(html).not.toContain("</SCRIPT>");
+    expect(html).toContain("<\\/SCRIPT>");
+  });
+
   it("exports handleClientScriptLoad and initScriptLoader", async () => {
     const scriptModule = await import("../packages/vinext/src/shims/script.js");
     expect(typeof scriptModule.handleClientScriptLoad).toBe("function");
@@ -7342,6 +7490,51 @@ describe("next/head SSR security", () => {
     expect(html).toContain("body { color: red; }");
   });
 
+  it("escapes </script> in dangerouslySetInnerHTML for script tags", async () => {
+    const React = await import("react");
+    const html = await collectHeadHTML([
+      React.createElement("script", {
+        dangerouslySetInnerHTML: {
+          __html: 'var x = "</script><img src=x onerror=alert(1)>";',
+        },
+      }),
+    ]);
+
+    // The raw </script> must NOT appear in the output
+    expect(html).not.toContain("</script><img");
+    // The escaped form preserves the JS string content
+    expect(html).toContain("<\\/script>");
+  });
+
+  it("escapes </style> in dangerouslySetInnerHTML for style tags", async () => {
+    const React = await import("react");
+    const html = await collectHeadHTML([
+      React.createElement("style", {
+        dangerouslySetInnerHTML: {
+          __html: "body::after { content: '</style><img src=x onerror=alert(1)>'; }",
+        },
+      }),
+    ]);
+
+    // The raw </style> must NOT appear
+    expect(html).not.toContain("</style><img");
+    expect(html).toContain("<\\/style>");
+  });
+
+  it("escapes case-insensitive closing tags in dangerouslySetInnerHTML", async () => {
+    const React = await import("react");
+    const html = await collectHeadHTML([
+      React.createElement("script", {
+        dangerouslySetInnerHTML: {
+          __html: 'var x = "</SCRIPT><img src=x onerror=alert(1)>";',
+        },
+      }),
+    ]);
+
+    expect(html).not.toContain("</SCRIPT>");
+    expect(html).toContain("<\\/SCRIPT>");
+  });
+
   it("attributes are still properly escaped", async () => {
     const React = await import("react");
     const html = await collectHeadHTML([
@@ -7405,6 +7598,54 @@ describe("next/head SSR security", () => {
       expect(html).toContain(`<${tag}`);
       expect(html).toContain('data-vinext-head="true"');
     }
+  });
+});
+
+describe("escapeInlineContent", () => {
+  it("escapes </script> within script content", async () => {
+    const { escapeInlineContent } = await import("../packages/vinext/src/shims/head.js");
+    const input = 'var x = "</script><img src=x onerror=alert(1)>";';
+    const result = escapeInlineContent(input, "script");
+    expect(result).toBe('var x = "<\\/script><img src=x onerror=alert(1)>";');
+    expect(result).not.toContain("</script>");
+  });
+
+  it("escapes </style> within style content", async () => {
+    const { escapeInlineContent } = await import("../packages/vinext/src/shims/head.js");
+    const input = "body::after { content: '</style><div>'; }";
+    const result = escapeInlineContent(input, "style");
+    expect(result).toBe("body::after { content: '<\\/style><div>'; }");
+    expect(result).not.toContain("</style>");
+  });
+
+  it("handles case-insensitive closing tags", async () => {
+    const { escapeInlineContent } = await import("../packages/vinext/src/shims/head.js");
+    expect(escapeInlineContent("</Script>", "script")).toBe("<\\/Script>");
+    expect(escapeInlineContent("</SCRIPT>", "script")).toBe("<\\/SCRIPT>");
+    expect(escapeInlineContent("</sCrIpT>", "script")).toBe("<\\/sCrIpT>");
+  });
+
+  it("handles multiple occurrences", async () => {
+    const { escapeInlineContent } = await import("../packages/vinext/src/shims/head.js");
+    const input = '</script></script></SCRIPT>';
+    const result = escapeInlineContent(input, "script");
+    expect(result).toBe('<\\/script><\\/script><\\/SCRIPT>');
+    expect(result).not.toContain("</script>");
+    expect(result).not.toContain("</SCRIPT>");
+  });
+
+  it("does not escape unrelated closing tags", async () => {
+    const { escapeInlineContent } = await import("../packages/vinext/src/shims/head.js");
+    // Escaping for "script" should not touch </style>
+    const input = '</style></div>';
+    const result = escapeInlineContent(input, "script");
+    expect(result).toBe('</style></div>');
+  });
+
+  it("passes through content with no closing tags", async () => {
+    const { escapeInlineContent } = await import("../packages/vinext/src/shims/head.js");
+    const input = "console.log('hello world');";
+    expect(escapeInlineContent(input, "script")).toBe(input);
   });
 });
 
