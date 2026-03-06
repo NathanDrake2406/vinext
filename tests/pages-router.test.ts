@@ -63,6 +63,28 @@ describe("Pages Router integration", () => {
     expect(html).toContain("Rendered at:");
   });
 
+  it("getServerSideProps headers and status are applied to the response", async () => {
+    const res = await fetch(`${baseUrl}/ssr-headers`);
+    // gSSP sets statusCode = 201
+    expect(res.status).toBe(201);
+    const html = await res.text();
+    expect(html).toContain("Headers were set");
+    // Custom header set via res.setHeader
+    expect(res.headers.get("x-custom-header")).toBe("hello-from-gssp");
+    // Cookie set via res.setHeader("set-cookie", ...)
+    const setCookie = res.headers.get("set-cookie");
+    expect(setCookie).toContain("gssp_token=abc123");
+  });
+
+  it("getServerSideProps calling res.end() short-circuits the response", async () => {
+    const res = await fetch(`${baseUrl}/ssr-res-end`);
+    // gSSP calls res.end() with a JSON body and status 202
+    expect(res.status).toBe(202);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    const body = await res.json();
+    expect(body).toEqual({ ok: true, source: "gssp-res-end" });
+  });
+
   it("getServerSideProps returning notFound renders custom 404 page", async () => {
     const res = await fetch(`${baseUrl}/posts/missing`);
     expect(res.status).toBe(404);
@@ -557,6 +579,87 @@ describe("Pages Router integration", () => {
   it("allows page requests without Origin header", async () => {
     const res = await fetch(`${baseUrl}/`);
     expect(res.status).toBe(200);
+  });
+});
+
+describe("Pages Router dev server origin check", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    ({ server, baseUrl } = await startFixtureServer(FIXTURE_DIR));
+  }, 30000);
+
+  afterAll(async () => {
+    await server?.close();
+  });
+
+  it("allows requests with no Origin header (direct navigation)", async () => {
+    const res = await fetch(`${baseUrl}/`);
+    expect(res.status).toBe(200);
+  });
+
+  it("allows same-origin requests", async () => {
+    const res = await fetch(`${baseUrl}/`, {
+      headers: { Origin: baseUrl },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("blocks cross-origin requests", async () => {
+    const res = await fetch(`${baseUrl}/`, {
+      headers: { Origin: "http://evil.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks cross-origin requests to /@* Vite internal paths", async () => {
+    const res = await fetch(`${baseUrl}/@fs/etc/passwd`, {
+      headers: { Origin: "http://evil.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks cross-origin requests to /__vite internal paths", async () => {
+    const res = await fetch(`${baseUrl}/__vite_ping`, {
+      headers: { Origin: "http://evil.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks cross-origin requests to /node_modules paths", async () => {
+    const res = await fetch(`${baseUrl}/node_modules/.vite/deps/react.js`, {
+      headers: { Origin: "http://evil.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks requests with malformed Origin header", async () => {
+    const res = await fetch(`${baseUrl}/`, {
+      headers: { Origin: "not-a-url" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks image endpoint redirect to /@* internal paths", async () => {
+    const res = await fetch(`${baseUrl}/_vinext/image?url=/@fs/etc/passwd&w=100&q=75`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("blocks image endpoint redirect to /__vite internal paths", async () => {
+    const res = await fetch(`${baseUrl}/_vinext/image?url=/__vite_hmr&w=100&q=75`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("blocks image endpoint redirect to /node_modules paths", async () => {
+    const res = await fetch(`${baseUrl}/_vinext/image?url=/node_modules/.vite/manifest.json&w=100&q=75`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(400);
   });
 });
 
@@ -1256,6 +1359,19 @@ describe("Production server middleware (Pages Router)", () => {
     expect(res.status).toBe(400);
     const body = await res.text();
     expect(body).toContain("Bad Request");
+  });
+
+  it("blocks access to .vite/ build metadata directory", async () => {
+    // The .vite/ directory contains build manifests (ssr-manifest.json,
+    // manifest.json) that should not be publicly accessible.
+    const res = await fetch(`${prodUrl}/.vite/ssr-manifest.json`);
+    expect(res.status).toBe(404);
+  });
+
+  it("blocks access to .vite/ with percent-encoded dot", async () => {
+    // Ensure encoded variants like /%2Evite/ are also blocked
+    const res = await fetch(`${prodUrl}/%2Evite/ssr-manifest.json`);
+    expect(res.status).toBe(404);
   });
 });
 
