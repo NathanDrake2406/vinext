@@ -8,14 +8,15 @@
  * Pages Router:
  *   - Static pages → render to HTML
  *   - getStaticProps pages → call at build time, render with props
- *   - Dynamic routes → call getStaticPaths (must be fallback: false), render each
+ *   - Dynamic routes → call getStaticPaths, render each (fallback: false required)
+ *   - Dynamic routes without getStaticPaths → warning, skipped
  *   - getServerSideProps → build error
  *   - API routes → skipped with warning
  *
  * App Router:
  *   - Static pages → run Server Components at build time, render to HTML
  *   - Dynamic routes → call generateStaticParams(), render each
- *   - Dynamic routes without generateStaticParams → build error
+ *   - Dynamic routes without generateStaticParams → warning, skipped
  */
 import type { ViteDevServer } from "vite";
 import type { Route } from "../routing/pages-router.js";
@@ -31,6 +32,44 @@ import React from "react";
 import { renderToReadableStream } from "react-dom/server.edge";
 
 const PAGE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js"];
+const VITE_CONFIG_FILES = ["vite.config.ts", "vite.config.js", "vite.config.mjs"];
+
+/**
+ * Create a temporary Vite dev server for a project root.
+ * Uses the project's vite config if present, otherwise auto-configures with vinext.
+ * Pass `listen: true` to bind an HTTP port (needed for fetching pages).
+ */
+async function createTempViteServer(
+  root: string,
+  opts: { listen?: boolean } = {},
+): Promise<import("vite").ViteDevServer> {
+  const vite = await import("vite");
+  const hasViteConfig = VITE_CONFIG_FILES.some((f) => fs.existsSync(path.join(root, f)));
+
+  let serverConfig: Record<string, unknown>;
+  if (hasViteConfig) {
+    serverConfig = {
+      root,
+      optimizeDeps: { holdUntilCrawlEnd: true },
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    };
+  } else {
+    const { default: vinextPlugin } = await import("../index.js");
+    serverConfig = {
+      root,
+      configFile: false,
+      plugins: [vinextPlugin({ appDir: root })],
+      optimizeDeps: { holdUntilCrawlEnd: true },
+      server: { port: 0, cors: false },
+      logLevel: "silent",
+    };
+  }
+
+  const server = await vite.createServer(serverConfig);
+  if (opts.listen) await server.listen();
+  return server;
+}
 
 function findFileWithExtensions(basePath: string): boolean {
   return PAGE_EXTENSIONS.some((ext) => fs.existsSync(basePath + ext));
@@ -286,85 +325,86 @@ async function renderStaticPage(options: RenderStaticPageOptions): Promise<strin
     });
   }
 
-  const pageModule = await server.ssrLoadModule(route.filePath);
-  const PageComponent = pageModule.default;
-  if (!PageComponent) {
-    throw new Error(`Page ${route.filePath} has no default export`);
-  }
-
-  // Collect page props
-  let pageProps: Record<string, unknown> = {};
-
-  if (typeof pageModule.getStaticProps === "function") {
-    const result = await pageModule.getStaticProps({ params });
-    if (result && "props" in result) {
-      pageProps = result.props as Record<string, unknown>;
+  try {
+    const pageModule = await server.ssrLoadModule(route.filePath);
+    const PageComponent = pageModule.default;
+    if (!PageComponent) {
+      throw new Error(`Page ${route.filePath} has no default export`);
     }
-    if (result && "redirect" in result) {
-      // Static export can't handle redirects — write a meta redirect
-      const redirect = result.redirect as { destination: string };
-      return `<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=${escapeAttr(redirect.destination)}" /></head><body></body></html>`;
+
+    // Collect page props
+    let pageProps: Record<string, unknown> = {};
+
+    if (typeof pageModule.getStaticProps === "function") {
+      const result = await pageModule.getStaticProps({ params });
+      if (result && "props" in result) {
+        pageProps = result.props as Record<string, unknown>;
+      }
+      if (result && "redirect" in result) {
+        // Static export can't handle redirects — write a meta redirect
+        const redirect = result.redirect as { destination: string };
+        return `<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=${escapeAttr(redirect.destination)}" /></head><body></body></html>`;
+      }
+      if (result && "notFound" in result && result.notFound) {
+        throw new Error(`Page ${urlPath} returned notFound: true`);
+      }
     }
-    if (result && "notFound" in result && result.notFound) {
-      throw new Error(`Page ${urlPath} returned notFound: true`);
+
+    // Build element
+    const createElement = React.createElement;
+    let element: React.ReactElement;
+
+    if (AppComponent) {
+      element = createElement(AppComponent, {
+        Component: PageComponent,
+        pageProps,
+      });
+    } else {
+      element = createElement(PageComponent, pageProps);
     }
-  }
 
-  // Build element
-  const createElement = React.createElement;
-  let element: React.ReactElement;
-
-  if (AppComponent) {
-    element = createElement(AppComponent, {
-      Component: PageComponent,
-      pageProps,
-    });
-  } else {
-    element = createElement(PageComponent, pageProps);
-  }
-
-  // Reset head collector and flush dynamic preloads
-  if (typeof headShim.resetSSRHead === "function") {
-    headShim.resetSSRHead();
-  }
-  if (typeof dynamicShim.flushPreloads === "function") {
-    await dynamicShim.flushPreloads();
-  }
-
-  // Render page body
-  const bodyHtml = await renderToStringAsync(element);
-
-  // Collect head tags
-  const ssrHeadHTML =
-    typeof headShim.getSSRHeadHTML === "function"
-      ? headShim.getSSRHeadHTML()
-      : "";
-
-  // __NEXT_DATA__ for client hydration
-  const nextDataScript = `<script>window.__NEXT_DATA__ = ${safeJsonStringify({
-    props: { pageProps },
-    page: route.pattern,
-    query: params,
-  })}</script>`;
-
-  // Build HTML shell
-  let html: string;
-
-  if (DocumentComponent) {
-    const docElement = createElement(DocumentComponent);
-    // renderToReadableStream auto-prepends <!DOCTYPE html> when root is <html>
-    let docHtml = await renderToStringAsync(docElement);
-    docHtml = docHtml.replace("__NEXT_MAIN__", bodyHtml);
-    if (ssrHeadHTML) {
-      docHtml = docHtml.replace("</head>", `  ${ssrHeadHTML}\n</head>`);
+    // Reset head collector and flush dynamic preloads
+    if (typeof headShim.resetSSRHead === "function") {
+      headShim.resetSSRHead();
     }
-    docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", nextDataScript);
-    if (!docHtml.includes("__NEXT_DATA__")) {
-      docHtml = docHtml.replace("</body>", `  ${nextDataScript}\n</body>`);
+    if (typeof dynamicShim.flushPreloads === "function") {
+      await dynamicShim.flushPreloads();
     }
-    html = docHtml;
-  } else {
-    html = `<!DOCTYPE html>
+
+    // Render page body
+    const bodyHtml = await renderToStringAsync(element);
+
+    // Collect head tags
+    const ssrHeadHTML =
+      typeof headShim.getSSRHeadHTML === "function"
+        ? headShim.getSSRHeadHTML()
+        : "";
+
+    // __NEXT_DATA__ for client hydration
+    const nextDataScript = `<script>window.__NEXT_DATA__ = ${safeJsonStringify({
+      props: { pageProps },
+      page: route.pattern,
+      query: params,
+    })}</script>`;
+
+    // Build HTML shell
+    let html: string;
+
+    if (DocumentComponent) {
+      const docElement = createElement(DocumentComponent);
+      // renderToReadableStream auto-prepends <!DOCTYPE html> when root is <html>
+      let docHtml = await renderToStringAsync(docElement);
+      docHtml = docHtml.replace("__NEXT_MAIN__", bodyHtml);
+      if (ssrHeadHTML) {
+        docHtml = docHtml.replace("</head>", `  ${ssrHeadHTML}\n</head>`);
+      }
+      docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", nextDataScript);
+      if (!docHtml.includes("__NEXT_DATA__")) {
+        docHtml = docHtml.replace("</body>", `  ${nextDataScript}\n</body>`);
+      }
+      html = docHtml;
+    } else {
+      html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -376,14 +416,15 @@ async function renderStaticPage(options: RenderStaticPageOptions): Promise<strin
   ${nextDataScript}
 </body>
 </html>`;
-  }
+    }
 
-  // Clear SSR context
-  if (typeof routerShim.setSSRContext === "function") {
-    routerShim.setSSRContext(null);
+    return html;
+  } finally {
+    // Always clear SSR context, even if rendering throws
+    if (typeof routerShim.setSSRContext === "function") {
+      routerShim.setSSRContext(null);
+    }
   }
-
-  return html;
 }
 
 interface RenderErrorPageOptions {
@@ -509,8 +550,13 @@ function getOutputPath(urlPath: string, trailingSlash: boolean): string {
     return "index.html";
   }
 
-  // Remove leading slash
-  const clean = urlPath.replace(/^\//, "");
+  // Normalize and reject path traversal from user-controlled params
+  const normalized = path.posix.normalize(urlPath);
+  if (normalized.includes("..")) {
+    throw new Error(`Route path "${urlPath}" contains path traversal segments`);
+  }
+
+  const clean = normalized.replace(/^\//, "");
 
   if (trailingSlash) {
     return `${clean}/index.html`;
@@ -606,6 +652,38 @@ async function resolveParentParams(
   return currentParams;
 }
 
+/**
+ * Expand a dynamic App Router route into concrete URLs via generateStaticParams.
+ * Handles parent param resolution (top-down passing).
+ * Returns the list of expanded URLs, or an empty array if the route has no params.
+ */
+async function expandDynamicAppRoute(
+  route: AppRoute,
+  allRoutes: AppRoute[],
+  server: ViteDevServer,
+  generateStaticParams: (opts: { params: Record<string, string | string[]> }) => Promise<Record<string, string | string[]>[]>,
+): Promise<string[]> {
+  const parentParamSets = await resolveParentParams(route, allRoutes, server);
+
+  let paramSets: Record<string, string | string[]>[];
+  if (parentParamSets.length > 0) {
+    paramSets = [];
+    for (const parentParams of parentParamSets) {
+      const childResults = await generateStaticParams({ params: parentParams });
+      if (Array.isArray(childResults)) {
+        for (const childParams of childResults) {
+          paramSets.push({ ...parentParams, ...childParams });
+        }
+      }
+    }
+  } else {
+    paramSets = await generateStaticParams({ params: {} });
+  }
+
+  if (!Array.isArray(paramSets)) return [];
+  return paramSets.map((params) => buildUrlFromParams(route.pattern, params));
+}
+
 // -------------------------------------------------------------------
 // App Router static export
 // -------------------------------------------------------------------
@@ -670,39 +748,18 @@ export async function staticExportApp(
           continue;
         }
 
-        // Resolve parent dynamic segments for top-down params passing.
-        // Find all other routes whose patterns are prefixes of this route's pattern
-        // and that have dynamic params, then collect their generateStaticParams.
-        const parentParamSets = await resolveParentParams(route, routes, server);
+        const expandedUrls = await expandDynamicAppRoute(
+          route, routes, server, pageModule.generateStaticParams,
+        );
 
-        let paramSets: Record<string, string | string[]>[];
-        if (parentParamSets.length > 0) {
-          // Top-down: call child's generateStaticParams for each parent param set
-          paramSets = [];
-          for (const parentParams of parentParamSets) {
-            const childResults = await pageModule.generateStaticParams({ params: parentParams });
-            if (Array.isArray(childResults)) {
-              for (const childParams of childResults) {
-                paramSets.push({ ...parentParams, ...childParams });
-              }
-            }
-          }
-        } else {
-          // Bottom-up: no parent params, call with empty params
-          paramSets = await pageModule.generateStaticParams({ params: {} });
-        }
-
-        if (!Array.isArray(paramSets) || paramSets.length === 0) {
+        if (expandedUrls.length === 0) {
           result.warnings.push(
             `generateStaticParams() for ${route.pattern} returned empty array — no pages generated`,
           );
           continue;
         }
 
-        for (const params of paramSets) {
-          const urlPath = buildUrlFromParams(route.pattern, params);
-          urlsToRender.push(urlPath);
-        }
+        urlsToRender.push(...expandedUrls);
       } catch (e) {
         result.errors.push({
           route: route.pattern,
@@ -724,6 +781,7 @@ export async function staticExportApp(
           route: urlPath,
           error: `Server returned ${res.status}`,
         });
+        await res.body?.cancel(); // release connection
         continue;
       }
 
@@ -812,33 +870,8 @@ export async function runStaticExport(
     };
   }
 
-  // 3. Start a temporary Vite dev server
-  const vite = await import("vite");
-  const hasViteConfig = ["vite.config.ts", "vite.config.js", "vite.config.mjs"]
-    .some((f) => fs.existsSync(path.join(root, f)));
-
-  let serverConfig: Record<string, unknown>;
-  if (hasViteConfig) {
-    // Use the project's vite config so user plugins/aliases/transforms are available
-    serverConfig = {
-      root,
-      optimizeDeps: { holdUntilCrawlEnd: true },
-      server: { port: 0, cors: false },
-      logLevel: "silent",
-    };
-  } else {
-    const { default: vinextPlugin } = await import("../index.js");
-    serverConfig = {
-      root,
-      configFile: false,
-      plugins: [vinextPlugin({ appDir: root })],
-      optimizeDeps: { holdUntilCrawlEnd: true },
-      server: { port: 0, cors: false },
-      logLevel: "silent",
-    };
-  }
-  const server = await vite.createServer(serverConfig);
-  await server.listen();
+  // 3. Start a temporary Vite dev server (with listener for HTTP fetching)
+  const server = await createTempViteServer(root, { listen: true });
 
   try {
     // 4. Clean output directory
@@ -958,13 +991,12 @@ export async function prerenderStaticPages(
     fs.mkdirSync(pagesOutDir, { recursive: true });
 
     for (const urlPath of staticUrls) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10_000);
         const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
           signal: controller.signal,
         });
-        clearTimeout(timer);
 
         if (!res.ok) {
           result.skipped.push(urlPath);
@@ -982,6 +1014,8 @@ export async function prerenderStaticPages(
         result.pageCount++;
       } catch {
         result.skipped.push(urlPath);
+      } finally {
+        clearTimeout(timer);
       }
     }
   } finally {
@@ -1012,32 +1046,8 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
   if (isAppRouter && !appDir) return [];
   if (!isAppRouter && !pagesDir) return [];
 
-  // Start a temporary Vite dev server for module inspection
-  const vite = await import("vite");
-  const hasViteConfig = ["vite.config.ts", "vite.config.js", "vite.config.mjs"]
-    .some((f) => fs.existsSync(path.join(root, f)));
-
-  let serverConfig: Record<string, unknown>;
-  if (hasViteConfig) {
-    serverConfig = {
-      root,
-      optimizeDeps: { holdUntilCrawlEnd: true },
-      server: { port: 0, cors: false },
-      logLevel: "silent",
-    };
-  } else {
-    const { default: vinextPlugin } = await import("../index.js");
-    serverConfig = {
-      root,
-      configFile: false,
-      plugins: [vinextPlugin({ appDir: root })],
-      optimizeDeps: { holdUntilCrawlEnd: true },
-      server: { port: 0, cors: false },
-      logLevel: "silent",
-    };
-  }
-  const server = await vite.createServer(serverConfig);
-  await server.listen();
+  // Only need ssrLoadModule for module inspection — no HTTP listener needed
+  const server = await createTempViteServer(root);
 
   try {
     const urls: string[] = [];
@@ -1054,34 +1064,19 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
 
           // Skip dynamic/request-dependent pages
           if (pageModule.dynamic === "force-dynamic") continue;
-          if (pageModule.revalidate !== undefined && pageModule.revalidate !== false) continue;
+          // revalidate: 0 means "always revalidate" (force-dynamic equivalent) — skip.
+          // Positive revalidate values (ISR) are fine to pre-render; the revalidation
+          // simply won't run without a server.
+          if (pageModule.revalidate === 0) continue;
 
           if (route.isDynamic) {
             // Need generateStaticParams to expand
             if (typeof pageModule.generateStaticParams !== "function") continue;
 
-            const parentParamSets = await resolveParentParams(route, routes, server);
-            let paramSets: Record<string, string | string[]>[];
-
-            if (parentParamSets.length > 0) {
-              paramSets = [];
-              for (const parentParams of parentParamSets) {
-                const childResults = await pageModule.generateStaticParams({ params: parentParams });
-                if (Array.isArray(childResults)) {
-                  for (const childParams of childResults) {
-                    paramSets.push({ ...parentParams, ...childParams });
-                  }
-                }
-              }
-            } else {
-              paramSets = await pageModule.generateStaticParams({ params: {} });
-            }
-
-            if (Array.isArray(paramSets)) {
-              for (const params of paramSets) {
-                urls.push(buildUrlFromParams(route.pattern, params));
-              }
-            }
+            const expandedUrls = await expandDynamicAppRoute(
+              route, routes, server, pageModule.generateStaticParams,
+            );
+            urls.push(...expandedUrls);
           } else {
             urls.push(route.pattern);
           }
@@ -1102,11 +1097,13 @@ async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<
           // Skip pages with getServerSideProps
           if (typeof pageModule.getServerSideProps === "function") continue;
 
-          // Skip ISR pages (getStaticProps with revalidate)
+          // Skip dynamic pages (getStaticProps with revalidate: 0 means force-dynamic)
           if (typeof pageModule.getStaticProps === "function") {
             try {
               const propsResult = await pageModule.getStaticProps({});
-              if (propsResult?.revalidate) continue;
+              // revalidate: 0 means "always revalidate" (force-dynamic) — skip.
+              // Positive values (ISR) are fine to pre-render.
+              if (propsResult?.revalidate === 0) continue;
             } catch {
               continue; // Skip if getStaticProps fails
             }

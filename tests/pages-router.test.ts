@@ -1543,6 +1543,46 @@ describe("Static export (Pages Router)", () => {
     }
   });
 
+  it("warns and skips dynamic routes without getStaticPaths", async () => {
+    const { staticExportPages } = await import(
+      "../packages/vinext/src/build/static-export.js"
+    );
+    const { resolveNextConfig } = await import(
+      "../packages/vinext/src/config/next-config.js"
+    );
+
+    // Create a fake dynamic route with no getStaticPaths
+    const fakeRoutes = [
+      {
+        pattern: "/fake/:id",
+        filePath: path.resolve(FIXTURE_DIR, "pages", "index.tsx"),
+        isDynamic: true,
+        params: ["id"],
+      },
+    ];
+    const config = await resolveNextConfig({ output: "export" });
+    const tempDir = path.resolve(FIXTURE_DIR, "out-temp-pages-warn");
+
+    try {
+      const result = await staticExportPages({
+        server,
+        routes: fakeRoutes as any,
+        apiRoutes: [],
+        pagesDir: path.resolve(FIXTURE_DIR, "pages"),
+        outDir: tempDir,
+        config,
+      });
+
+      // Should warn (not error) about missing getStaticPaths
+      expect(result.errors).toHaveLength(0);
+      expect(
+        result.warnings.some((w) => w.includes("getStaticPaths")),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("includes __NEXT_DATA__ in exported HTML", async () => {
     const indexHtml = fs.readFileSync(
       path.join(exportDir, "index.html"),
