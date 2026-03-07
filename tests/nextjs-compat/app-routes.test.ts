@@ -333,13 +333,23 @@ describe("Next.js compat: app-routes", () => {
     expect(cacheControl).toContain("stale-while-revalidate");
   });
 
-  it("does not override handler-set Cache-Control with revalidate config", async () => {
-    // If the handler itself sets Cache-Control, we should respect it
-    const res = await fetch(`${baseUrl}/api/static-data`);
+  it("does not set s-maxage when revalidate is 0", async () => {
+    // revalidate=0 means "never cache" in Next.js — no s-maxage header
+    const res = await fetch(`${baseUrl}/api/no-cache`);
     expect(res.status).toBe(200);
-    // Verify the response has our expected header (not duplicated)
     const cacheControl = res.headers.get("cache-control");
-    expect(cacheControl).toBe("s-maxage=1, stale-while-revalidate");
+    // Should either be null or not contain s-maxage
+    if (cacheControl) {
+      expect(cacheControl).not.toContain("s-maxage");
+    }
+  });
+
+  it("does not override handler-set Cache-Control with revalidate config", async () => {
+    // Fixture: /api/custom-cache exports revalidate=60 but sets its own Cache-Control
+    const res = await fetch(`${baseUrl}/api/custom-cache`);
+    expect(res.status).toBe(200);
+    const cacheControl = res.headers.get("cache-control");
+    expect(cacheControl).toBe("public, max-age=300");
   });
 
   // ── Documented skips ─────────────────────────────────────────
