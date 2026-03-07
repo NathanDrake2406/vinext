@@ -32,11 +32,15 @@ import React from "react";
 import { renderToReadableStream } from "react-dom/server.edge";
 import { createValidFileMatcher, type ValidFileMatcher } from "../routing/file-matcher.js";
 
-const VITE_CONFIG_FILES = ["vite.config.ts", "vite.config.js", "vite.config.mjs"];
-
 /**
  * Create a temporary Vite dev server for a project root.
- * Uses the project's vite config if present, otherwise auto-configures with vinext.
+ *
+ * Always uses configFile: false with vinext loaded directly from this
+ * package. Loading from the user's vite.config causes module resolution
+ * issues: the config-file vinext instance resolves @vitejs/plugin-rsc
+ * from a different path than the inline instance, causing instanceof
+ * checks to fail and the RSC middleware to silently not handle requests.
+ *
  * Pass `listen: true` to bind an HTTP port (needed for fetching pages).
  */
 async function createTempViteServer(
@@ -44,29 +48,16 @@ async function createTempViteServer(
   opts: { listen?: boolean } = {},
 ): Promise<import("vite").ViteDevServer> {
   const vite = await import("vite");
-  const hasViteConfig = VITE_CONFIG_FILES.some((f) => fs.existsSync(path.join(root, f)));
+  const { default: vinextPlugin } = await import("../index.js");
 
-  let serverConfig: import("vite").InlineConfig;
-  if (hasViteConfig) {
-    serverConfig = {
-      root,
-      optimizeDeps: { holdUntilCrawlEnd: true },
-      server: { port: 0, cors: false },
-      logLevel: "silent",
-    };
-  } else {
-    const { default: vinextPlugin } = await import("../index.js");
-    serverConfig = {
-      root,
-      configFile: false,
-      plugins: [vinextPlugin({ appDir: root })],
-      optimizeDeps: { holdUntilCrawlEnd: true },
-      server: { port: 0, cors: false },
-      logLevel: "silent",
-    };
-  }
-
-  const server = await vite.createServer(serverConfig);
+  const server = await vite.createServer({
+    root,
+    configFile: false,
+    plugins: [vinextPlugin({ appDir: root })],
+    optimizeDeps: { holdUntilCrawlEnd: true },
+    server: { port: 0, cors: false },
+    logLevel: "silent",
+  });
   if (opts.listen) await server.listen();
   return server;
 }
@@ -245,7 +236,7 @@ export async function staticExportPages(
         routerShim,
       });
 
-      const outputPath = getOutputPath(urlPath, config.trailingSlash);
+      const outputPath = getOutputPath(urlPath, config.trailingSlash, outDir);
       const fullPath = path.join(outDir, outputPath);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
       fs.writeFileSync(fullPath, html, "utf-8");
@@ -545,26 +536,31 @@ function buildUrlFromParams(
 }
 
 /**
- * Determine the output file path for a given URL.
- * Respects trailingSlash config.
+ * Determine the output file path for a given URL and verify it stays
+ * within the output directory. Respects trailingSlash config.
+ *
+ * `outDir` is the resolved absolute path of the output directory.
+ * After computing the relative output path, the function resolves it
+ * against `outDir` and checks that it doesn't escape the boundary
+ * (e.g. via crafted `generateStaticParams` / `getStaticPaths` values).
  */
-function getOutputPath(urlPath: string, trailingSlash: boolean): string {
+function getOutputPath(urlPath: string, trailingSlash: boolean, outDir: string): string {
   if (urlPath === "/") {
     return "index.html";
   }
 
-  // Normalize and reject path traversal from user-controlled params
   const normalized = path.posix.normalize(urlPath);
-  if (normalized.includes("..")) {
-    throw new Error(`Route path "${urlPath}" contains path traversal segments`);
-  }
-
   const clean = normalized.replace(/^\//, "");
 
-  if (trailingSlash) {
-    return `${clean}/index.html`;
+  const relative = trailingSlash ? `${clean}/index.html` : `${clean}.html`;
+
+  const resolved = path.resolve(outDir, relative);
+  const resolvedOutDir = path.resolve(outDir);
+  if (!resolved.startsWith(resolvedOutDir + path.sep)) {
+    throw new Error(`Output path "${urlPath}" escapes the output directory`);
   }
-  return `${clean}.html`;
+
+  return relative;
 }
 
 /**
@@ -669,18 +665,22 @@ async function expandDynamicAppRoute(
   const parentParamSets = await resolveParentParams(route, allRoutes, server);
 
   let paramSets: Record<string, string | string[]>[];
-  if (parentParamSets.length > 0) {
-    paramSets = [];
-    for (const parentParams of parentParamSets) {
-      const childResults = await generateStaticParams({ params: parentParams });
-      if (Array.isArray(childResults)) {
-        for (const childParams of childResults) {
-          paramSets.push({ ...parentParams, ...childParams });
+  try {
+    if (parentParamSets.length > 0) {
+      paramSets = [];
+      for (const parentParams of parentParamSets) {
+        const childResults = await generateStaticParams({ params: parentParams });
+        if (Array.isArray(childResults)) {
+          for (const childParams of childResults) {
+            paramSets.push({ ...parentParams, ...childParams });
+          }
         }
       }
+    } else {
+      paramSets = await generateStaticParams({ params: {} });
     }
-  } else {
-    paramSets = await generateStaticParams({ params: {} });
+  } catch (e) {
+    throw new Error(`generateStaticParams() failed for ${route.pattern}: ${(e as Error).message}`);
   }
 
   if (!Array.isArray(paramSets)) return [];
@@ -789,7 +789,7 @@ export async function staticExportApp(
       }
 
       const html = await res.text();
-      const outputPath = getOutputPath(urlPath, config.trailingSlash);
+      const outputPath = getOutputPath(urlPath, config.trailingSlash, outDir);
       const fullPath = path.join(outDir, outputPath);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
       fs.writeFileSync(fullPath, html, "utf-8");
@@ -830,6 +830,7 @@ export async function staticExportApp(
 export interface RunStaticExportOptions {
   root: string;
   outDir?: string;
+  config?: ResolvedNextConfig;
   configOverride?: Partial<NextConfig>;
 }
 
@@ -846,10 +847,15 @@ export async function runStaticExport(
   const { root, configOverride } = options;
   const outDir = options.outDir ?? path.join(root, "out");
 
-  // 1. Load and resolve config
-  const loadedConfig = await loadNextConfig(root);
-  const merged: NextConfig = { ...loadedConfig, ...configOverride };
-  const config = await resolveNextConfig(merged);
+  // 1. Load and resolve config (reuse caller's config if provided)
+  let config: ResolvedNextConfig;
+  if (options.config) {
+    config = options.config;
+  } else {
+    const loadedConfig = await loadNextConfig(root);
+    const merged: NextConfig = { ...loadedConfig, ...configOverride };
+    config = await resolveNextConfig(merged);
+  }
 
   // 2. Detect router type
   const appDirCandidates = [
@@ -885,6 +891,9 @@ export async function runStaticExport(
     if (appDir) {
       const addr = server.httpServer?.address();
       const port = typeof addr === "object" && addr ? addr.port : 0;
+      if (port === 0) {
+        throw new Error("Vite dev server failed to bind to a port");
+      }
       const baseUrl = `http://localhost:${port}`;
 
       const routes = await appRouter(appDir);
@@ -978,8 +987,12 @@ export async function prerenderStaticPages(
     return result;
   }
 
-  // Collect static routes using a temporary Vite dev server
-  const collected = await collectStaticRoutes(root, false);
+  // Collect static routes via source-file inspection (no dev server needed).
+  // We scan the filesystem for routes, then read each source file to detect
+  // server-side exports. This avoids spinning up a Vite dev server just for
+  // route classification. Dynamic routes are skipped since they need
+  // getStaticPaths execution to enumerate param values.
+  const collected = await collectStaticRoutesFromSource(root);
   result.skipped.push(...collected.skipped);
 
   if (collected.urls.length === 0) {
@@ -1018,7 +1031,7 @@ export async function prerenderStaticPages(
         }
 
         const html = await res.text();
-        const outputPath = getOutputPath(urlPath, false);
+        const outputPath = getOutputPath(urlPath, false, pagesOutDir);
         const fullPath = path.join(pagesOutDir, outputPath);
         fs.mkdirSync(path.dirname(fullPath), { recursive: true });
         fs.writeFileSync(fullPath, html, "utf-8");
@@ -1039,135 +1052,61 @@ export async function prerenderStaticPages(
 }
 
 /**
- * Collect static routes by starting a temporary Vite dev server and
- * inspecting page module exports.
+ * Lightweight route collection for pre-rendering via source-file inspection.
+ *
+ * Scans the pages/ directory and reads each source file to detect exports
+ * like getServerSideProps and revalidate, without starting a Vite dev server.
+ * Dynamic routes are skipped (they need getStaticPaths execution).
  */
-interface CollectedRoutes {
-  urls: string[];
-  skipped: string[];
-}
-
-async function collectStaticRoutes(root: string, isAppRouter: boolean): Promise<CollectedRoutes> {
-  // Detect source directories
-  const appDirCandidates = [
-    path.join(root, "app"),
-    path.join(root, "src", "app"),
-  ];
+async function collectStaticRoutesFromSource(root: string): Promise<CollectedRoutes> {
   const pagesDirCandidates = [
     path.join(root, "pages"),
     path.join(root, "src", "pages"),
   ];
-
-  const appDir = appDirCandidates.find((d) => fs.existsSync(d));
   const pagesDir = pagesDirCandidates.find((d) => fs.existsSync(d));
+  if (!pagesDir) return { urls: [], skipped: [] };
 
-  if (isAppRouter && !appDir) return { urls: [], skipped: [] };
-  if (!isAppRouter && !pagesDir) return { urls: [], skipped: [] };
+  const routes = await pagesRouter(pagesDir);
+  const urls: string[] = [];
+  const skipped: string[] = [];
 
-  // Only need ssrLoadModule for module inspection — no HTTP listener needed
-  const server = await createTempViteServer(root);
+  // Patterns that indicate a page has server-side data fetching
+  const gsspPattern = /export\s+(async\s+)?function\s+getServerSideProps|export\s+(const|let|var)\s+getServerSideProps/;
+  const revalidateZeroPattern = /export\s+const\s+revalidate\s*=\s*0\b/;
 
-  try {
-    const urls: string[] = [];
-    const skipped: string[] = [];
+  for (const route of routes) {
+    const routeName = path.basename(route.filePath, path.extname(route.filePath));
+    if (routeName.startsWith("_")) continue;
 
-    if (isAppRouter && appDir) {
-      const routes = await appRouter(appDir);
-      for (const route of routes) {
-        // Skip route handlers (API routes)
-        if (route.routePath && !route.pagePath) continue;
-        if (!route.pagePath) continue;
-
-        try {
-          const pageModule = await server.ssrLoadModule(route.pagePath);
-
-          // Skip dynamic/request-dependent pages
-          if (pageModule.dynamic === "force-dynamic") {
-            skipped.push(`${route.pattern} (force-dynamic)`);
-            continue;
-          }
-          // revalidate: 0 means "always revalidate" (force-dynamic equivalent) — skip.
-          // Positive revalidate values (ISR) are fine to pre-render; the revalidation
-          // simply won't run without a server.
-          if (pageModule.revalidate === 0) {
-            skipped.push(`${route.pattern} (revalidate: 0)`);
-            continue;
-          }
-
-          if (route.isDynamic) {
-            // Need generateStaticParams to expand
-            if (typeof pageModule.generateStaticParams !== "function") continue;
-
-            const expandedUrls = await expandDynamicAppRoute(
-              route, routes, server, pageModule.generateStaticParams,
-            );
-            urls.push(...expandedUrls);
-          } else {
-            urls.push(route.pattern);
-          }
-        } catch (e) {
-          skipped.push(`${route.pattern} (failed to load: ${(e as Error).message})`);
-        }
-      }
-    } else if (pagesDir) {
-      const routes = await pagesRouter(pagesDir);
-      for (const route of routes) {
-        // Skip internal pages
-        const routeName = path.basename(route.filePath, path.extname(route.filePath));
-        if (routeName.startsWith("_")) continue;
-
-        try {
-          const pageModule = await server.ssrLoadModule(route.filePath);
-
-          // Skip pages with getServerSideProps
-          if (typeof pageModule.getServerSideProps === "function") {
-            skipped.push(`${route.pattern} (getServerSideProps)`);
-            continue;
-          }
-
-          // Skip dynamic pages (getStaticProps with revalidate: 0 means force-dynamic)
-          if (typeof pageModule.getStaticProps === "function") {
-            try {
-              const propsResult = await pageModule.getStaticProps({ params: {} });
-              // revalidate: 0 means "always revalidate" (force-dynamic) — skip.
-              // Positive values (ISR) are fine to pre-render.
-              if (propsResult?.revalidate === 0) {
-                skipped.push(`${route.pattern} (revalidate: 0)`);
-                continue;
-              }
-            } catch {
-              skipped.push(`${route.pattern} (getStaticProps failed)`);
-              continue;
-            }
-          }
-
-          if (route.isDynamic) {
-            // Need getStaticPaths with fallback: false
-            if (typeof pageModule.getStaticPaths !== "function") continue;
-
-            const pathsResult = await pageModule.getStaticPaths({
-              locales: [],
-              defaultLocale: "",
-            });
-            if (pathsResult?.fallback !== false) continue;
-
-            const paths: Array<{ params: Record<string, string | string[]> }> =
-              pathsResult?.paths ?? [];
-            for (const { params } of paths) {
-              urls.push(buildUrlFromParams(route.pattern, params));
-            }
-          } else {
-            urls.push(route.pattern);
-          }
-        } catch (e) {
-          skipped.push(`${route.pattern} (failed to load: ${(e as Error).message})`);
-        }
-      }
+    if (route.isDynamic) {
+      skipped.push(`${route.pattern} (dynamic)`);
+      continue;
     }
 
-    return { urls, skipped };
-  } finally {
-    await server.close();
+    try {
+      const source = fs.readFileSync(route.filePath, "utf-8");
+
+      if (gsspPattern.test(source)) {
+        skipped.push(`${route.pattern} (getServerSideProps)`);
+        continue;
+      }
+
+      if (revalidateZeroPattern.test(source)) {
+        skipped.push(`${route.pattern} (revalidate: 0)`);
+        continue;
+      }
+
+      urls.push(route.pattern);
+    } catch {
+      skipped.push(`${route.pattern} (failed to read source)`);
+    }
   }
+
+  return { urls, skipped };
+}
+
+interface CollectedRoutes {
+  urls: string[];
+  skipped: string[];
 }
 

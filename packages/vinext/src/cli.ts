@@ -284,7 +284,7 @@ async function buildApp() {
       /* @vite-ignore */ "./build/static-export.js"
     );
 
-    const result = await runStaticExport({ root: process.cwd() });
+    const result = await runStaticExport({ root: process.cwd(), config: resolvedConfig });
 
     if (result.warnings.length > 0) {
       for (const w of result.warnings) console.log(`  Warning: ${w}`);
@@ -340,9 +340,9 @@ async function start() {
   const { loadNextConfig, resolveNextConfig } = await import(
     /* @vite-ignore */ "./config/next-config.js"
   );
-  const startRawConfig = await loadNextConfig(process.cwd());
-  const startResolvedConfig = await resolveNextConfig(startRawConfig);
-  if (startResolvedConfig.output === "export") {
+  const rawConfig = await loadNextConfig(process.cwd());
+  const resolvedConfig = await resolveNextConfig(rawConfig);
+  if (resolvedConfig.output === "export") {
     console.error(
       '\n  "vinext start" does not work with "output: export" configuration.',
     );
