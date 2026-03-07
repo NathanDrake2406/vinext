@@ -289,8 +289,6 @@ function tryServeStatic(
  * `vinext build` to dist/server/pages/.
  */
 function resolvePrerenderedHtml(dir: string, pathname: string): string | null {
-  if (!fs.existsSync(dir)) return null;
-
   // Normalize: "/" → "index", "/about" → "about", "/blog/post" → "blog/post"
   const normalized = pathname === "/" ? "index" : pathname.replace(/^\//, "").replace(/\/$/, "");
 
@@ -298,12 +296,12 @@ function resolvePrerenderedHtml(dir: string, pathname: string): string | null {
   const resolvedDir = path.resolve(dir);
 
   const directPath = path.join(dir, `${normalized}.html`);
-  if (path.resolve(directPath).startsWith(resolvedDir) && fs.existsSync(directPath) && fs.statSync(directPath).isFile()) {
+  if (path.resolve(directPath).startsWith(resolvedDir + path.sep) && fs.existsSync(directPath) && fs.statSync(directPath).isFile()) {
     return directPath;
   }
 
   const indexPath = path.join(dir, normalized, "index.html");
-  if (path.resolve(indexPath).startsWith(resolvedDir) && fs.existsSync(indexPath) && fs.statSync(indexPath).isFile()) {
+  if (path.resolve(indexPath).startsWith(resolvedDir + path.sep) && fs.existsSync(indexPath) && fs.statSync(indexPath).isFile()) {
     return indexPath;
   }
 
