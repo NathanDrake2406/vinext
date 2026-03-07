@@ -1780,6 +1780,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   if (route.routeHandler) {
     const handler = route.routeHandler;
     const method = request.method.toUpperCase();
+    const revalidateSeconds = typeof handler.revalidate === "number" ? handler.revalidate : null;
 
     // Collect exported HTTP methods for OPTIONS auto-response and Allow header
     const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
@@ -1813,6 +1814,12 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     if (typeof handlerFn === "function") {
       try {
         const response = await handlerFn(request, { params });
+
+        // Apply Cache-Control from route segment config (export const revalidate = N).
+        // Next.js sets s-maxage on GET route handlers with a numeric revalidate value.
+        if (revalidateSeconds !== null && (method === "GET" || isAutoHead) && !response.headers.has("cache-control")) {
+          response.headers.set("cache-control", "s-maxage=" + revalidateSeconds + ", stale-while-revalidate");
+        }
 
         // Collect any Set-Cookie headers from cookies().set()/delete() calls
         const pendingCookies = getAndClearPendingCookies();

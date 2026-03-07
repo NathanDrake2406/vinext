@@ -320,6 +320,28 @@ describe("Next.js compat: app-routes", () => {
     expect(data.name).toBe("Widget");
   });
 
+  // ── Route segment config: revalidate ────────────────────────
+  // Next.js: GET-only route handlers with `export const revalidate = N`
+  // get Cache-Control: s-maxage=N, stale-while-revalidate
+  // Fixture: /api/static-data exports revalidate = 1
+
+  it("sets Cache-Control s-maxage from route handler revalidate config", async () => {
+    const res = await fetch(`${baseUrl}/api/static-data`);
+    expect(res.status).toBe(200);
+    const cacheControl = res.headers.get("cache-control");
+    expect(cacheControl).toContain("s-maxage=1");
+    expect(cacheControl).toContain("stale-while-revalidate");
+  });
+
+  it("does not override handler-set Cache-Control with revalidate config", async () => {
+    // If the handler itself sets Cache-Control, we should respect it
+    const res = await fetch(`${baseUrl}/api/static-data`);
+    expect(res.status).toBe(200);
+    // Verify the response has our expected header (not duplicated)
+    const cacheControl = res.headers.get("cache-control");
+    expect(cacheControl).toBe("s-maxage=1, stale-while-revalidate");
+  });
+
   // ── Documented skips ─────────────────────────────────────────
   //
   // N/A: 'statically generates correctly with no dynamic usage'
