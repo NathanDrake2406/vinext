@@ -15,6 +15,37 @@
  */
 const SAFE_DEV_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 
+function extractHostnameFromHostHeader(host: string | null | undefined): string {
+  const firstValue = host?.split(",")[0]?.trim().toLowerCase() ?? "";
+  if (!firstValue) return "";
+  if (firstValue.startsWith("[")) {
+    const closingBracket = firstValue.indexOf("]");
+    return closingBracket === -1 ? firstValue : firstValue.slice(0, closingBracket + 1);
+  }
+  return firstValue.split(":")[0] ?? "";
+}
+
+function isAllowedDevHost(hostname: string, allowedDevOrigins?: string[]): boolean {
+  if (SAFE_DEV_HOSTS.includes(hostname) || hostname.endsWith(".localhost")) {
+    return true;
+  }
+
+  if (allowedDevOrigins) {
+    for (const pattern of allowedDevOrigins) {
+      if (pattern.startsWith("*.")) {
+        const suffix = pattern.slice(1);
+        if (hostname === pattern.slice(2) || hostname.endsWith(suffix)) {
+          return true;
+        }
+      } else if (hostname === pattern) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /**
  * Check if a request origin is allowed for dev server access.
  *
@@ -57,21 +88,12 @@ export function isAllowedDevOrigin(
 
   // Same-origin check: compare Origin hostname against Host header hostname
   if (host) {
-    const hostHostname = host.split(",")[0].trim().split(":")[0].toLowerCase();
+    const hostHostname = extractHostnameFromHostHeader(host);
     if (originHostname === hostHostname) return true;
   }
 
   // Check user-configured allowed origins
-  if (allowedDevOrigins) {
-    for (const pattern of allowedDevOrigins) {
-      if (pattern.startsWith("*.")) {
-        const suffix = pattern.slice(1); // ".example.com"
-        if (originHostname === pattern.slice(2) || originHostname.endsWith(suffix)) return true;
-      } else if (originHostname === pattern) {
-        return true;
-      }
-    }
-  }
+  if (isAllowedDevHost(originHostname, allowedDevOrigins)) return true;
 
   return false;
 }
@@ -111,30 +133,9 @@ export function validateDevRequest(
   // DNS rebinding protection: validate the Host header is a known dev host.
   // Without this check, an attacker can register a domain that resolves to
   // 127.0.0.1, then use it to bypass same-origin policy via DNS rebinding.
-  const hostHeader = headers.host;
-  if (hostHeader) {
-    const hostHostname = hostHeader.split(",")[0].trim().split(":")[0].toLowerCase();
-    if (!SAFE_DEV_HOSTS.includes(hostHostname) && !hostHostname.endsWith(".localhost")) {
-      // Check if the host is in allowedDevOrigins
-      let hostAllowed = false;
-      if (allowedDevOrigins) {
-        for (const pattern of allowedDevOrigins) {
-          if (pattern.startsWith("*.")) {
-            const suffix = pattern.slice(1);
-            if (hostHostname === pattern.slice(2) || hostHostname.endsWith(suffix)) {
-              hostAllowed = true;
-              break;
-            }
-          } else if (hostHostname === pattern) {
-            hostAllowed = true;
-            break;
-          }
-        }
-      }
-      if (!hostAllowed) {
-        return `host "${hostHostname}" is not allowed (possible DNS rebinding attack)`;
-      }
-    }
+  const hostHostname = extractHostnameFromHostHeader(headers.host);
+  if (hostHostname && !isAllowedDevHost(hostHostname, allowedDevOrigins)) {
+    return `host "${hostHostname}" is not allowed (possible DNS rebinding attack)`;
   }
 
   // Use x-forwarded-host when behind a reverse proxy, falling back to host.
@@ -164,11 +165,41 @@ export function generateDevOriginCheckCode(allowedDevOrigins?: string[]): string
 const __allowedDevOrigins = ${origins};
 const __safeDevHosts = ["localhost", "127.0.0.1", "[::1]"];
 
+function __extractHostnameFromHostHeader(host) {
+  const firstValue = (host || "").split(",")[0].trim().toLowerCase();
+  if (!firstValue) return "";
+  if (firstValue.startsWith("[")) {
+    const closingBracket = firstValue.indexOf("]");
+    return closingBracket === -1 ? firstValue : firstValue.slice(0, closingBracket + 1);
+  }
+  return firstValue.split(":")[0] || "";
+}
+
+function __isAllowedDevHost(hostname) {
+  if (__safeDevHosts.includes(hostname) || hostname.endsWith(".localhost")) return true;
+  for (const pattern of __allowedDevOrigins) {
+    if (pattern.startsWith("*.")) {
+      const suffix = pattern.slice(1);
+      if (hostname === pattern.slice(2) || hostname.endsWith(suffix)) return true;
+    } else if (hostname === pattern) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function __validateDevRequestOrigin(request) {
   // Check Sec-Fetch headers (catches <script> tag exfiltration)
   if (request.headers.get("sec-fetch-mode") === "no-cors" &&
       request.headers.get("sec-fetch-site") === "cross-site") {
     console.warn("[vinext] Blocked cross-site no-cors request to " + new URL(request.url).pathname);
+    return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
+  }
+
+  const requestHost = request.headers.get("host");
+  const requestHostname = __extractHostnameFromHostHeader(requestHost);
+  if (requestHostname && !__isAllowedDevHost(requestHostname)) {
+    console.warn("[vinext] Blocked dev request with untrusted Host header \\"" + requestHostname + "\\" (possible DNS rebinding attack)");
     return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
   }
 
@@ -186,18 +217,13 @@ function __validateDevRequestOrigin(request) {
   if (__safeDevHosts.includes(originHostname) || originHostname.endsWith(".localhost")) return null;
 
   // Same-origin: compare against Host header
-  const hostHeader = (request.headers.get("x-forwarded-host") || request.headers.get("host") || "").split(",")[0].trim().split(":")[0].toLowerCase();
+  const hostHeader = __extractHostnameFromHostHeader(
+    request.headers.get("x-forwarded-host") || request.headers.get("host") || "",
+  );
   if (hostHeader && originHostname === hostHeader) return null;
 
   // Check user-configured allowed origins
-  for (const pattern of __allowedDevOrigins) {
-    if (pattern.startsWith("*.")) {
-      const suffix = pattern.slice(1);
-      if (originHostname === pattern.slice(2) || originHostname.endsWith(suffix)) return null;
-    } else if (originHostname === pattern) {
-      return null;
-    }
-  }
+  if (__isAllowedDevHost(originHostname)) return null;
 
   console.warn(
     \`[vinext] Blocked cross-origin request from "\${origin}" to \${new URL(request.url).pathname}. \` +

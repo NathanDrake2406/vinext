@@ -725,17 +725,17 @@ export function createSSRHandler(
 
       // Convert absolute file paths to Vite-servable URLs (relative to root)
       const viteRoot = server.config.root;
-      const pageModuleUrl = "/" + path.relative(viteRoot, route.filePath);
+      const pageModuleUrl = "/" + path.relative(viteRoot, route.filePath).replace(/\\/g, "/");
       const appModuleUrl = AppComponent
-        ? "/" + path.relative(viteRoot, path.join(pagesDir, "_app"))
+        ? "/" + path.relative(viteRoot, path.join(pagesDir, "_app")).replace(/\\/g, "/")
         : null;
 
       // Hydration entry: inline script that imports the page and hydrates.
       // Stores the React root and page loader for client-side navigation.
-      // Sanitize module URLs to prevent injection via malicious route file paths.
-      // Only allow URL-safe characters (alphanumeric, slashes, dots, hyphens, underscores).
-      const safePageModuleUrl = pageModuleUrl.replace(/[^a-zA-Z0-9/_.\-@]/g, "");
-      const safeAppModuleUrl = appModuleUrl ? appModuleUrl.replace(/[^a-zA-Z0-9/_.\-@]/g, "") : null;
+      // Escape module URLs as JavaScript string literals rather than filtering
+      // characters so dynamic route names like [pid] remain importable.
+      const pageModuleLiteral = JSON.stringify(pageModuleUrl);
+      const appModuleLiteral = appModuleUrl ? JSON.stringify(appModuleUrl) : null;
 
       const hydrationScript = `
 <script type="module">
@@ -747,13 +747,13 @@ const nextData = window.__NEXT_DATA__;
 const { pageProps } = nextData.props;
 
 async function hydrate() {
-  const pageModule = await import("${safePageModuleUrl}");
+  const pageModule = await import(${pageModuleLiteral});
   const PageComponent = pageModule.default;
   let element;
   ${
-    safeAppModuleUrl
+    appModuleLiteral
       ? `
-  const appModule = await import("${safeAppModuleUrl}");
+  const appModule = await import(${appModuleLiteral});
   const AppComponent = appModule.default;
   window.__VINEXT_APP__ = AppComponent;
   element = React.createElement(AppComponent, { Component: PageComponent, pageProps });
@@ -1024,5 +1024,4 @@ async function renderErrorPage(
   res.writeHead(statusCode, { "Content-Type": "text/plain" });
   res.end(`${statusCode} - ${statusCode === 404 ? "Page not found" : "Internal Server Error"}`);
 }
-
 

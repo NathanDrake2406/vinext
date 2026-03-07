@@ -129,6 +129,10 @@ describe("dev origin check", () => {
       expect(validateDevRequest({ host: "localhost:5173" })).toBeNull();
     });
 
+    it("allows bracketed IPv6 loopback Host headers", () => {
+      expect(validateDevRequest({ host: "[::1]:5173" })).toBeNull();
+    });
+
     it("allows localhost origin requests", () => {
       expect(validateDevRequest({
         origin: "http://localhost:5173",
@@ -162,6 +166,11 @@ describe("dev origin check", () => {
         ["custom.com"],
       )).toBeNull();
     });
+
+    it("blocks requests for untrusted Host headers even without Origin", () => {
+      const result = validateDevRequest({ host: "evil.example.com:5173" });
+      expect(result).toContain("possible DNS rebinding attack");
+    });
   });
 
   // ── generateDevOriginCheckCode ────────────────────────────────────────
@@ -184,6 +193,33 @@ describe("dev origin check", () => {
     it("embeds empty array when no origins provided", () => {
       const code = generateDevOriginCheckCode();
       expect(code).toContain("__allowedDevOrigins = []");
+    });
+
+    it("generated validator blocks untrusted Host headers before Origin checks", () => {
+      const factory = new Function(`${generateDevOriginCheckCode()}\nreturn __validateDevRequestOrigin;`);
+      const validateGenerated = factory() as (request: Request) => Response | null;
+
+      const response = validateGenerated(
+        new Request("http://localhost:5173/", {
+          headers: { host: "evil.example.com:5173" },
+        }),
+      );
+
+      expect(response).toBeInstanceOf(Response);
+      expect(response?.status).toBe(403);
+    });
+
+    it("generated validator allows bracketed IPv6 loopback Host headers", () => {
+      const factory = new Function(`${generateDevOriginCheckCode()}\nreturn __validateDevRequestOrigin;`);
+      const validateGenerated = factory() as (request: Request) => Response | null;
+
+      const response = validateGenerated(
+        new Request("http://[::1]:5173/", {
+          headers: { host: "[::1]:5173" },
+        }),
+      );
+
+      expect(response).toBeNull();
     });
   });
 });

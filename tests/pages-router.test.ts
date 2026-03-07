@@ -521,6 +521,22 @@ describe("Pages Router integration", () => {
     expect(nextData.isFallback).toBe(false);
   });
 
+  it("preserves bracketed dynamic route module URLs in hydration output", async () => {
+    const res = await fetch(`${baseUrl}/products/widget`);
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    const proxyMatch = html.match(/src="([^"]*html-proxy[^"]*)"/);
+    expect(proxyMatch).toBeTruthy();
+
+    const scriptRes = await fetch(`${baseUrl}${proxyMatch![1]}`);
+    expect(scriptRes.status).toBe(200);
+
+    const scriptContent = await scriptRes.text();
+    expect(scriptContent).toContain('import("/pages/products/[pid].tsx")');
+    expect(scriptContent).not.toContain('import("/pages/products/pid.tsx")');
+  });
+
   // ── Cross-origin request protection ─────────────────────────────────
   it("blocks page requests with cross-origin Origin header", async () => {
     const res = await fetch(`${baseUrl}/`, {
