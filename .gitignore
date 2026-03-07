@@ -24,6 +24,9 @@ yarn-error.log*
 pnpm-debug.log*
 coverage/
 
+# Worktrees
+.worktrees/
+
 # OS / editor
 .DS_Store
 .idea/
