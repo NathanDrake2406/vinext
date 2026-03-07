@@ -19,13 +19,16 @@ describe("Production server — serves pre-rendered HTML", () => {
   const serverEntryPath = path.join(outDir, "server", "entry.js");
   const pagesDir = path.join(outDir, "server", "pages");
   const prerenderedFile = path.join(pagesDir, "prerendered-test.html");
-  const hasServerEntry = fs.existsSync(serverEntryPath);
-
   let server: Server;
   let baseUrl: string;
 
   beforeAll(async () => {
-    if (!hasServerEntry) return;
+    if (!fs.existsSync(serverEntryPath)) {
+      throw new Error(
+        `Fixture not built: ${serverEntryPath} does not exist. ` +
+        `Run "cd ${PAGES_FIXTURE} && pnpm build" first.`,
+      );
+    }
 
     // Create a fake pre-rendered HTML file at dist/server/pages/prerendered-test.html
     fs.mkdirSync(pagesDir, { recursive: true });
@@ -60,7 +63,7 @@ describe("Production server — serves pre-rendered HTML", () => {
     }
   });
 
-  it.skipIf(!hasServerEntry)(
+  it(
     "serves pre-rendered HTML for /prerendered-test",
     async () => {
       const res = await fetch(`${baseUrl}/prerendered-test`);
@@ -70,7 +73,7 @@ describe("Production server — serves pre-rendered HTML", () => {
     },
   );
 
-  it.skipIf(!hasServerEntry)(
+  it(
     "serves pre-rendered HTML with text/html content type",
     async () => {
       const res = await fetch(`${baseUrl}/prerendered-test`);
@@ -79,7 +82,7 @@ describe("Production server — serves pre-rendered HTML", () => {
     },
   );
 
-  it.skipIf(!hasServerEntry)(
+  it(
     "falls back to SSR when no pre-rendered file exists",
     async () => {
       // /about is a real page in pages-basic but has no pre-rendered file
@@ -90,7 +93,7 @@ describe("Production server — serves pre-rendered HTML", () => {
     },
   );
 
-  it.skipIf(!hasServerEntry)(
+  it(
     "serves nested pre-rendered HTML (e.g. /blog/hello-world)",
     async () => {
       // Create a nested pre-rendered file simulating a dynamic route
@@ -117,7 +120,7 @@ describe("Production server — serves pre-rendered HTML", () => {
     },
   );
 
-  it.skipIf(!hasServerEntry)(
+  it(
     "serves pre-rendered index.html for /",
     async () => {
       const indexFile = path.join(pagesDir, "index.html");
