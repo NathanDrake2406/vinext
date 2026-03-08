@@ -550,10 +550,11 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
       });
     }
     ` : ""}
+    const _pathname = new URL(request.url).pathname;
     const onRenderError = createRscOnErrorHandler(
       request,
-      new URL(request.url).pathname,
-      route?.pattern ?? new URL(request.url).pathname,
+      _pathname,
+      route?.pattern ?? _pathname,
     );
     const rscStream = renderToReadableStream(element, { onError: onRenderError });
     setHeadersContext(null);
@@ -573,10 +574,11 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
       element = createElement(LayoutComponent, { children: element, params: _asyncFallbackParamsHtml });
     }
   }
+  const _pathname = new URL(request.url).pathname;
   const onRenderError = createRscOnErrorHandler(
     request,
-    new URL(request.url).pathname,
-    route?.pattern ?? new URL(request.url).pathname,
+    _pathname,
+    route?.pattern ?? _pathname,
   );
   const rscStream = renderToReadableStream(element, { onError: onRenderError });
   // Collect font data from RSC environment
@@ -665,10 +667,11 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
       });
     }
     ` : ""}
+    const _pathname = new URL(request.url).pathname;
     const onRenderError = createRscOnErrorHandler(
       request,
-      new URL(request.url).pathname,
-      route?.pattern ?? new URL(request.url).pathname,
+      _pathname,
+      route?.pattern ?? _pathname,
     );
     const rscStream = renderToReadableStream(element, { onError: onRenderError });
     setHeadersContext(null);
@@ -687,10 +690,11 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
       element = createElement(LayoutComponent, { children: element, params: _asyncErrParamsHtml });
     }
   }
+  const _pathname = new URL(request.url).pathname;
   const onRenderError = createRscOnErrorHandler(
     request,
-    new URL(request.url).pathname,
-    route?.pattern ?? new URL(request.url).pathname,
+    _pathname,
+    route?.pattern ?? _pathname,
   );
   const rscStream = renderToReadableStream(element, { onError: onRenderError });
   // Collect font data from RSC environment so error pages include font styles
