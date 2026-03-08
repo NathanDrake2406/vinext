@@ -143,4 +143,40 @@ module.exports = withPlugin({ basePath: "/wrapped" });`,
     expect(config.env.FEATURE_FLAG).toBe("on");
     expect(config.aliases).toEqual({});
   });
+
+  it("extracts aliases and mdx from a single async webpack probe", async () => {
+    tmpDir = makeTempDir();
+
+    let invocations = 0;
+    const fakeRemarkPlugin = () => {};
+    const rawConfig = {
+      webpack: async (webpackConfig: any) => {
+        invocations++;
+        webpackConfig.resolve = webpackConfig.resolve || {};
+        webpackConfig.resolve.alias = webpackConfig.resolve.alias || {};
+        webpackConfig.resolve.alias["wrapped/config"] = "./config/request.ts";
+        webpackConfig.module = webpackConfig.module || { rules: [] };
+        webpackConfig.module.rules.push({
+          test: /\.mdx$/,
+          use: [
+            {
+              loader: "@next/mdx/mdx-js-loader",
+              options: {
+                remarkPlugins: [fakeRemarkPlugin],
+              },
+            },
+          ],
+        });
+        return webpackConfig;
+      },
+    };
+
+    const config = await resolveNextConfig(rawConfig, tmpDir);
+
+    expect(invocations).toBe(1);
+    expect(config.aliases["wrapped/config"]).toBe(
+      path.join(tmpDir, "config", "request.ts"),
+    );
+    expect(config.mdx?.remarkPlugins).toEqual([fakeRemarkPlugin]);
+  });
 });

@@ -416,12 +416,8 @@ function extractTurboAliases(
   root: string,
 ): Record<string, string> {
   const experimental = config.experimental as Record<string, unknown> | undefined;
-  const experimentalTurbo = experimental?.turbo as
-    | Record<string, unknown>
-    | undefined;
-  const topLevelTurbopack = config.turbopack as
-    | Record<string, unknown>
-    | undefined;
+  const experimentalTurbo = experimental?.turbo as Record<string, unknown> | undefined;
+  const topLevelTurbopack = config.turbopack as Record<string, unknown> | undefined;
 
   return {
     ...normalizeAliasEntries(
