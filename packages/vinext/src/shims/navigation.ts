@@ -12,14 +12,14 @@
 // bindings are just `undefined` on the namespace object and we can guard at runtime.
 import * as React from "react";
 
-// ─── Layout segment depth context ─────────────────────────────────────────────
-// Used by useSelectedLayoutSegments() to know which layout it's inside.
-// The context is created lazily because `React.createContext` is NOT available in
-// the react-server condition of React. In the RSC environment, this remains
-// null and the hooks fall back to returning all segments (depth 0).
-// In SSR and browser environments, the context is created and used normally.
+// ─── Layout segment context ───────────────────────────────────────────────────
+// Stores the child segments below the current layout. Each layout wraps its
+// children with a provider whose value is the remaining route tree segments
+// (including route groups, with dynamic params resolved to actual values).
+// Created lazily because `React.createContext` is NOT available in the
+// react-server condition of React. In the RSC environment, this remains null.
 
-let _LayoutSegmentCtx: React.Context<number> | null = null;
+let _LayoutSegmentCtx: React.Context<string[]> | null = null;
 
 // ─── ServerInsertedHTML context ────────────────────────────────────────────────
 // Used by CSS-in-JS libraries (Apollo Client, styled-components, emotion) to
@@ -46,27 +46,27 @@ export const ServerInsertedHTMLContext: React.Context<
  * Get or create the layout segment context.
  * Returns null in the RSC environment (createContext unavailable).
  */
-export function getLayoutSegmentContext(): React.Context<number> | null {
+export function getLayoutSegmentContext(): React.Context<string[]> | null {
   if (_LayoutSegmentCtx === null && typeof React.createContext === "function") {
-    _LayoutSegmentCtx = React.createContext<number>(0);
+    _LayoutSegmentCtx = React.createContext<string[]>([]);
   }
   return _LayoutSegmentCtx;
 }
 
 /**
- * Read the layout segment depth from context. Returns 0 if no context
- * is available (RSC environment, outside React tree, or root level).
+ * Read the child segments below the current layout from context.
+ * Returns [] if no context is available (RSC environment, outside React tree).
  */
-function useLayoutSegmentDepth(): number {
+function useChildSegments(): string[] {
   const ctx = getLayoutSegmentContext();
-  if (!ctx) return 0;
+  if (!ctx) return [];
   // useContext is safe here because if createContext exists, useContext does too.
   // This branch is only taken in SSR/Browser, never in RSC.
   // Try/catch for unit tests that call this hook outside a React render tree.
   try {
     return React.useContext(ctx);
   } catch {
-    return 0;
+    return [];
   }
 }
 
@@ -582,38 +582,38 @@ export function useRouter() {
 /**
  * Returns the active child segment one level below the layout where it's called.
  *
- * In Next.js, this is layout-aware: it returns the segment relative to the
- * nearest parent layout. In our implementation, we approximate by returning
- * the first segment after a specified parallel route key, or the first segment
- * of the pathname. Returns null if at the leaf (no child segments).
+ * Returns the first segment from the route tree below this layout, including
+ * route groups (e.g., "(marketing)") and resolved dynamic params. Returns null
+ * if at the leaf (no child segments).
  *
  * @param parallelRoutesKey - Which parallel route to read (default: "children")
  */
 export function useSelectedLayoutSegment(
-  parallelRoutesKey?: string,
+  // parallelRoutesKey is accepted for API compat but not yet supported —
+  // vinext doesn't implement parallel routes with separate segment tracking.
+  _parallelRoutesKey?: string,
 ): string | null {
-  const segments = useSelectedLayoutSegments(parallelRoutesKey);
+  const segments = useSelectedLayoutSegments(_parallelRoutesKey);
   return segments.length > 0 ? segments[0] : null;
 }
 
 /**
  * Returns all active segments below the layout where it's called.
  *
- * In Next.js, this returns the full array of segments from the current
- * layout down to the leaf page. Each layout in the tree wraps its children
- * with a LayoutSegmentProvider that records the URL segment depth at that
- * level. This hook reads that depth from context and slices the pathname
- * segments accordingly.
+ * Each layout in the App Router tree wraps its children with a
+ * LayoutSegmentProvider whose value is the remaining route tree segments
+ * (including route groups, with dynamic params resolved to actual values
+ * and catch-all segments joined with "/"). This hook reads those segments
+ * directly from context.
  *
  * @param parallelRoutesKey - Which parallel route to read (default: "children")
  */
 export function useSelectedLayoutSegments(
+  // parallelRoutesKey is accepted for API compat but not yet supported —
+  // vinext doesn't implement parallel routes with separate segment tracking.
   _parallelRoutesKey?: string,
 ): string[] {
-  const pathname = usePathname();
-  const depth = useLayoutSegmentDepth();
-  const segments = pathname.split("/").filter(Boolean);
-  return segments.slice(depth);
+  return useChildSegments();
 }
 
 /**

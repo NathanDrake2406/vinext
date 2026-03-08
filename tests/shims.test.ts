@@ -201,38 +201,23 @@ describe("next/navigation shim", () => {
     expect(typeof nav.useSelectedLayoutSegments).toBe("function");
   });
 
-  it("useSelectedLayoutSegments returns path segments from server context", async () => {
-    const { setNavigationContext, useSelectedLayoutSegments } = await import(
+  it("useSelectedLayoutSegments returns empty array outside React context", async () => {
+    const { useSelectedLayoutSegments } = await import(
       "../packages/vinext/src/shims/navigation.js"
     );
-    setNavigationContext({
-      pathname: "/dashboard/settings/profile",
-      searchParams: new URLSearchParams(""),
-      params: {},
-    });
+    // Outside a React tree, no LayoutSegmentProvider wraps us,
+    // so the context defaults to [].
     const segments = useSelectedLayoutSegments();
-    expect(segments).toEqual(["dashboard", "settings", "profile"]);
-    setNavigationContext(null);
+    expect(segments).toEqual([]);
   });
 
-  it("useSelectedLayoutSegment returns first segment or null", async () => {
-    const { setNavigationContext, useSelectedLayoutSegment } = await import(
+  it("useSelectedLayoutSegment returns null outside React context", async () => {
+    const { useSelectedLayoutSegment } = await import(
       "../packages/vinext/src/shims/navigation.js"
     );
-    setNavigationContext({
-      pathname: "/blog/my-post",
-      searchParams: new URLSearchParams(""),
-      params: {},
-    });
-    expect(useSelectedLayoutSegment()).toBe("blog");
-
-    setNavigationContext({
-      pathname: "/",
-      searchParams: new URLSearchParams(""),
-      params: {},
-    });
+    // Outside a React tree, no LayoutSegmentProvider wraps us,
+    // so there are no child segments → null.
     expect(useSelectedLayoutSegment()).toBeNull();
-    setNavigationContext(null);
   });
 });
 
@@ -2195,7 +2180,8 @@ describe("double-encoded path handling in middleware", () => {
         pagePath: null,
         routePath: null,
         layouts: [],
-        layoutSegmentDepths: [],
+        routeSegments: [],
+        layoutTreePositions: [],
         templates: [],
         loadingPath: null,
         errorPath: null,
@@ -2230,7 +2216,8 @@ describe("double-encoded path handling in middleware", () => {
           pagePath: null,
           routePath: null,
           layouts: [],
-          layoutSegmentDepths: [],
+          routeSegments: [],
+          layoutTreePositions: [],
           templates: [],
           loadingPath: null,
           errorPath: null,

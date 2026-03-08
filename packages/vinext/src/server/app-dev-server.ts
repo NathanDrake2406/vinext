@@ -132,7 +132,8 @@ ${interceptEntries.join(",\n")}
     page: ${route.pagePath ? getImportVar(route.pagePath) : "null"},
     routeHandler: ${route.routePath ? getImportVar(route.routePath) : "null"},
     layouts: [${layoutVars.join(", ")}],
-    layoutSegmentDepths: ${JSON.stringify(route.layoutSegmentDepths)},
+    routeSegments: ${JSON.stringify(route.routeSegments)},
+    layoutTreePositions: ${JSON.stringify(route.layoutTreePositions)},
     templates: [${templateVars.join(", ")}],
     errors: [${layoutErrorVars.join(", ")}],
     slots: {
@@ -274,6 +275,38 @@ function setNavigationContext(ctx) {
 function makeThenableParams(obj) {
   const plain = { ...obj };
   return Object.assign(Promise.resolve(plain), plain);
+}
+
+// Resolve route tree segments to actual values using matched params.
+// Dynamic segments like [id] are replaced with param values, catch-all
+// segments like [...slug] are joined with "/", and route groups are kept as-is.
+function __resolveChildSegments(routeSegments, treePosition, params) {
+  var raw = routeSegments.slice(treePosition);
+  var result = [];
+  for (var j = 0; j < raw.length; j++) {
+    var seg = raw[j];
+    // Optional catch-all: [[...param]]
+    if (seg.indexOf("[[...") === 0 && seg.charAt(seg.length - 1) === "]" && seg.charAt(seg.length - 2) === "]") {
+      var pn = seg.slice(5, -2);
+      var v = params[pn];
+      // Skip empty optional catch-all (e.g., visiting /blog on [[...slug]] route)
+      if (Array.isArray(v) && v.length === 0) continue;
+      if (v == null) continue;
+      result.push(Array.isArray(v) ? v.join("/") : v);
+    // Catch-all: [...param]
+    } else if (seg.indexOf("[...") === 0 && seg.charAt(seg.length - 1) === "]") {
+      var pn2 = seg.slice(4, -1);
+      var v2 = params[pn2];
+      result.push(Array.isArray(v2) ? v2.join("/") : (v2 || seg));
+    // Dynamic: [param]
+    } else if (seg.charAt(0) === "[" && seg.charAt(seg.length - 1) === "]" && seg.indexOf(".") === -1) {
+      var pn3 = seg.slice(1, -1);
+      result.push(params[pn3] || seg);
+    } else {
+      result.push(seg);
+    }
+  }
+  return result;
 }
 
 // djb2 hash — matches Next.js's stringHash for digest generation.
@@ -469,13 +502,16 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
     // We wrap each layout with LayoutSegmentProvider and add GlobalErrorBoundary
     // to match the wrapping order in buildPageElement(), ensuring smooth
     // client-side tree reconciliation.
-    const layoutDepths = route?.layoutSegmentDepths;
+    const _treePositions = route?.layoutTreePositions;
+    const _routeSegs = route?.routeSegments || [];
+    const _fallbackParams = opts?.params || {};
     for (let i = layouts.length - 1; i >= 0; i--) {
       const LayoutComponent = layouts[i]?.default;
       if (LayoutComponent) {
         element = createElement(LayoutComponent, { children: element });
-        const layoutDepth = layoutDepths ? layoutDepths[i] : 0;
-        element = createElement(LayoutSegmentProvider, { depth: layoutDepth }, element);
+        const _tp = _treePositions ? _treePositions[i] : 0;
+        const _cs = __resolveChildSegments(_routeSegs, _tp, _fallbackParams);
+        element = createElement(LayoutSegmentProvider, { childSegments: _cs }, element);
       }
     }
     ${globalErrorVar ? `
@@ -524,8 +560,8 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
 }
 
 /** Convenience: render a not-found page (404) */
-async function renderNotFoundPage(route, isRscRequest, request) {
-  return renderHTTPAccessFallbackPage(route, 404, isRscRequest, request);
+async function renderNotFoundPage(route, isRscRequest, request, params) {
+  return renderHTTPAccessFallbackPage(route, 404, isRscRequest, request, { params });
 }
 
 /**
@@ -535,7 +571,7 @@ async function renderNotFoundPage(route, isRscRequest, request) {
  * Next.js returns HTTP 200 when error.tsx catches an error (the error is "handled"
  * by the boundary). This matches that behavior intentionally.
  */
-async function renderErrorBoundaryPage(route, error, isRscRequest, request) {
+async function renderErrorBoundaryPage(route, error, isRscRequest, request, params) {
   // Resolve the error boundary component: leaf error.tsx first, then walk per-layout
   // errors from innermost to outermost (matching ancestor inheritance), then global-error.tsx.
   let ErrorComponent = route?.error?.default ?? null;
@@ -568,13 +604,16 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request) {
     // wrappers that buildPageElement() uses (LayoutSegmentProvider, GlobalErrorBoundary).
     // This ensures React can reconcile the tree without destroying the DOM.
     // Same rationale as renderHTTPAccessFallbackPage — see comment there.
-    const layoutDepths = route?.layoutSegmentDepths;
+    const _errTreePositions = route?.layoutTreePositions;
+    const _errRouteSegs = route?.routeSegments || [];
+    const _errParams = params || {};
     for (let i = layouts.length - 1; i >= 0; i--) {
       const LayoutComponent = layouts[i]?.default;
       if (LayoutComponent) {
         element = createElement(LayoutComponent, { children: element });
-        const layoutDepth = layoutDepths ? layoutDepths[i] : 0;
-        element = createElement(LayoutSegmentProvider, { depth: layoutDepth }, element);
+        const _etp = _errTreePositions ? _errTreePositions[i] : 0;
+        const _ecs = __resolveChildSegments(_errRouteSegs, _etp, _errParams);
+        element = createElement(LayoutSegmentProvider, { childSegments: _ecs }, element);
       }
     }
     ${globalErrorVar ? `
@@ -754,6 +793,10 @@ async function buildPageElement(route, params, opts, searchParams) {
   }
   let element = createElement(PageComponent, pageProps);
 
+  // Wrap page with empty segment provider so useSelectedLayoutSegments()
+  // returns [] when called from inside a page component (leaf node).
+  element = createElement(LayoutSegmentProvider, { childSegments: [] }, element);
+
   // Add metadata + viewport head tags (React 19 hoists title/meta/link to <head>)
   // Next.js always injects charset and default viewport even when no metadata/viewport
   // is exported. We replicate that by always emitting these essential head elements.
@@ -904,12 +947,13 @@ async function buildPageElement(route, params, opts, searchParams) {
       element = createElement(LayoutComponent, layoutProps);
 
       // Wrap the layout with LayoutSegmentProvider so useSelectedLayoutSegments()
-      // called INSIDE this layout knows its URL segment depth. The depth tells the
-      // hook how many URL segments are above this layout, so it returns only the
-      // segments below. We wrap the layout (not just children) because hooks are
-      // called from components rendered inside the layout's own JSX.
-      const layoutDepth = route.layoutSegmentDepths ? route.layoutSegmentDepths[i] : 0;
-      element = createElement(LayoutSegmentProvider, { depth: layoutDepth }, element);
+      // called INSIDE this layout gets the correct child segments. We resolve the
+      // route tree segments using actual param values and pass them through context.
+      // We wrap the layout (not just children) because hooks are called from
+      // components rendered inside the layout's own JSX.
+      const treePos = route.layoutTreePositions ? route.layoutTreePositions[i] : 0;
+      const childSegs = __resolveChildSegments(route.routeSegments || [], treePos, params);
+      element = createElement(LayoutSegmentProvider, { childSegments: childSegs }, element);
     }
   }
 
@@ -2064,7 +2108,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       }
       if (digest === "NEXT_NOT_FOUND" || digest.startsWith("NEXT_HTTP_ERROR_FALLBACK;")) {
         const statusCode = digest === "NEXT_NOT_FOUND" ? 404 : parseInt(digest.split(";")[1], 10);
-        const fallbackResp = await renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, request);
+        const fallbackResp = await renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, request, { params });
         if (fallbackResp) return fallbackResp;
         setHeadersContext(null);
         setNavigationContext(null);
@@ -2073,7 +2117,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       }
     }
     // Non-special error (e.g. generateMetadata() threw) — render error.tsx if available
-    const errorBoundaryResp = await renderErrorBoundaryPage(route, buildErr, isRscRequest, request);
+    const errorBoundaryResp = await renderErrorBoundaryPage(route, buildErr, isRscRequest, request, params);
     if (errorBoundaryResp) return errorBoundaryResp;
     throw buildErr;
   }
@@ -2095,7 +2139,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       }
       if (digest === "NEXT_NOT_FOUND" || digest.startsWith("NEXT_HTTP_ERROR_FALLBACK;")) {
         const statusCode = digest === "NEXT_NOT_FOUND" ? 404 : parseInt(digest.split(";")[1], 10);
-        const fallbackResp = await renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, request);
+        const fallbackResp = await renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, request, { params });
         if (fallbackResp) return fallbackResp;
         setHeadersContext(null);
         setNavigationContext(null);
@@ -2160,7 +2204,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
               const parentLayouts = route.layouts.slice(0, li);
               const fallbackResp = await renderHTTPAccessFallbackPage(
                 route, statusCode, isRscRequest, request,
-                { boundaryComponent: parentNotFound, layouts: parentLayouts }
+                { boundaryComponent: parentNotFound, layouts: parentLayouts, params }
               );
               if (fallbackResp) return fallbackResp;
               setHeadersContext(null);
@@ -2320,7 +2364,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     const specialResponse = await handleRenderError(ssrErr);
     if (specialResponse) return specialResponse;
     // Non-special error during SSR — render error.tsx if available
-    const errorBoundaryResp = await renderErrorBoundaryPage(route, ssrErr, isRscRequest, request);
+    const errorBoundaryResp = await renderErrorBoundaryPage(route, ssrErr, isRscRequest, request, params);
     if (errorBoundaryResp) return errorBoundaryResp;
     throw ssrErr;
   }

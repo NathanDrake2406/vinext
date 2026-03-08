@@ -95,13 +95,19 @@ export interface AppRoute {
   /** Unauthorized component path (401) */
   unauthorizedPath: string | null;
   /**
-   * URL segment depth for each layout in the layouts array.
-   * Used by useSelectedLayoutSegments() to determine which segments are
-   * below a given layout. For example, root layout has depth 0, a layout
-   * at app/dashboard/ has depth 1 (one URL segment: "dashboard").
-   * Route groups and parallel slots don't contribute to the depth.
+   * Filesystem segments from app/ root to the route's directory.
+   * Includes route groups and dynamic segments (as template strings like "[id]").
+   * Used at render time to compute the child segments for useSelectedLayoutSegments().
    */
-  layoutSegmentDepths: number[];
+  routeSegments: string[];
+  /**
+   * Tree position (directory depth from app/ root) for each layout.
+   * Used to slice routeSegments and determine which segments are below each layout.
+   * For example, root layout = 0, a layout at app/blog/ = 1, app/blog/(group)/ = 2.
+   * Unlike the old layoutSegmentDepths, this counts ALL directory levels including
+   * route groups and parallel slots.
+   */
+  layoutTreePositions: number[];
   /** Whether this is a dynamic route */
   isDynamic: boolean;
   /** Parameter names for dynamic segments */
@@ -296,7 +302,8 @@ function discoverSlotSubRoutes(
         notFoundPaths: parentRoute.notFoundPaths,
         forbiddenPath: parentRoute.forbiddenPath,
         unauthorizedPath: parentRoute.unauthorizedPath,
-        layoutSegmentDepths: parentRoute.layoutSegmentDepths,
+        routeSegments: [...parentRoute.routeSegments, ...subSegments],
+        layoutTreePositions: parentRoute.layoutTreePositions,
         isDynamic: parentRoute.isDynamic || subIsDynamic,
         params: [...parentRoute.params, ...subParams],
       });
@@ -412,15 +419,10 @@ function fileToAppRoute(
   const layouts = discoverLayouts(segments, appDir, matcher);
   const templates = discoverTemplates(segments, appDir, matcher);
 
-  // Compute the URL segment depth for each layout.
-  // Each layout corresponds to a directory level. We need to count how many
-  // of the filesystem segments up to that layout's level contribute URL segments
-  // (i.e., are not route groups or parallel slots).
-  const layoutSegmentDepths = computeLayoutSegmentDepths(
-    segments,
+  // Compute the tree position (directory depth) for each layout.
+  const layoutTreePositions = computeLayoutTreePositions(
     appDir,
     layouts,
-    matcher,
   );
 
   // Discover per-layout error boundaries (aligned with layouts array).
@@ -486,51 +488,28 @@ function fileToAppRoute(
     notFoundPaths,
     forbiddenPath,
     unauthorizedPath,
-    layoutSegmentDepths,
+    routeSegments: segments,
+    layoutTreePositions,
     isDynamic,
     params,
   };
 }
 
 /**
- * Compute the URL segment depth for each layout in the layouts array.
- * Root layout = 0, then each directory level that contributes a URL segment
- * increments the depth. Route groups and parallel slots don't contribute.
+ * Compute the tree position (directory depth from app root) for each layout.
+ * Root layout = 0, a layout at app/blog/ = 1, app/blog/(group)/ = 2.
+ * Counts ALL directory levels including route groups and parallel slots.
  */
-function computeLayoutSegmentDepths(
-  segments: string[],
+function computeLayoutTreePositions(
   appDir: string,
   layouts: string[],
-  matcher: ValidFileMatcher,
 ): number[] {
-  // Build a map: layout file path → depth in URL segments
-  // Walk the segments directory-by-directory, tracking cumulative URL depth
-  const depthMap = new Map<string, number>();
-
-  // Root layout (at appDir) always has depth 0
-  const rootLayout = findFile(appDir, "layout", matcher);
-  if (rootLayout) depthMap.set(rootLayout, 0);
-
-  let urlDepth = 0;
-  let currentDir = appDir;
-  for (const segment of segments) {
-    currentDir = path.join(currentDir, segment);
-
-    // Count URL-visible segments (skip route groups and parallel slots)
-    const isRouteGroup = segment.startsWith("(") && segment.endsWith(")");
-    const isParallelSlot = segment.startsWith("@");
-    if (!isRouteGroup && !isParallelSlot) {
-      urlDepth++;
-    }
-
-    const layout = findFile(currentDir, "layout", matcher);
-    if (layout) {
-      depthMap.set(layout, urlDepth);
-    }
-  }
-
-  // Map the ordered layouts array to their depths
-  return layouts.map((layoutPath) => depthMap.get(layoutPath) ?? 0);
+  return layouts.map((layoutPath) => {
+    const layoutDir = path.dirname(layoutPath);
+    if (layoutDir === appDir) return 0;
+    const relative = path.relative(appDir, layoutDir);
+    return relative.split(path.sep).length;
+  });
 }
 
 /**

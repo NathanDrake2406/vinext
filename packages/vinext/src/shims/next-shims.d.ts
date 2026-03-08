@@ -102,7 +102,7 @@ declare module "next/navigation" {
   export function setNavigationContext(ctx: any): void;
   export function setClientParams(params: Record<string, string | string[]>): void;
   export function getClientParams(): Record<string, string | string[]>;
-  export function getLayoutSegmentContext(): import("react").Context<number> | null;
+  export function getLayoutSegmentContext(): import("react").Context<string[]> | null;
 
   // RSC prefetch cache utilities (shared between link.tsx and browser entry)
   export interface PrefetchCacheEntry {
