@@ -357,7 +357,7 @@ function __sanitizeErrorForClient(error) {
 // thrown during RSC streaming (e.g. inside Suspense boundaries).
 // For non-navigation errors in production, generates a digest hash so the
 // error can be correlated with server logs without leaking details.
-function rscOnError(error) {
+function rscOnError(error, requestInfo, errorContext) {
   if (error && typeof error === "object" && "digest" in error) {
     return String(error.digest);
   }
@@ -403,6 +403,16 @@ function rscOnError(error) {
     return undefined;
   }
 
+  if (requestInfo && errorContext && error) {
+    _reportRequestError(
+      error instanceof Error ? error : new Error(String(error)),
+      requestInfo,
+      errorContext,
+    ).catch((reportErr) => {
+      console.error("[vinext] Failed to report render error:", reportErr);
+    });
+  }
+
   // In production, generate a digest hash for non-navigation errors
   if (process.env.NODE_ENV === "production" && error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -410,6 +420,22 @@ function rscOnError(error) {
     return __errorDigest(msg + stack);
   }
   return undefined;
+}
+
+function createRscOnErrorHandler(request, pathname, routePath) {
+  const requestInfo = {
+    path: pathname,
+    method: request.method,
+    headers: Object.fromEntries(request.headers.entries()),
+  };
+  const errorContext = {
+    routerKind: "App Router",
+    routePath: routePath || pathname,
+    routeType: "render",
+  };
+  return function(error) {
+    return rscOnError(error, requestInfo, errorContext);
+  };
 }
 
 ${imports.join("\n")}
@@ -524,7 +550,12 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
       });
     }
     ` : ""}
-    const rscStream = renderToReadableStream(element, { onError: rscOnError });
+    const onRenderError = createRscOnErrorHandler(
+      request,
+      new URL(request.url).pathname,
+      route?.pattern ?? new URL(request.url).pathname,
+    );
+    const rscStream = renderToReadableStream(element, { onError: onRenderError });
     setHeadersContext(null);
     setNavigationContext(null);
     return new Response(rscStream, {
@@ -542,7 +573,12 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
       element = createElement(LayoutComponent, { children: element, params: _asyncFallbackParamsHtml });
     }
   }
-  const rscStream = renderToReadableStream(element, { onError: rscOnError });
+  const onRenderError = createRscOnErrorHandler(
+    request,
+    new URL(request.url).pathname,
+    route?.pattern ?? new URL(request.url).pathname,
+  );
+  const rscStream = renderToReadableStream(element, { onError: onRenderError });
   // Collect font data from RSC environment
   const fontData = {
     links: _getSSRFontLinks(),
@@ -629,7 +665,12 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
       });
     }
     ` : ""}
-    const rscStream = renderToReadableStream(element, { onError: rscOnError });
+    const onRenderError = createRscOnErrorHandler(
+      request,
+      new URL(request.url).pathname,
+      route?.pattern ?? new URL(request.url).pathname,
+    );
+    const rscStream = renderToReadableStream(element, { onError: onRenderError });
     setHeadersContext(null);
     setNavigationContext(null);
     return new Response(rscStream, {
@@ -646,7 +687,12 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
       element = createElement(LayoutComponent, { children: element, params: _asyncErrParamsHtml });
     }
   }
-  const rscStream = renderToReadableStream(element, { onError: rscOnError });
+  const onRenderError = createRscOnErrorHandler(
+    request,
+    new URL(request.url).pathname,
+    route?.pattern ?? new URL(request.url).pathname,
+  );
+  const rscStream = renderToReadableStream(element, { onError: onRenderError });
   // Collect font data from RSC environment so error pages include font styles
   const fontData = {
     links: _getSSRFontLinks(),
@@ -1762,9 +1808,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         element = createElement("div", null, "Page not found");
       }
 
+      const onRenderError = createRscOnErrorHandler(
+        request,
+        cleanPathname,
+        match ? match.route.pattern : cleanPathname,
+      );
       const rscStream = renderToReadableStream(
         { root: element, returnValue },
-        { temporaryReferences, onError: rscOnError },
+        { temporaryReferences, onError: onRenderError },
       );
 
       // Collect cookies set during the action
@@ -2083,7 +2134,12 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           interceptPage: intercept.page,
           interceptParams: intercept.matchedParams,
         }, url.searchParams);
-        const interceptStream = renderToReadableStream(interceptElement, { onError: rscOnError });
+        const interceptOnError = createRscOnErrorHandler(
+          request,
+          cleanPathname,
+          sourceRoute.pattern,
+        );
+        const interceptStream = renderToReadableStream(interceptElement, { onError: interceptOnError });
         setHeadersContext(null);
         setNavigationContext(null);
         return new Response(interceptStream, {
@@ -2273,7 +2329,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   if (process.env.NODE_ENV !== "production") __compileEnd = performance.now();
 
   // Render to RSC stream
-  const rscStream = renderToReadableStream(element, { onError: rscOnError });
+  const onRenderError = createRscOnErrorHandler(request, cleanPathname, route.pattern);
+  const rscStream = renderToReadableStream(element, { onError: onRenderError });
 
   if (isRscRequest) {
     // Direct RSC stream response (for client-side navigation)
