@@ -348,7 +348,7 @@ export async function resolveNextConfig(
   // Warn about unsupported webpack usage. We preserve alias injection and
   // extract MDX settings, but all other webpack customization is still ignored.
   if (config.webpack !== undefined) {
-    if (mdx || Object.keys(aliases).length > 0) {
+    if (mdx || Object.keys(webpackProbe.aliases).length > 0) {
       console.warn(
         '[vinext] next.config option "webpack" is only partially supported. ' +
           "vinext preserves resolve.alias entries and MDX loader settings, but other webpack customization is ignored",
@@ -442,7 +442,7 @@ async function probeWebpackConfig(
   const mockModuleRules: any[] = [];
   const mockConfig = {
     context: root,
-    resolve: { alias: {} as Record<string, string> },
+    resolve: { alias: {} as Record<string, unknown> },
     module: { rules: mockModuleRules },
     plugins: [] as any[],
   };

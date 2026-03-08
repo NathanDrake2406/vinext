@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ describe("loadNextConfig phase argument", () => {
   let tmpDir: string;
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (tmpDir) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -123,6 +124,50 @@ module.exports = withPlugin({ basePath: "/wrapped" });`,
 
     expect(config.aliases["wrapped/config"]).toBe(
       path.join(tmpDir, "turbo", "request.ts"),
+    );
+  });
+
+  it("captures top-level turbopack aliases", async () => {
+    tmpDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(tmpDir, "next.config.mjs"),
+      `export default {
+        turbopack: {
+          resolveAlias: {
+            "wrapped/config": "./turbopack/request.ts"
+          }
+        }
+      };`,
+    );
+
+    const rawConfig = await loadNextConfig(tmpDir);
+    const config = await resolveNextConfig(rawConfig, tmpDir);
+
+    expect(config.aliases["wrapped/config"]).toBe(
+      path.join(tmpDir, "turbopack", "request.ts"),
+    );
+  });
+
+  it("does not attribute turbopack aliases to webpack support warnings", async () => {
+    tmpDir = makeTempDir();
+
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rawConfig = {
+      turbopack: {
+        resolveAlias: {
+          "wrapped/config": "./turbopack/request.ts",
+        },
+      },
+      webpack: (webpackConfig: any) => webpackConfig,
+    };
+
+    const config = await resolveNextConfig(rawConfig, tmpDir);
+
+    expect(config.aliases["wrapped/config"]).toBe(
+      path.join(tmpDir, "turbopack", "request.ts"),
+    );
+    expect(consoleWarn).toHaveBeenCalledWith(
+      '[vinext] next.config option "webpack" is not yet supported and will be ignored',
     );
   });
 
