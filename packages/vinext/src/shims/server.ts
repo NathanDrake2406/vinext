@@ -385,7 +385,7 @@ export type NextMiddleware = (
  */
 export class NextFetchEvent {
   sourcePage: string;
-  _waitUntilPromises: Promise<unknown>[] = [];
+  private _waitUntilPromises: Promise<unknown>[] = [];
 
   constructor(params: { page: string }) {
     this.sourcePage = params.page;
@@ -393,6 +393,11 @@ export class NextFetchEvent {
 
   waitUntil(promise: Promise<unknown>): void {
     this._waitUntilPromises.push(promise);
+  }
+
+  /** Drain all waitUntil promises. Returns a single promise that settles when all are done. */
+  drainWaitUntil(): Promise<PromiseSettledResult<unknown>[]> {
+    return Promise.allSettled(this._waitUntilPromises);
   }
 }
 

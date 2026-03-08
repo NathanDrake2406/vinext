@@ -693,7 +693,7 @@ ${generateNormalizePathCode("es5")}
 ${generateSafeRegExpCode("es5")}
 ${generateMiddlewareMatcherCode("es5")}
 
-export async function runMiddleware(request) {
+export async function runMiddleware(request, ctx) {
   var isProxy = ${middlewarePath ? JSON.stringify(isProxyFile(middlewarePath)) : "false"};
   var middlewareFn = isProxy
     ? (middlewareModule.proxy ?? middlewareModule.default)
@@ -734,7 +734,7 @@ export async function runMiddleware(request) {
     console.error("[vinext] Middleware error:", e);
     return { continue: false, response: new Response("Internal Server Error", { status: 500 }) };
   }
-  if (fetchEvent._waitUntilPromises.length > 0) { Promise.allSettled(fetchEvent._waitUntilPromises); }
+  if (ctx && typeof ctx.waitUntil === "function") { ctx.waitUntil(fetchEvent.drainWaitUntil()); } else { fetchEvent.drainWaitUntil(); }
 
   if (!response) return { continue: true };
 

@@ -293,10 +293,9 @@ export async function runMiddleware(
     };
   }
 
-  // Drain waitUntil promises (fire-and-forget in Node.js)
-  if (fetchEvent._waitUntilPromises.length > 0) {
-    Promise.allSettled(fetchEvent._waitUntilPromises);
-  }
+  // Drain waitUntil promises. Fire-and-forget in Node.js dev/prod servers;
+  // on Cloudflare Workers the caller can pass ctx so the isolate is kept alive.
+  fetchEvent.drainWaitUntil();
 
   // No response = continue
   if (!response) {

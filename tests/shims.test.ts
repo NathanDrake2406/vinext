@@ -2370,9 +2370,8 @@ describe("NextFetchEvent passed to middleware", () => {
       ssrLoadModule: async () => ({
         middleware: (_req: any, event: any) => {
           event.waitUntil(
-            new Promise<void>((resolve) => {
+            Promise.resolve().then(() => {
               sideEffectRan = true;
-              resolve();
             }),
           );
           return new Response(null, {
