@@ -2385,9 +2385,9 @@ describe("NextFetchEvent passed to middleware", () => {
     const request = new Request("http://localhost:3000/drain");
     await runMiddleware(mockServer as any, "/tmp/middleware.ts", request);
 
-    // The waitUntil promise should have been resolved
-    // Give it a tick to drain
-    await new Promise((r) => setTimeout(r, 10));
+    // The waitUntil promise should have been resolved.
+    // Flush the microtask queue so Promise.resolve().then(...) callbacks run.
+    await new Promise((r) => queueMicrotask(r as () => void));
     expect(sideEffectRan).toBe(true);
   });
 });

@@ -293,8 +293,8 @@ export async function runMiddleware(
     };
   }
 
-  // Drain waitUntil promises. Fire-and-forget in Node.js dev/prod servers;
-  // on Cloudflare Workers the caller can pass ctx so the isolate is kept alive.
+  // Drain waitUntil promises (fire-and-forget: we don't block the response
+  // on these — matches platform semantics where waitUntil runs after response).
   fetchEvent.drainWaitUntil();
 
   // No response = continue
