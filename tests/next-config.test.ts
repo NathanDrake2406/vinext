@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadNextConfig } from "../packages/vinext/src/config/next-config.js";
+import { loadNextConfig, resolveNextConfig } from "../packages/vinext/src/config/next-config.js";
 import { PHASE_PRODUCTION_BUILD, PHASE_DEVELOPMENT_SERVER } from "../packages/vinext/src/shims/constants.js";
 
 function makeTempDir(): string {
@@ -49,5 +49,98 @@ describe("loadNextConfig phase argument", () => {
 
     const config = await loadNextConfig(tmpDir, PHASE_PRODUCTION_BUILD);
     expect(config?.env?.STATIC).toBe("yes");
+  });
+});
+
+describe("resolveNextConfig alias extraction", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("captures webpack resolve.alias from wrapped config plugins", async () => {
+    tmpDir = makeTempDir();
+
+    fs.mkdirSync(path.join(tmpDir, "node_modules", "fake-plugin"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, "node_modules", "fake-plugin", "index.js"),
+      `module.exports = function fakePlugin() {
+        return function withPlugin(nextConfig = {}) {
+          return Object.assign({}, nextConfig, {
+            webpack(config) {
+              config.resolve = config.resolve || {};
+              config.resolve.alias = config.resolve.alias || {};
+              config.resolve.alias["wrapped/config"] = "./config/request.ts";
+              return typeof nextConfig.webpack === "function"
+                ? nextConfig.webpack(config)
+                : config;
+            }
+          });
+        };
+      };`,
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "node_modules", "fake-plugin", "package.json"),
+      JSON.stringify({ name: "fake-plugin", version: "1.0.0", main: "index.js" }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "next.config.js"),
+      `const withPlugin = require("fake-plugin")();
+module.exports = withPlugin({ basePath: "/wrapped" });`,
+    );
+
+    const rawConfig = await loadNextConfig(tmpDir);
+    const config = await resolveNextConfig(rawConfig, tmpDir);
+
+    expect(config.basePath).toBe("/wrapped");
+    expect(config.aliases["wrapped/config"]).toBe(
+      path.join(tmpDir, "config", "request.ts"),
+    );
+  });
+
+  it("captures turbopack aliases from wrapped config plugins", async () => {
+    tmpDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(tmpDir, "next.config.mjs"),
+      `export default {
+        experimental: {
+          turbo: {
+            resolveAlias: {
+              "wrapped/config": "./turbo/request.ts"
+            }
+          }
+        }
+      };`,
+    );
+
+    const rawConfig = await loadNextConfig(tmpDir);
+    const config = await resolveNextConfig(rawConfig, tmpDir);
+
+    expect(config.aliases["wrapped/config"]).toBe(
+      path.join(tmpDir, "turbo", "request.ts"),
+    );
+  });
+
+  it("keeps unrelated config resolution unchanged when no aliases exist", async () => {
+    tmpDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(tmpDir, "next.config.mjs"),
+      `export default {
+        basePath: "/docs",
+        env: { FEATURE_FLAG: "on" }
+      };`,
+    );
+
+    const rawConfig = await loadNextConfig(tmpDir);
+    const config = await resolveNextConfig(rawConfig, tmpDir);
+
+    expect(config.basePath).toBe("/docs");
+    expect(config.env.FEATURE_FLAG).toBe("on");
+    expect(config.aliases).toEqual({});
   });
 });
