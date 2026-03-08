@@ -808,7 +808,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       const middlewareHeaders: Record<string, string | string[]> = {};
       let middlewareRewriteStatus: number | undefined;
       if (typeof runMiddleware === "function") {
-        const result = await runMiddleware(webRequest);
+        const result = await runMiddleware(webRequest, undefined);
 
         if (!result.continue) {
           if (result.redirectUrl) {
