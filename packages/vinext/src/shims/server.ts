@@ -385,7 +385,7 @@ export type NextMiddleware = (
  */
 export class NextFetchEvent {
   sourcePage: string;
-  private _waitUntilPromises: Promise<unknown>[] = [];
+  _waitUntilPromises: Promise<unknown>[] = [];
 
   constructor(params: { page: string }) {
     this.sourcePage = params.page;

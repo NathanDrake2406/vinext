@@ -681,7 +681,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // Generate middleware code if middleware.ts exists
     const middlewareImportCode = middlewarePath
       ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};
-import { NextRequest } from "next/server";`
+import { NextRequest, NextFetchEvent } from "next/server";`
       : "";
 
     // The matcher config is read from the middleware module at import time.
@@ -727,12 +727,14 @@ export async function runMiddleware(request) {
     mwRequest = new Request(mwUrl, request);
   }
   var nextRequest = mwRequest instanceof NextRequest ? mwRequest : new NextRequest(mwRequest);
+  var fetchEvent = new NextFetchEvent({ page: normalizedPathname });
   var response;
-  try { response = await middlewareFn(nextRequest); }
+  try { response = await middlewareFn(nextRequest, fetchEvent); }
   catch (e) {
     console.error("[vinext] Middleware error:", e);
     return { continue: false, response: new Response("Internal Server Error", { status: 500 }) };
   }
+  if (fetchEvent._waitUntilPromises.length > 0) { Promise.allSettled(fetchEvent._waitUntilPromises); }
 
   if (!response) return { continue: true };
 
