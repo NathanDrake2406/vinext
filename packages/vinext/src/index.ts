@@ -4245,9 +4245,12 @@ export function matchConfigPattern(
     const paramName = catchAllMatch[1];
     const isPlus = catchAllMatch[2] === "+";
 
-    if (!pathname.startsWith(prefix.replace(/\/$/, ""))) return null;
+    const prefixNoSlash = prefix.replace(/\/$/, "");
+    if (!pathname.startsWith(prefixNoSlash)) return null;
+    const charAfter = pathname[prefixNoSlash.length];
+    if (charAfter !== undefined && charAfter !== "/") return null;
 
-    const rest = pathname.slice(prefix.replace(/\/$/, "").length);
+    const rest = pathname.slice(prefixNoSlash.length);
     // For :path+ we need at least one segment (non-empty after the prefix)
     if (isPlus && (!rest || rest === "/")) return null;
     // For :path* zero segments is fine
