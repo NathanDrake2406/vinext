@@ -2613,6 +2613,23 @@ describe("App Router middleware with NextRequest", () => {
     expect(res.status).toBe(500);
   });
 
+  it("middleware request header overrides can delete credential headers before rendering", async () => {
+    // Ported from Next.js: test/e2e/middleware-request-header-overrides/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-request-header-overrides/test/index.test.ts
+    const { res, html } = await fetchHtml(baseUrl, "/header-override-delete", {
+      headers: {
+        authorization: "Bearer secret",
+        cookie: "a=1; b=2",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(html).toContain('id="authorization">null<');
+    expect(html).toContain('id="cookie">null<');
+    expect(html).toContain('id="middleware-header">hello-from-middleware<');
+    expect(html).toContain('id="cookie-count">0<');
+  });
+
   it("does not leak x-middleware-next or x-middleware-rewrite headers to the client", async () => {
     // NextResponse.next() sets x-middleware-next internally.
     // The dev server must strip it (and all x-middleware-* headers) before

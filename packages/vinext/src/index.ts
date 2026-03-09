@@ -43,6 +43,7 @@ import {
 } from "./config/config-matchers.js";
 import { scanMetadataFiles } from "./server/metadata-routes.js";
 import { staticExportPages } from "./build/static-export.js";
+import { buildRequestHeadersFromMiddlewareResponse } from "./server/middleware-request-headers.js";
 import { detectPackageManager } from "./utils/project.js";
 import { asyncHooksStubPlugin } from "./plugins/async-hooks-stub.js";
 import { hasWranglerConfig, formatMissingCloudflarePluginError } from "./deploy.js";
@@ -1997,12 +1998,39 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // config has/missing conditions and downstream handlers
                 // see middleware-modified cookies and headers.
                 if (result.responseHeaders) {
-                  const mwReqPrefix = "x-middleware-request-";
+                  const currentRequestHeaders = new Headers();
+                  for (const [key, value] of Object.entries(req.headers)) {
+                    if (Array.isArray(value)) {
+                      currentRequestHeaders.set(key, value.join(", "));
+                    } else if (value !== undefined) {
+                      currentRequestHeaders.set(key, value);
+                    }
+                  }
+
+                  // In mixed app/pages projects, the App Router dev entry reruns
+                  // middleware and owns applying x-middleware-request-* to its
+                  // request-scoped headers context. Rebuilding the shared Node
+                  // request headers here leaks App Router middleware state into
+                  // the pages-shell config matcher, which can misroute app-only
+                  // fallback rewrites through the pages handler.
+                  if (!hasAppDir) {
+                    const nextRequestHeaders = buildRequestHeadersFromMiddlewareResponse(
+                      currentRequestHeaders,
+                      result.responseHeaders,
+                    );
+
+                    if (nextRequestHeaders) {
+                      for (const key of Object.keys(req.headers)) {
+                        delete req.headers[key];
+                      }
+                      for (const [key, value] of nextRequestHeaders) {
+                        req.headers[key] = value;
+                      }
+                    }
+                  }
+
                   for (const [key, value] of result.responseHeaders) {
-                    if (key.startsWith(mwReqPrefix)) {
-                      const realName = key.slice(mwReqPrefix.length);
-                      req.headers[realName] = value;
-                    } else if (!key.startsWith("x-middleware-")) {
+                    if (!key.startsWith("x-middleware-")) {
                       res.appendHeader(key, value);
                     }
                   }
@@ -2157,10 +2185,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     await proxyExternalRewriteNode(req, res, fallbackRewrite);
                     return;
                   }
-                  // App Router: the RSC entry handles fallback rewrites internally
-                  // (with its own middleware + config processing). Don't dispatch
-                  // to the Pages Router handler which would 404 on App Router routes.
-                  if (hasAppDir) return next();
+                  const fallbackMatch = matchRoute(fallbackRewrite.split("?")[0], routes);
+                  if (!fallbackMatch && hasAppDir) {
+                    return next();
+                  }
                   await handler(req, res, fallbackRewrite, mwStatus);
                   return;
                 }

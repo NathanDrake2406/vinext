@@ -9,6 +9,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { buildRequestHeadersFromMiddlewareResponse } from "../server/middleware-request-headers.js";
 
 // ---------------------------------------------------------------------------
 // Request context
@@ -210,19 +211,19 @@ export function applyMiddlewareRequestHeaders(middlewareResponseHeaders: Headers
   if (!state.headersContext) return;
 
   const ctx = state.headersContext;
-  const PREFIX = "x-middleware-request-";
+  const nextHeaders = buildRequestHeadersFromMiddlewareResponse(
+    ctx.headers,
+    middlewareResponseHeaders,
+  );
 
-  for (const [key, value] of middlewareResponseHeaders) {
-    if (key.startsWith(PREFIX)) {
-      const realName = key.slice(PREFIX.length);
-      ctx.headers.set(realName, value);
-    }
+  if (nextHeaders) {
+    ctx.headers = nextHeaders;
   }
 
   // If middleware modified the cookie header, rebuild the cookies map.
+  ctx.cookies.clear();
   const newCookieHeader = ctx.headers.get("cookie");
   if (newCookieHeader !== null) {
-    ctx.cookies.clear();
     for (const part of newCookieHeader.split(";")) {
       const [k, ...rest] = part.split("=");
       if (k) {

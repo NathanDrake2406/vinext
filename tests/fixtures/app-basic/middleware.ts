@@ -97,6 +97,14 @@ export function middleware(request: NextRequest) {
     return res;
   }
 
+  if (pathname === "/header-override-delete") {
+    const headers = new Headers(request.headers);
+    headers.delete("authorization");
+    headers.delete("cookie");
+    headers.set("x-from-middleware", "hello-from-middleware");
+    return NextResponse.next({ request: { headers } });
+  }
+
   // Forward search params as a header for RSC testing
   // Ref: opennextjs-cloudflare middleware.ts — search-params header
   const requestHeaders = new Headers(request.headers);
@@ -125,6 +133,7 @@ export const config = {
     "/middleware-throw",
     "/search-query",
     "/headers/override-from-middleware",
+    "/header-override-delete",
     "/",
     "/mw-gated-before",
     "/mw-gated-fallback",
