@@ -1,0 +1,19 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "*/5 * * * *" # every 5 minutes
+  workflow_dispatch: # manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync fork with upstream
+        run: gh repo sync NathanDrake2406/vinext --force
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
