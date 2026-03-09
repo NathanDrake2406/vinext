@@ -102,42 +102,12 @@ declare global {
     __VINEXT_RSC_PREFETCHED_URLS__: Set<string> | undefined;
 
     // ── Next.js conventional globals ────────────────────────────────────────
-
-    /**
-     * Pages Router SSR data injected by the server as an inline `<script>`.
-     * Contains page props, route params, locale info, and vinext-specific
-     * metadata (page module URL, app module URL) needed for client hydration
-     * and subsequent client-side navigations.
-     */
-    __NEXT_DATA__:
-      | {
-          /** Serialised page props. */
-          props: { pageProps: unknown };
-          /** Next.js route pattern (e.g. `"/posts/[id]"`). */
-          page: string;
-          /** Merged URL search params + dynamic route params. */
-          query: Record<string, string | string[]>;
-          /** `true` while a fallback SSG page is being generated. */
-          isFallback: boolean;
-          /** Active locale. */
-          locale?: string;
-          /** All configured locales. */
-          locales?: string[];
-          /** Default locale. */
-          defaultLocale?: string;
-          /** vinext-specific additions (not part of Next.js upstream). */
-          __vinext?: {
-            /** Absolute URL of the page module for dynamic import. */
-            pageModuleUrl?: string;
-            /** Absolute URL of the `_app` module for dynamic import. */
-            appModuleUrl?: string;
-          };
-          /** Serialised page module path (legacy — used by `client/entry.ts`). */
-          __pageModule?: string;
-          /** Serialised `_app` module path (legacy — used by `client/entry.ts`). */
-          __appModule?: string;
-        }
-      | undefined;
+    //
+    // `__NEXT_DATA__` is already declared by `next/dist/client/index.d.ts` as
+    // `NEXT_DATA` from `next/dist/shared/lib/utils`. We intentionally do NOT
+    // re-declare it here to avoid type conflicts. vinext-specific extensions
+    // (__vinext, __pageModule, __appModule) are accessed via the
+    // `VinextNextData` type in `client/vinext-next-data.ts`.
   }
 
   // ── self globals used inside server-injected inline scripts ───────────────

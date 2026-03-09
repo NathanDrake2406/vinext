@@ -13,6 +13,7 @@ import React, { forwardRef, useRef, useEffect, useCallback, useContext, createCo
 import { toRscUrl, getPrefetchedUrls, storePrefetchResponse } from "./navigation.js";
 import { isDangerousScheme } from "./url-safety.js";
 import { toSameOriginPath } from "./url-utils.js";
+import type { VinextNextData } from "../client/vinext-next-data.js";
 
 interface NavigateEvent {
   url: URL;
@@ -186,7 +187,7 @@ function prefetchUrl(href: string): void {
         // Network error: allow retry on next viewport intersection
         prefetched.delete(rscUrl);
       });
-    } else if (window.__NEXT_DATA__?.__vinext?.pageModuleUrl) {
+    } else if ((window.__NEXT_DATA__ as VinextNextData | undefined)?.__vinext?.pageModuleUrl) {
       // Pages Router: inject a prefetch link for the target page module
       // We can't easily resolve the target page's module URL from the Link,
       // so we create a <link rel="prefetch"> for the HTML page which helps
