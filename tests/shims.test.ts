@@ -3100,6 +3100,42 @@ describe("matchConfigPattern", () => {
       path: "guide/getting-started",
     });
   });
+
+  // Regression test for: catch-all prefix overmatch
+  // /foobar was incorrectly matched by /foo/:path* because startsWith("/foo")
+  // passed without checking for a segment boundary after the prefix.
+  // https://github.com/cloudflare/vinext/pull/368
+  it("regression: does not overmatch catch-all when pathname shares a prefix but not a segment boundary", async () => {
+    const { matchConfigPattern } = await import(
+      "../packages/vinext/src/index.js"
+    );
+    // Core regression case: /foobar must NOT match /foo/:path*
+    expect(matchConfigPattern("/foobar", "/foo/:path*")).toBeNull();
+    // Similarly for :path+
+    expect(matchConfigPattern("/foobar", "/foo/:path+")).toBeNull();
+    // A legitimate sub-path still matches
+    expect(matchConfigPattern("/foo/bar", "/foo/:path*")).toEqual({ path: "bar" });
+    // An exact prefix (zero segments) still matches for :path*
+    expect(matchConfigPattern("/foo", "/foo/:path*")).toEqual({ path: "" });
+    // An exact prefix (zero segments) still does NOT match for :path+
+    expect(matchConfigPattern("/foo", "/foo/:path+")).toBeNull();
+    // Deeper false-prefix: /football must NOT match /foot/:path*
+    expect(matchConfigPattern("/football", "/foot/:path*")).toBeNull();
+    // But /foot/ball should match
+    expect(matchConfigPattern("/foot/ball", "/foot/:path*")).toEqual({ path: "ball" });
+  });
+
+  it("regression: catch-all prefix overmatch via config-matchers module", async () => {
+    const { matchConfigPattern } = await import(
+      "../packages/vinext/src/config/config-matchers.js"
+    );
+    // Same cases exercised against the standalone config-matchers module
+    expect(matchConfigPattern("/foobar", "/foo/:path*")).toBeNull();
+    expect(matchConfigPattern("/foobar", "/foo/:path+")).toBeNull();
+    expect(matchConfigPattern("/foo/bar", "/foo/:path*")).toEqual({ path: "bar" });
+    expect(matchConfigPattern("/foo", "/foo/:path*")).toEqual({ path: "" });
+    expect(matchConfigPattern("/foo", "/foo/:path+")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
