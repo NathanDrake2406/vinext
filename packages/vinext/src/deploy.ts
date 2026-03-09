@@ -598,9 +598,15 @@ export default {
 
         if (!result.continue) {
           if (result.redirectUrl) {
+            const redirectHeaders = new Headers({ Location: result.redirectUrl });
+            if (result.responseHeaders) {
+              for (const [key, value] of result.responseHeaders) {
+                redirectHeaders.append(key, value);
+              }
+            }
             return new Response(null, {
               status: result.redirectStatus ?? 307,
-              headers: { Location: result.redirectUrl },
+              headers: redirectHeaders,
             });
           }
           if (result.response) {

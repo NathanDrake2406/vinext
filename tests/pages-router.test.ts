@@ -1285,6 +1285,25 @@ export const config = { matcher: ["/protected"] };
     expect(result.redirectStatus).toBe(307);
   });
 
+  it("runMiddleware preserves responseHeaders on redirect (/redirect-with-cookies)", async () => {
+    const serverEntryPath = path.join(outDir, "server", "entry.js");
+    const serverEntry = await import(pathToFileURL(serverEntryPath).href);
+    const request = new Request("http://localhost/redirect-with-cookies");
+    const result = await serverEntry.runMiddleware(request);
+    expect(result.continue).toBe(false);
+    expect(result.redirectUrl).toContain("/about");
+    expect(result.redirectStatus).toBe(307);
+    // The inline runMiddleware codegen must collect non-internal headers
+    // (e.g. Set-Cookie) on redirect responses, just like it does for
+    // next() and rewrite() responses.
+    expect(result.responseHeaders).toBeDefined();
+    const cookies = [...result.responseHeaders.entries()]
+      .filter(([k]: [string, string]) => k === "set-cookie")
+      .map(([, v]: [string, string]) => v);
+    expect(cookies.some((c: string) => c.includes("mw-session=abc123"))).toBe(true);
+    expect(cookies.some((c: string) => c.includes("mw-theme=dark"))).toBe(true);
+  });
+
   it("runMiddleware handles rewrite (/rewritten -> /ssr)", async () => {
     const serverEntryPath = path.join(outDir, "server", "entry.js");
     const serverEntry = await import(pathToFileURL(serverEntryPath).href);
@@ -1400,6 +1419,19 @@ describe("Production server middleware (Pages Router)", () => {
     const res = await fetch(`${prodUrl}/old-page`, { redirect: "manual" });
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/about");
+  });
+
+  it("preserves Set-Cookie headers on middleware redirect", async () => {
+    const res = await fetch(`${prodUrl}/redirect-with-cookies`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/about");
+    // Middleware sets mw-session and mw-theme cookies on this redirect.
+    // These must survive into the production response — not be dropped.
+    const cookies = res.headers.getSetCookie();
+    expect(cookies.some((c: string) => c.includes("mw-session=abc123"))).toBe(true);
+    expect(cookies.some((c: string) => c.includes("mw-theme=dark"))).toBe(true);
   });
 
   it("rewrites /rewritten to render /ssr content", async () => {

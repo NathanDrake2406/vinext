@@ -454,6 +454,17 @@ describe("generatePagesRouterWorkerEntry", () => {
     expect(content).toContain("result.redirectStatus");
   });
 
+  it("preserves responseHeaders on middleware redirect", () => {
+    const content = generatePagesRouterWorkerEntry();
+    // Extract the redirect branch: from "if (result.redirectUrl)" to the
+    // next "if (result.response)". This block must reference responseHeaders
+    // so that Set-Cookie and other headers survive the redirect.
+    const redirectStart = content.indexOf("if (result.redirectUrl)");
+    const redirectEnd = content.indexOf("if (result.response)", redirectStart);
+    const redirectBlock = content.slice(redirectStart, redirectEnd);
+    expect(redirectBlock).toContain("responseHeaders");
+  });
+
   it("handles middleware rewrites", () => {
     const content = generatePagesRouterWorkerEntry();
     expect(content).toContain("result.rewriteUrl");

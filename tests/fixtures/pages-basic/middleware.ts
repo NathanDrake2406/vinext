@@ -13,6 +13,14 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/about", request.url));
   }
 
+  // Redirect /redirect-with-cookies to /about and set cookies on the redirect
+  if (url.pathname === "/redirect-with-cookies") {
+    const res = NextResponse.redirect(new URL("/about", request.url));
+    res.cookies.set("mw-session", "abc123", { path: "/" });
+    res.cookies.set("mw-theme", "dark", { path: "/" });
+    return res;
+  }
+
   // Rewrite /rewritten to /ssr
   if (url.pathname === "/rewritten") {
     return NextResponse.rewrite(new URL("/ssr", request.url));
