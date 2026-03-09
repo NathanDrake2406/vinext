@@ -234,6 +234,30 @@ function isCjsError(e: unknown): boolean {
 }
 
 /**
+ * Emit a warning when config loading fails, with a targeted hint for
+ * known plugin wrappers that are unnecessary in vinext.
+ */
+function warnConfigLoadFailure(filename: string, err: Error): void {
+  const msg = err.message ?? "";
+  const stack = err.stack ?? "";
+  const isNextIntlPlugin =
+    msg.includes("next-intl") ||
+    stack.includes("next-intl/plugin") ||
+    stack.includes("next-intl/dist");
+
+  console.warn(
+    `[vinext] Failed to load ${filename}: ${msg}`,
+  );
+  if (isNextIntlPlugin) {
+    console.warn(
+      "[vinext] Hint: createNextIntlPlugin() is not needed with vinext. " +
+        "Remove the next-intl/plugin wrapper from your next.config — " +
+        "vinext auto-detects next-intl and registers the i18n config alias automatically.",
+    );
+  }
+}
+
+/**
  * Unwrap the config value from a loaded module, calling it if it's a
  * function-form config (Next.js supports `module.exports = (phase, opts) => config`).
  */
@@ -286,16 +310,12 @@ export async function loadNextConfig(
           const mod = require(configPath);
           return await unwrapConfig({ default: mod }, phase);
         } catch (e2) {
-          console.warn(
-            `[vinext] Failed to load ${filename}: ${(e2 as Error).message}`,
-          );
+          warnConfigLoadFailure(filename, e2 as Error);
           return null;
         }
       }
 
-      console.warn(
-        `[vinext] Failed to load ${filename}: ${(e as Error).message}`,
-      );
+      warnConfigLoadFailure(filename, e as Error);
       return null;
     }
   }
@@ -312,7 +332,7 @@ export async function resolveNextConfig(
   root: string = process.cwd(),
 ): Promise<ResolvedNextConfig> {
   if (!config) {
-    return {
+    const resolved: ResolvedNextConfig = {
       env: {},
       basePath: "",
       trailingSlash: false,
@@ -330,6 +350,8 @@ export async function resolveNextConfig(
       serverActionsAllowedOrigins: [],
       serverActionsBodySizeLimit: 1 * 1024 * 1024,
     };
+    detectNextIntlConfig(root, resolved);
+    return resolved;
   }
 
   // Resolve redirects
@@ -422,7 +444,7 @@ export async function resolveNextConfig(
     };
   }
 
-  return {
+  const resolved: ResolvedNextConfig = {
     env: config.env ?? {},
     basePath: config.basePath ?? "",
     trailingSlash: config.trailingSlash ?? false,
@@ -440,6 +462,12 @@ export async function resolveNextConfig(
     serverActionsAllowedOrigins,
     serverActionsBodySizeLimit,
   };
+
+  // Auto-detect next-intl (lowest priority — explicit aliases from
+  // webpack/turbopack already in `aliases` take precedence)
+  detectNextIntlConfig(root, resolved);
+
+  return resolved;
 }
 
 function normalizeAliasEntries(
@@ -524,6 +552,66 @@ export async function extractMdxOptions(
   root: string = process.cwd(),
 ): Promise<MdxOptions | null> {
   return (await probeWebpackConfig(config, root)).mdx;
+}
+
+/**
+ * Probe file candidates relative to root. Returns the first one that exists,
+ * or null if none match.
+ */
+function probeFiles(root: string, candidates: string[]): string | null {
+  for (const candidate of candidates) {
+    const abs = path.resolve(root, candidate);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+const I18N_REQUEST_CANDIDATES = [
+  "i18n/request.ts",
+  "i18n/request.tsx",
+  "i18n/request.js",
+  "i18n/request.jsx",
+  "src/i18n/request.ts",
+  "src/i18n/request.tsx",
+  "src/i18n/request.js",
+  "src/i18n/request.jsx",
+];
+
+/**
+ * Detect next-intl in the project and auto-register the `next-intl/config`
+ * alias if needed.
+ *
+ * next-intl's `createNextIntlPlugin()` crashes in vinext because it calls
+ * `require('next/package.json')` to check the Next.js version. Instead,
+ * vinext detects next-intl and registers the alias automatically.
+ *
+ * Mutates `resolved.aliases` and `resolved.env` in place.
+ */
+export function detectNextIntlConfig(
+  root: string,
+  resolved: ResolvedNextConfig,
+): void {
+  // Explicit alias wins — user or plugin already set it
+  if (resolved.aliases["next-intl/config"]) return;
+
+  // Check if next-intl is installed (use main entry — some packages
+  // don't expose ./package.json in their exports map)
+  const require = createRequire(path.join(root, "package.json"));
+  try {
+    require.resolve("next-intl");
+  } catch {
+    return; // next-intl not installed
+  }
+
+  // Probe for the i18n request config file
+  const configPath = probeFiles(root, I18N_REQUEST_CANDIDATES);
+  if (!configPath) return;
+
+  resolved.aliases["next-intl/config"] = configPath;
+
+  if (resolved.trailingSlash) {
+    resolved.env._next_intl_trailing_slash = "true";
+  }
 }
 
 function extractMdxOptionsFromRules(rules: any[]): MdxOptions | null {

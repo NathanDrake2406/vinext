@@ -1,5 +1,2 @@
-import createNextIntlPlugin from "next-intl/plugin";
-
-const withNextIntl = createNextIntlPlugin();
-
-export default withNextIntl({});
+// No createNextIntlPlugin wrapper needed — vinext auto-detects next-intl
+export default {};

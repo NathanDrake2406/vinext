@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadNextConfig, parseBodySizeLimit, resolveNextConfig } from "../packages/vinext/src/config/next-config.js";
+import { detectNextIntlConfig, loadNextConfig, parseBodySizeLimit, resolveNextConfig, type ResolvedNextConfig } from "../packages/vinext/src/config/next-config.js";
 import { PHASE_PRODUCTION_BUILD, PHASE_DEVELOPMENT_SERVER } from "../packages/vinext/src/shims/constants.js";
 
 function makeTempDir(): string {
@@ -329,5 +329,223 @@ describe("resolveNextConfig serverActionsBodySizeLimit", () => {
       },
     });
     expect(resolved.serverActionsBodySizeLimit).toBe(5242880);
+  });
+});
+
+describe("detectNextIntlConfig", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function makeResolved(overrides: Partial<ResolvedNextConfig> = {}): ResolvedNextConfig {
+    return {
+      env: {},
+      basePath: "",
+      trailingSlash: false,
+      output: "",
+      pageExtensions: ["tsx", "ts", "jsx", "js"],
+      cacheComponents: false,
+      redirects: [],
+      rewrites: { beforeFiles: [], afterFiles: [], fallback: [] },
+      headers: [],
+      images: undefined,
+      i18n: null,
+      mdx: null,
+      aliases: {},
+      allowedDevOrigins: [],
+      serverActionsAllowedOrigins: [],
+      serverActionsBodySizeLimit: 1 * 1024 * 1024,
+      ...overrides,
+    };
+  }
+
+  /** Create a tmpdir with a fake next-intl package so createRequire can resolve it */
+  function setupWithNextIntl(i18nFile?: string) {
+    tmpDir = makeTempDir();
+    // Create a resolvable next-intl/package.json
+    const nextIntlDir = path.join(tmpDir, "node_modules", "next-intl");
+    fs.mkdirSync(nextIntlDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nextIntlDir, "package.json"),
+      JSON.stringify({ name: "next-intl", version: "4.0.0" }),
+    );
+    // Create root package.json so createRequire works
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-project" }),
+    );
+
+    if (i18nFile) {
+      const absPath = path.join(tmpDir, i18nFile);
+      fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      fs.writeFileSync(absPath, "export default {};\n");
+    }
+  }
+
+  it("auto-detects i18n/request.ts when next-intl is installed", () => {
+    setupWithNextIntl("i18n/request.ts");
+    const resolved = makeResolved();
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.aliases["next-intl/config"]).toBe(
+      path.join(tmpDir, "i18n", "request.ts"),
+    );
+  });
+
+  it("auto-detects src/i18n/request.ts", () => {
+    setupWithNextIntl("src/i18n/request.ts");
+    const resolved = makeResolved();
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.aliases["next-intl/config"]).toBe(
+      path.join(tmpDir, "src", "i18n", "request.ts"),
+    );
+  });
+
+  it("prefers i18n/request.ts over src/i18n/request.ts", () => {
+    setupWithNextIntl("i18n/request.ts");
+    // Also create src variant
+    const srcPath = path.join(tmpDir, "src", "i18n", "request.ts");
+    fs.mkdirSync(path.dirname(srcPath), { recursive: true });
+    fs.writeFileSync(srcPath, "export default {};\n");
+
+    const resolved = makeResolved();
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.aliases["next-intl/config"]).toBe(
+      path.join(tmpDir, "i18n", "request.ts"),
+    );
+  });
+
+  it("detects .js extension variant", () => {
+    setupWithNextIntl("i18n/request.js");
+    const resolved = makeResolved();
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.aliases["next-intl/config"]).toBe(
+      path.join(tmpDir, "i18n", "request.js"),
+    );
+  });
+
+  it("detects .tsx extension variant", () => {
+    setupWithNextIntl("i18n/request.tsx");
+    const resolved = makeResolved();
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.aliases["next-intl/config"]).toBe(
+      path.join(tmpDir, "i18n", "request.tsx"),
+    );
+  });
+
+  // Note: "does nothing when next-intl is not installed" cannot be tested
+  // in this monorepo because vitest's module resolution always finds
+  // next-intl from the workspace root. The code path is a single try/catch
+  // that returns early — covered by the "no config file" and "explicit alias" tests.
+
+  it("does nothing when no i18n config file exists", () => {
+    setupWithNextIntl(); // no i18n file
+    const resolved = makeResolved();
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.aliases["next-intl/config"]).toBeUndefined();
+  });
+
+  it("does not overwrite explicit alias", () => {
+    setupWithNextIntl("i18n/request.ts");
+    const explicit = "/custom/path/to/config.ts";
+    const resolved = makeResolved({
+      aliases: { "next-intl/config": explicit },
+    });
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.aliases["next-intl/config"]).toBe(explicit);
+  });
+
+  it("sets trailing slash env var when trailingSlash is true", () => {
+    setupWithNextIntl("i18n/request.ts");
+    const resolved = makeResolved({ trailingSlash: true });
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.env._next_intl_trailing_slash).toBe("true");
+  });
+
+  it("does not set trailing slash env var when trailingSlash is false", () => {
+    setupWithNextIntl("i18n/request.ts");
+    const resolved = makeResolved({ trailingSlash: false });
+    detectNextIntlConfig(tmpDir, resolved);
+
+    expect(resolved.env._next_intl_trailing_slash).toBeUndefined();
+  });
+});
+
+describe("resolveNextConfig next-intl auto-detection", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("auto-detects next-intl even when config is null", async () => {
+    tmpDir = makeTempDir();
+    // Setup next-intl + i18n config file
+    const nextIntlDir = path.join(tmpDir, "node_modules", "next-intl");
+    fs.mkdirSync(nextIntlDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nextIntlDir, "package.json"),
+      JSON.stringify({ name: "next-intl", version: "4.0.0" }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-project" }),
+    );
+    fs.mkdirSync(path.join(tmpDir, "i18n"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "i18n", "request.ts"), "export default {};\n");
+
+    const config = await resolveNextConfig(null, tmpDir);
+    expect(config.aliases["next-intl/config"]).toBe(
+      path.join(tmpDir, "i18n", "request.ts"),
+    );
+  });
+
+  it("explicit webpack alias takes precedence over auto-detection", async () => {
+    tmpDir = makeTempDir();
+    // Setup next-intl + i18n config file
+    const nextIntlDir = path.join(tmpDir, "node_modules", "next-intl");
+    fs.mkdirSync(nextIntlDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nextIntlDir, "package.json"),
+      JSON.stringify({ name: "next-intl", version: "4.0.0" }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-project" }),
+    );
+    fs.mkdirSync(path.join(tmpDir, "i18n"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "i18n", "request.ts"), "export default {};\n");
+
+    // Create a custom config path
+    fs.mkdirSync(path.join(tmpDir, "custom"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "custom", "intl.ts"), "export default {};\n");
+
+    const rawConfig = {
+      webpack: (webpackConfig: any) => {
+        webpackConfig.resolve = webpackConfig.resolve || {};
+        webpackConfig.resolve.alias = webpackConfig.resolve.alias || {};
+        webpackConfig.resolve.alias["next-intl/config"] = "./custom/intl.ts";
+        return webpackConfig;
+      },
+    };
+
+    const config = await resolveNextConfig(rawConfig, tmpDir);
+    // Should use the explicit webpack alias, not auto-detected
+    expect(config.aliases["next-intl/config"]).toBe(
+      path.join(tmpDir, "custom", "intl.ts"),
+    );
   });
 });
