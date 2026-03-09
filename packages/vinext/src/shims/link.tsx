@@ -367,7 +367,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     // External links: let the browser handle it.
     // Same-origin absolute URLs (e.g. http://localhost:3000/about) are
     // normalized to local paths so they get client-side navigation.
-    let navigateHref = resolvedHref;
+    let navigateHref = localizedHref;
     if (
       resolvedHref.startsWith("http://") ||
       resolvedHref.startsWith("https://") ||
@@ -383,7 +383,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     // Call onNavigate callback if provided (Next.js 16 View Transitions support)
     if (onNavigate) {
       try {
-        const navUrl = new URL(resolvedHref, window.location.origin);
+        const navUrl = new URL(localizedHref, window.location.origin);
         let prevented = false;
         const navEvent: NavigateEvent = {
           url: navUrl,
