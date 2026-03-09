@@ -17124,7 +17124,13 @@ export async function runMiddleware(request, ctx) {
 
   if (response.status >= 300 && response.status < 400) {
     var location = response.headers.get("Location") || response.headers.get("location");
-    if (location) return { continue: false, redirectUrl: location, redirectStatus: response.status };
+    if (location) {
+      var rdHeaders = new Headers();
+      for (var [rk, rv] of response.headers) {
+        if (!rk.startsWith("x-middleware-") && rk.toLowerCase() !== "location") rdHeaders.append(rk, rv);
+      }
+      return { continue: false, redirectUrl: location, redirectStatus: response.status, responseHeaders: rdHeaders };
+    }
   }
 
   var rewriteUrl = response.headers.get("x-middleware-rewrite");
