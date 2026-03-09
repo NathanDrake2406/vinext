@@ -2,17 +2,12 @@
  * vinext-specific extensions to Next.js's `NEXT_DATA`.
  *
  * The `next` package declares `Window.__NEXT_DATA__: NEXT_DATA` in its types.
- * We can't augment the `NEXT_DATA` type alias, so we define a superset here
- * and cast at the usage sites.
+ * We can't augment the `NEXT_DATA` type alias, so we extend the vinext shim's
+ * interface (shims/internal/utils.ts) and cast at the usage sites.
  */
-export interface VinextNextData {
-  props: Record<string, any>;
-  page: string;
-  query: Record<string, string | string[]>;
-  isFallback: boolean;
-  locale?: string;
-  locales?: string[];
-  defaultLocale?: string;
+import type { NEXT_DATA } from "../shims/internal/utils.js";
+
+export interface VinextNextData extends NEXT_DATA {
   /** vinext-specific additions (not part of Next.js upstream). */
   __vinext?: {
     /** Absolute URL of the page module for dynamic import. */

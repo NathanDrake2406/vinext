@@ -585,6 +585,12 @@ const I18N_REQUEST_CANDIDATES = [
  * `require('next/package.json')` to check the Next.js version. Instead,
  * vinext detects next-intl and registers the alias automatically.
  *
+ * Note: `require.resolve('next-intl')` walks up to parent `node_modules`
+ * directories via standard Node module resolution. In a monorepo, next-intl
+ * installed at the workspace root will trigger detection even if not listed
+ * in the project's own package.json. This is acceptable since a workspace-root
+ * install implies the user wants it available.
+ *
  * Mutates `resolved.aliases` and `resolved.env` in place.
  */
 export function detectNextIntlConfig(
