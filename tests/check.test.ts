@@ -60,9 +60,8 @@ describe("scanImports", () => {
     const items = scanImports(tmpDir);
     expect(items).toHaveLength(1);
     expect(items[0].name).toBe("next/font/local");
-    expect(items[0].status).toBe("partial");
-    expect(items[0].detail).toContain("font.className works");
-    expect(items[0].detail).toContain("font.variable mode broken");
+    expect(items[0].status).toBe("supported");
+    expect(items[0].detail).toContain("className and variable modes both work");
   });
 
   it("detects unsupported imports", () => {
@@ -361,7 +360,7 @@ describe("checkLibraries", () => {
     expect(items.every((i) => i.status === "unsupported")).toBe(true);
   });
 
-  it("detects partial libraries", () => {
+  it("detects supported CSS-in-JS libraries", () => {
     writeFile(
       "package.json",
       JSON.stringify({
@@ -371,7 +370,7 @@ describe("checkLibraries", () => {
 
     const items = checkLibraries(tmpDir);
     expect(items).toHaveLength(1);
-    expect(items[0].status).toBe("partial");
+    expect(items[0].status).toBe("supported");
     expect(items[0].detail).toContain("useServerInsertedHTML");
   });
 
