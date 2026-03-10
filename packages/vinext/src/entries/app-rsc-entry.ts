@@ -1532,7 +1532,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     // generateSitemaps() support — paginated sitemaps at /{prefix}/sitemap/{id}.xml
     // When a sitemap module exports generateSitemaps, the base URL (e.g. /products/sitemap.xml)
     // is no longer served. Instead, individual sitemaps are served at /products/sitemap/{id}.xml.
-    if (metaRoute.type === "sitemap" && metaRoute.isDynamic && typeof metaRoute.module.generateSitemaps === "function") {
+    if (
+      metaRoute.type === "sitemap" &&
+      metaRoute.isDynamic &&
+      typeof metaRoute.module.generateSitemaps === "function"
+    ) {
       const sitemapPrefix = metaRoute.servedUrl.slice(0, -4); // strip ".xml"
       // Match exactly /{prefix}/{id}.xml — one segment only (no slashes in id)
       if (cleanPathname.startsWith(sitemapPrefix + "/") && cleanPathname.endsWith(".xml")) {
@@ -1541,7 +1545,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         const sitemaps = await metaRoute.module.generateSitemaps();
         const matched = sitemaps.find(function(s) { return String(s.id) === rawId; });
         if (!matched) return new Response("Not Found", { status: 404 });
-        // Pass the original typed id from generateSitemaps() so numeric IDs stay numeric
+        // Pass the original typed id from generateSitemaps() so numeric IDs stay numeric.
+        // TODO: wrap with makeThenableParams-style Promise when upgrading to Next.js 16
+        // full-Promise param semantics (id becomes Promise<string> in v16).
         const result = await metaRoute.module.default({ id: matched.id });
         if (result instanceof Response) return result;
         return new Response(sitemapToXml(result), {

@@ -1934,6 +1934,21 @@ describe("metadata routes integration (App Router)", () => {
     expect(xml).not.toContain("batch-0");
   });
 
+  // Ported from Next.js: test/e2e/app-dir/metadata-dynamic-routes/index.test.ts
+  // "Should 404 when missing .xml extension"
+  it("returns 404 for sitemap id without .xml extension", async () => {
+    const res = await fetch(`${baseUrl}/products/sitemap/0`);
+    expect(res.status).toBe(404);
+  });
+
+  it("serves /products/sitemap/featured.xml with string id", async () => {
+    const res = await fetch(`${baseUrl}/products/sitemap/featured.xml`);
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+    expect(xml).toContain("https://example.com/products/batch-featured/item-1");
+    expect(xml).toContain("https://example.com/products/batch-featured/item-2");
+  });
+
   it("returns 404 for invalid sitemap id", async () => {
     const res = await fetch(`${baseUrl}/products/sitemap/99.xml`);
     expect(res.status).toBe(404);
