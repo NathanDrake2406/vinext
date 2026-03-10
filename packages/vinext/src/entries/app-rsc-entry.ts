@@ -1529,6 +1529,27 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
 
   // Handle metadata routes (sitemap.xml, robots.txt, manifest.webmanifest, etc.)
   for (const metaRoute of metadataRoutes) {
+    // generateSitemaps() support — paginated sitemaps at /{prefix}/sitemap/{id}.xml
+    // When a sitemap module exports generateSitemaps, the base URL (e.g. /products/sitemap.xml)
+    // is no longer served. Instead, individual sitemaps are served at /products/sitemap/{id}.xml.
+    if (metaRoute.type === "sitemap" && metaRoute.isDynamic && typeof metaRoute.module.generateSitemaps === "function") {
+      const sitemapPrefix = metaRoute.servedUrl.slice(0, -4); // strip ".xml"
+      if (cleanPathname.startsWith(sitemapPrefix + "/") && cleanPathname.endsWith(".xml")) {
+        const rawId = cleanPathname.slice(sitemapPrefix.length + 1, -4);
+        const sitemaps = await metaRoute.module.generateSitemaps();
+        const found = sitemaps.some(function(s) { return String(s.id) === rawId; });
+        if (!found) return new Response("Not Found", { status: 404 });
+        // Pass raw id string — works for both v15 (direct access) and v16 (await on
+        // a non-Promise returns the value unchanged).
+        const result = await metaRoute.module.default({ id: rawId });
+        if (result instanceof Response) return result;
+        return new Response(sitemapToXml(result), {
+          headers: { "Content-Type": metaRoute.contentType },
+        });
+      }
+      // Skip — the base servedUrl is not served when generateSitemaps exists
+      continue;
+    }
     if (cleanPathname === metaRoute.servedUrl) {
       if (metaRoute.isDynamic) {
         // Dynamic metadata route — call the default export and serialize
