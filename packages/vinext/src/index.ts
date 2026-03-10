@@ -1934,6 +1934,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 }
               }
 
+              const applyRequestHeadersToNodeRequest = (nextRequestHeaders: Headers) => {
+                for (const key of Object.keys(req.headers)) {
+                  delete req.headers[key];
+                }
+                for (const [key, value] of nextRequestHeaders) {
+                  req.headers[key] = value;
+                }
+              };
+
+              let middlewareRequestHeaders: Headers | null = null;
+
               // Run middleware.ts if present
               if (middlewarePath) {
                 // Only trust X-Forwarded-Proto when behind a trusted proxy
@@ -2007,26 +2018,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     }
                   }
 
-                  // In mixed app/pages projects, the App Router dev entry reruns
-                  // middleware and owns applying x-middleware-request-* to its
-                  // request-scoped headers context. Rebuilding the shared Node
-                  // request headers here leaks App Router middleware state into
-                  // the pages-shell config matcher, which can misroute app-only
-                  // fallback rewrites through the pages handler.
-                  if (!hasAppDir) {
-                    const nextRequestHeaders = buildRequestHeadersFromMiddlewareResponse(
-                      currentRequestHeaders,
-                      result.responseHeaders,
-                    );
+                  middlewareRequestHeaders = buildRequestHeadersFromMiddlewareResponse(
+                    currentRequestHeaders,
+                    result.responseHeaders,
+                  );
 
-                    if (nextRequestHeaders) {
-                      for (const key of Object.keys(req.headers)) {
-                        delete req.headers[key];
-                      }
-                      for (const [key, value] of nextRequestHeaders) {
-                        req.headers[key] = value;
-                      }
-                    }
+                  if (middlewareRequestHeaders && !hasAppDir) {
+                    applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
                   }
 
                   for (const [key, value] of result.responseHeaders) {
@@ -2080,13 +2078,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // Convert Node.js IncomingMessage headers to a Web Request for
               // requestContextFromRequest(), which uses the standard Web API.
               const reqUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
-              const reqCtxHeaders = new Headers(
-                Object.fromEntries(
-                  Object.entries(req.headers)
-                    .filter(([, v]) => v !== undefined)
-                    .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)]),
-                ),
-              );
+              const reqCtxHeaders =
+                middlewareRequestHeaders ??
+                new Headers(
+                  Object.fromEntries(
+                    Object.entries(req.headers)
+                      .filter(([, v]) => v !== undefined)
+                      .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)]),
+                  ),
+                );
               const reqCtx: RequestContext = requestContextFromRequest(
                 new Request(reqUrl, { headers: reqCtxHeaders }),
               );
@@ -2123,6 +2123,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   nextConfig?.pageExtensions,
                   fileMatcher,
                 );
+                const apiMatch = matchRoute(resolvedUrl, apiRoutes);
+                if (apiMatch && middlewareRequestHeaders) {
+                  applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
+                }
                 const handled = await handleApiRoute(server, req, res, resolvedUrl, apiRoutes);
                 if (handled) return;
 
@@ -2168,6 +2172,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // Try rendering the resolved URL
               const match = matchRoute(resolvedUrl.split("?")[0], routes);
               if (match) {
+                if (middlewareRequestHeaders) {
+                  applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
+                }
                 await handler(req, res, resolvedUrl, mwStatus);
                 return;
               }
@@ -2188,6 +2195,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   const fallbackMatch = matchRoute(fallbackRewrite.split("?")[0], routes);
                   if (!fallbackMatch && hasAppDir) {
                     return next();
+                  }
+                  if (middlewareRequestHeaders) {
+                    applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
                   }
                   await handler(req, res, fallbackRewrite, mwStatus);
                   return;

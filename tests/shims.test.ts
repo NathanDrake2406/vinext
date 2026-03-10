@@ -2783,6 +2783,43 @@ describe("middleware request header overrides", () => {
     expect(middlewareHeaders).toEqual({});
   });
 
+  it("config-matchers applyMiddlewareRequestHeaders preserves existing headers in add-only overrides", async () => {
+    const { applyMiddlewareRequestHeaders } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+
+    const request = new Request("http://localhost/test", {
+      headers: {
+        authorization: "Bearer secret",
+        cookie: "a=1; b=2",
+        "x-keep": "original",
+      },
+    });
+
+    const forwardedHeaders = new Headers(request.headers);
+    forwardedHeaders.set("x-added", "1");
+
+    const middlewareHeaders: Record<string, string> = {
+      "x-middleware-override-headers": [...forwardedHeaders.keys()].join(","),
+      "x-middleware-request-authorization": forwardedHeaders.get("authorization")!,
+      "x-middleware-request-cookie": forwardedHeaders.get("cookie")!,
+      "x-middleware-request-x-keep": forwardedHeaders.get("x-keep")!,
+      "x-middleware-request-x-added": "1",
+      "x-middleware-next": "1",
+    };
+
+    const { request: nextRequest, postMwReqCtx } = applyMiddlewareRequestHeaders(
+      middlewareHeaders,
+      request,
+    );
+
+    expect(nextRequest.headers.get("authorization")).toBe("Bearer secret");
+    expect(nextRequest.headers.get("cookie")).toBe("a=1; b=2");
+    expect(nextRequest.headers.get("x-keep")).toBe("original");
+    expect(nextRequest.headers.get("x-added")).toBe("1");
+    expect(postMwReqCtx.cookies).toEqual({ a: "1", b: "2" });
+    expect(middlewareHeaders).toEqual({});
+  });
+
   it("next/headers applyMiddlewareRequestHeaders replaces the live request header set", async () => {
     const {
       applyMiddlewareRequestHeaders,
