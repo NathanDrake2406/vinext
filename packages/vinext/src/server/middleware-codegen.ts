@@ -150,16 +150,11 @@ export function generateMiddlewareMatcherCode(style: "modern" | "es5" = "modern"
   // packages/vinext/src/server/middleware.ts. Any changes here must be
   // mirrored there and vice versa.
   return `
-function matchMiddlewarePattern(pathname, pattern) {
-  // Regex patterns: if the pattern contains "(" or "\\" it's a regex —
-  // pass it through to RegExp directly WITHOUT dot-escaping.
-  // This guard prevents regex pattern corruption from dot-escaping.
+${v} __mwPatternCache = new Map();
+function __compileMwPattern(pattern) {
   if (pattern.includes("(") || pattern.includes("\\\\")) {
-    ${v} re = __safeRegExp("^" + pattern + "$");
-    if (re) return re.test(pathname);
+    return __safeRegExp("^" + pattern + "$");
   }
-  // Single-pass tokenizer (avoids chained .replace() flagged by CodeQL as
-  // incomplete sanitization — later passes could re-process earlier outputs).
   ${l} regexStr = "";
   ${v} tokenRe = /\\/:([\\w-]+)\\*|\\/:([\\w-]+)\\+|:([\\w-]+)|[.]|[^/:.]+|./g;
   ${l} tok;
@@ -170,8 +165,15 @@ function matchMiddlewarePattern(pathname, pattern) {
     else if (tok[0] === ".") { regexStr += "\\\\."; }
     else { regexStr += tok[0]; }
   }
-  ${v} re2 = __safeRegExp("^" + regexStr + "$");
-  return re2 ? re2.test(pathname) : pathname === pattern;
+  return __safeRegExp("^" + regexStr + "$");
+}
+function matchMiddlewarePattern(pathname, pattern) {
+  ${l} cached = __mwPatternCache.get(pattern);
+  if (cached === undefined) {
+    cached = __compileMwPattern(pattern);
+    __mwPatternCache.set(pattern, cached);
+  }
+  return cached ? cached.test(pathname) : pathname === pattern;
 }
 
 function matchesMiddleware(pathname, matcher) {
