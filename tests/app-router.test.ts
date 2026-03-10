@@ -1911,6 +1911,51 @@ describe("metadata routes integration (App Router)", () => {
     expect(magic[2]).toBe(0x01);
     expect(magic[3]).toBe(0x00);
   });
+
+  // generateSitemaps() support — paginated sitemaps at /products/sitemap/{id}.xml
+  it("serves /products/sitemap/0.xml from generateSitemaps", async () => {
+    const res = await fetch(`${baseUrl}/products/sitemap/0.xml`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/xml");
+    const xml = await res.text();
+    expect(xml).toContain("<urlset");
+    expect(xml).toContain("https://example.com/products/batch-0/item-1");
+    expect(xml).toContain("https://example.com/products/batch-0/item-2");
+    // Should NOT contain entries from other batches
+    expect(xml).not.toContain("batch-1");
+  });
+
+  it("serves /products/sitemap/1.xml with distinct entries", async () => {
+    const res = await fetch(`${baseUrl}/products/sitemap/1.xml`);
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+    expect(xml).toContain("https://example.com/products/batch-1/item-1");
+    expect(xml).toContain("https://example.com/products/batch-1/item-2");
+    expect(xml).not.toContain("batch-0");
+  });
+
+  it("returns 404 for invalid sitemap id", async () => {
+    const res = await fetch(`${baseUrl}/products/sitemap/99.xml`);
+    expect(res.status).toBe(404);
+  });
+
+  it("does not serve /products/sitemap.xml when generateSitemaps exists", async () => {
+    const res = await fetch(`${baseUrl}/products/sitemap.xml`);
+    // The base URL should not match — either 404 or falls through to page routing
+    expect(res.status).toBe(404);
+  });
+
+  it("scanMetadataFiles discovers nested products/sitemap.ts", async () => {
+    const { scanMetadataFiles } = await import("../packages/vinext/src/server/metadata-routes.js");
+    const appDir = path.resolve(import.meta.dirname, "./fixtures/app-basic/app");
+    const routes = scanMetadataFiles(appDir);
+    const productsSitemap = routes.find(
+      (r: { type: string; servedUrl: string }) =>
+        r.type === "sitemap" && r.servedUrl === "/products/sitemap.xml",
+    );
+    expect(productsSitemap).toBeDefined();
+    expect(productsSitemap!.isDynamic).toBe(true);
+  });
 });
 
 describe("App Router next.config.js features (dev server integration)", () => {
