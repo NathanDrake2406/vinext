@@ -44,6 +44,14 @@ function getForwardedRequestHeaders(source: MiddlewareHeaderSource): Map<string,
   return forwardedHeaders;
 }
 
+function cloneHeaders(source: Headers): Headers {
+  const cloned = new Headers();
+  for (const [key, value] of source.entries()) {
+    cloned.append(key, value);
+  }
+  return cloned;
+}
+
 export function encodeMiddlewareRequestHeaders(
   targetHeaders: Headers,
   requestHeaders: Headers,
@@ -67,7 +75,7 @@ export function buildRequestHeadersFromMiddlewareResponse(
     return null;
   }
 
-  const nextHeaders = overrideHeaderNames === null ? new Headers(baseHeaders) : new Headers();
+  const nextHeaders = overrideHeaderNames === null ? cloneHeaders(baseHeaders) : new Headers();
 
   if (overrideHeaderNames === null) {
     for (const [key, value] of forwardedHeaders) {
