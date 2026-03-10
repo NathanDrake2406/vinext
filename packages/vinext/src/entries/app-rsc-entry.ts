@@ -245,7 +245,7 @@ ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewar
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
 ${effectiveMetaRoutes.length > 0 ? `import { sitemapToXml, robotsToText, manifestToJson } from ${JSON.stringify(fileURLToPath(new URL("../server/metadata-routes.js", import.meta.url)).replace(/\\/g, "/"))};` : ""}
 import { requestContextFromRequest, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from ${JSON.stringify(configMatchersPath)};
-import { validateCsrfOrigin, validateImageUrl, guardProtocolRelativeUrl, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from ${JSON.stringify(requestPipelinePath)};
+import { validateCsrfOrigin, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from ${JSON.stringify(requestPipelinePath)};
 import { _consumeRequestScopedCacheLife, _runWithCacheState } from "next/cache";
 import { runWithFetchCache } from "vinext/fetch-cache";
 import { runWithPrivateCache as _runWithPrivateCache } from "vinext/cache-runtime";
@@ -1394,7 +1394,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     const __redir = matchRedirect(__redirPathname, __configRedirects, __reqCtx);
     if (__redir) {
       const __redirDest = sanitizeDestination(
-        __basePath && !__redir.destination.startsWith(__basePath)
+        __basePath &&
+          !isExternalUrl(__redir.destination) &&
+          !hasBasePath(__redir.destination, __basePath)
           ? __basePath + __redir.destination
           : __redir.destination
       );

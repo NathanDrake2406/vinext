@@ -44,6 +44,7 @@ import {
   type ImageConfig,
 } from "./image-optimization.js";
 import { normalizePath } from "./normalize-path.js";
+import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 import { computeLazyChunks } from "../index.js";
 
 /** Convert a Node.js IncomingMessage into a ReadableStream for Web Request body. */
@@ -740,8 +741,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     // Serve static files from client build. When basePath is configured,
     // Vite's `base` config ensures assets are under basePath/assets/.
     // We check both with and without basePath.
-    const staticLookupPath =
-      basePath && pathname.startsWith(basePath) ? pathname.slice(basePath.length) || "/" : pathname;
+    const staticLookupPath = stripBasePath(pathname, basePath);
     if (
       staticLookupPath !== "/" &&
       !staticLookupPath.startsWith("/api/") &&
@@ -784,11 +784,13 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
     try {
       // ── 2. Strip basePath ─────────────────────────────────────────
-      if (basePath && pathname.startsWith(basePath)) {
-        const stripped = pathname.slice(basePath.length) || "/";
-        const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-        url = stripped + qs;
-        pathname = stripped;
+      {
+        const stripped = stripBasePath(pathname, basePath);
+        if (stripped !== pathname) {
+          const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+          url = stripped + qs;
+          pathname = stripped;
+        }
       }
 
       // ── 3. Trailing slash normalization ───────────────────────────
@@ -957,7 +959,9 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
           // doesn't already start with it.
           // Sanitize the final destination to prevent protocol-relative URL open redirects.
           const dest = sanitizeDestination(
-            basePath && !redirect.destination.startsWith(basePath)
+            basePath &&
+              !isExternalUrl(redirect.destination) &&
+              !hasBasePath(redirect.destination, basePath)
               ? basePath + redirect.destination
               : redirect.destination,
           );

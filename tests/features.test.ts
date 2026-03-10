@@ -1273,6 +1273,20 @@ describe("basePath HTTP routing (Pages Router)", () => {
       `/** @type {import('next').NextConfig} */
 export default {
   basePath: "/app",
+  async redirects() {
+    return [
+      {
+        source: "/redir",
+        destination: "/application/about",
+        permanent: false,
+      },
+      {
+        source: "/redir-external",
+        destination: "https://example.com/page",
+        permanent: false,
+      },
+    ];
+  },
 };
 `,
     );
@@ -1301,6 +1315,17 @@ export default function Home() {
       path.join(tmpDir, "pages", "about.tsx"),
       `export default function About() {
   return <h1>BasePath About</h1>;
+}
+`,
+    );
+
+    // Collision route used to verify that shared string prefixes outside the
+    // basePath do not get stripped and misrouted into a valid page.
+    await fsp.mkdir(path.join(tmpDir, "pages", "lication"), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "pages", "lication", "about.tsx"),
+      `export default function Collision() {
+  return <h1>Collision Route</h1>;
 }
 `,
     );
@@ -1382,11 +1407,35 @@ export default function Home() {
     expect(res.status).not.toBe(200);
   });
 
+  it("does not strip shared string prefixes outside basePath", async () => {
+    const valid = await fetch(`${bpBaseUrl}/app/lication/about`);
+    expect(valid.status).toBe(200);
+    expect(await valid.text()).toContain("Collision Route");
+
+    const outside = await fetch(`${bpBaseUrl}/application/about`);
+    expect(outside.status).not.toBe(200);
+    expect(await outside.text()).not.toContain("Collision Route");
+  });
+
   it("GET /app/api/hello serves the API route", async () => {
     const res = await fetch(`${bpBaseUrl}/app/api/hello`);
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.message).toBe("hello from basePath");
+  });
+
+  it("redirects prefix destinations under the real basePath boundary", async () => {
+    const res = await fetch(`${bpBaseUrl}/app/redir`, { redirect: "manual" });
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("/app/application/about");
+  });
+
+  it("does not prepend basePath to external redirect destinations", async () => {
+    const res = await fetch(`${bpBaseUrl}/app/redir-external`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("https://example.com/page");
   });
 
   it("GET /api/hello (without basePath) does NOT serve API routes", async () => {

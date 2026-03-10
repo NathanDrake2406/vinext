@@ -43,7 +43,9 @@ import {
 } from "./config/config-matchers.js";
 import { scanMetadataFiles } from "./server/metadata-routes.js";
 import { staticExportPages } from "./build/static-export.js";
+import { buildRequestHeadersFromMiddlewareResponse } from "./server/middleware-request-headers.js";
 import { detectPackageManager } from "./utils/project.js";
+import { hasBasePath } from "./utils/base-path.js";
 import { asyncHooksStubPlugin } from "./plugins/async-hooks-stub.js";
 import { hasWranglerConfig, formatMissingCloudflarePluginError } from "./deploy.js";
 import tsconfigPaths from "vite-tsconfig-paths";
@@ -1933,6 +1935,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 }
               }
 
+              const applyRequestHeadersToNodeRequest = (nextRequestHeaders: Headers) => {
+                for (const key of Object.keys(req.headers)) {
+                  delete req.headers[key];
+                }
+                for (const [key, value] of nextRequestHeaders) {
+                  req.headers[key] = value;
+                }
+              };
+
+              let middlewareRequestHeaders: Headers | null = null;
+
               // Run middleware.ts if present
               if (middlewarePath) {
                 // Only trust X-Forwarded-Proto when behind a trusted proxy
@@ -1997,12 +2010,26 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // config has/missing conditions and downstream handlers
                 // see middleware-modified cookies and headers.
                 if (result.responseHeaders) {
-                  const mwReqPrefix = "x-middleware-request-";
+                  const currentRequestHeaders = new Headers();
+                  for (const [key, value] of Object.entries(req.headers)) {
+                    if (Array.isArray(value)) {
+                      currentRequestHeaders.set(key, value.join(", "));
+                    } else if (value !== undefined) {
+                      currentRequestHeaders.set(key, value);
+                    }
+                  }
+
+                  middlewareRequestHeaders = buildRequestHeadersFromMiddlewareResponse(
+                    currentRequestHeaders,
+                    result.responseHeaders,
+                  );
+
+                  if (middlewareRequestHeaders && !hasAppDir) {
+                    applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
+                  }
+
                   for (const [key, value] of result.responseHeaders) {
-                    if (key.startsWith(mwReqPrefix)) {
-                      const realName = key.slice(mwReqPrefix.length);
-                      req.headers[realName] = value;
-                    } else if (!key.startsWith("x-middleware-")) {
+                    if (!key.startsWith("x-middleware-")) {
                       res.appendHeader(key, value);
                     }
                   }
@@ -2052,13 +2079,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // Convert Node.js IncomingMessage headers to a Web Request for
               // requestContextFromRequest(), which uses the standard Web API.
               const reqUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
-              const reqCtxHeaders = new Headers(
-                Object.fromEntries(
-                  Object.entries(req.headers)
-                    .filter(([, v]) => v !== undefined)
-                    .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)]),
-                ),
-              );
+              const reqCtxHeaders =
+                middlewareRequestHeaders ??
+                new Headers(
+                  Object.fromEntries(
+                    Object.entries(req.headers)
+                      .filter(([, v]) => v !== undefined)
+                      .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)]),
+                  ),
+                );
               const reqCtx: RequestContext = requestContextFromRequest(
                 new Request(reqUrl, { headers: reqCtxHeaders }),
               );
@@ -2070,7 +2099,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
               // Apply redirects from next.config.js
               if (nextConfig?.redirects.length) {
-                const redirected = applyRedirects(pathname, res, nextConfig.redirects, reqCtx);
+                const redirected = applyRedirects(
+                  pathname,
+                  res,
+                  nextConfig.redirects,
+                  reqCtx,
+                  nextConfig.basePath ?? "",
+                );
                 if (redirected) return;
               }
 
@@ -2095,6 +2130,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   nextConfig?.pageExtensions,
                   fileMatcher,
                 );
+                const apiMatch = matchRoute(resolvedUrl, apiRoutes);
+                if (apiMatch && middlewareRequestHeaders) {
+                  applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
+                }
                 const handled = await handleApiRoute(server, req, res, resolvedUrl, apiRoutes);
                 if (handled) return;
 
@@ -2140,6 +2179,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // Try rendering the resolved URL
               const match = matchRoute(resolvedUrl.split("?")[0], routes);
               if (match) {
+                if (middlewareRequestHeaders) {
+                  applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
+                }
                 await handler(req, res, resolvedUrl, mwStatus);
                 return;
               }
@@ -2157,10 +2199,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     await proxyExternalRewriteNode(req, res, fallbackRewrite);
                     return;
                   }
-                  // App Router: the RSC entry handles fallback rewrites internally
-                  // (with its own middleware + config processing). Don't dispatch
-                  // to the Pages Router handler which would 404 on App Router routes.
-                  if (hasAppDir) return next();
+                  const fallbackMatch = matchRoute(fallbackRewrite.split("?")[0], routes);
+                  if (!fallbackMatch && hasAppDir) {
+                    return next();
+                  }
+                  if (middlewareRequestHeaders) {
+                    applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
+                  }
                   await handler(req, res, fallbackRewrite, mwStatus);
                   return;
                 }
@@ -3223,11 +3268,16 @@ function applyRedirects(
   res: any,
   redirects: NextRedirect[],
   ctx: RequestContext,
+  basePath = "",
 ): boolean {
   const result = matchRedirect(pathname, redirects, ctx);
   if (result) {
     // Sanitize to prevent open redirect via protocol-relative URLs
-    const dest = sanitizeDestination(result.destination);
+    const dest = sanitizeDestination(
+      basePath && !isExternalUrl(result.destination) && !hasBasePath(result.destination, basePath)
+        ? basePath + result.destination
+        : result.destination,
+    );
     res.writeHead(result.permanent ? 308 : 307, { Location: dest });
     res.end();
     return true;

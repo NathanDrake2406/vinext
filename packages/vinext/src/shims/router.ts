@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback, useMemo, createElement, type ReactEle
 import { RouterContext } from "./internal/router-context.js";
 import { isValidModulePath } from "../client/validate-module-path.js";
 import { toSameOriginPath } from "./url-utils.js";
+import { stripBasePath } from "../utils/base-path.js";
 
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
@@ -17,13 +18,6 @@ const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
 function withBasePath(p: string): string {
   if (!__basePath) return p;
   return __basePath + p;
-}
-
-/** Strip basePath prefix from a browser pathname */
-function stripBasePath(p: string): string {
-  if (!__basePath) return p;
-  if (p.startsWith(__basePath)) return p.slice(__basePath.length) || "/";
-  return p;
 }
 
 type BeforePopStateCallback = (state: {
@@ -264,7 +258,7 @@ function getPathnameAndQuery(): {
     }
     return { pathname: "/", query: {}, asPath: "/" };
   }
-  const pathname = stripBasePath(window.location.pathname);
+  const pathname = stripBasePath(window.location.pathname, __basePath);
   const query: Record<string, string> = {};
   // Include dynamic route params from __NEXT_DATA__ (e.g., { id: "42" } from /posts/[id]).
   // Only include keys that are part of the route pattern (not stale query params).
@@ -633,7 +627,7 @@ let _beforePopStateCb: BeforePopStateCallback | undefined;
 if (typeof window !== "undefined") {
   window.addEventListener("popstate", (e: PopStateEvent) => {
     const browserUrl = window.location.pathname + window.location.search;
-    const appUrl = stripBasePath(window.location.pathname) + window.location.search;
+    const appUrl = stripBasePath(window.location.pathname, __basePath) + window.location.search;
 
     // Check beforePopState callback
     if (_beforePopStateCb !== undefined) {

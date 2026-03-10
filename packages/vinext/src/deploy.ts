@@ -517,6 +517,16 @@ const imageConfig: ImageConfig | undefined = vinextConfig?.images ? {
   contentSecurityPolicy: vinextConfig.images.contentSecurityPolicy,
 } : undefined;
 
+function hasBasePath(pathname: string, basePath: string): boolean {
+  if (!basePath) return false;
+  return pathname === basePath || pathname.startsWith(basePath + "/");
+}
+
+function stripBasePath(pathname: string, basePath: string): string {
+  if (!hasBasePath(pathname, basePath)) return pathname;
+  return pathname.slice(basePath.length) || "/";
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
@@ -532,10 +542,12 @@ export default {
       }
 
       // ── 1. Strip basePath ─────────────────────────────────────────
-      if (basePath && pathname.startsWith(basePath)) {
-        const stripped = pathname.slice(basePath.length) || "/";
-        urlWithQuery = stripped + url.search;
-        pathname = stripped;
+      {
+        const stripped = stripBasePath(pathname, basePath);
+        if (stripped !== pathname) {
+          urlWithQuery = stripped + url.search;
+          pathname = stripped;
+        }
       }
 
       // ── Image optimization via Cloudflare Images binding ──────────
@@ -682,7 +694,9 @@ export default {
         const redirect = matchRedirect(resolvedPathname, configRedirects, reqCtx);
         if (redirect) {
           const dest = sanitizeDestination(
-            basePath && !redirect.destination.startsWith(basePath)
+            basePath &&
+              !isExternalUrl(redirect.destination) &&
+              !hasBasePath(redirect.destination, basePath)
               ? basePath + redirect.destination
               : redirect.destination,
           );

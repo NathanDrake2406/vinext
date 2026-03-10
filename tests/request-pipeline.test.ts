@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   guardProtocolRelativeUrl,
+  hasBasePath,
   stripBasePath,
   normalizeTrailingSlash,
   validateCsrfOrigin,
@@ -32,6 +33,21 @@ describe("guardProtocolRelativeUrl", () => {
 
 // ── stripBasePath ───────────────────────────────────────────────────────
 
+describe("hasBasePath", () => {
+  it("matches exact basePath and basePath-prefixed descendants only", () => {
+    expect(hasBasePath("/app", "/app")).toBe(true);
+    expect(hasBasePath("/app/about", "/app")).toBe(true);
+    expect(hasBasePath("/application/about", "/app")).toBe(false);
+    expect(hasBasePath("/app2", "/app")).toBe(false);
+  });
+
+  it("handles nested basePath segments", () => {
+    expect(hasBasePath("/docs/v2", "/docs/v2")).toBe(true);
+    expect(hasBasePath("/docs/v2/guide", "/docs/v2")).toBe(true);
+    expect(hasBasePath("/docs/v20", "/docs/v2")).toBe(false);
+  });
+});
+
 describe("stripBasePath", () => {
   it("strips basePath prefix from pathname", () => {
     expect(stripBasePath("/docs/about", "/docs")).toBe("/about");
@@ -41,12 +57,22 @@ describe("stripBasePath", () => {
     expect(stripBasePath("/docs", "/docs")).toBe("/");
   });
 
+  it("strips when the next character is a path separator", () => {
+    expect(stripBasePath("/docs/about/team", "/docs")).toBe("/about/team");
+  });
+
   it("returns pathname unchanged when basePath is empty", () => {
     expect(stripBasePath("/about", "")).toBe("/about");
   });
 
   it("returns pathname unchanged when it doesn't start with basePath", () => {
     expect(stripBasePath("/other/page", "/docs")).toBe("/other/page");
+  });
+
+  it("does not strip when pathname only shares a string prefix with basePath", () => {
+    expect(stripBasePath("/application/about", "/app")).toBe("/application/about");
+    expect(stripBasePath("/app2", "/app")).toBe("/app2");
+    expect(stripBasePath("/apple", "/app")).toBe("/apple");
   });
 });
 

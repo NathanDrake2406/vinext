@@ -12,6 +12,7 @@
 // bindings are just `undefined` on the namespace object and we can guard at runtime.
 import * as React from "react";
 import { toSameOriginPath } from "./url-utils.js";
+import { stripBasePath } from "../utils/base-path.js";
 
 // ─── Layout segment context ───────────────────────────────────────────────────
 // Stores the child segments below the current layout. Each layout wraps its
@@ -145,13 +146,6 @@ const isServer = typeof window === "undefined";
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
 
-/** Strip basePath prefix from a browser pathname */
-function stripBasePath(p: string): string {
-  if (!__basePath) return p;
-  if (p.startsWith(__basePath)) return p.slice(__basePath.length) || "/";
-  return p;
-}
-
 /** Prepend basePath to a path for browser URLs / fetches */
 function withBasePath(p: string): string {
   if (!__basePath) return p;
@@ -239,10 +233,10 @@ function notifyListeners(): void {
 let _cachedSearch = !isServer ? window.location.search : "";
 let _cachedSearchParams: URLSearchParams = new URLSearchParams(_cachedSearch);
 let _cachedServerSearchParams: URLSearchParams | null = null;
-let _cachedPathname = !isServer ? stripBasePath(window.location.pathname) : "/";
+let _cachedPathname = !isServer ? stripBasePath(window.location.pathname, __basePath) : "/";
 
 function getPathnameSnapshot(): string {
-  const current = stripBasePath(window.location.pathname);
+  const current = stripBasePath(window.location.pathname, __basePath);
   if (current !== _cachedPathname) {
     _cachedPathname = current;
   }
