@@ -4659,11 +4659,13 @@ describe("metadata route serializers", () => {
     expect(types).toContain("manifest");
     expect(types).toContain("favicon");
 
-    // Sitemap should be dynamic (.ts)
-    const sitemap = routes.find((r: { type: string }) => r.type === "sitemap");
+    // Root sitemap should be dynamic (.ts)
+    const sitemap = routes.find(
+      (r: { type: string; servedUrl: string }) =>
+        r.type === "sitemap" && r.servedUrl === "/sitemap.xml",
+    );
     expect(sitemap).toBeDefined();
     expect(sitemap!.isDynamic).toBe(true);
-    expect(sitemap!.servedUrl).toBe("/sitemap.xml");
     expect(sitemap!.contentType).toBe("application/xml");
 
     // Favicon should be static (.ico)

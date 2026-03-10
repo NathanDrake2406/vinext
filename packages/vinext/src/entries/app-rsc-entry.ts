@@ -1534,14 +1534,15 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     // is no longer served. Instead, individual sitemaps are served at /products/sitemap/{id}.xml.
     if (metaRoute.type === "sitemap" && metaRoute.isDynamic && typeof metaRoute.module.generateSitemaps === "function") {
       const sitemapPrefix = metaRoute.servedUrl.slice(0, -4); // strip ".xml"
+      // Match exactly /{prefix}/{id}.xml — one segment only (no slashes in id)
       if (cleanPathname.startsWith(sitemapPrefix + "/") && cleanPathname.endsWith(".xml")) {
         const rawId = cleanPathname.slice(sitemapPrefix.length + 1, -4);
+        if (rawId.includes("/")) continue; // multi-segment — not a paginated sitemap
         const sitemaps = await metaRoute.module.generateSitemaps();
-        const found = sitemaps.some(function(s) { return String(s.id) === rawId; });
-        if (!found) return new Response("Not Found", { status: 404 });
-        // Pass raw id string — works for both v15 (direct access) and v16 (await on
-        // a non-Promise returns the value unchanged).
-        const result = await metaRoute.module.default({ id: rawId });
+        const matched = sitemaps.find(function(s) { return String(s.id) === rawId; });
+        if (!matched) return new Response("Not Found", { status: 404 });
+        // Pass the original typed id from generateSitemaps() so numeric IDs stay numeric
+        const result = await metaRoute.module.default({ id: matched.id });
         if (result instanceof Response) return result;
         return new Response(sitemapToXml(result), {
           headers: { "Content-Type": metaRoute.contentType },
