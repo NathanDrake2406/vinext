@@ -585,6 +585,7 @@ import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
 const routes = [
   {
     pattern: "/",
+    patternParts: [],
     isDynamic: false,
     params: [],
     page: mod_0,
@@ -606,6 +607,7 @@ const routes = [
   },
   {
     pattern: "/about",
+    patternParts: ["about"],
     isDynamic: false,
     params: [],
     page: mod_2,
@@ -627,6 +629,7 @@ const routes = [
   },
   {
     pattern: "/blog/:slug",
+    patternParts: ["blog",":slug"],
     isDynamic: true,
     params: ["slug"],
     page: mod_3,
@@ -648,6 +651,7 @@ const routes = [
   },
   {
     pattern: "/dashboard",
+    patternParts: ["dashboard"],
     isDynamic: false,
     params: [],
     page: mod_5,
@@ -939,16 +943,15 @@ function matchRoute(url, routes) {
    // NOTE: Do NOT decodeURIComponent here. The caller is responsible for decoding
    // the pathname exactly once at the request entry point. Decoding again here
    // would cause inconsistent path matching between middleware and routing.
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) return { route, params };
   }
   return null;
 }
 
-function matchPattern(url, pattern) {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
+function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];
@@ -988,6 +991,7 @@ for (let ri = 0; ri < routes.length; ri++) {
         sourceRouteIndex: ri,
         slotName,
         targetPattern: intercept.targetPattern,
+        targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
         page: intercept.page,
         params: intercept.params,
       });
@@ -1000,8 +1004,9 @@ for (let ri = 0; ri < routes.length; ri++) {
  * Returns the match info or null.
  */
 function findIntercept(pathname) {
+  const urlParts = pathname.split("/").filter(Boolean);
   for (const entry of interceptLookup) {
-    const params = matchPattern(pathname, entry.targetPattern);
+    const params = matchPattern(urlParts, entry.targetPatternParts);
     if (params !== null) {
       return { ...entry, matchedParams: params };
     }
@@ -2879,6 +2884,7 @@ import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
 const routes = [
   {
     pattern: "/",
+    patternParts: [],
     isDynamic: false,
     params: [],
     page: mod_0,
@@ -2900,6 +2906,7 @@ const routes = [
   },
   {
     pattern: "/about",
+    patternParts: ["about"],
     isDynamic: false,
     params: [],
     page: mod_2,
@@ -2921,6 +2928,7 @@ const routes = [
   },
   {
     pattern: "/blog/:slug",
+    patternParts: ["blog",":slug"],
     isDynamic: true,
     params: ["slug"],
     page: mod_3,
@@ -2942,6 +2950,7 @@ const routes = [
   },
   {
     pattern: "/dashboard",
+    patternParts: ["dashboard"],
     isDynamic: false,
     params: [],
     page: mod_5,
@@ -3233,16 +3242,15 @@ function matchRoute(url, routes) {
    // NOTE: Do NOT decodeURIComponent here. The caller is responsible for decoding
    // the pathname exactly once at the request entry point. Decoding again here
    // would cause inconsistent path matching between middleware and routing.
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) return { route, params };
   }
   return null;
 }
 
-function matchPattern(url, pattern) {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
+function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];
@@ -3282,6 +3290,7 @@ for (let ri = 0; ri < routes.length; ri++) {
         sourceRouteIndex: ri,
         slotName,
         targetPattern: intercept.targetPattern,
+        targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
         page: intercept.page,
         params: intercept.params,
       });
@@ -3294,8 +3303,9 @@ for (let ri = 0; ri < routes.length; ri++) {
  * Returns the match info or null.
  */
 function findIntercept(pathname) {
+  const urlParts = pathname.split("/").filter(Boolean);
   for (const entry of interceptLookup) {
-    const params = matchPattern(pathname, entry.targetPattern);
+    const params = matchPattern(urlParts, entry.targetPatternParts);
     if (params !== null) {
       return { ...entry, matchedParams: params };
     }
@@ -5177,6 +5187,7 @@ import * as mod_11 from "/tmp/test/app/global-error.tsx";
 const routes = [
   {
     pattern: "/",
+    patternParts: [],
     isDynamic: false,
     params: [],
     page: mod_0,
@@ -5198,6 +5209,7 @@ const routes = [
   },
   {
     pattern: "/about",
+    patternParts: ["about"],
     isDynamic: false,
     params: [],
     page: mod_2,
@@ -5219,6 +5231,7 @@ const routes = [
   },
   {
     pattern: "/blog/:slug",
+    patternParts: ["blog",":slug"],
     isDynamic: true,
     params: ["slug"],
     page: mod_3,
@@ -5240,6 +5253,7 @@ const routes = [
   },
   {
     pattern: "/dashboard",
+    patternParts: ["dashboard"],
     isDynamic: false,
     params: [],
     page: mod_5,
@@ -5552,16 +5566,15 @@ function matchRoute(url, routes) {
    // NOTE: Do NOT decodeURIComponent here. The caller is responsible for decoding
    // the pathname exactly once at the request entry point. Decoding again here
    // would cause inconsistent path matching between middleware and routing.
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) return { route, params };
   }
   return null;
 }
 
-function matchPattern(url, pattern) {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
+function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];
@@ -5601,6 +5614,7 @@ for (let ri = 0; ri < routes.length; ri++) {
         sourceRouteIndex: ri,
         slotName,
         targetPattern: intercept.targetPattern,
+        targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
         page: intercept.page,
         params: intercept.params,
       });
@@ -5613,8 +5627,9 @@ for (let ri = 0; ri < routes.length; ri++) {
  * Returns the match info or null.
  */
 function findIntercept(pathname) {
+  const urlParts = pathname.split("/").filter(Boolean);
   for (const entry of interceptLookup) {
-    const params = matchPattern(pathname, entry.targetPattern);
+    const params = matchPattern(urlParts, entry.targetPatternParts);
     if (params !== null) {
       return { ...entry, matchedParams: params };
     }
@@ -7537,6 +7552,7 @@ async function __ensureInstrumentation() {
 const routes = [
   {
     pattern: "/",
+    patternParts: [],
     isDynamic: false,
     params: [],
     page: mod_0,
@@ -7558,6 +7574,7 @@ const routes = [
   },
   {
     pattern: "/about",
+    patternParts: ["about"],
     isDynamic: false,
     params: [],
     page: mod_2,
@@ -7579,6 +7596,7 @@ const routes = [
   },
   {
     pattern: "/blog/:slug",
+    patternParts: ["blog",":slug"],
     isDynamic: true,
     params: ["slug"],
     page: mod_3,
@@ -7600,6 +7618,7 @@ const routes = [
   },
   {
     pattern: "/dashboard",
+    patternParts: ["dashboard"],
     isDynamic: false,
     params: [],
     page: mod_5,
@@ -7891,16 +7910,15 @@ function matchRoute(url, routes) {
    // NOTE: Do NOT decodeURIComponent here. The caller is responsible for decoding
    // the pathname exactly once at the request entry point. Decoding again here
    // would cause inconsistent path matching between middleware and routing.
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) return { route, params };
   }
   return null;
 }
 
-function matchPattern(url, pattern) {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
+function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];
@@ -7940,6 +7958,7 @@ for (let ri = 0; ri < routes.length; ri++) {
         sourceRouteIndex: ri,
         slotName,
         targetPattern: intercept.targetPattern,
+        targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
         page: intercept.page,
         params: intercept.params,
       });
@@ -7952,8 +7971,9 @@ for (let ri = 0; ri < routes.length; ri++) {
  * Returns the match info or null.
  */
 function findIntercept(pathname) {
+  const urlParts = pathname.split("/").filter(Boolean);
   for (const entry of interceptLookup) {
-    const params = matchPattern(pathname, entry.targetPattern);
+    const params = matchPattern(urlParts, entry.targetPatternParts);
     if (params !== null) {
       return { ...entry, matchedParams: params };
     }
@@ -9835,6 +9855,7 @@ import * as mod_11 from "/tmp/test/app/sitemap.ts";
 const routes = [
   {
     pattern: "/",
+    patternParts: [],
     isDynamic: false,
     params: [],
     page: mod_0,
@@ -9856,6 +9877,7 @@ const routes = [
   },
   {
     pattern: "/about",
+    patternParts: ["about"],
     isDynamic: false,
     params: [],
     page: mod_2,
@@ -9877,6 +9899,7 @@ const routes = [
   },
   {
     pattern: "/blog/:slug",
+    patternParts: ["blog",":slug"],
     isDynamic: true,
     params: ["slug"],
     page: mod_3,
@@ -9898,6 +9921,7 @@ const routes = [
   },
   {
     pattern: "/dashboard",
+    patternParts: ["dashboard"],
     isDynamic: false,
     params: [],
     page: mod_5,
@@ -10195,16 +10219,15 @@ function matchRoute(url, routes) {
    // NOTE: Do NOT decodeURIComponent here. The caller is responsible for decoding
    // the pathname exactly once at the request entry point. Decoding again here
    // would cause inconsistent path matching between middleware and routing.
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) return { route, params };
   }
   return null;
 }
 
-function matchPattern(url, pattern) {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
+function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];
@@ -10244,6 +10267,7 @@ for (let ri = 0; ri < routes.length; ri++) {
         sourceRouteIndex: ri,
         slotName,
         targetPattern: intercept.targetPattern,
+        targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
         page: intercept.page,
         params: intercept.params,
       });
@@ -10256,8 +10280,9 @@ for (let ri = 0; ri < routes.length; ri++) {
  * Returns the match info or null.
  */
 function findIntercept(pathname) {
+  const urlParts = pathname.split("/").filter(Boolean);
   for (const entry of interceptLookup) {
-    const params = matchPattern(pathname, entry.targetPattern);
+    const params = matchPattern(urlParts, entry.targetPatternParts);
     if (params !== null) {
       return { ...entry, matchedParams: params };
     }
@@ -12135,6 +12160,7 @@ import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
 const routes = [
   {
     pattern: "/",
+    patternParts: [],
     isDynamic: false,
     params: [],
     page: mod_0,
@@ -12156,6 +12182,7 @@ const routes = [
   },
   {
     pattern: "/about",
+    patternParts: ["about"],
     isDynamic: false,
     params: [],
     page: mod_2,
@@ -12177,6 +12204,7 @@ const routes = [
   },
   {
     pattern: "/blog/:slug",
+    patternParts: ["blog",":slug"],
     isDynamic: true,
     params: ["slug"],
     page: mod_3,
@@ -12198,6 +12226,7 @@ const routes = [
   },
   {
     pattern: "/dashboard",
+    patternParts: ["dashboard"],
     isDynamic: false,
     params: [],
     page: mod_5,
@@ -12489,16 +12518,15 @@ function matchRoute(url, routes) {
    // NOTE: Do NOT decodeURIComponent here. The caller is responsible for decoding
    // the pathname exactly once at the request entry point. Decoding again here
    // would cause inconsistent path matching between middleware and routing.
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) return { route, params };
   }
   return null;
 }
 
-function matchPattern(url, pattern) {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
+function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];
@@ -12538,6 +12566,7 @@ for (let ri = 0; ri < routes.length; ri++) {
         sourceRouteIndex: ri,
         slotName,
         targetPattern: intercept.targetPattern,
+        targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
         page: intercept.page,
         params: intercept.params,
       });
@@ -12550,8 +12579,9 @@ for (let ri = 0; ri < routes.length; ri++) {
  * Returns the match info or null.
  */
 function findIntercept(pathname) {
+  const urlParts = pathname.split("/").filter(Boolean);
   for (const entry of interceptLookup) {
-    const params = matchPattern(pathname, entry.targetPattern);
+    const params = matchPattern(urlParts, entry.targetPatternParts);
     if (params !== null) {
       return { ...entry, matchedParams: params };
     }
@@ -14941,45 +14971,45 @@ import { default as AppComponent } from "<ROOT>/tests/fixtures/pages-basic/pages
 import { default as DocumentComponent } from "<ROOT>/tests/fixtures/pages-basic/pages/_document.tsx";
 
 const pageRoutes = [
-  { pattern: "/", isDynamic: false, params: [], module: page_0, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/index.tsx" },
-  { pattern: "/404", isDynamic: false, params: [], module: page_1, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/404.tsx" },
-  { pattern: "/about", isDynamic: false, params: [], module: page_2, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/about.tsx" },
-  { pattern: "/alias-test", isDynamic: false, params: [], module: page_3, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/alias-test.tsx" },
-  { pattern: "/before-pop-state-test", isDynamic: false, params: [], module: page_4, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/before-pop-state-test.tsx" },
-  { pattern: "/cjs/basic", isDynamic: false, params: [], module: page_5, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/cjs/basic.tsx" },
-  { pattern: "/cjs/random", isDynamic: false, params: [], module: page_6, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/cjs/random.ts" },
-  { pattern: "/config-test", isDynamic: false, params: [], module: page_7, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/config-test.tsx" },
-  { pattern: "/counter", isDynamic: false, params: [], module: page_8, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/counter.tsx" },
-  { pattern: "/dynamic-page", isDynamic: false, params: [], module: page_9, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/dynamic-page.tsx" },
-  { pattern: "/dynamic-ssr-false", isDynamic: false, params: [], module: page_10, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/dynamic-ssr-false.tsx" },
-  { pattern: "/isr-test", isDynamic: false, params: [], module: page_11, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/isr-test.tsx" },
-  { pattern: "/link-test", isDynamic: false, params: [], module: page_12, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/link-test.tsx" },
-  { pattern: "/nav-test", isDynamic: false, params: [], module: page_13, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/nav-test.tsx" },
-  { pattern: "/posts/missing", isDynamic: false, params: [], module: page_14, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/posts/missing.tsx" },
-  { pattern: "/redirect-xss", isDynamic: false, params: [], module: page_15, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/redirect-xss.tsx" },
-  { pattern: "/router-events-test", isDynamic: false, params: [], module: page_16, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/router-events-test.tsx" },
-  { pattern: "/script-test", isDynamic: false, params: [], module: page_17, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/script-test.tsx" },
-  { pattern: "/shallow-test", isDynamic: false, params: [], module: page_18, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/shallow-test.tsx" },
-  { pattern: "/ssr", isDynamic: false, params: [], module: page_19, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/ssr.tsx" },
-  { pattern: "/ssr-headers", isDynamic: false, params: [], module: page_20, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/ssr-headers.tsx" },
-  { pattern: "/ssr-res-end", isDynamic: false, params: [], module: page_21, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/ssr-res-end.tsx" },
-  { pattern: "/suspense-test", isDynamic: false, params: [], module: page_22, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/suspense-test.tsx" },
-  { pattern: "/articles/:id", isDynamic: true, params: ["id"], module: page_23, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/articles/[id].tsx" },
-  { pattern: "/blog/:slug", isDynamic: true, params: ["slug"], module: page_24, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/blog/[slug].tsx" },
-  { pattern: "/posts/:id", isDynamic: true, params: ["id"], module: page_25, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/posts/[id].tsx" },
-  { pattern: "/products/:pid", isDynamic: true, params: ["pid"], module: page_26, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/products/[pid].tsx" },
-  { pattern: "/docs/:slug+", isDynamic: true, params: ["slug"], module: page_27, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/docs/[...slug].tsx" },
-  { pattern: "/sign-up/:sign-up*", isDynamic: true, params: ["sign-up"], module: page_28, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/sign-up/[[...sign-up]]/index.tsx" }
+  { pattern: "/", patternParts: [], isDynamic: false, params: [], module: page_0, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/index.tsx" },
+  { pattern: "/404", patternParts: ["404"], isDynamic: false, params: [], module: page_1, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/404.tsx" },
+  { pattern: "/about", patternParts: ["about"], isDynamic: false, params: [], module: page_2, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/about.tsx" },
+  { pattern: "/alias-test", patternParts: ["alias-test"], isDynamic: false, params: [], module: page_3, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/alias-test.tsx" },
+  { pattern: "/before-pop-state-test", patternParts: ["before-pop-state-test"], isDynamic: false, params: [], module: page_4, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/before-pop-state-test.tsx" },
+  { pattern: "/cjs/basic", patternParts: ["cjs","basic"], isDynamic: false, params: [], module: page_5, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/cjs/basic.tsx" },
+  { pattern: "/cjs/random", patternParts: ["cjs","random"], isDynamic: false, params: [], module: page_6, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/cjs/random.ts" },
+  { pattern: "/config-test", patternParts: ["config-test"], isDynamic: false, params: [], module: page_7, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/config-test.tsx" },
+  { pattern: "/counter", patternParts: ["counter"], isDynamic: false, params: [], module: page_8, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/counter.tsx" },
+  { pattern: "/dynamic-page", patternParts: ["dynamic-page"], isDynamic: false, params: [], module: page_9, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/dynamic-page.tsx" },
+  { pattern: "/dynamic-ssr-false", patternParts: ["dynamic-ssr-false"], isDynamic: false, params: [], module: page_10, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/dynamic-ssr-false.tsx" },
+  { pattern: "/isr-test", patternParts: ["isr-test"], isDynamic: false, params: [], module: page_11, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/isr-test.tsx" },
+  { pattern: "/link-test", patternParts: ["link-test"], isDynamic: false, params: [], module: page_12, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/link-test.tsx" },
+  { pattern: "/nav-test", patternParts: ["nav-test"], isDynamic: false, params: [], module: page_13, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/nav-test.tsx" },
+  { pattern: "/posts/missing", patternParts: ["posts","missing"], isDynamic: false, params: [], module: page_14, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/posts/missing.tsx" },
+  { pattern: "/redirect-xss", patternParts: ["redirect-xss"], isDynamic: false, params: [], module: page_15, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/redirect-xss.tsx" },
+  { pattern: "/router-events-test", patternParts: ["router-events-test"], isDynamic: false, params: [], module: page_16, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/router-events-test.tsx" },
+  { pattern: "/script-test", patternParts: ["script-test"], isDynamic: false, params: [], module: page_17, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/script-test.tsx" },
+  { pattern: "/shallow-test", patternParts: ["shallow-test"], isDynamic: false, params: [], module: page_18, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/shallow-test.tsx" },
+  { pattern: "/ssr", patternParts: ["ssr"], isDynamic: false, params: [], module: page_19, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/ssr.tsx" },
+  { pattern: "/ssr-headers", patternParts: ["ssr-headers"], isDynamic: false, params: [], module: page_20, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/ssr-headers.tsx" },
+  { pattern: "/ssr-res-end", patternParts: ["ssr-res-end"], isDynamic: false, params: [], module: page_21, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/ssr-res-end.tsx" },
+  { pattern: "/suspense-test", patternParts: ["suspense-test"], isDynamic: false, params: [], module: page_22, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/suspense-test.tsx" },
+  { pattern: "/articles/:id", patternParts: ["articles",":id"], isDynamic: true, params: ["id"], module: page_23, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/articles/[id].tsx" },
+  { pattern: "/blog/:slug", patternParts: ["blog",":slug"], isDynamic: true, params: ["slug"], module: page_24, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/blog/[slug].tsx" },
+  { pattern: "/posts/:id", patternParts: ["posts",":id"], isDynamic: true, params: ["id"], module: page_25, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/posts/[id].tsx" },
+  { pattern: "/products/:pid", patternParts: ["products",":pid"], isDynamic: true, params: ["pid"], module: page_26, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/products/[pid].tsx" },
+  { pattern: "/docs/:slug+", patternParts: ["docs",":slug+"], isDynamic: true, params: ["slug"], module: page_27, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/docs/[...slug].tsx" },
+  { pattern: "/sign-up/:sign-up*", patternParts: ["sign-up",":sign-up*"], isDynamic: true, params: ["sign-up"], module: page_28, filePath: "<ROOT>/tests/fixtures/pages-basic/pages/sign-up/[[...sign-up]]/index.tsx" }
 ];
 
 const apiRoutes = [
-  { pattern: "/api/binary", isDynamic: false, params: [], module: api_0 },
-  { pattern: "/api/error-route", isDynamic: false, params: [], module: api_1 },
-  { pattern: "/api/hello", isDynamic: false, params: [], module: api_2 },
-  { pattern: "/api/instrumentation-test", isDynamic: false, params: [], module: api_3 },
-  { pattern: "/api/middleware-test", isDynamic: false, params: [], module: api_4 },
-  { pattern: "/api/no-content-type", isDynamic: false, params: [], module: api_5 },
-  { pattern: "/api/users/:id", isDynamic: true, params: ["id"], module: api_6 }
+  { pattern: "/api/binary", patternParts: ["api","binary"], isDynamic: false, params: [], module: api_0 },
+  { pattern: "/api/error-route", patternParts: ["api","error-route"], isDynamic: false, params: [], module: api_1 },
+  { pattern: "/api/hello", patternParts: ["api","hello"], isDynamic: false, params: [], module: api_2 },
+  { pattern: "/api/instrumentation-test", patternParts: ["api","instrumentation-test"], isDynamic: false, params: [], module: api_3 },
+  { pattern: "/api/middleware-test", patternParts: ["api","middleware-test"], isDynamic: false, params: [], module: api_4 },
+  { pattern: "/api/no-content-type", patternParts: ["api","no-content-type"], isDynamic: false, params: [], module: api_5 },
+  { pattern: "/api/users/:id", patternParts: ["api","users",":id"], isDynamic: true, params: ["id"], module: api_6 }
 ];
 
 function matchRoute(url, routes) {
@@ -14987,16 +15017,15 @@ function matchRoute(url, routes) {
   let normalizedUrl = pathname === "/" ? "/" : pathname.replace(/\\/$/, "");
   // NOTE: Do NOT decodeURIComponent here. The pathname is already decoded at
   // the entry point. Decoding again would create a double-decode vector.
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) return { route, params };
   }
   return null;
 }
 
-function matchPattern(url, pattern) {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
+function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];

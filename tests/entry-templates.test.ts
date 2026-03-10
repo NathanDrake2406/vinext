@@ -34,6 +34,7 @@ function stabilize(code: string): string {
 const minimalAppRoutes: AppRoute[] = [
   {
     pattern: "/",
+    patternParts: [],
     pagePath: "/tmp/test/app/page.tsx",
     routePath: null,
     layouts: ["/tmp/test/app/layout.tsx"],
@@ -53,6 +54,7 @@ const minimalAppRoutes: AppRoute[] = [
   },
   {
     pattern: "/about",
+    patternParts: ["about"],
     pagePath: "/tmp/test/app/about/page.tsx",
     routePath: null,
     layouts: ["/tmp/test/app/layout.tsx"],
@@ -72,6 +74,7 @@ const minimalAppRoutes: AppRoute[] = [
   },
   {
     pattern: "/blog/:slug",
+    patternParts: ["blog", ":slug"],
     pagePath: "/tmp/test/app/blog/[slug]/page.tsx",
     routePath: null,
     layouts: ["/tmp/test/app/layout.tsx", "/tmp/test/app/blog/[slug]/layout.tsx"],
@@ -91,6 +94,7 @@ const minimalAppRoutes: AppRoute[] = [
   },
   {
     pattern: "/dashboard",
+    patternParts: ["dashboard"],
     pagePath: "/tmp/test/app/dashboard/page.tsx",
     routePath: null,
     layouts: ["/tmp/test/app/layout.tsx", "/tmp/test/app/dashboard/layout.tsx"],

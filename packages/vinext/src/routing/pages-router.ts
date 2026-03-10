@@ -9,6 +9,8 @@ import {
 export interface Route {
   /** URL pattern, e.g. "/" or "/about" or "/posts/:id" */
   pattern: string;
+  /** Pre-split pattern segments (computed once at scan time, reused per request) */
+  patternParts: string[];
   /** Absolute file path to the page component */
   filePath: string;
   /** Whether this is a dynamic route */
@@ -134,6 +136,7 @@ function fileToRoute(file: string, pagesDir: string, matcher: ValidFileMatcher):
 
   return {
     pattern: pattern === "/" ? "/" : pattern,
+    patternParts: urlSegments.filter(Boolean),
     filePath: path.join(pagesDir, file),
     isDynamic,
     params,
@@ -157,8 +160,11 @@ export function matchRoute(
     /* malformed percent-encoding — match as-is */
   }
 
+  // Split URL once, reuse across all route match attempts
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
+
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) {
       return { route, params };
     }
@@ -220,10 +226,10 @@ async function scanApiRoutes(pagesDir: string, matcher: ValidFileMatcher): Promi
   return routes;
 }
 
-function matchPattern(url: string, pattern: string): Record<string, string | string[]> | null {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
-
+function matchPattern(
+  urlParts: string[],
+  patternParts: string[],
+): Record<string, string | string[]> | null {
   const params: Record<string, string | string[]> = Object.create(null);
 
   for (let i = 0; i < patternParts.length; i++) {

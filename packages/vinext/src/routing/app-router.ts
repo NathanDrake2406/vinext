@@ -112,6 +112,8 @@ export interface AppRoute {
   isDynamic: boolean;
   /** Parameter names for dynamic segments */
   params: string[];
+  /** Pre-split pattern segments (computed once at scan time, reused per request) */
+  patternParts: string[];
 }
 
 // Cache for app routes
@@ -298,6 +300,7 @@ function discoverSlotSubRoutes(
         layoutTreePositions: parentRoute.layoutTreePositions,
         isDynamic: parentRoute.isDynamic || subIsDynamic,
         params: [...parentRoute.params, ...subParams],
+        patternParts: [...parentRoute.patternParts, ...urlParts],
       });
     }
   }
@@ -457,6 +460,7 @@ function fileToAppRoute(
     layoutTreePositions,
     isDynamic,
     params,
+    patternParts: urlSegments,
   };
 }
 
@@ -979,8 +983,11 @@ export function matchAppRoute(
     /* malformed percent-encoding — match as-is */
   }
 
+  // Split URL once, reuse across all route match attempts
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
+
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) {
       return { route, params };
     }
@@ -989,10 +996,10 @@ export function matchAppRoute(
   return null;
 }
 
-function matchPattern(url: string, pattern: string): Record<string, string | string[]> | null {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
-
+function matchPattern(
+  urlParts: string[],
+  patternParts: string[],
+): Record<string, string | string[]> | null {
   const params: Record<string, string | string[]> = Object.create(null);
 
   for (let i = 0; i < patternParts.length; i++) {

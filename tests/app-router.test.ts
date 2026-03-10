@@ -1706,6 +1706,7 @@ describe("App Router Static export", () => {
         unauthorizedPath: null,
         isDynamic: true,
         params: ["id"],
+        patternParts: ["fake", ":id"],
       },
     ];
     const config = await resolveNextConfig({ output: "export" });
@@ -1752,6 +1753,7 @@ describe("App Router Static export", () => {
         unauthorizedPath: null,
         isDynamic: false,
         params: [],
+        patternParts: ["api", "test"],
       },
     ];
     const config = await resolveNextConfig({ output: "export" });

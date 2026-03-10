@@ -115,7 +115,7 @@ function mockRes(): http.ServerResponse & {
 function route(pattern: string, filePath = "/fake/api/handler.ts"): Route {
   const isDynamic = pattern.includes(":");
   const params = isDynamic ? [...pattern.matchAll(/:(\w+)/g)].map((m) => m[1]) : [];
-  return { pattern, filePath, isDynamic, params };
+  return { pattern, patternParts: pattern.split("/").filter(Boolean), filePath, isDynamic, params };
 }
 
 /**

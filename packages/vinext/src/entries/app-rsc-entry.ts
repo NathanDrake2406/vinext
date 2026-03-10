@@ -152,6 +152,7 @@ ${interceptEntries.join(",\n")}
     );
     return `  {
     pattern: ${JSON.stringify(route.pattern)},
+    patternParts: ${JSON.stringify(route.patternParts)},
     isDynamic: ${route.isDynamic},
     params: ${JSON.stringify(route.params)},
     page: ${route.pagePath ? getImportVar(route.pagePath) : "null"},
@@ -803,16 +804,15 @@ function matchRoute(url, routes) {
    // NOTE: Do NOT decodeURIComponent here. The caller is responsible for decoding
    // the pathname exactly once at the request entry point. Decoding again here
    // would cause inconsistent path matching between middleware and routing.
+  const urlParts = normalizedUrl.split("/").filter(Boolean);
   for (const route of routes) {
-    const params = matchPattern(normalizedUrl, route.pattern);
+    const params = matchPattern(urlParts, route.patternParts);
     if (params !== null) return { route, params };
   }
   return null;
 }
 
-function matchPattern(url, pattern) {
-  const urlParts = url.split("/").filter(Boolean);
-  const patternParts = pattern.split("/").filter(Boolean);
+function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
   for (let i = 0; i < patternParts.length; i++) {
     const pp = patternParts[i];
@@ -852,6 +852,7 @@ for (let ri = 0; ri < routes.length; ri++) {
         sourceRouteIndex: ri,
         slotName,
         targetPattern: intercept.targetPattern,
+        targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
         page: intercept.page,
         params: intercept.params,
       });
@@ -864,8 +865,9 @@ for (let ri = 0; ri < routes.length; ri++) {
  * Returns the match info or null.
  */
 function findIntercept(pathname) {
+  const urlParts = pathname.split("/").filter(Boolean);
   for (const entry of interceptLookup) {
-    const params = matchPattern(pathname, entry.targetPattern);
+    const params = matchPattern(urlParts, entry.targetPatternParts);
     if (params !== null) {
       return { ...entry, matchedParams: params };
     }
