@@ -200,31 +200,33 @@ export function runWithHeadersContext<T>(
 /**
  * Apply middleware-forwarded request headers to the current headers context.
  *
- * When Next.js middleware calls `NextResponse.next({ request: { headers } })`,
- * the modified headers are encoded as `x-middleware-request-<name>` on the
- * middleware response.  This function unpacks those prefixed headers and
- * replaces the corresponding entries on the live `HeadersContext` so that
- * subsequent calls to `headers()` / `cookies()` see the middleware changes.
+ * When Next.js middleware calls `NextResponse.next()` or `NextResponse.rewrite()`
+ * with `{ request: { headers } }`, the modified headers are encoded on the
+ * middleware response. This function decodes that protocol and applies the
+ * resulting request header set to the live `HeadersContext`. When an override
+ * list is present, omitted headers are deleted as part of the rebuild.
  */
 export function applyMiddlewareRequestHeaders(middlewareResponseHeaders: Headers): void {
   const state = _getState();
   if (!state.headersContext) return;
 
   const ctx = state.headersContext;
+  const previousCookieHeader = ctx.headers.get("cookie");
   const nextHeaders = buildRequestHeadersFromMiddlewareResponse(
     ctx.headers,
     middlewareResponseHeaders,
   );
 
-  if (nextHeaders) {
-    ctx.headers = nextHeaders;
-  }
+  if (!nextHeaders) return;
+
+  ctx.headers = nextHeaders;
+  const nextCookieHeader = nextHeaders.get("cookie");
+  if (previousCookieHeader === nextCookieHeader) return;
 
   // If middleware modified the cookie header, rebuild the cookies map.
   ctx.cookies.clear();
-  const newCookieHeader = ctx.headers.get("cookie");
-  if (newCookieHeader !== null) {
-    for (const part of newCookieHeader.split(";")) {
+  if (nextCookieHeader !== null) {
+    for (const part of nextCookieHeader.split(";")) {
       const [k, ...rest] = part.split("=");
       if (k) {
         ctx.cookies.set(k.trim(), rest.join("=").trim());

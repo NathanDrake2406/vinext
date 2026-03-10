@@ -540,6 +540,25 @@ describe("next/server shim", () => {
     expect(res.headers.get("x-middleware-rewrite")).toBe("https://example.com/internal");
   });
 
+  it("NextResponse.rewrite() forwards request header overrides", async () => {
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+    const forwardedHeaders = new Headers({
+      cookie: "a=1",
+      "x-added": "1",
+    });
+
+    const res = NextResponse.rewrite("https://example.com/internal", {
+      request: {
+        headers: forwardedHeaders,
+      },
+    });
+
+    expect(res.headers.get("x-middleware-rewrite")).toBe("https://example.com/internal");
+    expect(res.headers.get("x-middleware-override-headers")).toBe("cookie,x-added");
+    expect(res.headers.get("x-middleware-request-cookie")).toBe("a=1");
+    expect(res.headers.get("x-middleware-request-x-added")).toBe("1");
+  });
+
   it("NextResponse.next() sets x-middleware-next header", async () => {
     const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
     const res = NextResponse.next();
