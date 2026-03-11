@@ -242,6 +242,30 @@ describe("Link locale handling", () => {
     // Should not become /fr/fr/about
     expect(html).toContain('href="/fr/about"');
   });
+
+  it("locale does not mangle absolute same-origin URLs", () => {
+    // An absolute URL like https://example.com/about should not become
+    // /fr/https://example.com/about — locale prefix only applies to paths
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Link, { href: "https://example.com/about", locale: "fr" } as any, "x"),
+    );
+    expect(html).toContain('href="https://example.com/about"');
+  });
+
+  it("locale does not mangle protocol-relative URLs", () => {
+    // //example.com/about should not become /fr///example.com/about
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Link, { href: "//example.com/about", locale: "fr" } as any, "x"),
+    );
+    expect(html).toContain('href="//example.com/about"');
+  });
+
+  it("locale does not mangle http:// URLs", () => {
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Link, { href: "http://example.com/path", locale: "de" } as any, "x"),
+    );
+    expect(html).toContain('href="http://example.com/path"');
+  });
 });
 
 // ─── toSameOriginPath ────────────────────────────────────────────────────
