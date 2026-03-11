@@ -1,10 +1,7 @@
 import { test, expect } from "@playwright/test";
+import { waitForHydration } from "../helpers";
 
 const BASE = "http://localhost:4173";
-
-async function waitForHydration(page: import("@playwright/test").Page) {
-  await page.waitForFunction(() => Boolean((window as any).__VINEXT_ROOT__));
-}
 
 test.describe("Client-side navigation", () => {
   test("Link click navigates without full page reload", async ({ page }) => {
@@ -78,6 +75,7 @@ test.describe("Client-side navigation", () => {
     await expect(page.locator('[data-testid="as-path"]')).toHaveText(
       "As Path: /posts/42?from=hook",
     );
+    await expect(page.locator('[data-testid="pathname"]')).toHaveText("Pathname: /posts/[id]");
     expect(page.url()).toBe(`${BASE}/posts/42?from=hook`);
   });
 

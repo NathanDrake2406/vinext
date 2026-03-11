@@ -118,6 +118,13 @@ function resolveUrl(url: string | UrlObject): string {
   return result;
 }
 
+/**
+ * When `as` is provided, use it as the navigation target. This is a
+ * simplification: Next.js keeps `url` and `as` as separate values (url for
+ * data fetching, as for the browser URL). We collapse them because vinext's
+ * navigateClient() fetches HTML from the target URL, so `as` must be a
+ * server-resolvable path. Purely decorative `as` values are not supported.
+ */
 function resolveNavigationTarget(
   url: string | UrlObject,
   as: string | undefined,

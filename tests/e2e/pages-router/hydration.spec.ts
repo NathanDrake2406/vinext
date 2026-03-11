@@ -1,10 +1,7 @@
 import { test, expect } from "../fixtures";
+import { waitForHydration } from "../helpers";
 
 const BASE = "http://localhost:4173";
-
-async function waitForHydration(page: import("@playwright/test").Page) {
-  await page.waitForFunction(() => Boolean((window as any).__VINEXT_ROOT__));
-}
 
 test.describe("Hydration", () => {
   // The consoleErrors fixture automatically fails tests if any console errors occur.
