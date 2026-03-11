@@ -243,6 +243,34 @@ describe("isHashOnlyChange", () => {
 // ─── applyLocaleToHref (tested via component output) ────────────────────
 
 describe("Link locale handling", () => {
+  const originalWindow = globalThis.window;
+  const originalNextData = (globalThis as any).__NEXT_DATA__;
+  const originalDomainLocales = (globalThis as any).__VINEXT_DOMAIN_LOCALES__;
+  const originalHostname = (globalThis as any).__VINEXT_HOSTNAME__;
+
+  afterEach(() => {
+    if (originalWindow === undefined) {
+      delete (globalThis as any).window;
+    } else {
+      (globalThis as any).window = originalWindow;
+    }
+    if (originalNextData === undefined) {
+      delete (globalThis as any).__NEXT_DATA__;
+    } else {
+      (globalThis as any).__NEXT_DATA__ = originalNextData;
+    }
+    if (originalDomainLocales === undefined) {
+      delete (globalThis as any).__VINEXT_DOMAIN_LOCALES__;
+    } else {
+      (globalThis as any).__VINEXT_DOMAIN_LOCALES__ = originalDomainLocales;
+    }
+    if (originalHostname === undefined) {
+      delete (globalThis as any).__VINEXT_HOSTNAME__;
+    } else {
+      (globalThis as any).__VINEXT_HOSTNAME__ = originalHostname;
+    }
+  });
+
   it("locale=false keeps href as-is", () => {
     const html = ReactDOMServer.renderToString(
       React.createElement(Link, { href: "/about", locale: false } as any, "x"),
@@ -294,6 +322,47 @@ describe("Link locale handling", () => {
       React.createElement(Link, { href: "http://example.com/path", locale: "de" } as any, "x"),
     );
     expect(html).toContain('href="http://example.com/path"');
+  });
+
+  it("locale string uses configured locale domains for cross-domain links", () => {
+    (globalThis as any).window = {
+      __VINEXT_DEFAULT_LOCALE__: "en",
+      __NEXT_DATA__: {
+        domainLocales: [
+          { domain: "example.com", defaultLocale: "en" },
+          { domain: "example.fr", defaultLocale: "fr", http: true },
+        ],
+        locale: "en",
+        defaultLocale: "en",
+      },
+      location: {
+        protocol: "https:",
+        hostname: "example.com",
+        host: "example.com",
+      },
+    };
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Link, { href: "/about", locale: "fr" } as any, "x"),
+    );
+
+    expect(html).toContain('href="http://example.fr/about"');
+  });
+
+  it("uses configured locale domains during SSR output", () => {
+    delete (globalThis as any).window;
+    (globalThis as any).__VINEXT_DEFAULT_LOCALE__ = "en";
+    (globalThis as any).__VINEXT_DOMAIN_LOCALES__ = [
+      { domain: "example.com", defaultLocale: "en" },
+      { domain: "example.fr", defaultLocale: "fr", http: true },
+    ];
+    (globalThis as any).__VINEXT_HOSTNAME__ = "example.com";
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Link, { href: "/about", locale: "fr" } as any, "x"),
+    );
+
+    expect(html).toContain('href="http://example.fr/about"');
   });
 });
 
