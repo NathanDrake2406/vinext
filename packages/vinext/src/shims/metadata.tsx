@@ -825,13 +825,7 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
       for (const entry of list) {
         for (const [k, v] of Object.entries(entry)) {
           if (v === undefined) continue;
-          elements.push(
-            <meta
-              key={key++}
-              property={`al:${platform}:${k}`}
-              content={String(v)}
-            />,
-          );
+          elements.push(<meta key={key++} property={`al:${platform}:${k}`} content={String(v)} />);
         }
       }
     }
