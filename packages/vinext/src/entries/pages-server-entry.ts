@@ -715,7 +715,7 @@ async function _renderPage(request, url, manifest) {
   try {
     if (typeof setSSRContext === "function") {
       setSSRContext({
-        pathname: routeUrl.split("?")[0],
+        pathname: patternToNextFormat(route.pattern),
         query: { ...params, ...parseQuery(routeUrl) },
         asPath: routeUrl,
         locale: locale,

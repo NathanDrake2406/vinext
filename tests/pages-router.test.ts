@@ -105,7 +105,7 @@ describe("Pages Router integration", () => {
     expect(html).toMatch(/Post:\s*(<!--\s*-->)?\s*42/);
     expect(html).toContain("post-title");
     // Router should have correct pathname and query during SSR
-    expect(html).toMatch(/Pathname:\s*(<!--\s*-->)?\s*\/posts\/42/);
+    expect(html).toMatch(/Pathname:\s*(<!--\s*-->)?\s*\/posts\/\[id\]/);
     expect(html).toMatch(/Query ID:\s*(<!--\s*-->)?\s*42/);
   });
 
