@@ -29,6 +29,9 @@ const _routeTriePath = fileURLToPath(new URL("../routing/route-trie.js", import.
   /\\/g,
   "/",
 );
+const _pagesI18nPath = fileURLToPath(
+  new URL("../server/pages-i18n.js", import.meta.url),
+).replace(/\\/g, "/");
 
 /**
  * Generate the virtual SSR server entry module.
@@ -86,6 +89,7 @@ export async function generateServerEntry(
         locales: nextConfig.i18n.locales,
         defaultLocale: nextConfig.i18n.defaultLocale,
         localeDetection: nextConfig.i18n.localeDetection,
+        domains: nextConfig.i18n.domains,
       })
     : "null";
 
@@ -272,6 +276,7 @@ import { parseCookies } from ${JSON.stringify(path.resolve(__dirname, "../config
 import { runWithExecutionContext as _runWithExecutionContext, getRequestExecutionContext as _getRequestExecutionContext } from ${JSON.stringify(_requestContextShimPath)};
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from ${JSON.stringify(_routeTriePath)};
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
+import { resolvePagesI18nRequest } from ${JSON.stringify(_pagesI18nPath)};
 ${instrumentationImportCode}
 ${middlewareImportCode}
 
@@ -686,23 +691,25 @@ export async function renderPage(request, url, manifest, ctx) {
 }
 
 async function _renderPage(request, url, manifest) {
-  const localeInfo = extractLocale(url);
+  const localeInfo = i18nConfig
+    ? resolvePagesI18nRequest(
+        url,
+        i18nConfig,
+        request.headers,
+        new URL(request.url).hostname,
+        vinextConfig.basePath,
+        vinextConfig.trailingSlash,
+      )
+    : { locale: undefined, url, hadPrefix: false, domainLocale: undefined, redirectUrl: undefined };
   const locale = localeInfo.locale;
   const routeUrl = localeInfo.url;
-  const cookieHeader = request.headers.get("cookie") || "";
+  const currentDefaultLocale = i18nConfig
+    ? (localeInfo.domainLocale ? localeInfo.domainLocale.defaultLocale : i18nConfig.defaultLocale)
+    : undefined;
+  const domainLocales = i18nConfig ? i18nConfig.domains : undefined;
 
-  // i18n redirect: check NEXT_LOCALE cookie first, then Accept-Language
-  if (i18nConfig && !localeInfo.hadPrefix) {
-    const cookieLocale = parseCookieLocaleFromHeader(cookieHeader);
-    if (cookieLocale && cookieLocale !== i18nConfig.defaultLocale) {
-      return new Response(null, { status: 307, headers: { Location: "/" + cookieLocale + routeUrl } });
-    }
-    if (!cookieLocale && i18nConfig.localeDetection !== false) {
-      const detected = detectLocaleFromHeaders(request.headers);
-      if (detected && detected !== i18nConfig.defaultLocale) {
-        return new Response(null, { status: 307, headers: { Location: "/" + detected + routeUrl } });
-      }
-    }
+  if (localeInfo.redirectUrl) {
+    return new Response(null, { status: 307, headers: { Location: localeInfo.redirectUrl } });
   }
 
   const match = matchRoute(routeUrl, pageRoutes);
@@ -725,14 +732,17 @@ async function _renderPage(request, url, manifest) {
         asPath: routeUrl,
         locale: locale,
         locales: i18nConfig ? i18nConfig.locales : undefined,
-        defaultLocale: i18nConfig ? i18nConfig.defaultLocale : undefined,
+        defaultLocale: currentDefaultLocale,
+        domainLocales: domainLocales,
       });
     }
 
     if (i18nConfig) {
       globalThis.__VINEXT_LOCALE__ = locale;
       globalThis.__VINEXT_LOCALES__ = i18nConfig.locales;
-      globalThis.__VINEXT_DEFAULT_LOCALE__ = i18nConfig.defaultLocale;
+      globalThis.__VINEXT_DEFAULT_LOCALE__ = currentDefaultLocale;
+      globalThis.__VINEXT_DOMAIN_LOCALES__ = domainLocales;
+      globalThis.__VINEXT_HOSTNAME__ = new URL(request.url).hostname;
     }
 
     const pageModule = route.module;
@@ -745,7 +755,7 @@ async function _renderPage(request, url, manifest) {
     if (typeof pageModule.getStaticPaths === "function" && route.isDynamic) {
       const pathsResult = await pageModule.getStaticPaths({
         locales: i18nConfig ? i18nConfig.locales : [],
-        defaultLocale: i18nConfig ? i18nConfig.defaultLocale : "",
+        defaultLocale: currentDefaultLocale || "",
       });
       const fallback = pathsResult && pathsResult.fallback !== undefined ? pathsResult.fallback : false;
 
@@ -778,7 +788,7 @@ async function _renderPage(request, url, manifest) {
         resolvedUrl: routeUrl,
         locale: locale,
         locales: i18nConfig ? i18nConfig.locales : undefined,
-        defaultLocale: i18nConfig ? i18nConfig.defaultLocale : undefined,
+        defaultLocale: currentDefaultLocale,
       };
       const result = await pageModule.getServerSideProps(ctx);
       // If gSSP called res.end() directly (short-circuit), return that response.
@@ -895,7 +905,7 @@ async function _renderPage(request, url, manifest) {
         params,
         locale: locale,
         locales: i18nConfig ? i18nConfig.locales : undefined,
-        defaultLocale: i18nConfig ? i18nConfig.defaultLocale : undefined,
+        defaultLocale: currentDefaultLocale,
       };
       const result = await pageModule.getStaticProps(ctx);
       if (result && result.props) pageProps = result.props;
@@ -948,12 +958,13 @@ async function _renderPage(request, url, manifest) {
     if (i18nConfig) {
       nextDataPayload.locale = locale;
       nextDataPayload.locales = i18nConfig.locales;
-      nextDataPayload.defaultLocale = i18nConfig.defaultLocale;
+      nextDataPayload.defaultLocale = currentDefaultLocale;
+      nextDataPayload.domainLocales = domainLocales;
     }
     const localeGlobals = i18nConfig
       ? ";window.__VINEXT_LOCALE__=" + safeJsonStringify(locale) +
         ";window.__VINEXT_LOCALES__=" + safeJsonStringify(i18nConfig.locales) +
-        ";window.__VINEXT_DEFAULT_LOCALE__=" + safeJsonStringify(i18nConfig.defaultLocale)
+        ";window.__VINEXT_DEFAULT_LOCALE__=" + safeJsonStringify(currentDefaultLocale)
       : "";
     const nextDataScript = "<script>window.__NEXT_DATA__ = " + safeJsonStringify(nextDataPayload) + localeGlobals + "</script>";
 

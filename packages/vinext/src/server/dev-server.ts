@@ -29,6 +29,12 @@ import React from "react";
 import { renderToReadableStream } from "react-dom/server.edge";
 import { logRequest, now } from "./request-log.js";
 import { createValidFileMatcher, type ValidFileMatcher } from "../routing/file-matcher.js";
+import {
+  extractLocaleFromUrl as extractLocaleFromUrlShared,
+  detectLocaleFromAcceptLanguage,
+  parseCookieLocaleFromHeader,
+  resolvePagesI18nRequest,
+} from "./pages-i18n.js";
 
 /**
  * Render a React element to a string using renderToReadableStream.
@@ -185,17 +191,7 @@ export function extractLocaleFromUrl(
   url: string,
   i18nConfig: NextI18nConfig,
 ): { locale: string; url: string; hadPrefix: boolean } {
-  const pathname = url.split("?")[0];
-  const parts = pathname.split("/").filter(Boolean);
-  const query = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-
-  if (parts.length > 0 && i18nConfig.locales.includes(parts[0])) {
-    const locale = parts[0];
-    const rest = "/" + parts.slice(1).join("/");
-    return { locale, url: (rest || "/") + query, hadPrefix: true };
-  }
-
-  return { locale: i18nConfig.defaultLocale, url, hadPrefix: false };
+  return extractLocaleFromUrlShared(url, i18nConfig);
 }
 
 /**
@@ -206,33 +202,7 @@ export function detectLocaleFromHeaders(
   req: IncomingMessage,
   i18nConfig: NextI18nConfig,
 ): string | null {
-  const acceptLang = req.headers["accept-language"];
-  if (!acceptLang) return null;
-
-  // Parse Accept-Language: en-US,en;q=0.9,fr;q=0.8
-  const langs = acceptLang
-    .split(",")
-    .map((part) => {
-      const [lang, qPart] = part.trim().split(";");
-      const q = qPart ? parseFloat(qPart.replace("q=", "")) : 1;
-      return { lang: lang.trim().toLowerCase(), q };
-    })
-    .sort((a, b) => b.q - a.q);
-
-  for (const { lang } of langs) {
-    // Exact match
-    const exactMatch = i18nConfig.locales.find((l) => l.toLowerCase() === lang);
-    if (exactMatch) return exactMatch;
-
-    // Prefix match (e.g. "en-US" matches "en")
-    const prefix = lang.split("-")[0];
-    const prefixMatch = i18nConfig.locales.find(
-      (l) => l.toLowerCase() === prefix || l.toLowerCase().startsWith(prefix + "-"),
-    );
-    if (prefixMatch) return prefixMatch;
-  }
-
-  return null;
+  return detectLocaleFromAcceptLanguage(req.headers["accept-language"], i18nConfig);
 }
 
 /**
@@ -240,22 +210,7 @@ export function detectLocaleFromHeaders(
  * Returns the cookie value if it matches a configured locale, otherwise null.
  */
 export function parseCookieLocale(req: IncomingMessage, i18nConfig: NextI18nConfig): string | null {
-  const cookieHeader = req.headers.cookie;
-  if (!cookieHeader) return null;
-
-  // Simple cookie parsing — find NEXT_LOCALE=value
-  const match = cookieHeader.match(/(?:^|;\s*)NEXT_LOCALE=([^;]*)/);
-  if (!match) return null;
-
-  let value: string;
-  try {
-    value = decodeURIComponent(match[1].trim());
-  } catch {
-    return null;
-  }
-  // Only return if it's a valid configured locale
-  if (i18nConfig.locales.includes(value)) return value;
-  return null;
+  return parseCookieLocaleFromHeader(req.headers.cookie, i18nConfig);
 }
 
 /**
@@ -309,32 +264,24 @@ export function createSSRHandler(
     // --- i18n: extract locale from URL prefix ---
     let locale: string | undefined;
     let localeStrippedUrl = url;
+    let currentDefaultLocale: string | undefined;
+    const domainLocales = i18nConfig?.domains;
 
     if (i18nConfig) {
-      const parsed = extractLocaleFromUrl(url, i18nConfig);
-      locale = parsed.locale;
-      localeStrippedUrl = parsed.url;
+      const resolved = resolvePagesI18nRequest(
+        url,
+        i18nConfig,
+        req.headers as Record<string, string | string[] | undefined>,
+        req.headers.host,
+      );
+      locale = resolved.locale;
+      localeStrippedUrl = resolved.url;
+      currentDefaultLocale = resolved.domainLocale?.defaultLocale ?? i18nConfig.defaultLocale;
 
-      // If no locale prefix, check NEXT_LOCALE cookie first, then Accept-Language
-      if (!parsed.hadPrefix) {
-        const cookieLocale = parseCookieLocale(req, i18nConfig);
-        if (cookieLocale && cookieLocale !== i18nConfig.defaultLocale) {
-          // NEXT_LOCALE cookie overrides Accept-Language — redirect to cookie locale
-          const redirectUrl = `/${cookieLocale}${url === "/" ? "" : url}`;
-          res.writeHead(307, { Location: redirectUrl });
-          res.end();
-          return;
-        }
-        // If no cookie or cookie matches default, fall through to Accept-Language detection
-        if (!cookieLocale && i18nConfig.localeDetection !== false) {
-          const detectedLocale = detectLocaleFromHeaders(req, i18nConfig);
-          if (detectedLocale && detectedLocale !== i18nConfig.defaultLocale) {
-            const redirectUrl = `/${detectedLocale}${url === "/" ? "" : url}`;
-            res.writeHead(307, { Location: redirectUrl });
-            res.end();
-            return;
-          }
-        }
+      if (resolved.redirectUrl) {
+        res.writeHead(307, { Location: resolved.redirectUrl });
+        res.end();
+        return;
       }
     }
 
@@ -368,17 +315,20 @@ export function createSSRHandler(
                             pathname: patternToNextFormat(route.pattern),
                             query: { ...params, ...parseQuery(url) },
                             asPath: url,
-                            locale: locale ?? i18nConfig?.defaultLocale,
+                            locale: locale ?? currentDefaultLocale,
                             locales: i18nConfig?.locales,
-                            defaultLocale: i18nConfig?.defaultLocale,
+                            defaultLocale: currentDefaultLocale,
+                            domainLocales,
                           });
                         }
 
                         // Set globalThis locale info for Link component locale prop support during SSR
                         if (i18nConfig) {
-                          globalThis.__VINEXT_LOCALE__ = locale ?? i18nConfig.defaultLocale;
+                          globalThis.__VINEXT_LOCALE__ = locale ?? currentDefaultLocale;
                           globalThis.__VINEXT_LOCALES__ = i18nConfig.locales;
-                          globalThis.__VINEXT_DEFAULT_LOCALE__ = i18nConfig.defaultLocale;
+                          globalThis.__VINEXT_DEFAULT_LOCALE__ = currentDefaultLocale;
+                          globalThis.__VINEXT_DOMAIN_LOCALES__ = domainLocales;
+                          globalThis.__VINEXT_HOSTNAME__ = req.headers.host?.split(":", 1)[0];
                         }
 
                         // Load the page module through Vite's SSR pipeline
@@ -405,7 +355,7 @@ export function createSSRHandler(
                         if (typeof pageModule.getStaticPaths === "function" && route.isDynamic) {
                           const pathsResult = await pageModule.getStaticPaths({
                             locales: i18nConfig?.locales ?? [],
-                            defaultLocale: i18nConfig?.defaultLocale ?? "",
+                            defaultLocale: currentDefaultLocale ?? "",
                           });
                           const fallback = pathsResult?.fallback ?? false;
 
@@ -464,9 +414,9 @@ export function createSSRHandler(
                             res,
                             query: parseQuery(url),
                             resolvedUrl: localeStrippedUrl,
-                            locale: locale ?? i18nConfig?.defaultLocale,
+                            locale: locale ?? currentDefaultLocale,
                             locales: i18nConfig?.locales,
-                            defaultLocale: i18nConfig?.defaultLocale,
+                            defaultLocale: currentDefaultLocale,
                           };
                           const result = await pageModule.getServerSideProps(context);
                           // If gSSP called res.end() directly (short-circuit pattern),
@@ -692,9 +642,9 @@ export function createSSRHandler(
                           // Cache miss — call getStaticProps normally
                           const context = {
                             params,
-                            locale: locale ?? i18nConfig?.defaultLocale,
+                            locale: locale ?? currentDefaultLocale,
                             locales: i18nConfig?.locales,
-                            defaultLocale: i18nConfig?.defaultLocale,
+                            defaultLocale: currentDefaultLocale,
                           };
                           const result = await pageModule.getStaticProps(context);
                           if (result && "props" in result) {
@@ -882,15 +832,16 @@ hydrate();
                           query: params,
                           buildId: process.env.__VINEXT_BUILD_ID,
                           isFallback: false,
-                          locale: locale ?? i18nConfig?.defaultLocale,
+                          locale: locale ?? currentDefaultLocale,
                           locales: i18nConfig?.locales,
-                          defaultLocale: i18nConfig?.defaultLocale,
+                          defaultLocale: currentDefaultLocale,
+                          domainLocales,
                           // Include module URLs so client navigation can import pages directly
                           __vinext: {
                             pageModuleUrl,
                             appModuleUrl,
                           },
-                        })}${i18nConfig ? `;window.__VINEXT_LOCALE__=${safeJsonStringify(locale ?? i18nConfig.defaultLocale)};window.__VINEXT_LOCALES__=${safeJsonStringify(i18nConfig.locales)};window.__VINEXT_DEFAULT_LOCALE__=${safeJsonStringify(i18nConfig.defaultLocale)}` : ""}</script>`;
+                        })}${i18nConfig ? `;window.__VINEXT_LOCALE__=${safeJsonStringify(locale ?? currentDefaultLocale)};window.__VINEXT_LOCALES__=${safeJsonStringify(i18nConfig.locales)};window.__VINEXT_DEFAULT_LOCALE__=${safeJsonStringify(currentDefaultLocale)}` : ""}</script>`;
 
                         // Try to load custom _document.tsx
                         const docPath = path.join(pagesDir, "_document");

@@ -234,6 +234,74 @@ function getDefaultLocale(): string | undefined {
   return globalThis.__VINEXT_DEFAULT_LOCALE__;
 }
 
+type DomainLocale = NonNullable<NonNullable<VinextNextData["domainLocales"]>[number]>;
+
+function getDomainLocales(): readonly DomainLocale[] | undefined {
+  if (typeof window !== "undefined") {
+    return (window.__NEXT_DATA__ as VinextNextData | undefined)?.domainLocales;
+  }
+  return globalThis.__VINEXT_DOMAIN_LOCALES__;
+}
+
+function getCurrentHostname(): string | undefined {
+  if (typeof window !== "undefined") return window.location.hostname;
+  return globalThis.__VINEXT_HOSTNAME__;
+}
+
+function normalizeDomainHostname(hostname: string | null | undefined): string | undefined {
+  if (!hostname) return undefined;
+  return hostname.split(":", 1)[0]?.toLowerCase() || undefined;
+}
+
+function detectDomainLocale(
+  domainLocales: readonly DomainLocale[] | undefined,
+  hostname?: string,
+  locale?: string,
+): DomainLocale | undefined {
+  if (!domainLocales?.length) return undefined;
+
+  const normalizedHostname = normalizeDomainHostname(hostname);
+  const normalizedLocale = locale?.toLowerCase();
+
+  for (const domainLocale of domainLocales) {
+    const domainHostname = normalizeDomainHostname(domainLocale.domain);
+    if (
+      (normalizedHostname && normalizedHostname === domainHostname) ||
+      (normalizedLocale && normalizedLocale === domainLocale.defaultLocale.toLowerCase()) ||
+      domainLocale.locales?.some((candidate) => candidate.toLowerCase() === normalizedLocale)
+    ) {
+      return domainLocale;
+    }
+  }
+
+  return undefined;
+}
+
+function addLocalePrefix(path: string, locale: string, localeDefault: string): string {
+  if (locale === localeDefault) return path;
+  if (path.startsWith(`/${locale}/`) || path === `/${locale}`) return path;
+  return `/${locale}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function getDomainLocaleHref(href: string, locale: string): string | undefined {
+  const domainLocales = getDomainLocales();
+  if (!domainLocales?.length) return undefined;
+
+  const targetDomain = detectDomainLocale(domainLocales, undefined, locale);
+  if (!targetDomain) return undefined;
+
+  const currentHostname = getCurrentHostname();
+  const currentDomain = detectDomainLocale(domainLocales, currentHostname);
+  const localizedPath = addLocalePrefix(href, locale, targetDomain.defaultLocale);
+
+  if (currentDomain && currentDomain.domain.toLowerCase() === targetDomain.domain.toLowerCase()) {
+    return localizedPath;
+  }
+
+  const scheme = `http${targetDomain.http ? "" : "s"}://`;
+  return `${scheme}${targetDomain.domain}${localizedPath}`;
+}
+
 /**
  * Apply locale prefix to a URL path based on the locale prop.
  * - locale="fr" → prepend /fr (unless it already has a locale prefix)
@@ -255,6 +323,11 @@ function applyLocaleToHref(href: string, locale: string | false | undefined): st
   // only applies to local paths.
   if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//")) {
     return href;
+  }
+
+  const domainLocaleHref = getDomainLocaleHref(href, locale);
+  if (domainLocaleHref) {
+    return domainLocaleHref;
   }
 
   // locale is a string: prepend the locale prefix if not already present
