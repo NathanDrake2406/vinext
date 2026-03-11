@@ -29,9 +29,10 @@ const _routeTriePath = fileURLToPath(new URL("../routing/route-trie.js", import.
   /\\/g,
   "/",
 );
-const _pagesI18nPath = fileURLToPath(
-  new URL("../server/pages-i18n.js", import.meta.url),
-).replace(/\\/g, "/");
+const _pagesI18nPath = fileURLToPath(new URL("../server/pages-i18n.js", import.meta.url)).replace(
+  /\\/g,
+  "/",
+);
 
 /**
  * Generate the virtual SSR server entry module.
