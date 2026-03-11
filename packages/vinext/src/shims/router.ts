@@ -118,6 +118,14 @@ function resolveUrl(url: string | UrlObject): string {
   return result;
 }
 
+function resolveNavigationTarget(
+  url: string | UrlObject,
+  as: string | undefined,
+  locale: string | undefined,
+): string {
+  return applyNavigationLocale(as ?? resolveUrl(url), locale);
+}
+
 /**
  * Apply locale prefix to a URL for client-side navigation.
  * Same logic as Link's applyLocaleToHref but reads from window globals.
@@ -464,12 +472,8 @@ export function useRouter(): NextRouter {
   }, []);
 
   const push = useCallback(
-    async (
-      url: string | UrlObject,
-      _as?: string,
-      options?: TransitionOptions,
-    ): Promise<boolean> => {
-      let resolved = applyNavigationLocale(resolveUrl(url), options?.locale);
+    async (url: string | UrlObject, as?: string, options?: TransitionOptions): Promise<boolean> => {
+      let resolved = resolveNavigationTarget(url, as, options?.locale);
 
       // External URLs — delegate to browser (unless same-origin)
       if (isExternalUrl(resolved)) {
@@ -519,12 +523,8 @@ export function useRouter(): NextRouter {
   );
 
   const replace = useCallback(
-    async (
-      url: string | UrlObject,
-      _as?: string,
-      options?: TransitionOptions,
-    ): Promise<boolean> => {
-      let resolved = applyNavigationLocale(resolveUrl(url), options?.locale);
+    async (url: string | UrlObject, as?: string, options?: TransitionOptions): Promise<boolean> => {
+      let resolved = resolveNavigationTarget(url, as, options?.locale);
 
       // External URLs — delegate to browser (unless same-origin)
       if (isExternalUrl(resolved)) {
@@ -666,8 +666,8 @@ export function wrapWithRouterContext(element: ReactElement): ReactElement {
 
 // Also export a default Router singleton for `import Router from 'next/router'`
 const Router = {
-  push: async (url: string | UrlObject, _as?: string, options?: TransitionOptions) => {
-    let resolved = applyNavigationLocale(resolveUrl(url), options?.locale);
+  push: async (url: string | UrlObject, as?: string, options?: TransitionOptions) => {
+    let resolved = resolveNavigationTarget(url, as, options?.locale);
 
     // External URLs (unless same-origin)
     if (isExternalUrl(resolved)) {
@@ -710,8 +710,8 @@ const Router = {
     window.dispatchEvent(new CustomEvent("vinext:navigate"));
     return true;
   },
-  replace: async (url: string | UrlObject, _as?: string, options?: TransitionOptions) => {
-    let resolved = applyNavigationLocale(resolveUrl(url), options?.locale);
+  replace: async (url: string | UrlObject, as?: string, options?: TransitionOptions) => {
+    let resolved = resolveNavigationTarget(url, as, options?.locale);
 
     // External URLs (unless same-origin)
     if (isExternalUrl(resolved)) {

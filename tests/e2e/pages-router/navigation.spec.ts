@@ -2,10 +2,15 @@ import { test, expect } from "@playwright/test";
 
 const BASE = "http://localhost:4173";
 
+async function waitForHydration(page: import("@playwright/test").Page) {
+  await page.waitForFunction(() => Boolean((window as any).__VINEXT_ROOT__));
+}
+
 test.describe("Client-side navigation", () => {
   test("Link click navigates without full page reload", async ({ page }) => {
     await page.goto(`${BASE}/`);
     await expect(page.locator("h1")).toHaveText("Hello, vinext!");
+    await waitForHydration(page);
 
     // Store a marker on the window to detect if page fully reloaded
     await page.evaluate(() => {
@@ -29,6 +34,7 @@ test.describe("Client-side navigation", () => {
   test("Link navigates back to home from about", async ({ page }) => {
     await page.goto(`${BASE}/about`);
     await expect(page.locator("h1")).toHaveText("About");
+    await waitForHydration(page);
 
     await page.evaluate(() => {
       (window as any).__NAV_MARKER__ = true;
@@ -45,6 +51,7 @@ test.describe("Client-side navigation", () => {
   test("router.push navigates to a new page", async ({ page }) => {
     await page.goto(`${BASE}/nav-test`);
     await expect(page.locator("h1")).toHaveText("Navigation Test");
+    await waitForHydration(page);
 
     await page.evaluate(() => {
       (window as any).__NAV_MARKER__ = true;
@@ -58,6 +65,22 @@ test.describe("Client-side navigation", () => {
     expect(page.url()).toBe(`${BASE}/about`);
   });
 
+  test("router.push(url, as) uses the masked URL while resolving the real route", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/nav-test`);
+    await expect(page.locator("h1")).toHaveText("Navigation Test");
+    await waitForHydration(page);
+
+    await page.click('[data-testid="push-post-as-hook"]');
+    await expect(page.locator('[data-testid="post-title"]')).toHaveText("Post: 42");
+    await expect(page.locator('[data-testid="query"]')).toHaveText("Query ID: 42");
+    await expect(page.locator('[data-testid="as-path"]')).toHaveText(
+      "As Path: /posts/42?from=hook",
+    );
+    expect(page.url()).toBe(`${BASE}/posts/42?from=hook`);
+  });
+
   test("router.replace navigates without adding history entry", async ({ page }) => {
     // Start at home, then go to nav-test, then replace to SSR
     await page.goto(`${BASE}/`);
@@ -66,6 +89,7 @@ test.describe("Client-side navigation", () => {
     // Navigate to nav-test via direct navigation
     await page.goto(`${BASE}/nav-test`);
     await expect(page.locator("h1")).toHaveText("Navigation Test");
+    await waitForHydration(page);
 
     await page.click('[data-testid="replace-ssr"]');
     await expect(page.locator("h1")).toHaveText("Server-Side Rendered");
@@ -76,9 +100,30 @@ test.describe("Client-side navigation", () => {
     await expect(page.locator("h1")).not.toHaveText("Navigation Test");
   });
 
+  test("Router.replace(url, as) uses the masked URL for singleton navigation", async ({ page }) => {
+    await page.goto(`${BASE}/`);
+    await expect(page.locator("h1")).toHaveText("Hello, vinext!");
+
+    await page.goto(`${BASE}/nav-test`);
+    await expect(page.locator("h1")).toHaveText("Navigation Test");
+    await waitForHydration(page);
+
+    await page.click('[data-testid="replace-post-as-singleton"]');
+    await expect(page.locator('[data-testid="post-title"]')).toHaveText("Post: 84");
+    await expect(page.locator('[data-testid="query"]')).toHaveText("Query ID: 84");
+    await expect(page.locator('[data-testid="as-path"]')).toHaveText(
+      "As Path: /posts/84?from=singleton",
+    );
+    expect(page.url()).toBe(`${BASE}/posts/84?from=singleton`);
+
+    await page.goBack();
+    await expect(page.locator("h1")).toHaveText("Hello, vinext!");
+  });
+
   test("browser back/forward buttons work after client navigation", async ({ page }) => {
     await page.goto(`${BASE}/`);
     await expect(page.locator("h1")).toHaveText("Hello, vinext!");
+    await waitForHydration(page);
 
     // Navigate: Home -> About via link
     await page.click('a[href="/about"]');
@@ -98,6 +143,7 @@ test.describe("Client-side navigation", () => {
   test("multiple sequential navigations work", async ({ page }) => {
     await page.goto(`${BASE}/nav-test`);
     await expect(page.locator("h1")).toHaveText("Navigation Test");
+    await waitForHydration(page);
 
     await page.evaluate(() => {
       (window as any).__NAV_MARKER__ = true;
@@ -123,6 +169,7 @@ test.describe("Client-side navigation", () => {
   test("navigating to SSR page fetches fresh server data", async ({ page }) => {
     await page.goto(`${BASE}/nav-test`);
     await expect(page.locator("h1")).toHaveText("Navigation Test");
+    await waitForHydration(page);
 
     await page.click('[data-testid="link-ssr"]');
     await expect(page.locator("h1")).toHaveText("Server-Side Rendered");
