@@ -156,6 +156,12 @@ export function isExternalUrl(url: string): boolean {
   return /^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//");
 }
 
+/** Resolve a fragment-only URL to include the current pathname + search */
+function resolveHashUrl(url: string): string {
+  if (!url.startsWith("#") || typeof window === "undefined") return url;
+  return stripBasePath(window.location.pathname, __basePath) + window.location.search + url;
+}
+
 /** Check if a href is only a hash change relative to the current URL */
 export function isHashOnlyChange(href: string): boolean {
   if (href.startsWith("#")) return true;
@@ -505,12 +511,16 @@ export function useRouter(): NextRouter {
 
       // Hash-only change — no page fetch needed
       if (isHashOnlyChange(resolved)) {
-        routerEvents.emit("hashChangeStart", resolved, { shallow: options?.shallow ?? false });
+        routerEvents.emit("hashChangeStart", resolveHashUrl(resolved), {
+          shallow: options?.shallow ?? false,
+        });
         const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
         window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
         scrollToHash(hash);
         setState(getPathnameAndQuery());
-        routerEvents.emit("hashChangeComplete", resolved, { shallow: options?.shallow ?? false });
+        routerEvents.emit("hashChangeComplete", resolveHashUrl(resolved), {
+          shallow: options?.shallow ?? false,
+        });
         window.dispatchEvent(new CustomEvent("vinext:navigate"));
         return true;
       }
@@ -556,12 +566,16 @@ export function useRouter(): NextRouter {
 
       // Hash-only change — no page fetch needed
       if (isHashOnlyChange(resolved)) {
-        routerEvents.emit("hashChangeStart", resolved, { shallow: options?.shallow ?? false });
+        routerEvents.emit("hashChangeStart", resolveHashUrl(resolved), {
+          shallow: options?.shallow ?? false,
+        });
         const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
         window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
         scrollToHash(hash);
         setState(getPathnameAndQuery());
-        routerEvents.emit("hashChangeComplete", resolved, { shallow: options?.shallow ?? false });
+        routerEvents.emit("hashChangeComplete", resolveHashUrl(resolved), {
+          shallow: options?.shallow ?? false,
+        });
         window.dispatchEvent(new CustomEvent("vinext:navigate"));
         return true;
       }
@@ -700,11 +714,15 @@ const Router = {
 
     // Hash-only change
     if (isHashOnlyChange(resolved)) {
-      routerEvents.emit("hashChangeStart", resolved, { shallow: options?.shallow ?? false });
+      routerEvents.emit("hashChangeStart", resolveHashUrl(resolved), {
+        shallow: options?.shallow ?? false,
+      });
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
       window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
       scrollToHash(hash);
-      routerEvents.emit("hashChangeComplete", resolved, { shallow: options?.shallow ?? false });
+      routerEvents.emit("hashChangeComplete", resolveHashUrl(resolved), {
+        shallow: options?.shallow ?? false,
+      });
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return true;
     }
@@ -744,11 +762,15 @@ const Router = {
 
     // Hash-only change
     if (isHashOnlyChange(resolved)) {
-      routerEvents.emit("hashChangeStart", resolved, { shallow: options?.shallow ?? false });
+      routerEvents.emit("hashChangeStart", resolveHashUrl(resolved), {
+        shallow: options?.shallow ?? false,
+      });
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
       window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
       scrollToHash(hash);
-      routerEvents.emit("hashChangeComplete", resolved, { shallow: options?.shallow ?? false });
+      routerEvents.emit("hashChangeComplete", resolveHashUrl(resolved), {
+        shallow: options?.shallow ?? false,
+      });
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return true;
     }
