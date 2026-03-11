@@ -283,6 +283,12 @@ function applyLocaleToHref(href: string, locale: string | false | undefined): st
     return href;
   }
 
+  // Absolute and protocol-relative URLs must not be prefixed — locale
+  // only applies to local paths.
+  if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//")) {
+    return href;
+  }
+
   // locale is a string: prepend the locale prefix if not already present
   const defaultLocale = getDefaultLocale();
   // For the default locale, Next.js doesn't add a prefix
