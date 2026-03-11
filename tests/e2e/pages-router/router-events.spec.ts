@@ -54,6 +54,68 @@ test.describe("router.events (Pages Router)", () => {
     expect(events).toContain("complete:/about");
   });
 
+  test("beforeHistoryChange fires between routeChangeStart and routeChangeComplete", async ({
+    page,
+  }) => {
+    await page.click('[data-testid="push-about"]');
+    await expect(page.locator("h1")).toHaveText("About");
+
+    const events: string[] = await page.evaluate((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    }, STORAGE_KEY);
+
+    const startIdx = events.findIndex((e) => e === "start:/about");
+    const beforeIdx = events.findIndex((e) => e === "beforeHistoryChange:/about");
+    const completeIdx = events.findIndex((e) => e === "complete:/about");
+    expect(startIdx).toBeGreaterThanOrEqual(0);
+    expect(beforeIdx).toBeGreaterThan(startIdx);
+    expect(completeIdx).toBeGreaterThan(beforeIdx);
+  });
+
+  test("hashChangeStart and hashChangeComplete fire on hash-only push", async ({ page }) => {
+    await page.click('[data-testid="push-hash"]');
+
+    const events: string[] = await page.evaluate((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    }, STORAGE_KEY);
+
+    expect(events.some((e) => e.startsWith("hashChangeStart:"))).toBe(true);
+    expect(events.some((e) => e.startsWith("hashChangeComplete:"))).toBe(true);
+    // Should NOT fire routeChange events for hash-only navigation
+    expect(events.some((e) => e.startsWith("start:"))).toBe(false);
+    expect(events.some((e) => e.startsWith("complete:"))).toBe(false);
+  });
+
+  test("hashChangeStart fires before hashChangeComplete on hash push", async ({ page }) => {
+    await page.click('[data-testid="push-hash"]');
+
+    const events: string[] = await page.evaluate((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    }, STORAGE_KEY);
+
+    const startIdx = events.findIndex((e) => e.startsWith("hashChangeStart:"));
+    const completeIdx = events.findIndex((e) => e.startsWith("hashChangeComplete:"));
+    expect(startIdx).toBeGreaterThanOrEqual(0);
+    expect(completeIdx).toBeGreaterThan(startIdx);
+  });
+
+  test("hashChangeStart and hashChangeComplete fire on hash-only replace", async ({ page }) => {
+    await page.click('[data-testid="replace-hash"]');
+
+    const events: string[] = await page.evaluate((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    }, STORAGE_KEY);
+
+    expect(events.some((e) => e.startsWith("hashChangeStart:"))).toBe(true);
+    expect(events.some((e) => e.startsWith("hashChangeComplete:"))).toBe(true);
+    expect(events.some((e) => e.startsWith("start:"))).toBe(false);
+    expect(events.some((e) => e.startsWith("complete:"))).toBe(false);
+  });
+
   test("multiple navigations produce multiple event pairs", async ({ page }) => {
     // Navigate to about
     await page.click('[data-testid="push-about"]');

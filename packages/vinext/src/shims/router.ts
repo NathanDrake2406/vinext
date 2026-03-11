@@ -505,22 +505,25 @@ export function useRouter(): NextRouter {
 
       // Hash-only change — no page fetch needed
       if (isHashOnlyChange(resolved)) {
+        routerEvents.emit("hashChangeStart", resolved, { shallow: options?.shallow ?? false });
         const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
         window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
         scrollToHash(hash);
         setState(getPathnameAndQuery());
+        routerEvents.emit("hashChangeComplete", resolved, { shallow: options?.shallow ?? false });
         window.dispatchEvent(new CustomEvent("vinext:navigate"));
         return true;
       }
 
       saveScrollPosition();
-      routerEvents.emit("routeChangeStart", resolved);
+      routerEvents.emit("routeChangeStart", resolved, { shallow: options?.shallow ?? false });
+      routerEvents.emit("beforeHistoryChange", resolved, { shallow: options?.shallow ?? false });
       window.history.pushState({}, "", full);
       if (!options?.shallow) {
         await navigateClient(full);
       }
       setState(getPathnameAndQuery());
-      routerEvents.emit("routeChangeComplete", resolved);
+      routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
 
       // Scroll: handle hash target, else scroll to top unless scroll:false
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
@@ -553,21 +556,24 @@ export function useRouter(): NextRouter {
 
       // Hash-only change — no page fetch needed
       if (isHashOnlyChange(resolved)) {
+        routerEvents.emit("hashChangeStart", resolved, { shallow: options?.shallow ?? false });
         const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
         window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
         scrollToHash(hash);
         setState(getPathnameAndQuery());
+        routerEvents.emit("hashChangeComplete", resolved, { shallow: options?.shallow ?? false });
         window.dispatchEvent(new CustomEvent("vinext:navigate"));
         return true;
       }
 
-      routerEvents.emit("routeChangeStart", resolved);
+      routerEvents.emit("routeChangeStart", resolved, { shallow: options?.shallow ?? false });
+      routerEvents.emit("beforeHistoryChange", resolved, { shallow: options?.shallow ?? false });
       window.history.replaceState({}, "", full);
       if (!options?.shallow) {
         await navigateClient(full);
       }
       setState(getPathnameAndQuery());
-      routerEvents.emit("routeChangeComplete", resolved);
+      routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
 
       // Scroll: handle hash target, else scroll to top unless scroll:false
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
@@ -641,9 +647,10 @@ if (typeof window !== "undefined") {
       if (!shouldContinue) return;
     }
 
-    routerEvents.emit("routeChangeStart", appUrl);
+    routerEvents.emit("routeChangeStart", appUrl, { shallow: false });
+    routerEvents.emit("beforeHistoryChange", appUrl, { shallow: false });
     void navigateClient(browserUrl).then(() => {
-      routerEvents.emit("routeChangeComplete", appUrl);
+      routerEvents.emit("routeChangeComplete", appUrl, { shallow: false });
       restoreScrollPosition(e.state);
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
     });
@@ -693,20 +700,23 @@ const Router = {
 
     // Hash-only change
     if (isHashOnlyChange(resolved)) {
+      routerEvents.emit("hashChangeStart", resolved, { shallow: options?.shallow ?? false });
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
       window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
       scrollToHash(hash);
+      routerEvents.emit("hashChangeComplete", resolved, { shallow: options?.shallow ?? false });
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return true;
     }
 
     saveScrollPosition();
-    routerEvents.emit("routeChangeStart", resolved);
+    routerEvents.emit("routeChangeStart", resolved, { shallow: options?.shallow ?? false });
+    routerEvents.emit("beforeHistoryChange", resolved, { shallow: options?.shallow ?? false });
     window.history.pushState({}, "", full);
     if (!options?.shallow) {
       await navigateClient(full);
     }
-    routerEvents.emit("routeChangeComplete", resolved);
+    routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
 
     const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
     if (hash) {
@@ -734,19 +744,22 @@ const Router = {
 
     // Hash-only change
     if (isHashOnlyChange(resolved)) {
+      routerEvents.emit("hashChangeStart", resolved, { shallow: options?.shallow ?? false });
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
       window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
       scrollToHash(hash);
+      routerEvents.emit("hashChangeComplete", resolved, { shallow: options?.shallow ?? false });
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return true;
     }
 
-    routerEvents.emit("routeChangeStart", resolved);
+    routerEvents.emit("routeChangeStart", resolved, { shallow: options?.shallow ?? false });
+    routerEvents.emit("beforeHistoryChange", resolved, { shallow: options?.shallow ?? false });
     window.history.replaceState({}, "", full);
     if (!options?.shallow) {
       await navigateClient(full);
     }
-    routerEvents.emit("routeChangeComplete", resolved);
+    routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
 
     const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
     if (hash) {
