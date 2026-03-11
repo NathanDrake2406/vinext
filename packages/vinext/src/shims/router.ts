@@ -514,14 +514,16 @@ function buildRouterValue(
   },
 ): NextRouter {
   const _ssrState = _getSSRContext();
-  const nextData = typeof window !== "undefined"
-    ? (window.__NEXT_DATA__ as VinextNextData | undefined)
-    : undefined;
+  const nextData =
+    typeof window !== "undefined"
+      ? (window.__NEXT_DATA__ as VinextNextData | undefined)
+      : undefined;
   const locale = typeof window === "undefined" ? _ssrState?.locale : window.__VINEXT_LOCALE__;
   const locales = typeof window === "undefined" ? _ssrState?.locales : window.__VINEXT_LOCALES__;
   const defaultLocale =
     typeof window === "undefined" ? _ssrState?.defaultLocale : window.__VINEXT_DEFAULT_LOCALE__;
-  const domainLocales = typeof window === "undefined" ? _ssrState?.domainLocales : nextData?.domainLocales;
+  const domainLocales =
+    typeof window === "undefined" ? _ssrState?.domainLocales : nextData?.domainLocales;
 
   const route = typeof window !== "undefined" ? (nextData?.page ?? pathname) : pathname;
 

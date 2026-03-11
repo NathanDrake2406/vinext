@@ -171,8 +171,7 @@ function shouldRedirectToPreferredDomain(
 
   const sameDomain =
     normalizeHostname(currentDomainLocale.domain) === normalizeHostname(preferredDomain.domain);
-  const sameLocale =
-    preferredDomain.defaultLocale.toLowerCase() === detectedLocale.toLowerCase();
+  const sameLocale = preferredDomain.defaultLocale.toLowerCase() === detectedLocale.toLowerCase();
 
   return !sameDomain || !sameLocale;
 }
@@ -188,11 +187,16 @@ export function getLocaleRedirect({
 
   const domainLocale = detectDomainLocale(i18n.domains, urlParsed.hostname ?? undefined);
   const defaultLocale = domainLocale?.defaultLocale || i18n.defaultLocale;
-  const cookieLocale = parseCookieLocaleFromHeader(readHeader(headers, "cookie"), i18n) ?? undefined;
+  const cookieLocale =
+    parseCookieLocaleFromHeader(readHeader(headers, "cookie"), i18n) ?? undefined;
   const preferredLocale =
     detectLocaleFromAcceptLanguage(readHeader(headers, "accept-language"), i18n) ?? undefined;
   const detectedLocale =
-    pathLocale || cookieLocale || preferredLocale || domainLocale?.defaultLocale || i18n.defaultLocale;
+    pathLocale ||
+    cookieLocale ||
+    preferredLocale ||
+    domainLocale?.defaultLocale ||
+    i18n.defaultLocale;
   const search = urlParsed.search ?? "";
 
   const preferredDomain = detectDomainLocale(i18n.domains, undefined, detectedLocale);
@@ -241,7 +245,9 @@ export function resolvePagesI18nRequest(
       urlParsed: {
         hostname,
         pathname: localeInfo.url.split("?")[0] || "/",
-        search: localeInfo.url.includes("?") ? localeInfo.url.slice(localeInfo.url.indexOf("?")) : "",
+        search: localeInfo.url.includes("?")
+          ? localeInfo.url.slice(localeInfo.url.indexOf("?"))
+          : "",
       },
     });
   }

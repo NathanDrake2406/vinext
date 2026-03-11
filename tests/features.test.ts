@@ -1103,7 +1103,11 @@ describe("i18n domain routing (Pages Router)", () => {
     requestPath: string,
     host: string,
     headers: Record<string, string> = {},
-  ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
+  ): Promise<{
+    status: number;
+    headers: Record<string, string | string[] | undefined>;
+    body: string;
+  }> {
     const http = await import("node:http");
     return new Promise((resolve, reject) => {
       const req = http.request(
@@ -1250,7 +1254,9 @@ export default function About({ locale, defaultLocale }) {
     expect(res.body).toContain('<p id="defaultLocale">fr</p>');
     expect(res.body).toContain('href="/about" id="switch-locale"');
     expect(res.body).toContain('"defaultLocale":"fr"');
-    expect(res.body).toContain('"domainLocales":[{"domain":"example.com","defaultLocale":"en"},{"domain":"example.fr","defaultLocale":"fr","http":true}]');
+    expect(res.body).toContain(
+      '"domainLocales":[{"domain":"example.com","defaultLocale":"en"},{"domain":"example.fr","defaultLocale":"fr","http":true}]',
+    );
   });
 });
 
