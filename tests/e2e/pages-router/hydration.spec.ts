@@ -2,6 +2,10 @@ import { test, expect } from "../fixtures";
 
 const BASE = "http://localhost:4173";
 
+async function waitForHydration(page: import("@playwright/test").Page) {
+  await page.waitForFunction(() => Boolean((window as any).__VINEXT_ROOT__));
+}
+
 test.describe("Hydration", () => {
   // The consoleErrors fixture automatically fails tests if any console errors occur.
   // This catches React hydration mismatches, runtime errors, etc.
@@ -12,7 +16,8 @@ test.describe("Hydration", () => {
     // SSR should render the initial count
     await expect(page.locator('[data-testid="count"]')).toContainText("Count:");
 
-    // Wait for hydration — button should become interactive
+    await waitForHydration(page);
+
     await page.click('[data-testid="increment"]');
     await expect(page.locator('[data-testid="count"]')).toHaveText("Count: 1");
 
@@ -57,6 +62,7 @@ test.describe("Hydration", () => {
   test("state is preserved within client navigation", async ({ page, consoleErrors }) => {
     // Start at counter page, increment, then navigate away and back
     await page.goto(`${BASE}/counter`);
+    await waitForHydration(page);
     await page.click('[data-testid="increment"]');
     await page.click('[data-testid="increment"]');
     await expect(page.locator('[data-testid="count"]')).toHaveText("Count: 2");
