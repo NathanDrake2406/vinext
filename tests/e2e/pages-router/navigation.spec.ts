@@ -75,8 +75,7 @@ test.describe("Client-side navigation", () => {
     await expect(page.locator('[data-testid="as-path"]')).toHaveText(
       "As Path: /posts/42?from=hook",
     );
-    // TODO(#462): after implementing two-value url/as navigation, assert that
-    // router.pathname stays as the route pattern (/posts/[id]) not the resolved path.
+    await expect(page.locator('[data-testid="pathname"]')).toHaveText("Pathname: /posts/[id]");
     expect(page.url()).toBe(`${BASE}/posts/42?from=hook`);
   });
 

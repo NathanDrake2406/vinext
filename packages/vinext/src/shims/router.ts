@@ -274,7 +274,11 @@ function getPathnameAndQuery(): {
     }
     return { pathname: "/", query: {}, asPath: "/" };
   }
-  const pathname = stripBasePath(window.location.pathname, __basePath);
+  const resolvedPath = stripBasePath(window.location.pathname, __basePath);
+  // In Next.js, router.pathname is the route pattern (e.g., "/posts/[id]"),
+  // not the resolved path ("/posts/42"). __NEXT_DATA__.page holds the route
+  // pattern and is updated by navigateClient() on every client-side navigation.
+  const pathname = window.__NEXT_DATA__?.page ?? resolvedPath;
   const routeQuery: Record<string, string | string[]> = {};
   // Include dynamic route params from __NEXT_DATA__ (e.g., { id: "42" } from /posts/[id]).
   // Only include keys that are part of the route pattern (not stale query params).
@@ -297,7 +301,8 @@ function getPathnameAndQuery(): {
     addQueryParam(searchQuery, key, value);
   }
   const query = { ...searchQuery, ...routeQuery };
-  const asPath = pathname + window.location.search + window.location.hash;
+  // asPath uses the resolved browser path, not the route pattern
+  const asPath = resolvedPath + window.location.search + window.location.hash;
   return { pathname, query, asPath };
 }
 
