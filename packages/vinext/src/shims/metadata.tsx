@@ -605,11 +605,17 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
     if (tw.players) {
       const players = Array.isArray(tw.players) ? tw.players : [tw.players];
       for (const player of players) {
+        const playerUrl = player.playerUrl.toString();
+        const streamUrl = player.streamUrl.toString();
         elements.push(
-          <meta key={key++} name="twitter:player" content={player.playerUrl.toString()} />,
+          <meta key={key++} name="twitter:player" content={resolveUrl(playerUrl) ?? playerUrl} />,
         );
         elements.push(
-          <meta key={key++} name="twitter:player:stream" content={player.streamUrl.toString()} />,
+          <meta
+            key={key++}
+            name="twitter:player:stream"
+            content={resolveUrl(streamUrl) ?? streamUrl}
+          />,
         );
         elements.push(
           <meta key={key++} name="twitter:player:width" content={String(player.width)} />,
@@ -637,11 +643,12 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
             />,
           );
           if (app.url?.[platform] !== undefined) {
+            const appUrl = app.url[platform]!.toString();
             elements.push(
               <meta
                 key={key++}
                 name={`twitter:app:url:${platform}`}
-                content={app.url[platform]!.toString()}
+                content={resolveUrl(appUrl) ?? appUrl}
               />,
             );
           }
@@ -825,7 +832,9 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
       for (const entry of list) {
         for (const [k, v] of Object.entries(entry)) {
           if (v === undefined) continue;
-          elements.push(<meta key={key++} property={`al:${platform}:${k}`} content={String(v)} />);
+          const str = String(v);
+          const content = k === "url" ? (resolveUrl(str) ?? str) : str;
+          elements.push(<meta key={key++} property={`al:${platform}:${k}`} content={content} />);
         }
       }
     }
