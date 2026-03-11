@@ -12,6 +12,12 @@ import { isValidModulePath } from "../client/validate-module-path.js";
 import { toBrowserNavigationHref, toSameOriginAppPath } from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
 import {
+  addLocalePrefix,
+  detectDomainLocale,
+  normalizeDomainHostname,
+  type DomainLocale,
+} from "../utils/domain-locale.js";
+import {
   addQueryParam,
   appendSearchParamsToUrl,
   type UrlQuery,
@@ -135,45 +141,8 @@ function resolveNavigationTarget(
   return applyNavigationLocale(as ?? resolveUrl(url), locale);
 }
 
-type DomainLocale = NonNullable<NonNullable<VinextNextData["domainLocales"]>[number]>;
-
 function getDomainLocales(): readonly DomainLocale[] | undefined {
   return (window.__NEXT_DATA__ as VinextNextData | undefined)?.domainLocales;
-}
-
-function normalizeDomainHostname(hostname: string | null | undefined): string | undefined {
-  if (!hostname) return undefined;
-  return hostname.split(":", 1)[0]?.toLowerCase() || undefined;
-}
-
-function detectDomainLocale(
-  domainLocales: readonly DomainLocale[] | undefined,
-  hostname?: string,
-  locale?: string,
-): DomainLocale | undefined {
-  if (!domainLocales?.length) return undefined;
-
-  const normalizedHostname = normalizeDomainHostname(hostname);
-  const normalizedLocale = locale?.toLowerCase();
-
-  for (const domainLocale of domainLocales) {
-    const domainHostname = normalizeDomainHostname(domainLocale.domain);
-    if (
-      (normalizedHostname && normalizedHostname === domainHostname) ||
-      (normalizedLocale && normalizedLocale === domainLocale.defaultLocale.toLowerCase()) ||
-      domainLocale.locales?.some((candidate) => candidate.toLowerCase() === normalizedLocale)
-    ) {
-      return domainLocale;
-    }
-  }
-
-  return undefined;
-}
-
-function addLocalePrefix(path: string, locale: string, localeDefault: string): string {
-  if (locale === localeDefault) return path;
-  if (path.startsWith(`/${locale}/`) || path === `/${locale}`) return path;
-  return `/${locale}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 function getDomainLocalePath(url: string, locale: string): string | undefined {
@@ -187,7 +156,10 @@ function getDomainLocalePath(url: string, locale: string): string | undefined {
   const localizedPath = addLocalePrefix(url, locale, targetDomain.defaultLocale);
   const localizedPathWithBasePath = withBasePath(localizedPath);
 
-  if (currentDomain && currentDomain.domain.toLowerCase() === targetDomain.domain.toLowerCase()) {
+  if (
+    currentDomain &&
+    normalizeDomainHostname(currentDomain.domain) === normalizeDomainHostname(targetDomain.domain)
+  ) {
     return localizedPath;
   }
 

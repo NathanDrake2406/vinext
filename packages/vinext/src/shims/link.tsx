@@ -29,6 +29,12 @@ import {
   withBasePath,
 } from "./url-utils.js";
 import { appendSearchParamsToUrl, type UrlQuery, urlQueryToSearchParams } from "../utils/query.js";
+import {
+  addLocalePrefix,
+  detectDomainLocale,
+  normalizeDomainHostname,
+  type DomainLocale,
+} from "../utils/domain-locale.js";
 import type { VinextNextData } from "../client/vinext-next-data.js";
 
 interface NavigateEvent {
@@ -234,8 +240,6 @@ function getDefaultLocale(): string | undefined {
   return globalThis.__VINEXT_DEFAULT_LOCALE__;
 }
 
-type DomainLocale = NonNullable<NonNullable<VinextNextData["domainLocales"]>[number]>;
-
 function getDomainLocales(): readonly DomainLocale[] | undefined {
   if (typeof window !== "undefined") {
     return (window.__NEXT_DATA__ as VinextNextData | undefined)?.domainLocales;
@@ -246,41 +250,6 @@ function getDomainLocales(): readonly DomainLocale[] | undefined {
 function getCurrentHostname(): string | undefined {
   if (typeof window !== "undefined") return window.location.hostname;
   return globalThis.__VINEXT_HOSTNAME__;
-}
-
-function normalizeDomainHostname(hostname: string | null | undefined): string | undefined {
-  if (!hostname) return undefined;
-  return hostname.split(":", 1)[0]?.toLowerCase() || undefined;
-}
-
-function detectDomainLocale(
-  domainLocales: readonly DomainLocale[] | undefined,
-  hostname?: string,
-  locale?: string,
-): DomainLocale | undefined {
-  if (!domainLocales?.length) return undefined;
-
-  const normalizedHostname = normalizeDomainHostname(hostname);
-  const normalizedLocale = locale?.toLowerCase();
-
-  for (const domainLocale of domainLocales) {
-    const domainHostname = normalizeDomainHostname(domainLocale.domain);
-    if (
-      (normalizedHostname && normalizedHostname === domainHostname) ||
-      (normalizedLocale && normalizedLocale === domainLocale.defaultLocale.toLowerCase()) ||
-      domainLocale.locales?.some((candidate) => candidate.toLowerCase() === normalizedLocale)
-    ) {
-      return domainLocale;
-    }
-  }
-
-  return undefined;
-}
-
-function addLocalePrefix(path: string, locale: string, localeDefault: string): string {
-  if (locale === localeDefault) return path;
-  if (path.startsWith(`/${locale}/`) || path === `/${locale}`) return path;
-  return `/${locale}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 function getDomainLocaleHref(href: string, locale: string): string | undefined {
@@ -295,7 +264,10 @@ function getDomainLocaleHref(href: string, locale: string): string | undefined {
   const localizedPath = addLocalePrefix(href, locale, targetDomain.defaultLocale);
   const localizedPathWithBasePath = withBasePath(localizedPath);
 
-  if (currentDomain && currentDomain.domain.toLowerCase() === targetDomain.domain.toLowerCase()) {
+  if (
+    currentDomain &&
+    normalizeDomainHostname(currentDomain.domain) === normalizeDomainHostname(targetDomain.domain)
+  ) {
     return localizedPath;
   }
 

@@ -1,6 +1,9 @@
 import type { NextI18nConfig } from "../config/next-config.js";
-
-export type DomainLocale = NonNullable<NextI18nConfig["domains"]>[number];
+import {
+  detectDomainLocale,
+  normalizeDomainHostname,
+  type DomainLocale,
+} from "../utils/domain-locale.js";
 
 type HeaderValue = string | string[] | undefined;
 type HeaderBag = Headers | Record<string, HeaderValue> | undefined;
@@ -39,10 +42,8 @@ function readHeader(headers: HeaderBag, name: string): string | undefined {
   return direct;
 }
 
-export function normalizeHostname(hostname: string | null | undefined): string | undefined {
-  if (!hostname) return undefined;
-  return hostname.split(",", 1)[0]?.trim().split(":", 1)[0]?.toLowerCase() || undefined;
-}
+export const normalizeHostname = normalizeDomainHostname;
+export { detectDomainLocale };
 
 /**
  * Extract locale prefix from a URL path.
@@ -123,30 +124,6 @@ export function parseCookieLocaleFromHeader(
 
   if (i18nConfig.locales.includes(value)) return value;
   return null;
-}
-
-export function detectDomainLocale(
-  domainItems?: readonly DomainLocale[],
-  hostname?: string,
-  detectedLocale?: string,
-): DomainLocale | undefined {
-  if (!domainItems) return undefined;
-
-  const normalizedHostname = normalizeHostname(hostname);
-  const normalizedLocale = detectedLocale?.toLowerCase();
-
-  for (const item of domainItems) {
-    const domainHostname = normalizeHostname(item.domain);
-    if (
-      normalizedHostname === domainHostname ||
-      normalizedLocale === item.defaultLocale.toLowerCase() ||
-      item.locales?.some((locale) => locale.toLowerCase() === normalizedLocale)
-    ) {
-      return item;
-    }
-  }
-
-  return undefined;
 }
 
 function formatLocalizedRootPath(

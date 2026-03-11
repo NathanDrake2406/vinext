@@ -2,7 +2,15 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { createServer, type ViteDevServer } from "vite";
 import path from "node:path";
 import vinext from "../packages/vinext/src/index.js";
-import { PAGES_FIXTURE_DIR, APP_FIXTURE_DIR, startFixtureServer } from "./helpers.js";
+import {
+  APP_FIXTURE_DIR,
+  PAGES_FIXTURE_DIR,
+  PAGES_I18N_DOMAINS_BASEPATH_FIXTURE_DIR,
+  PAGES_I18N_DOMAINS_FIXTURE_DIR,
+  createIsolatedFixture,
+  requestNodeServerWithHost,
+  startFixtureServer,
+} from "./helpers.js";
 
 const FIXTURE_DIR = PAGES_FIXTURE_DIR;
 
@@ -1094,108 +1102,39 @@ export default function About({ locale, locales, defaultLocale }) {
   });
 });
 
+async function startDomainFixtureServer(
+  fixtureDir: string,
+  prefix: string,
+): Promise<{
+  port: number;
+  server: ViteDevServer;
+  tmpDir: string;
+}> {
+  const tmpDir = await createIsolatedFixture(fixtureDir, prefix);
+  const { server } = await startFixtureServer(tmpDir, {
+    server: {
+      host: "127.0.0.1",
+      allowedHosts: ["example.com", "example.fr"],
+    },
+  });
+  const addr = server.httpServer?.address();
+  if (!addr || typeof addr === "string") {
+    throw new Error(`Failed to start dev server for fixture ${fixtureDir}`);
+  }
+  return { port: addr.port, server, tmpDir };
+}
+
 describe("i18n domain routing (Pages Router)", () => {
   let domainServer: ViteDevServer;
   let domainTmpDir: string;
   let domainPort: number;
 
-  async function requestWithHost(
-    requestPath: string,
-    host: string,
-    headers: Record<string, string> = {},
-  ): Promise<{
-    status: number;
-    headers: Record<string, string | string[] | undefined>;
-    body: string;
-  }> {
-    const http = await import("node:http");
-    return new Promise((resolve, reject) => {
-      const req = http.request(
-        {
-          hostname: "127.0.0.1",
-          port: domainPort,
-          path: requestPath,
-          method: "GET",
-          headers: {
-            host,
-            ...headers,
-          },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-          res.on("end", () => {
-            resolve({
-              status: res.statusCode ?? 0,
-              headers: res.headers,
-              body: Buffer.concat(chunks).toString("utf8"),
-            });
-          });
-        },
-      );
-      req.on("error", reject);
-      req.end();
-    });
-  }
-
   beforeAll(async () => {
-    const os = await import("node:os");
-    const fsp = await import("node:fs/promises");
-
-    domainTmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-i18n-domain-"));
-
-    const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");
-    await fsp.symlink(rootNodeModules, path.join(domainTmpDir, "node_modules"), "junction");
-
-    await fsp.writeFile(
-      path.join(domainTmpDir, "next.config.mjs"),
-      `export default {
-  i18n: {
-    locales: ["en", "fr"],
-    defaultLocale: "en",
-    domains: [
-      { domain: "example.com", defaultLocale: "en" },
-      { domain: "example.fr", defaultLocale: "fr", http: true },
-    ],
-  },
-};`,
-    );
-
-    await fsp.mkdir(path.join(domainTmpDir, "pages"), { recursive: true });
-    await fsp.writeFile(
-      path.join(domainTmpDir, "pages", "index.tsx"),
-      `export default function Home() { return <h1>Home</h1>; }`,
-    );
-    await fsp.writeFile(
-      path.join(domainTmpDir, "pages", "about.tsx"),
-      `import Link from "next/link";
-export function getServerSideProps({ locale, defaultLocale }) {
-  return { props: { locale, defaultLocale } };
-}
-export default function About({ locale, defaultLocale }) {
-  return <div><p id="locale">{locale}</p><p id="defaultLocale">{defaultLocale}</p><Link href="/about" locale="fr" id="switch-locale">Switch locale</Link></div>;
-}`,
-    );
-
-    const vinext = (await import("../packages/vinext/src/index.js")).default;
-    domainServer = await createServer({
-      root: domainTmpDir,
-      configFile: false,
-      plugins: [vinext()],
-      server: {
-        port: 0,
-        host: "127.0.0.1",
-        allowedHosts: ["example.com", "example.fr"],
-      },
-      logLevel: "silent",
-    });
-
-    await domainServer.listen();
-    const addr = domainServer.httpServer?.address();
-    if (!addr || typeof addr === "string") {
-      throw new Error("Failed to start i18n domain dev server");
-    }
-    domainPort = addr.port;
+    ({
+      server: domainServer,
+      tmpDir: domainTmpDir,
+      port: domainPort,
+    } = await startDomainFixtureServer(PAGES_I18N_DOMAINS_FIXTURE_DIR, "vinext-i18n-domain-"));
   }, 30000);
 
   afterAll(async () => {
@@ -1213,7 +1152,7 @@ export default function About({ locale, defaultLocale }) {
   }, 15000);
 
   it("redirects the root path to the preferred locale domain", async () => {
-    const res = await requestWithHost("/", "example.com", {
+    const res = await requestNodeServerWithHost(domainPort, "/", "example.com", {
       "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
     });
 
@@ -1222,16 +1161,21 @@ export default function About({ locale, defaultLocale }) {
   });
 
   it("preserves the search string on root locale redirects", async () => {
-    const res = await requestWithHost("/?utm=campaign&next=%2Fcheckout", "example.com", {
-      "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-    });
+    const res = await requestNodeServerWithHost(
+      domainPort,
+      "/?utm=campaign&next=%2Fcheckout",
+      "example.com",
+      {
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+      },
+    );
 
     expect(res.status).toBe(307);
     expect(res.headers.location).toBe("http://example.fr/?utm=campaign&next=%2Fcheckout");
   });
 
   it("does not redirect unprefixed non-root paths for locale detection", async () => {
-    const res = await requestWithHost("/about", "example.com", {
+    const res = await requestNodeServerWithHost(domainPort, "/about", "example.com", {
       "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
     });
 
@@ -1240,14 +1184,14 @@ export default function About({ locale, defaultLocale }) {
   });
 
   it("renders locale-switcher links with the target locale domain during SSR", async () => {
-    const res = await requestWithHost("/about", "example.com");
+    const res = await requestNodeServerWithHost(domainPort, "/about", "example.com");
 
     expect(res.status).toBe(200);
     expect(res.body).toContain('href="http://example.fr/about" id="switch-locale"');
   });
 
   it("uses the matched domain default locale in request context and __NEXT_DATA__", async () => {
-    const res = await requestWithHost("/about", "example.fr");
+    const res = await requestNodeServerWithHost(domainPort, "/about", "example.fr");
 
     expect(res.status).toBe(200);
     expect(res.body).toContain('<p id="locale">fr</p>');
@@ -1265,105 +1209,15 @@ describe("i18n domain routing with basePath (Pages Router)", () => {
   let domainTmpDir: string;
   let domainPort: number;
 
-  async function requestWithHost(
-    requestPath: string,
-    host: string,
-    headers: Record<string, string> = {},
-  ): Promise<{
-    status: number;
-    headers: Record<string, string | string[] | undefined>;
-    body: string;
-  }> {
-    const http = await import("node:http");
-    return new Promise((resolve, reject) => {
-      const req = http.request(
-        {
-          hostname: "127.0.0.1",
-          port: domainPort,
-          path: requestPath,
-          method: "GET",
-          headers: {
-            host,
-            ...headers,
-          },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-          res.on("end", () => {
-            resolve({
-              status: res.statusCode ?? 0,
-              headers: res.headers,
-              body: Buffer.concat(chunks).toString("utf8"),
-            });
-          });
-        },
-      );
-      req.on("error", reject);
-      req.end();
-    });
-  }
-
   beforeAll(async () => {
-    const os = await import("node:os");
-    const fsp = await import("node:fs/promises");
-
-    domainTmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-i18n-domain-basepath-"));
-
-    const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");
-    await fsp.symlink(rootNodeModules, path.join(domainTmpDir, "node_modules"), "junction");
-
-    await fsp.writeFile(
-      path.join(domainTmpDir, "next.config.mjs"),
-      `export default {
-  basePath: "/app",
-  trailingSlash: true,
-  i18n: {
-    locales: ["en", "fr"],
-    defaultLocale: "en",
-    domains: [
-      { domain: "example.com", defaultLocale: "en" },
-      { domain: "example.fr", defaultLocale: "fr", http: true },
-    ],
-  },
-};`,
-    );
-
-    await fsp.mkdir(path.join(domainTmpDir, "pages"), { recursive: true });
-    await fsp.writeFile(
-      path.join(domainTmpDir, "pages", "index.tsx"),
-      `export default function Home() { return <h1>Home</h1>; }`,
-    );
-    await fsp.writeFile(
-      path.join(domainTmpDir, "pages", "about.tsx"),
-      `import Link from "next/link";
-export function getServerSideProps({ locale, defaultLocale }) {
-  return { props: { locale, defaultLocale } };
-}
-export default function About({ locale, defaultLocale }) {
-  return <div><p id="locale">{locale}</p><p id="defaultLocale">{defaultLocale}</p><Link href="/about" locale="fr" id="switch-locale">Switch locale</Link></div>;
-}`,
-    );
-
-    const vinext = (await import("../packages/vinext/src/index.js")).default;
-    domainServer = await createServer({
-      root: domainTmpDir,
-      configFile: false,
-      plugins: [vinext()],
-      server: {
-        port: 0,
-        host: "127.0.0.1",
-        allowedHosts: ["example.com", "example.fr"],
-      },
-      logLevel: "silent",
-    });
-
-    await domainServer.listen();
-    const addr = domainServer.httpServer?.address();
-    if (!addr || typeof addr === "string") {
-      throw new Error("Failed to start i18n domain basePath dev server");
-    }
-    domainPort = addr.port;
+    ({
+      server: domainServer,
+      tmpDir: domainTmpDir,
+      port: domainPort,
+    } = await startDomainFixtureServer(
+      PAGES_I18N_DOMAINS_BASEPATH_FIXTURE_DIR,
+      "vinext-i18n-domain-basepath-",
+    ));
   }, 30000);
 
   afterAll(async () => {
@@ -1381,7 +1235,7 @@ export default function About({ locale, defaultLocale }) {
   }, 15000);
 
   it("preserves basePath and trailingSlash in root locale redirects", async () => {
-    const res = await requestWithHost("/app/?utm=campaign", "example.com", {
+    const res = await requestNodeServerWithHost(domainPort, "/app/?utm=campaign", "example.com", {
       "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
     });
 
@@ -1390,7 +1244,7 @@ export default function About({ locale, defaultLocale }) {
   });
 
   it("renders locale-switcher links with basePath on cross-domain hrefs", async () => {
-    const res = await requestWithHost("/app/about/", "example.com");
+    const res = await requestNodeServerWithHost(domainPort, "/app/about/", "example.com");
 
     expect(res.status).toBe(200);
     expect(res.body).toContain('href="http://example.fr/app/about" id="switch-locale"');
