@@ -1541,6 +1541,32 @@ function __normalizePath(pathname) {
   return "/" + resolved.join("/");
 }
 
+const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
+function __decodeRouteSegment(segment) {
+  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
+    return encodeURIComponent(char);
+  });
+}
+function __decodeRouteSegmentSafe(segment) {
+  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
+}
+function __normalizePathnameForRouteMatch(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegmentSafe(segments[i]));
+  }
+  return normalized.join("/");
+}
+function __normalizePathnameForRouteMatchStrict(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegment(segments[i]));
+  }
+  return normalized.join("/");
+}
+
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
 //    config-matchers.ts and request-pipeline.ts (see import statements above).
@@ -1666,7 +1692,7 @@ export default async function handler(request, ctx) {
               if (__configHeaders.length) {
                 const url = new URL(request.url);
                 let pathname;
-                try { pathname = __normalizePath(decodeURIComponent(url.pathname)); } catch { pathname = url.pathname; }
+                try { pathname = __normalizePath(__normalizePathnameForRouteMatch(url.pathname)); } catch { pathname = url.pathname; }
                 
                 const extraHeaders = matchHeaders(pathname, __configHeaders, __reqCtx);
                 for (const h of extraHeaders) {
@@ -1715,11 +1741,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const __protoGuard = guardProtocolRelativeUrl(url.pathname);
   if (__protoGuard) return __protoGuard;
 
-  // Decode percent-encoding and normalize pathname to canonical form.
-  // decodeURIComponent prevents /%61dmin from bypassing /admin matchers.
+  // Decode percent-encoding segment-wise and normalize pathname to canonical form.
+  // This preserves encoded path delimiters like %2F within a single segment.
   // __normalizePath collapses //foo///bar → /foo/bar, resolves . and .. segments.
   let decodedUrlPathname;
-  try { decodedUrlPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedUrlPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return new Response("Bad Request", { status: 400 });
   }
   let pathname = __normalizePath(decodedUrlPathname);
@@ -4287,6 +4313,32 @@ function __normalizePath(pathname) {
   return "/" + resolved.join("/");
 }
 
+const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
+function __decodeRouteSegment(segment) {
+  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
+    return encodeURIComponent(char);
+  });
+}
+function __decodeRouteSegmentSafe(segment) {
+  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
+}
+function __normalizePathnameForRouteMatch(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegmentSafe(segments[i]));
+  }
+  return normalized.join("/");
+}
+function __normalizePathnameForRouteMatchStrict(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegment(segments[i]));
+  }
+  return normalized.join("/");
+}
+
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
 //    config-matchers.ts and request-pipeline.ts (see import statements above).
@@ -4412,7 +4464,7 @@ export default async function handler(request, ctx) {
               if (__configHeaders.length) {
                 const url = new URL(request.url);
                 let pathname;
-                try { pathname = __normalizePath(decodeURIComponent(url.pathname)); } catch { pathname = url.pathname; }
+                try { pathname = __normalizePath(__normalizePathnameForRouteMatch(url.pathname)); } catch { pathname = url.pathname; }
                 if (pathname.startsWith("/base")) pathname = pathname.slice("/base".length) || "/";
                 const extraHeaders = matchHeaders(pathname, __configHeaders, __reqCtx);
                 for (const h of extraHeaders) {
@@ -4461,11 +4513,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const __protoGuard = guardProtocolRelativeUrl(url.pathname);
   if (__protoGuard) return __protoGuard;
 
-  // Decode percent-encoding and normalize pathname to canonical form.
-  // decodeURIComponent prevents /%61dmin from bypassing /admin matchers.
+  // Decode percent-encoding segment-wise and normalize pathname to canonical form.
+  // This preserves encoded path delimiters like %2F within a single segment.
   // __normalizePath collapses //foo///bar → /foo/bar, resolves . and .. segments.
   let decodedUrlPathname;
-  try { decodedUrlPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedUrlPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return new Response("Bad Request", { status: 400 });
   }
   let pathname = __normalizePath(decodedUrlPathname);
@@ -7066,6 +7118,32 @@ function __normalizePath(pathname) {
   return "/" + resolved.join("/");
 }
 
+const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
+function __decodeRouteSegment(segment) {
+  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
+    return encodeURIComponent(char);
+  });
+}
+function __decodeRouteSegmentSafe(segment) {
+  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
+}
+function __normalizePathnameForRouteMatch(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegmentSafe(segments[i]));
+  }
+  return normalized.join("/");
+}
+function __normalizePathnameForRouteMatchStrict(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegment(segments[i]));
+  }
+  return normalized.join("/");
+}
+
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
 //    config-matchers.ts and request-pipeline.ts (see import statements above).
@@ -7191,7 +7269,7 @@ export default async function handler(request, ctx) {
               if (__configHeaders.length) {
                 const url = new URL(request.url);
                 let pathname;
-                try { pathname = __normalizePath(decodeURIComponent(url.pathname)); } catch { pathname = url.pathname; }
+                try { pathname = __normalizePath(__normalizePathnameForRouteMatch(url.pathname)); } catch { pathname = url.pathname; }
                 
                 const extraHeaders = matchHeaders(pathname, __configHeaders, __reqCtx);
                 for (const h of extraHeaders) {
@@ -7240,11 +7318,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const __protoGuard = guardProtocolRelativeUrl(url.pathname);
   if (__protoGuard) return __protoGuard;
 
-  // Decode percent-encoding and normalize pathname to canonical form.
-  // decodeURIComponent prevents /%61dmin from bypassing /admin matchers.
+  // Decode percent-encoding segment-wise and normalize pathname to canonical form.
+  // This preserves encoded path delimiters like %2F within a single segment.
   // __normalizePath collapses //foo///bar → /foo/bar, resolves . and .. segments.
   let decodedUrlPathname;
-  try { decodedUrlPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedUrlPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return new Response("Bad Request", { status: 400 });
   }
   let pathname = __normalizePath(decodedUrlPathname);
@@ -9849,6 +9927,32 @@ function __normalizePath(pathname) {
   return "/" + resolved.join("/");
 }
 
+const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
+function __decodeRouteSegment(segment) {
+  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
+    return encodeURIComponent(char);
+  });
+}
+function __decodeRouteSegmentSafe(segment) {
+  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
+}
+function __normalizePathnameForRouteMatch(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegmentSafe(segments[i]));
+  }
+  return normalized.join("/");
+}
+function __normalizePathnameForRouteMatchStrict(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegment(segments[i]));
+  }
+  return normalized.join("/");
+}
+
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
 //    config-matchers.ts and request-pipeline.ts (see import statements above).
@@ -9977,7 +10081,7 @@ export default async function handler(request, ctx) {
               if (__configHeaders.length) {
                 const url = new URL(request.url);
                 let pathname;
-                try { pathname = __normalizePath(decodeURIComponent(url.pathname)); } catch { pathname = url.pathname; }
+                try { pathname = __normalizePath(__normalizePathnameForRouteMatch(url.pathname)); } catch { pathname = url.pathname; }
                 
                 const extraHeaders = matchHeaders(pathname, __configHeaders, __reqCtx);
                 for (const h of extraHeaders) {
@@ -10026,11 +10130,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const __protoGuard = guardProtocolRelativeUrl(url.pathname);
   if (__protoGuard) return __protoGuard;
 
-  // Decode percent-encoding and normalize pathname to canonical form.
-  // decodeURIComponent prevents /%61dmin from bypassing /admin matchers.
+  // Decode percent-encoding segment-wise and normalize pathname to canonical form.
+  // This preserves encoded path delimiters like %2F within a single segment.
   // __normalizePath collapses //foo///bar → /foo/bar, resolves . and .. segments.
   let decodedUrlPathname;
-  try { decodedUrlPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedUrlPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return new Response("Bad Request", { status: 400 });
   }
   let pathname = __normalizePath(decodedUrlPathname);
@@ -12605,6 +12709,32 @@ function __normalizePath(pathname) {
   return "/" + resolved.join("/");
 }
 
+const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
+function __decodeRouteSegment(segment) {
+  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
+    return encodeURIComponent(char);
+  });
+}
+function __decodeRouteSegmentSafe(segment) {
+  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
+}
+function __normalizePathnameForRouteMatch(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegmentSafe(segments[i]));
+  }
+  return normalized.join("/");
+}
+function __normalizePathnameForRouteMatchStrict(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegment(segments[i]));
+  }
+  return normalized.join("/");
+}
+
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
 //    config-matchers.ts and request-pipeline.ts (see import statements above).
@@ -12730,7 +12860,7 @@ export default async function handler(request, ctx) {
               if (__configHeaders.length) {
                 const url = new URL(request.url);
                 let pathname;
-                try { pathname = __normalizePath(decodeURIComponent(url.pathname)); } catch { pathname = url.pathname; }
+                try { pathname = __normalizePath(__normalizePathnameForRouteMatch(url.pathname)); } catch { pathname = url.pathname; }
                 
                 const extraHeaders = matchHeaders(pathname, __configHeaders, __reqCtx);
                 for (const h of extraHeaders) {
@@ -12779,11 +12909,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const __protoGuard = guardProtocolRelativeUrl(url.pathname);
   if (__protoGuard) return __protoGuard;
 
-  // Decode percent-encoding and normalize pathname to canonical form.
-  // decodeURIComponent prevents /%61dmin from bypassing /admin matchers.
+  // Decode percent-encoding segment-wise and normalize pathname to canonical form.
+  // This preserves encoded path delimiters like %2F within a single segment.
   // __normalizePath collapses //foo///bar → /foo/bar, resolves . and .. segments.
   let decodedUrlPathname;
-  try { decodedUrlPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedUrlPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return new Response("Bad Request", { status: 400 });
   }
   let pathname = __normalizePath(decodedUrlPathname);
@@ -15547,6 +15677,32 @@ function __normalizePath(pathname) {
   return "/" + resolved.join("/");
 }
 
+const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
+function __decodeRouteSegment(segment) {
+  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
+    return encodeURIComponent(char);
+  });
+}
+function __decodeRouteSegmentSafe(segment) {
+  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
+}
+function __normalizePathnameForRouteMatch(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegmentSafe(segments[i]));
+  }
+  return normalized.join("/");
+}
+function __normalizePathnameForRouteMatchStrict(pathname) {
+  const segments = pathname.split("/");
+  const normalized = [];
+  for (let i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegment(segments[i]));
+  }
+  return normalized.join("/");
+}
+
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
 //    config-matchers.ts and request-pipeline.ts (see import statements above).
@@ -15672,7 +15828,7 @@ export default async function handler(request, ctx) {
               if (__configHeaders.length) {
                 const url = new URL(request.url);
                 let pathname;
-                try { pathname = __normalizePath(decodeURIComponent(url.pathname)); } catch { pathname = url.pathname; }
+                try { pathname = __normalizePath(__normalizePathnameForRouteMatch(url.pathname)); } catch { pathname = url.pathname; }
                 
                 const extraHeaders = matchHeaders(pathname, __configHeaders, __reqCtx);
                 for (const h of extraHeaders) {
@@ -15721,11 +15877,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const __protoGuard = guardProtocolRelativeUrl(url.pathname);
   if (__protoGuard) return __protoGuard;
 
-  // Decode percent-encoding and normalize pathname to canonical form.
-  // decodeURIComponent prevents /%61dmin from bypassing /admin matchers.
+  // Decode percent-encoding segment-wise and normalize pathname to canonical form.
+  // This preserves encoded path delimiters like %2F within a single segment.
   // __normalizePath collapses //foo///bar → /foo/bar, resolves . and .. segments.
   let decodedUrlPathname;
-  try { decodedUrlPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedUrlPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return new Response("Bad Request", { status: 400 });
   }
   let pathname = __normalizePath(decodedUrlPathname);
@@ -18650,6 +18806,32 @@ function __normalizePath(pathname) {
   return "/" + resolved.join("/");
 }
 
+var __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
+function __decodeRouteSegment(segment) {
+  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
+    return encodeURIComponent(char);
+  });
+}
+function __decodeRouteSegmentSafe(segment) {
+  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
+}
+function __normalizePathnameForRouteMatch(pathname) {
+  var segments = pathname.split("/");
+  var normalized = [];
+  for (var i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegmentSafe(segments[i]));
+  }
+  return normalized.join("/");
+}
+function __normalizePathnameForRouteMatchStrict(pathname) {
+  var segments = pathname.split("/");
+  var normalized = [];
+  for (var i = 0; i < segments.length; i++) {
+    normalized.push(__decodeRouteSegment(segments[i]));
+  }
+  return normalized.join("/");
+}
+
 function __isSafeRegex(pattern) {
   var quantifierAtDepth = [];
   var depth = 0;
@@ -18938,7 +19120,7 @@ async function _runMiddleware(request) {
   // Normalize pathname before matching to prevent path-confusion bypasses
   // (percent-encoding like /%61dmin, double slashes like /dashboard//settings).
   var decodedPathname;
-  try { decodedPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return { continue: false, response: new Response("Bad Request", { status: 400 }) };
   }
   var normalizedPathname = __normalizePath(decodedPathname);

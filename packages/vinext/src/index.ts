@@ -16,6 +16,7 @@ import { createDirectRunner } from "./server/dev-module-runner.js";
 import { generateRscEntry } from "./entries/app-rsc-entry.js";
 import { generateSsrEntry } from "./entries/app-ssr-entry.js";
 import { generateBrowserEntry } from "./entries/app-browser-entry.js";
+import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import {
   loadNextConfig,
   resolveNextConfig,
@@ -1999,7 +2000,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // decodeURIComponent prevents /%61dmin bypassing /admin matchers.
               // normalizePath collapses // and resolves . / .. segments.
               try {
-                pathname = normalizePath(decodeURIComponent(pathname));
+                pathname = normalizePath(normalizePathnameForRouteMatchStrict(pathname));
               } catch {
                 // Malformed percent-encoding (e.g. /%E0%A4%A) — return 400 instead of crashing.
                 res.writeHead(400);

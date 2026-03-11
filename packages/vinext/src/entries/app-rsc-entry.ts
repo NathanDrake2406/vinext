@@ -22,6 +22,7 @@ import {
   generateSafeRegExpCode,
   generateMiddlewareMatcherCode,
   generateNormalizePathCode,
+  generateRouteMatchNormalizationCode,
 } from "../server/middleware-codegen.js";
 import { isProxyFile } from "../server/middleware.js";
 
@@ -1291,6 +1292,7 @@ ${generateSafeRegExpCode("modern")}
 
 // ── Path normalization ──────────────────────────────────────────────────
 ${generateNormalizePathCode("modern")}
+${generateRouteMatchNormalizationCode("modern")}
 
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
@@ -1424,7 +1426,7 @@ export default async function handler(request, ctx) {
               if (__configHeaders.length) {
                 const url = new URL(request.url);
                 let pathname;
-                try { pathname = __normalizePath(decodeURIComponent(url.pathname)); } catch { pathname = url.pathname; }
+                try { pathname = __normalizePath(__normalizePathnameForRouteMatch(url.pathname)); } catch { pathname = url.pathname; }
                 ${bp ? `if (pathname.startsWith(${JSON.stringify(bp)})) pathname = pathname.slice(${JSON.stringify(bp)}.length) || "/";` : ""}
                 const extraHeaders = matchHeaders(pathname, __configHeaders, __reqCtx);
                 for (const h of extraHeaders) {
@@ -1473,11 +1475,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const __protoGuard = guardProtocolRelativeUrl(url.pathname);
   if (__protoGuard) return __protoGuard;
 
-  // Decode percent-encoding and normalize pathname to canonical form.
-  // decodeURIComponent prevents /%61dmin from bypassing /admin matchers.
+  // Decode percent-encoding segment-wise and normalize pathname to canonical form.
+  // This preserves encoded path delimiters like %2F within a single segment.
   // __normalizePath collapses //foo///bar → /foo/bar, resolves . and .. segments.
   let decodedUrlPathname;
-  try { decodedUrlPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedUrlPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return new Response("Bad Request", { status: 400 });
   }
   let pathname = __normalizePath(decodedUrlPathname);

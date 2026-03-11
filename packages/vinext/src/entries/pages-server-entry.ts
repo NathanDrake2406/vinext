@@ -17,6 +17,7 @@ import {
   generateSafeRegExpCode,
   generateMiddlewareMatcherCode,
   generateNormalizePathCode,
+  generateRouteMatchNormalizationCode,
 } from "../server/middleware-codegen.js";
 import { findFileWithExts } from "./pages-entry-helpers.js";
 
@@ -149,6 +150,7 @@ import { NextRequest, NextFetchEvent } from "next/server";`
     ? `
 // --- Middleware support (generated from middleware-codegen.ts) ---
 ${generateNormalizePathCode("es5")}
+${generateRouteMatchNormalizationCode("es5")}
 ${generateSafeRegExpCode("es5")}
 ${generateMiddlewareMatcherCode("es5")}
 
@@ -175,7 +177,7 @@ async function _runMiddleware(request) {
   // Normalize pathname before matching to prevent path-confusion bypasses
   // (percent-encoding like /%61dmin, double slashes like /dashboard//settings).
   var decodedPathname;
-  try { decodedPathname = decodeURIComponent(url.pathname); } catch (e) {
+  try { decodedPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
     return { continue: false, response: new Response("Bad Request", { status: 400 }) };
   }
   var normalizedPathname = __normalizePath(decodedPathname);

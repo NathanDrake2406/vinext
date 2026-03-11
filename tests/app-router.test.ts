@@ -64,6 +64,16 @@ describe("App Router integration", () => {
     expect(html).toContain("hello-world");
   });
 
+  it("does not collapse encoded slashes onto nested routes in dev", async () => {
+    const encodedRes = await fetch(`${baseUrl}/headers%2Foverride-from-middleware`);
+    expect(encodedRes.status).toBe(404);
+    expect(encodedRes.headers.get("e2e-headers")).not.toBe("middleware");
+
+    const nestedRes = await fetch(`${baseUrl}/headers/override-from-middleware`);
+    expect(nestedRes.status).toBe(200);
+    expect(nestedRes.headers.get("e2e-headers")).toBe("middleware");
+  });
+
   it("handles GET API route handlers", async () => {
     const res = await fetch(`${baseUrl}/api/hello`);
     expect(res.status).toBe(200);
@@ -1490,6 +1500,16 @@ describe("App Router Production server (startProdServer)", () => {
     const html = await res.text();
     expect(html).toContain("Welcome to App Router");
     expect(html).toContain("<script");
+  });
+
+  it("does not collapse encoded slashes onto nested routes in production", async () => {
+    const encodedRes = await fetch(`${baseUrl}/headers%2Foverride-from-middleware`);
+    expect(encodedRes.status).toBe(404);
+    expect(encodedRes.headers.get("e2e-headers")).not.toBe("middleware");
+
+    const nestedRes = await fetch(`${baseUrl}/headers/override-from-middleware`);
+    expect(nestedRes.status).toBe(200);
+    expect(nestedRes.headers.get("e2e-headers")).toBe("middleware");
   });
 
   it("serves dynamic routes", async () => {
