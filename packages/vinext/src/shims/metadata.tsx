@@ -831,7 +831,7 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
       const list = Array.isArray(entries) ? entries : [entries];
       for (const entry of list) {
         for (const [k, v] of Object.entries(entry)) {
-          if (v === undefined) continue;
+          if (v === undefined || v === null) continue;
           const str = String(v);
           const content = k === "url" ? (resolveUrl(str) ?? str) : str;
           elements.push(<meta key={key++} property={`al:${platform}:${k}`} content={content} />);
