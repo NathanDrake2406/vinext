@@ -2305,10 +2305,7 @@ describe("domainCandidates", () => {
   });
 
   it("starts from the shortest suffix for a simple subdomain", () => {
-    expect(domainCandidates("shop.example.com")).toEqual([
-      "example.com",
-      "shop.example.com",
-    ]);
+    expect(domainCandidates("shop.example.com")).toEqual(["example.com", "shop.example.com"]);
   });
 
   it("handles multi-part TLDs by trying progressively longer candidates", () => {
@@ -2333,31 +2330,19 @@ describe("domainCandidates", () => {
 
 describe("parseWranglerConfig — custom domain extraction", () => {
   it("extracts custom domain from routes array (string form)", () => {
-    writeFile(
-      tmpDir,
-      "wrangler.jsonc",
-      JSON.stringify({ routes: ["example.co.uk/*"] }),
-    );
+    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ routes: ["example.co.uk/*"] }));
     const config = parseWranglerConfig(tmpDir);
     expect(config?.customDomain).toBe("example.co.uk");
   });
 
   it("extracts custom domain from custom_domains array", () => {
-    writeFile(
-      tmpDir,
-      "wrangler.json",
-      JSON.stringify({ custom_domains: ["shop.example.com.au"] }),
-    );
+    writeFile(tmpDir, "wrangler.json", JSON.stringify({ custom_domains: ["shop.example.com.au"] }));
     const config = parseWranglerConfig(tmpDir);
     expect(config?.customDomain).toBe("shop.example.com.au");
   });
 
   it("ignores workers.dev domains", () => {
-    writeFile(
-      tmpDir,
-      "wrangler.json",
-      JSON.stringify({ routes: ["my-app.workers.dev/*"] }),
-    );
+    writeFile(tmpDir, "wrangler.json", JSON.stringify({ routes: ["my-app.workers.dev/*"] }));
     const config = parseWranglerConfig(tmpDir);
     expect(config?.customDomain).toBeUndefined();
   });
