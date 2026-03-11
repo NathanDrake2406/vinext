@@ -629,12 +629,12 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
     if (tw.app) {
       const { app } = tw;
       for (const platform of ["iphone", "ipad", "googleplay"] as const) {
+        if (app.name) {
+          elements.push(
+            <meta key={key++} name={`twitter:app:name:${platform}`} content={app.name} />,
+          );
+        }
         if (app.id[platform] !== undefined) {
-          if (app.name) {
-            elements.push(
-              <meta key={key++} name={`twitter:app:name:${platform}`} content={app.name} />,
-            );
-          }
           elements.push(
             <meta
               key={key++}
@@ -642,16 +642,16 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
               content={String(app.id[platform])}
             />,
           );
-          if (app.url?.[platform] !== undefined) {
-            const appUrl = app.url[platform]!.toString();
-            elements.push(
-              <meta
-                key={key++}
-                name={`twitter:app:url:${platform}`}
-                content={resolveUrl(appUrl) ?? appUrl}
-              />,
-            );
-          }
+        }
+        if (app.url?.[platform] !== undefined) {
+          const appUrl = app.url[platform]!.toString();
+          elements.push(
+            <meta
+              key={key++}
+              name={`twitter:app:url:${platform}`}
+              content={resolveUrl(appUrl) ?? appUrl}
+            />,
+          );
         }
       }
     }

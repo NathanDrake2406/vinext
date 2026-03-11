@@ -382,6 +382,7 @@ describe("Next.js compat: metadata", () => {
     expect(html).toContain('name="twitter:app:name:iphone" content="My App"');
     expect(html).toContain('name="twitter:app:id:iphone" content="id123456789"');
     expect(html).toContain('name="twitter:app:url:iphone" content="https://example.com/iphone"');
+    expect(html).toContain('name="twitter:app:name:ipad" content="My App"');
     expect(html).toContain('name="twitter:app:id:ipad" content="id123456789"');
     expect(html).toContain('name="twitter:app:url:ipad" content="https://example.com/ipad"');
     expect(html).toContain('name="twitter:app:name:googleplay" content="My App"');
