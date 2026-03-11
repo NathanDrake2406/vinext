@@ -1260,6 +1260,143 @@ export default function About({ locale, defaultLocale }) {
   });
 });
 
+describe("i18n domain routing with basePath (Pages Router)", () => {
+  let domainServer: ViteDevServer;
+  let domainTmpDir: string;
+  let domainPort: number;
+
+  async function requestWithHost(
+    requestPath: string,
+    host: string,
+    headers: Record<string, string> = {},
+  ): Promise<{
+    status: number;
+    headers: Record<string, string | string[] | undefined>;
+    body: string;
+  }> {
+    const http = await import("node:http");
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: domainPort,
+          path: requestPath,
+          method: "GET",
+          headers: {
+            host,
+            ...headers,
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          res.on("end", () => {
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              body: Buffer.concat(chunks).toString("utf8"),
+            });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  beforeAll(async () => {
+    const os = await import("node:os");
+    const fsp = await import("node:fs/promises");
+
+    domainTmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-i18n-domain-basepath-"));
+
+    const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");
+    await fsp.symlink(rootNodeModules, path.join(domainTmpDir, "node_modules"), "junction");
+
+    await fsp.writeFile(
+      path.join(domainTmpDir, "next.config.mjs"),
+      `export default {
+  basePath: "/app",
+  trailingSlash: true,
+  i18n: {
+    locales: ["en", "fr"],
+    defaultLocale: "en",
+    domains: [
+      { domain: "example.com", defaultLocale: "en" },
+      { domain: "example.fr", defaultLocale: "fr", http: true },
+    ],
+  },
+};`,
+    );
+
+    await fsp.mkdir(path.join(domainTmpDir, "pages"), { recursive: true });
+    await fsp.writeFile(
+      path.join(domainTmpDir, "pages", "index.tsx"),
+      `export default function Home() { return <h1>Home</h1>; }`,
+    );
+    await fsp.writeFile(
+      path.join(domainTmpDir, "pages", "about.tsx"),
+      `import Link from "next/link";
+export function getServerSideProps({ locale, defaultLocale }) {
+  return { props: { locale, defaultLocale } };
+}
+export default function About({ locale, defaultLocale }) {
+  return <div><p id="locale">{locale}</p><p id="defaultLocale">{defaultLocale}</p><Link href="/about" locale="fr" id="switch-locale">Switch locale</Link></div>;
+}`,
+    );
+
+    const vinext = (await import("../packages/vinext/src/index.js")).default;
+    domainServer = await createServer({
+      root: domainTmpDir,
+      configFile: false,
+      plugins: [vinext()],
+      server: {
+        port: 0,
+        host: "127.0.0.1",
+        allowedHosts: ["example.com", "example.fr"],
+      },
+      logLevel: "silent",
+    });
+
+    await domainServer.listen();
+    const addr = domainServer.httpServer?.address();
+    if (!addr || typeof addr === "string") {
+      throw new Error("Failed to start i18n domain basePath dev server");
+    }
+    domainPort = addr.port;
+  }, 30000);
+
+  afterAll(async () => {
+    try {
+      (domainServer?.httpServer as any)?.closeAllConnections?.();
+      await Promise.race([
+        domainServer?.close(),
+        new Promise((resolve) => setTimeout(resolve, 5000)),
+      ]);
+    } catch {
+      /* ignore */
+    }
+    const fsp = await import("node:fs/promises");
+    await fsp.rm(domainTmpDir, { recursive: true, force: true }).catch(() => {});
+  }, 15000);
+
+  it("preserves basePath and trailingSlash in root locale redirects", async () => {
+    const res = await requestWithHost("/app/?utm=campaign", "example.com", {
+      "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    });
+
+    expect(res.status).toBe(307);
+    expect(res.headers.location).toBe("http://example.fr/app/?utm=campaign");
+  });
+
+  it("renders locale-switcher links with basePath on cross-domain hrefs", async () => {
+    const res = await requestWithHost("/app/about/", "example.com");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('href="http://example.fr/app/about" id="switch-locale"');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Link locale prop
 // ---------------------------------------------------------------------------
@@ -3711,6 +3848,41 @@ describe("applyNavigationLocale", () => {
     };
 
     expect(applyNavigationLocale("/about", "fr")).toBe("http://example.fr/about");
+  });
+
+  it("includes basePath in cross-domain locale navigation URLs", async () => {
+    const originalBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    process.env.__NEXT_ROUTER_BASEPATH = "/app";
+    vi.resetModules();
+
+    try {
+      (globalThis as any).window = {
+        __NEXT_DATA__: {
+          domainLocales: [
+            { domain: "example.com", defaultLocale: "en" },
+            { domain: "example.fr", defaultLocale: "fr", http: true },
+          ],
+        },
+        __VINEXT_DEFAULT_LOCALE__: "en",
+        location: {
+          hostname: "example.com",
+          pathname: "/app/about",
+          search: "",
+        },
+        addEventListener() {},
+        removeEventListener() {},
+      };
+      const mod = await import("../packages/vinext/src/shims/router.js");
+
+      expect(mod.applyNavigationLocale("/about", "fr")).toBe("http://example.fr/app/about");
+    } finally {
+      if (originalBasePath === undefined) {
+        delete process.env.__NEXT_ROUTER_BASEPATH;
+      } else {
+        process.env.__NEXT_ROUTER_BASEPATH = originalBasePath;
+      }
+      vi.resetModules();
+    }
   });
 });
 

@@ -229,6 +229,8 @@ export function createSSRHandler(
   pagesDir: string,
   i18nConfig?: NextI18nConfig | null,
   fileMatcher?: ValidFileMatcher,
+  basePath = "",
+  trailingSlash = false,
 ) {
   const matcher = fileMatcher ?? createValidFileMatcher();
   return async (
@@ -273,6 +275,8 @@ export function createSSRHandler(
         i18nConfig,
         req.headers as Record<string, string | string[] | undefined>,
         req.headers.host,
+        basePath,
+        trailingSlash,
       );
       locale = resolved.locale;
       localeStrippedUrl = resolved.url;

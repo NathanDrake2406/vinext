@@ -364,6 +364,41 @@ describe("Link locale handling", () => {
 
     expect(html).toContain('href="http://example.fr/about"');
   });
+
+  it("uses configured locale domains with basePath for cross-domain links", async () => {
+    const originalBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    process.env.__NEXT_ROUTER_BASEPATH = "/app";
+    vi.resetModules();
+
+    try {
+      const { default: LinkWithBasePath } = await import("../packages/vinext/src/shims/link.js");
+      (globalThis as any).window = {
+        __VINEXT_DEFAULT_LOCALE__: "en",
+        __NEXT_DATA__: {
+          domainLocales: [
+            { domain: "example.com", defaultLocale: "en" },
+            { domain: "example.fr", defaultLocale: "fr", http: true },
+          ],
+        },
+        location: {
+          hostname: "example.com",
+        },
+      };
+
+      const html = ReactDOMServer.renderToString(
+        React.createElement(LinkWithBasePath, { href: "/about", locale: "fr" } as any, "x"),
+      );
+
+      expect(html).toContain('href="http://example.fr/app/about"');
+    } finally {
+      if (originalBasePath === undefined) {
+        delete process.env.__NEXT_ROUTER_BASEPATH;
+      } else {
+        process.env.__NEXT_ROUTER_BASEPATH = originalBasePath;
+      }
+      vi.resetModules();
+    }
+  });
 });
 
 // ─── toSameOriginPath ────────────────────────────────────────────────────

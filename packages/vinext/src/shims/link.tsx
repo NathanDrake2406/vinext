@@ -293,13 +293,14 @@ function getDomainLocaleHref(href: string, locale: string): string | undefined {
   const currentHostname = getCurrentHostname();
   const currentDomain = detectDomainLocale(domainLocales, currentHostname);
   const localizedPath = addLocalePrefix(href, locale, targetDomain.defaultLocale);
+  const localizedPathWithBasePath = withBasePath(localizedPath);
 
   if (currentDomain && currentDomain.domain.toLowerCase() === targetDomain.domain.toLowerCase()) {
     return localizedPath;
   }
 
   const scheme = `http${targetDomain.http ? "" : "s"}://`;
-  return `${scheme}${targetDomain.domain}${localizedPath}`;
+  return `${scheme}${targetDomain.domain}${localizedPathWithBasePath}`;
 }
 
 /**

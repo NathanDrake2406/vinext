@@ -185,13 +185,14 @@ function getDomainLocalePath(url: string, locale: string): string | undefined {
 
   const currentDomain = detectDomainLocale(domainLocales, window.location.hostname);
   const localizedPath = addLocalePrefix(url, locale, targetDomain.defaultLocale);
+  const localizedPathWithBasePath = withBasePath(localizedPath);
 
   if (currentDomain && currentDomain.domain.toLowerCase() === targetDomain.domain.toLowerCase()) {
     return localizedPath;
   }
 
   const scheme = `http${targetDomain.http ? "" : "s"}://`;
-  return `${scheme}${targetDomain.domain}${localizedPath}`;
+  return `${scheme}${targetDomain.domain}${localizedPathWithBasePath}`;
 }
 
 /**
