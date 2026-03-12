@@ -154,23 +154,13 @@ export async function appRouter(
 
   // Process page files in a single pass
   // Use function form of exclude for Node < 22.14 compatibility (string arrays require >= 22.14)
-  for await (const file of scanWithExtensions(
-    "**/page",
-    appDir,
-    matcher.extensions,
-    excludeDir,
-  )) {
+  for await (const file of scanWithExtensions("**/page", appDir, matcher.extensions, excludeDir)) {
     const route = fileToAppRoute(file, appDir, "page", matcher);
     if (route) routes.push(route);
   }
 
   // Process route handler files (API routes) in a single pass
-  for await (const file of scanWithExtensions(
-    "**/route",
-    appDir,
-    matcher.extensions,
-    excludeDir,
-  )) {
+  for await (const file of scanWithExtensions("**/route", appDir, matcher.extensions, excludeDir)) {
     const route = fileToAppRoute(file, appDir, "route", matcher);
     if (route) routes.push(route);
   }
