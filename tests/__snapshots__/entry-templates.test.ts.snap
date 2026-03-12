@@ -15311,7 +15311,7 @@ function __extractConstraint(str, re) {
   return str.slice(start, i - 1);
 }
 function __compileMwPattern(pattern) {
-  const hasConstraints = /:[\\w-]+\\(/.test(pattern);
+  const hasConstraints = /:[\\w-]+[*+]?\\(/.test(pattern);
   if (!hasConstraints && (pattern.includes("(") || pattern.includes("\\\\"))) {
     return __safeRegExp("^" + pattern + "$");
   }
@@ -15319,8 +15319,14 @@ function __compileMwPattern(pattern) {
   const tokenRe = /\\/:([\\w-]+)\\*|\\/:([\\w-]+)\\+|:([\\w-]+)|[.]|[^/:.]+|./g;
   let tok;
   while ((tok = tokenRe.exec(pattern)) !== null) {
-    if (tok[1] !== undefined) { regexStr += "(?:/.*)?"; }
-    else if (tok[2] !== undefined) { regexStr += "(?:/.+)"; }
+    if (tok[1] !== undefined) {
+      const c1 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
+      regexStr += c1 !== null ? "(?:/(" + c1 + "))?" : "(?:/.*)?";
+    }
+    else if (tok[2] !== undefined) {
+      const c2 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
+      regexStr += c2 !== null ? "(?:/(" + c2 + "))" : "(?:/.+)";
+    }
     else if (tok[3] !== undefined) {
       const constraint = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
       const isOptional = pattern[tokenRe.lastIndex] === "?";
@@ -18969,7 +18975,7 @@ function __extractConstraint(str, re) {
   return str.slice(start, i - 1);
 }
 function __compileMwPattern(pattern) {
-  var hasConstraints = /:[\\w-]+\\(/.test(pattern);
+  var hasConstraints = /:[\\w-]+[*+]?\\(/.test(pattern);
   if (!hasConstraints && (pattern.includes("(") || pattern.includes("\\\\"))) {
     return __safeRegExp("^" + pattern + "$");
   }
@@ -18977,8 +18983,14 @@ function __compileMwPattern(pattern) {
   var tokenRe = /\\/:([\\w-]+)\\*|\\/:([\\w-]+)\\+|:([\\w-]+)|[.]|[^/:.]+|./g;
   var tok;
   while ((tok = tokenRe.exec(pattern)) !== null) {
-    if (tok[1] !== undefined) { regexStr += "(?:/.*)?"; }
-    else if (tok[2] !== undefined) { regexStr += "(?:/.+)"; }
+    if (tok[1] !== undefined) {
+      var c1 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
+      regexStr += c1 !== null ? "(?:/(" + c1 + "))?" : "(?:/.*)?";
+    }
+    else if (tok[2] !== undefined) {
+      var c2 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
+      regexStr += c2 !== null ? "(?:/(" + c2 + "))" : "(?:/.+)";
+    }
     else if (tok[3] !== undefined) {
       var constraint = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
       var isOptional = pattern[tokenRe.lastIndex] === "?";

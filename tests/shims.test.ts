@@ -2156,6 +2156,7 @@ describe("middleware matcher patterns", () => {
     // Optional locale with ? after constraint
     expect(matchPattern("/about", "/:locale(en|es|fr)?/about")).toBe(true);
     expect(matchPattern("/en/about", "/:locale(en|es|fr)?/about")).toBe(true);
+    expect(matchPattern("/de/about", "/:locale(en|es|fr)?/about")).toBe(false);
   });
 
   it("matchPattern: wildcard (:path*) matches zero or more segments", async () => {
@@ -2164,6 +2165,21 @@ describe("middleware matcher patterns", () => {
     expect(matchPattern("/dashboard/settings", "/dashboard/:path*")).toBe(true);
     expect(matchPattern("/dashboard/settings/profile", "/dashboard/:path*")).toBe(true);
     expect(matchPattern("/other", "/dashboard/:path*")).toBe(false);
+  });
+
+  it("matchPattern: :param*(constraint) and :param+(constraint)", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+    // /:path*(api|static) — optional segment constrained to api or static
+    expect(matchPattern("/cdn", "/cdn/:path*(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/api", "/cdn/:path*(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/static", "/cdn/:path*(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/other", "/cdn/:path*(api|static)")).toBe(false);
+
+    // /:path+(api|static) — required segment constrained
+    expect(matchPattern("/cdn", "/cdn/:path+(api|static)")).toBe(false);
+    expect(matchPattern("/cdn/api", "/cdn/:path+(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/static", "/cdn/:path+(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/other", "/cdn/:path+(api|static)")).toBe(false);
   });
 
   it("matchPattern: one-or-more (:path+) requires at least one segment", async () => {

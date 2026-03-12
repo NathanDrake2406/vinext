@@ -202,7 +202,7 @@ function __extractConstraint(str, re) {
   return str.slice(start, i - 1);
 }
 function __compileMwPattern(pattern) {
-  ${v} hasConstraints = /:[\\w-]+\\(/.test(pattern);
+  ${v} hasConstraints = /:[\\w-]+[*+]?\\(/.test(pattern);
   if (!hasConstraints && (pattern.includes("(") || pattern.includes("\\\\"))) {
     return __safeRegExp("^" + pattern + "$");
   }
@@ -210,8 +210,14 @@ function __compileMwPattern(pattern) {
   ${v} tokenRe = /\\/:([\\w-]+)\\*|\\/:([\\w-]+)\\+|:([\\w-]+)|[.]|[^/:.]+|./g;
   ${l} tok;
   while ((tok = tokenRe.exec(pattern)) !== null) {
-    if (tok[1] !== undefined) { regexStr += "(?:/.*)?"; }
-    else if (tok[2] !== undefined) { regexStr += "(?:/.+)"; }
+    if (tok[1] !== undefined) {
+      ${v} c1 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
+      regexStr += c1 !== null ? "(?:/(" + c1 + "))?" : "(?:/.*)?";
+    }
+    else if (tok[2] !== undefined) {
+      ${v} c2 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
+      regexStr += c2 !== null ? "(?:/(" + c2 + "))" : "(?:/.+)";
+    }
     else if (tok[3] !== undefined) {
       ${v} constraint = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
       ${v} isOptional = pattern[tokenRe.lastIndex] === "?";

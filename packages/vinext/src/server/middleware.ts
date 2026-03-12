@@ -308,7 +308,8 @@ function extractConstraint(str: string, re: RegExp): string | null {
  */
 function compileMatcherPattern(pattern: string): RegExp | null {
   // Check if pattern uses :param(constraint) syntax (e.g. :id(\d+), :locale(en|es|fr))
-  const hasConstraints = /:[\w-]+\(/.test(pattern);
+  // Also matches :param*(constraint) and :param+(constraint) for catch-all variants.
+  const hasConstraints = /:[\w-]+[*+]?\(/.test(pattern);
 
   // Pure regex patterns: contain parens or escapes that aren't param constraints.
   // E.g. /((?!api|_next|favicon\.ico).*)
@@ -325,10 +326,12 @@ function compileMatcherPattern(pattern: string): RegExp | null {
   while ((tok = tokenRe.exec(pattern)) !== null) {
     if (tok[1] !== undefined) {
       // /:param* → optionally match slash + zero or more segments
-      regexStr += "(?:/.*)?";
+      const constraint = hasConstraints ? extractConstraint(pattern, tokenRe) : null;
+      regexStr += constraint !== null ? `(?:/(${constraint}))?` : "(?:/.*)?";
     } else if (tok[2] !== undefined) {
       // /:param+ → match slash + one or more segments
-      regexStr += "(?:/.+)";
+      const constraint = hasConstraints ? extractConstraint(pattern, tokenRe) : null;
+      regexStr += constraint !== null ? `(?:/(${constraint}))` : "(?:/.+)";
     } else if (tok[3] !== undefined) {
       // :param — check for inline constraint (e.g. :id(\d+)) and optional ? marker
       const constraint = hasConstraints ? extractConstraint(pattern, tokenRe) : null;
