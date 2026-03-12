@@ -268,6 +268,8 @@ export async function handleApiRoute(
         res.statusCode = 500;
         res.end("Internal Server Error");
       }
+    } else if (!res.writableEnded) {
+      res.end();
     }
     return true;
   }
