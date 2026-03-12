@@ -29,7 +29,7 @@ import {
   withBasePath,
 } from "./url-utils.js";
 import { appendSearchParamsToUrl, type UrlQuery, urlQueryToSearchParams } from "../utils/query.js";
-import { getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
+import { addLocalePrefix, getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
 import type { VinextNextData } from "../client/vinext-next-data.js";
 
 interface NavigateEvent {
@@ -248,8 +248,8 @@ function getCurrentHostname(): string | undefined {
 }
 
 function getDomainLocaleHref(href: string, locale: string): string | undefined {
-  // Cross-domain results include basePath in the absolute URL.
-  // Same-domain results omit it so withBasePath() at the call site can add it.
+  // Only cross-domain locale switches need a special absolute URL here.
+  // Same-domain cases fall back to the standard locale-prefix logic below.
   return getDomainLocaleUrl(href, locale, {
     basePath: __basePath,
     currentHostname: getCurrentHostname(),
@@ -285,19 +285,7 @@ function applyLocaleToHref(href: string, locale: string | false | undefined): st
     return domainLocaleHref;
   }
 
-  // locale is a string: prepend the locale prefix if not already present
-  const defaultLocale = getDefaultLocale();
-  // For the default locale, Next.js doesn't add a prefix
-  if (locale === defaultLocale) {
-    return href;
-  }
-
-  // Check if href already starts with the locale
-  if (href.startsWith(`/${locale}/`) || href === `/${locale}`) {
-    return href;
-  }
-
-  return `/${locale}${href.startsWith("/") ? href : `/${href}`}`;
+  return addLocalePrefix(href, locale, getDefaultLocale() ?? "");
 }
 
 const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(

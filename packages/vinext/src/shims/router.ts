@@ -11,7 +11,7 @@ import type { VinextNextData } from "../client/vinext-next-data.js";
 import { isValidModulePath } from "../client/validate-module-path.js";
 import { toBrowserNavigationHref, toSameOriginAppPath } from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
-import { getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
+import { addLocalePrefix, getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
 import {
   addQueryParam,
   appendSearchParamsToUrl,
@@ -167,12 +167,7 @@ export function applyNavigationLocale(url: string, locale?: string): string {
   const domainLocalePath = getDomainLocalePath(url, locale);
   if (domainLocalePath) return domainLocalePath;
 
-  const defaultLocale = window.__VINEXT_DEFAULT_LOCALE__;
-  // Default locale doesn't get a prefix
-  if (locale === defaultLocale) return url;
-  // Don't double-prefix
-  if (url.startsWith(`/${locale}/`) || url === `/${locale}`) return url;
-  return `/${locale}${url.startsWith("/") ? url : `/${url}`}`;
+  return addLocalePrefix(url, locale, window.__VINEXT_DEFAULT_LOCALE__ ?? "");
 }
 
 /** Check if a URL is external (any URL scheme per RFC 3986, or protocol-relative) */

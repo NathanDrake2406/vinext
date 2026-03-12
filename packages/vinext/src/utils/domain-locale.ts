@@ -83,9 +83,7 @@ export function getDomainLocaleUrl(
     currentDomain &&
     normalizeDomainHostname(currentDomain.domain) === normalizeDomainHostname(targetDomain.domain)
   ) {
-    // Same-domain locale switches stay relative so the caller can keep treating
-    // them as internal navigation and apply its usual basePath/history flow.
-    return localizedPath;
+    return undefined;
   }
 
   const scheme = `http${targetDomain.http ? "" : "s"}://`;
