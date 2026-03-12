@@ -305,6 +305,8 @@ export function setClientParams(params: Record<string, string | string[]>): void
   if (json !== _clientParamsJson) {
     _clientParams = params;
     _clientParamsJson = json;
+    // Notify useSyncExternalStore subscribers so useParams() re-renders.
+    notifyListeners();
   }
 }
 
@@ -371,7 +373,16 @@ export function useParams<
     // During SSR of "use client" components, the navigation context may not be set.
     return (_getServerContext()?.params ?? {}) as T;
   }
-  return _clientParams as T;
+  return React.useSyncExternalStore(
+    (cb: () => void) => {
+      _listeners.add(cb);
+      return () => {
+        _listeners.delete(cb);
+      };
+    },
+    () => _clientParams as T,
+    () => (_getServerContext()?.params ?? {}) as T,
+  );
 }
 
 /**
