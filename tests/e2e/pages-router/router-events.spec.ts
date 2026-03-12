@@ -150,9 +150,13 @@ test.describe("router.events (Pages Router)", () => {
   });
 
   test("hash-only forward emits hashChange events, not routeChange", async ({ page }) => {
-    // Push a hash, go back, clear events, then go forward
+    // Push a hash, go back, wait for popstate to settle, clear events, then go forward
     await page.click('[data-testid="push-hash"]');
     await page.goBack();
+    await page.waitForFunction((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw).length > 0 : false;
+    }, STORAGE_KEY);
     await page.click('[data-testid="clear-events"]');
     await page.goForward();
 

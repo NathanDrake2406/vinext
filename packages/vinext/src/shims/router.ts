@@ -693,7 +693,7 @@ if (typeof window !== "undefined") {
     // handler calls replaceState to store history metadata — beforeHistoryChange
     // precedes that call, not the URL change itself. We emit it here for API
     // compatibility.
-    routerEvents.emit("beforeHistoryChange", appUrl, { shallow: false });
+    routerEvents.emit("beforeHistoryChange", appUrl + window.location.hash, { shallow: false });
     void navigateClient(browserUrl).then(() => {
       routerEvents.emit("routeChangeComplete", appUrl, { shallow: false });
       restoreScrollPosition(e.state);
