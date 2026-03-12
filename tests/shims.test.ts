@@ -8881,9 +8881,9 @@ describe("KVCacheHandler", () => {
         kind: "FETCH",
         data: { headers: {}, body: '{"result":1}', url: "test" },
         tags: ["my-tag"],
-        revalidate: 0,
+        revalidate: 60,
       },
-      { tags: ["my-tag"] },
+      { revalidate: 60, tags: ["my-tag"] },
     );
 
     // Before invalidation — entry exists

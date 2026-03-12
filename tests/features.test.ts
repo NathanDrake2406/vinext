@@ -643,7 +643,7 @@ describe("ISR cache internals", () => {
     // Set an entry with a very short TTL
     await handler.set(
       "test-stale",
-      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 0 },
+      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 0.001 },
       { revalidate: 0.001 },
     );
 
@@ -682,7 +682,7 @@ describe("ISR cache internals", () => {
         kind: "FETCH",
         data: { headers: {}, body: "test", url: "" },
         tags: ["mytag"],
-        revalidate: 0,
+        revalidate: 60,
       },
       { revalidate: 60, tags: ["mytag"] },
     );
@@ -693,6 +693,52 @@ describe("ISR cache internals", () => {
     // Should return null (hard invalidation, not stale)
     const result = await handler.get("test-tag");
     expect(result).toBeNull();
+  });
+
+  it("MemoryCacheHandler skips storage when data.revalidate is 0", async () => {
+    const { MemoryCacheHandler } = await import("../packages/vinext/src/shims/cache.js");
+    const handler = new MemoryCacheHandler();
+
+    // revalidate: 0 means "don't cache" — entry should not be stored at all
+    await handler.set(
+      "revalidate-zero-data",
+      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 0 },
+      { tags: [] },
+    );
+
+    const result = await handler.get("revalidate-zero-data");
+    expect(result).toBeNull();
+  });
+
+  it("MemoryCacheHandler skips storage when ctx.revalidate is 0", async () => {
+    const { MemoryCacheHandler } = await import("../packages/vinext/src/shims/cache.js");
+    const handler = new MemoryCacheHandler();
+
+    // revalidate: 0 via ctx should also skip storage
+    await handler.set(
+      "revalidate-zero-ctx",
+      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: false },
+      { revalidate: 0 },
+    );
+
+    const result = await handler.get("revalidate-zero-ctx");
+    expect(result).toBeNull();
+  });
+
+  it("MemoryCacheHandler stores entry when ctx.revalidate is 0 but data.revalidate is positive", async () => {
+    const { MemoryCacheHandler } = await import("../packages/vinext/src/shims/cache.js");
+    const handler = new MemoryCacheHandler();
+
+    // data.revalidate overrides ctx — positive value should store
+    await handler.set(
+      "ctx-zero-data-positive",
+      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 60 },
+      { revalidate: 0 },
+    );
+
+    const result = await handler.get("ctx-zero-data-positive");
+    expect(result).not.toBeNull();
+    expect(result!.cacheState).toBeUndefined();
   });
 });
 
