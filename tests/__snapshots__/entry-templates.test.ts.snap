@@ -18704,7 +18704,7 @@ async function _renderPage(request, url, manifest) {
     console.error("[vinext] SSR error:", e);
     _reportRequestError(
       e instanceof Error ? e : new Error(String(e)),
-      { path: routeUrl, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
+      { path: url, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
       { routerKind: "Pages Router", routePath: route.pattern, routeType: "render" },
     ).catch(() => { /* ignore reporting errors */ });
     return new Response("Internal Server Error", { status: 500 });
