@@ -90,6 +90,16 @@ describe("Pages i18n domain routing (production)", () => {
     expect(res.headers.location).toBe("http://example.fr/");
   });
 
+  it("uses Accept-Language rather than NEXT_LOCALE to pick the preferred domain", async () => {
+    const res = await requestNodeServerWithHost(prodPort, "/", "example.com", {
+      "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+      Cookie: "NEXT_LOCALE=en",
+    });
+
+    expect(res.status).toBe(307);
+    expect(res.headers.location).toBe("http://example.fr/");
+  });
+
   it("preserves the search string on root locale redirects", async () => {
     const res = await requestNodeServerWithHost(
       prodPort,

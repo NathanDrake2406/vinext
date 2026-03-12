@@ -138,21 +138,6 @@ function formatLocalizedRootPath(
   return `${rootPath.replace(/\/{2,}/g, "/")}${search}`;
 }
 
-function shouldRedirectToPreferredDomain(
-  currentDomainLocale: DomainLocale | undefined,
-  preferredDomain: DomainLocale | undefined,
-  detectedLocale: string,
-): boolean {
-  if (!preferredDomain) return false;
-  if (!currentDomainLocale) return true;
-
-  const sameDomain =
-    normalizeHostname(currentDomainLocale.domain) === normalizeHostname(preferredDomain.domain);
-  const sameLocale = preferredDomain.defaultLocale.toLowerCase() === detectedLocale.toLowerCase();
-
-  return !sameDomain || !sameLocale;
-}
-
 export function getLocaleRedirect({
   headers,
   nextConfig,
@@ -164,29 +149,32 @@ export function getLocaleRedirect({
 
   const domainLocale = detectDomainLocale(i18n.domains, urlParsed.hostname ?? undefined);
   const defaultLocale = domainLocale?.defaultLocale || i18n.defaultLocale;
-  const cookieLocale =
-    parseCookieLocaleFromHeader(readHeader(headers, "cookie"), i18n) ?? undefined;
   const preferredLocale =
     detectLocaleFromAcceptLanguage(readHeader(headers, "accept-language"), i18n) ?? undefined;
   const detectedLocale =
     pathLocale ||
-    cookieLocale ||
-    preferredLocale ||
     domainLocale?.defaultLocale ||
+    (parseCookieLocaleFromHeader(readHeader(headers, "cookie"), i18n) ?? undefined) ||
+    preferredLocale ||
     i18n.defaultLocale;
   const search = urlParsed.search ?? "";
 
-  const preferredDomain = detectDomainLocale(i18n.domains, undefined, detectedLocale);
-  if (shouldRedirectToPreferredDomain(domainLocale, preferredDomain, detectedLocale)) {
-    const scheme = `http${preferredDomain?.http ? "" : "s"}`;
-    const localePath =
-      detectedLocale.toLowerCase() === preferredDomain!.defaultLocale.toLowerCase()
-        ? ""
-        : `/${detectedLocale}`;
-    const basePath = nextConfig.basePath ?? "";
-    const rootPath = `${basePath}${localePath}${nextConfig.trailingSlash ? "/" : ""}` || "/";
-    const normalizedPath = rootPath.startsWith("/") ? rootPath : `/${rootPath}`;
-    return `${scheme}://${preferredDomain!.domain}${normalizedPath}${search}`;
+  const preferredDomain = detectDomainLocale(i18n.domains, undefined, preferredLocale);
+  if (domainLocale && preferredDomain) {
+    const sameDomain =
+      normalizeHostname(domainLocale.domain) === normalizeHostname(preferredDomain.domain);
+    const sameLocale =
+      preferredLocale !== undefined &&
+      preferredDomain.defaultLocale.toLowerCase() === preferredLocale.toLowerCase();
+
+    if (!sameDomain || !sameLocale) {
+      const scheme = `http${preferredDomain.http ? "" : "s"}`;
+      const localePath = sameLocale ? "" : `/${preferredLocale}`;
+      const basePath = nextConfig.basePath ?? "";
+      const rootPath = `${basePath}${localePath}${nextConfig.trailingSlash ? "/" : ""}` || "/";
+      const normalizedPath = rootPath.startsWith("/") ? rootPath : `/${rootPath}`;
+      return `${scheme}://${preferredDomain.domain}${normalizedPath}${search}`;
+    }
   }
 
   return formatLocalizedRootPath(

@@ -31,6 +31,42 @@ describe("Pages i18n domain helpers", () => {
     expect(detectDomainLocale(i18n.domains, undefined, "nl-BE")).toEqual(i18n.domains[2]);
   });
 
+  it("does not let NEXT_LOCALE override the current domain default locale", () => {
+    expect(
+      getLocaleRedirect({
+        headers: { cookie: "NEXT_LOCALE=fr" },
+        nextConfig: { i18n, basePath: "", trailingSlash: false },
+        pathLocale: undefined,
+        urlParsed: { hostname: "example.com", pathname: "/" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not redirect same-domain locale aliases when the domain default already matches", () => {
+    expect(
+      getLocaleRedirect({
+        headers: { cookie: "NEXT_LOCALE=nl-BE" },
+        nextConfig: { i18n, basePath: "", trailingSlash: false },
+        pathLocale: undefined,
+        urlParsed: { hostname: "example.nl", pathname: "/" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses Accept-Language rather than NEXT_LOCALE to choose the preferred domain", () => {
+    expect(
+      getLocaleRedirect({
+        headers: {
+          cookie: "NEXT_LOCALE=en",
+          "accept-language": "fr-FR,fr;q=0.9,en;q=0.8",
+        },
+        nextConfig: { i18n, basePath: "", trailingSlash: false },
+        pathLocale: undefined,
+        urlParsed: { hostname: "example.com", pathname: "/" },
+      }),
+    ).toBe("http://example.fr/");
+  });
+
   it("redirects root requests to the preferred locale domain", () => {
     expect(
       getLocaleRedirect({
