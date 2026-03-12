@@ -133,6 +133,16 @@ pnpm test -t "middleware"
 
 **When to run the full suite locally:** Only if you're making a broad change that touches shared infrastructure (e.g., the Vite plugin's `resolveId` hook, virtual module generation, or the test helpers themselves). Even then, consider pushing and letting CI do it.
 
+### Before Committing
+
+**Always run these before committing:**
+
+1. **Format:** `pnpm run fmt` — auto-fixes formatting with oxfmt
+2. **Format check:** `pnpm run fmt:check` — verify nothing was missed
+3. **Update snapshots:** If your change affects generated output (entry templates, virtual modules, build artifacts), run `pnpm test -- -u` on the relevant test file to update snapshots
+
+Formatting failures are the #1 preventable CI failure. Don't waste a CI round-trip on it.
+
 ### Fixing Bugs
 
 **Always check dev and prod server parity.** Request handling logic exists in multiple places that must stay in sync:
