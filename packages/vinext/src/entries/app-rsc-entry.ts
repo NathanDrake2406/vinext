@@ -220,24 +220,27 @@ ${slotEntries.join(",\n")}
   // generate patternParts so the runtime can use matchPattern() instead of strict
   // equality — the same matching used for intercept routes.
   const metaRouteEntries = effectiveMetaRoutes.map((mr) => {
-    // Convert dynamic segments in servedUrl to matchPattern format:
+    // Convert dynamic segments in servedUrl to matchPattern format.
+    // Keep in sync with routing/app-router.ts patternParts generation.
     //   [param]       → :param
     //   [...param]    → :param+
     //   [[...param]]  → :param*
-    const patternParts = mr.servedUrl.includes("[")
-      ? JSON.stringify(
-          mr.servedUrl
-            .split("/")
-            .filter(Boolean)
-            .map((seg) => {
-              if (seg.startsWith("[[...") && seg.endsWith("]]"))
-                return ":" + seg.slice(5, -2) + "*";
-              if (seg.startsWith("[...") && seg.endsWith("]")) return ":" + seg.slice(4, -1) + "+";
-              if (seg.startsWith("[") && seg.endsWith("]")) return ":" + seg.slice(1, -1);
-              return seg;
-            }),
-        )
-      : null;
+    const patternParts =
+      mr.isDynamic && mr.servedUrl.includes("[")
+        ? JSON.stringify(
+            mr.servedUrl
+              .split("/")
+              .filter(Boolean)
+              .map((seg) => {
+                if (seg.startsWith("[[...") && seg.endsWith("]]"))
+                  return ":" + seg.slice(5, -2) + "*";
+                if (seg.startsWith("[...") && seg.endsWith("]"))
+                  return ":" + seg.slice(4, -1) + "+";
+                if (seg.startsWith("[") && seg.endsWith("]")) return ":" + seg.slice(1, -1);
+                return seg;
+              }),
+          )
+        : null;
 
     if (mr.isDynamic) {
       return `  {
@@ -261,7 +264,7 @@ ${slotEntries.join(",\n")}
     isDynamic: false,
     servedUrl: ${JSON.stringify(mr.servedUrl)},
     contentType: ${JSON.stringify(mr.contentType)},
-    fileDataBase64: ${JSON.stringify(fileDataBase64)},${patternParts ? `\n    patternParts: ${patternParts},` : ""}
+    fileDataBase64: ${JSON.stringify(fileDataBase64)},
   }`;
   });
 
@@ -1731,11 +1734,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: {
             "Content-Type": metaRoute.contentType,
             "Cache-Control": "public, max-age=0, must-revalidate",
-            },
-          });
-        } catch {
-          return new Response("Not Found", { status: 404 });
-        }
+          },
+        });
+      } catch {
+        return new Response("Not Found", { status: 404 });
+      }
     }
   }
 

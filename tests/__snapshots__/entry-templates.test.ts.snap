@@ -1881,11 +1881,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: {
             "Content-Type": metaRoute.contentType,
             "Cache-Control": "public, max-age=0, must-revalidate",
-            },
-          });
-        } catch {
-          return new Response("Not Found", { status: 404 });
-        }
+          },
+        });
+      } catch {
+        return new Response("Not Found", { status: 404 });
+      }
     }
   }
 
@@ -4658,11 +4658,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: {
             "Content-Type": metaRoute.contentType,
             "Cache-Control": "public, max-age=0, must-revalidate",
-            },
-          });
-        } catch {
-          return new Response("Not Found", { status: 404 });
-        }
+          },
+        });
+      } catch {
+        return new Response("Not Found", { status: 404 });
+      }
     }
   }
 
@@ -7462,11 +7462,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: {
             "Content-Type": metaRoute.contentType,
             "Cache-Control": "public, max-age=0, must-revalidate",
-            },
-          });
-        } catch {
-          return new Response("Not Found", { status: 404 });
-        }
+          },
+        });
+      } catch {
+        return new Response("Not Found", { status: 404 });
+      }
     }
   }
 
@@ -10276,11 +10276,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: {
             "Content-Type": metaRoute.contentType,
             "Cache-Control": "public, max-age=0, must-revalidate",
-            },
-          });
-        } catch {
-          return new Response("Not Found", { status: 404 });
-        }
+          },
+        });
+      } catch {
+        return new Response("Not Found", { status: 404 });
+      }
     }
   }
 
@@ -13057,11 +13057,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: {
             "Content-Type": metaRoute.contentType,
             "Cache-Control": "public, max-age=0, must-revalidate",
-            },
-          });
-        } catch {
-          return new Response("Not Found", { status: 404 });
-        }
+          },
+        });
+      } catch {
+        return new Response("Not Found", { status: 404 });
+      }
     }
   }
 
@@ -16142,11 +16142,11 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: {
             "Content-Type": metaRoute.contentType,
             "Cache-Control": "public, max-age=0, must-revalidate",
-            },
-          });
-        } catch {
-          return new Response("Not Found", { status: 404 });
-        }
+          },
+        });
+      } catch {
+        return new Response("Not Found", { status: 404 });
+      }
     }
   }
 
