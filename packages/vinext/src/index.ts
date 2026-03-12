@@ -1066,6 +1066,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           "vinext/navigation-state": path.join(shimsDir, "navigation-state"),
           "vinext/router-state": path.join(shimsDir, "router-state"),
           "vinext/head-state": path.join(shimsDir, "head-state"),
+          "vinext/i18n-state": path.join(shimsDir, "i18n-state"),
+          "vinext/i18n-context": path.join(shimsDir, "i18n-context"),
           "vinext/instrumentation": path.resolve(__dirname, "server", "instrumentation"),
           "vinext/html": path.resolve(__dirname, "server", "html"),
         };
