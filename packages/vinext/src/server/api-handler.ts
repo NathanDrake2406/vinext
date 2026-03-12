@@ -260,12 +260,14 @@ export async function handleApiRoute(
     ).catch(() => {
       /* ignore reporting errors */
     });
-    if ((e as Error).message === "Request body too large") {
-      res.statusCode = 413;
-      res.end("Request body too large");
-    } else {
-      res.statusCode = 500;
-      res.end("Internal Server Error");
+    if (!res.headersSent) {
+      if ((e as Error).message === "Request body too large") {
+        res.statusCode = 413;
+        res.end("Request body too large");
+      } else {
+        res.statusCode = 500;
+        res.end("Internal Server Error");
+      }
     }
     return true;
   }
