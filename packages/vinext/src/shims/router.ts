@@ -156,10 +156,18 @@ export function isExternalUrl(url: string): boolean {
   return /^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//");
 }
 
-/** Resolve a fragment-only URL to include the current pathname + search */
+/** Resolve a hash URL to a basePath-stripped app URL for event payloads */
 function resolveHashUrl(url: string): string {
-  if (!url.startsWith("#") || typeof window === "undefined") return url;
-  return stripBasePath(window.location.pathname, __basePath) + window.location.search + url;
+  if (typeof window === "undefined") return url;
+  if (url.startsWith("#"))
+    return stripBasePath(window.location.pathname, __basePath) + window.location.search + url;
+  // Full-path hash URL — strip basePath for consistency with other events
+  try {
+    const parsed = new URL(url, window.location.href);
+    return stripBasePath(parsed.pathname, __basePath) + parsed.search + parsed.hash;
+  } catch {
+    return url;
+  }
 }
 
 /** Check if a href is only a hash change relative to the current URL */
@@ -687,15 +695,16 @@ if (typeof window !== "undefined") {
       return;
     }
 
-    routerEvents.emit("routeChangeStart", appUrl, { shallow: false });
+    const fullAppUrl = appUrl + window.location.hash;
+    routerEvents.emit("routeChangeStart", fullAppUrl, { shallow: false });
     // Note: The browser has already updated window.location by the time popstate
     // fires, so this is not truly "before" the URL change. In Next.js the popstate
     // handler calls replaceState to store history metadata — beforeHistoryChange
     // precedes that call, not the URL change itself. We emit it here for API
     // compatibility.
-    routerEvents.emit("beforeHistoryChange", appUrl + window.location.hash, { shallow: false });
+    routerEvents.emit("beforeHistoryChange", fullAppUrl, { shallow: false });
     void navigateClient(browserUrl).then(() => {
-      routerEvents.emit("routeChangeComplete", appUrl, { shallow: false });
+      routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: false });
       restoreScrollPosition(e.state);
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
     });
