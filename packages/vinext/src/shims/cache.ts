@@ -200,7 +200,12 @@ export class MemoryCacheHandler implements CacheHandler {
         revalidateAt = Date.now() + revalidate * 1000;
       }
     }
-    if (data && "revalidate" in data && typeof data.revalidate === "number") {
+    if (
+      data &&
+      "revalidate" in data &&
+      typeof data.revalidate === "number" &&
+      data.revalidate > 0
+    ) {
       revalidateAt = Date.now() + data.revalidate * 1000;
     }
 
