@@ -20,6 +20,11 @@ import Link, { useLinkStatus } from "../packages/vinext/src/shims/link.js";
 // Internal helpers re-exported or accessible via the router shim
 import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/router.js";
 
+// Import server-only i18n state to register ALS-backed accessors before any
+// rendering occurs (same as dev-server.ts and pages-server-entry.ts do).
+import { runWithI18nState } from "../packages/vinext/src/shims/i18n-state.js";
+import { setI18nContext } from "../packages/vinext/src/shims/i18n-context.js";
+
 // ─── SSR rendering (mirrors Next.js test/unit/link-rendering.test.ts) ────
 
 describe("Link rendering", () => {
@@ -351,18 +356,24 @@ describe("Link locale handling", () => {
 
   it("uses configured locale domains during SSR output", () => {
     delete (globalThis as any).window;
-    (globalThis as any).__VINEXT_DEFAULT_LOCALE__ = "en";
-    (globalThis as any).__VINEXT_DOMAIN_LOCALES__ = [
-      { domain: "example.com", defaultLocale: "en" },
-      { domain: "example.fr", defaultLocale: "fr", http: true },
-    ];
-    (globalThis as any).__VINEXT_HOSTNAME__ = "example.com";
+    setI18nContext({
+      defaultLocale: "en",
+      domainLocales: [
+        { domain: "example.com", defaultLocale: "en" },
+        { domain: "example.fr", defaultLocale: "fr", http: true },
+      ],
+      hostname: "example.com",
+    });
 
-    const html = ReactDOMServer.renderToString(
-      React.createElement(Link, { href: "/about", locale: "fr" } as any, "x"),
-    );
+    try {
+      const html = ReactDOMServer.renderToString(
+        React.createElement(Link, { href: "/about", locale: "fr" } as any, "x"),
+      );
 
-    expect(html).toContain('href="http://example.fr/about"');
+      expect(html).toContain('href="http://example.fr/about"');
+    } finally {
+      setI18nContext(null);
+    }
   });
 
   it("uses configured locale domains with basePath for cross-domain links", async () => {
@@ -398,6 +409,94 @@ describe("Link locale handling", () => {
       }
       vi.resetModules();
     }
+  });
+});
+
+// ─── i18n ALS isolation ─────────────────────────────────────────────────
+// Verifies that concurrent SSR renders with different i18n contexts
+// don't leak locale state between requests.
+
+describe("Link i18n ALS isolation", () => {
+  const originalWindow = globalThis.window;
+
+  afterEach(() => {
+    if (originalWindow === undefined) {
+      delete (globalThis as any).window;
+    } else {
+      (globalThis as any).window = originalWindow;
+    }
+  });
+
+  it("concurrent renders in different ALS scopes see their own locale context", async () => {
+    delete (globalThis as any).window;
+
+    // Simulate two concurrent requests with different locales.
+    // Each runs in its own ALS scope. If the state leaked via globalThis,
+    // the second request's locale would overwrite the first's.
+    const results = await Promise.all([
+      runWithI18nState(async () => {
+        setI18nContext({
+          defaultLocale: "en",
+          domainLocales: [
+            { domain: "example.com", defaultLocale: "en" },
+            { domain: "example.fr", defaultLocale: "fr", http: true },
+          ],
+          hostname: "example.com",
+        });
+        // Yield to let the other scope set its context
+        await new Promise((r) => setTimeout(r, 5));
+        return ReactDOMServer.renderToString(
+          React.createElement(Link, { href: "/about", locale: "fr" } as any, "x"),
+        );
+      }),
+      runWithI18nState(async () => {
+        setI18nContext({
+          defaultLocale: "de",
+          domainLocales: [
+            { domain: "example.de", defaultLocale: "de" },
+            { domain: "example.jp", defaultLocale: "ja", http: true },
+          ],
+          hostname: "example.de",
+        });
+        await new Promise((r) => setTimeout(r, 5));
+        return ReactDOMServer.renderToString(
+          React.createElement(Link, { href: "/about", locale: "ja" } as any, "x"),
+        );
+      }),
+    ]);
+
+    // Request 1 (en domain, switching to fr) should link to example.fr
+    expect(results[0]).toContain('href="http://example.fr/about"');
+    // Request 2 (de domain, switching to ja) should link to example.jp
+    expect(results[1]).toContain('href="http://example.jp/about"');
+  });
+
+  it("SSR locale prefix uses ALS-scoped defaultLocale, not stale globalThis", async () => {
+    delete (globalThis as any).window;
+
+    const results = await Promise.all([
+      runWithI18nState(async () => {
+        // defaultLocale "en" → locale "fr" should get /fr prefix
+        setI18nContext({ defaultLocale: "en" });
+        await new Promise((r) => setTimeout(r, 5));
+        return ReactDOMServer.renderToString(
+          React.createElement(Link, { href: "/about", locale: "fr" } as any, "x"),
+        );
+      }),
+      runWithI18nState(async () => {
+        // defaultLocale "fr" → locale "fr" should NOT get prefix (it's the default)
+        setI18nContext({ defaultLocale: "fr" });
+        await new Promise((r) => setTimeout(r, 5));
+        return ReactDOMServer.renderToString(
+          React.createElement(Link, { href: "/about", locale: "fr" } as any, "x"),
+        );
+      }),
+    ]);
+
+    // First scope: fr is non-default, so it gets /fr prefix
+    expect(results[0]).toContain('href="/fr/about"');
+    // Second scope: fr IS the default, so no prefix
+    expect(results[1]).toContain('href="/about"');
   });
 });
 

@@ -30,6 +30,7 @@ import {
 } from "./url-utils.js";
 import { appendSearchParamsToUrl, type UrlQuery, urlQueryToSearchParams } from "../utils/query.js";
 import { addLocalePrefix, getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
+import { getI18nContext } from "./i18n-context.js";
 import type { VinextNextData } from "../client/vinext-next-data.js";
 
 interface NavigateEvent {
@@ -232,19 +233,19 @@ function getDefaultLocale(): string | undefined {
   if (typeof window !== "undefined") {
     return window.__VINEXT_DEFAULT_LOCALE__;
   }
-  return globalThis.__VINEXT_DEFAULT_LOCALE__;
+  return getI18nContext()?.defaultLocale;
 }
 
 function getDomainLocales(): readonly DomainLocale[] | undefined {
   if (typeof window !== "undefined") {
     return (window.__NEXT_DATA__ as VinextNextData | undefined)?.domainLocales;
   }
-  return globalThis.__VINEXT_DOMAIN_LOCALES__;
+  return getI18nContext()?.domainLocales;
 }
 
 function getCurrentHostname(): string | undefined {
   if (typeof window !== "undefined") return window.location.hostname;
-  return globalThis.__VINEXT_HOSTNAME__;
+  return getI18nContext()?.hostname;
 }
 
 function getDomainLocaleHref(href: string, locale: string): string | undefined {

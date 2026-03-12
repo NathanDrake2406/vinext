@@ -269,6 +269,8 @@ import { _runWithCacheState } from "next/cache";
 import { runWithPrivateCache } from "vinext/cache-runtime";
 import { runWithRouterState } from "vinext/router-state";
 import { runWithHeadState } from "vinext/head-state";
+import { runWithI18nState } from "vinext/i18n-state";
+import { setI18nContext } from "vinext/i18n-context";
 import { safeJsonStringify } from "vinext/html";
 import { decode as decodeQueryString } from "node:querystring";
 import { getSSRFontLinks as _getSSRFontLinks, getSSRFontStyles as _getSSRFontStylesGoogle, getSSRFontPreloads as _getSSRFontPreloadsGoogle } from "next/font/google";
@@ -722,9 +724,10 @@ async function _renderPage(request, url, manifest) {
   const { route, params } = match;
   return runWithRouterState(() =>
     runWithHeadState(() =>
-      _runWithCacheState(() =>
-        runWithPrivateCache(() =>
-          runWithFetchCache(async () => {
+      runWithI18nState(() =>
+        _runWithCacheState(() =>
+          runWithPrivateCache(() =>
+            runWithFetchCache(async () => {
   try {
     if (typeof setSSRContext === "function") {
       setSSRContext({
@@ -739,11 +742,13 @@ async function _renderPage(request, url, manifest) {
     }
 
     if (i18nConfig) {
-      globalThis.__VINEXT_LOCALE__ = locale;
-      globalThis.__VINEXT_LOCALES__ = i18nConfig.locales;
-      globalThis.__VINEXT_DEFAULT_LOCALE__ = currentDefaultLocale;
-      globalThis.__VINEXT_DOMAIN_LOCALES__ = domainLocales;
-      globalThis.__VINEXT_HOSTNAME__ = new URL(request.url).hostname;
+      setI18nContext({
+        locale: locale,
+        locales: i18nConfig.locales,
+        defaultLocale: currentDefaultLocale,
+        domainLocales: domainLocales,
+        hostname: new URL(request.url).hostname,
+      });
     }
 
     const pageModule = route.module;
@@ -1071,9 +1076,10 @@ async function _renderPage(request, url, manifest) {
     );
     return new Response("Internal Server Error", { status: 500 });
   }
-          }) // end runWithFetchCache
-        ) // end runWithPrivateCache
-      ) // end _runWithCacheState
+            }) // end runWithFetchCache
+          ) // end runWithPrivateCache
+        ) // end _runWithCacheState
+      ) // end runWithI18nState
     ) // end runWithHeadState
   ); // end runWithRouterState
 }
