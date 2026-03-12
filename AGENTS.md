@@ -137,8 +137,8 @@ pnpm test -t "middleware"
 
 **Always run these before committing:**
 
-1. **Format:** `pnpm run fmt` — auto-fixes formatting with oxfmt
-2. **Format check:** `pnpm run fmt:check` — verify nothing was missed
+1. `pnpm run fmt`
+2. `pnpm run fmt:check`
 3. **Update snapshots:** If your change affects generated output (entry templates, virtual modules, build artifacts), run `pnpm test -- -u` on the relevant test file to update snapshots
 
 Formatting failures are the #1 preventable CI failure. Don't waste a CI round-trip on it.
