@@ -870,11 +870,28 @@ function collectInterceptingPages(
 }
 
 /**
+ * Check whether a path segment is invisible in the URL (route groups, parallel slots, ".").
+ *
+ * Used by computeInterceptTarget, convertSegmentsToRouteParts, and
+ * hasRemainingVisibleSegments — keep this the single source of truth.
+ */
+function isInvisibleSegment(segment: string): boolean {
+  if (segment === ".") return true;
+  if (segment.startsWith("(") && segment.endsWith(")")) return true;
+  if (segment.startsWith("@")) return true;
+  return false;
+}
+
+/**
  * Compute the target URL pattern for an intercepting route.
  *
+ * Interception conventions (..), (..)(..)" climb by *visible route segments*
+ * (not filesystem directories). Route groups like (marketing) and parallel
+ * slots like @modal are invisible and must be skipped when counting levels.
+ *
  * - (.) same level: resolve relative to routeDir
- * - (..) one level up: resolve relative to parent of routeDir
- * - (..)(..)" two levels up: resolve relative to grandparent of routeDir
+ * - (..) one level up: climb 1 visible segment
+ * - (..)(..) two levels up: climb 2 visible segments
  * - (...) root: resolve from appDir
  */
 function computeInterceptTarget(
@@ -885,27 +902,36 @@ function computeInterceptTarget(
   routeDir: string,
   appDir: string,
 ): { pattern: string; params: string[] } | null {
-  // Determine the base directory for target resolution
-  let baseDir: string;
+  // Determine the base segments for target resolution.
+  // We work on route segments (not filesystem paths) so that route groups
+  // and parallel slots are properly skipped when climbing.
+  const routeSegments = path.relative(appDir, routeDir).split(path.sep).filter(Boolean);
+
+  let baseParts: string[];
   switch (convention) {
     case ".":
-      baseDir = routeDir;
+      baseParts = routeSegments;
       break;
     case "..":
-      baseDir = path.dirname(routeDir);
+    case "../..": {
+      const levelsToClimb = convention === ".." ? 1 : 2;
+      let climbed = 0;
+      let cutIndex = routeSegments.length;
+      while (cutIndex > 0 && climbed < levelsToClimb) {
+        cutIndex--;
+        if (!isInvisibleSegment(routeSegments[cutIndex])) {
+          climbed++;
+        }
+      }
+      baseParts = routeSegments.slice(0, cutIndex);
       break;
-    case "../..":
-      baseDir = path.dirname(path.dirname(routeDir));
-      break;
+    }
     case "...":
-      baseDir = appDir;
+      baseParts = [];
       break;
     default:
       return null;
   }
-
-  // Build the target URL segments from baseDir relative to appDir
-  const baseParts = path.relative(appDir, baseDir).split(path.sep).filter(Boolean);
 
   // Add the intercept segment and any nested path segments
   const nestedParts = path.relative(interceptRoot, currentDir).split(path.sep).filter(Boolean);
@@ -936,10 +962,6 @@ function findFile(dir: string, name: string, matcher: ValidFileMatcher): string 
  * Convert filesystem path segments to URL route parts, skipping invisible segments
  * (route groups, @slots, ".") and converting dynamic segment syntax to Express-style
  * patterns (e.g. "[id]" → ":id", "[...slug]" → ":slug+").
- *
- * Note: the invisible-segment filtering logic here is also applied manually in
- * discoverSlotSubRoutes when building the dedup key from urlSegments. If a new
- * invisible segment type is added, both locations need updating.
  */
 function convertSegmentsToRouteParts(
   segments: string[],
@@ -951,13 +973,7 @@ function convertSegmentsToRouteParts(
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i];
 
-    if (segment === ".") continue;
-
-    // Route groups are transparent in the URL.
-    if (segment.startsWith("(") && segment.endsWith(")")) continue;
-
-    // Parallel slots are also transparent.
-    if (segment.startsWith("@")) continue;
+    if (isInvisibleSegment(segment)) continue;
 
     // Catch-all segments are only valid in terminal URL position.
     const catchAllMatch = segment.match(/^\[\.\.\.([\w-]+)\]$/);
@@ -994,12 +1010,8 @@ function convertSegmentsToRouteParts(
 
 function hasRemainingVisibleSegments(segments: string[], startIndex: number): boolean {
   for (let i = startIndex; i < segments.length; i++) {
-    const segment = segments[i];
-    if (segment.startsWith("(") && segment.endsWith(")")) continue;
-    if (segment.startsWith("@")) continue;
-    return true;
+    if (!isInvisibleSegment(segments[i])) return true;
   }
-
   return false;
 }
 
