@@ -2157,6 +2157,33 @@ describe("metadata routes integration (App Router)", () => {
     expect(productsSitemap).toBeDefined();
     expect(productsSitemap!.isDynamic).toBe(true);
   });
+
+  it("scanMetadataFiles discovers opengraph-image in dynamic segment", async () => {
+    const { scanMetadataFiles } = await import("../packages/vinext/src/server/metadata-routes.js");
+    const appDir = path.resolve(import.meta.dirname, "./fixtures/app-basic/app");
+    const routes = scanMetadataFiles(appDir);
+    const ogImage = routes.find(
+      (r: { type: string; servedUrl: string }) =>
+        r.type === "opengraph-image" && r.servedUrl === "/blog/[slug]/opengraph-image",
+    );
+    expect(ogImage).toBeDefined();
+    expect(ogImage!.isDynamic).toBe(true);
+  });
+
+  it("serves dynamic opengraph-image in dynamic segment with params", async () => {
+    const res = await fetch(`${baseUrl}/blog/hello-world/opengraph-image`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("image/png");
+    const text = await res.text();
+    expect(text).toBe("og:hello-world");
+  });
+
+  it("serves dynamic opengraph-image with different param values", async () => {
+    const res = await fetch(`${baseUrl}/blog/my-post/opengraph-image`);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toBe("og:my-post");
+  });
 });
 
 describe("App Router next.config.js features (dev server integration)", () => {
