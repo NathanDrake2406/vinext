@@ -667,6 +667,10 @@ function createPatchedFetch(): typeof globalThis.fetch {
             if (pendingRefetches.get(cacheKey) === refetchPromise) {
               pendingRefetches.delete(cacheKey);
             }
+          const timeoutId = setTimeout(() => {
+            if (pendingRefetches.get(cacheKey) === refetchPromise) {
+              pendingRefetches.delete(cacheKey);
+            }
           }, DEDUP_TIMEOUT_MS);
 
           getRequestExecutionContext()?.waitUntil(refetchPromise);
