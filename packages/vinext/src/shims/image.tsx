@@ -209,11 +209,11 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   ref,
 ) {
   // Wire onLoadingComplete (deprecated) into onLoad — matches Next.js behavior.
-  // Calls the callback with { naturalWidth, naturalHeight } after the image loads.
+  // onLoad fires first, then onLoadingComplete receives the HTMLImageElement.
   const handleLoad = onLoadingComplete
     ? (e: React.SyntheticEvent<HTMLImageElement>) => {
-        onLoadingComplete(e.currentTarget);
         onLoad?.(e);
+        onLoadingComplete(e.currentTarget);
       }
     : onLoad;
 

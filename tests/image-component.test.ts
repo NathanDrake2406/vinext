@@ -539,4 +539,19 @@ describe("onLoadingComplete prop", () => {
     expect(html).not.toContain("onloadingcomplete");
     expect(html).toContain('alt="cdn"');
   });
+
+  it("does not leak onLoadingComplete as a DOM attribute in SSR (remote URL)", () => {
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Image, {
+        alt: "remote",
+        src: "https://example.com/photo.jpg",
+        width: 400,
+        height: 300,
+        onLoadingComplete: () => {},
+      }),
+    );
+    expect(html).not.toContain("onLoadingComplete");
+    expect(html).not.toContain("onloadingcomplete");
+    expect(html).toContain('alt="remote"');
+  });
 });
