@@ -84,6 +84,9 @@ export function getDomainLocaleUrl(
     currentDomain &&
     normalizeDomainHostname(currentDomain.domain) === normalizeDomainHostname(targetDomain.domain)
   ) {
+    // Same-domain switches fall back to the caller's standard locale-prefix
+    // logic. This relies on __VINEXT_DEFAULT_LOCALE__ matching the current
+    // domain's defaultLocale, which the server entry keeps in sync.
     return undefined;
   }
 

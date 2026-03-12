@@ -37,6 +37,8 @@ function readHeader(headers: HeaderBag, name: string): string | undefined {
     return headers.get(name) ?? undefined;
   }
 
+  // For Record headers, callers must pass lowercase names. Node's
+  // IncomingMessage.headers are already lowercased by the HTTP parser.
   const direct = headers[name];
   if (Array.isArray(direct)) return direct.join(", ");
   return direct;
