@@ -856,12 +856,29 @@ async function _renderPage(request, url, manifest) {
                 ";window.__VINEXT_DEFAULT_LOCALE__=" + safeJsonStringify(i18nConfig.defaultLocale)
               : "";
             var _freshNDS = "<script>window.__NEXT_DATA__ = " + safeJsonStringify(_regenPayload) + _lGlobals + "</script>";
-            // Extract stable head section from cached HTML (fonts, assets, document shell)
+            // Reconstruct ISR HTML preserving the document shell from the
+            // cached entry (head, fonts, assets, custom _document markup).
             var _cachedStr = cached.value.value.html;
             var _btag = '<div id="__next">';
-            var _bidx = _cachedStr.indexOf(_btag);
-            var _head = _bidx >= 0 ? _cachedStr.slice(0, _bidx + _btag.length) : '<!DOCTYPE html>\\n<html>\\n<head>\\n</head>\\n<body>\\n  <div id="__next">';
-            var _freshHtml = _head + _freshBody + '</div>\\n  ' + _freshNDS + '\\n</body>\\n</html>';
+            var _bstart = _cachedStr.indexOf(_btag);
+            var _bodyStart = _bstart >= 0 ? _bstart + _btag.length : -1;
+            // Locate __NEXT_DATA__ script to split body from suffix
+            var _ndMarker = '<script>window.__NEXT_DATA__';
+            var _ndStart = _cachedStr.indexOf(_ndMarker);
+            var _freshHtml;
+            if (_bodyStart >= 0 && _ndStart >= 0) {
+              // Region between body start and __NEXT_DATA__ contains:
+              // BODY_HTML + </div> + optional gap (custom _document content)
+              var _region = _cachedStr.slice(_bodyStart, _ndStart);
+              var _lastClose = _region.lastIndexOf('</div>');
+              var _gap = _lastClose >= 0 ? _region.slice(_lastClose + 6) : '';
+              // Tail: everything after the old __NEXT_DATA__ </script>
+              var _ndEnd = _cachedStr.indexOf('</script>', _ndStart) + 9;
+              var _tail = _cachedStr.slice(_ndEnd);
+              _freshHtml = _cachedStr.slice(0, _bodyStart) + _freshBody + '</div>' + _gap + _freshNDS + _tail;
+            } else {
+              _freshHtml = '<!DOCTYPE html>\\n<html>\\n<head>\\n</head>\\n<body>\\n  <div id="__next">' + _freshBody + '</div>\\n  ' + _freshNDS + '\\n</body>\\n</html>';
+            }
             await isrSet(cacheKey, { kind: "PAGES", html: _freshHtml, pageData: _fp, headers: undefined, status: undefined }, freshResult.revalidate);
           }
         });
