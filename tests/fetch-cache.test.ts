@@ -456,131 +456,133 @@ describe("fetch cache shim", () => {
 
   it("force-cleans dedup entry after timeout when upstream fetch hangs", async () => {
     vi.useFakeTimers();
+    try {
+      // Populate cache
+      await fetch("https://api.example.com/dedup-hang", {
+        next: { revalidate: 1 },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // Populate cache
-    await fetch("https://api.example.com/dedup-hang", {
-      next: { revalidate: 1 },
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+      // Make subsequent fetches hang forever
+      fetchMock.mockImplementation(() => new Promise(() => {}));
 
-    // Make subsequent fetches hang forever
-    fetchMock.mockImplementation(() => new Promise(() => {}));
+      // Expire the entry
+      const handler = getCacheHandler() as InstanceType<typeof MemoryCacheHandler>;
+      const store = (handler as any).store as Map<string, any>;
+      for (const [, entry] of store) {
+        entry.revalidateAt = Date.now() - 1000;
+      }
 
-    // Expire the entry
-    const handler = getCacheHandler() as InstanceType<typeof MemoryCacheHandler>;
-    const store = (handler as any).store as Map<string, any>;
-    for (const [, entry] of store) {
-      entry.revalidateAt = Date.now() - 1000;
+      // Stale hit — background refetch hangs
+      await fetch("https://api.example.com/dedup-hang", {
+        next: { revalidate: 1 },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2); // Hung fetch was called
+
+      // Another stale hit before timeout — dedup suppresses it
+      for (const [, entry] of store) {
+        entry.revalidateAt = Date.now() - 1000;
+      }
+      await fetch("https://api.example.com/dedup-hang", {
+        next: { revalidate: 1 },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2); // Still suppressed
+
+      // Advance past the 60s timeout — dedup entry should be force-cleaned
+      vi.advanceTimersByTime(60_000);
+
+      // Restore working fetch and expire again
+      fetchMock.mockImplementation(defaultFetchMockImplementation);
+      for (const [, entry] of store) {
+        entry.revalidateAt = Date.now() - 1000;
+      }
+
+      // New stale hit should trigger a fresh refetch
+      await fetch("https://api.example.com/dedup-hang", {
+        next: { revalidate: 1 },
+      });
+
+      // Flush the microtask for the background refetch
+      await vi.advanceTimersByTimeAsync(50);
+      expect(fetchMock).toHaveBeenCalledTimes(3); // New refetch succeeded
+    } finally {
+      vi.useRealTimers();
     }
-
-    // Stale hit — background refetch hangs
-    await fetch("https://api.example.com/dedup-hang", {
-      next: { revalidate: 1 },
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2); // Hung fetch was called
-
-    // Another stale hit before timeout — dedup suppresses it
-    for (const [, entry] of store) {
-      entry.revalidateAt = Date.now() - 1000;
-    }
-    await fetch("https://api.example.com/dedup-hang", {
-      next: { revalidate: 1 },
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2); // Still suppressed
-
-    // Advance past the 60s timeout — dedup entry should be force-cleaned
-    vi.advanceTimersByTime(60_000);
-
-    // Restore working fetch and expire again
-    fetchMock.mockImplementation(defaultFetchMockImplementation);
-    for (const [, entry] of store) {
-      entry.revalidateAt = Date.now() - 1000;
-    }
-
-    // New stale hit should trigger a fresh refetch
-    await fetch("https://api.example.com/dedup-hang", {
-      next: { revalidate: 1 },
-    });
-
-    // Flush the microtask for the background refetch
-    await vi.advanceTimersByTimeAsync(50);
-    expect(fetchMock).toHaveBeenCalledTimes(3); // New refetch succeeded
-
-    vi.useRealTimers();
   });
 
   it("hung fetch settling after timeout does not evict replacement refetch", async () => {
     vi.useFakeTimers();
+    try {
+      let resolveHungFetch!: (resp: Response) => void;
 
-    let resolveHungFetch!: (resp: Response) => void;
+      // Populate cache
+      await fetch("https://api.example.com/dedup-race", {
+        next: { revalidate: 1 },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // Populate cache
-    await fetch("https://api.example.com/dedup-race", {
-      next: { revalidate: 1 },
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+      // Make next fetch hang until we resolve it manually
+      fetchMock.mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveHungFetch = resolve;
+          }),
+      );
 
-    // Make next fetch hang until we resolve it manually
-    fetchMock.mockImplementation(
-      () =>
-        new Promise<Response>((resolve) => {
-          resolveHungFetch = resolve;
+      // Expire and trigger a stale hit — background refetch #1 hangs
+      const handler = getCacheHandler() as InstanceType<typeof MemoryCacheHandler>;
+      const store = (handler as any).store as Map<string, any>;
+      for (const [, entry] of store) {
+        entry.revalidateAt = Date.now() - 1000;
+      }
+      await fetch("https://api.example.com/dedup-race", {
+        next: { revalidate: 1 },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2); // Hung fetch was called
+
+      // Advance past the 60s timeout — dedup entry is force-cleaned
+      vi.advanceTimersByTime(60_000);
+
+      // Restore working fetch for the replacement refetch
+      fetchMock.mockImplementation(defaultFetchMockImplementation);
+
+      // Expire and trigger a new stale hit — background refetch #2 starts
+      for (const [, entry] of store) {
+        entry.revalidateAt = Date.now() - 1000;
+      }
+      await fetch("https://api.example.com/dedup-race", {
+        next: { revalidate: 1 },
+      });
+
+      // Let refetch #2 complete
+      await vi.advanceTimersByTimeAsync(50);
+      expect(fetchMock).toHaveBeenCalledTimes(3); // Replacement refetch ran
+
+      // Now the hung refetch #1 finally settles — it must NOT evict #2's slot
+      resolveHungFetch(
+        new Response(JSON.stringify({ url: "stale", count: 999 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
         }),
-    );
+      );
+      await vi.advanceTimersByTimeAsync(50);
 
-    // Expire and trigger a stale hit — background refetch #1 hangs
-    const handler = getCacheHandler() as InstanceType<typeof MemoryCacheHandler>;
-    const store = (handler as any).store as Map<string, any>;
-    for (const [, entry] of store) {
-      entry.revalidateAt = Date.now() - 1000;
+      // Expire again — a new stale hit should NOT start another refetch
+      // because #2's slot should still be gone (it completed normally).
+      // The key behavior: #1 settling did not delete #2's entry while #2 was live.
+      // Since #2 already completed and cleaned up its own slot, a new refetch
+      // should start normally (proving #1 didn't corrupt state).
+      for (const [, entry] of store) {
+        entry.revalidateAt = Date.now() - 1000;
+      }
+      await fetch("https://api.example.com/dedup-race", {
+        next: { revalidate: 1 },
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(fetchMock).toHaveBeenCalledTimes(4); // Clean new refetch
+    } finally {
+      vi.useRealTimers();
     }
-    await fetch("https://api.example.com/dedup-race", {
-      next: { revalidate: 1 },
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2); // Hung fetch was called
-
-    // Advance past the 60s timeout — dedup entry is force-cleaned
-    vi.advanceTimersByTime(60_000);
-
-    // Restore working fetch for the replacement refetch
-    fetchMock.mockImplementation(defaultFetchMockImplementation);
-
-    // Expire and trigger a new stale hit — background refetch #2 starts
-    for (const [, entry] of store) {
-      entry.revalidateAt = Date.now() - 1000;
-    }
-    await fetch("https://api.example.com/dedup-race", {
-      next: { revalidate: 1 },
-    });
-
-    // Let refetch #2 complete
-    await vi.advanceTimersByTimeAsync(50);
-    expect(fetchMock).toHaveBeenCalledTimes(3); // Replacement refetch ran
-
-    // Now the hung refetch #1 finally settles — it must NOT evict #2's slot
-    resolveHungFetch(
-      new Response(JSON.stringify({ url: "stale", count: 999 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(50);
-
-    // Expire again — a new stale hit should NOT start another refetch
-    // because #2's slot should still be gone (it completed normally).
-    // The key behavior: #1 settling did not delete #2's entry while #2 was live.
-    // Since #2 already completed and cleaned up its own slot, a new refetch
-    // should start normally (proving #1 didn't corrupt state).
-    for (const [, entry] of store) {
-      entry.revalidateAt = Date.now() - 1000;
-    }
-    await fetch("https://api.example.com/dedup-race", {
-      next: { revalidate: 1 },
-    });
-    await vi.advanceTimersByTimeAsync(50);
-    expect(fetchMock).toHaveBeenCalledTimes(4); // Clean new refetch
-
-    vi.useRealTimers();
   });
 
   // ── Independent cache entries per URL ───────────────────────────────
