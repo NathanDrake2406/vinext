@@ -11,12 +11,7 @@ import type { VinextNextData } from "../client/vinext-next-data.js";
 import { isValidModulePath } from "../client/validate-module-path.js";
 import { toBrowserNavigationHref, toSameOriginAppPath } from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
-import {
-  addLocalePrefix,
-  detectDomainLocale,
-  normalizeDomainHostname,
-  type DomainLocale,
-} from "../utils/domain-locale.js";
+import { getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
 import {
   addQueryParam,
   appendSearchParamsToUrl,
@@ -145,26 +140,16 @@ function getDomainLocales(): readonly DomainLocale[] | undefined {
   return (window.__NEXT_DATA__ as VinextNextData | undefined)?.domainLocales;
 }
 
+function getCurrentHostname(): string | undefined {
+  return window.location?.hostname;
+}
+
 function getDomainLocalePath(url: string, locale: string): string | undefined {
-  const domainLocales = getDomainLocales();
-  if (!domainLocales?.length) return undefined;
-
-  const targetDomain = detectDomainLocale(domainLocales, undefined, locale);
-  if (!targetDomain) return undefined;
-
-  const currentDomain = detectDomainLocale(domainLocales, window.location.hostname);
-  const localizedPath = addLocalePrefix(url, locale, targetDomain.defaultLocale);
-  const localizedPathWithBasePath = withBasePath(localizedPath);
-
-  if (
-    currentDomain &&
-    normalizeDomainHostname(currentDomain.domain) === normalizeDomainHostname(targetDomain.domain)
-  ) {
-    return localizedPath;
-  }
-
-  const scheme = `http${targetDomain.http ? "" : "s"}://`;
-  return `${scheme}${targetDomain.domain}${localizedPathWithBasePath}`;
+  return getDomainLocaleUrl(url, locale, {
+    basePath: __basePath,
+    currentHostname: getCurrentHostname(),
+    domainItems: getDomainLocales(),
+  });
 }
 
 /**

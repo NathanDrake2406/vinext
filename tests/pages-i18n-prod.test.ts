@@ -21,6 +21,8 @@ async function startProdFixture(
 }> {
   const tmpDir = await createIsolatedFixture(fixtureDir, prefix);
   const outDir = path.join(tmpDir, "dist");
+  // Pages Router only — no RSC pipeline, so separate build() calls work.
+  // For App Router, use createBuilder().buildApp() instead.
   await build({
     root: tmpDir,
     configFile: false,

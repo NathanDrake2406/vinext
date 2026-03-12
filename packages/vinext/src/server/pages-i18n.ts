@@ -145,6 +145,8 @@ export function getLocaleRedirect({
   urlParsed,
 }: LocaleRedirectOptions): string | undefined {
   const i18n = nextConfig.i18n;
+  // Next.js treats localeDetection as the global auto-redirect switch, so
+  // disabling it also disables root domain-locale redirects.
   if (!i18n || i18n.localeDetection === false || urlParsed.pathname !== "/") return undefined;
 
   const domainLocale = detectDomainLocale(i18n.domains, urlParsed.hostname ?? undefined);
