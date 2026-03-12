@@ -149,6 +149,30 @@ test.describe("router.events (Pages Router)", () => {
     expect(events.some((e) => e.startsWith("beforeHistoryChange:"))).toBe(false);
   });
 
+  test("hash-only forward emits hashChange events, not routeChange", async ({ page }) => {
+    // Push a hash, go back, clear events, then go forward
+    await page.click('[data-testid="push-hash"]');
+    await page.goBack();
+    await page.click('[data-testid="clear-events"]');
+    await page.goForward();
+
+    await page.waitForFunction((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw).length > 0 : false;
+    }, STORAGE_KEY);
+
+    const events: string[] = await page.evaluate((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    }, STORAGE_KEY);
+
+    expect(events.some((e) => e.startsWith("hashChangeStart:"))).toBe(true);
+    expect(events.some((e) => e.startsWith("hashChangeComplete:"))).toBe(true);
+    expect(events.some((e) => e.startsWith("start:"))).toBe(false);
+    expect(events.some((e) => e.startsWith("complete:"))).toBe(false);
+    expect(events.some((e) => e.startsWith("beforeHistoryChange:"))).toBe(false);
+  });
+
   test("multiple navigations produce multiple event pairs", async ({ page }) => {
     // Navigate to about
     await page.click('[data-testid="push-about"]');

@@ -426,7 +426,7 @@ async function navigateClient(url: string): Promise<void> {
     root.render(element);
   } catch (err) {
     console.error("[vinext] Client navigation failed:", err);
-    routerEvents.emit("routeChangeError", err, url);
+    routerEvents.emit("routeChangeError", err, url, { shallow: false });
     window.location.href = url;
   } finally {
     _navInProgress = false;
