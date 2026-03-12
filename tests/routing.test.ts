@@ -597,6 +597,31 @@ describe("appRouter - route discovery", () => {
       await expect(appRouter(appDir)).rejects.toThrow(/different slug names/);
     });
   });
+
+  it("excludes private folders (underscore prefix) from route discovery", async () => {
+    await withTempDir("vinext-app-private-folder-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      // _components is a private folder — should be excluded
+      await mkdir(path.join(appDir, "_components"), { recursive: true });
+      await writeFile(path.join(appDir, "_components", "page.tsx"), EMPTY_PAGE);
+      // _lib/utils is also private — nested private folder
+      await mkdir(path.join(appDir, "_lib", "utils"), { recursive: true });
+      await writeFile(path.join(appDir, "_lib", "utils", "page.tsx"), EMPTY_PAGE);
+      // Regular routes should still be discovered
+      await mkdir(path.join(appDir, "about"), { recursive: true });
+      await writeFile(path.join(appDir, "about", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const patterns = routes.map((r) => r.pattern);
+
+      expect(patterns).toContain("/");
+      expect(patterns).toContain("/about");
+      expect(patterns).not.toContain("/_components");
+      expect(patterns).not.toContain("/_lib/utils");
+    });
+  });
 });
 
 describe("matchAppRoute - URL matching", () => {
