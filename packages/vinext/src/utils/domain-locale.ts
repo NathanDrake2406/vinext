@@ -11,6 +11,7 @@ export function normalizeDomainHostname(hostname: string | null | undefined): st
  * Match a configured domain either by hostname or locale.
  * When both are provided, the checks intentionally use OR semantics so the
  * same helper can cover Next.js's hostname lookup and preferred-locale lookup.
+ * Callers should pass hostname or detectedLocale, not both.
  */
 export function detectDomainLocale(
   domainItems?: readonly DomainLocale[],
@@ -37,9 +38,19 @@ export function detectDomainLocale(
 }
 
 export function addLocalePrefix(path: string, locale: string, localeDefault: string): string {
-  if (locale === localeDefault) return path;
-  if (path.startsWith(`/${locale}/`) || path === `/${locale}`) return path;
-  return `/${locale}${path.startsWith("/") ? path : `/${path}`}`;
+  const normalizedLocale = locale.toLowerCase();
+  if (normalizedLocale === localeDefault.toLowerCase()) return path;
+
+  const pathWithLeadingSlash = path.startsWith("/") ? path : `/${path}`;
+  const pathname = pathWithLeadingSlash.split(/[?#]/, 1)[0] ?? pathWithLeadingSlash;
+  const normalizedPathname = pathname.toLowerCase();
+  const localePrefix = `/${normalizedLocale}`;
+
+  if (normalizedPathname === localePrefix || normalizedPathname.startsWith(`${localePrefix}/`)) {
+    return path.startsWith("/") ? path : pathWithLeadingSlash;
+  }
+
+  return `/${locale}${pathWithLeadingSlash}`;
 }
 
 function withBasePath(path: string, basePath = ""): string {

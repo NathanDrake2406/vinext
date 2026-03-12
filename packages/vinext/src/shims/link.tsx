@@ -248,6 +248,8 @@ function getCurrentHostname(): string | undefined {
 }
 
 function getDomainLocaleHref(href: string, locale: string): string | undefined {
+  // Cross-domain results include basePath in the absolute URL.
+  // Same-domain results omit it so withBasePath() at the call site can add it.
   return getDomainLocaleUrl(href, locale, {
     basePath: __basePath,
     currentHostname: getCurrentHostname(),

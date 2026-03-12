@@ -170,6 +170,9 @@ export function getLocaleRedirect({
       preferredDomain.defaultLocale.toLowerCase() === preferredLocale.toLowerCase();
 
     if (!sameDomain || !sameLocale) {
+      // sameDomain && !sameLocale yields a locale-prefixed redirect on the same
+      // host (for example /nl-BE). This matches Next.js and doesn't loop because
+      // the next request is prefixed and therefore skips getLocaleRedirect().
       const scheme = `http${preferredDomain.http ? "" : "s"}`;
       const localePath = sameLocale ? "" : `/${preferredLocale}`;
       const basePath = nextConfig.basePath ?? "";
