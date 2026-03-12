@@ -15296,8 +15296,23 @@ async function buildPageElement(route, params, opts, searchParams) {
 
 
 const __mwPatternCache = new Map();
+function __extractConstraint(str, re) {
+  if (str[re.lastIndex] !== "(") return null;
+  const start = re.lastIndex + 1;
+  let depth = 1;
+  let i = start;
+  while (i < str.length && depth > 0) {
+    if (str[i] === "(") depth++;
+    else if (str[i] === ")") depth--;
+    i++;
+  }
+  if (depth !== 0) return null;
+  re.lastIndex = i;
+  return str.slice(start, i - 1);
+}
 function __compileMwPattern(pattern) {
-  if (pattern.includes("(") || pattern.includes("\\\\")) {
+  const hasConstraints = /:[\\w-]+\\(/.test(pattern);
+  if (!hasConstraints && (pattern.includes("(") || pattern.includes("\\\\"))) {
     return __safeRegExp("^" + pattern + "$");
   }
   let regexStr = "";
@@ -15306,7 +15321,19 @@ function __compileMwPattern(pattern) {
   while ((tok = tokenRe.exec(pattern)) !== null) {
     if (tok[1] !== undefined) { regexStr += "(?:/.*)?"; }
     else if (tok[2] !== undefined) { regexStr += "(?:/.+)"; }
-    else if (tok[3] !== undefined) { regexStr += "([^/]+)"; }
+    else if (tok[3] !== undefined) {
+      const constraint = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
+      const isOptional = pattern[tokenRe.lastIndex] === "?";
+      if (isOptional) tokenRe.lastIndex += 1;
+      const group = constraint !== null ? "(" + constraint + ")" : "([^/]+)";
+      if (isOptional && regexStr.endsWith("/")) {
+        regexStr = regexStr.slice(0, -1) + "(?:/" + group + ")?";
+      } else if (isOptional) {
+        regexStr += group + "?";
+      } else {
+        regexStr += group;
+      }
+    }
     else if (tok[0] === ".") { regexStr += "\\\\."; }
     else { regexStr += tok[0]; }
   }
@@ -18927,8 +18954,23 @@ function __safeRegExp(pattern, flags) {
 }
 
 var __mwPatternCache = new Map();
+function __extractConstraint(str, re) {
+  if (str[re.lastIndex] !== "(") return null;
+  var start = re.lastIndex + 1;
+  var depth = 1;
+  var i = start;
+  while (i < str.length && depth > 0) {
+    if (str[i] === "(") depth++;
+    else if (str[i] === ")") depth--;
+    i++;
+  }
+  if (depth !== 0) return null;
+  re.lastIndex = i;
+  return str.slice(start, i - 1);
+}
 function __compileMwPattern(pattern) {
-  if (pattern.includes("(") || pattern.includes("\\\\")) {
+  var hasConstraints = /:[\\w-]+\\(/.test(pattern);
+  if (!hasConstraints && (pattern.includes("(") || pattern.includes("\\\\"))) {
     return __safeRegExp("^" + pattern + "$");
   }
   var regexStr = "";
@@ -18937,7 +18979,19 @@ function __compileMwPattern(pattern) {
   while ((tok = tokenRe.exec(pattern)) !== null) {
     if (tok[1] !== undefined) { regexStr += "(?:/.*)?"; }
     else if (tok[2] !== undefined) { regexStr += "(?:/.+)"; }
-    else if (tok[3] !== undefined) { regexStr += "([^/]+)"; }
+    else if (tok[3] !== undefined) {
+      var constraint = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
+      var isOptional = pattern[tokenRe.lastIndex] === "?";
+      if (isOptional) tokenRe.lastIndex += 1;
+      var group = constraint !== null ? "(" + constraint + ")" : "([^/]+)";
+      if (isOptional && regexStr.endsWith("/")) {
+        regexStr = regexStr.slice(0, -1) + "(?:/" + group + ")?";
+      } else if (isOptional) {
+        regexStr += group + "?";
+      } else {
+        regexStr += group;
+      }
+    }
     else if (tok[0] === ".") { regexStr += "\\\\."; }
     else { regexStr += tok[0]; }
   }

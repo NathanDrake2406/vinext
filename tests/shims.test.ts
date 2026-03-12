@@ -2138,6 +2138,26 @@ describe("middleware matcher patterns", () => {
     expect(matchPattern("/user/123/posts", "/user/:id")).toBe(false);
   });
 
+  // Ported from Next.js: middleware matchers support :param(constraint) syntax
+  // https://nextjs.org/docs/app/building-your-application/routing/middleware#matcher
+  it("matchPattern: :param(constraint) applies inline regex constraint", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+    // :id(\d+) should match only digits
+    expect(matchPattern("/blog/123", "/blog/:id(\\d+)")).toBe(true);
+    expect(matchPattern("/blog/0", "/blog/:id(\\d+)")).toBe(true);
+    expect(matchPattern("/blog/abc", "/blog/:id(\\d+)")).toBe(false);
+    expect(matchPattern("/blog/12x", "/blog/:id(\\d+)")).toBe(false);
+
+    // Locale-style alternation constraint: :locale(en|es|fr)
+    expect(matchPattern("/en/about", "/:locale(en|es|fr)/about")).toBe(true);
+    expect(matchPattern("/es/about", "/:locale(en|es|fr)/about")).toBe(true);
+    expect(matchPattern("/de/about", "/:locale(en|es|fr)/about")).toBe(false);
+
+    // Optional locale with ? after constraint
+    expect(matchPattern("/about", "/:locale(en|es|fr)?/about")).toBe(true);
+    expect(matchPattern("/en/about", "/:locale(en|es|fr)?/about")).toBe(true);
+  });
+
   it("matchPattern: wildcard (:path*) matches zero or more segments", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
     expect(matchPattern("/dashboard", "/dashboard/:path*")).toBe(true);
@@ -2488,6 +2508,12 @@ describe("middleware codegen parity", () => {
     // Named params
     expect(matchMiddlewarePattern("/user/123", "/user/:id")).toBe(true);
 
+    // :param(constraint) — inline regex constraint on a named param
+    expect(matchMiddlewarePattern("/blog/123", "/blog/:id(\\d+)")).toBe(true);
+    expect(matchMiddlewarePattern("/blog/abc", "/blog/:id(\\d+)")).toBe(false);
+    expect(matchMiddlewarePattern("/en/about", "/:locale(en|es|fr)/about")).toBe(true);
+    expect(matchMiddlewarePattern("/de/about", "/:locale(en|es|fr)/about")).toBe(false);
+
     // Wildcard
     expect(matchMiddlewarePattern("/dashboard/settings", "/dashboard/:path*")).toBe(true);
     expect(matchMiddlewarePattern("/dashboard", "/dashboard/:path*")).toBe(true);
@@ -2545,6 +2571,12 @@ describe("middleware codegen parity", () => {
     // Regex guard (must not corrupt regex patterns via dot-escaping)
     expect(matchMiddlewarePattern("/about", "/((?!api|_next|favicon\\.ico).*)")).toBe(true);
     expect(matchMiddlewarePattern("/api/hello", "/((?!api|_next|favicon\\.ico).*)")).toBe(false);
+
+    // :param(constraint) — inline regex constraint on a named param
+    expect(matchMiddlewarePattern("/blog/123", "/blog/:id(\\d+)")).toBe(true);
+    expect(matchMiddlewarePattern("/blog/abc", "/blog/:id(\\d+)")).toBe(false);
+    expect(matchMiddlewarePattern("/en/about", "/:locale(en|es|fr)/about")).toBe(true);
+    expect(matchMiddlewarePattern("/de/about", "/:locale(en|es|fr)/about")).toBe(false);
 
     const headerMatcher = [
       {
