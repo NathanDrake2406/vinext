@@ -77,10 +77,6 @@ interface TransitionOptions {
   locale?: string;
 }
 
-// Route event handler types (used by consumers via router.events)
-type _RouteChangeHandler = (url: string) => void;
-type _RouteErrorHandler = (err: Error, url: string) => void;
-
 interface RouterEvents {
   on(event: string, handler: (...args: unknown[]) => void): void;
   off(event: string, handler: (...args: unknown[]) => void): void;
@@ -673,7 +669,6 @@ if (typeof window !== "undefined") {
 
     // Detect hash-only back/forward: pathname+search unchanged, only hash differs.
     const isHashOnly = browserUrl === _lastPathnameAndSearch;
-    _lastPathnameAndSearch = browserUrl;
 
     // Check beforePopState callback
     if (_beforePopStateCb !== undefined) {
@@ -684,6 +679,11 @@ if (typeof window !== "undefined") {
       });
       if (!shouldContinue) return;
     }
+
+    // Update tracker only after beforePopState confirms navigation proceeds.
+    // If beforePopState cancels, the tracker must retain the previous value
+    // so the next popstate compares against the correct baseline.
+    _lastPathnameAndSearch = browserUrl;
 
     if (isHashOnly) {
       // Hash-only back/forward — no page fetch needed
