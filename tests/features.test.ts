@@ -643,7 +643,7 @@ describe("ISR cache internals", () => {
     // Set an entry with a very short TTL
     await handler.set(
       "test-stale",
-      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 0 },
+      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 0.001 },
       { revalidate: 0.001 },
     );
 
@@ -682,7 +682,7 @@ describe("ISR cache internals", () => {
         kind: "FETCH",
         data: { headers: {}, body: "test", url: "" },
         tags: ["mytag"],
-        revalidate: 0,
+        revalidate: 60,
       },
       { revalidate: 60, tags: ["mytag"] },
     );
@@ -695,56 +695,50 @@ describe("ISR cache internals", () => {
     expect(result).toBeNull();
   });
 
-  it("MemoryCacheHandler does not treat data.revalidate:0 as immediately stale", async () => {
+  it("MemoryCacheHandler skips storage when data.revalidate is 0", async () => {
     const { MemoryCacheHandler } = await import("../packages/vinext/src/shims/cache.js");
     const handler = new MemoryCacheHandler();
 
-    // data.revalidate: 0 should mean "no caching" / no TTL — not "immediately stale".
-    // The entry should be stored with revalidateAt: null (no time-based expiry).
+    // revalidate: 0 means "don't cache" — entry should not be stored at all
     await handler.set(
-      "revalidate-zero",
+      "revalidate-zero-data",
       { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 0 },
       { tags: [] },
     );
 
-    // Small delay so Date.now() at get > Date.now() at set — exposes the
-    // immediately-stale bug where revalidateAt = Date.now() + 0.
-    await new Promise((r) => setTimeout(r, 5));
-
-    const result = await handler.get("revalidate-zero");
-    expect(result).not.toBeNull();
-    // Should NOT be stale — revalidate: 0 on data should be ignored (same as ctx path)
-    expect(result!.cacheState).toBeUndefined();
+    const result = await handler.get("revalidate-zero-data");
+    expect(result).toBeNull();
   });
 
-  it("MemoryCacheHandler handles data.revalidate:0 consistently with ctx.revalidate:0", async () => {
+  it("MemoryCacheHandler skips storage when ctx.revalidate is 0", async () => {
     const { MemoryCacheHandler } = await import("../packages/vinext/src/shims/cache.js");
+    const handler = new MemoryCacheHandler();
 
-    // Entry set via ctx.revalidate: 0 (has > 0 guard — no TTL set)
-    const ctxHandler = new MemoryCacheHandler();
-    await ctxHandler.set(
-      "ctx-zero",
+    // revalidate: 0 via ctx should also skip storage
+    await handler.set(
+      "revalidate-zero-ctx",
       { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: false },
       { revalidate: 0 },
     );
 
-    // Entry set via data.revalidate: 0 (missing > 0 guard — BUG: sets revalidateAt)
-    const dataHandler = new MemoryCacheHandler();
-    await dataHandler.set(
-      "data-zero",
-      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 0 },
-      {},
+    const result = await handler.get("revalidate-zero-ctx");
+    expect(result).toBeNull();
+  });
+
+  it("MemoryCacheHandler stores entry when ctx.revalidate is 0 but data.revalidate is positive", async () => {
+    const { MemoryCacheHandler } = await import("../packages/vinext/src/shims/cache.js");
+    const handler = new MemoryCacheHandler();
+
+    // data.revalidate overrides ctx — positive value should store
+    await handler.set(
+      "ctx-zero-data-positive",
+      { kind: "FETCH", data: { headers: {}, body: "test", url: "" }, tags: [], revalidate: 60 },
+      { revalidate: 0 },
     );
 
-    // Small delay so Date.now() advances past any revalidateAt = Date.now() + 0
-    await new Promise((r) => setTimeout(r, 5));
-
-    const ctxResult = await ctxHandler.get("ctx-zero");
-    const dataResult = await dataHandler.get("data-zero");
-
-    // Both should have identical staleness behavior — neither should be stale
-    expect(ctxResult!.cacheState).toBeUndefined();
-    expect(dataResult!.cacheState).toBeUndefined();
+    const result = await handler.get("ctx-zero-data-positive");
+    expect(result).not.toBeNull();
+    expect(result!.cacheState).toBeUndefined();
   });
 });
 
