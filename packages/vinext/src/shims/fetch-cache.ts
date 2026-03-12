@@ -656,6 +656,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
               if (pendingRefetches.get(cacheKey) === refetchPromise) {
                 pendingRefetches.delete(cacheKey);
               }
+              clearTimeout(timeoutId);
             });
 
           pendingRefetches.set(cacheKey, refetchPromise);
@@ -663,10 +664,6 @@ function createPatchedFetch(): typeof globalThis.fetch {
           // Safety net: if the upstream fetch hangs forever, force-clean the
           // dedup entry so future stale hits can retry instead of being
           // permanently suppressed.
-          setTimeout(() => {
-            if (pendingRefetches.get(cacheKey) === refetchPromise) {
-              pendingRefetches.delete(cacheKey);
-            }
           const timeoutId = setTimeout(() => {
             if (pendingRefetches.get(cacheKey) === refetchPromise) {
               pendingRefetches.delete(cacheKey);
