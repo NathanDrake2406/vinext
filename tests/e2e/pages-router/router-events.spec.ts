@@ -86,9 +86,10 @@ test.describe("router.events (Pages Router)", () => {
     // Event URL should include pathname, not just the fragment
     expect(events).toContain("hashChangeStart:/router-events-test#section-1");
     expect(events).toContain("hashChangeComplete:/router-events-test#section-1");
-    // Should NOT fire routeChange events for hash-only navigation
+    // Should NOT fire routeChange or beforeHistoryChange events for hash-only navigation
     expect(events.some((e) => e.startsWith("start:"))).toBe(false);
     expect(events.some((e) => e.startsWith("complete:"))).toBe(false);
+    expect(events.some((e) => e.startsWith("beforeHistoryChange:"))).toBe(false);
   });
 
   test("hashChangeStart fires before hashChangeComplete on hash push", async ({ page }) => {
@@ -119,6 +120,33 @@ test.describe("router.events (Pages Router)", () => {
     expect(events).toContain("hashChangeComplete:/router-events-test#section-2");
     expect(events.some((e) => e.startsWith("start:"))).toBe(false);
     expect(events.some((e) => e.startsWith("complete:"))).toBe(false);
+    expect(events.some((e) => e.startsWith("beforeHistoryChange:"))).toBe(false);
+  });
+
+  test("hash-only back/forward emits hashChange events, not routeChange", async ({ page }) => {
+    // Push a hash change, then go back — popstate should detect hash-only navigation
+    await page.click('[data-testid="push-hash"]');
+    await page.click('[data-testid="clear-events"]');
+    await page.goBack();
+
+    // Wait for popstate handler to record events
+    await page.waitForFunction((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw).length > 0 : false;
+    }, STORAGE_KEY);
+
+    const events: string[] = await page.evaluate((key) => {
+      const raw = sessionStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    }, STORAGE_KEY);
+
+    // Should emit hashChange events for hash-only back navigation
+    expect(events.some((e) => e.startsWith("hashChangeStart:"))).toBe(true);
+    expect(events.some((e) => e.startsWith("hashChangeComplete:"))).toBe(true);
+    // Should NOT emit routeChange or beforeHistoryChange events
+    expect(events.some((e) => e.startsWith("start:"))).toBe(false);
+    expect(events.some((e) => e.startsWith("complete:"))).toBe(false);
+    expect(events.some((e) => e.startsWith("beforeHistoryChange:"))).toBe(false);
   });
 
   test("multiple navigations produce multiple event pairs", async ({ page }) => {
