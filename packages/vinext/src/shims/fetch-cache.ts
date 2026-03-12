@@ -610,9 +610,9 @@ function createPatchedFetch(): typeof globalThis.fetch {
           const cleanInit = stripNextFromInit(init);
           const refetchPromise = originalFetch(input, cleanInit)
             .then(async (freshResp) => {
-              // Only cache successful responses — a transient 500 must not
-              // overwrite previously-good cached data.
-              if (!freshResp.ok) return;
+              // Only cache 200 responses — a transient error or unexpected
+              // status must not overwrite previously-good cached data.
+              if (freshResp.status !== 200) return;
 
               const freshBody = await freshResp.text();
               const freshHeaders: Record<string, string> = {};
@@ -692,8 +692,8 @@ function createPatchedFetch(): typeof globalThis.fetch {
     const cleanInit = stripNextFromInit(init);
     const response = await originalFetch(input, cleanInit);
 
-    // Only cache successful responses (2xx)
-    if (response.ok) {
+    // Only cache 200 responses
+    if (response.status === 200) {
       // Clone before reading body
       const cloned = response.clone();
       const body = await cloned.text();
