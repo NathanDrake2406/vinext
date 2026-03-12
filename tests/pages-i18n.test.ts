@@ -63,6 +63,17 @@ describe("Pages i18n domain helpers", () => {
     ).toBeUndefined();
   });
 
+  it("redirects same-domain locale aliases detected from Accept-Language", () => {
+    expect(
+      getLocaleRedirect({
+        headers: { "accept-language": "nl-BE,nl;q=0.9,en;q=0.8" },
+        nextConfig: { i18n, basePath: "", trailingSlash: false },
+        pathLocale: undefined,
+        urlParsed: { hostname: "example.nl", pathname: "/" },
+      }),
+    ).toBe("https://example.nl/nl-BE");
+  });
+
   it("uses Accept-Language rather than NEXT_LOCALE to choose the preferred domain", () => {
     expect(
       getLocaleRedirect({

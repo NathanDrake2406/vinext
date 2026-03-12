@@ -37,7 +37,7 @@ function readHeader(headers: HeaderBag, name: string): string | undefined {
     return headers.get(name) ?? undefined;
   }
 
-  const direct = headers[name] ?? headers[name.toLowerCase()];
+  const direct = headers[name];
   if (Array.isArray(direct)) return direct.join(", ");
   return direct;
 }
@@ -146,7 +146,8 @@ export function getLocaleRedirect({
 }: LocaleRedirectOptions): string | undefined {
   const i18n = nextConfig.i18n;
   // Next.js treats localeDetection as the global auto-redirect switch, so
-  // disabling it also disables root domain-locale redirects.
+  // disabling it also disables root domain-locale redirects, including
+  // cross-domain redirects driven by the current host or Accept-Language.
   if (!i18n || i18n.localeDetection === false || urlParsed.pathname !== "/") return undefined;
 
   const domainLocale = detectDomainLocale(i18n.domains, urlParsed.hostname ?? undefined);

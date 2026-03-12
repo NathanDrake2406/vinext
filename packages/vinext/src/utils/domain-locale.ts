@@ -11,7 +11,8 @@ export function normalizeDomainHostname(hostname: string | null | undefined): st
  * Match a configured domain either by hostname or locale.
  * When both are provided, the checks intentionally use OR semantics so the
  * same helper can cover Next.js's hostname lookup and preferred-locale lookup.
- * Callers should pass hostname or detectedLocale, not both.
+ * If both are passed, the first domain matching either input wins, so callers
+ * should pass hostname or detectedLocale, not both.
  */
 export function detectDomainLocale(
   domainItems?: readonly DomainLocale[],
