@@ -627,9 +627,7 @@ function rscOnError(error, requestInfo, errorContext) {
       error instanceof Error ? error : new Error(String(error)),
       requestInfo,
       errorContext,
-    ).catch((reportErr) => {
-      console.error("[vinext] Failed to report render error:", reportErr);
-    });
+    );
   }
 
   // In production, generate a digest hash for non-navigation errors
@@ -2045,9 +2043,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         err instanceof Error ? err : new Error(String(err)),
         { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
         { routerKind: "App Router", routePath: cleanPathname, routeType: "action" },
-      ).catch((reportErr) => {
-        console.error("[vinext] Failed to report server action error:", reportErr);
-      });
+      );
       setHeadersContext(null);
       setNavigationContext(null);
       return new Response(
@@ -2249,9 +2245,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           err instanceof Error ? err : new Error(String(err)),
           { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
           { routerKind: "App Router", routePath: route.pattern, routeType: "route" },
-        ).catch((reportErr) => {
-          console.error("[vinext] Failed to report route handler error:", reportErr);
-        });
+        );
         return attachRouteHandlerMiddlewareContext(new Response(null, { status: 500 }));
       } finally {
         setHeadersAccessPhase(previousHeadersPhase);
@@ -3399,9 +3393,7 @@ function rscOnError(error, requestInfo, errorContext) {
       error instanceof Error ? error : new Error(String(error)),
       requestInfo,
       errorContext,
-    ).catch((reportErr) => {
-      console.error("[vinext] Failed to report render error:", reportErr);
-    });
+    );
   }
 
   // In production, generate a digest hash for non-navigation errors
@@ -4820,9 +4812,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         err instanceof Error ? err : new Error(String(err)),
         { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
         { routerKind: "App Router", routePath: cleanPathname, routeType: "action" },
-      ).catch((reportErr) => {
-        console.error("[vinext] Failed to report server action error:", reportErr);
-      });
+      );
       setHeadersContext(null);
       setNavigationContext(null);
       return new Response(
@@ -5024,9 +5014,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           err instanceof Error ? err : new Error(String(err)),
           { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
           { routerKind: "App Router", routePath: route.pattern, routeType: "route" },
-        ).catch((reportErr) => {
-          console.error("[vinext] Failed to report route handler error:", reportErr);
-        });
+        );
         return attachRouteHandlerMiddlewareContext(new Response(null, { status: 500 }));
       } finally {
         setHeadersAccessPhase(previousHeadersPhase);
@@ -6174,9 +6162,7 @@ function rscOnError(error, requestInfo, errorContext) {
       error instanceof Error ? error : new Error(String(error)),
       requestInfo,
       errorContext,
-    ).catch((reportErr) => {
-      console.error("[vinext] Failed to report render error:", reportErr);
-    });
+    );
   }
 
   // In production, generate a digest hash for non-navigation errors
@@ -7622,9 +7608,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         err instanceof Error ? err : new Error(String(err)),
         { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
         { routerKind: "App Router", routePath: cleanPathname, routeType: "action" },
-      ).catch((reportErr) => {
-        console.error("[vinext] Failed to report server action error:", reportErr);
-      });
+      );
       setHeadersContext(null);
       setNavigationContext(null);
       return new Response(
@@ -7826,9 +7810,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           err instanceof Error ? err : new Error(String(err)),
           { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
           { routerKind: "App Router", routePath: route.pattern, routeType: "route" },
-        ).catch((reportErr) => {
-          console.error("[vinext] Failed to report route handler error:", reportErr);
-        });
+        );
         return attachRouteHandlerMiddlewareContext(new Response(null, { status: 500 }));
       } finally {
         setHeadersAccessPhase(previousHeadersPhase);
@@ -8984,9 +8966,7 @@ function rscOnError(error, requestInfo, errorContext) {
       error instanceof Error ? error : new Error(String(error)),
       requestInfo,
       errorContext,
-    ).catch((reportErr) => {
-      console.error("[vinext] Failed to report render error:", reportErr);
-    });
+    );
   }
 
   // In production, generate a digest hash for non-navigation errors
@@ -10434,9 +10414,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         err instanceof Error ? err : new Error(String(err)),
         { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
         { routerKind: "App Router", routePath: cleanPathname, routeType: "action" },
-      ).catch((reportErr) => {
-        console.error("[vinext] Failed to report server action error:", reportErr);
-      });
+      );
       setHeadersContext(null);
       setNavigationContext(null);
       return new Response(
@@ -10638,9 +10616,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           err instanceof Error ? err : new Error(String(err)),
           { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
           { routerKind: "App Router", routePath: route.pattern, routeType: "route" },
-        ).catch((reportErr) => {
-          console.error("[vinext] Failed to report route handler error:", reportErr);
-        });
+        );
         return attachRouteHandlerMiddlewareContext(new Response(null, { status: 500 }));
       } finally {
         setHeadersAccessPhase(previousHeadersPhase);
@@ -11788,9 +11764,7 @@ function rscOnError(error, requestInfo, errorContext) {
       error instanceof Error ? error : new Error(String(error)),
       requestInfo,
       errorContext,
-    ).catch((reportErr) => {
-      console.error("[vinext] Failed to report render error:", reportErr);
-    });
+    );
   }
 
   // In production, generate a digest hash for non-navigation errors
@@ -13213,9 +13187,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         err instanceof Error ? err : new Error(String(err)),
         { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
         { routerKind: "App Router", routePath: cleanPathname, routeType: "action" },
-      ).catch((reportErr) => {
-        console.error("[vinext] Failed to report server action error:", reportErr);
-      });
+      );
       setHeadersContext(null);
       setNavigationContext(null);
       return new Response(
@@ -13417,9 +13389,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           err instanceof Error ? err : new Error(String(err)),
           { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
           { routerKind: "App Router", routePath: route.pattern, routeType: "route" },
-        ).catch((reportErr) => {
-          console.error("[vinext] Failed to report route handler error:", reportErr);
-        });
+        );
         return attachRouteHandlerMiddlewareContext(new Response(null, { status: 500 }));
       } finally {
         setHeadersAccessPhase(previousHeadersPhase);
@@ -14567,9 +14537,7 @@ function rscOnError(error, requestInfo, errorContext) {
       error instanceof Error ? error : new Error(String(error)),
       requestInfo,
       errorContext,
-    ).catch((reportErr) => {
-      console.error("[vinext] Failed to report render error:", reportErr);
-    });
+    );
   }
 
   // In production, generate a digest hash for non-navigation errors
@@ -16263,9 +16231,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         err instanceof Error ? err : new Error(String(err)),
         { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
         { routerKind: "App Router", routePath: cleanPathname, routeType: "action" },
-      ).catch((reportErr) => {
-        console.error("[vinext] Failed to report server action error:", reportErr);
-      });
+      );
       setHeadersContext(null);
       setNavigationContext(null);
       return new Response(
@@ -16467,9 +16433,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           err instanceof Error ? err : new Error(String(err)),
           { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
           { routerKind: "App Router", routePath: route.pattern, routeType: "route" },
-        ).catch((reportErr) => {
-          console.error("[vinext] Failed to report route handler error:", reportErr);
-        });
+        );
         return attachRouteHandlerMiddlewareContext(new Response(null, { status: 500 }));
       } finally {
         setHeadersAccessPhase(previousHeadersPhase);
@@ -18757,7 +18721,7 @@ async function _renderPage(request, url, manifest) {
       e instanceof Error ? e : new Error(String(e)),
       { path: url, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
       { routerKind: "Pages Router", routePath: route.pattern, routeType: "render" },
-    ).catch(() => { /* ignore reporting errors */ });
+    );
     return new Response("Internal Server Error", { status: 500 });
   }
           }) // end runWithFetchCache
@@ -18836,7 +18800,7 @@ export async function handleApiRoute(request, url) {
       e instanceof Error ? e : new Error(String(e)),
       { path: url, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
       { routerKind: "Pages Router", routePath: route.pattern, routeType: "route" },
-    ).catch(() => { /* ignore reporting errors */ });
+    );
     return new Response("Internal Server Error", { status: 500 });
   }
 }

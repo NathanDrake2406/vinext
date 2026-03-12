@@ -1005,9 +1005,7 @@ hydrate();
                             routePath: route.pattern,
                             routeType: "render",
                           },
-                        ).catch(() => {
-                          /* ignore reporting errors */
-                        });
+                        );
                         // Try to render custom 500 error page
                         try {
                           await renderErrorPage(

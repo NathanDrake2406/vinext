@@ -1056,7 +1056,7 @@ async function _renderPage(request, url, manifest) {
       e instanceof Error ? e : new Error(String(e)),
       { path: url, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
       { routerKind: "Pages Router", routePath: route.pattern, routeType: "render" },
-    ).catch(() => { /* ignore reporting errors */ });
+    );
     return new Response("Internal Server Error", { status: 500 });
   }
           }) // end runWithFetchCache
@@ -1135,7 +1135,7 @@ export async function handleApiRoute(request, url) {
       e instanceof Error ? e : new Error(String(e)),
       { path: url, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
       { routerKind: "Pages Router", routePath: route.pattern, routeType: "route" },
-    ).catch(() => { /* ignore reporting errors */ });
+    );
     return new Response("Internal Server Error", { status: 500 });
   }
 }
