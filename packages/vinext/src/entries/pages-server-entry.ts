@@ -826,9 +826,43 @@ async function _renderPage(request, url, manifest) {
 
       if (cached && cached.isStale && cached.value.value && cached.value.value.kind === "PAGES") {
         triggerBackgroundRegeneration(cacheKey, async function() {
-          const freshResult = await pageModule.getStaticProps({ params });
+          var freshResult = await pageModule.getStaticProps({
+            params: params,
+            locale: locale,
+            locales: i18nConfig ? i18nConfig.locales : undefined,
+            defaultLocale: i18nConfig ? i18nConfig.defaultLocale : undefined,
+          });
           if (freshResult && freshResult.props && typeof freshResult.revalidate === "number" && freshResult.revalidate > 0) {
-            await isrSet(cacheKey, { kind: "PAGES", html: cached.value.value.html, pageData: freshResult.props, headers: undefined, status: undefined }, freshResult.revalidate);
+            var _fp = freshResult.props;
+            // Re-render the page with fresh props
+            var _el = AppComponent
+              ? React.createElement(AppComponent, { Component: PageComponent, pageProps: _fp })
+              : React.createElement(PageComponent, _fp);
+            _el = wrapWithRouterContext(_el);
+            var _freshBody = await renderToStringAsync(_el);
+            // Rebuild __NEXT_DATA__ with fresh props
+            var _regenPayload = {
+              props: { pageProps: _fp }, page: patternToNextFormat(route.pattern),
+              query: params, buildId: buildId, isFallback: false,
+            };
+            if (i18nConfig) {
+              _regenPayload.locale = locale;
+              _regenPayload.locales = i18nConfig.locales;
+              _regenPayload.defaultLocale = i18nConfig.defaultLocale;
+            }
+            var _lGlobals = i18nConfig
+              ? ";window.__VINEXT_LOCALE__=" + safeJsonStringify(locale) +
+                ";window.__VINEXT_LOCALES__=" + safeJsonStringify(i18nConfig.locales) +
+                ";window.__VINEXT_DEFAULT_LOCALE__=" + safeJsonStringify(i18nConfig.defaultLocale)
+              : "";
+            var _freshNDS = "<script>window.__NEXT_DATA__ = " + safeJsonStringify(_regenPayload) + _lGlobals + "</script>";
+            // Extract stable head section from cached HTML (fonts, assets, document shell)
+            var _cachedStr = cached.value.value.html;
+            var _btag = '<div id="__next">';
+            var _bidx = _cachedStr.indexOf(_btag);
+            var _head = _bidx >= 0 ? _cachedStr.slice(0, _bidx + _btag.length) : '<!DOCTYPE html>\\n<html>\\n<head>\\n</head>\\n<body>\\n  <div id="__next">';
+            var _freshHtml = _head + _freshBody + '</div>\\n  ' + _freshNDS + '\\n</body>\\n</html>';
+            await isrSet(cacheKey, { kind: "PAGES", html: _freshHtml, pageData: _fp, headers: undefined, status: undefined }, freshResult.revalidate);
           }
         });
         var _staleHeaders = {
