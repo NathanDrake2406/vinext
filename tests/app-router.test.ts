@@ -2946,6 +2946,16 @@ describe("App Router middleware with NextRequest", () => {
     expect(html).toContain('"cookie":null');
   });
 
+  it("middleware rewrite preserves query params from the rewrite URL", async () => {
+    // Middleware rewrites /middleware-rewrite-query → /search-query?searchParams=from-rewrite&extra=injected
+    // The rewrite URL's query string must be visible to the target page.
+    const res = await fetch(`${baseUrl}/middleware-rewrite-query`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    // The /search-query page renders searchParams from props
+    expect(html).toContain("from-rewrite");
+  });
+
   it("does not leak x-middleware-next or x-middleware-rewrite headers to the client", async () => {
     // NextResponse.next() sets x-middleware-next internally.
     // The dev server must strip it (and all x-middleware-* headers) before

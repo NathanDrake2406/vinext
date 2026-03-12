@@ -1576,6 +1576,10 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           if (rewriteUrl) {
             const rewriteParsed = new URL(rewriteUrl, request.url);
             cleanPathname = rewriteParsed.pathname;
+            // Carry over query params from the rewrite URL so that
+            // searchParams props, useSearchParams(), and navigation context
+            // reflect the rewrite destination, not the original request.
+            url.search = rewriteParsed.search;
             // Capture custom status code from rewrite (e.g. NextResponse.rewrite(url, { status: 403 }))
             if (mwResponse.status !== 200) {
               _mwCtx.status = mwResponse.status;
