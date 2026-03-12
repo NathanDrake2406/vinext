@@ -454,6 +454,59 @@ describe("fetch cache shim", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("background revalidation does not cache error responses", async () => {
+    // Populate cache with a good response
+    const res1 = await fetch("https://api.example.com/revalidate-error-test", {
+      next: { revalidate: 1 },
+    });
+    const data1 = await res1.json();
+    expect(data1.count).toBe(1);
+    expect(res1.status).toBe(200);
+
+    // Manually expire the cache entry
+    const handler = getCacheHandler() as InstanceType<typeof MemoryCacheHandler>;
+    const store = (handler as any).store as Map<string, any>;
+    for (const [, entry] of store) {
+      entry.revalidateAt = Date.now() - 1000;
+    }
+
+    // Make the upstream return a 500 error for the background refetch
+    fetchMock.mockImplementationOnce(async () => {
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: { "content-type": "text/plain" },
+      });
+    });
+
+    // Should return stale data immediately (stale-while-revalidate)
+    const res2 = await fetch("https://api.example.com/revalidate-error-test", {
+      next: { revalidate: 1 },
+    });
+    const data2 = await res2.json();
+    expect(data2.count).toBe(1); // Stale data returned
+    expect(res2.status).toBe(200);
+
+    // Wait for background refetch to complete
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The background refetch got a 500, so the cache should still hold the
+    // original good response — not the error.
+    // Expire the entry again to force another stale read from cache.
+    for (const [, entry] of store) {
+      entry.revalidateAt = Date.now() - 1000;
+    }
+
+    // Restore good fetch for next background refetch
+    fetchMock.mockImplementation(defaultFetchMockImplementation);
+
+    const res3 = await fetch("https://api.example.com/revalidate-error-test", {
+      next: { revalidate: 1 },
+    });
+    // If the bug exists, this will be 500 (the error was cached).
+    // If fixed, this will be 200 (the original good data was preserved).
+    expect(res3.status).toBe(200);
+  });
+
   it("force-cleans dedup entry after timeout when upstream fetch hangs", async () => {
     vi.useFakeTimers();
     try {

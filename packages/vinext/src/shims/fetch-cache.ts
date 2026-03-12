@@ -610,6 +610,10 @@ function createPatchedFetch(): typeof globalThis.fetch {
           const cleanInit = stripNextFromInit(init);
           const refetchPromise = originalFetch(input, cleanInit)
             .then(async (freshResp) => {
+              // Only cache successful responses — a transient 500 must not
+              // overwrite previously-good cached data.
+              if (!freshResp.ok) return;
+
               const freshBody = await freshResp.text();
               const freshHeaders: Record<string, string> = {};
               freshResp.headers.forEach((v, k) => {
