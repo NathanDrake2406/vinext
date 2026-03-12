@@ -177,7 +177,7 @@ export function getLocaleRedirect({
       // host (for example /nl-BE). This matches Next.js and doesn't loop because
       // the next request is prefixed and therefore skips getLocaleRedirect().
       const scheme = `http${preferredDomain.http ? "" : "s"}`;
-      const localePath = sameLocale ? "" : `/${preferredLocale}`;
+      const localePath = sameLocale || preferredLocale === undefined ? "" : `/${preferredLocale}`;
       const basePath = nextConfig.basePath ?? "";
       const rootPath = `${basePath}${localePath}${nextConfig.trailingSlash ? "/" : ""}` || "/";
       const normalizedPath = rootPath.startsWith("/") ? rootPath : `/${rootPath}`;
