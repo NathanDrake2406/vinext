@@ -1760,6 +1760,21 @@ describe("App Router Production server (startProdServer)", () => {
     const freshBody = await freshRes.json();
     expect(freshBody.timestamp).not.toBe(cachedTimestamp); // New data
   });
+
+  it("route handler ISR: auto-HEAD returns cached headers with empty body", async () => {
+    // Ensure cache is warm
+    const getRes = await fetch(`${baseUrl}/api/static-data`);
+    await getRes.text();
+    const cacheHeader = getRes.headers.get("x-vinext-cache");
+    expect(cacheHeader === "MISS" || cacheHeader === "HIT" || cacheHeader === "STALE").toBe(true);
+
+    // HEAD against a GET-only route should return cached headers, no body
+    const headRes = await fetch(`${baseUrl}/api/static-data`, { method: "HEAD" });
+    expect(headRes.status).toBe(200);
+    expect(headRes.headers.get("x-vinext-cache")).toBe("HIT");
+    const body = await headRes.text();
+    expect(body).toBe("");
+  });
 });
 
 describe("App Router Production server worker entry compatibility", () => {
