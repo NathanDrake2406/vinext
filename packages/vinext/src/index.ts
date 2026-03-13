@@ -988,6 +988,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           "next/document": path.join(shimsDir, "document"),
           "next/document.js": path.join(shimsDir, "document"),
           "next/config": path.join(shimsDir, "config"),
+          "next/config.js": path.join(shimsDir, "config"),
           "next/script": path.join(shimsDir, "script"),
           "next/script.js": path.join(shimsDir, "script"),
           "next/server": path.join(shimsDir, "server"),
@@ -1007,6 +1008,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           "next/web-vitals": path.join(shimsDir, "web-vitals"),
           "next/web-vitals.js": path.join(shimsDir, "web-vitals"),
           "next/amp": path.join(shimsDir, "amp"),
+          "next/amp.js": path.join(shimsDir, "amp"),
           "next/error": path.join(shimsDir, "error"),
           "next/error.js": path.join(shimsDir, "error"),
           "next/constants": path.join(shimsDir, "constants"),
@@ -1064,6 +1066,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           "vinext/fetch-cache": path.join(shimsDir, "fetch-cache"),
           "vinext/cache-runtime": path.join(shimsDir, "cache-runtime"),
           "vinext/navigation-state": path.join(shimsDir, "navigation-state"),
+          "vinext/unified-request-context": path.join(shimsDir, "unified-request-context"),
           "vinext/router-state": path.join(shimsDir, "router-state"),
           "vinext/head-state": path.join(shimsDir, "head-state"),
           "vinext/i18n-state": path.join(shimsDir, "i18n-state"),
@@ -1985,7 +1988,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   res.end("Only relative URLs allowed");
                   return;
                 }
-                res.writeHead(302, { Location: imgUrl });
+                const encodedLocation = resolvedImg.pathname + resolvedImg.search;
+                res.writeHead(302, { Location: encodedLocation });
                 res.end();
                 return;
               }

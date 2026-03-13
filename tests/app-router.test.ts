@@ -2322,6 +2322,11 @@ describe("App Router next.config.js features (dev server integration)", () => {
     expect(res.headers.get("x-page-header")).toBe("about-page");
   });
 
+  it("encoded slashes stay within a single segment for config header matching", async () => {
+    const res = await fetch(`${baseUrl}/api%2Fhello`);
+    expect(res.headers.get("x-custom-header")).toBeNull();
+  });
+
   it("percent-encoded rewrite path is decoded before config matching", async () => {
     // /rewrite-%61bout decodes to /rewrite-about → /about (beforeFiles rewrite)
     const res = await fetch(`${baseUrl}/rewrite-%61bout`);
@@ -2472,6 +2477,24 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain("middlewareModule.proxy ?? middlewareModule.default");
     // Should throw if no valid export found
     expect(code).toContain("must export a function named");
+  });
+
+  it("propagates middleware waitUntil promises to the Workers execution context", () => {
+    const code = generateRscEntry(
+      "/tmp/test/app",
+      minimalRoutes,
+      "/tmp/middleware.ts",
+      [],
+      null,
+      "",
+      false,
+    );
+    // drainWaitUntil() must be registered with the execution context so
+    // Workers keeps the isolate alive for background promises.
+    expect(code).toContain("_getRequestExecutionContext()");
+    expect(code).toContain("waitUntil");
+    // Must NOT discard the drainWaitUntil() return value
+    expect(code).not.toMatch(/^\s*mwFetchEvent\.drainWaitUntil\(\);$/m);
   });
 
   it("applies redirects before middleware in the handler", () => {
@@ -3465,9 +3488,9 @@ describe("generateRscEntry ISR code generation", () => {
     expect(code).toContain('"X-Vinext-Cache": "STALE"');
   });
 
-  it("generated code uses ctx.waitUntil for background cache write", () => {
+  it("generated code uses request execution context for background cache write", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("ctx.waitUntil");
+    expect(code).toContain("_getRequestExecutionContext()?.waitUntil");
   });
 
   it("generated code tees the RSC stream to capture rscData for cache", () => {

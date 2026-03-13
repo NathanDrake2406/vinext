@@ -22,6 +22,11 @@
 import { getCacheHandler, type CachedFetchValue } from "./cache.js";
 import { getRequestExecutionContext } from "./request-context.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  isInsideUnifiedScope,
+  getRequestContext,
+  runWithUnifiedStateMutation,
+} from "./unified-request-context.js";
 
 // ---------------------------------------------------------------------------
 // Cache key generation
@@ -460,7 +465,7 @@ const originalFetch: typeof globalThis.fetch = (_gFetch[_ORIG_FETCH_KEY] ??=
 // Uses Symbol.for() on globalThis so the storage is shared across Vite's
 // multi-environment module instances.
 // ---------------------------------------------------------------------------
-interface FetchCacheState {
+export interface FetchCacheState {
   currentRequestTags: string[];
 }
 
@@ -475,6 +480,9 @@ const _fallbackState = (_g[_FALLBACK_KEY] ??= {
 } satisfies FetchCacheState) as FetchCacheState;
 
 function _getState(): FetchCacheState {
+  if (isInsideUnifiedScope()) {
+    return getRequestContext();
+  }
   return _als.getStore() ?? _fallbackState;
 }
 
@@ -810,7 +818,24 @@ export function withFetchCache(): () => void {
  */
 export async function runWithFetchCache<T>(fn: () => Promise<T>): Promise<T> {
   _ensurePatchInstalled();
+  if (isInsideUnifiedScope()) {
+    return await runWithUnifiedStateMutation((uCtx) => {
+      uCtx.currentRequestTags = [];
+    }, fn);
+  }
   return _als.run({ currentRequestTags: [] }, fn);
+}
+
+/**
+ * Install the patched fetch without creating a standalone ALS scope.
+ *
+ * `runWithFetchCache()` is the standalone helper: it installs the patch and
+ * creates an isolated per-request tag store. The unified request context owns
+ * that isolation itself via `currentRequestTags`, so callers inside
+ * `runWithRequestContext()` only need the process-global fetch monkey-patch.
+ */
+export function ensureFetchPatch(): void {
+  _ensurePatchInstalled();
 }
 
 /**
