@@ -369,10 +369,13 @@ export function scanMetadataFiles(appDir: string): MetadataFileRoute[] {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        // Skip route group parentheses from URL
         const dirName = entry.name;
+        if (dirName.startsWith("_")) continue;
+
         const isRouteGroup = dirName.startsWith("(") && dirName.endsWith(")");
-        const nextUrlPrefix = isRouteGroup ? urlPrefix : `${urlPrefix}/${dirName}`;
+        const isParallelRoute = dirName.startsWith("@");
+        const nextUrlPrefix =
+          isRouteGroup || isParallelRoute ? urlPrefix : `${urlPrefix}/${dirName}`;
         scan(path.join(dir, dirName), nextUrlPrefix);
         continue;
       }

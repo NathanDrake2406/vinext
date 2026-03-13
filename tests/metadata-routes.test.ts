@@ -729,6 +729,21 @@ describe("scanMetadataFiles", () => {
     expect(icon!.servedUrl).not.toContain("marketing");
   });
 
+  it("parallel slot directories are transparent in URLs", () => {
+    createFile("@modal/icon.png");
+    const routes = scanMetadataFiles(tmpDir);
+    const icon = routes.find((r) => r.type === "icon");
+    expect(icon).toBeDefined();
+    expect(icon!.servedUrl).toBe("/icon");
+    expect(icon!.servedUrl).not.toContain("@modal");
+  });
+
+  it("skips metadata files inside private folders", () => {
+    createFile("_private/icon.png");
+    const routes = scanMetadataFiles(tmpDir);
+    expect(routes).toEqual([]);
+  });
+
   it("dynamic takes priority over static at same URL", () => {
     createFile("sitemap.xml");
     createFile("sitemap.ts");
