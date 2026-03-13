@@ -343,7 +343,7 @@ export class RequestCookies {
 
   clear(): this {
     this._parsed.clear();
-    this._headers.delete("cookie");
+    this._syncHeader();
     return this;
   }
 
@@ -352,6 +352,10 @@ export class RequestCookies {
   }
 
   toString(): string {
+    return this._serialize();
+  }
+
+  private _serialize(): string {
     return [...this._parsed.entries()].map(([n, v]) => `${n}=${encodeURIComponent(v)}`).join("; ");
   }
 
@@ -359,10 +363,7 @@ export class RequestCookies {
     if (this._parsed.size === 0) {
       this._headers.delete("cookie");
     } else {
-      this._headers.set(
-        "cookie",
-        [...this._parsed.entries()].map(([n, v]) => `${n}=${encodeURIComponent(v)}`).join("; "),
-      );
+      this._headers.set("cookie", this._serialize());
     }
   }
 
