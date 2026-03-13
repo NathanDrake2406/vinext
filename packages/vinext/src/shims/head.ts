@@ -70,9 +70,6 @@ function collectHeadElements(
   list: React.ReactElement[],
   child: React.ReactNode,
 ): React.ReactElement[] {
-  if (Array.isArray(child)) {
-    return Children.toArray(child).reduce(collectHeadElements, list);
-  }
   if (
     child == null ||
     typeof child === "boolean" ||
@@ -101,8 +98,10 @@ function collectHeadElements(
 }
 
 function normalizeHeadKey(key: React.Key | null): string | null {
-  if (key == null) return null;
-  return String(key);
+  if (key == null || typeof key === "number") return null;
+  const normalizedKey = String(key);
+  const separatorIndex = normalizedKey.indexOf("$");
+  return separatorIndex > 0 ? normalizedKey.slice(separatorIndex + 1) : null;
 }
 
 function createUniqueHeadFilter(): (child: React.ReactElement) => boolean {

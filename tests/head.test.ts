@@ -270,50 +270,23 @@ describe("Head reduction", () => {
     expect(dedupedMeta?.props.content).toBe("Updated Title");
   });
 
-  it("preserves React's scoped keys when flattening nested arrays", () => {
-    const groupA = [
-      React.createElement("meta", {
-        property: "og:image",
-        content: "image-a",
-        key: "image",
-      }),
-    ];
-    const groupB = [
-      React.createElement("meta", {
-        property: "og:image:alt",
-        content: "image-b",
-        key: "image",
-      }),
-    ];
-
-    const reduced = reduceHeadChildren([[groupA, groupB]]);
-
-    expect(reduced).toHaveLength(2);
-    const contents = reduced.map(
-      (child) => (child as React.ReactElement<{ content?: string }>).props.content,
-    );
-    expect(contents).toEqual(["image-a", "image-b"]);
-  });
-
-  it("treats raw keys containing dollar signs as distinct user keys", () => {
+  it("dedupes meta[name] tags without explicit keys using the last value", () => {
     const reduced = reduceHeadChildren([
-      React.createElement("meta", {
-        property: "og:title",
-        content: "Dollar Key",
-        key: "foo$bar",
-      }),
-      React.createElement("meta", {
-        property: "og:description",
-        content: "Plain Key",
-        key: "bar",
-      }),
+      [
+        React.createElement("meta", {
+          name: "description",
+          content: "Description A",
+        }),
+        React.createElement("meta", {
+          name: "description",
+          content: "Description B",
+        }),
+      ],
     ]);
 
-    expect(reduced).toHaveLength(2);
-    const contents = reduced.map(
-      (child) => (child as React.ReactElement<{ content?: string }>).props.content,
-    );
-    expect(contents).toEqual(["Dollar Key", "Plain Key"]);
+    expect(reduced).toHaveLength(1);
+    const dedupedMeta = reduced[0] as React.ReactElement<{ content?: string }> | undefined;
+    expect(dedupedMeta?.props.content).toBe("Description B");
   });
 });
 
