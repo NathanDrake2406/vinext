@@ -358,11 +358,15 @@ export interface MetadataFileRoute {
 
 function metadataRouteSuffix(parentSegments: string[], metaType: string): string {
   if (metaType === "sitemap" || metaType === "robots" || metaType === "manifest") {
+    // Sitemap is exempt per Next.js. Robots and manifest are also safe to
+    // exempt because they are root-only in vinext, so invisible parents never apply.
     return "";
   }
 
   const hasInvisibleParent = parentSegments.some(
-    (segment) => (segment.startsWith("(") && segment.endsWith(")")) || segment.startsWith("@"),
+    (segment) =>
+      (segment.startsWith("(") && segment.endsWith(")")) ||
+      (segment.startsWith("@") && segment !== "@children"),
   );
   if (!hasInvisibleParent) return "";
 
