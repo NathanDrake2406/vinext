@@ -1577,7 +1577,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       const nextRequest = mwRequest instanceof NextRequest ? mwRequest : new NextRequest(mwRequest);
       const mwFetchEvent = new NextFetchEvent({ page: cleanPathname });
       const mwResponse = await middlewareFn(nextRequest, mwFetchEvent);
-      mwFetchEvent.drainWaitUntil();
+      const _mwWaitUntil = mwFetchEvent.drainWaitUntil();
+      const _mwExecCtx = _getRequestExecutionContext();
+      if (_mwExecCtx && typeof _mwExecCtx.waitUntil === "function") { _mwExecCtx.waitUntil(_mwWaitUntil); }
       if (mwResponse) {
         // Check for x-middleware-next (continue)
         if (mwResponse.headers.get("x-middleware-next") === "1") {
