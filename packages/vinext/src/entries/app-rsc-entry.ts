@@ -2047,6 +2047,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     if (
       process.env.NODE_ENV === "production" &&
       revalidateSeconds !== null &&
+      handler.dynamic !== "force-dynamic" &&
       (method === "GET" || isAutoHead) &&
       typeof handlerFn === "function"
     ) {
@@ -2093,7 +2094,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
               const __freshBody = await __revalResponse.arrayBuffer();
               const __freshHeaders = {};
               __revalResponse.headers.forEach(function(v, k) {
-                if (k !== "x-vinext-cache") __freshHeaders[k] = v;
+                if (k !== "x-vinext-cache" && k !== "cache-control") __freshHeaders[k] = v;
               });
               const __routeTags = __pageCacheTags(cleanPathname, getCollectedFetchTags());
               await __isrSet(__routeKey, { kind: "APP_ROUTE", body: __freshBody, status: __revalResponse.status, headers: __freshHeaders }, __revalSecs, __routeTags);
@@ -2142,6 +2143,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         if (
           process.env.NODE_ENV === "production" &&
           revalidateSeconds !== null &&
+          handler.dynamic !== "force-dynamic" &&
           !dynamicUsedInHandler &&
           (method === "GET" || isAutoHead) &&
           !handlerSetCacheControl
