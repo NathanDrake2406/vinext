@@ -2075,6 +2075,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           const __revalHandlerFn = handlerFn;
           const __revalParams = params;
           const __revalUrl = request.url;
+          const __revalSearchParams = new URLSearchParams(url.searchParams);
           __triggerBackgroundRegeneration(__routeKey, async function() {
             const __revalHeadCtx = { headers: new Headers(), cookies: new Map() };
             const __revalUCtx = _createUnifiedCtx({
@@ -2083,7 +2084,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
             });
             await _runWithUnifiedCtx(__revalUCtx, async () => {
               _ensureFetchPatch();
-              setNavigationContext({ pathname: cleanPathname, searchParams: url.searchParams, params: __revalParams });
+              setNavigationContext({ pathname: cleanPathname, searchParams: __revalSearchParams, params: __revalParams });
               const __syntheticReq = new Request(__revalUrl, { method: "GET" });
               const __revalResponse = await __revalHandlerFn(__syntheticReq, { params: __revalParams });
               const __regenDynamic = consumeDynamicUsage();

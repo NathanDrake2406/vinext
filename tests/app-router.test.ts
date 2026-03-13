@@ -1684,6 +1684,9 @@ describe("App Router Production server (startProdServer)", () => {
   });
 
   // Route handler ISR caching tests
+  // These tests are ORDER-DEPENDENT: they share a single production server and
+  // /api/static-data cache state persists across tests. HIT depends on MISS
+  // having run first, STALE re-warms explicitly. Take care when adding new tests.
   // Fixture: /api/static-data exports revalidate = 1 and returns { timestamp: Date.now() }
   it("route handler ISR: first GET returns MISS", async () => {
     const res = await fetch(`${baseUrl}/api/static-data`);
@@ -1731,6 +1734,14 @@ describe("App Router Production server (startProdServer)", () => {
     const res1 = await fetch(`${baseUrl}/api/custom-cache`);
     const res2 = await fetch(`${baseUrl}/api/custom-cache`);
     // Handler controls caching — ISR should not interfere
+    expect(res1.headers.get("x-vinext-cache")).toBeNull();
+    expect(res2.headers.get("x-vinext-cache")).toBeNull();
+  });
+
+  it("route handler ISR: force-dynamic handler is not cached", async () => {
+    // /api/force-dynamic-revalidate exports revalidate=60 AND dynamic="force-dynamic"
+    const res1 = await fetch(`${baseUrl}/api/force-dynamic-revalidate`);
+    const res2 = await fetch(`${baseUrl}/api/force-dynamic-revalidate`);
     expect(res1.headers.get("x-vinext-cache")).toBeNull();
     expect(res2.headers.get("x-vinext-cache")).toBeNull();
   });
