@@ -68,11 +68,7 @@ Carries: headers/cookies, navigation (pathname, searchParams, params), cache sta
 
 Both RSC and SSR environments share `globalThis`, so the ALS scope propagates automatically.
 
-**Exception:** `handleSsr` still receives `navContext` explicitly because SSR has a separate module graph — the SSR `navigation.ts` instance needs `setNavigationContext()` called with RSC-side values, otherwise `usePathname()`/`useSearchParams()` are null during SSR.
-
-### RSC and SSR Are Separate Module Graphs
-
-Separate Vite environments = separate module instances. Setting state in RSC doesn't affect SSR's copy. The unified ALS (shared via `globalThis`) solves this for most state, but navigation still requires explicit bridging at the `handleSsr` boundary.
+**Exception:** RSC and SSR are separate Vite module graphs with separate module instances. The unified ALS propagates via `globalThis`, but `handleSsr` still receives `navContext` explicitly — SSR's `navigation.ts` instance needs `setNavigationContext()` called with RSC-side values, otherwise `usePathname()`/`useSearchParams()` are null during SSR.
 
 ### What `@vitejs/plugin-rsc` Does vs vinext
 
@@ -116,17 +112,24 @@ Must use `createBuilder()` + `builder.buildApp()`, not `build()`. Direct `build(
 
 ISR sits above `CacheHandler` (simple key-value store). ISR semantics in `server/isr-cache.ts`: stale-while-revalidate, dedup via `Map<string, Promise>`, tag invalidation (hard delete vs time-expiry returning stale). Pluggable via `setCacheHandler()`.
 
-### Ecosystem Library Compat
+### Ecosystem & Config Compat
 
-Libraries importing `next/*.js` (with extension) work via `resolveId` stripping `.js`. Libraries depending on Next.js build plugins need custom shimming.
-
-### next.config.ts `serverExternalPackages`
-
-vinext propagates `serverExternalPackages` from `next.config.ts` to Vite's `ssr.external`, so packages that need Node.js built-ins (not bundled for Workers) are excluded from the SSR bundle automatically.
+- Libraries importing `next/*.js` (with extension) work via `resolveId` stripping `.js`. Libraries depending on Next.js build plugins need custom shimming.
+- `serverExternalPackages` from `next.config.ts` propagates to Vite's `ssr.external`, so packages needing Node.js built-ins are excluded from the SSR bundle automatically.
 
 ## Code Style
 
 - Prefer Node.js built-in APIs over third-party packages
 - Search the Next.js test suite before implementing features — port relevant tests with a link to the original
-- Never push directly to main — always branch + PR
-- Never use `gh pr merge --admin`
+
+## Git Workflow
+
+- **Never push directly to main.** Branch protection requires: Format, Lint, Typecheck, Vitest, Playwright E2E.
+- **Never use `gh pr merge --admin`** — if merge is blocked, fix the failing check, don't bypass.
+- **PR workflow:**
+  1. Create a branch: `git checkout -b fix/descriptive-name`
+  2. Make changes and commit
+  3. Push branch: `git push -u origin fix/descriptive-name`
+  4. Open PR via `gh pr create`
+  5. Wait for CI to pass — all required checks must be green
+  6. Merge via `gh pr merge --squash --delete-branch`
