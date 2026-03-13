@@ -12,6 +12,7 @@ import Head, {
   resetSSRHead,
   getSSRHeadHTML,
   escapeAttr,
+  reduceHeadChildren,
 } from "../packages/vinext/src/shims/head.js";
 
 // ─── SSR rendering (mirrors Next.js test/unit/next-head-rendering.test.ts) ──
@@ -174,6 +175,107 @@ describe("Head SSR collection", () => {
   it("returns empty string when no head elements", () => {
     const headHtml = getSSRHeadHTML();
     expect(headHtml).toBe("");
+  });
+
+  it("dedupes keyed tags across multiple Head instances and keeps the last one", () => {
+    // Next.js documents `key` as the dedupe mechanism for next/head tags:
+    // https://github.com/vercel/next.js/blob/canary/docs/02-pages/04-api-reference/01-components/head.mdx
+    ReactDOMServer.renderToString(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(
+          Head,
+          null,
+          React.createElement("meta", {
+            property: "og:title",
+            content: "Original Title",
+            key: "og-title",
+          }),
+        ),
+        React.createElement(
+          Head,
+          null,
+          React.createElement("meta", {
+            property: "og:title",
+            content: "Updated Title",
+            key: "og-title",
+          }),
+        ),
+      ),
+    );
+
+    const headHtml = getSSRHeadHTML();
+    expect(headHtml).toContain('content="Updated Title"');
+    expect(headHtml).not.toContain('content="Original Title"');
+    expect(headHtml.match(/property="og:title"/g)).toHaveLength(1);
+  });
+});
+
+describe("Head reduction", () => {
+  it("dedupes keyed tags and keeps the last matching element", () => {
+    const reduced = reduceHeadChildren([
+      React.createElement("meta", {
+        property: "og:title",
+        content: "Original Title",
+        key: "og-title",
+      }),
+      React.createElement("meta", {
+        property: "og:title",
+        content: "Updated Title",
+        key: "og-title",
+      }),
+    ]);
+
+    expect(reduced).toHaveLength(1);
+    const dedupedMeta = reduced[0] as React.ReactElement<{ content?: string }> | undefined;
+    expect(dedupedMeta?.props.content).toBe("Updated Title");
+  });
+
+  it("preserves React's scoped keys when flattening nested arrays", () => {
+    const groupA = [
+      React.createElement("meta", {
+        property: "og:image",
+        content: "image-a",
+        key: "image",
+      }),
+    ];
+    const groupB = [
+      React.createElement("meta", {
+        property: "og:image:alt",
+        content: "image-b",
+        key: "image",
+      }),
+    ];
+
+    const reduced = reduceHeadChildren([groupA, groupB]);
+
+    expect(reduced).toHaveLength(2);
+    const contents = reduced.map(
+      (child) => (child as React.ReactElement<{ content?: string }>).props.content,
+    );
+    expect(contents).toEqual(["image-a", "image-b"]);
+  });
+
+  it("treats raw keys containing dollar signs as distinct user keys", () => {
+    const reduced = reduceHeadChildren([
+      React.createElement("meta", {
+        property: "og:title",
+        content: "Dollar Key",
+        key: "foo$bar",
+      }),
+      React.createElement("meta", {
+        property: "og:description",
+        content: "Plain Key",
+        key: "bar",
+      }),
+    ]);
+
+    expect(reduced).toHaveLength(2);
+    const contents = reduced.map(
+      (child) => (child as React.ReactElement<{ content?: string }>).props.content,
+    );
+    expect(contents).toEqual(["Dollar Key", "Plain Key"]);
   });
 });
 

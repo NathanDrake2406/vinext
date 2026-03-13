@@ -8,6 +8,7 @@
  * be bundled for the browser.
  */
 
+import type React from "react";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { _registerHeadStateAccessors } from "./head.js";
 
@@ -16,7 +17,7 @@ import { _registerHeadStateAccessors } from "./head.js";
 // ---------------------------------------------------------------------------
 
 interface HeadState {
-  ssrHeadElements: string[];
+  ssrHeadChildren: React.ReactNode[];
 }
 
 const _ALS_KEY = Symbol.for("vinext.head.als");
@@ -25,7 +26,7 @@ const _g = globalThis as unknown as Record<PropertyKey, unknown>;
 const _als = (_g[_ALS_KEY] ??= new AsyncLocalStorage<HeadState>()) as AsyncLocalStorage<HeadState>;
 
 const _fallbackState = (_g[_FALLBACK_KEY] ??= {
-  ssrHeadElements: [],
+  ssrHeadChildren: [],
 } satisfies HeadState) as HeadState;
 
 function _getState(): HeadState {
@@ -39,7 +40,7 @@ function _getState(): HeadState {
  */
 export function runWithHeadState<T>(fn: () => T | Promise<T>): T | Promise<T> {
   const state: HeadState = {
-    ssrHeadElements: [],
+    ssrHeadChildren: [],
   };
   return _als.run(state, fn);
 }
@@ -49,16 +50,16 @@ export function runWithHeadState<T>(fn: () => T | Promise<T>): T | Promise<T> {
 // ---------------------------------------------------------------------------
 
 _registerHeadStateAccessors({
-  getSSRHeadElements(): string[] {
-    return _getState().ssrHeadElements;
+  getSSRHeadChildren(): React.ReactNode[] {
+    return _getState().ssrHeadChildren;
   },
 
   resetSSRHead(): void {
     const state = _als.getStore();
     if (state) {
-      state.ssrHeadElements = [];
+      state.ssrHeadChildren = [];
     } else {
-      _fallbackState.ssrHeadElements = [];
+      _fallbackState.ssrHeadChildren = [];
     }
   },
 });
