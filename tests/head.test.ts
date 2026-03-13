@@ -210,6 +210,44 @@ describe("Head SSR collection", () => {
     expect(headHtml).not.toContain('content="Original Title"');
     expect(headHtml.match(/property="og:title"/g)).toHaveLength(1);
   });
+
+  it("dedupes keyed tags across Head instances when one Head has multiple children", () => {
+    ReactDOMServer.renderToString(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(
+          Head,
+          null,
+          React.createElement("meta", {
+            property: "og:title",
+            content: "Title A",
+            key: "og-title",
+          }),
+          React.createElement("meta", {
+            name: "description",
+            content: "Desc A",
+            key: "desc",
+          }),
+        ),
+        React.createElement(
+          Head,
+          null,
+          React.createElement("meta", {
+            property: "og:title",
+            content: "Title B",
+            key: "og-title",
+          }),
+        ),
+      ),
+    );
+
+    const headHtml = getSSRHeadHTML();
+    expect(headHtml).toContain('content="Title B"');
+    expect(headHtml).toContain('content="Desc A"');
+    expect(headHtml).not.toContain('content="Title A"');
+    expect(headHtml.match(/property="og:title"/g)).toHaveLength(1);
+  });
 });
 
 describe("Head reduction", () => {
@@ -248,7 +286,7 @@ describe("Head reduction", () => {
       }),
     ];
 
-    const reduced = reduceHeadChildren([groupA, groupB]);
+    const reduced = reduceHeadChildren([[groupA, groupB]]);
 
     expect(reduced).toHaveLength(2);
     const contents = reduced.map(

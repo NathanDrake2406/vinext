@@ -171,7 +171,10 @@ function createUniqueHeadFilter(): (child: React.ReactElement) => boolean {
 }
 
 export function reduceHeadChildren(headChildren: React.ReactNode[]): React.ReactElement[] {
-  return Children.toArray(headChildren)
+  return headChildren
+    .reduce<React.ReactNode[]>((flattenedChildren, child) => {
+      return flattenedChildren.concat(Children.toArray(child));
+    }, [])
     .reduce(collectHeadElements, [])
     .reverse()
     .filter(createUniqueHeadFilter())
