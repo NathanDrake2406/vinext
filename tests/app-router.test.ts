@@ -1742,8 +1742,8 @@ describe("App Router Production server (startProdServer)", () => {
     const warmBody = await warm.json();
     const cachedTimestamp = warmBody.timestamp;
 
-    // Wait for cache entry to become stale (revalidate=1)
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Wait for cache entry to become stale (revalidate=1, generous margin for slow CI)
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // STALE — serves stale data, triggers background regen
     const staleRes = await fetch(`${baseUrl}/api/static-data`);
@@ -1751,13 +1751,18 @@ describe("App Router Production server (startProdServer)", () => {
     const staleBody = await staleRes.json();
     expect(staleBody.timestamp).toBe(cachedTimestamp); // Still the old data
 
-    // Wait for background regen to complete
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Poll until background regen completes (up to 5s)
+    const deadline = Date.now() + 5000;
+    let freshRes: Response;
+    let freshBody: { timestamp: number };
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      freshRes = await fetch(`${baseUrl}/api/static-data`);
+      freshBody = await freshRes.json();
+    } while (freshRes.headers.get("x-vinext-cache") !== "HIT" && Date.now() < deadline);
 
     // HIT — fresh data from background regen
-    const freshRes = await fetch(`${baseUrl}/api/static-data`);
     expect(freshRes.headers.get("x-vinext-cache")).toBe("HIT");
-    const freshBody = await freshRes.json();
     expect(freshBody.timestamp).not.toBe(cachedTimestamp); // New data
   });
 
