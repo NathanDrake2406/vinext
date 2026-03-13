@@ -1682,6 +1682,84 @@ describe("App Router Production server (startProdServer)", () => {
     expect(reqId3).not.toBe(reqId1);
     expect(res3.headers.get("x-vinext-cache")).toBe("MISS");
   });
+
+  // Route handler ISR caching tests
+  // Fixture: /api/static-data exports revalidate = 1 and returns { timestamp: Date.now() }
+  it("route handler ISR: first GET returns MISS", async () => {
+    const res = await fetch(`${baseUrl}/api/static-data`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-vinext-cache")).toBe("MISS");
+  });
+
+  it("route handler ISR: second GET returns cached response (HIT)", async () => {
+    // First request populates cache
+    const res1 = await fetch(`${baseUrl}/api/static-data`);
+    const body1 = await res1.json();
+    expect(res1.status).toBe(200);
+
+    // Second request should be a cache hit with identical response
+    const res2 = await fetch(`${baseUrl}/api/static-data`);
+    const body2 = await res2.json();
+    expect(res2.status).toBe(200);
+    expect(body2.timestamp).toBe(body1.timestamp);
+    expect(res2.headers.get("x-vinext-cache")).toBe("HIT");
+  });
+
+  it("route handler ISR: POST bypasses cache", async () => {
+    // POST should never be cached even with revalidate set on GET
+    const res = await fetch(`${baseUrl}/api/static-data`, { method: "POST" });
+    // /api/static-data only exports GET, POST should be 405
+    expect(res.status).toBe(405);
+    expect(res.headers.get("x-vinext-cache")).toBeNull();
+  });
+
+  it("route handler ISR: dynamic handler (reads headers()) is not cached", async () => {
+    // /api/dynamic-request-data exports revalidate=60 but reads headers() and cookies()
+    const res1 = await fetch(`${baseUrl}/api/dynamic-request-data`, {
+      headers: { "x-test-ping": "a" },
+    });
+    const res2 = await fetch(`${baseUrl}/api/dynamic-request-data`, {
+      headers: { "x-test-ping": "b" },
+    });
+    // Dynamic usage should prevent ISR caching
+    expect(res1.headers.get("x-vinext-cache")).toBeNull();
+    expect(res2.headers.get("x-vinext-cache")).toBeNull();
+  });
+
+  it("route handler ISR: handler-set Cache-Control skips ISR caching", async () => {
+    // /api/custom-cache exports revalidate=60 but sets its own Cache-Control
+    const res1 = await fetch(`${baseUrl}/api/custom-cache`);
+    const res2 = await fetch(`${baseUrl}/api/custom-cache`);
+    // Handler controls caching — ISR should not interfere
+    expect(res1.headers.get("x-vinext-cache")).toBeNull();
+    expect(res2.headers.get("x-vinext-cache")).toBeNull();
+  });
+
+  it("route handler ISR: STALE serves stale data and triggers background regen", async () => {
+    // /api/static-data has revalidate=1
+    // Cache may already be warm from earlier tests — ensure we have a known timestamp
+    const warm = await fetch(`${baseUrl}/api/static-data`);
+    const warmBody = await warm.json();
+    const cachedTimestamp = warmBody.timestamp;
+
+    // Wait for cache entry to become stale (revalidate=1)
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    // STALE — serves stale data, triggers background regen
+    const staleRes = await fetch(`${baseUrl}/api/static-data`);
+    expect(staleRes.headers.get("x-vinext-cache")).toBe("STALE");
+    const staleBody = await staleRes.json();
+    expect(staleBody.timestamp).toBe(cachedTimestamp); // Still the old data
+
+    // Wait for background regen to complete
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // HIT — fresh data from background regen
+    const freshRes = await fetch(`${baseUrl}/api/static-data`);
+    expect(freshRes.headers.get("x-vinext-cache")).toBe("HIT");
+    const freshBody = await freshRes.json();
+    expect(freshBody.timestamp).not.toBe(cachedTimestamp); // New data
+  });
 });
 
 describe("App Router Production server worker entry compatibility", () => {
@@ -3586,5 +3664,26 @@ describe("generateRscEntry ISR code generation", () => {
     expect(teeAssignIdx).toBeGreaterThan(-1);
     expect(rscResponseIdx).toBeGreaterThan(-1);
     expect(teeAssignIdx).toBeLessThan(rscResponseIdx);
+  });
+
+  // Route handler ISR code generation tests
+  it("generated code contains __isrRouteKey helper", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
+    expect(code).toContain("__isrRouteKey");
+  });
+
+  it("generated code contains APP_ROUTE ISR cache read for route handlers", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
+    expect(code).toContain('"APP_ROUTE"');
+    // Route handler ISR uses __isrRouteKey to build the cache key, then reads via __isrGet
+    expect(code).toContain("__isrRouteKey(cleanPathname)");
+    expect(code).toContain("__isrGet(__routeKey)");
+  });
+
+  it("generated code contains APP_ROUTE ISR cache write for route handlers", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
+    // Route handler ISR writes use __isrSet with __routeKey and APP_ROUTE kind
+    expect(code).toContain("__isrSet(__routeKey,");
+    expect(code).toContain('kind: "APP_ROUTE"');
   });
 });
