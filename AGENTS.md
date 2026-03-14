@@ -17,14 +17,18 @@ pnpm run build                           # Build the vinext package
 
 Always run targeted tests during development. Full suite is ~2 min serial — let CI run it.
 
-| Changed                    | Test files                                                                               |
-| -------------------------- | ---------------------------------------------------------------------------------------- |
-| `shims/*.ts`               | `tests/shims.test.ts` + specific shim test (e.g. `tests/link.test.ts`)                   |
-| `routing/*.ts`             | `tests/routing.test.ts`, `tests/route-sorting.test.ts`                                   |
-| `entries/app-rsc-entry.ts` | `tests/app-router.test.ts`, `tests/features.test.ts`                                     |
-| `server/dev-server.ts`     | `tests/pages-router.test.ts`                                                             |
-| Caching/ISR                | `tests/isr-cache.test.ts`, `tests/fetch-cache.test.ts`, `tests/kv-cache-handler.test.ts` |
-| Build/deploy               | `tests/deploy.test.ts`, `tests/build-optimization.test.ts`                               |
+| Changed                    | Test files                                                                                      |
+| -------------------------- | ----------------------------------------------------------------------------------------------- |
+| `shims/*.ts`               | `tests/shims.test.ts` + specific shim test (e.g. `tests/link.test.ts`)                          |
+| `routing/*.ts`             | `tests/routing.test.ts`, `tests/route-sorting.test.ts`                                          |
+| `entries/app-rsc-entry.ts` | `tests/app-router.test.ts`, `tests/features.test.ts`                                            |
+| `server/dev-server.ts`     | `tests/pages-router.test.ts`                                                                    |
+| Caching/ISR                | `tests/isr-cache.test.ts`, `tests/fetch-cache.test.ts`, `tests/kv-cache-handler.test.ts`        |
+| `build/*.ts`               | `tests/build-report.test.ts`, `tests/static-export.test.ts`, `tests/build-optimization.test.ts` |
+| `client/*.ts`              | `tests/pages-router.test.ts`, `tests/shims.test.ts`                                             |
+| `plugins/*.ts`             | `tests/client-reference-dedup.test.ts` (integration tests for async-hooks-stub)                 |
+| `config/*.ts`              | `tests/next-config.test.ts`, `tests/file-matcher.test.ts`                                       |
+| Deploy/CLI                 | `tests/deploy.test.ts`, `tests/init.test.ts`                                                    |
 
 ## Project Structure
 
@@ -43,15 +47,29 @@ packages/vinext/src/
     prod-server.ts        # Production Node.js server
     request-pipeline.ts   # Shared request lifecycle
     app-router-entry.ts   # App Router production entry
+    dev-module-runner.ts  # Custom ModuleRunner for @cloudflare/vite-plugin compat
   entries/                # Code generators (emit JS strings, not runtime code)
     app-rsc-entry.ts      # Generates RSC entry (App Router)
     app-ssr-entry.ts      # Generates SSR entry
+    app-browser-entry.ts  # Generates client hydration JS (App Router)
+    pages-server-entry.ts # Generates SSR entry (Pages Router)
+    pages-client-entry.ts # Generates client hydration entry (Pages Router)
+  build/                  # Build tooling
+    report.ts             # Next.js-style route table after build
+    static-export.ts      # output: 'export' static site generation
+  client/                 # Client-side runtime (Pages Router dev hydration)
+    entry.ts              # Dev hydration entry (reads __NEXT_DATA__)
+    validate-module-path.ts # Security: blocks traversal/protocol in dynamic imports
   cloudflare/             # KV cache handler, TPR
   config/                 # next.config.ts parsing, config matchers
   plugins/                # Internal Vite sub-plugins
+    async-hooks-stub.ts   # Stubs node:async_hooks in client env (prevents Rollup crash)
+    client-reference-dedup.ts # Dev-only: dedup RSC client references to .vite/deps/
+  utils/                  # Shared utilities (hash, basePath, query, i18n domain routing)
 
 tests/
   *.test.ts               # Vitest unit/integration tests
+  nextjs-compat/          # Next.js parity tests
   fixtures/               # Test apps (pages-basic, app-basic, etc.)
   e2e/                    # Playwright tests
 
@@ -112,10 +130,18 @@ Must use `createBuilder()` + `builder.buildApp()`, not `build()`. Direct `build(
 
 ISR sits above `CacheHandler` (simple key-value store). ISR semantics in `server/isr-cache.ts`: stale-while-revalidate, dedup via `Map<string, Promise>`, tag invalidation (hard delete vs time-expiry returning stale). Pluggable via `setCacheHandler()`.
 
+### Key Gotchas
+
+- **Decode-once invariant:** Pathnames are decoded once upstream. Never call `decodeURIComponent` again in middleware or route matching — double-decoding breaks percent-encoded segments. This invariant is enforced in `config-matchers.ts`, `pages-server-entry.ts`, and `app-rsc-entry.ts`.
+- **Shallow clone trap:** `cloneContext()` in `unified-request-context.ts` is a shallow clone — array fields (e.g. `pendingSetCookies`) share references. Spread array fields explicitly if you need an independent copy.
+- **`ssrLoadModule` crashes with `@cloudflare/vite-plugin`:** Its Vite environments aren't `RunnableDevEnvironment` instances. Use `DevModuleRunner` from `server/dev-module-runner.ts` instead.
+- **Pages Router prod config is baked in:** `prod-server.ts` reads redirects/rewrites/headers/basePath from `vinextConfig` embedded at build time — it does NOT re-read `next.config.ts` at runtime.
+
 ### Debugging
 
 - **RSC streaming issues:** Context is often cleared before stream consumption — check AsyncLocalStorage usage and ensure the unified context scope wraps the entire render.
 - **Module resolution:** Remember RSC/SSR/client are separate Vite environments with separate module instances.
+- **ISR debug logging:** Set `NEXT_PRIVATE_DEBUG_CACHE=1` for verbose cache hit/miss/revalidate logging.
 
 ### Ecosystem & Config Compat
 
