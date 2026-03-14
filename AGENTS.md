@@ -84,7 +84,7 @@ Request handling exists in multiple places that must stay in sync:
 - `server/dev-server.ts` — Dev handler (Pages Router)
 - `server/prod-server.ts` — Production server (own middleware/routing/SSR)
 
-When fixing a bug in one, check whether the same bug exists in the others.
+App Router prod delegates to the built RSC entry, so it inherits fixes from `app-rsc-entry.ts`. But Pages Router prod server has its own middleware/routing/SSR — fix it separately. When fixing a bug in one, check whether the same bug exists in the others.
 
 ### Three Context Abstractions
 
@@ -112,10 +112,23 @@ Must use `createBuilder()` + `builder.buildApp()`, not `build()`. Direct `build(
 
 ISR sits above `CacheHandler` (simple key-value store). ISR semantics in `server/isr-cache.ts`: stale-while-revalidate, dedup via `Map<string, Promise>`, tag invalidation (hard delete vs time-expiry returning stale). Pluggable via `setCacheHandler()`.
 
+### Debugging
+
+- **RSC streaming issues:** Context is often cleared before stream consumption — check AsyncLocalStorage usage and ensure the unified context scope wraps the entire render.
+- **Module resolution:** Remember RSC/SSR/client are separate Vite environments with separate module instances.
+
 ### Ecosystem & Config Compat
 
 - Libraries importing `next/*.js` (with extension) work via `resolveId` stripping `.js`. Libraries depending on Next.js build plugins need custom shimming.
 - `serverExternalPackages` from `next.config.ts` propagates to Vite's `ssr.external`, so packages needing Node.js built-ins are excluded from the SSR bundle automatically.
+
+## Context7
+
+When in doubt about how Next.js implements something, always query Context7 before guessing.
+
+- `/vercel/next.js` — Next.js source code and docs
+- `/llmstxt/nextjs_llms_txt` — Extended Next.js documentation
+- `/vitejs/vite-plugin-react` — Vite RSC plugin docs
 
 ## Code Style
 
@@ -128,6 +141,7 @@ ISR sits above `CacheHandler` (simple key-value store). ISR semantics in `server
   ```ts
   // Ported from Next.js: test/e2e/app-dir/feature/feature.test.ts
   ```
+- Add new test pages to `tests/fixtures/`, not `examples/`. Examples are for user-facing demos.
 
 ## Git Workflow
 
