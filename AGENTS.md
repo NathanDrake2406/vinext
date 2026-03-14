@@ -39,7 +39,7 @@ packages/vinext/src/
     pages-router.ts       # Scans pages/ directory
     route-trie.ts         # Trie-based route matching
   server/                 # SSR handlers, middleware, ISR
-    dev-server.ts         # Dev handler (Pages + App Router)
+    dev-server.ts         # Pages Router dev handler
     prod-server.ts        # Production Node.js server
     request-pipeline.ts   # Shared request lifecycle
     app-router-entry.ts   # App Router production entry
@@ -81,7 +81,7 @@ vinext: file-system routing, request lifecycle (middleware → headers → redir
 Request handling exists in multiple places that must stay in sync:
 
 - `entries/app-rsc-entry.ts` — App Router (generates RSC entry)
-- `server/dev-server.ts` — Dev handler (Pages + App Router)
+- `server/dev-server.ts` — Dev handler (Pages Router)
 - `server/prod-server.ts` — Production server (own middleware/routing/SSR)
 
 When fixing a bug in one, check whether the same bug exists in the others.
@@ -120,7 +120,14 @@ ISR sits above `CacheHandler` (simple key-value store). ISR semantics in `server
 ## Code Style
 
 - Prefer Node.js built-in APIs over third-party packages
-- Search the Next.js test suite before implementing features — port relevant tests with a link to the original
+- Search the Next.js test suite before implementing features:
+  ```bash
+  gh search code "middleware" --repo vercel/next.js --filename "*.test.*" --limit 20
+  ```
+  Port relevant tests with a link to the original:
+  ```ts
+  // Ported from Next.js: test/e2e/app-dir/feature/feature.test.ts
+  ```
 
 ## Git Workflow
 
