@@ -3276,6 +3276,95 @@ describe("Tick-buffered RSC delivery", () => {
   });
 });
 
+// ── Client reference preloading (Issue #256) ─────────────────────────────────
+//
+// On the first SSR request after server start, client reference modules are
+// loaded lazily via async import(). The memoize cache in @vitejs/plugin-rsc is
+// cold, so __vite_rsc_client_require__ returns an unresolved Promise. Without
+// <Suspense> wrapping the root shell, React SSR rejects and the server returns
+// 500. Subsequent requests work because the memoize cache is warm.
+//
+// Fix: the SSR entry eagerly preloads all client reference modules before
+// renderToReadableStream runs, warming the memoize cache on every request.
+
+describe("Client reference preloading (Issue #256)", () => {
+  it("generateSsrEntry imports virtual:vite-rsc/client-references", async () => {
+    const { generateSsrEntry } = await import("../packages/vinext/src/entries/app-ssr-entry.js");
+    const code = generateSsrEntry();
+    // The SSR entry must import the client references map so it can
+    // eagerly preload all client modules before rendering
+    expect(code).toContain("virtual:vite-rsc/client-references");
+  });
+
+  it("generateSsrEntry preloads client references before renderToReadableStream", async () => {
+    const { generateSsrEntry } = await import("../packages/vinext/src/entries/app-ssr-entry.js");
+    const code = generateSsrEntry();
+    // Must call __vite_rsc_client_require__ to warm the memoize cache
+    expect(code).toContain("__vite_rsc_client_require__");
+    // Preloading must happen before renderToReadableStream — verify the
+    // preload call appears before the render call in the source
+    const preloadIndex = code.indexOf("__vite_rsc_client_require__");
+    const renderIndex = code.indexOf("renderToReadableStream(ssrRoot");
+    expect(preloadIndex).toBeGreaterThan(-1);
+    expect(renderIndex).toBeGreaterThan(-1);
+    expect(preloadIndex).toBeLessThan(renderIndex);
+  });
+
+  it("preloading awaits all client references in parallel", async () => {
+    const { generateSsrEntry } = await import("../packages/vinext/src/entries/app-ssr-entry.js");
+    const code = generateSsrEntry();
+    // Should use Promise.all to await all preloads in parallel, not sequentially
+    expect(code).toContain("Promise.all");
+  });
+
+  it("preloading correctly warms the memoize cache", async () => {
+    // Replicate the memoize + lazy-load pattern from @vitejs/plugin-rsc
+    // to verify that preloading prevents the first-request 500.
+    const loadCounts = new Map<string, number>();
+
+    function memoize(f: (id: string) => Promise<Record<string, unknown>>) {
+      const cache = new Map<string, Promise<Record<string, unknown>>>();
+      return (id: string) => {
+        const cached = cache.get(id);
+        if (cached !== undefined) return cached;
+        const result = f(id);
+        cache.set(id, result);
+        return result;
+      };
+    }
+
+    // Simulate lazy client module loading (async import)
+    const requireModule = memoize(async (id: string) => {
+      loadCounts.set(id, (loadCounts.get(id) ?? 0) + 1);
+      // Simulate async module load
+      await new Promise((r) => setTimeout(r, 10));
+      return { default: `component-${id}` };
+    });
+
+    const clientRefs = { "comp-a": true, "comp-b": true, "comp-c": true };
+
+    // Without preloading: requireModule returns unresolved promises
+    const beforePreload = requireModule("comp-a");
+    // The promise is pending — this is what causes the 500 on first request
+    expect(beforePreload).toBeInstanceOf(Promise);
+
+    // Preload all references (the fix)
+    await Promise.all(Object.keys(clientRefs).map((id) => requireModule(id)));
+
+    // After preloading: memoize cache is warm, promises are resolved.
+    // Calling requireModule again returns the same (now-resolved) promise.
+    const afterPreload = requireModule("comp-a");
+    expect(afterPreload).toBeInstanceOf(Promise);
+    const resolved = await afterPreload;
+    expect(resolved).toEqual({ default: "component-comp-a" });
+
+    // Each module should only be loaded once (memoize dedup)
+    expect(loadCounts.get("comp-a")).toBe(1);
+    expect(loadCounts.get("comp-b")).toBe(1);
+    expect(loadCounts.get("comp-c")).toBe(1);
+  });
+});
+
 // ── Auto-registration of @vitejs/plugin-rsc ─────────────────────────────────
 
 describe("RSC plugin auto-registration", () => {

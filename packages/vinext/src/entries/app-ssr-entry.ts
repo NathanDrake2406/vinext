@@ -12,6 +12,7 @@ import { setNavigationContext, ServerInsertedHTMLContext } from "next/navigation
 import { runWithNavigationContext as _runWithNavCtx } from "vinext/navigation-state";
 import { safeJsonStringify } from "vinext/html";
 import { createElement as _ssrCE } from "react";
+import * as _clientReferences from "virtual:vite-rsc/client-references";
 
 /**
  * Collect all chunks from a ReadableStream into an array of text strings.
@@ -206,6 +207,22 @@ export async function handleSsr(rscStream, navContext, fontData) {
     // Get the bootstrap script content for the browser entry
     const bootstrapScriptContent =
       await import.meta.viteRsc.loadBootstrapScriptContent("index");
+
+    // Eagerly preload all client reference modules before rendering.
+    // On cold start, __vite_rsc_client_require__ returns an unresolved
+    // Promise (the async import() hasn't completed). Without <Suspense>
+    // wrapping the root shell, React SSR rejects — causing a 500 on the
+    // very first request. By awaiting all client references here, the
+    // memoize cache in @vitejs/plugin-rsc is warmed and subsequent calls
+    // during renderToReadableStream resolve synchronously.
+    // See: https://github.com/cloudflare/vinext/issues/256
+    if (_clientReferences.default && globalThis.__vite_rsc_client_require__) {
+      await Promise.all(
+        Object.keys(_clientReferences.default).map((id) =>
+          globalThis.__vite_rsc_client_require__(id)
+        )
+      );
+    }
 
     // djb2 hash for digest generation in the SSR environment.
     // Matches the RSC environment's __errorDigest function.
