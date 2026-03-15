@@ -328,9 +328,16 @@ export class KVCacheHandler implements CacheHandler {
     // 30 days of zero traffic, or when explicitly deleted via tag invalidation.
     const expirationTtl: number | undefined = revalidateAt !== null ? this.ttlSeconds : undefined;
 
+    // Store tags in KV metadata so revalidateByPathPrefix can discover them
+    // via kv.list() without fetching entry values. Cloudflare KV limits
+    // metadata to 1024 bytes — if tags exceed the budget, omit metadata
+    // and fall back gracefully (prefix invalidation skips entries without it).
+    const metadataJson = JSON.stringify({ tags });
+    const metadata = metadataJson.length <= 1024 ? { tags } : undefined;
+
     return this._put(this.prefix + ENTRY_PREFIX + key, JSON.stringify(entry), {
       expirationTtl,
-      metadata: { tags },
+      metadata,
     });
   }
 
