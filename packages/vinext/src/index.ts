@@ -2398,7 +2398,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   const mwCtxEntries: [string, string][] = [];
                   if (result.responseHeaders) {
                     for (const [key, value] of result.responseHeaders) {
-                      mwCtxEntries.push([key, value]);
+                      // Exclude control headers that runMiddleware already
+                      // consumed — matches the RSC entry's inline filtering.
+                      if (key !== "x-middleware-next" && key !== "x-middleware-rewrite") {
+                        mwCtxEntries.push([key, value]);
+                      }
                     }
                   }
                   req.headers["x-vinext-mw-ctx"] = JSON.stringify({
@@ -2436,6 +2440,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
               // External rewrite from beforeFiles — proxy to external URL
               if (isExternalUrl(resolvedUrl)) {
+                if (deferredMwResponseHeaders) {
+                  for (const [key, value] of deferredMwResponseHeaders) {
+                    res.appendHeader(key, value);
+                  }
+                }
                 await proxyExternalRewriteNode(req, res, resolvedUrl);
                 return;
               }
@@ -2488,6 +2497,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
               // External rewrite from afterFiles — proxy to external URL
               if (isExternalUrl(resolvedUrl)) {
+                if (deferredMwResponseHeaders) {
+                  for (const [key, value] of deferredMwResponseHeaders) {
+                    res.appendHeader(key, value);
+                  }
+                }
                 await proxyExternalRewriteNode(req, res, resolvedUrl);
                 return;
               }
@@ -2528,6 +2542,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 if (fallbackRewrite) {
                   // External fallback rewrite — proxy to external URL
                   if (isExternalUrl(fallbackRewrite)) {
+                    if (deferredMwResponseHeaders) {
+                      for (const [key, value] of deferredMwResponseHeaders) {
+                        res.appendHeader(key, value);
+                      }
+                    }
                     await proxyExternalRewriteNode(req, res, fallbackRewrite);
                     return;
                   }
