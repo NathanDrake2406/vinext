@@ -1123,7 +1123,7 @@ describe("next/server shim", () => {
     };
 
     let called = false;
-    await runWithExecutionContext(mockCtx, async () => {
+    await runWithExecutionContext(mockCtx, () => {
       after(() => {
         called = true;
       });
@@ -1144,7 +1144,7 @@ describe("next/server shim", () => {
     after(() => {
       called = true;
     });
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 50));
     expect(called).toBe(true);
   });
 

@@ -2824,6 +2824,67 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (!id.match(/\.(tsx?|jsx?|mjs)$/)) return null;
           if (!code.includes("use cache")) return null;
 
+          // Parse the AST first to check for actual "use cache" directives before
+          // throwing the missing-RSC error. The fast-path string check above can
+          // fire on files that contain "use cache" only in comments or string
+          // literals (e.g., in error messages), not as real directives.
+          const ast = parseAst(code);
+
+          // Check for file-level "use cache" directive
+          const cacheDirective = (ast.body as any[]).find(
+            (node: any) =>
+              node.type === "ExpressionStatement" &&
+              node.expression?.type === "Literal" &&
+              typeof node.expression.value === "string" &&
+              node.expression.value.startsWith("use cache"),
+          );
+
+          // Check for function-level "use cache" directives by walking function bodies
+          function nodeHasInlineCacheDirective(node: any): boolean {
+            if (!node || typeof node !== "object") return false;
+            const body: any[] = node.body ?? node.consequent ?? [];
+            if (Array.isArray(body)) {
+              for (const stmt of body) {
+                if (
+                  stmt?.type === "ExpressionStatement" &&
+                  stmt.expression?.type === "Literal" &&
+                  typeof stmt.expression?.value === "string" &&
+                  /^use cache(:\s*\w+)?$/.test(stmt.expression.value)
+                ) {
+                  return true;
+                }
+              }
+            }
+            return false;
+          }
+          function astHasInlineCache(nodes: any[]): boolean {
+            for (const node of nodes) {
+              if (!node || typeof node !== "object") continue;
+              if (
+                (node.type === "FunctionDeclaration" ||
+                  node.type === "FunctionExpression" ||
+                  node.type === "ArrowFunctionExpression") &&
+                nodeHasInlineCacheDirective(node.body)
+              ) {
+                return true;
+              }
+              // Walk into variable declarations, export declarations, etc.
+              for (const key of Object.keys(node)) {
+                if (key === "type" || key === "start" || key === "end" || key === "loc") continue;
+                const child = node[key];
+                if (Array.isArray(child) && child.length > 0 && typeof child[0] === "object") {
+                  if (astHasInlineCache(child)) return true;
+                } else if (child && typeof child === "object" && child.type) {
+                  if (astHasInlineCache([child])) return true;
+                }
+              }
+            }
+            return false;
+          }
+          const hasInlineCache = !cacheDirective && astHasInlineCache(ast.body as any[]);
+
+          if (!cacheDirective && !hasInlineCache) return null;
+
           if (!resolvedRscTransformsPath) {
             throw new Error(
               "vinext: 'use cache' requires @vitejs/plugin-rsc to be installed.\n" +
@@ -2834,16 +2895,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           const { transformWrapExport, transformHoistInlineDirective } = await import(
             pathToFileURL(resolvedRscTransformsPath).href
-          );
-          const ast = parseAst(code);
-
-          // Check for file-level "use cache" directive
-          const cacheDirective = (ast.body as any[]).find(
-            (node: any) =>
-              node.type === "ExpressionStatement" &&
-              node.expression?.type === "Literal" &&
-              typeof node.expression.value === "string" &&
-              node.expression.value.startsWith("use cache"),
           );
 
           if (cacheDirective) {
@@ -2911,7 +2962,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
           // Check for function-level "use cache" directives
           // (e.g., async function getData() { "use cache"; ... })
-          const hasInlineCache = code.includes("use cache") && !cacheDirective;
           if (hasInlineCache) {
             const runtimeModuleUrl2 = pathToFileURL(path.join(shimsDir, "cache-runtime.js")).href;
 

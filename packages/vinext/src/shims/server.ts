@@ -17,10 +17,10 @@ import { getRequestExecutionContext } from "./request-context.js";
 // Inlined cache-scope guard for after()
 //
 // We cannot statically import throwIfInsideCacheScope from headers.ts here
-// because headers.ts contains a directive string that triggers Vite's
-// cache-transform handler (`code.includes(...)` check). If headers.ts is
-// pulled into the module graph via static import from server.ts, Pages
-// Router fixtures that lack @vitejs/plugin-rsc will fail at startup.
+// because headers.ts contains the "use cache" directive string in its error
+// message, which causes Vite's use-cache transform to include it in the module
+// graph. If headers.ts is pulled in via static import from server.ts, the
+// transform fires on it in Pages Router fixtures that lack @vitejs/plugin-rsc.
 //
 // The connection() function in this file avoids the same problem by using
 // `await import("./headers.js")` (dynamic import, async function). after()
@@ -624,10 +624,19 @@ export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
   _throwIfInsideCacheScope("after()");
 
   const promise = typeof task === "function" ? Promise.resolve().then(task) : task;
+  // NOTE: vinext runs function tasks concurrently with response streaming (next microtask),
+  // whereas Next.js queues them to run strictly after the response is sent via onClose.
+  // This is a known simplification — function tasks here are not guaranteed to run
+  // after the response completes, only after the current synchronous execution.
   const guarded = promise.catch((err) => {
     console.error("[vinext] after() task failed:", err);
   });
 
+  // TODO: Next.js throws when after() is called outside a request context or when
+  // waitUntil is unavailable, preventing silent task loss. vinext falls back to
+  // fire-and-forget here (safe for the Node.js dev server), but a misconfigured
+  // Cloudflare Worker entry that omits runWithExecutionContext would silently drop
+  // tasks. Consider a one-time console.warn on the fallback path.
   getRequestExecutionContext()?.waitUntil(guarded);
 }
 
