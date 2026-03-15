@@ -10,9 +10,46 @@
  */
 
 import { encodeMiddlewareRequestHeaders } from "../server/middleware-request-headers.js";
-import { throwIfInsideCacheScope } from "./headers.js";
 import { parseCookieHeader } from "./internal/parse-cookie-header.js";
 import { getRequestExecutionContext } from "./request-context.js";
+
+// ---------------------------------------------------------------------------
+// Inlined cache-scope guard for after()
+//
+// We cannot statically import throwIfInsideCacheScope from headers.ts here
+// because headers.ts contains a directive string that triggers Vite's
+// cache-transform handler (`code.includes(...)` check). If headers.ts is
+// pulled into the module graph via static import from server.ts, Pages
+// Router fixtures that lack @vitejs/plugin-rsc will fail at startup.
+//
+// The connection() function in this file avoids the same problem by using
+// `await import("./headers.js")` (dynamic import, async function). after()
+// must remain synchronous, so we inline the check using the same Symbol.for
+// keys that cache-runtime.ts and cache.ts register their ALS instances with.
+// ---------------------------------------------------------------------------
+
+const _USE_CACHE_ALS_KEY = Symbol.for("vinext.cacheRuntime.contextAls");
+const _UNSTABLE_CACHE_ALS_KEY = Symbol.for("vinext.unstableCache.als");
+const _g = globalThis as unknown as Record<PropertyKey, unknown>;
+
+function _throwIfInsideCacheScope(apiName: string): void {
+  const cacheAls = _g[_USE_CACHE_ALS_KEY] as { getStore(): unknown } | undefined;
+  if (cacheAls?.getStore() != null) {
+    throw new Error(
+      `\`${apiName}\` cannot be called inside a cached scope. ` +
+        `If you need this data inside a cached function, call \`${apiName}\` ` +
+        "outside and pass the required data as an argument.",
+    );
+  }
+  const unstableAls = _g[_UNSTABLE_CACHE_ALS_KEY] as { getStore(): unknown } | undefined;
+  if (unstableAls?.getStore() === true) {
+    throw new Error(
+      `\`${apiName}\` cannot be called inside a function cached with \`unstable_cache()\`. ` +
+        `If you need this data inside a cached function, call \`${apiName}\` ` +
+        "outside and pass the required data as an argument.",
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // NextRequest
@@ -580,11 +617,11 @@ export interface UserAgent {
  * Falls back to a fire-and-forget microtask on runtimes without an execution
  * context (e.g. Node.js dev server).
  *
- * Throws when called inside a `"use cache"` scope — request-specific
+ * Throws when called inside a cached scope — request-specific
  * side-effects must not leak into cached results.
  */
 export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
-  throwIfInsideCacheScope("after()");
+  _throwIfInsideCacheScope("after()");
 
   const promise = typeof task === "function" ? Promise.resolve().then(task) : task;
   const guarded = promise.catch((err) => {

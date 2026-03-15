@@ -1153,7 +1153,7 @@ describe("next/server shim", () => {
     const { cacheContextStorage } = await import("../packages/vinext/src/shims/cache-runtime.js");
 
     cacheContextStorage.run({ tags: [], lifeConfigs: [], variant: "default" }, () => {
-      expect(() => after(() => {})).toThrow(/cannot be called inside "use cache"/);
+      expect(() => after(() => {})).toThrow(/cannot be called inside a cached scope/);
     });
   });
 
