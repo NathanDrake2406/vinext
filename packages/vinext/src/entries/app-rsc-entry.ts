@@ -1569,6 +1569,32 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   ${
     middlewarePath
       ? `
+  // In hybrid app+pages dev mode the connect handler already ran middleware
+  // and forwarded the results via x-vinext-mw-ctx. Reconstruct _mwCtx from
+  // the forwarded data instead of re-running the middleware function.
+  const __mwCtxHeader = request.headers.get("x-vinext-mw-ctx");
+  if (__mwCtxHeader) {
+    try {
+      const __mwCtxData = JSON.parse(__mwCtxHeader);
+      if (__mwCtxData.h && __mwCtxData.h.length > 0) {
+        _mwCtx.headers = new Headers();
+        for (const [key, value] of __mwCtxData.h) {
+          _mwCtx.headers.append(key, value);
+        }
+      }
+      if (__mwCtxData.s != null) {
+        _mwCtx.status = __mwCtxData.s;
+      }
+      // Apply forwarded middleware rewrite so routing uses the rewritten path.
+      // The RSC plugin constructs its Request from the original HTTP request,
+      // not from req.url, so the connect handler's req.url rewrite is invisible.
+      if (__mwCtxData.r) {
+        const __rewriteParsed = new URL(__mwCtxData.r, request.url);
+        cleanPathname = __rewriteParsed.pathname;
+        url.search = __rewriteParsed.search;
+      }
+    } catch {}
+  } else {
    // Run proxy/middleware if present and path matches.
    // Validate exports match the file type (proxy.ts vs middleware.ts), matching Next.js behavior.
    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/proxy-missing-export/proxy-missing-export.test.ts
@@ -1646,6 +1672,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       return new Response("Internal Server Error", { status: 500 });
     }
   }
+  } // end of else (no forwarded middleware context)
 
   // Unpack x-middleware-request-* headers into the request context so that
   // headers() returns the middleware-modified headers instead of the original
