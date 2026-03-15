@@ -36,7 +36,7 @@ function _throwIfInsideCacheScope(apiName: string): void {
   const cacheAls = _g[_USE_CACHE_ALS_KEY] as { getStore(): unknown } | undefined;
   if (cacheAls?.getStore() != null) {
     throw new Error(
-      `\`${apiName}\` cannot be called inside a cached scope. ` +
+      `\`${apiName}\` cannot be called inside "use cache". ` +
         `If you need this data inside a cached function, call \`${apiName}\` ` +
         "outside and pass the required data as an argument.",
     );

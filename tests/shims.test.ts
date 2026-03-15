@@ -1153,7 +1153,19 @@ describe("next/server shim", () => {
     const { cacheContextStorage } = await import("../packages/vinext/src/shims/cache-runtime.js");
 
     cacheContextStorage.run({ tags: [], lifeConfigs: [], variant: "default" }, () => {
-      expect(() => after(() => {})).toThrow(/cannot be called inside a cached scope/);
+      expect(() => after(() => {})).toThrow(/cannot be called inside "use cache"/);
+    });
+  });
+
+  it("after() throws inside unstable_cache() scope", async () => {
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { AsyncLocalStorage } = await import("node:async_hooks");
+    const key = Symbol.for("vinext.unstableCache.als");
+    const g = globalThis as unknown as Record<symbol, unknown>;
+    if (!g[key]) g[key] = new AsyncLocalStorage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (g[key] as any).run(true, () => {
+      expect(() => after(() => {})).toThrow(/unstable_cache/);
     });
   });
 
