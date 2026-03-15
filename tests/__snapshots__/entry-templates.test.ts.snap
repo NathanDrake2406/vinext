@@ -18074,6 +18074,8 @@ import { safeJsonStringify } from "vinext/html";
 import { createElement as _ssrCE } from "react";
 import * as _clientReferences from "virtual:vite-rsc/client-references";
 
+let _clientRefsPreloaded = false;
+
 /**
  * Collect all chunks from a ReadableStream into an array of text strings.
  * Used to capture the RSC payload for embedding in HTML.
@@ -18276,12 +18278,13 @@ export async function handleSsr(rscStream, navContext, fontData) {
     // memoize cache in @vitejs/plugin-rsc is warmed and subsequent calls
     // during renderToReadableStream resolve synchronously.
     // See: https://github.com/cloudflare/vinext/issues/256
-    if (_clientReferences.default && globalThis.__vite_rsc_client_require__) {
+    if (!_clientRefsPreloaded && _clientReferences.default && globalThis.__vite_rsc_client_require__) {
       await Promise.all(
         Object.keys(_clientReferences.default).map((id) =>
           globalThis.__vite_rsc_client_require__(id)
         )
       );
+      _clientRefsPreloaded = true;
     }
 
     // djb2 hash for digest generation in the SSR environment.
