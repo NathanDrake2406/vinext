@@ -2865,7 +2865,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   node.type === "FunctionExpression" ||
                   node.type === "ArrowFunctionExpression" ||
                   node.type === "MethodDefinition") &&
-                nodeHasInlineCacheDirective(node.body ?? node.value)
+                nodeHasInlineCacheDirective(node.body ?? node.value) // MethodDefinition stores the function in .value
               ) {
                 return true;
               }

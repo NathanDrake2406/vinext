@@ -1144,7 +1144,10 @@ describe("next/server shim", () => {
     after(() => {
       called = true;
     });
-    await new Promise((r) => setTimeout(r, 50));
+    // after() wraps function tasks in Promise.resolve().then(task) — two microtask
+    // ticks are sufficient and more deterministic than a setTimeout.
+    await Promise.resolve();
+    await Promise.resolve();
     expect(called).toBe(true);
   });
 

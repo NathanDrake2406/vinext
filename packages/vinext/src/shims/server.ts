@@ -637,7 +637,10 @@ export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
   // fire-and-forget here, which is correct for the Node.js dev server (where
   // getRequestExecutionContext() always returns null). On Workers, a misconfigured
   // entry that omits runWithExecutionContext would silently drop tasks — consider
-  // a one-time console.warn on the fallback path, gated to non-dev environments.
+  // a one-time console.warn on the fallback path, gated to production only (e.g.
+  // `process.env.NODE_ENV === 'production'` or `typeof caches !== 'undefined'` for
+  // a Workers runtime check) with a module-level `let _warned = false` guard so it
+  // fires at most once and doesn't spam the dev-server console.
   getRequestExecutionContext()?.waitUntil(guarded);
 }
 
