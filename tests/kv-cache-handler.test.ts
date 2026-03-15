@@ -1131,5 +1131,41 @@ describe("KVCacheHandler", () => {
       // Legacy entry is NOT invalidated — no metadata to read tags from
       expect(await handler.get("/legacy")).not.toBeNull();
     });
+
+    it("omits metadata when tags exceed 1024-byte KV limit, entry still cached", async () => {
+      // Generate tags that exceed 1024 bytes when JSON-serialized
+      const longTags = Array.from({ length: 50 }, (_, i) => `/very/deep/nested/path/segment-${i}`);
+      const allTags = longTags.flatMap((t) => [t, `_N_T_${t}`]);
+
+      await handler.set(
+        "/big-tags",
+        {
+          kind: "APP_PAGE",
+          html: "<html>big</html>",
+          rscData: undefined,
+          headers: undefined,
+          postponed: undefined,
+          status: 200,
+        },
+        { revalidate: 60, tags: allTags },
+      );
+
+      // Entry IS cached (set didn't fail)
+      handler.resetRequestCache();
+      const result = await handler.get("/big-tags");
+      expect(result).not.toBeNull();
+      expect(result!.value!.kind).toBe("APP_PAGE");
+
+      // But prefix invalidation skips it (no metadata to read)
+      handler.resetRequestCache();
+      await handler.revalidateByPathPrefix!("/very");
+      handler.resetRequestCache();
+      expect(await handler.get("/big-tags")).not.toBeNull();
+
+      // Exact-path invalidation via revalidateTag still works
+      await handler.revalidateTag(allTags.slice(0, 2));
+      handler.resetRequestCache();
+      expect(await handler.get("/big-tags")).toBeNull();
+    });
   });
 });
