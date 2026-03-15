@@ -2842,7 +2842,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // Check for function-level "use cache" directives by walking function bodies
           function nodeHasInlineCacheDirective(node: any): boolean {
             if (!node || typeof node !== "object") return false;
-            const body: any[] = node.body ?? node.consequent ?? [];
+            const body: any[] = node.body ?? [];
             if (Array.isArray(body)) {
               for (const stmt of body) {
                 if (
@@ -2863,8 +2863,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               if (
                 (node.type === "FunctionDeclaration" ||
                   node.type === "FunctionExpression" ||
-                  node.type === "ArrowFunctionExpression") &&
-                nodeHasInlineCacheDirective(node.body)
+                  node.type === "ArrowFunctionExpression" ||
+                  node.type === "MethodDefinition") &&
+                nodeHasInlineCacheDirective(node.body ?? node.value)
               ) {
                 return true;
               }
@@ -2872,7 +2873,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               for (const key of Object.keys(node)) {
                 if (key === "type" || key === "start" || key === "end" || key === "loc") continue;
                 const child = node[key];
-                if (Array.isArray(child) && child.length > 0 && typeof child[0] === "object") {
+                if (Array.isArray(child) && child.some((c) => c && typeof c === "object")) {
                   if (astHasInlineCache(child)) return true;
                 } else if (child && typeof child === "object" && child.type) {
                   if (astHasInlineCache([child])) return true;

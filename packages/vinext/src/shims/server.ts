@@ -634,9 +634,10 @@ export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
 
   // TODO: Next.js throws when after() is called outside a request context or when
   // waitUntil is unavailable, preventing silent task loss. vinext falls back to
-  // fire-and-forget here (safe for the Node.js dev server), but a misconfigured
-  // Cloudflare Worker entry that omits runWithExecutionContext would silently drop
-  // tasks. Consider a one-time console.warn on the fallback path.
+  // fire-and-forget here, which is correct for the Node.js dev server (where
+  // getRequestExecutionContext() always returns null). On Workers, a misconfigured
+  // entry that omits runWithExecutionContext would silently drop tasks — consider
+  // a one-time console.warn on the fallback path, gated to non-dev environments.
   getRequestExecutionContext()?.waitUntil(guarded);
 }
 
