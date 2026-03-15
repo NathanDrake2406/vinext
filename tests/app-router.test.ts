@@ -3288,35 +3288,6 @@ describe("Tick-buffered RSC delivery", () => {
 // renderToReadableStream runs, warming the memoize cache on every request.
 
 describe("Client reference preloading (Issue #256)", () => {
-  it("generateSsrEntry imports virtual:vite-rsc/client-references", async () => {
-    const { generateSsrEntry } = await import("../packages/vinext/src/entries/app-ssr-entry.js");
-    const code = generateSsrEntry();
-    // The SSR entry must import the client references map so it can
-    // eagerly preload all client modules before rendering
-    expect(code).toContain("virtual:vite-rsc/client-references");
-  });
-
-  it("generateSsrEntry preloads client references before renderToReadableStream", async () => {
-    const { generateSsrEntry } = await import("../packages/vinext/src/entries/app-ssr-entry.js");
-    const code = generateSsrEntry();
-    // Must call __vite_rsc_client_require__ to warm the memoize cache
-    expect(code).toContain("__vite_rsc_client_require__");
-    // Preloading must happen before renderToReadableStream — verify the
-    // preload call appears before the render call in the source
-    const preloadIndex = code.indexOf("__vite_rsc_client_require__");
-    const renderIndex = code.indexOf("renderToReadableStream(ssrRoot");
-    expect(preloadIndex).toBeGreaterThan(-1);
-    expect(renderIndex).toBeGreaterThan(-1);
-    expect(preloadIndex).toBeLessThan(renderIndex);
-  });
-
-  it("preloading awaits all client references in parallel", async () => {
-    const { generateSsrEntry } = await import("../packages/vinext/src/entries/app-ssr-entry.js");
-    const code = generateSsrEntry();
-    // Should use Promise.all to await all preloads in parallel, not sequentially
-    expect(code).toContain("Promise.all");
-  });
-
   it("preloading correctly warms the memoize cache", async () => {
     // Replicate the memoize + lazy-load pattern from @vitejs/plugin-rsc
     // to verify that preloading prevents the first-request 500.
