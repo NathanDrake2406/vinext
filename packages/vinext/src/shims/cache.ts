@@ -361,20 +361,27 @@ export async function revalidateTag(
  * only the exact path is invalidated.
  */
 export async function revalidatePath(path: string, type?: "page" | "layout"): Promise<void> {
+  const normalizedPath = path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
   const handler = _getActiveHandler();
 
-  if (type === "layout" && handler.collectTagsByPathPrefix) {
-    // Collect all path-based tags that are children of `path`
-    const matchingTags = await handler.collectTagsByPathPrefix(path);
-    if (matchingTags.length > 0) {
-      await handler.revalidateTag(matchingTags);
-      return;
+  if (type === "layout") {
+    if (handler.collectTagsByPathPrefix) {
+      // Collect all path-based tags that are children of `normalizedPath`
+      const matchingTags = await handler.collectTagsByPathPrefix(normalizedPath);
+      if (matchingTags.length > 0) {
+        await handler.revalidateTag(matchingTags);
+        return;
+      }
+    } else {
+      console.warn(
+        "[vinext] revalidatePath with type 'layout' is not fully supported by the active cache handler. Falling back to exact-path invalidation.",
+      );
     }
   }
 
   // Default: invalidate only the exact path (type === "page" or unspecified)
-  const pathTag = `_N_T_${path}`;
-  await handler.revalidateTag([path, pathTag]);
+  const pathTag = `_N_T_${normalizedPath}`;
+  await handler.revalidateTag([normalizedPath, pathTag]);
 }
 
 /**
