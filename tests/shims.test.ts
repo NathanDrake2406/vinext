@@ -1110,6 +1110,52 @@ describe("next/server shim", () => {
     consoleError.mockRestore();
   });
 
+  it("after() calls waitUntil on the execution context when one exists", async () => {
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { runWithExecutionContext } =
+      await import("../packages/vinext/src/shims/request-context.js");
+
+    const waitUntilCalls: Promise<unknown>[] = [];
+    const mockCtx = {
+      waitUntil: (p: Promise<unknown>) => {
+        waitUntilCalls.push(p);
+      },
+    };
+
+    let called = false;
+    await runWithExecutionContext(mockCtx, async () => {
+      after(() => {
+        called = true;
+      });
+      // Let the microtask settle
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(waitUntilCalls).toHaveLength(1);
+    expect(called).toBe(true);
+  });
+
+  it("after() falls back to fire-and-forget when no execution context exists", async () => {
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+
+    // Outside any execution context scope — should still run the task
+    let called = false;
+    after(() => {
+      called = true;
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(called).toBe(true);
+  });
+
+  it('after() throws inside "use cache" scope', async () => {
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { cacheContextStorage } = await import("../packages/vinext/src/shims/cache-runtime.js");
+
+    await cacheContextStorage.run({ tags: [], lifeConfigs: [], variant: "default" }, async () => {
+      await expect(after(() => {})).rejects.toThrow(/cannot be called inside "use cache"/);
+    });
+  });
+
   it("connection() returns a resolved promise", async () => {
     const { connection } = await import("../packages/vinext/src/shims/server.js");
     const result = connection();

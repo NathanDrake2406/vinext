@@ -572,14 +572,27 @@ export interface UserAgent {
 
 /**
  * after() — schedule work after the response is sent.
- * In a real server, this would use the platform's waitUntil.
- * Here we simply run it as a microtask (best-effort).
+ *
+ * Uses the platform's `waitUntil` (via the per-request ExecutionContext) when
+ * available so the task survives past the response on Cloudflare Workers.
+ * Falls back to a fire-and-forget microtask on runtimes without an execution
+ * context (e.g. Node.js dev server).
+ *
+ * Throws when called inside a `"use cache"` scope — request-specific
+ * side-effects must not leak into cached results.
  */
-export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
+export async function after<T>(task: Promise<T> | (() => T | Promise<T>)): Promise<void> {
+  const { throwIfInsideCacheScope } = await import("./headers.js");
+  throwIfInsideCacheScope("after()");
+
+  const { getRequestExecutionContext } = await import("./request-context.js");
+
   const promise = typeof task === "function" ? Promise.resolve().then(task) : task;
-  promise.catch((err) => {
+  const guarded = promise.catch((err) => {
     console.error("[vinext] after() task failed:", err);
   });
+
+  getRequestExecutionContext()?.waitUntil(guarded);
 }
 
 /**
