@@ -10,7 +10,9 @@
  */
 
 import { encodeMiddlewareRequestHeaders } from "../server/middleware-request-headers.js";
+import { throwIfInsideCacheScope } from "./headers.js";
 import { parseCookieHeader } from "./internal/parse-cookie-header.js";
+import { getRequestExecutionContext } from "./request-context.js";
 
 // ---------------------------------------------------------------------------
 // NextRequest
@@ -581,11 +583,8 @@ export interface UserAgent {
  * Throws when called inside a `"use cache"` scope — request-specific
  * side-effects must not leak into cached results.
  */
-export async function after<T>(task: Promise<T> | (() => T | Promise<T>)): Promise<void> {
-  const { throwIfInsideCacheScope } = await import("./headers.js");
+export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
   throwIfInsideCacheScope("after()");
-
-  const { getRequestExecutionContext } = await import("./request-context.js");
 
   const promise = typeof task === "function" ? Promise.resolve().then(task) : task;
   const guarded = promise.catch((err) => {

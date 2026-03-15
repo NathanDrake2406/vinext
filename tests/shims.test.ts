@@ -1127,11 +1127,12 @@ describe("next/server shim", () => {
       after(() => {
         called = true;
       });
-      // Let the microtask settle
-      await new Promise((r) => setTimeout(r, 10));
     });
 
+    // waitUntil is called synchronously — no microtask delay needed
     expect(waitUntilCalls).toHaveLength(1);
+    // Await the guarded promise to verify the callback ran
+    await waitUntilCalls[0];
     expect(called).toBe(true);
   });
 
@@ -1151,8 +1152,8 @@ describe("next/server shim", () => {
     const { after } = await import("../packages/vinext/src/shims/server.js");
     const { cacheContextStorage } = await import("../packages/vinext/src/shims/cache-runtime.js");
 
-    await cacheContextStorage.run({ tags: [], lifeConfigs: [], variant: "default" }, async () => {
-      await expect(after(() => {})).rejects.toThrow(/cannot be called inside "use cache"/);
+    cacheContextStorage.run({ tags: [], lifeConfigs: [], variant: "default" }, () => {
+      expect(() => after(() => {})).toThrow(/cannot be called inside "use cache"/);
     });
   });
 
