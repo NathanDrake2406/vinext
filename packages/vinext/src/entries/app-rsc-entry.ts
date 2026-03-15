@@ -1601,6 +1601,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           cleanPathname = __rewriteParsed.pathname;
           url.search = __rewriteParsed.search;
         }
+        // Flag set after full context application — if any step fails (e.g. malformed
+        // rewrite URL), we fall back to re-running middleware as a safety net.
         __mwCtxApplied = true;
       } catch (e) {
         console.error("[vinext] Failed to parse forwarded middleware context:", e);

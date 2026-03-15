@@ -2276,6 +2276,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               let middlewareRequestHeaders: Headers | null = null;
               let deferredMwResponseHeaders: [string, string][] | null = null;
 
+              const applyDeferredMwHeaders = () => {
+                if (deferredMwResponseHeaders) {
+                  for (const [key, value] of deferredMwResponseHeaders) {
+                    res.appendHeader(key, value);
+                  }
+                }
+              };
+
               // Run middleware.ts if present
               if (middlewarePath) {
                 // Only trust X-Forwarded-Proto when behind a trusted proxy
@@ -2440,11 +2448,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
               // External rewrite from beforeFiles — proxy to external URL
               if (isExternalUrl(resolvedUrl)) {
-                if (deferredMwResponseHeaders) {
-                  for (const [key, value] of deferredMwResponseHeaders) {
-                    res.appendHeader(key, value);
-                  }
-                }
+                applyDeferredMwHeaders();
                 await proxyExternalRewriteNode(req, res, resolvedUrl);
                 return;
               }
@@ -2459,11 +2463,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 );
                 const apiMatch = matchRoute(resolvedUrl, apiRoutes);
                 if (apiMatch) {
-                  if (deferredMwResponseHeaders) {
-                    for (const [key, value] of deferredMwResponseHeaders) {
-                      res.appendHeader(key, value);
-                    }
-                  }
+                  applyDeferredMwHeaders();
                   if (middlewareRequestHeaders) {
                     applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
                   }
@@ -2497,11 +2497,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
               // External rewrite from afterFiles — proxy to external URL
               if (isExternalUrl(resolvedUrl)) {
-                if (deferredMwResponseHeaders) {
-                  for (const [key, value] of deferredMwResponseHeaders) {
-                    res.appendHeader(key, value);
-                  }
-                }
+                applyDeferredMwHeaders();
                 await proxyExternalRewriteNode(req, res, resolvedUrl);
                 return;
               }
@@ -2520,11 +2516,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // Try rendering the resolved URL
               const match = matchRoute(resolvedUrl.split("?")[0], routes);
               if (match) {
-                if (deferredMwResponseHeaders) {
-                  for (const [key, value] of deferredMwResponseHeaders) {
-                    res.appendHeader(key, value);
-                  }
-                }
+                applyDeferredMwHeaders();
                 if (middlewareRequestHeaders) {
                   applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
                 }
@@ -2542,11 +2534,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 if (fallbackRewrite) {
                   // External fallback rewrite — proxy to external URL
                   if (isExternalUrl(fallbackRewrite)) {
-                    if (deferredMwResponseHeaders) {
-                      for (const [key, value] of deferredMwResponseHeaders) {
-                        res.appendHeader(key, value);
-                      }
-                    }
+                    applyDeferredMwHeaders();
                     await proxyExternalRewriteNode(req, res, fallbackRewrite);
                     return;
                   }
@@ -2554,11 +2542,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   if (!fallbackMatch && hasAppDir) {
                     return next();
                   }
-                  if (deferredMwResponseHeaders) {
-                    for (const [key, value] of deferredMwResponseHeaders) {
-                      res.appendHeader(key, value);
-                    }
-                  }
+                  applyDeferredMwHeaders();
                   if (middlewareRequestHeaders) {
                     applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
                   }
