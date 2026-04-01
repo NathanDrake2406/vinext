@@ -1122,21 +1122,32 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
         // Load next.config.js if present (always from project root, not src/),
         // unless vinext({ nextConfig }) explicitly overrides it.
-        const phase = env?.command === "build" ? PHASE_PRODUCTION_BUILD : PHASE_DEVELOPMENT_SERVER;
-        let rawConfig: NextConfig | null;
-        if (options.nextConfig) {
-          const diskConfigPath = findNextConfigPath(root);
-          if (diskConfigPath && !warnedInlineNextConfigOverride) {
-            warnedInlineNextConfigOverride = true;
-            console.warn(
-              `[vinext] vinext({ nextConfig }) overrides ${path.basename(diskConfigPath)}. Remove one of the config sources to avoid drift.`,
-            );
+        // Guard: resolve nextConfig only once per plugin instance. In Vite's
+        // multi-environment build the config hook fires once per environment;
+        // without this guard, resolveNextConfig() → resolveBuildId() generates
+        // a fresh random UUID each time, causing different buildId values to be
+        // baked into the RSC, SSR, and client bundles.
+        // Note: fileMatcher, instrumentationPath, etc. are intentionally set
+        // outside this guard — they are cheap and deterministic, and keeping
+        // them here ensures they reflect the final resolved root on every call.
+        if (!nextConfig) {
+          const phase =
+            env?.command === "build" ? PHASE_PRODUCTION_BUILD : PHASE_DEVELOPMENT_SERVER;
+          let rawConfig: NextConfig | null;
+          if (options.nextConfig) {
+            const diskConfigPath = findNextConfigPath(root);
+            if (diskConfigPath && !warnedInlineNextConfigOverride) {
+              warnedInlineNextConfigOverride = true;
+              console.warn(
+                `[vinext] vinext({ nextConfig }) overrides ${path.basename(diskConfigPath)}. Remove one of the config sources to avoid drift.`,
+              );
+            }
+            rawConfig = await resolveNextConfigInput(options.nextConfig, phase);
+          } else {
+            rawConfig = await loadNextConfig(root, phase);
           }
-          rawConfig = await resolveNextConfigInput(options.nextConfig, phase);
-        } else {
-          rawConfig = await loadNextConfig(root, phase);
+          nextConfig = await resolveNextConfig(rawConfig, root);
         }
-        nextConfig = await resolveNextConfig(rawConfig, root);
         fileMatcher = createValidFileMatcher(nextConfig.pageExtensions);
         instrumentationPath = findInstrumentationFile(root, fileMatcher);
         instrumentationClientPath = findInstrumentationClientFile(root, fileMatcher);
@@ -3216,6 +3227,32 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         },
       },
     },
+    // Write BUILD_ID to dist/server/ so post-build tools (TPR, seed-cache) can
+    // read the build identifier without depending on the prerender manifest.
+    // Uses closeBundle (not writeBundle) with a one-time write guard so the file
+    // is written exactly once per build regardless of how many environments are
+    // active (App Router RSC+SSR+client, Pages Router SSR+client, etc.).
+    // The path is always dist/server/BUILD_ID — derived from root, not from the
+    // per-environment options.dir — so it works for all router types.
+    (() => {
+      let buildIdWritten = false;
+      return {
+        name: "vinext:build-id",
+        apply: "build" as const,
+        enforce: "post" as const,
+        closeBundle: {
+          sequential: true,
+          order: "post" as const,
+          handler() {
+            if (buildIdWritten) return;
+            buildIdWritten = true;
+            const outDir = path.join(root, "dist", "server");
+            fs.mkdirSync(outDir, { recursive: true });
+            fs.writeFileSync(path.join(outDir, "BUILD_ID"), nextConfig!.buildId);
+          },
+        },
+      };
+    })(),
     // Write vinext-server.json to dist/server/ with a per-build prerender secret.
     // The prerender secret is used by prod-server.ts to authenticate requests to
     // the internal /__vinext/prerender/* endpoints, which are only reachable during
