@@ -84,14 +84,14 @@ export type RenderAppPageLifecycleOptions = {
   ) => Promise<Response>;
   renderPageSpecialError: (specialError: AppPageSpecialError) => Promise<Response>;
   renderToReadableStream: (
-    element: ReactNode,
+    element: ReactNode | Record<string, ReactNode>,
     options: { onError: AppPageBoundaryOnError },
   ) => ReadableStream<Uint8Array>;
   routeHasLocalBoundary: boolean;
   routePattern: string;
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
   waitUntil?: (promise: Promise<void>) => void;
-  element: ReactNode;
+  element: ReactNode | Record<string, ReactNode>;
 };
 
 function buildResponseTiming(

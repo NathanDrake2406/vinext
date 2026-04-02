@@ -19,7 +19,6 @@ import { createRscEmbedTransform, createTickBufferedTransform } from "./app-ssr-
 import {
   normalizeAppElements,
   readAppElementsMetadata,
-  type AppElements,
   type AppWireElements,
 } from "./app-elements.js";
 import { ElementsContext, Slot } from "../shims/slot.js";
@@ -174,15 +173,14 @@ export async function handleSsr(
       const [ssrStream, embedStream] = rscStream.tee();
       const rscEmbed = createRscEmbedTransform(embedStream);
 
-      let flightRoot: Promise<AppElements> | null = null;
+      let flightRoot: PromiseLike<AppWireElements> | null = null;
 
       function VinextFlightRoot(): ReactNode {
         if (!flightRoot) {
-          flightRoot = createFromReadableStream<AppWireElements>(ssrStream).then((elements) =>
-            normalizeAppElements(elements),
-          );
+          flightRoot = createFromReadableStream<AppWireElements>(ssrStream);
         }
-        const elements = use(flightRoot);
+        const wireElements = use(flightRoot);
+        const elements = normalizeAppElements(wireElements);
         const metadata = readAppElementsMetadata(elements);
         return createReactElement(
           ElementsContext.Provider,
