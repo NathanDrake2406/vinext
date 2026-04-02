@@ -18,6 +18,15 @@ function createStreamFromMarkup(markup: string): ReadableStream<Uint8Array> {
 
 function renderElementToStream(element: React.ReactNode | AppElements): ReadableStream<Uint8Array> {
   if (element !== null && typeof element === "object" && !React.isValidElement(element)) {
+    // Flat map payload — extract the route element and render it to HTML
+    // (mirrors what the real SSR entry does after deserializing the Flight stream)
+    const record = element as Record<string, unknown>;
+    const routeId = record.__route;
+    if (typeof routeId === "string" && React.isValidElement(record[routeId])) {
+      return createStreamFromMarkup(
+        ReactDOMServer.renderToStaticMarkup(record[routeId] as React.ReactNode),
+      );
+    }
     return createStreamFromMarkup(JSON.stringify(element));
   }
   return createStreamFromMarkup(ReactDOMServer.renderToStaticMarkup(element));
