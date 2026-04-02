@@ -55,6 +55,10 @@ const appPageBoundaryRenderPath = resolveEntryPath(
   "../server/app-page-boundary-render.js",
   import.meta.url,
 );
+const appPageRouteWiringPath = resolveEntryPath(
+  "../server/app-page-route-wiring.js",
+  import.meta.url,
+);
 const appPageRenderPath = resolveEntryPath("../server/app-page-render.js", import.meta.url);
 const appPageRequestPath = resolveEntryPath("../server/app-page-request.js", import.meta.url);
 const appRouteHandlerResponsePath = resolveEntryPath(
@@ -337,13 +341,11 @@ function renderToReadableStream(model, options) {
     }
   }));
 }
-import { createElement, Suspense, Fragment } from "react";
+import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
 import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { NextRequest, NextFetchEvent } from "next/server";
-import { ErrorBoundary, NotFoundBoundary } from "vinext/error-boundary";
-import { LayoutSegmentProvider } from "vinext/layout-segment-context";
-import { MetadataHead, mergeMetadata, resolveModuleMetadata, ViewportHead, mergeViewport, resolveModuleViewport } from "vinext/metadata";
+import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
 ${effectiveMetaRoutes.length > 0 ? `import { sitemapToXml, robotsToText, manifestToJson } from ${JSON.stringify(metadataRoutesPath)};` : ""}
@@ -375,6 +377,10 @@ import {
   renderAppPageErrorBoundary as __renderAppPageErrorBoundary,
   renderAppPageHttpAccessFallback as __renderAppPageHttpAccessFallback,
 } from ${JSON.stringify(appPageBoundaryRenderPath)};
+import {
+  buildAppPageRouteElement as __buildAppPageRouteElement,
+  resolveAppPageChildSegments as __resolveAppPageChildSegments,
+} from ${JSON.stringify(appPageRouteWiringPath)};
 import {
   renderAppPageLifecycle as __renderAppPageLifecycle,
 } from ${JSON.stringify(appPageRenderPath)};
@@ -540,38 +546,6 @@ const __isrDebug = process.env.NEXT_PRIVATE_DEBUG_CACHE
 function makeThenableParams(obj) {
   const plain = { ...obj };
   return Object.assign(Promise.resolve(plain), plain);
-}
-
-// Resolve route tree segments to actual values using matched params.
-// Dynamic segments like [id] are replaced with param values, catch-all
-// segments like [...slug] are joined with "/", and route groups are kept as-is.
-function __resolveChildSegments(routeSegments, treePosition, params) {
-  var raw = routeSegments.slice(treePosition);
-  var result = [];
-  for (var j = 0; j < raw.length; j++) {
-    var seg = raw[j];
-    // Optional catch-all: [[...param]]
-    if (seg.indexOf("[[...") === 0 && seg.charAt(seg.length - 1) === "]" && seg.charAt(seg.length - 2) === "]") {
-      var pn = seg.slice(5, -2);
-      var v = params[pn];
-      // Skip empty optional catch-all (e.g., visiting /blog on [[...slug]] route)
-      if (Array.isArray(v) && v.length === 0) continue;
-      if (v == null) continue;
-      result.push(Array.isArray(v) ? v.join("/") : v);
-    // Catch-all: [...param]
-    } else if (seg.indexOf("[...") === 0 && seg.charAt(seg.length - 1) === "]") {
-      var pn2 = seg.slice(4, -1);
-      var v2 = params[pn2];
-      result.push(Array.isArray(v2) ? v2.join("/") : (v2 || seg));
-    // Dynamic: [param]
-    } else if (seg.charAt(0) === "[" && seg.charAt(seg.length - 1) === "]" && seg.indexOf(".") === -1) {
-      var pn3 = seg.slice(1, -1);
-      result.push(params[pn3] || seg);
-    } else {
-      result.push(seg);
-    }
-  }
-  return result;
 }
 
 // djb2 hash — matches Next.js's stringHash for digest generation.
@@ -777,7 +751,7 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
     makeThenableParams,
     matchedParams: opts?.matchedParams ?? route?.params ?? {},
     requestUrl: request.url,
-    resolveChildSegments: __resolveChildSegments,
+    resolveChildSegments: __resolveAppPageChildSegments,
     rootForbiddenModule: rootForbiddenModule,
     rootLayouts: rootLayouts,
     rootNotFoundModule: rootNotFoundModule,
@@ -823,7 +797,7 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
     makeThenableParams,
     matchedParams: matchedParams ?? route?.params ?? {},
     requestUrl: request.url,
-    resolveChildSegments: __resolveChildSegments,
+    resolveChildSegments: __resolveAppPageChildSegments,
     rootLayouts: rootLayouts,
     route,
     renderToReadableStream,
@@ -989,12 +963,10 @@ async function buildPageElement(route, params, opts, searchParams) {
   const resolvedMetadata = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
   const resolvedViewport = mergeViewport(viewportList);
 
-  // Build nested layout tree from outermost to innermost.
-  // Next.js 16 passes params/searchParams as Promises (async pattern)
-  // but pre-16 code accesses them as plain objects (params.id).
-  // makeThenableParams() normalises null-prototype + preserves both patterns.
-  const asyncParams = makeThenableParams(params);
-  const pageProps = { params: asyncParams };
+  // Build the route tree from the leaf page, then delegate the boundary/layout/
+  // template/segment wiring to a typed runtime helper so the generated entry
+  // stays thin and the wiring logic can be unit tested directly.
+  const pageProps = { params: makeThenableParams(params) };
   if (searchParams) {
     // Always provide searchParams prop when the URL object is available, even
     // when the query string is empty -- pages that do "await searchParams" need
@@ -1010,196 +982,25 @@ async function buildPageElement(route, params, opts, searchParams) {
     // dynamic, and this avoids false positives from React internals.
     if (hasSearchParams) markDynamicUsage();
   }
-  let element = createElement(PageComponent, pageProps);
-
-  // Wrap page with empty segment provider so useSelectedLayoutSegments()
-  // returns [] when called from inside a page component (leaf node).
-  element = createElement(LayoutSegmentProvider, { segmentMap: { children: [] } }, element);
-
-  // Add metadata + viewport head tags (React 19 hoists title/meta/link to <head>)
-  // Next.js always injects charset and default viewport even when no metadata/viewport
-  // is exported. We replicate that by always emitting these essential head elements.
-  {
-    const headElements = [];
-    // Always emit <meta charset="utf-8"> — Next.js includes this on every page
-    headElements.push(createElement("meta", { charSet: "utf-8" }));
-    if (resolvedMetadata) headElements.push(createElement(MetadataHead, { metadata: resolvedMetadata }));
-    headElements.push(createElement(ViewportHead, { viewport: resolvedViewport }));
-    element = createElement(Fragment, null, ...headElements, element);
-  }
-
-  // Wrap with loading.tsx Suspense if present
-  if (route.loading?.default) {
-    element = createElement(
-      Suspense,
-      { fallback: createElement(route.loading.default) },
-      element,
-    );
-  }
-
-  // Wrap with the leaf's error.tsx ErrorBoundary if it's not already covered
-  // by a per-layout error boundary (i.e., the leaf has error.tsx but no layout).
-  // Per-layout error boundaries are interleaved with layouts below.
-  {
-    const lastLayoutError = route.errors ? route.errors[route.errors.length - 1] : null;
-    if (route.error?.default && route.error !== lastLayoutError) {
-      element = createElement(ErrorBoundary, {
-        fallback: route.error.default,
-        children: element,
-      });
-    }
-  }
-
-  // Wrap with NotFoundBoundary so client-side notFound() renders not-found.tsx
-  // instead of crashing the React tree. Must be above ErrorBoundary since
-  // ErrorBoundary re-throws notFound errors.
-  // Pre-render the not-found component as a React element since it may be a
-  // server component (not a client reference) and can't be passed as a function prop.
-  {
-    const NotFoundComponent = route.notFound?.default ?? ${rootNotFoundVar ? `${rootNotFoundVar}?.default` : "null"};
-    if (NotFoundComponent) {
-      element = createElement(NotFoundBoundary, {
-        fallback: createElement(NotFoundComponent),
-        children: element,
-      });
-    }
-  }
-
-  // Wrap with templates (innermost first, then outer)
-  // Templates are like layouts but re-mount on navigation (client-side concern).
-  // On the server, they just wrap the content like layouts do.
-  if (route.templates) {
-    for (let i = route.templates.length - 1; i >= 0; i--) {
-      const TemplateComponent = route.templates[i]?.default;
-      if (TemplateComponent) {
-        element = createElement(TemplateComponent, { children: element, params });
-      }
-    }
-  }
-
-  // Wrap with layouts (innermost first, then outer).
-  // At each layout level, first wrap with that level's error boundary (if any)
-  // so the boundary is inside the layout and catches errors from children.
-  // This matches Next.js behavior: Layout > ErrorBoundary > children.
-  // Parallel slots are passed as named props to the innermost layout
-  // (the layout at the same directory level as the page/slots)
-  for (let i = route.layouts.length - 1; i >= 0; i--) {
-    // Wrap with per-layout error boundary before wrapping with layout.
-    // This places the ErrorBoundary inside the layout, catching errors
-    // from child segments (matching Next.js per-segment error handling).
-    if (route.errors && route.errors[i]?.default) {
-      element = createElement(ErrorBoundary, {
-        fallback: route.errors[i].default,
-        children: element,
-      });
-    }
-
-    const LayoutComponent = route.layouts[i]?.default;
-    if (LayoutComponent) {
-      // Per-layout NotFoundBoundary: wraps this layout's children so that
-      // notFound() thrown from a child layout is caught here.
-      // Matches Next.js behavior where each segment has its own boundary.
-      // The boundary at level N catches errors from Layout[N+1] and below,
-      // but NOT from Layout[N] itself (which propagates to level N-1).
-      {
-        const LayoutNotFound = route.notFounds?.[i]?.default;
-        if (LayoutNotFound) {
-          element = createElement(NotFoundBoundary, {
-            fallback: createElement(LayoutNotFound),
-            children: element,
-          });
-        }
-      }
-
-      const layoutProps = { children: element, params: makeThenableParams(params) };
-
-      // Add parallel slot elements to the layout that defines them.
-      // Each slot has a layoutIndex indicating which layout it belongs to.
-      if (route.slots) {
-        for (const [slotName, slotMod] of Object.entries(route.slots)) {
-          // Attach slot to the layout at its layoutIndex, or to the innermost layout if -1
-          const targetIdx = slotMod.layoutIndex >= 0 ? slotMod.layoutIndex : route.layouts.length - 1;
-          if (i !== targetIdx) continue;
-          // Check if this slot has an intercepting route that should activate
-          let SlotPage = null;
-          let slotParams = params;
-
-          if (opts && opts.interceptSlot === slotName && opts.interceptPage) {
-            // Use the intercepting route's page component
-            SlotPage = opts.interceptPage.default;
-            slotParams = opts.interceptParams || params;
-          } else {
-            SlotPage = slotMod.page?.default || slotMod.default?.default;
+  return __buildAppPageRouteElement({
+    element: createElement(PageComponent, pageProps),
+    globalErrorModule: ${globalErrorVar ? globalErrorVar : "null"},
+    makeThenableParams,
+    matchedParams: params,
+    resolvedMetadata,
+    resolvedViewport,
+    rootNotFoundModule: ${rootNotFoundVar ? rootNotFoundVar : "null"},
+    route,
+    slotOverrides:
+      opts && opts.interceptSlot && opts.interceptPage
+        ? {
+            [opts.interceptSlot]: {
+              pageModule: opts.interceptPage,
+              params: opts.interceptParams || params,
+            },
           }
-
-          if (SlotPage) {
-            let slotElement = createElement(SlotPage, { params: makeThenableParams(slotParams) });
-            // Wrap with slot-specific layout if present.
-            // In Next.js, @slot/layout.tsx wraps the slot's page content
-            // before it is passed as a prop to the parent layout.
-            const SlotLayout = slotMod.layout?.default;
-            if (SlotLayout) {
-              slotElement = createElement(SlotLayout, {
-                children: slotElement,
-                params: makeThenableParams(slotParams),
-              });
-            }
-            // Wrap with slot-specific loading if present
-            if (slotMod.loading?.default) {
-              slotElement = createElement(Suspense,
-                { fallback: createElement(slotMod.loading.default) },
-                slotElement,
-              );
-            }
-            // Wrap with slot-specific error boundary if present
-            if (slotMod.error?.default) {
-              slotElement = createElement(ErrorBoundary, {
-                fallback: slotMod.error.default,
-                children: slotElement,
-              });
-            }
-            layoutProps[slotName] = slotElement;
-          }
-        }
-      }
-
-      element = createElement(LayoutComponent, layoutProps);
-
-      // Wrap the layout with LayoutSegmentProvider so useSelectedLayoutSegments()
-      // called INSIDE this layout gets the correct child segments. We resolve the
-      // route tree segments using actual param values and pass them through context.
-      // We wrap the layout (not just children) because hooks are called from
-      // components rendered inside the layout's own JSX.
-      const treePos = route.layoutTreePositions ? route.layoutTreePositions[i] : 0;
-      const childSegs = __resolveChildSegments(route.routeSegments || [], treePos, params);
-      element = createElement(LayoutSegmentProvider, { segmentMap: { children: childSegs } }, element);
-    }
-  }
-
-  // Wrap with global error boundary if app/global-error.tsx exists.
-  // This must be present in both HTML and RSC paths so the component tree
-  // structure matches — otherwise React reconciliation on client-side navigation
-  // would see a mismatched tree and destroy/recreate the DOM.
-  //
-  // For RSC requests (client-side nav), this provides error recovery on the client.
-  // For HTML requests (initial page load), the ErrorBoundary catches during SSR
-  // but produces double <html>/<body> (root layout + global-error). The request
-  // handler detects this via the rscOnError flag and re-renders without layouts.
-  ${
-    globalErrorVar
-      ? `
-  const GlobalErrorComponent = ${globalErrorVar}.default;
-  if (GlobalErrorComponent) {
-    element = createElement(ErrorBoundary, {
-      fallback: GlobalErrorComponent,
-      children: element,
-    });
-  }
-  `
-      : ""
-  }
-
-  return element;
+        : null,
+  });
 }
 
 ${middlewarePath ? generateMiddlewareMatcherCode("modern") : ""}

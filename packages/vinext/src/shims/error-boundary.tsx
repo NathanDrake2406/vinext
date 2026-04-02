@@ -9,8 +9,13 @@ export type ErrorBoundaryProps = {
   children: React.ReactNode;
 };
 
+type ErrorBoundaryInnerProps = {
+  pathname: string;
+} & ErrorBoundaryProps;
+
 export type ErrorBoundaryState = {
   error: Error | null;
+  previousPathname: string;
 };
 
 /**
@@ -18,10 +23,23 @@ export type ErrorBoundaryState = {
  * This must be a client component since error boundaries use
  * componentDidCatch / getDerivedStateFromError.
  */
-export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
+export class ErrorBoundaryInner extends React.Component<
+  ErrorBoundaryInnerProps,
+  ErrorBoundaryState
+> {
+  constructor(props: ErrorBoundaryInnerProps) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, previousPathname: props.pathname };
+  }
+
+  static getDerivedStateFromProps(
+    props: ErrorBoundaryInnerProps,
+    state: ErrorBoundaryState,
+  ): ErrorBoundaryState | null {
+    if (props.pathname !== state.previousPathname && state.error) {
+      return { error: null, previousPathname: props.pathname };
+    }
+    return { error: state.error, previousPathname: props.pathname };
   }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
@@ -38,7 +56,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         throw error;
       }
     }
-    return { error };
+    return { error, previousPathname: "" };
   }
 
   reset = () => {
@@ -52,6 +70,15 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     }
     return this.props.children;
   }
+}
+
+export function ErrorBoundary({ fallback, children }: ErrorBoundaryProps) {
+  const pathname = usePathname();
+  return (
+    <ErrorBoundaryInner pathname={pathname} fallback={fallback}>
+      {children}
+    </ErrorBoundaryInner>
+  );
 }
 
 // ---------------------------------------------------------------------------
