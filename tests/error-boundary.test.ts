@@ -18,6 +18,14 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
 // The error boundary is primarily a client-side component.
+//
+// Verified against Next.js source:
+// - packages/next/src/client/components/error-boundary.tsx
+// - packages/next/src/client/components/navigation.ts
+//
+// Next.js resets segment error boundaries on pathname changes using a
+// previousPathname field, and usePathname() is pathname-only rather than
+// query-aware. These tests lock our shim to that behavior.
 
 type ErrorBoundaryInnerConstructor = {
   getDerivedStateFromError(error: Error): {
