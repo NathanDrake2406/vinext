@@ -306,7 +306,10 @@ function NavigationCommitSignal({
 }
 
 function normalizeAppElementsPromise(payload: Promise<AppWireElements>): Promise<AppElements> {
-  return payload.then((elements) => normalizeAppElements(elements));
+  // Wrap in Promise.resolve() because createFromReadableStream() returns a
+  // React Flight thenable whose .then() returns undefined (not a new Promise).
+  // Without the wrap, chaining .then() produces undefined → use() crashes.
+  return Promise.resolve(payload).then((elements) => normalizeAppElements(elements));
 }
 
 function BrowserRoot({
