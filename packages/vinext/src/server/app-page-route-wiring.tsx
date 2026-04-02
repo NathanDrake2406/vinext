@@ -291,7 +291,11 @@ export function buildAppPageElements<
   const pageId = `page:${options.routePath}`;
   const layoutEntries = createAppPageLayoutEntries(options.route);
   const templateEntries = createAppPageTemplateEntries(options.route);
+  const layoutEntriesByTreePosition = new Map<number, AppPageLayoutEntry<TModule, TErrorModule>>();
   const templateEntriesByTreePosition = new Map<number, AppPageTemplateEntry<TModule>>();
+  for (const layoutEntry of layoutEntries) {
+    layoutEntriesByTreePosition.set(layoutEntry.treePosition, layoutEntry);
+  }
   for (const templateEntry of templateEntries) {
     templateEntriesByTreePosition.set(templateEntry.treePosition, templateEntry);
   }
@@ -489,14 +493,11 @@ export function buildAppPageElements<
     );
   }
 
-  for (let index = layoutEntries.length - 1; index >= 0; index--) {
-    const layoutEntry = layoutEntries[index];
-    let layoutChildren = routeChildren;
-    const templateEntry = templateEntries.find(
-      (entry) => entry.treePosition === layoutEntry.treePosition,
-    );
+  for (let index = orderedTreePositions.length - 1; index >= 0; index--) {
+    const treePosition = orderedTreePositions[index];
+    const templateEntry = templateEntriesByTreePosition.get(treePosition);
     if (templateEntry) {
-      layoutChildren = (
+      routeChildren = (
         <Slot
           id={templateEntry.id}
           key={resolveAppPageTemplateKey(
@@ -505,11 +506,16 @@ export function buildAppPageElements<
             options.matchedParams,
           )}
         >
-          {layoutChildren}
+          {routeChildren}
         </Slot>
       );
     }
 
+    const layoutEntry = layoutEntriesByTreePosition.get(treePosition);
+    if (!layoutEntry) {
+      continue;
+    }
+    let layoutChildren = routeChildren;
     const layoutErrorComponent = getErrorBoundaryExport(layoutEntry.errorModule);
     if (layoutErrorComponent) {
       layoutChildren = (
@@ -538,7 +544,7 @@ export function buildAppPageElements<
               .filter(([, slot]) => {
                 const targetIndex =
                   slot.layoutIndex >= 0 ? slot.layoutIndex : layoutEntries.length - 1;
-                return targetIndex === index;
+                return targetIndex === layoutIndicesByTreePosition.get(treePosition);
               })
               .map(([slotName]) => [slotName, []]),
           ),
@@ -546,7 +552,11 @@ export function buildAppPageElements<
       >
         <Slot
           id={layoutEntry.id}
-          parallelSlots={createAppPageParallelSlotEntries(index, layoutEntries, options.route)}
+          parallelSlots={createAppPageParallelSlotEntries(
+            layoutIndicesByTreePosition.get(treePosition) ?? -1,
+            layoutEntries,
+            options.route,
+          )}
         >
           {layoutChildren}
         </Slot>

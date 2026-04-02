@@ -1,6 +1,7 @@
 import { Fragment, createElement, isValidElement, type ReactNode } from "react";
 import { describe, expect, it } from "vite-plus/test";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
+import type { AppElements } from "../packages/vinext/src/server/app-elements.js";
 import {
   buildAppPageElements,
   createAppPageLayoutEntries,
@@ -58,6 +59,17 @@ async function renderHtml(node: ReactNode): Promise<string> {
   });
 
   return readStream(stream);
+}
+
+async function renderRouteEntry(elements: AppElements, routeId: string): Promise<string> {
+  const { ElementsContext, Slot } = await import("../packages/vinext/src/shims/slot.js");
+  return renderHtml(
+    createElement(
+      ElementsContext.Provider,
+      { value: elements },
+      createElement(Slot, { id: routeId }),
+    ),
+  );
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -290,5 +302,46 @@ describe("app page route wiring helpers", () => {
 
     expect(body).toContain("page:de");
     expect(body).not.toContain("page:en");
+  });
+
+  it("renders template-only segments in the route entry even without a matching layout", async () => {
+    function BlogTemplate(props: Record<string, unknown>) {
+      return createElement("div", { "data-template": "blog" }, readChildren(props.children));
+    }
+
+    function BlogPage() {
+      return createElement("main", null, "Blog page");
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement(BlogPage),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: RootLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null],
+        routeSegments: ["blog"],
+        slots: null,
+        templateTreePositions: [1],
+        templates: [{ default: BlogTemplate }],
+      },
+      routePath: "/blog",
+      rootNotFoundModule: null,
+    });
+
+    const body = await renderRouteEntry(elements, "route:/blog");
+
+    expect(body).toContain('data-layout="root"');
+    expect(body).toContain('data-template="blog"');
+    expect(body).toContain("Blog page");
   });
 });
