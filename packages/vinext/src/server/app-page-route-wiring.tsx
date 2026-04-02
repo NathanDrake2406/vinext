@@ -12,31 +12,41 @@ type AppPageComponentProps = {
 } & Record<string, unknown>;
 
 type AppPageComponent = ComponentType<AppPageComponentProps>;
-type ErrorBoundaryFallbackComponent = ComponentType<{ error: Error; reset: () => void }>;
+type AppPageErrorComponent = ComponentType<{ error: Error; reset: () => void }>;
 
 export type AppPageModule = Record<string, unknown> & {
   default?: AppPageComponent | null | undefined;
 };
 
-export type AppPageRouteWiringSlot<TModule extends AppPageModule = AppPageModule> = {
+export type AppPageErrorModule = Record<string, unknown> & {
+  default?: AppPageErrorComponent | null | undefined;
+};
+
+export type AppPageRouteWiringSlot<
+  TModule extends AppPageModule = AppPageModule,
+  TErrorModule extends AppPageErrorModule = AppPageErrorModule,
+> = {
   default?: TModule | null;
-  error?: TModule | null;
+  error?: TErrorModule | null;
   layout?: TModule | null;
   layoutIndex: number;
   loading?: TModule | null;
   page?: TModule | null;
 };
 
-export type AppPageRouteWiringRoute<TModule extends AppPageModule = AppPageModule> = {
-  error?: TModule | null;
-  errors?: readonly (TModule | null | undefined)[] | null;
+export type AppPageRouteWiringRoute<
+  TModule extends AppPageModule = AppPageModule,
+  TErrorModule extends AppPageErrorModule = AppPageErrorModule,
+> = {
+  error?: TErrorModule | null;
+  errors?: readonly (TErrorModule | null | undefined)[] | null;
   layoutTreePositions?: readonly number[] | null;
   layouts: readonly (TModule | null | undefined)[];
   loading?: TModule | null;
   notFound?: TModule | null;
   notFounds?: readonly (TModule | null | undefined)[] | null;
   routeSegments?: readonly string[];
-  slots?: Readonly<Record<string, AppPageRouteWiringSlot<TModule>>> | null;
+  slots?: Readonly<Record<string, AppPageRouteWiringSlot<TModule, TErrorModule>>> | null;
   templates?: readonly (TModule | null | undefined)[] | null;
 };
 
@@ -46,8 +56,11 @@ export type AppPageSlotOverride<TModule extends AppPageModule = AppPageModule> =
   props?: Readonly<Record<string, unknown>>;
 };
 
-export type AppPageLayoutEntry<TModule extends AppPageModule = AppPageModule> = {
-  errorModule?: TModule | null | undefined;
+export type AppPageLayoutEntry<
+  TModule extends AppPageModule = AppPageModule,
+  TErrorModule extends AppPageErrorModule = AppPageErrorModule,
+> = {
+  errorModule?: TErrorModule | null | undefined;
   id: string;
   layoutModule?: TModule | null | undefined;
   notFoundModule?: TModule | null | undefined;
@@ -55,15 +68,18 @@ export type AppPageLayoutEntry<TModule extends AppPageModule = AppPageModule> = 
   treePosition: number;
 };
 
-export type BuildAppPageRouteElementOptions<TModule extends AppPageModule = AppPageModule> = {
+export type BuildAppPageRouteElementOptions<
+  TModule extends AppPageModule = AppPageModule,
+  TErrorModule extends AppPageErrorModule = AppPageErrorModule,
+> = {
   element: ReactNode;
-  globalErrorModule?: TModule | null;
+  globalErrorModule?: TErrorModule | null;
   makeThenableParams: (params: AppPageParams) => unknown;
   matchedParams: AppPageParams;
   resolvedMetadata: Metadata | null;
   resolvedViewport: Viewport;
   rootNotFoundModule?: TModule | null;
-  route: AppPageRouteWiringRoute<TModule>;
+  route: AppPageRouteWiringRoute<TModule, TErrorModule>;
   slotOverrides?: Readonly<Record<string, AppPageSlotOverride<TModule>>> | null;
 };
 
@@ -73,13 +89,10 @@ function getDefaultExport<TModule extends AppPageModule>(
   return module?.default ?? null;
 }
 
-function wrapWithErrorBoundary(fallback: AppPageComponent, children: ReactNode): ReactNode {
-  const FallbackBoundary: ErrorBoundaryFallbackComponent = ({ error, reset }) => {
-    const FallbackComponent = fallback;
-    return <FallbackComponent error={error} reset={reset} />;
-  };
-
-  return <ErrorBoundary fallback={FallbackBoundary}>{children}</ErrorBoundary>;
+function getErrorBoundaryExport<TModule extends AppPageErrorModule>(
+  module: TModule | null | undefined,
+): AppPageErrorComponent | null {
+  return module?.default ?? null;
 }
 
 export function createAppPageTreePath(
@@ -93,12 +106,15 @@ export function createAppPageTreePath(
   return `/${treePathSegments.join("/")}`;
 }
 
-export function createAppPageLayoutEntries<TModule extends AppPageModule>(
+export function createAppPageLayoutEntries<
+  TModule extends AppPageModule,
+  TErrorModule extends AppPageErrorModule,
+>(
   route: Pick<
-    AppPageRouteWiringRoute<TModule>,
+    AppPageRouteWiringRoute<TModule, TErrorModule>,
     "errors" | "layoutTreePositions" | "layouts" | "notFounds" | "routeSegments"
   >,
-): AppPageLayoutEntry<TModule>[] {
+): AppPageLayoutEntry<TModule, TErrorModule>[] {
   return route.layouts.map((layoutModule, index) => {
     const treePosition = route.layoutTreePositions?.[index] ?? 0;
     const treePath = createAppPageTreePath(route.routeSegments, treePosition);
@@ -165,9 +181,10 @@ export function resolveAppPageChildSegments(
   return resolvedSegments;
 }
 
-export function buildAppPageRouteElement<TModule extends AppPageModule>(
-  options: BuildAppPageRouteElementOptions<TModule>,
-): ReactNode {
+export function buildAppPageRouteElement<
+  TModule extends AppPageModule,
+  TErrorModule extends AppPageErrorModule,
+>(options: BuildAppPageRouteElementOptions<TModule, TErrorModule>): ReactNode {
   let element: ReactNode = (
     <LayoutSegmentProvider segmentMap={{ children: [] }}>{options.element}</LayoutSegmentProvider>
   );
@@ -191,9 +208,9 @@ export function buildAppPageRouteElement<TModule extends AppPageModule>(
     options.route.errors && options.route.errors.length > 0
       ? options.route.errors[options.route.errors.length - 1]
       : null;
-  const pageErrorComponent = getDefaultExport(options.route.error);
+  const pageErrorComponent = getErrorBoundaryExport(options.route.error);
   if (pageErrorComponent && options.route.error !== lastLayoutErrorModule) {
-    element = wrapWithErrorBoundary(pageErrorComponent, element);
+    element = <ErrorBoundary fallback={pageErrorComponent}>{element}</ErrorBoundary>;
   }
 
   const notFoundComponent =
@@ -219,9 +236,9 @@ export function buildAppPageRouteElement<TModule extends AppPageModule>(
 
   for (let index = layoutEntries.length - 1; index >= 0; index--) {
     const layoutEntry = layoutEntries[index];
-    const layoutErrorComponent = getDefaultExport(layoutEntry.errorModule);
+    const layoutErrorComponent = getErrorBoundaryExport(layoutEntry.errorModule);
     if (layoutErrorComponent) {
-      element = wrapWithErrorBoundary(layoutErrorComponent, element);
+      element = <ErrorBoundary fallback={layoutErrorComponent}>{element}</ErrorBoundary>;
     }
 
     const layoutComponent = getDefaultExport(layoutEntry.layoutModule);
@@ -283,9 +300,9 @@ export function buildAppPageRouteElement<TModule extends AppPageModule>(
         slotElement = <Suspense fallback={<SlotLoadingComponent />}>{slotElement}</Suspense>;
       }
 
-      const slotErrorComponent = getDefaultExport(slot.error);
+      const slotErrorComponent = getErrorBoundaryExport(slot.error);
       if (slotErrorComponent) {
-        slotElement = wrapWithErrorBoundary(slotErrorComponent, slotElement);
+        slotElement = <ErrorBoundary fallback={slotErrorComponent}>{slotElement}</ErrorBoundary>;
       }
 
       layoutProps[slotName] = slotElement;
@@ -308,9 +325,9 @@ export function buildAppPageRouteElement<TModule extends AppPageModule>(
     );
   }
 
-  const globalErrorComponent = getDefaultExport(options.globalErrorModule);
+  const globalErrorComponent = getErrorBoundaryExport(options.globalErrorModule);
   if (globalErrorComponent) {
-    element = wrapWithErrorBoundary(globalErrorComponent, element);
+    element = <ErrorBoundary fallback={globalErrorComponent}>{element}</ErrorBoundary>;
   }
 
   return element;
