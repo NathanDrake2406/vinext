@@ -399,6 +399,7 @@ async function renderNavigationPayload(
   payload: Promise<AppElements>,
   navigationSnapshot: ClientNavigationRenderSnapshot,
   targetHref: string,
+  navId: number,
   prePaintEffect: (() => void) | null = null,
   useTransition = true,
   actionType: "navigate" | "replace" = "navigate",
@@ -408,8 +409,7 @@ async function renderNavigationPayload(
     pendingNavigationCommits.set(renderId, resolve);
   });
 
-  // Wrap updateBrowserTree in try-catch to ensure counter is decremented
-  // if a synchronous error occurs before the async promise chain is established.
+  let snapshotActivated = false;
   try {
     const currentState = getBrowserRouterState();
     const pending = await createPendingNavigationCommit({
@@ -420,6 +420,16 @@ async function renderNavigationPayload(
       type: actionType,
     });
 
+    // After the await, a newer navigation may have started. Bail out to
+    // avoid dispatching stale elements into the React tree. Clean up the
+    // pending commit entry so it doesn't leak.
+    if (navId !== activeNavigationId) {
+      const resolve = pendingNavigationCommits.get(renderId);
+      pendingNavigationCommits.delete(renderId);
+      resolve?.();
+      return;
+    }
+
     if (shouldHardNavigate(currentState.rootLayoutTreePath, pending.rootLayoutTreePath)) {
       pendingNavigationCommits.delete(renderId);
       window.location.assign(targetHref);
@@ -428,6 +438,7 @@ async function renderNavigationPayload(
 
     queuePrePaintNavigationEffect(renderId, prePaintEffect);
     activateNavigationSnapshot();
+    snapshotActivated = true;
     dispatchBrowserTree(
       pending.action.elements,
       navigationSnapshot,
@@ -438,13 +449,18 @@ async function renderNavigationPayload(
       useTransition,
     );
   } catch (error) {
-    // Clean up pending state and decrement counter on synchronous error.
+    // Clean up pending state on error. Only decrement the snapshot counter
+    // if activateNavigationSnapshot() was actually called — if
+    // createPendingNavigationCommit() threw, the counter was never
+    // incremented so decrementing would underflow it.
     pendingNavigationPrePaintEffects.delete(renderId);
     const resolve = pendingNavigationCommits.get(renderId);
     pendingNavigationCommits.delete(renderId);
-    commitClientNavigationState();
+    if (snapshotActivated) {
+      commitClientNavigationState();
+    }
     resolve?.();
-    throw error; // Re-throw to maintain error propagation
+    throw error;
   }
 
   return committed;
@@ -719,6 +735,7 @@ async function main(): Promise<void> {
             cachedPayload,
             cachedNavigationSnapshot,
             href,
+            navId,
             createNavigationCommitEffect(href, historyUpdateMode, cachedParams),
             isSameRoute,
           );
@@ -799,6 +816,7 @@ async function main(): Promise<void> {
           rscPayload,
           navigationSnapshot,
           href,
+          navId,
           createNavigationCommitEffect(href, historyUpdateMode, navParams),
           isSameRoute,
         );
@@ -810,6 +828,9 @@ async function main(): Promise<void> {
         // catch from double-decrementing navigationSnapshotActiveCount.
         _snapshotPending = false;
       }
+      // Don't cache the response if this navigation was superseded during
+      // renderNavigationPayload's await — the elements were never dispatched.
+      if (navId !== activeNavigationId) return;
       // Store the visited response only after renderNavigationPayload succeeds.
       // If we stored it before and renderNavigationPayload threw, a future
       // back/forward navigation could replay a snapshot from a navigation that

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { UNMATCHED_SLOT, type AppElements } from "../server/app-elements.js";
+import { UNMATCHED_SLOT, type AppElementValue, type AppElements } from "../server/app-elements.js";
 import { notFound } from "./navigation.js";
 
 const EMPTY_ELEMENTS: AppElements = {};
@@ -22,7 +22,16 @@ export const ParallelSlotsContext = React.createContext<Readonly<
 > | null>(null);
 
 export function mergeElements(prev: AppElements, next: AppElements): AppElements {
-  return { ...prev, ...next };
+  const merged: Record<string, AppElementValue> = { ...prev, ...next };
+  // On soft navigation, unmatched parallel slots preserve their previous subtree
+  // instead of firing notFound(). Only hard navigation (full page load) should 404.
+  // This matches Next.js behavior for parallel route persistence.
+  for (const key of Object.keys(merged)) {
+    if (key.startsWith("slot:") && merged[key] === UNMATCHED_SLOT && key in prev) {
+      merged[key] = prev[key];
+    }
+  }
+  return merged;
 }
 
 export function Slot({

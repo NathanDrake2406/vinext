@@ -886,9 +886,15 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   const PageComponent = route.page?.default;
   if (!PageComponent) {
     const _noExportRouteId = "route:" + routePath;
+    let _noExportRootLayout = null;
+    if (route.layouts?.length > 0) {
+      const _tp = route.layoutTreePositions?.[0] ?? 0;
+      const _segs = route.routeSegments?.slice(0, _tp) ?? [];
+      _noExportRootLayout = _segs.length === 0 ? "/" : "/" + _segs.join("/");
+    }
     return {
       __route: _noExportRouteId,
-      __rootLayout: route.layouts?.length > 0 ? "/" : null,
+      __rootLayout: _noExportRootLayout,
       [_noExportRouteId]: createElement("div", null, "Page has no default export"),
     };
   }

@@ -1,6 +1,7 @@
 import React from "react";
 import { renderToReadableStream } from "react-dom/server.edge";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { UNMATCHED_SLOT } from "../packages/vinext/src/server/app-elements.js";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/",
@@ -190,6 +191,48 @@ describe("slot primitives", () => {
     expect(merged["layout:/"]).toBeDefined();
     expect(merged["page:/blog/hello"]).toBeDefined();
     expect(merged["slot:modal:/"]).not.toBeNull();
+  });
+
+  it("mergeElements preserves previous slot content when next marks it unmatched", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+
+    const previousSlotContent = React.createElement("div", null, "previous modal");
+    const merged = mergeElements(
+      {
+        "layout:/": React.createElement("div", null, "layout"),
+        "slot:modal:/": previousSlotContent,
+        "page:/dashboard": React.createElement("div", null, "dashboard"),
+      },
+      {
+        "page:/blog": React.createElement("div", null, "blog page"),
+        "slot:modal:/": UNMATCHED_SLOT,
+      },
+    );
+
+    // The slot should keep its previous content, not become UNMATCHED_SLOT.
+    // This matches Next.js soft navigation behavior: unmatched parallel slots
+    // preserve their previous subtree instead of showing 404.
+    expect(merged["slot:modal:/"]).toBe(previousSlotContent);
+    expect(merged["page:/blog"]).toBeDefined();
+    expect(merged["layout:/"]).toBeDefined();
+  });
+
+  it("mergeElements allows UNMATCHED_SLOT for slots absent from previous state", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+
+    const merged = mergeElements(
+      {
+        "layout:/": React.createElement("div", null, "layout"),
+        "page:/": React.createElement("div", null, "home"),
+      },
+      {
+        "page:/blog": React.createElement("div", null, "blog"),
+        "slot:modal:/": UNMATCHED_SLOT,
+      },
+    );
+
+    // No previous value to preserve — the sentinel passes through.
+    expect(merged["slot:modal:/"]).toBe(UNMATCHED_SLOT);
   });
 
   it("Slot renders element from resolved context", async () => {

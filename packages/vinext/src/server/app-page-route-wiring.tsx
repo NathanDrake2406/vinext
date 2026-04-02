@@ -10,6 +10,12 @@ import { LayoutSegmentProvider } from "../shims/layout-segment-context.js";
 import { MetadataHead, ViewportHead, type Metadata, type Viewport } from "../shims/metadata.js";
 import { Children, ParallelSlot, Slot } from "../shims/slot.js";
 import type { AppPageParams } from "./app-page-boundary.js";
+import {
+  createAppRenderDependency,
+  renderAfterAppDependencies,
+  renderWithAppDependencyBarrier,
+  type AppRenderDependency,
+} from "./app-render-dependency.js";
 
 type AppPageComponentProps = {
   children?: ReactNode;
@@ -285,12 +291,37 @@ export function buildAppPageElements<
   const pageId = `page:${options.routePath}`;
   const layoutEntries = createAppPageLayoutEntries(options.route);
   const templateEntries = createAppPageTemplateEntries(options.route);
+  const templateEntriesByTreePosition = new Map(
+    templateEntries.map((entry) => [entry.treePosition, entry] as const),
+  );
+  const layoutDependencies = layoutEntries.map(() => createAppRenderDependency());
+  const layoutDependenciesBefore: AppRenderDependency[][] = [];
+  const slotDependenciesByLayoutIndex: AppRenderDependency[][] = [];
+  const templateDependenciesById = new Map<string, AppRenderDependency>();
+  const templateDependenciesBeforeById = new Map<string, AppRenderDependency[]>();
+  const pageDependencies: AppRenderDependency[] = [];
   const routeThenableParams = options.makeThenableParams(options.matchedParams);
   const rootLayoutTreePath = layoutEntries[0]?.treePath ?? null;
 
+  for (let index = 0; index < layoutEntries.length; index++) {
+    layoutDependenciesBefore[index] = [...pageDependencies];
+    pageDependencies.push(layoutDependencies[index]);
+    slotDependenciesByLayoutIndex[index] = [...pageDependencies];
+
+    const templateEntry = templateEntriesByTreePosition.get(layoutEntries[index].treePosition);
+    if (!templateEntry) {
+      continue;
+    }
+
+    const templateDependency = createAppRenderDependency();
+    templateDependenciesById.set(templateEntry.id, templateDependency);
+    templateDependenciesBeforeById.set(templateEntry.id, [...pageDependencies]);
+    pageDependencies.push(templateDependency);
+  }
+
   elements[APP_ROUTE_KEY] = routeId;
   elements[APP_ROOT_LAYOUT_KEY] = rootLayoutTreePath;
-  elements[pageId] = options.element;
+  elements[pageId] = renderAfterAppDependencies(options.element, pageDependencies);
 
   for (const templateEntry of templateEntries) {
     const templateComponent = getDefaultExport(templateEntry.templateModule);
@@ -298,8 +329,19 @@ export function buildAppPageElements<
       continue;
     }
     const TemplateComponent = templateComponent;
-    elements[templateEntry.id] = (
-      <TemplateComponent params={options.matchedParams}>{<Children />}</TemplateComponent>
+    const templateDependency = templateDependenciesById.get(templateEntry.id);
+    const templateElement = (
+      <TemplateComponent params={options.matchedParams}>
+        {templateDependency ? (
+          renderWithAppDependencyBarrier(<Children />, templateDependency)
+        ) : (
+          <Children />
+        )}
+      </TemplateComponent>
+    );
+    elements[templateEntry.id] = renderAfterAppDependencies(
+      templateElement,
+      templateDependenciesBeforeById.get(templateEntry.id) ?? [],
     );
   }
 
@@ -323,10 +365,14 @@ export function buildAppPageElements<
     }
 
     const LayoutComponent = layoutComponent;
-    elements[layoutEntry.id] = (
+    const layoutElement = (
       <LayoutComponent {...layoutProps}>
-        <Children />
+        {renderWithAppDependencyBarrier(<Children />, layoutDependencies[index])}
       </LayoutComponent>
+    );
+    elements[layoutEntry.id] = renderAfterAppDependencies(
+      layoutElement,
+      layoutDependenciesBefore[index] ?? [],
     );
   }
 
@@ -377,7 +423,10 @@ export function buildAppPageElements<
       slotElement = <ErrorBoundary fallback={slotErrorComponent}>{slotElement}</ErrorBoundary>;
     }
 
-    elements[slotId] = slotElement;
+    elements[slotId] = renderAfterAppDependencies(
+      slotElement,
+      targetIndex >= 0 ? (slotDependenciesByLayoutIndex[targetIndex] ?? []) : [],
+    );
   }
 
   let routeChildren: ReactNode = (
