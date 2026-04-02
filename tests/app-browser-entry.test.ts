@@ -19,13 +19,11 @@ function createResolvedElements(
   rootLayoutTreePath: string | null,
   extraEntries: Record<string, unknown> = {},
 ) {
-  return Promise.resolve(
-    normalizeAppElements({
-      [APP_ROUTE_KEY]: routeId,
-      [APP_ROOT_LAYOUT_KEY]: rootLayoutTreePath,
-      ...extraEntries,
-    }),
-  );
+  return normalizeAppElements({
+    [APP_ROUTE_KEY]: routeId,
+    [APP_ROOT_LAYOUT_KEY]: rootLayoutTreePath,
+    ...extraEntries,
+  });
 }
 
 function createState(overrides: Partial<AppRouterState> = {}): AppRouterState {
@@ -64,13 +62,13 @@ describe("app browser entry state helpers", () => {
 
     expect(nextState.routeId).toBe("route:/next");
     expect(nextState.rootLayoutTreePath).toBe("/");
-    await expect(nextState.elements).resolves.toMatchObject({
+    expect(nextState.elements).toMatchObject({
       "layout:/": expect.anything(),
       "page:/next": expect.anything(),
     });
   });
 
-  it("replaces elements on replace", async () => {
+  it("replaces elements on replace", () => {
     const nextElements = createResolvedElements("route:/next", "/", {
       "page:/next": React.createElement("main", null, "next"),
     });
@@ -85,7 +83,7 @@ describe("app browser entry state helpers", () => {
     });
 
     expect(nextState.elements).toBe(nextElements);
-    await expect(nextState.elements).resolves.toMatchObject({
+    expect(nextState.elements).toMatchObject({
       "page:/next": expect.anything(),
     });
   });
@@ -99,7 +97,7 @@ describe("app browser entry state helpers", () => {
         rootLayoutTreePath: "/(marketing)",
       }),
       dispatch: vi.fn(),
-      nextElements: createResolvedElements("route:/dashboard", "/(dashboard)"),
+      nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/(dashboard)")),
       onHardNavigate: assign,
       targetHref: "/dashboard",
       transition: (callback) => callback(),
@@ -151,7 +149,7 @@ describe("app browser entry state helpers", () => {
   it("builds a merge commit for refresh and server-action payloads", async () => {
     const refreshCommit = await createPendingNavigationCommit({
       currentState: createState(),
-      nextElements: createResolvedElements("route:/dashboard", "/"),
+      nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
       navigationSnapshot: createState().navigationSnapshot,
       type: "navigate",
     });

@@ -1,4 +1,4 @@
-import React, { Suspense } from "react";
+import React from "react";
 import { renderToReadableStream } from "react-dom/server.edge";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -6,31 +6,12 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
 function createContextProvider<TValue>(
   context: React.Context<TValue>,
   value: TValue,
   child: React.ReactNode,
 ): React.ReactElement {
   return React.createElement(context.Provider, { value }, child);
-}
-
-function createDeferred<T>(): Deferred<T> {
-  let resolvePromise: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((resolve) => {
-    resolvePromise = resolve;
-  });
-  if (!resolvePromise) {
-    throw new Error("Deferred promise resolver was not created");
-  }
-  return {
-    promise,
-    resolve: resolvePromise,
-  };
 }
 
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -62,7 +43,7 @@ describe("slot primitives", () => {
     expect(typeof mod.Slot).toBe("function");
     expect(typeof mod.Children).toBe("function");
     expect(typeof mod.ParallelSlot).toBe("function");
-    expect(typeof mod.mergeElementsPromise).toBe("function");
+    expect(typeof mod.mergeElements).toBe("function");
     expect(mod.ElementsContext).toBeDefined();
     expect(mod.ChildrenContext).toBeDefined();
     expect(mod.ParallelSlotsContext).toBeDefined();
@@ -101,7 +82,7 @@ describe("slot primitives", () => {
 
     const slotElement = createContextProvider(
       mod.ElementsContext,
-      Promise.resolve({ "layout:/": React.createElement(LayoutShell) }),
+      { "layout:/": React.createElement(LayoutShell) },
       React.createElement(
         mod.Slot,
         {
@@ -125,7 +106,7 @@ describe("slot primitives", () => {
     const html = await renderHtml(
       createContextProvider(
         mod.ElementsContext,
-        Promise.resolve({}),
+        {},
         React.createElement(mod.Slot, { id: "slot:modal:/" }),
       ),
     );
@@ -138,7 +119,7 @@ describe("slot primitives", () => {
     const renderPromise = renderHtml(
       createContextProvider(
         mod.ElementsContext,
-        Promise.resolve({ "slot:modal:/": mod.UNMATCHED_SLOT }),
+        { "slot:modal:/": mod.UNMATCHED_SLOT },
         React.createElement(mod.Slot, { id: "slot:modal:/" }),
       ),
     );
@@ -158,7 +139,7 @@ describe("slot primitives", () => {
     const stream = await renderToReadableStream(
       createContextProvider(
         mod.ElementsContext,
-        Promise.resolve({ "slot:modal:/": null }),
+        { "slot:modal:/": null },
         React.createElement(mod.Slot, { id: "slot:modal:/" }),
       ),
       {
@@ -191,18 +172,18 @@ describe("slot primitives", () => {
     expect(normalized["slot:modal:/"]).toBe(mod.UNMATCHED_SLOT);
   });
 
-  it("mergeElementsPromise shallow-merges previous and next elements", async () => {
-    const { mergeElementsPromise } = await import("../packages/vinext/src/shims/slot.js");
+  it("mergeElements shallow-merges previous and next elements", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
 
-    const merged = await mergeElementsPromise(
-      Promise.resolve({
+    const merged = mergeElements(
+      {
         "layout:/": React.createElement("div", null, "layout"),
         "slot:modal:/": React.createElement("div", null, "previous slot"),
-      }),
-      Promise.resolve({
+      },
+      {
         "page:/blog/hello": React.createElement("div", null, "page"),
         "slot:modal:/": React.createElement("div", null, "next slot"),
-      }),
+      },
     );
 
     expect(Object.keys(merged)).toEqual(["layout:/", "slot:modal:/", "page:/blog/hello"]);
@@ -211,69 +192,27 @@ describe("slot primitives", () => {
     expect(merged["slot:modal:/"]).not.toBeNull();
   });
 
-  it("mergeElementsPromise caches by input promise pair", async () => {
-    const { mergeElementsPromise } = await import("../packages/vinext/src/shims/slot.js");
-
-    const previous = Promise.resolve({ "layout:/": React.createElement("div", null, "layout") });
-    const next = Promise.resolve({ "page:/blog/hello": React.createElement("div", null, "page") });
-
-    const first = mergeElementsPromise(previous, next);
-    const second = mergeElementsPromise(previous, next);
-    const third = mergeElementsPromise(previous, Promise.resolve({}));
-
-    expect(first).toBe(second);
-    expect(first).not.toBe(third);
-  });
-
-  it("Slot suspends on the elements promise and streams the Suspense fallback first", async () => {
+  it("Slot renders element from resolved context", async () => {
     const mod = await import("../packages/vinext/src/shims/slot.js");
-    const deferred = createDeferred<Awaited<React.ContextType<typeof mod.ElementsContext>>>();
 
     const stream = await renderToReadableStream(
-      React.createElement(
-        Suspense,
-        { fallback: React.createElement("p", null, "loading slot") },
-        createContextProvider(
-          mod.ElementsContext,
-          deferred.promise,
-          React.createElement(mod.Slot, { id: "layout:/" }),
-        ),
+      createContextProvider(
+        mod.ElementsContext,
+        { "layout:/": React.createElement("div", null, "resolved slot") },
+        React.createElement(mod.Slot, { id: "layout:/" }),
       ),
     );
 
     const reader = stream.getReader();
     const decoder = new TextDecoder();
-    const firstChunkPromise = reader.read();
-    const firstReadState = await Promise.race([
-      firstChunkPromise.then(() => "resolved"),
-      Promise.resolve("pending"),
-    ]);
-
-    expect(firstReadState).toBe("pending");
-
-    const resolvedPromise = new Promise<void>((resolve) => {
-      setTimeout(() => {
-        deferred.resolve({
-          "layout:/": React.createElement("div", null, "resolved slot"),
-        });
-        resolve();
-      }, 20);
-    });
-
-    const firstChunk = await firstChunkPromise;
-    const firstHtml = decoder.decode(firstChunk.value, { stream: true });
-    await resolvedPromise;
-
-    let rest = "";
+    let html = "";
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      rest += decoder.decode(value, { stream: true });
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
     }
-    rest += decoder.decode();
+    html += decoder.decode();
 
-    expect(firstHtml + rest).toContain("resolved slot");
-  }, 10000);
+    expect(html).toContain("resolved slot");
+  });
 });
