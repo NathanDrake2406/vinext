@@ -3,6 +3,7 @@ import ReactDOMServer from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
 import {
+  buildAppPageElements,
   buildAppPageRouteElement,
   createAppPageLayoutEntries,
   resolveAppPageChildSegments,
@@ -148,5 +149,57 @@ describe("app page route wiring helpers", () => {
     expect(html).toContain('data-page-segments=""');
     expect(html).toContain('data-segments="(marketing)|blog|post"');
     expect(html).toContain('data-segments="blog|post"');
+  });
+
+  it("builds a flat elements map with route, layout, template, page, and slot entries", () => {
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: { slug: "post" },
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null, null],
+        layoutTreePositions: [0, 1],
+        layouts: [{ default: RootLayout }, { default: GroupLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null, null],
+        routeSegments: ["(marketing)", "blog", "[slug]"],
+        slots: {
+          sidebar: {
+            default: null,
+            error: null,
+            layout: { default: SlotLayout },
+            layoutIndex: 0,
+            loading: null,
+            page: { default: SlotPage },
+          },
+        },
+        templateTreePositions: [1],
+        templates: [{ default: Template }],
+      },
+      routePath: "/blog/post",
+      rootNotFoundModule: null,
+      slotOverrides: {
+        sidebar: {
+          pageModule: { default: SlotPage },
+          params: { slug: "post" },
+          props: { label: "intercepted" },
+        },
+      },
+    });
+
+    expect(elements.__route).toBe("route:/blog/post");
+    expect(elements.__rootLayout).toBe("/");
+    expect(elements["layout:/"]).toBeDefined();
+    expect(elements["layout:/(marketing)"]).toBeDefined();
+    expect(elements["template:/(marketing)"]).toBeDefined();
+    expect(elements["page:/blog/post"]).toBeDefined();
+    expect(elements["slot:sidebar:/"]).toBeDefined();
+    expect(elements["route:/blog/post"]).toBeDefined();
   });
 });

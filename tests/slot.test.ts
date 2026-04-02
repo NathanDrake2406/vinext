@@ -177,6 +177,20 @@ describe("slot primitives", () => {
     expect(errors).toEqual([]);
   });
 
+  it("normalizes the server unmatched-slot marker to the client sentinel", async () => {
+    const { normalizeAppElements, APP_UNMATCHED_SLOT_WIRE_VALUE } =
+      await import("../packages/vinext/src/server/app-elements.js");
+    const mod = await import("../packages/vinext/src/shims/slot.js");
+
+    const normalized = normalizeAppElements({
+      __rootLayout: "/",
+      __route: "route:/dashboard",
+      "slot:modal:/": APP_UNMATCHED_SLOT_WIRE_VALUE,
+    });
+
+    expect(normalized["slot:modal:/"]).toBe(mod.UNMATCHED_SLOT);
+  });
+
   it("mergeElementsPromise shallow-merges previous and next elements", async () => {
     const { mergeElementsPromise } = await import("../packages/vinext/src/shims/slot.js");
 

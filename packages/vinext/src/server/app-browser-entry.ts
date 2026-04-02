@@ -5,10 +5,9 @@ import {
   startTransition,
   use,
   useLayoutEffect,
-  useState,
+  useReducer,
   type Dispatch,
   type ReactNode,
-  type SetStateAction,
 } from "react";
 import {
   createFromFetch,
@@ -46,22 +45,31 @@ import {
   createProgressiveRscStream,
   getVinextBrowserGlobal,
 } from "./app-browser-stream.js";
+import {
+  normalizeAppElements,
+  readAppElementsMetadata,
+  type AppElements,
+  type AppWireElements,
+} from "./app-elements.js";
+import {
+  createPendingNavigationCommit,
+  routerReducer,
+  shouldHardNavigate,
+  type AppRouterAction,
+  type AppRouterState,
+} from "./app-browser-state.js";
+import { ElementsContext, Slot } from "../shims/slot.js";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 
 type ServerActionResult = {
-  root: ReactNode;
+  root: AppWireElements;
   returnValue?: {
     ok: boolean;
     data: unknown;
   };
 };
 
-type BrowserTreeState = {
-  renderId: number;
-  node: ReactNode;
-  navigationSnapshot: ClientNavigationRenderSnapshot;
-};
 type NavigationKind = "navigate" | "traverse" | "refresh";
 type HistoryUpdateMode = "push" | "replace";
 type VisitedResponseCacheEntry = {
@@ -89,7 +97,8 @@ let nextNavigationRenderId = 0;
 let activeNavigationId = 0;
 const pendingNavigationCommits = new Map<number, () => void>();
 const pendingNavigationPrePaintEffects = new Map<number, () => void>();
-let setBrowserTreeState: Dispatch<SetStateAction<BrowserTreeState>> | null = null;
+let dispatchBrowserRouterAction: Dispatch<AppRouterAction> | null = null;
+let readBrowserRouterState: (() => AppRouterState) | null = null;
 let latestClientParams: Record<string, string | string[]> = {};
 const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 
@@ -97,11 +106,18 @@ function isServerActionResult(value: unknown): value is ServerActionResult {
   return !!value && typeof value === "object" && "root" in value;
 }
 
-function getBrowserTreeStateSetter(): Dispatch<SetStateAction<BrowserTreeState>> {
-  if (!setBrowserTreeState) {
-    throw new Error("[vinext] Browser tree state is not initialized");
+function getBrowserRouterDispatch(): Dispatch<AppRouterAction> {
+  if (!dispatchBrowserRouterAction) {
+    throw new Error("[vinext] Browser router dispatch is not initialized");
   }
-  return setBrowserTreeState;
+  return dispatchBrowserRouterAction;
+}
+
+function getBrowserRouterState(): AppRouterState {
+  if (!readBrowserRouterState) {
+    throw new Error("[vinext] Browser router state is not initialized");
+  }
+  return readBrowserRouterState();
 }
 
 function applyClientParams(params: Record<string, string | string[]>): void {
@@ -171,9 +187,11 @@ function drainPrePaintEffects(upToRenderId: number): void {
 function createNavigationCommitEffect(
   href: string,
   historyUpdateMode: HistoryUpdateMode | undefined,
+  params: Record<string, string | string[]>,
 ): () => void {
   return () => {
     const targetHref = new URL(href, window.location.origin).href;
+    stageClientParams(params);
 
     if (historyUpdateMode === "replace" && window.location.href !== targetHref) {
       replaceHistoryStateWithoutNotify(null, "", href);
@@ -286,34 +304,46 @@ function NavigationCommitSignal({
   return children;
 }
 
+function normalizeAppElementsPromise(payload: Promise<AppWireElements>): Promise<AppElements> {
+  return payload.then((elements) => normalizeAppElements(elements));
+}
+
 function BrowserRoot({
-  initialNode,
+  initialElements,
   initialNavigationSnapshot,
 }: {
-  initialNode: ReactNode | Promise<ReactNode>;
+  initialElements: Promise<AppElements>;
   initialNavigationSnapshot: ClientNavigationRenderSnapshot;
 }) {
-  const resolvedNode = use(initialNode as Promise<ReactNode>);
-  const [treeState, setTreeState] = useState<BrowserTreeState>({
-    renderId: 0,
-    node: resolvedNode,
+  const resolvedElements = use(initialElements);
+  const initialMetadata = readAppElementsMetadata(resolvedElements);
+  const [treeState, dispatchTreeState] = useReducer(routerReducer, {
+    elements: Promise.resolve(resolvedElements),
     navigationSnapshot: initialNavigationSnapshot,
+    renderId: 0,
+    rootLayoutTreePath: initialMetadata.rootLayoutTreePath,
+    routeId: initialMetadata.routeId,
   });
 
   // Assign the module-level setter via useLayoutEffect instead of during render
   // to avoid side effects that React Strict Mode / concurrent features may
   // call multiple times. useLayoutEffect fires synchronously during commit,
-  // before hydrateRoot returns to main(), so setBrowserTreeState is available
-  // before __VINEXT_RSC_NAVIGATE__ is assigned. setTreeState is referentially
+  // before hydrateRoot returns to main(), so the router dispatch is available
+  // before __VINEXT_RSC_NAVIGATE__ is assigned. dispatchTreeState is referentially
   // stable so the effect only runs on mount.
   useLayoutEffect(() => {
-    setBrowserTreeState = setTreeState;
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- setTreeState is referentially stable
+    dispatchBrowserRouterAction = dispatchTreeState;
+    readBrowserRouterState = () => treeState;
+  }, [dispatchTreeState, treeState]);
 
   const committedTree = createElement(
     NavigationCommitSignal,
     { renderId: treeState.renderId },
-    treeState.node,
+    createElement(
+      ElementsContext.Provider,
+      { value: treeState.elements },
+      createElement(Slot, { id: treeState.routeId }),
+    ),
   );
 
   const ClientNavigationRenderContext = getClientNavigationRenderContext();
@@ -328,18 +358,17 @@ function BrowserRoot({
   );
 }
 
-function updateBrowserTree(
-  node: ReactNode | Promise<ReactNode>,
+function dispatchBrowserTree(
+  elements: Promise<AppElements>,
   navigationSnapshot: ClientNavigationRenderSnapshot,
   renderId: number,
+  actionType: "navigate" | "replace",
+  routeId: string,
+  rootLayoutTreePath: string | null,
   useTransitionMode: boolean,
   snapshotActivated = false,
 ): void {
-  const setter = getBrowserTreeStateSetter();
-
-  const resolvedThenSet = (resolvedNode: ReactNode) => {
-    setter({ renderId, node: resolvedNode, navigationSnapshot });
-  };
+  const dispatch = getBrowserRouterDispatch();
 
   // Balance the activate/commit pairing if the async payload rejects after
   // activateNavigationSnapshot() was called. Only decrement when snapshotActivated
@@ -356,47 +385,68 @@ function updateBrowserTree(
     resolve?.();
   };
 
-  if (node != null && typeof (node as PromiseLike<ReactNode>).then === "function") {
-    const thenable = node as PromiseLike<ReactNode>;
+  const applyAction = () =>
+    dispatch({
+      elements,
+      navigationSnapshot,
+      renderId,
+      rootLayoutTreePath,
+      routeId,
+      type: actionType,
+    });
+
+  void elements.then(() => {
     if (useTransitionMode) {
-      void thenable.then(
-        (resolved) => startTransition(() => resolvedThenSet(resolved)),
-        handleAsyncError,
-      );
+      startTransition(applyAction);
     } else {
-      void thenable.then(resolvedThenSet, handleAsyncError);
+      applyAction();
     }
-    return;
-  }
-
-  const syncNode = node as ReactNode;
-  if (useTransitionMode) {
-    startTransition(() => resolvedThenSet(syncNode));
-    return;
-  }
-
-  resolvedThenSet(syncNode);
+  }, handleAsyncError);
 }
 
-function renderNavigationPayload(
-  payload: Promise<ReactNode> | ReactNode,
+async function renderNavigationPayload(
+  payload: Promise<AppElements>,
   navigationSnapshot: ClientNavigationRenderSnapshot,
+  targetHref: string,
   prePaintEffect: (() => void) | null = null,
   useTransition = true,
+  actionType: "navigate" | "replace" = "navigate",
 ): Promise<void> {
   const renderId = ++nextNavigationRenderId;
-  queuePrePaintNavigationEffect(renderId, prePaintEffect);
-
   const committed = new Promise<void>((resolve) => {
     pendingNavigationCommits.set(renderId, resolve);
   });
 
-  activateNavigationSnapshot();
-
   // Wrap updateBrowserTree in try-catch to ensure counter is decremented
   // if a synchronous error occurs before the async promise chain is established.
   try {
-    updateBrowserTree(payload, navigationSnapshot, renderId, useTransition, true);
+    const currentState = getBrowserRouterState();
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: payload,
+      navigationSnapshot,
+      renderId,
+      type: actionType,
+    });
+
+    if (shouldHardNavigate(currentState.rootLayoutTreePath, pending.rootLayoutTreePath)) {
+      pendingNavigationCommits.delete(renderId);
+      window.location.assign(targetHref);
+      return;
+    }
+
+    queuePrePaintNavigationEffect(renderId, prePaintEffect);
+    activateNavigationSnapshot();
+    dispatchBrowserTree(
+      pending.action.elements,
+      navigationSnapshot,
+      renderId,
+      actionType,
+      pending.routeId,
+      pending.rootLayoutTreePath,
+      useTransition,
+      true,
+    );
   } catch (error) {
     // Clean up pending state and decrement counter on synchronous error.
     pendingNavigationPrePaintEffects.delete(renderId);
@@ -534,7 +584,7 @@ function registerServerActionCallback(): void {
 
     clearClientNavigationCaches();
 
-    const result = await createFromFetch<ServerActionResult | ReactNode>(
+    const result = await createFromFetch<ServerActionResult | AppWireElements>(
       Promise.resolve(fetchResponse),
       { temporaryReferences },
     );
@@ -548,10 +598,24 @@ function registerServerActionCallback(): void {
     // If server actions ever trigger URL changes via RSC payload (instead of hard
     // redirects), this would need renderNavigationPayload() + snapshotActivated=true.
     if (isServerActionResult(result)) {
-      updateBrowserTree(
-        result.root,
-        createClientNavigationRenderSnapshot(window.location.href, latestClientParams),
-        ++nextNavigationRenderId,
+      const navigationSnapshot = createClientNavigationRenderSnapshot(
+        window.location.href,
+        latestClientParams,
+      );
+      const pending = await createPendingNavigationCommit({
+        currentState: getBrowserRouterState(),
+        nextElements: Promise.resolve(normalizeAppElements(result.root)),
+        navigationSnapshot,
+        renderId: ++nextNavigationRenderId,
+        type: "navigate",
+      });
+      dispatchBrowserTree(
+        pending.action.elements,
+        navigationSnapshot,
+        pending.action.renderId,
+        "navigate",
+        pending.routeId,
+        pending.rootLayoutTreePath,
         false,
       );
       if (result.returnValue) {
@@ -561,11 +625,24 @@ function registerServerActionCallback(): void {
       return undefined;
     }
 
-    // Same reasoning as above: snapshotActivated omitted intentionally.
-    updateBrowserTree(
-      result,
-      createClientNavigationRenderSnapshot(window.location.href, latestClientParams),
-      ++nextNavigationRenderId,
+    const navigationSnapshot = createClientNavigationRenderSnapshot(
+      window.location.href,
+      latestClientParams,
+    );
+    const pending = await createPendingNavigationCommit({
+      currentState: getBrowserRouterState(),
+      nextElements: Promise.resolve(normalizeAppElements(result)),
+      navigationSnapshot,
+      renderId: ++nextNavigationRenderId,
+      type: "navigate",
+    });
+    dispatchBrowserTree(
+      pending.action.elements,
+      navigationSnapshot,
+      pending.action.renderId,
+      "navigate",
+      pending.routeId,
+      pending.rootLayoutTreePath,
       false,
     );
     return result;
@@ -576,7 +653,7 @@ async function main(): Promise<void> {
   registerServerActionCallback();
 
   const rscStream = await readInitialRscStream();
-  const root = createFromReadableStream<ReactNode>(rscStream);
+  const root = normalizeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
   const initialNavigationSnapshot = createClientNavigationRenderSnapshot(
     window.location.href,
     latestClientParams,
@@ -585,7 +662,7 @@ async function main(): Promise<void> {
   window.__VINEXT_RSC_ROOT__ = hydrateRoot(
     document,
     createElement(BrowserRoot, {
-      initialNode: root,
+      initialElements: root,
       initialNavigationSnapshot,
     }),
     import.meta.env.DEV ? { onCaughtError() {} } : undefined,
@@ -625,8 +702,6 @@ async function main(): Promise<void> {
         stripBasePath(url.pathname, __basePath) ===
         stripBasePath(window.location.pathname, __basePath);
       const cachedRoute = getVisitedResponse(rscUrl, navigationKind);
-      const navigationCommitEffect = createNavigationCommitEffect(href, historyUpdateMode);
-
       if (cachedRoute) {
         // Check stale-navigation before and after createFromFetch. The pre-check
         // avoids wasted parse work; the post-check catches supersessions that
@@ -642,23 +717,19 @@ async function main(): Promise<void> {
         // wrapping only) — no stale-navigation recheck needed between here and the
         // next await.
         const cachedNavigationSnapshot = createClientNavigationRenderSnapshot(href, cachedParams);
-        const cachedPayload = await createFromFetch<ReactNode>(
-          Promise.resolve(restoreRscResponse(cachedRoute.response)),
+        const cachedPayload = normalizeAppElementsPromise(
+          createFromFetch<AppWireElements>(
+            Promise.resolve(restoreRscResponse(cachedRoute.response)),
+          ),
         );
         if (navId !== activeNavigationId) return;
-        // Stage params only after confirming this navigation hasn't been superseded.
-        // Set _snapshotPending before stageClientParams: if renderNavigationPayload
-        // throws synchronously, its inner catch calls commitClientNavigationState()
-        // which would flush pendingClientParams for a route that never rendered.
-        // Ordering _snapshotPending first makes the intent explicit — params are
-        // staged as part of an in-flight snapshot, not as a standalone side-effect.
         _snapshotPending = true; // Set before renderNavigationPayload
-        stageClientParams(cachedParams); // NB: if this throws, outer catch hard-navigates, resetting all JS state
         try {
           await renderNavigationPayload(
             cachedPayload,
             cachedNavigationSnapshot,
-            navigationCommitEffect,
+            href,
+            createNavigationCommitEffect(href, historyUpdateMode, cachedParams),
             isSameRoute,
           );
         } finally {
@@ -726,23 +797,19 @@ async function main(): Promise<void> {
 
       if (navId !== activeNavigationId) return;
 
-      const rscPayload = await createFromFetch<ReactNode>(
-        Promise.resolve(restoreRscResponse(responseSnapshot)),
+      const rscPayload = normalizeAppElementsPromise(
+        createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(responseSnapshot))),
       );
 
       if (navId !== activeNavigationId) return;
 
-      // Stage params only after confirming this navigation hasn't been superseded
-      // (avoids stale cache entries). Set _snapshotPending before stageClientParams
-      // for the same reason as the cached path above: ensures params are only staged
-      // as part of an in-flight snapshot.
       _snapshotPending = true; // Set before renderNavigationPayload
-      stageClientParams(navParams); // NB: if this throws, outer catch hard-navigates, resetting all JS state
       try {
         await renderNavigationPayload(
           rscPayload,
           navigationSnapshot,
-          navigationCommitEffect,
+          href,
+          createNavigationCommitEffect(href, historyUpdateMode, navParams),
           isSameRoute,
         );
       } finally {
@@ -801,14 +868,28 @@ async function main(): Promise<void> {
     import.meta.hot.on("rsc:update", async () => {
       try {
         clearClientNavigationCaches();
-        const rscPayload = await createFromFetch<ReactNode>(
-          fetch(toRscUrl(window.location.pathname + window.location.search)),
+        const navigationSnapshot = createClientNavigationRenderSnapshot(
+          window.location.href,
+          latestClientParams,
         );
-        // HMR updates skip renderNavigationPayload — no snapshot activated.
-        updateBrowserTree(
-          rscPayload,
-          createClientNavigationRenderSnapshot(window.location.href, latestClientParams),
-          ++nextNavigationRenderId,
+        const pending = await createPendingNavigationCommit({
+          currentState: getBrowserRouterState(),
+          nextElements: normalizeAppElementsPromise(
+            createFromFetch<AppWireElements>(
+              fetch(toRscUrl(window.location.pathname + window.location.search)),
+            ),
+          ),
+          navigationSnapshot,
+          renderId: ++nextNavigationRenderId,
+          type: "replace",
+        });
+        dispatchBrowserTree(
+          pending.action.elements,
+          navigationSnapshot,
+          pending.action.renderId,
+          "replace",
+          pending.routeId,
+          pending.rootLayoutTreePath,
           false,
         );
       } catch (error) {
@@ -818,4 +899,6 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+if (typeof document !== "undefined") {
+  void main();
+}

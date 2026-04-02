@@ -210,6 +210,7 @@ ${interceptEntries.join(",\n")}
     routeHandler: ${route.routePath ? getImportVar(route.routePath) : "null"},
     layouts: [${layoutVars.join(", ")}],
     routeSegments: ${JSON.stringify(route.routeSegments)},
+    templateTreePositions: ${JSON.stringify(route.templateTreePositions)},
     layoutTreePositions: ${JSON.stringify(route.layoutTreePositions)},
     templates: [${templateVars.join(", ")}],
     errors: [${layoutErrorVars.join(", ")}],
@@ -378,7 +379,7 @@ import {
   renderAppPageHttpAccessFallback as __renderAppPageHttpAccessFallback,
 } from ${JSON.stringify(appPageBoundaryRenderPath)};
 import {
-  buildAppPageRouteElement as __buildAppPageRouteElement,
+  buildAppPageElements as __buildAppPageElements,
   resolveAppPageChildSegments as __resolveAppPageChildSegments,
 } from ${JSON.stringify(appPageRouteWiringPath)};
 import {
@@ -881,7 +882,7 @@ function findIntercept(pathname) {
   return null;
 }
 
-async function buildPageElement(route, params, opts, searchParams) {
+async function buildPageElements(route, params, routePath, opts, searchParams) {
   const PageComponent = route.page?.default;
   if (!PageComponent) {
     return createElement("div", null, "Page has no default export");
@@ -982,13 +983,13 @@ async function buildPageElement(route, params, opts, searchParams) {
     // dynamic, and this avoids false positives from React internals.
     if (hasSearchParams) markDynamicUsage();
   }
-  return __buildAppPageRouteElement({
+  return __buildAppPageElements({
     element: createElement(PageComponent, pageProps),
-    globalErrorModule: ${globalErrorVar ? globalErrorVar : "null"},
     makeThenableParams,
     matchedParams: params,
     resolvedMetadata,
     resolvedViewport,
+    routePath,
     rootNotFoundModule: ${rootNotFoundVar ? rootNotFoundVar : "null"},
     route,
     slotOverrides:
@@ -1701,7 +1702,13 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           searchParams: url.searchParams,
           params: actionParams,
         });
-        element = buildPageElement(actionRoute, actionParams, undefined, url.searchParams);
+        element = buildPageElements(
+          actionRoute,
+          actionParams,
+          cleanPathname,
+          undefined,
+          url.searchParams,
+        );
       } else {
         element = createElement("div", null, "Page not found");
       }
@@ -2055,7 +2062,13 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         return _runWithUnifiedCtx(__revalUCtx, async () => {
           _ensureFetchPatch();
           setNavigationContext({ pathname: cleanPathname, searchParams: new URLSearchParams(), params });
-          const __revalElement = await buildPageElement(route, params, undefined, new URLSearchParams());
+          const __revalElement = await buildPageElements(
+            route,
+            params,
+            cleanPathname,
+            undefined,
+            new URLSearchParams(),
+          );
           const __revalOnError = createRscOnErrorHandler(request, cleanPathname, route.pattern);
           const __revalRscStream = renderToReadableStream(__revalElement, { onError: __revalOnError });
           const __revalRscCapture = __teeAppPageRscStreamForCapture(__revalRscStream, true);
@@ -2104,7 +2117,15 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   // If the target URL matches an intercepting route in a parallel slot,
   // render the source route with the intercepting page in the slot.
   const __interceptResult = await __resolveAppPageIntercept({
-    buildPageElement,
+    buildPageElement(interceptRoute, interceptParams, interceptOpts, interceptSearchParams) {
+      return buildPageElements(
+        interceptRoute,
+        interceptParams,
+        cleanPathname,
+        interceptOpts,
+        interceptSearchParams,
+      );
+    },
     cleanPathname,
     currentRoute: route,
     findIntercept,
@@ -2152,7 +2173,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
 
   const __pageBuildResult = await __buildAppPageElement({
     buildPageElement() {
-      return buildPageElement(route, params, interceptOpts, url.searchParams);
+      return buildPageElements(route, params, cleanPathname, interceptOpts, url.searchParams);
     },
     renderErrorBoundaryPage(buildErr) {
       return renderErrorBoundaryPage(route, buildErr, isRscRequest, request, params);

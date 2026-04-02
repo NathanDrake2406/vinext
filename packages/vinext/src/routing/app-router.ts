@@ -104,6 +104,8 @@ export type AppRoute = {
    * Used at render time to compute the child segments for useSelectedLayoutSegments().
    */
   routeSegments: string[];
+  /** Tree position (directory depth from app/ root) for each template. */
+  templateTreePositions?: number[];
   /**
    * Tree position (directory depth from app/ root) for each layout.
    * Used to slice routeSegments and determine which segments are below each layout.
@@ -327,6 +329,7 @@ function discoverSlotSubRoutes(
         forbiddenPath: parentRoute.forbiddenPath,
         unauthorizedPath: parentRoute.unauthorizedPath,
         routeSegments: [...parentRoute.routeSegments, ...rawSegments],
+        templateTreePositions: parentRoute.templateTreePositions,
         layoutTreePositions: parentRoute.layoutTreePositions,
         isDynamic: parentRoute.isDynamic || subIsDynamic,
         params: [...parentRoute.params, ...subParams],
@@ -405,6 +408,7 @@ function fileToAppRoute(
   // Discover layouts and templates from root to leaf
   const layouts = discoverLayouts(segments, appDir, matcher);
   const templates = discoverTemplates(segments, appDir, matcher);
+  const templateTreePositions = computeLayoutTreePositions(appDir, templates);
 
   // Compute the tree position (directory depth) for each layout.
   const layoutTreePositions = computeLayoutTreePositions(appDir, layouts);
@@ -449,6 +453,7 @@ function fileToAppRoute(
     forbiddenPath,
     unauthorizedPath,
     routeSegments: segments,
+    templateTreePositions,
     layoutTreePositions,
     isDynamic,
     params,

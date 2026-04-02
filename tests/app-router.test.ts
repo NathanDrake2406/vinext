@@ -128,6 +128,24 @@ describe("App Router integration", () => {
     expect(text.length).toBeGreaterThan(0);
   });
 
+  it("returns flat payload metadata for app route RSC responses", async () => {
+    const res = await fetch(`${baseUrl}/dashboard.rsc`, {
+      headers: { Accept: "text/x-component" },
+    });
+    const rscText = await res.text();
+    if (res.status !== 200) {
+      throw new Error(rscText);
+    }
+    expect(res.headers.get("content-type")).toContain("text/x-component");
+    expect(rscText).toContain("__route");
+    expect(rscText).toContain("__rootLayout");
+    expect(rscText).toContain("route:/dashboard");
+    expect(rscText).toContain("layout:/");
+    expect(rscText).toContain("layout:/dashboard");
+    expect(rscText).toContain("slot:team:/dashboard");
+    expect(rscText).toContain("slot:analytics:/dashboard");
+  });
+
   it("wraps pages in the root layout", async () => {
     const res = await fetch(`${baseUrl}/about`);
     const html = await res.text();

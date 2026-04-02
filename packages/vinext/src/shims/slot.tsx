@@ -1,16 +1,18 @@
 "use client";
 
 import * as React from "react";
+import { UNMATCHED_SLOT, type AppElements } from "../server/app-elements.js";
 import { notFound } from "./navigation.js";
 
-type Elements = Record<string, React.ReactNode | typeof UNMATCHED_SLOT>;
+const EMPTY_ELEMENTS_PROMISE = Promise.resolve<AppElements>({});
+const mergeCache = new WeakMap<
+  Promise<AppElements>,
+  WeakMap<Promise<AppElements>, Promise<AppElements>>
+>();
 
-const EMPTY_ELEMENTS_PROMISE = Promise.resolve<Elements>({});
-const mergeCache = new WeakMap<Promise<Elements>, WeakMap<Promise<Elements>, Promise<Elements>>>();
+export { UNMATCHED_SLOT };
 
-export const UNMATCHED_SLOT = Symbol.for("vinext.unmatchedSlot");
-
-export const ElementsContext = React.createContext<Promise<Elements>>(EMPTY_ELEMENTS_PROMISE);
+export const ElementsContext = React.createContext<Promise<AppElements>>(EMPTY_ELEMENTS_PROMISE);
 
 export const ChildrenContext = React.createContext<React.ReactNode>(null);
 
@@ -19,9 +21,9 @@ export const ParallelSlotsContext = React.createContext<Readonly<
 > | null>(null);
 
 export function mergeElementsPromise(
-  prev: Promise<Elements>,
-  next: Promise<Elements>,
-): Promise<Elements> {
+  prev: Promise<AppElements>,
+  next: Promise<AppElements>,
+): Promise<AppElements> {
   let nextCache = mergeCache.get(prev);
   if (!nextCache) {
     nextCache = new WeakMap();
