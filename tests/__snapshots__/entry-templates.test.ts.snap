@@ -751,6 +751,7 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   }
   return __buildAppPageElements({
     element: createElement(PageComponent, pageProps),
+    globalErrorModule: null,
     makeThenableParams,
     matchedParams: params,
     resolvedMetadata,
@@ -2778,6 +2779,7 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   }
   return __buildAppPageElements({
     element: createElement(PageComponent, pageProps),
+    globalErrorModule: null,
     makeThenableParams,
     matchedParams: params,
     resolvedMetadata,
@@ -4809,6 +4811,7 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   }
   return __buildAppPageElements({
     element: createElement(PageComponent, pageProps),
+    globalErrorModule: mod_11,
     makeThenableParams,
     matchedParams: params,
     resolvedMetadata,
@@ -6866,6 +6869,7 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   }
   return __buildAppPageElements({
     element: createElement(PageComponent, pageProps),
+    globalErrorModule: null,
     makeThenableParams,
     matchedParams: params,
     resolvedMetadata,
@@ -8903,6 +8907,7 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   }
   return __buildAppPageElements({
     element: createElement(PageComponent, pageProps),
+    globalErrorModule: null,
     makeThenableParams,
     matchedParams: params,
     resolvedMetadata,
@@ -10930,6 +10935,7 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   }
   return __buildAppPageElements({
     element: createElement(PageComponent, pageProps),
+    globalErrorModule: null,
     makeThenableParams,
     matchedParams: params,
     resolvedMetadata,

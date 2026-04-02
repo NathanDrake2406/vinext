@@ -6,6 +6,7 @@ import {
   use,
   useLayoutEffect,
   useReducer,
+  useRef,
   type Dispatch,
   type ReactNode,
 } from "react";
@@ -98,7 +99,7 @@ let activeNavigationId = 0;
 const pendingNavigationCommits = new Map<number, () => void>();
 const pendingNavigationPrePaintEffects = new Map<number, () => void>();
 let dispatchBrowserRouterAction: Dispatch<AppRouterAction> | null = null;
-let readBrowserRouterState: (() => AppRouterState) | null = null;
+let browserRouterStateRef: { current: AppRouterState } | null = null;
 let latestClientParams: Record<string, string | string[]> = {};
 const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 
@@ -114,10 +115,10 @@ function getBrowserRouterDispatch(): Dispatch<AppRouterAction> {
 }
 
 function getBrowserRouterState(): AppRouterState {
-  if (!readBrowserRouterState) {
+  if (!browserRouterStateRef) {
     throw new Error("[vinext] Browser router state is not initialized");
   }
-  return readBrowserRouterState();
+  return browserRouterStateRef.current;
 }
 
 function applyClientParams(params: Record<string, string | string[]>): void {
@@ -325,16 +326,21 @@ function BrowserRoot({
     routeId: initialMetadata.routeId,
   });
 
-  // Assign the module-level setter via useLayoutEffect instead of during render
-  // to avoid side effects that React Strict Mode / concurrent features may
-  // call multiple times. useLayoutEffect fires synchronously during commit,
-  // before hydrateRoot returns to main(), so the router dispatch is available
-  // before __VINEXT_RSC_NAVIGATE__ is assigned. dispatchTreeState is referentially
-  // stable so the effect only runs on mount.
+  // Keep the latest router state in a ref so external callers (navigate(),
+  // server actions, HMR) always read the current state. The ref is updated
+  // synchronously during render -- not in an effect -- so there is no stale
+  // window between React committing a new state and the effect firing.
+  const stateRef = useRef(treeState);
+  stateRef.current = treeState;
+  browserRouterStateRef = stateRef;
+
+  // Assign the module-level dispatch via useLayoutEffect. dispatchTreeState
+  // is referentially stable so the effect only runs on mount. The effect fires
+  // synchronously during commit, before hydrateRoot returns to main(), so the
+  // dispatch is available before __VINEXT_RSC_NAVIGATE__ is assigned.
   useLayoutEffect(() => {
     dispatchBrowserRouterAction = dispatchTreeState;
-    readBrowserRouterState = () => treeState;
-  }, [dispatchTreeState, treeState]);
+  }, [dispatchTreeState]);
 
   const committedTree = createElement(
     NavigationCommitSignal,

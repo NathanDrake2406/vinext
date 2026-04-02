@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { mergeElementsPromise } from "../shims/slot.js";
 import { readAppElementsMetadata, type AppElements } from "./app-elements.js";
 import type { ClientNavigationRenderSnapshot } from "../shims/navigation.js";
@@ -44,6 +43,10 @@ export function routerReducer(state: AppRouterState, action: AppRouterAction): A
         rootLayoutTreePath: action.rootLayoutTreePath,
         routeId: action.routeId,
       };
+    default: {
+      const _exhaustive: never = action.type;
+      throw new Error("[vinext] Unknown router action: " + String(_exhaustive));
+    }
   }
 }
 
@@ -112,13 +115,3 @@ export async function applyAppRouterStateUpdate(options: {
 
   return { type: "dispatched" };
 }
-
-export function createRouteNodeSnapshot(
-  elements: Promise<AppElements>,
-  routeId: string,
-): { elements: Promise<AppElements>; routeId: string } {
-  return { elements, routeId };
-}
-
-export type AppRouteNodeSnapshot = ReturnType<typeof createRouteNodeSnapshot>;
-export type AppRouteNodeValue = ReactNode;

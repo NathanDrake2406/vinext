@@ -18,8 +18,19 @@ export type AppElementsMetadata = {
 };
 
 export function normalizeAppElements(elements: AppWireElements): AppElements {
-  const normalized: Record<string, AppElementValue> = {};
+  let needsNormalization = false;
+  for (const [key, value] of Object.entries(elements)) {
+    if (key.startsWith("slot:") && value === APP_UNMATCHED_SLOT_WIRE_VALUE) {
+      needsNormalization = true;
+      break;
+    }
+  }
 
+  if (!needsNormalization) {
+    return elements;
+  }
+
+  const normalized: Record<string, AppElementValue> = {};
   for (const [key, value] of Object.entries(elements)) {
     normalized[key] =
       key.startsWith("slot:") && value === APP_UNMATCHED_SLOT_WIRE_VALUE ? UNMATCHED_SLOT : value;

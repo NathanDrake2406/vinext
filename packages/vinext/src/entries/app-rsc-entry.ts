@@ -985,6 +985,7 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   }
   return __buildAppPageElements({
     element: createElement(PageComponent, pageProps),
+    globalErrorModule: ${globalErrorVar ? globalErrorVar : "null"},
     makeThenableParams,
     matchedParams: params,
     resolvedMetadata,

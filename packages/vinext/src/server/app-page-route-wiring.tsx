@@ -94,7 +94,7 @@ export type BuildAppPageRouteElementOptions<
 export type BuildAppPageElementsOptions<
   TModule extends AppPageModule = AppPageModule,
   TErrorModule extends AppPageErrorModule = AppPageErrorModule,
-> = Omit<BuildAppPageRouteElementOptions<TModule, TErrorModule>, "globalErrorModule"> & {
+> = BuildAppPageRouteElementOptions<TModule, TErrorModule> & {
   routePath: string;
 };
 
@@ -475,6 +475,11 @@ export function buildAppPageElements<
     );
   }
 
+  const globalErrorComponent = getErrorBoundaryExport(options.globalErrorModule);
+  if (globalErrorComponent) {
+    routeChildren = <ErrorBoundary fallback={globalErrorComponent}>{routeChildren}</ErrorBoundary>;
+  }
+
   elements[routeId] = (
     <>
       {createAppPageRouteHead(options.resolvedMetadata, options.resolvedViewport)}
@@ -483,161 +488,4 @@ export function buildAppPageElements<
   );
 
   return elements;
-}
-
-export function buildAppPageRouteElement<
-  TModule extends AppPageModule,
-  TErrorModule extends AppPageErrorModule,
->(options: BuildAppPageRouteElementOptions<TModule, TErrorModule>): ReactNode {
-  /**
-   * @deprecated PR 2c introduces buildAppPageElements() for the flat payload
-   * cutover. Keep this helper during the transition so intermediate test runs
-   * remain stable, then delete it only after all call sites have switched.
-   */
-  let element: ReactNode = (
-    <LayoutSegmentProvider segmentMap={{ children: [] }}>{options.element}</LayoutSegmentProvider>
-  );
-
-  element = (
-    <>
-      <meta charSet="utf-8" />
-      {options.resolvedMetadata ? <MetadataHead metadata={options.resolvedMetadata} /> : null}
-      <ViewportHead viewport={options.resolvedViewport} />
-      {element}
-    </>
-  );
-
-  const loadingComponent = getDefaultExport(options.route.loading);
-  if (loadingComponent) {
-    const LoadingComponent = loadingComponent;
-    element = <Suspense fallback={<LoadingComponent />}>{element}</Suspense>;
-  }
-
-  const lastLayoutErrorModule =
-    options.route.errors && options.route.errors.length > 0
-      ? options.route.errors[options.route.errors.length - 1]
-      : null;
-  const pageErrorComponent = getErrorBoundaryExport(options.route.error);
-  if (pageErrorComponent && options.route.error !== lastLayoutErrorModule) {
-    element = <ErrorBoundary fallback={pageErrorComponent}>{element}</ErrorBoundary>;
-  }
-
-  const notFoundComponent =
-    getDefaultExport(options.route.notFound) ?? getDefaultExport(options.rootNotFoundModule);
-  if (notFoundComponent) {
-    const NotFoundComponent = notFoundComponent;
-    element = <NotFoundBoundary fallback={<NotFoundComponent />}>{element}</NotFoundBoundary>;
-  }
-
-  const templates = options.route.templates ?? [];
-  for (let index = templates.length - 1; index >= 0; index--) {
-    const templateComponent = getDefaultExport(templates[index]);
-    if (!templateComponent) {
-      continue;
-    }
-    const TemplateComponent = templateComponent;
-    element = <TemplateComponent params={options.matchedParams}>{element}</TemplateComponent>;
-  }
-
-  const routeSlots = options.route.slots ?? {};
-  const layoutEntries = createAppPageLayoutEntries(options.route);
-  const routeThenableParams = options.makeThenableParams(options.matchedParams);
-
-  for (let index = layoutEntries.length - 1; index >= 0; index--) {
-    const layoutEntry = layoutEntries[index];
-    const layoutErrorComponent = getErrorBoundaryExport(layoutEntry.errorModule);
-    if (layoutErrorComponent) {
-      element = <ErrorBoundary fallback={layoutErrorComponent}>{element}</ErrorBoundary>;
-    }
-
-    const layoutComponent = getDefaultExport(layoutEntry.layoutModule);
-    if (!layoutComponent) {
-      continue;
-    }
-
-    const layoutNotFoundComponent = getDefaultExport(layoutEntry.notFoundModule);
-    if (layoutNotFoundComponent) {
-      const LayoutNotFoundComponent = layoutNotFoundComponent;
-      element = (
-        <NotFoundBoundary fallback={<LayoutNotFoundComponent />}>{element}</NotFoundBoundary>
-      );
-    }
-
-    const layoutProps: Record<string, unknown> = {
-      params: routeThenableParams,
-    };
-
-    for (const [slotName, slot] of Object.entries(routeSlots)) {
-      const targetIndex = slot.layoutIndex >= 0 ? slot.layoutIndex : layoutEntries.length - 1;
-      if (index !== targetIndex) {
-        continue;
-      }
-
-      const slotOverride = options.slotOverrides?.[slotName];
-      const slotParams = slotOverride?.params ?? options.matchedParams;
-      const slotComponent =
-        getDefaultExport(slotOverride?.pageModule) ??
-        getDefaultExport(slot.page) ??
-        getDefaultExport(slot.default);
-      if (!slotComponent) {
-        continue;
-      }
-
-      const slotProps: Record<string, unknown> = {
-        params: options.makeThenableParams(slotParams),
-      };
-      if (slotOverride?.props) {
-        Object.assign(slotProps, slotOverride.props);
-      }
-
-      const SlotComponent = slotComponent;
-      let slotElement: ReactNode = <SlotComponent {...slotProps} />;
-
-      const slotLayoutComponent = getDefaultExport(slot.layout);
-      if (slotLayoutComponent) {
-        const SlotLayoutComponent = slotLayoutComponent;
-        slotElement = (
-          <SlotLayoutComponent params={options.makeThenableParams(slotParams)}>
-            {slotElement}
-          </SlotLayoutComponent>
-        );
-      }
-
-      const slotLoadingComponent = getDefaultExport(slot.loading);
-      if (slotLoadingComponent) {
-        const SlotLoadingComponent = slotLoadingComponent;
-        slotElement = <Suspense fallback={<SlotLoadingComponent />}>{slotElement}</Suspense>;
-      }
-
-      const slotErrorComponent = getErrorBoundaryExport(slot.error);
-      if (slotErrorComponent) {
-        slotElement = <ErrorBoundary fallback={slotErrorComponent}>{slotElement}</ErrorBoundary>;
-      }
-
-      layoutProps[slotName] = slotElement;
-    }
-
-    const LayoutComponent = layoutComponent;
-    element = <LayoutComponent {...layoutProps}>{element}</LayoutComponent>;
-    element = (
-      <LayoutSegmentProvider
-        segmentMap={{
-          children: resolveAppPageChildSegments(
-            options.route.routeSegments ?? [],
-            layoutEntry.treePosition,
-            options.matchedParams,
-          ),
-        }}
-      >
-        {element}
-      </LayoutSegmentProvider>
-    );
-  }
-
-  const globalErrorComponent = getErrorBoundaryExport(options.globalErrorModule);
-  if (globalErrorComponent) {
-    element = <ErrorBoundary fallback={globalErrorComponent}>{element}</ErrorBoundary>;
-  }
-
-  return element;
 }

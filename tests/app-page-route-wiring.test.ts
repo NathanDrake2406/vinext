@@ -1,10 +1,8 @@
 import { createElement, isValidElement, type ReactNode } from "react";
-import ReactDOMServer from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
 import {
   buildAppPageElements,
-  buildAppPageRouteElement,
   createAppPageLayoutEntries,
   resolveAppPageChildSegments,
 } from "../packages/vinext/src/server/app-page-route-wiring.js";
@@ -97,58 +95,6 @@ describe("app page route wiring helpers", () => {
 
     expect(entries.map((entry) => entry.id)).toEqual(["layout:/", "layout:/(marketing)"]);
     expect(entries.map((entry) => entry.treePath)).toEqual(["/", "/(marketing)"]);
-  });
-
-  it("wires templates, slots, and layout segment providers from the route tree", () => {
-    const element = buildAppPageRouteElement({
-      element: createElement(PageProbe),
-      makeThenableParams(params) {
-        return Promise.resolve(params);
-      },
-      matchedParams: { slug: "post" },
-      resolvedMetadata: null,
-      resolvedViewport: {},
-      route: {
-        error: null,
-        errors: [null, null],
-        layoutTreePositions: [0, 1],
-        layouts: [{ default: RootLayout }, { default: GroupLayout }],
-        loading: null,
-        notFound: null,
-        notFounds: [null, null],
-        routeSegments: ["(marketing)", "blog", "[slug]"],
-        slots: {
-          sidebar: {
-            default: null,
-            error: null,
-            layout: { default: SlotLayout },
-            layoutIndex: 0,
-            loading: null,
-            page: { default: SlotPage },
-          },
-        },
-        templates: [{ default: Template }],
-      },
-      rootNotFoundModule: null,
-      slotOverrides: {
-        sidebar: {
-          pageModule: { default: SlotPage },
-          params: { slug: "post" },
-          props: { label: "intercepted" },
-        },
-      },
-    });
-
-    const html = ReactDOMServer.renderToStaticMarkup(element);
-
-    expect(html).toContain('data-layout="root"');
-    expect(html).toContain('data-layout="group"');
-    expect(html).toContain('data-template="group"');
-    expect(html).toContain('data-slot-layout="sidebar"');
-    expect(html).toContain('data-slot-page="intercepted"');
-    expect(html).toContain('data-page-segments=""');
-    expect(html).toContain('data-segments="(marketing)|blog|post"');
-    expect(html).toContain('data-segments="blog|post"');
   });
 
   it("builds a flat elements map with route, layout, template, page, and slot entries", () => {
