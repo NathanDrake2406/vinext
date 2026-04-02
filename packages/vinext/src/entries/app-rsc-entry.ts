@@ -885,7 +885,12 @@ function findIntercept(pathname) {
 async function buildPageElements(route, params, routePath, opts, searchParams) {
   const PageComponent = route.page?.default;
   if (!PageComponent) {
-    return createElement("div", null, "Page has no default export");
+    const _noExportRouteId = "route:" + routePath;
+    return {
+      __route: _noExportRouteId,
+      __rootLayout: route.layouts?.length > 0 ? "/" : null,
+      [_noExportRouteId]: createElement("div", null, "Page has no default export"),
+    };
   }
 
   // Resolve metadata and viewport from layouts and page.
@@ -1711,7 +1716,12 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           url.searchParams,
         );
       } else {
-        element = createElement("div", null, "Page not found");
+        const _actionRouteId = "route:" + cleanPathname;
+        element = {
+          __route: _actionRouteId,
+          __rootLayout: null,
+          [_actionRouteId]: createElement("div", null, "Page not found"),
+        };
       }
 
       const onRenderError = createRscOnErrorHandler(

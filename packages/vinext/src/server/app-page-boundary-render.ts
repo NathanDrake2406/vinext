@@ -255,14 +255,12 @@ async function renderAppPageBoundaryElementResponse<TModule extends AppPageModul
   },
 ): Promise<Response> {
   const pathname = new URL(options.requestUrl).pathname;
-  const payload = options.isRscRequest
-    ? createAppPageBoundaryRscPayload({
-        element: options.element,
-        layoutModules: options.layoutModules,
-        pathname,
-        route: options.route,
-      })
-    : options.element;
+  const payload = createAppPageBoundaryRscPayload({
+    element: options.element,
+    layoutModules: options.layoutModules,
+    pathname,
+    route: options.route,
+  });
 
   return renderAppPageBoundaryResponse({
     async createHtmlResponse(rscStream, responseStatus) {
