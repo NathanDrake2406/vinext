@@ -1,4 +1,5 @@
 import { createElement } from "react";
+import { renderToReadableStream } from "react-dom/server.edge";
 import { describe, expect, it } from "vite-plus/test";
 import {
   createAppRenderDependency,
@@ -22,19 +23,18 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
   return text + decoder.decode();
 }
 
-async function renderFlight(model: unknown): Promise<string> {
-  const { renderToReadableStream } = await import("@vitejs/plugin-rsc/rsc");
-  const stream = renderToReadableStream(model, {
+async function renderHtml(element: React.ReactNode): Promise<string> {
+  const stream = await renderToReadableStream(element, {
     onError(error: unknown) {
       throw error instanceof Error ? error : new Error(String(error));
     },
   });
-
+  await stream.allReady;
   return readStream(stream);
 }
 
 describe("app render dependency helpers", () => {
-  it("documents that Flight can serialize a sync sibling before an async sibling completes", async () => {
+  it("documents that React can render a sync sibling before an async sibling completes", async () => {
     let activeLocale = "en";
 
     async function LocaleLayout() {
@@ -47,12 +47,9 @@ describe("app render dependency helpers", () => {
       return createElement("p", null, `page:${activeLocale}`);
     }
 
-    const payload = {
-      layout: createElement(LocaleLayout),
-      page: createElement(LocalePage),
-    };
-
-    const body = await renderFlight(payload);
+    const body = await renderHtml(
+      createElement("div", null, createElement(LocaleLayout), createElement(LocalePage)),
+    );
 
     expect(body).toContain("page:en");
   });
@@ -71,12 +68,14 @@ describe("app render dependency helpers", () => {
       return createElement("p", null, `page:${activeLocale}`);
     }
 
-    const payload = {
-      layout: createElement(LocaleLayout),
-      page: renderAfterAppDependencies(createElement(LocalePage), [layoutDependency]),
-    };
-
-    const body = await renderFlight(payload);
+    const body = await renderHtml(
+      createElement(
+        "div",
+        null,
+        createElement(LocaleLayout),
+        renderAfterAppDependencies(createElement(LocalePage), [layoutDependency]),
+      ),
+    );
 
     expect(body).toContain("page:de");
     expect(body).not.toContain("page:en");

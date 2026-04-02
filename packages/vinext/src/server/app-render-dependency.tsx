@@ -33,35 +33,27 @@ export function renderAfterAppDependencies(
     return children;
   }
 
-  return (
-    <AwaitAppRenderDependencies dependencies={dependencies}>{children}</AwaitAppRenderDependencies>
-  );
+  async function AwaitAppRenderDependencies() {
+    await Promise.all(dependencies.map((dependency) => dependency.promise));
+    return children;
+  }
+
+  return <AwaitAppRenderDependencies />;
 }
 
 export function renderWithAppDependencyBarrier(
   children: ReactNode,
   dependency: AppRenderDependency,
 ): ReactNode {
+  function ReleaseAppRenderDependency() {
+    dependency.release();
+    return null;
+  }
+
   return (
     <>
-      <ReleaseAppRenderDependency dependency={dependency} />
+      <ReleaseAppRenderDependency />
       {children}
     </>
   );
-}
-
-async function AwaitAppRenderDependencies({
-  children,
-  dependencies,
-}: {
-  children: ReactNode;
-  dependencies: readonly AppRenderDependency[];
-}) {
-  await Promise.all(dependencies.map((dependency) => dependency.promise));
-  return children;
-}
-
-function ReleaseAppRenderDependency({ dependency }: { dependency: AppRenderDependency }) {
-  dependency.release();
-  return null;
 }
