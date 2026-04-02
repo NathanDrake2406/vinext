@@ -253,6 +253,38 @@ describe("app page route wiring helpers", () => {
     expect(body).toContain("Page content");
   });
 
+  it("preserves route subtree when a layout entry has no default export", async () => {
+    const elements = buildAppPageElements({
+      element: createElement("main", null, "Page content"),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null, null],
+        layoutTreePositions: [0, 1],
+        layouts: [{ default: RootLayout }, null],
+        loading: null,
+        notFound: null,
+        notFounds: [null, null],
+        routeSegments: ["dashboard"],
+        slots: null,
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/dashboard",
+      rootNotFoundModule: null,
+    });
+
+    const body = await renderRouteEntry(elements, "route:/dashboard");
+
+    expect(body).toContain('data-layout="root"');
+    expect(body).toContain("Page content");
+  });
+
   it("waits for template-only segments before serializing the page entry", async () => {
     let activeLocale = "en";
 

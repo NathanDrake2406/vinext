@@ -531,6 +531,8 @@ export function buildAppPageElements<
       );
     }
 
+    const layoutHasElement = getDefaultExport(layoutEntry.layoutModule) !== null;
+
     routeChildren = (
       <LayoutSegmentProvider
         segmentMap={{
@@ -550,16 +552,20 @@ export function buildAppPageElements<
           ),
         }}
       >
-        <Slot
-          id={layoutEntry.id}
-          parallelSlots={createAppPageParallelSlotEntries(
-            layoutIndicesByTreePosition.get(treePosition) ?? -1,
-            layoutEntries,
-            options.route,
-          )}
-        >
-          {layoutChildren}
-        </Slot>
+        {layoutHasElement ? (
+          <Slot
+            id={layoutEntry.id}
+            parallelSlots={createAppPageParallelSlotEntries(
+              layoutIndicesByTreePosition.get(treePosition) ?? -1,
+              layoutEntries,
+              options.route,
+            )}
+          >
+            {layoutChildren}
+          </Slot>
+        ) : (
+          layoutChildren
+        )}
       </LayoutSegmentProvider>
     );
   }
