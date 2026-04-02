@@ -1,9 +1,9 @@
-import { mergeElementsPromise } from "../shims/slot.js";
+import { mergeElements } from "../shims/slot.js";
 import { readAppElementsMetadata, type AppElements } from "./app-elements.js";
 import type { ClientNavigationRenderSnapshot } from "../shims/navigation.js";
 
 export type AppRouterState = {
-  elements: Promise<AppElements>;
+  elements: AppElements;
   renderId: number;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   rootLayoutTreePath: string | null;
@@ -11,7 +11,7 @@ export type AppRouterState = {
 };
 
 export type AppRouterAction = {
-  elements: Promise<AppElements>;
+  elements: AppElements;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   renderId: number;
   rootLayoutTreePath: string | null;
@@ -29,7 +29,7 @@ export function routerReducer(state: AppRouterState, action: AppRouterAction): A
   switch (action.type) {
     case "navigate":
       return {
-        elements: mergeElementsPromise(state.elements, action.elements),
+        elements: mergeElements(state.elements, action.elements),
         navigationSnapshot: action.navigationSnapshot,
         renderId: action.renderId,
         rootLayoutTreePath: action.rootLayoutTreePath,
@@ -73,7 +73,7 @@ export async function createPendingNavigationCommit(options: {
 
   return {
     action: {
-      elements: Promise.resolve(elements),
+      elements,
       navigationSnapshot: options.navigationSnapshot,
       renderId: options.renderId ?? options.currentState.renderId + 1,
       rootLayoutTreePath: metadata.rootLayoutTreePath,

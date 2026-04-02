@@ -184,7 +184,7 @@ export async function handleSsr(
         const metadata = readAppElementsMetadata(elements);
         return createReactElement(
           ElementsContext.Provider,
-          { value: Promise.resolve(elements) },
+          { value: elements },
           createReactElement(Slot, { id: metadata.routeId }),
         );
       }

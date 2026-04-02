@@ -322,7 +322,7 @@ function BrowserRoot({
   const resolvedElements = use(initialElements);
   const initialMetadata = readAppElementsMetadata(resolvedElements);
   const [treeState, dispatchTreeState] = useReducer(routerReducer, {
-    elements: Promise.resolve(resolvedElements),
+    elements: resolvedElements,
     navigationSnapshot: initialNavigationSnapshot,
     renderId: 0,
     rootLayoutTreePath: initialMetadata.rootLayoutTreePath,
@@ -368,31 +368,15 @@ function BrowserRoot({
 }
 
 function dispatchBrowserTree(
-  elements: Promise<AppElements>,
+  elements: AppElements,
   navigationSnapshot: ClientNavigationRenderSnapshot,
   renderId: number,
   actionType: "navigate" | "replace",
   routeId: string,
   rootLayoutTreePath: string | null,
   useTransitionMode: boolean,
-  snapshotActivated = false,
 ): void {
   const dispatch = getBrowserRouterDispatch();
-
-  // Balance the activate/commit pairing if the async payload rejects after
-  // activateNavigationSnapshot() was called. Only decrement when snapshotActivated
-  // is true — server action callers skip renderNavigationPayload entirely and
-  // never call activateNavigationSnapshot(), so decrementing there would corrupt
-  // the counter for any concurrent RSC navigation.
-  const handleAsyncError = () => {
-    pendingNavigationPrePaintEffects.delete(renderId);
-    const resolve = pendingNavigationCommits.get(renderId);
-    pendingNavigationCommits.delete(renderId);
-    if (snapshotActivated) {
-      commitClientNavigationState();
-    }
-    resolve?.();
-  };
 
   const applyAction = () =>
     dispatch({
@@ -404,13 +388,11 @@ function dispatchBrowserTree(
       type: actionType,
     });
 
-  void elements.then(() => {
-    if (useTransitionMode) {
-      startTransition(applyAction);
-    } else {
-      applyAction();
-    }
-  }, handleAsyncError);
+  if (useTransitionMode) {
+    startTransition(applyAction);
+  } else {
+    applyAction();
+  }
 }
 
 async function renderNavigationPayload(
@@ -454,7 +436,6 @@ async function renderNavigationPayload(
       pending.routeId,
       pending.rootLayoutTreePath,
       useTransition,
-      true,
     );
   } catch (error) {
     // Clean up pending state and decrement counter on synchronous error.
