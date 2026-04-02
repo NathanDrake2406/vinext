@@ -291,10 +291,15 @@ export function buildAppPageElements<
   const pageId = `page:${options.routePath}`;
   const layoutEntries = createAppPageLayoutEntries(options.route);
   const templateEntries = createAppPageTemplateEntries(options.route);
-  const templateEntriesByTreePosition = new Map(
-    templateEntries.map((entry) => [entry.treePosition, entry] as const),
-  );
-  const layoutDependencies = layoutEntries.map(() => createAppRenderDependency());
+  const templateEntriesByTreePosition = new Map<number, AppPageTemplateEntry<TModule>>();
+  for (const templateEntry of templateEntries) {
+    templateEntriesByTreePosition.set(templateEntry.treePosition, templateEntry);
+  }
+  const layoutIndicesByTreePosition = new Map<number, number>();
+  for (let index = 0; index < layoutEntries.length; index++) {
+    layoutIndicesByTreePosition.set(layoutEntries[index].treePosition, index);
+  }
+  const layoutDependenciesByIndex = new Map<number, AppRenderDependency>();
   const layoutDependenciesBefore: AppRenderDependency[][] = [];
   const slotDependenciesByLayoutIndex: AppRenderDependency[][] = [];
   const templateDependenciesById = new Map<string, AppRenderDependency>();
@@ -302,14 +307,28 @@ export function buildAppPageElements<
   const pageDependencies: AppRenderDependency[] = [];
   const routeThenableParams = options.makeThenableParams(options.matchedParams);
   const rootLayoutTreePath = layoutEntries[0]?.treePath ?? null;
+  const orderedTreePositions = Array.from(
+    new Set<number>([
+      ...layoutEntries.map((entry) => entry.treePosition),
+      ...templateEntries.map((entry) => entry.treePosition),
+    ]),
+  ).sort((left, right) => left - right);
 
-  for (let index = 0; index < layoutEntries.length; index++) {
-    layoutDependenciesBefore[index] = [...pageDependencies];
-    pageDependencies.push(layoutDependencies[index]);
-    slotDependenciesByLayoutIndex[index] = [...pageDependencies];
+  for (const treePosition of orderedTreePositions) {
+    const layoutIndex = layoutIndicesByTreePosition.get(treePosition);
+    if (layoutIndex !== undefined) {
+      const layoutEntry = layoutEntries[layoutIndex];
+      layoutDependenciesBefore[layoutIndex] = [...pageDependencies];
+      if (getDefaultExport(layoutEntry.layoutModule)) {
+        const layoutDependency = createAppRenderDependency();
+        layoutDependenciesByIndex.set(layoutIndex, layoutDependency);
+        pageDependencies.push(layoutDependency);
+      }
+      slotDependenciesByLayoutIndex[layoutIndex] = [...pageDependencies];
+    }
 
-    const templateEntry = templateEntriesByTreePosition.get(layoutEntries[index].treePosition);
-    if (!templateEntry) {
+    const templateEntry = templateEntriesByTreePosition.get(treePosition);
+    if (!templateEntry || !getDefaultExport(templateEntry.templateModule)) {
       continue;
     }
 
@@ -330,13 +349,16 @@ export function buildAppPageElements<
     }
     const TemplateComponent = templateComponent;
     const templateDependency = templateDependenciesById.get(templateEntry.id);
-    const templateElement = (
-      <TemplateComponent params={options.matchedParams}>
-        {templateDependency ? (
-          renderWithAppDependencyBarrier(<Children />, templateDependency)
-        ) : (
+    const templateElement = templateDependency ? (
+      renderWithAppDependencyBarrier(
+        <TemplateComponent params={options.matchedParams}>
           <Children />
-        )}
+        </TemplateComponent>,
+        templateDependency,
+      )
+    ) : (
+      <TemplateComponent params={options.matchedParams}>
+        <Children />
       </TemplateComponent>
     );
     elements[templateEntry.id] = renderAfterAppDependencies(
@@ -365,9 +387,17 @@ export function buildAppPageElements<
     }
 
     const LayoutComponent = layoutComponent;
-    const layoutElement = (
+    const layoutDependency = layoutDependenciesByIndex.get(index);
+    const layoutElement = layoutDependency ? (
+      renderWithAppDependencyBarrier(
+        <LayoutComponent {...layoutProps}>
+          <Children />
+        </LayoutComponent>,
+        layoutDependency,
+      )
+    ) : (
       <LayoutComponent {...layoutProps}>
-        {renderWithAppDependencyBarrier(<Children />, layoutDependencies[index])}
+        <Children />
       </LayoutComponent>
     );
     elements[layoutEntry.id] = renderAfterAppDependencies(

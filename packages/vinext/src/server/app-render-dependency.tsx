@@ -52,8 +52,8 @@ export function renderWithAppDependencyBarrier(
 
   return (
     <>
-      <ReleaseAppRenderDependency />
       {children}
+      <ReleaseAppRenderDependency />
     </>
   );
 }

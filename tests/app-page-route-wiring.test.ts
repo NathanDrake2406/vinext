@@ -1,4 +1,4 @@
-import { createElement, isValidElement, type ReactNode } from "react";
+import { Fragment, createElement, isValidElement, type ReactNode } from "react";
 import { describe, expect, it } from "vite-plus/test";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
 import {
@@ -31,6 +31,52 @@ function readChildren(value: unknown): ReactNode {
   }
 
   return null;
+}
+
+async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+
+  return text + decoder.decode();
+}
+
+async function renderHtml(node: ReactNode): Promise<string> {
+  const { renderToReadableStream } = await import("react-dom/server.edge");
+  const stream = await renderToReadableStream(node, {
+    onError(error: unknown) {
+      throw error instanceof Error ? error : new Error(String(error));
+    },
+  });
+
+  return readStream(stream);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
 }
 
 function RootLayout(props: Record<string, unknown>) {
@@ -73,6 +119,10 @@ function Template(props: Record<string, unknown>) {
 function PageProbe() {
   const segments = useSelectedLayoutSegments();
   return createElement("main", { "data-page-segments": segments.join("|") }, "Page");
+}
+
+function LayoutWithoutChildren() {
+  return createElement("div", { "data-layout": "without-children" }, "Layout only");
 }
 
 describe("app page route wiring helpers", () => {
@@ -147,5 +197,98 @@ describe("app page route wiring helpers", () => {
     expect(elements["page:/blog/post"]).toBeDefined();
     expect(elements["slot:sidebar:/"]).toBeDefined();
     expect(elements["route:/blog/post"]).toBeDefined();
+  });
+
+  it("does not deadlock when a layout renders without children", async () => {
+    const elements = buildAppPageElements({
+      element: createElement("main", null, "Page content"),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: LayoutWithoutChildren }],
+        loading: null,
+        notFound: null,
+        notFounds: [null],
+        routeSegments: [],
+        slots: null,
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/layout-only",
+      rootNotFoundModule: null,
+    });
+
+    const body = await withTimeout(
+      renderHtml(
+        createElement(
+          Fragment,
+          null,
+          readChildren(elements["layout:/"]),
+          readChildren(elements["page:/layout-only"]),
+        ),
+      ),
+      1_000,
+    );
+
+    expect(body).toContain("Layout only");
+    expect(body).toContain("Page content");
+  });
+
+  it("waits for template-only segments before serializing the page entry", async () => {
+    let activeLocale = "en";
+
+    async function AsyncTemplate(props: Record<string, unknown>) {
+      await Promise.resolve();
+      activeLocale = "de";
+      return createElement("div", { "data-template": "async" }, readChildren(props.children));
+    }
+
+    function LocalePage() {
+      return createElement("main", null, `page:${activeLocale}`);
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement(LocalePage),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [],
+        layoutTreePositions: [],
+        layouts: [],
+        loading: null,
+        notFound: null,
+        notFounds: [],
+        routeSegments: ["blog"],
+        slots: null,
+        templateTreePositions: [1],
+        templates: [{ default: AsyncTemplate }],
+      },
+      routePath: "/blog",
+      rootNotFoundModule: null,
+    });
+
+    const body = await renderHtml(
+      createElement(
+        Fragment,
+        null,
+        readChildren(elements["template:/blog"]),
+        readChildren(elements["page:/blog"]),
+      ),
+    );
+
+    expect(body).toContain("page:de");
+    expect(body).not.toContain("page:en");
   });
 });
