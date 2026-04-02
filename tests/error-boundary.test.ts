@@ -200,4 +200,39 @@ describe("ErrorBoundary digest classification (actual class)", () => {
       previousPathname: "/next",
     });
   });
+
+  it("does not immediately clear a caught error on the same pathname", () => {
+    expect(ErrorBoundaryInner).not.toBeNull();
+    if (!ErrorBoundaryInner) {
+      throw new Error("Expected ErrorBoundaryInner export");
+    }
+
+    const error = new Error("stuck");
+    const baseState = {
+      error: null,
+      previousPathname: "/error-test",
+    };
+    const stateAfterError = {
+      ...baseState,
+      ...ErrorBoundaryInner.getDerivedStateFromError(error),
+    };
+
+    function Fallback() {
+      return null;
+    }
+
+    const stateAfterProps = ErrorBoundaryInner.getDerivedStateFromProps(
+      {
+        children: null,
+        fallback: Fallback,
+        pathname: "/error-test",
+      },
+      stateAfterError,
+    );
+
+    expect(stateAfterProps).toEqual({
+      error,
+      previousPathname: "/error-test",
+    });
+  });
 });

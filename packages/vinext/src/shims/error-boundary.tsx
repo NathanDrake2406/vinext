@@ -42,7 +42,7 @@ export class ErrorBoundaryInner extends React.Component<
     return { error: state.error, previousPathname: props.pathname };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     // notFound(), forbidden(), unauthorized(), and redirect() must propagate
     // past error boundaries. Re-throw them so they bubble up to the
     // framework's HTTP access fallback / redirect handler.
@@ -56,7 +56,7 @@ export class ErrorBoundaryInner extends React.Component<
         throw error;
       }
     }
-    return { error, previousPathname: "" };
+    return { error };
   }
 
   reset = () => {
