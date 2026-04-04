@@ -4,7 +4,7 @@ import * as React from "react";
 import { UNMATCHED_SLOT, type AppElementValue, type AppElements } from "../server/app-elements.js";
 import { notFound } from "./navigation.js";
 
-const EMPTY_ELEMENTS: AppElements = {};
+const EMPTY_ELEMENTS: AppElements = Object.freeze({});
 
 export { UNMATCHED_SLOT };
 
@@ -27,7 +27,7 @@ export function mergeElements(prev: AppElements, next: AppElements): AppElements
   // instead of firing notFound(). Only hard navigation (full page load) should 404.
   // This matches Next.js behavior for parallel route persistence.
   for (const key of Object.keys(merged)) {
-    if (key.startsWith("slot:") && merged[key] === UNMATCHED_SLOT && key in prev) {
+    if (key.startsWith("slot:") && merged[key] === UNMATCHED_SLOT && Object.hasOwn(prev, key)) {
       merged[key] = prev[key];
     }
   }
@@ -45,7 +45,7 @@ export function Slot({
 }) {
   const elements = React.useContext(ElementsContext);
 
-  if (!(id in elements)) {
+  if (!Object.hasOwn(elements, id)) {
     return null;
   }
 
