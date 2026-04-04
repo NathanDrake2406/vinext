@@ -50,15 +50,22 @@ export function routerReducer(state: AppRouterState, action: AppRouterAction): A
   }
 }
 
+/**
+ * Returns true when a full-page (hard) navigation is required.
+ *
+ * A hard navigate is needed whenever the root layout tree path changes,
+ * including when one side is null (no root layout) and the other is non-null
+ * (has a root layout). In that case the component tree structure changes
+ * fundamentally and React cannot reconcile in-place.
+ *
+ * The only case that does NOT require a hard navigate is when both sides
+ * share the same root layout path (including both being null).
+ */
 export function shouldHardNavigate(
   currentRootLayoutTreePath: string | null,
   nextRootLayoutTreePath: string | null,
 ): boolean {
-  return (
-    currentRootLayoutTreePath !== null &&
-    nextRootLayoutTreePath !== null &&
-    currentRootLayoutTreePath !== nextRootLayoutTreePath
-  );
+  return currentRootLayoutTreePath !== nextRootLayoutTreePath;
 }
 
 export async function createPendingNavigationCommit(options: {
@@ -83,35 +90,4 @@ export async function createPendingNavigationCommit(options: {
     rootLayoutTreePath: metadata.rootLayoutTreePath,
     routeId: metadata.routeId,
   };
-}
-
-export async function applyAppRouterStateUpdate(options: {
-  commit: () => void;
-  currentState: AppRouterState;
-  dispatch: (action: AppRouterAction) => void;
-  nextElements: Promise<AppElements>;
-  navigationSnapshot?: ClientNavigationRenderSnapshot;
-  onHardNavigate: (href: string) => void;
-  targetHref: string;
-  transition: (callback: () => void) => void;
-  type?: "navigate" | "replace";
-}): Promise<{ type: "dispatched" | "hard-navigate" }> {
-  const pending = await createPendingNavigationCommit({
-    currentState: options.currentState,
-    nextElements: options.nextElements,
-    navigationSnapshot: options.navigationSnapshot ?? options.currentState.navigationSnapshot,
-    type: options.type ?? "navigate",
-  });
-
-  if (shouldHardNavigate(options.currentState.rootLayoutTreePath, pending.rootLayoutTreePath)) {
-    options.onHardNavigate(options.targetHref);
-    return { type: "hard-navigate" };
-  }
-
-  options.transition(() => {
-    options.commit();
-    options.dispatch(pending.action);
-  });
-
-  return { type: "dispatched" };
 }

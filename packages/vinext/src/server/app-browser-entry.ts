@@ -329,20 +329,27 @@ function BrowserRoot({
     routeId: initialMetadata.routeId,
   });
 
-  // Keep the latest router state in a ref so external callers (navigate(),
-  // server actions, HMR) always read the current state. The ref is updated
-  // synchronously during render -- not in an effect -- so there is no stale
-  // window between React committing a new state and the effect firing.
+  // Keep the latest router state in a ref. stateRef.current is updated
+  // synchronously during render so there is never a stale window, while
+  // the module-level browserRouterStateRef pointer is set/cleared inside
+  // useLayoutEffect to avoid mutating module state during render (which
+  // can run more than once under React Strict Mode).
   const stateRef = useRef(treeState);
   stateRef.current = treeState;
-  browserRouterStateRef = stateRef;
 
-  // Assign the module-level dispatch via useLayoutEffect. dispatchTreeState
-  // is referentially stable so the effect only runs on mount. The effect fires
-  // synchronously during commit, before hydrateRoot returns to main(), so the
-  // dispatch is available before __VINEXT_RSC_NAVIGATE__ is assigned.
+  // Assign module-level pointers via useLayoutEffect. dispatchTreeState and
+  // stateRef are both referentially stable (useReducer / useRef), so this
+  // effect only runs on mount. It fires synchronously during commit, before
+  // hydrateRoot returns to main(), so both pointers are available before
+  // __VINEXT_RSC_NAVIGATE__ is assigned. Cleanup clears them on unmount so
+  // Strict Mode's mount → unmount → remount cycle doesn't leave dangling refs.
   useLayoutEffect(() => {
     dispatchBrowserRouterAction = dispatchTreeState;
+    browserRouterStateRef = stateRef;
+    return () => {
+      dispatchBrowserRouterAction = null;
+      browserRouterStateRef = null;
+    };
   }, [dispatchTreeState]);
 
   const committedTree = createElement(
@@ -651,7 +658,10 @@ function registerServerActionCallback(): void {
       pending.rootLayoutTreePath,
       false,
     );
-    return result;
+    // The legacy non-ServerActionResult path carries no return value for the
+    // caller. Returning the raw AppWireElements would leak internal wire
+    // elements to the caller, so return undefined instead.
+    return undefined;
   });
 }
 

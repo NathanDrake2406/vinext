@@ -9,7 +9,16 @@ export const UNMATCHED_SLOT = Symbol.for("vinext.unmatchedSlot");
 export type AppElementValue = ReactNode | typeof UNMATCHED_SLOT | string | null;
 export type AppWireElementValue = ReactNode | string | null;
 
-export type AppElements = Readonly<Record<string, AppElementValue>>;
+/**
+ * A flat RSC payload keyed by slot/route identifiers.
+ * The __route and __rootLayout keys are required; all other keys are
+ * slot or layout entries whose values are ReactNode or null.
+ */
+export type AppElements = Readonly<
+  Record<string, AppElementValue> &
+    Record<typeof APP_ROUTE_KEY, string> &
+    Record<typeof APP_ROOT_LAYOUT_KEY, string | null>
+>;
 export type AppWireElements = Readonly<Record<string, AppWireElementValue>>;
 
 export type AppElementsMetadata = {
@@ -27,7 +36,9 @@ export function normalizeAppElements(elements: AppWireElements): AppElements {
   }
 
   if (!needsNormalization) {
-    return elements;
+    // The required __route / __rootLayout keys are present at runtime;
+    // readAppElementsMetadata validates them and throws if they are missing.
+    return elements as AppElements;
   }
 
   const normalized: Record<string, AppElementValue> = {};
@@ -36,7 +47,7 @@ export function normalizeAppElements(elements: AppWireElements): AppElements {
       key.startsWith("slot:") && value === APP_UNMATCHED_SLOT_WIRE_VALUE ? UNMATCHED_SLOT : value;
   }
 
-  return normalized;
+  return normalized as AppElements;
 }
 
 export function readAppElementsMetadata(elements: AppElements): AppElementsMetadata {

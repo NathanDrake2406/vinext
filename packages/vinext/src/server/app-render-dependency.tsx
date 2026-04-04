@@ -45,6 +45,10 @@ export function renderWithAppDependencyBarrier(
   children: ReactNode,
   dependency: AppRenderDependency,
 ): ReactNode {
+  // Calling dependency.release() during render is intentional for RSC:
+  // server components render exactly once (no Strict Mode double-invoke,
+  // no concurrent re-renders), so a render-time side effect is safe here
+  // as a lightweight alternative to useEffect / useLayoutEffect.
   function ReleaseAppRenderDependency() {
     dependency.release();
     return null;

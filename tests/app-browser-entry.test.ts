@@ -1,16 +1,15 @@
 import React from "react";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import {
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
   normalizeAppElements,
-  type AppElements,
 } from "../packages/vinext/src/server/app-elements.js";
 import { createClientNavigationRenderSnapshot } from "../packages/vinext/src/shims/navigation.js";
 import {
-  applyAppRouterStateUpdate,
   createPendingNavigationCommit,
   routerReducer,
+  shouldHardNavigate,
   type AppRouterState,
 } from "../packages/vinext/src/server/app-browser-state.js";
 
@@ -88,62 +87,40 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("hard navigates instead of merging when the root layout changes", async () => {
-    const assign = vi.fn<(href: string) => void>();
-
-    const result = await applyAppRouterStateUpdate({
-      commit: vi.fn(),
-      currentState: createState({
-        rootLayoutTreePath: "/(marketing)",
-      }),
-      dispatch: vi.fn(),
-      nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/(dashboard)")),
-      onHardNavigate: assign,
-      targetHref: "/dashboard",
-      transition: (callback) => callback(),
-    });
-
-    expect(result).toEqual({ type: "hard-navigate" });
-    expect(assign).toHaveBeenCalledWith("/dashboard");
+  it("hard navigates when the root layout changes between two non-null paths", () => {
+    expect(shouldHardNavigate("/(marketing)", "/(dashboard)")).toBe(true);
   });
 
-  it("defers commit side effects until the payload has resolved and dispatched", async () => {
-    let resolveElements: ((value: AppElements) => void) | undefined;
-    const nextElements = new Promise<AppElements>((resolve) => {
-      resolveElements = resolve;
+  it("hard navigates when current route has no root layout but next does", () => {
+    // Navigating from a page with no layouts to one with a root layout fundamentally
+    // changes the component tree structure, so a hard navigate is required.
+    expect(shouldHardNavigate(null, "/")).toBe(true);
+  });
+
+  it("hard navigates when current route has a root layout but next does not", () => {
+    expect(shouldHardNavigate("/", null)).toBe(true);
+  });
+
+  it("soft navigates when both routes have the same root layout", () => {
+    expect(shouldHardNavigate("/", "/")).toBe(false);
+  });
+
+  it("soft navigates when both routes have no root layout", () => {
+    expect(shouldHardNavigate(null, null)).toBe(false);
+  });
+
+  it("creates a pending navigation commit with the resolved elements metadata", async () => {
+    const commit = await createPendingNavigationCommit({
+      currentState: createState({ rootLayoutTreePath: "/(marketing)" }),
+      nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/(dashboard)")),
+      navigationSnapshot: createState().navigationSnapshot,
+      type: "navigate",
     });
-    const dispatch = vi.fn();
-    const commit = vi.fn();
 
-    const pending = applyAppRouterStateUpdate({
-      commit,
-      currentState: createState(),
-      dispatch,
-      nextElements,
-      onHardNavigate: vi.fn(),
-      targetHref: "/dashboard",
-      transition: (callback) => callback(),
-    });
-
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(commit).not.toHaveBeenCalled();
-
-    if (!resolveElements) {
-      throw new Error("Expected deferred elements resolver");
-    }
-
-    resolveElements(
-      normalizeAppElements({
-        [APP_ROUTE_KEY]: "route:/dashboard",
-        [APP_ROOT_LAYOUT_KEY]: "/",
-        "page:/dashboard": React.createElement("main", null, "dashboard"),
-      }),
-    );
-
-    await pending;
-
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(commit).toHaveBeenCalledOnce();
+    expect(commit.routeId).toBe("route:/dashboard");
+    expect(commit.rootLayoutTreePath).toBe("/(dashboard)");
+    // Caller checks shouldHardNavigate(currentState.rootLayoutTreePath, commit.rootLayoutTreePath)
+    expect(shouldHardNavigate("/(marketing)", commit.rootLayoutTreePath)).toBe(true);
   });
 
   it("builds a merge commit for refresh and server-action payloads", async () => {

@@ -184,11 +184,7 @@ export function resolveAppPageChildSegments(
   const resolvedSegments: string[] = [];
 
   for (const segment of rawSegments) {
-    if (
-      segment.startsWith("[[...") &&
-      segment.endsWith("]]") &&
-      segment.length > "[[...x]]".length - 1
-    ) {
+    if (segment.startsWith("[[...") && segment.endsWith("]]") && segment.length >= 8) {
       const paramName = segment.slice(5, -2);
       const paramValue = params[paramName];
       if (Array.isArray(paramValue) && paramValue.length === 0) {
@@ -582,5 +578,7 @@ export function buildAppPageElements<
     </>
   );
 
-  return elements;
+  // Cast is safe: APP_ROUTE_KEY and APP_ROOT_LAYOUT_KEY are set above
+  // and readAppElementsMetadata validates them at runtime.
+  return elements as AppElements;
 }
