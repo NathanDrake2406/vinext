@@ -85,6 +85,9 @@ import {
   renderAppPageLifecycle as __renderAppPageLifecycle,
 } from "<ROOT>/packages/vinext/src/server/app-page-render.js";
 import {
+  mergeMiddlewareResponseHeaders as __mergeMiddlewareResponseHeaders,
+} from "<ROOT>/packages/vinext/src/server/app-page-response.js";
+import {
   buildAppPageElement as __buildAppPageElement,
   resolveAppPageIntercept as __resolveAppPageIntercept,
   validateAppPageDynamicParams as __validateAppPageDynamicParams,
@@ -582,6 +585,21 @@ function matchRoute(url) {
   return _trieMatch(_routeTrie, urlParts);
 }
 
+function __createStaticFileSignal(pathname, _mwCtx) {
+  const headers = new Headers({
+    "x-vinext-static-file": encodeURIComponent(pathname),
+  });
+  if (_mwCtx.headers) {
+    for (const [key, value] of _mwCtx.headers) {
+      headers.append(key, value);
+    }
+  }
+  return new Response(null, {
+    status: _mwCtx.status ?? 200,
+    headers,
+  });
+}
+
 // matchPattern is kept for findIntercept (linear scan over small interceptLookup array).
 function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
@@ -790,6 +808,7 @@ const __i18nConfig = null;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
+const __publicFiles = new Set([]);
 const __allowedOrigins = [];
 
 
@@ -1328,6 +1347,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
   }
 
+  // Serve public/ files as filesystem routes after middleware and before
+  // afterFiles/fallback rewrites, matching Next.js routing semantics.
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    !pathname.endsWith(".rsc") &&
+    __publicFiles.has(cleanPathname)
+  ) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __createStaticFileSignal(cleanPathname, _mwCtx);
+  }
+
   // Set navigation context for Server Components.
   // Note: Headers context is already set by runWithRequestContext in the handler wrapper.
   setNavigationContext({
@@ -1432,6 +1463,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           "x-action-redirect-type": actionRedirect.type,
           "x-action-redirect-status": String(actionRedirect.status),
         });
+        __mergeMiddlewareResponseHeaders(redirectHeaders, _mwCtx.headers);
         for (const cookie of actionPendingCookies) {
           redirectHeaders.append("Set-Cookie", cookie);
         }
@@ -1485,8 +1517,15 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       const actionPendingCookies = getAndClearPendingCookies();
       const actionDraftCookie = getDraftModeCookieHeader();
 
-      const actionHeaders = { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" };
-      const actionResponse = new Response(rscStream, { headers: actionHeaders });
+      const actionHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(actionHeaders, _mwCtx.headers);
+      const actionResponse = new Response(rscStream, {
+        status: _mwCtx.status ?? 200,
+        headers: actionHeaders,
+      });
       if (actionPendingCookies.length > 0 || actionDraftCookie) {
         for (const cookie of actionPendingCookies) {
           actionResponse.headers.append("Set-Cookie", cookie);
@@ -1876,8 +1915,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       // by the client, and async server components that run during consumption need the
       // context to still be live. The AsyncLocalStorage scope from runWithRequestContext
       // handles cleanup naturally when all async continuations complete.
+      const interceptHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(interceptHeaders, _mwCtx.headers);
       return new Response(interceptStream, {
-        headers: { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" },
+        status: _mwCtx.status ?? 200,
+        headers: interceptHeaders,
       });
     },
     searchParams: url.searchParams,
@@ -1973,7 +2018,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       return LayoutComp({ params: _asyncLayoutParams, children: null });
     },
     probePage() {
-      return PageComponent({ params });
+      const _probeSearchObj = {};
+      url.searchParams.forEach(function(v, k) {
+        if (k in _probeSearchObj) {
+          _probeSearchObj[k] = Array.isArray(_probeSearchObj[k])
+            ? _probeSearchObj[k].concat(v)
+            : [_probeSearchObj[k], v];
+        } else {
+          _probeSearchObj[k] = v;
+        }
+      });
+      const _asyncSearchParams = makeThenableParams(_probeSearchObj);
+      return PageComponent({ params: _asyncLayoutParams, searchParams: _asyncSearchParams });
     },
     revalidateSeconds,
     renderErrorBoundaryResponse(renderErr) {
@@ -2128,6 +2184,9 @@ import {
 import {
   renderAppPageLifecycle as __renderAppPageLifecycle,
 } from "<ROOT>/packages/vinext/src/server/app-page-render.js";
+import {
+  mergeMiddlewareResponseHeaders as __mergeMiddlewareResponseHeaders,
+} from "<ROOT>/packages/vinext/src/server/app-page-response.js";
 import {
   buildAppPageElement as __buildAppPageElement,
   resolveAppPageIntercept as __resolveAppPageIntercept,
@@ -2626,6 +2685,21 @@ function matchRoute(url) {
   return _trieMatch(_routeTrie, urlParts);
 }
 
+function __createStaticFileSignal(pathname, _mwCtx) {
+  const headers = new Headers({
+    "x-vinext-static-file": encodeURIComponent(pathname),
+  });
+  if (_mwCtx.headers) {
+    for (const [key, value] of _mwCtx.headers) {
+      headers.append(key, value);
+    }
+  }
+  return new Response(null, {
+    status: _mwCtx.status ?? 200,
+    headers,
+  });
+}
+
 // matchPattern is kept for findIntercept (linear scan over small interceptLookup array).
 function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
@@ -2834,6 +2908,7 @@ const __i18nConfig = null;
 const __configRedirects = [{"source":"/old","destination":"/new","permanent":true}];
 const __configRewrites = {"beforeFiles":[{"source":"/api/:path*","destination":"/backend/:path*"}],"afterFiles":[],"fallback":[]};
 const __configHeaders = [{"source":"/api/:path*","headers":[{"key":"X-Custom","value":"test"}]}];
+const __publicFiles = new Set([]);
 const __allowedOrigins = ["https://example.com"];
 
 
@@ -3200,6 +3275,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   let pathname = __normalizePath(decodedUrlPathname);
 
   
+  if (!hasBasePath(pathname, __basePath) && !pathname.startsWith("/__vinext/")) {
+    return new Response("Not Found", { status: 404 });
+  }
   // Strip basePath prefix
   pathname = stripBasePath(pathname, __basePath);
   
@@ -3375,6 +3453,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
   }
 
+  // Serve public/ files as filesystem routes after middleware and before
+  // afterFiles/fallback rewrites, matching Next.js routing semantics.
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    !pathname.endsWith(".rsc") &&
+    __publicFiles.has(cleanPathname)
+  ) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __createStaticFileSignal(cleanPathname, _mwCtx);
+  }
+
   // Set navigation context for Server Components.
   // Note: Headers context is already set by runWithRequestContext in the handler wrapper.
   setNavigationContext({
@@ -3479,6 +3569,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           "x-action-redirect-type": actionRedirect.type,
           "x-action-redirect-status": String(actionRedirect.status),
         });
+        __mergeMiddlewareResponseHeaders(redirectHeaders, _mwCtx.headers);
         for (const cookie of actionPendingCookies) {
           redirectHeaders.append("Set-Cookie", cookie);
         }
@@ -3532,8 +3623,15 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       const actionPendingCookies = getAndClearPendingCookies();
       const actionDraftCookie = getDraftModeCookieHeader();
 
-      const actionHeaders = { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" };
-      const actionResponse = new Response(rscStream, { headers: actionHeaders });
+      const actionHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(actionHeaders, _mwCtx.headers);
+      const actionResponse = new Response(rscStream, {
+        status: _mwCtx.status ?? 200,
+        headers: actionHeaders,
+      });
       if (actionPendingCookies.length > 0 || actionDraftCookie) {
         for (const cookie of actionPendingCookies) {
           actionResponse.headers.append("Set-Cookie", cookie);
@@ -3923,8 +4021,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       // by the client, and async server components that run during consumption need the
       // context to still be live. The AsyncLocalStorage scope from runWithRequestContext
       // handles cleanup naturally when all async continuations complete.
+      const interceptHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(interceptHeaders, _mwCtx.headers);
       return new Response(interceptStream, {
-        headers: { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" },
+        status: _mwCtx.status ?? 200,
+        headers: interceptHeaders,
       });
     },
     searchParams: url.searchParams,
@@ -4020,7 +4124,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       return LayoutComp({ params: _asyncLayoutParams, children: null });
     },
     probePage() {
-      return PageComponent({ params });
+      const _probeSearchObj = {};
+      url.searchParams.forEach(function(v, k) {
+        if (k in _probeSearchObj) {
+          _probeSearchObj[k] = Array.isArray(_probeSearchObj[k])
+            ? _probeSearchObj[k].concat(v)
+            : [_probeSearchObj[k], v];
+        } else {
+          _probeSearchObj[k] = v;
+        }
+      });
+      const _asyncSearchParams = makeThenableParams(_probeSearchObj);
+      return PageComponent({ params: _asyncLayoutParams, searchParams: _asyncSearchParams });
     },
     revalidateSeconds,
     renderErrorBoundaryResponse(renderErr) {
@@ -4175,6 +4290,9 @@ import {
 import {
   renderAppPageLifecycle as __renderAppPageLifecycle,
 } from "<ROOT>/packages/vinext/src/server/app-page-render.js";
+import {
+  mergeMiddlewareResponseHeaders as __mergeMiddlewareResponseHeaders,
+} from "<ROOT>/packages/vinext/src/server/app-page-response.js";
 import {
   buildAppPageElement as __buildAppPageElement,
   resolveAppPageIntercept as __resolveAppPageIntercept,
@@ -4674,6 +4792,21 @@ function matchRoute(url) {
   return _trieMatch(_routeTrie, urlParts);
 }
 
+function __createStaticFileSignal(pathname, _mwCtx) {
+  const headers = new Headers({
+    "x-vinext-static-file": encodeURIComponent(pathname),
+  });
+  if (_mwCtx.headers) {
+    for (const [key, value] of _mwCtx.headers) {
+      headers.append(key, value);
+    }
+  }
+  return new Response(null, {
+    status: _mwCtx.status ?? 200,
+    headers,
+  });
+}
+
 // matchPattern is kept for findIntercept (linear scan over small interceptLookup array).
 function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
@@ -4882,6 +5015,7 @@ const __i18nConfig = null;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
+const __publicFiles = new Set([]);
 const __allowedOrigins = [];
 
 
@@ -5420,6 +5554,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
   }
 
+  // Serve public/ files as filesystem routes after middleware and before
+  // afterFiles/fallback rewrites, matching Next.js routing semantics.
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    !pathname.endsWith(".rsc") &&
+    __publicFiles.has(cleanPathname)
+  ) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __createStaticFileSignal(cleanPathname, _mwCtx);
+  }
+
   // Set navigation context for Server Components.
   // Note: Headers context is already set by runWithRequestContext in the handler wrapper.
   setNavigationContext({
@@ -5524,6 +5670,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           "x-action-redirect-type": actionRedirect.type,
           "x-action-redirect-status": String(actionRedirect.status),
         });
+        __mergeMiddlewareResponseHeaders(redirectHeaders, _mwCtx.headers);
         for (const cookie of actionPendingCookies) {
           redirectHeaders.append("Set-Cookie", cookie);
         }
@@ -5577,8 +5724,15 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       const actionPendingCookies = getAndClearPendingCookies();
       const actionDraftCookie = getDraftModeCookieHeader();
 
-      const actionHeaders = { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" };
-      const actionResponse = new Response(rscStream, { headers: actionHeaders });
+      const actionHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(actionHeaders, _mwCtx.headers);
+      const actionResponse = new Response(rscStream, {
+        status: _mwCtx.status ?? 200,
+        headers: actionHeaders,
+      });
       if (actionPendingCookies.length > 0 || actionDraftCookie) {
         for (const cookie of actionPendingCookies) {
           actionResponse.headers.append("Set-Cookie", cookie);
@@ -5968,8 +6122,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       // by the client, and async server components that run during consumption need the
       // context to still be live. The AsyncLocalStorage scope from runWithRequestContext
       // handles cleanup naturally when all async continuations complete.
+      const interceptHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(interceptHeaders, _mwCtx.headers);
       return new Response(interceptStream, {
-        headers: { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" },
+        status: _mwCtx.status ?? 200,
+        headers: interceptHeaders,
       });
     },
     searchParams: url.searchParams,
@@ -6065,7 +6225,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       return LayoutComp({ params: _asyncLayoutParams, children: null });
     },
     probePage() {
-      return PageComponent({ params });
+      const _probeSearchObj = {};
+      url.searchParams.forEach(function(v, k) {
+        if (k in _probeSearchObj) {
+          _probeSearchObj[k] = Array.isArray(_probeSearchObj[k])
+            ? _probeSearchObj[k].concat(v)
+            : [_probeSearchObj[k], v];
+        } else {
+          _probeSearchObj[k] = v;
+        }
+      });
+      const _asyncSearchParams = makeThenableParams(_probeSearchObj);
+      return PageComponent({ params: _asyncLayoutParams, searchParams: _asyncSearchParams });
     },
     revalidateSeconds,
     renderErrorBoundaryResponse(renderErr) {
@@ -6220,6 +6391,9 @@ import {
 import {
   renderAppPageLifecycle as __renderAppPageLifecycle,
 } from "<ROOT>/packages/vinext/src/server/app-page-render.js";
+import {
+  mergeMiddlewareResponseHeaders as __mergeMiddlewareResponseHeaders,
+} from "<ROOT>/packages/vinext/src/server/app-page-response.js";
 import {
   buildAppPageElement as __buildAppPageElement,
   resolveAppPageIntercept as __resolveAppPageIntercept,
@@ -6748,6 +6922,21 @@ function matchRoute(url) {
   return _trieMatch(_routeTrie, urlParts);
 }
 
+function __createStaticFileSignal(pathname, _mwCtx) {
+  const headers = new Headers({
+    "x-vinext-static-file": encodeURIComponent(pathname),
+  });
+  if (_mwCtx.headers) {
+    for (const [key, value] of _mwCtx.headers) {
+      headers.append(key, value);
+    }
+  }
+  return new Response(null, {
+    status: _mwCtx.status ?? 200,
+    headers,
+  });
+}
+
 // matchPattern is kept for findIntercept (linear scan over small interceptLookup array).
 function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
@@ -6956,6 +7145,7 @@ const __i18nConfig = null;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
+const __publicFiles = new Set([]);
 const __allowedOrigins = [];
 
 
@@ -7497,6 +7687,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
   }
 
+  // Serve public/ files as filesystem routes after middleware and before
+  // afterFiles/fallback rewrites, matching Next.js routing semantics.
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    !pathname.endsWith(".rsc") &&
+    __publicFiles.has(cleanPathname)
+  ) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __createStaticFileSignal(cleanPathname, _mwCtx);
+  }
+
   // Set navigation context for Server Components.
   // Note: Headers context is already set by runWithRequestContext in the handler wrapper.
   setNavigationContext({
@@ -7601,6 +7803,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           "x-action-redirect-type": actionRedirect.type,
           "x-action-redirect-status": String(actionRedirect.status),
         });
+        __mergeMiddlewareResponseHeaders(redirectHeaders, _mwCtx.headers);
         for (const cookie of actionPendingCookies) {
           redirectHeaders.append("Set-Cookie", cookie);
         }
@@ -7654,8 +7857,15 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       const actionPendingCookies = getAndClearPendingCookies();
       const actionDraftCookie = getDraftModeCookieHeader();
 
-      const actionHeaders = { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" };
-      const actionResponse = new Response(rscStream, { headers: actionHeaders });
+      const actionHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(actionHeaders, _mwCtx.headers);
+      const actionResponse = new Response(rscStream, {
+        status: _mwCtx.status ?? 200,
+        headers: actionHeaders,
+      });
       if (actionPendingCookies.length > 0 || actionDraftCookie) {
         for (const cookie of actionPendingCookies) {
           actionResponse.headers.append("Set-Cookie", cookie);
@@ -8045,8 +8255,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       // by the client, and async server components that run during consumption need the
       // context to still be live. The AsyncLocalStorage scope from runWithRequestContext
       // handles cleanup naturally when all async continuations complete.
+      const interceptHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(interceptHeaders, _mwCtx.headers);
       return new Response(interceptStream, {
-        headers: { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" },
+        status: _mwCtx.status ?? 200,
+        headers: interceptHeaders,
       });
     },
     searchParams: url.searchParams,
@@ -8142,7 +8358,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       return LayoutComp({ params: _asyncLayoutParams, children: null });
     },
     probePage() {
-      return PageComponent({ params });
+      const _probeSearchObj = {};
+      url.searchParams.forEach(function(v, k) {
+        if (k in _probeSearchObj) {
+          _probeSearchObj[k] = Array.isArray(_probeSearchObj[k])
+            ? _probeSearchObj[k].concat(v)
+            : [_probeSearchObj[k], v];
+        } else {
+          _probeSearchObj[k] = v;
+        }
+      });
+      const _asyncSearchParams = makeThenableParams(_probeSearchObj);
+      return PageComponent({ params: _asyncLayoutParams, searchParams: _asyncSearchParams });
     },
     revalidateSeconds,
     renderErrorBoundaryResponse(renderErr) {
@@ -8297,6 +8524,9 @@ import {
 import {
   renderAppPageLifecycle as __renderAppPageLifecycle,
 } from "<ROOT>/packages/vinext/src/server/app-page-render.js";
+import {
+  mergeMiddlewareResponseHeaders as __mergeMiddlewareResponseHeaders,
+} from "<ROOT>/packages/vinext/src/server/app-page-response.js";
 import {
   buildAppPageElement as __buildAppPageElement,
   resolveAppPageIntercept as __resolveAppPageIntercept,
@@ -8802,6 +9032,21 @@ function matchRoute(url) {
   return _trieMatch(_routeTrie, urlParts);
 }
 
+function __createStaticFileSignal(pathname, _mwCtx) {
+  const headers = new Headers({
+    "x-vinext-static-file": encodeURIComponent(pathname),
+  });
+  if (_mwCtx.headers) {
+    for (const [key, value] of _mwCtx.headers) {
+      headers.append(key, value);
+    }
+  }
+  return new Response(null, {
+    status: _mwCtx.status ?? 200,
+    headers,
+  });
+}
+
 // matchPattern is kept for findIntercept (linear scan over small interceptLookup array).
 function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
@@ -9010,6 +9255,7 @@ const __i18nConfig = null;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
+const __publicFiles = new Set([]);
 const __allowedOrigins = [];
 
 
@@ -9548,6 +9794,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
   }
 
+  // Serve public/ files as filesystem routes after middleware and before
+  // afterFiles/fallback rewrites, matching Next.js routing semantics.
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    !pathname.endsWith(".rsc") &&
+    __publicFiles.has(cleanPathname)
+  ) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __createStaticFileSignal(cleanPathname, _mwCtx);
+  }
+
   // Set navigation context for Server Components.
   // Note: Headers context is already set by runWithRequestContext in the handler wrapper.
   setNavigationContext({
@@ -9652,6 +9910,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           "x-action-redirect-type": actionRedirect.type,
           "x-action-redirect-status": String(actionRedirect.status),
         });
+        __mergeMiddlewareResponseHeaders(redirectHeaders, _mwCtx.headers);
         for (const cookie of actionPendingCookies) {
           redirectHeaders.append("Set-Cookie", cookie);
         }
@@ -9705,8 +9964,15 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       const actionPendingCookies = getAndClearPendingCookies();
       const actionDraftCookie = getDraftModeCookieHeader();
 
-      const actionHeaders = { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" };
-      const actionResponse = new Response(rscStream, { headers: actionHeaders });
+      const actionHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(actionHeaders, _mwCtx.headers);
+      const actionResponse = new Response(rscStream, {
+        status: _mwCtx.status ?? 200,
+        headers: actionHeaders,
+      });
       if (actionPendingCookies.length > 0 || actionDraftCookie) {
         for (const cookie of actionPendingCookies) {
           actionResponse.headers.append("Set-Cookie", cookie);
@@ -10096,8 +10362,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       // by the client, and async server components that run during consumption need the
       // context to still be live. The AsyncLocalStorage scope from runWithRequestContext
       // handles cleanup naturally when all async continuations complete.
+      const interceptHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(interceptHeaders, _mwCtx.headers);
       return new Response(interceptStream, {
-        headers: { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" },
+        status: _mwCtx.status ?? 200,
+        headers: interceptHeaders,
       });
     },
     searchParams: url.searchParams,
@@ -10193,7 +10465,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       return LayoutComp({ params: _asyncLayoutParams, children: null });
     },
     probePage() {
-      return PageComponent({ params });
+      const _probeSearchObj = {};
+      url.searchParams.forEach(function(v, k) {
+        if (k in _probeSearchObj) {
+          _probeSearchObj[k] = Array.isArray(_probeSearchObj[k])
+            ? _probeSearchObj[k].concat(v)
+            : [_probeSearchObj[k], v];
+        } else {
+          _probeSearchObj[k] = v;
+        }
+      });
+      const _asyncSearchParams = makeThenableParams(_probeSearchObj);
+      return PageComponent({ params: _asyncLayoutParams, searchParams: _asyncSearchParams });
     },
     revalidateSeconds,
     renderErrorBoundaryResponse(renderErr) {
@@ -10348,6 +10631,9 @@ import {
 import {
   renderAppPageLifecycle as __renderAppPageLifecycle,
 } from "<ROOT>/packages/vinext/src/server/app-page-render.js";
+import {
+  mergeMiddlewareResponseHeaders as __mergeMiddlewareResponseHeaders,
+} from "<ROOT>/packages/vinext/src/server/app-page-response.js";
 import {
   buildAppPageElement as __buildAppPageElement,
   resolveAppPageIntercept as __resolveAppPageIntercept,
@@ -10846,6 +11132,21 @@ function matchRoute(url) {
   return _trieMatch(_routeTrie, urlParts);
 }
 
+function __createStaticFileSignal(pathname, _mwCtx) {
+  const headers = new Headers({
+    "x-vinext-static-file": encodeURIComponent(pathname),
+  });
+  if (_mwCtx.headers) {
+    for (const [key, value] of _mwCtx.headers) {
+      headers.append(key, value);
+    }
+  }
+  return new Response(null, {
+    status: _mwCtx.status ?? 200,
+    headers,
+  });
+}
+
 // matchPattern is kept for findIntercept (linear scan over small interceptLookup array).
 function matchPattern(urlParts, patternParts) {
   const params = Object.create(null);
@@ -11283,6 +11584,7 @@ const __i18nConfig = null;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
+const __publicFiles = new Set([]);
 const __allowedOrigins = [];
 
 
@@ -11956,6 +12258,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
   }
 
+  // Serve public/ files as filesystem routes after middleware and before
+  // afterFiles/fallback rewrites, matching Next.js routing semantics.
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    !pathname.endsWith(".rsc") &&
+    __publicFiles.has(cleanPathname)
+  ) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __createStaticFileSignal(cleanPathname, _mwCtx);
+  }
+
   // Set navigation context for Server Components.
   // Note: Headers context is already set by runWithRequestContext in the handler wrapper.
   setNavigationContext({
@@ -12060,6 +12374,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           "x-action-redirect-type": actionRedirect.type,
           "x-action-redirect-status": String(actionRedirect.status),
         });
+        __mergeMiddlewareResponseHeaders(redirectHeaders, _mwCtx.headers);
         for (const cookie of actionPendingCookies) {
           redirectHeaders.append("Set-Cookie", cookie);
         }
@@ -12113,8 +12428,15 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       const actionPendingCookies = getAndClearPendingCookies();
       const actionDraftCookie = getDraftModeCookieHeader();
 
-      const actionHeaders = { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" };
-      const actionResponse = new Response(rscStream, { headers: actionHeaders });
+      const actionHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(actionHeaders, _mwCtx.headers);
+      const actionResponse = new Response(rscStream, {
+        status: _mwCtx.status ?? 200,
+        headers: actionHeaders,
+      });
       if (actionPendingCookies.length > 0 || actionDraftCookie) {
         for (const cookie of actionPendingCookies) {
           actionResponse.headers.append("Set-Cookie", cookie);
@@ -12504,8 +12826,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       // by the client, and async server components that run during consumption need the
       // context to still be live. The AsyncLocalStorage scope from runWithRequestContext
       // handles cleanup naturally when all async continuations complete.
+      const interceptHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        "Vary": "RSC, Accept",
+      });
+      __mergeMiddlewareResponseHeaders(interceptHeaders, _mwCtx.headers);
       return new Response(interceptStream, {
-        headers: { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" },
+        status: _mwCtx.status ?? 200,
+        headers: interceptHeaders,
       });
     },
     searchParams: url.searchParams,
@@ -12601,7 +12929,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       return LayoutComp({ params: _asyncLayoutParams, children: null });
     },
     probePage() {
-      return PageComponent({ params });
+      const _probeSearchObj = {};
+      url.searchParams.forEach(function(v, k) {
+        if (k in _probeSearchObj) {
+          _probeSearchObj[k] = Array.isArray(_probeSearchObj[k])
+            ? _probeSearchObj[k].concat(v)
+            : [_probeSearchObj[k], v];
+        } else {
+          _probeSearchObj[k] = v;
+        }
+      });
+      const _asyncSearchParams = makeThenableParams(_probeSearchObj);
+      return PageComponent({ params: _asyncLayoutParams, searchParams: _asyncSearchParams });
     },
     revalidateSeconds,
     renderErrorBoundaryResponse(renderErr) {
