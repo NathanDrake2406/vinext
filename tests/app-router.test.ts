@@ -877,6 +877,20 @@ describe("App Router integration", () => {
     expect(html).toMatch(/name="description".*content="Read about my-post"/);
   });
 
+  it("layout generateMetadata() does not receive searchParams (Next.js parity)", async () => {
+    // Parity test: In Next.js, layout generateMetadata() does NOT receive
+    // searchParams — only page generateMetadata() does. The layout should
+    // always see undefined and fall back to "home", even when the URL has
+    // a query string.
+    // See: next.js resolve-metadata.ts — `isPage ? { params, searchParams } : { params }`
+    const res = await fetch(`${baseUrl}/layout-metadata-search?tab=settings`);
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    // Layout falls back to "home" because it never receives searchParams.
+    expect(html).toContain("<title>Layout Section: home</title>");
+  });
+
   it("renders catch-all routes with multiple segments", async () => {
     const res = await fetch(`${baseUrl}/docs/getting-started/install`);
     expect(res.status).toBe(200);

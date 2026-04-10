@@ -955,6 +955,24 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   // route it to the nearest error.tsx boundary (or global-error.tsx).
   const layoutMods = route.layouts.filter(Boolean);
 
+  // Convert URLSearchParams → plain object for page generateMetadata() and
+  // pageProps.searchParams. Built before the layout loop so the page metadata
+  // call (below) and pageProps can reference the same object.
+  // NOTE: Layouts do NOT receive searchParams in generateMetadata() — only
+  // pages do. This matches Next.js behavior (resolve-metadata.ts:777).
+  const spObj = Object.create(null);
+  let hasSearchParams = false;
+  if (searchParams && searchParams.forEach) {
+    searchParams.forEach(function(v, k) {
+      hasSearchParams = true;
+      if (k in spObj) {
+        spObj[k] = Array.isArray(spObj[k]) ? spObj[k].concat(v) : [spObj[k], v];
+      } else {
+        spObj[k] = v;
+      }
+    });
+  }
+
   // Build the parent promise chain and kick off metadata resolution in one pass.
   // Each layout module is called exactly once. layoutMetaPromises[i] is the
   // promise for layout[i]'s own metadata result.
@@ -976,22 +994,6 @@ async function buildPageElements(route, params, routePath, opts, searchParams) {
   }
   // Page's parent is the fully-accumulated layout metadata.
   const pageParentPromise = accumulatedMetaPromise;
-
-  // Convert URLSearchParams → plain object so we can pass it to
-  // resolveModuleMetadata (which expects Record<string, string | string[]>).
-  // This same object is reused for pageProps.searchParams below.
-  const spObj = {};
-  let hasSearchParams = false;
-  if (searchParams && searchParams.forEach) {
-    searchParams.forEach(function(v, k) {
-      hasSearchParams = true;
-      if (k in spObj) {
-        spObj[k] = Array.isArray(spObj[k]) ? spObj[k].concat(v) : [spObj[k], v];
-      } else {
-        spObj[k] = v;
-      }
-    });
-  }
 
   const [layoutMetaResults, layoutVpResults, pageMeta, pageVp] = await Promise.all([
     Promise.all(layoutMetaPromises),
