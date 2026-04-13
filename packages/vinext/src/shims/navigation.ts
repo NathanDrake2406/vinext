@@ -526,6 +526,8 @@ type ClientNavigationState = {
   clientParamsJson: string;
   pendingClientParams: Record<string, string | string[]> | null;
   pendingClientParamsJson: string | null;
+  pendingPathname: string | null;
+  pendingPathnameNavId: number | null;
   originalPushState: typeof window.history.pushState;
   originalReplaceState: typeof window.history.replaceState;
   patchInstalled: boolean;
@@ -551,7 +553,7 @@ export function getMountedSlotsHeader(): string | null {
   return globalState[_MOUNTED_SLOTS_HEADER_KEY] ?? null;
 }
 
-function getClientNavigationState(): ClientNavigationState | null {
+export function getClientNavigationState(): ClientNavigationState | null {
   if (isServer) return null;
 
   const globalState = window as ClientNavigationGlobal;
@@ -564,6 +566,8 @@ function getClientNavigationState(): ClientNavigationState | null {
     clientParamsJson: "{}",
     pendingClientParams: null,
     pendingClientParamsJson: null,
+    pendingPathname: null,
+    pendingPathnameNavId: null,
     // NB: These capture the currently installed history methods, not guaranteed
     // native ones. If a third-party library (analytics, router) has already patched
     // history methods before this module loads, we intentionally preserve that
@@ -794,6 +798,34 @@ export function getClientParams(): Record<string, string | string[]> {
   return getClientNavigationState()?.clientParams ?? _fallbackClientParams;
 }
 
+/**
+ * Set the pending pathname for client-side navigation.
+ * Strips the base path before storing. Associates the pathname with the given navId
+ * so only that navigation (or a newer one) can clear it.
+ */
+export function setPendingPathname(pathname: string, navId: number): void {
+  const state = getClientNavigationState();
+  if (!state) return;
+  state.pendingPathname = stripBasePath(pathname, __basePath);
+  state.pendingPathnameNavId = navId;
+}
+
+/**
+ * Clear the pending pathname, but only if the given navId matches the one
+ * that set it, or if pendingPathnameNavId is null (no active owner).
+ * This prevents superseded navigations from clearing state belonging to newer navigations.
+ */
+export function clearPendingPathname(navId: number): void {
+  const state = getClientNavigationState();
+  if (!state) return;
+  // Only clear if this navId is the one that set the pendingPathname,
+  // or if pendingPathnameNavId is null (no owner)
+  if (state.pendingPathnameNavId === null || state.pendingPathnameNavId === navId) {
+    state.pendingPathname = null;
+    state.pendingPathnameNavId = null;
+  }
+}
+
 function getClientParamsSnapshot(): Record<string, string | string[]> {
   return getClientNavigationState()?.clientParams ?? _EMPTY_PARAMS;
 }
@@ -953,7 +985,14 @@ function withSuppressedUrlNotifications<T>(fn: () => T): T {
   }
 }
 
-export function commitClientNavigationState(): void {
+/**
+ * Commit pending client navigation state to committed snapshots.
+ *
+ * navId is optional: callers that don't own pendingPathname (for example,
+ * superseded pre-paint cleanup) may pass undefined to flush snapshot/params
+ * state without clearing pendingPathname owned by the active navigation.
+ */
+export function commitClientNavigationState(navId?: number): void {
   if (isServer) return;
   const state = getClientNavigationState();
   if (!state) return;
@@ -972,6 +1011,18 @@ export function commitClientNavigationState(): void {
     state.clientParamsJson = state.pendingClientParamsJson;
     state.pendingClientParams = null;
     state.pendingClientParamsJson = null;
+  }
+  // Clear pending pathname when navigation commits, but only if:
+  // - The navId matches the one that set pendingPathname
+  // - No newer navigation has overwritten pendingPathname (pendingPathnameNavId === null or matches)
+  // - navId is undefined only for non-owning callers, which must not clear
+  //   pendingPathname for an active navigation.
+  const canClearPendingPathname =
+    state.pendingPathnameNavId === null ||
+    (navId !== undefined && state.pendingPathnameNavId === navId);
+  if (canClearPendingPathname) {
+    state.pendingPathname = null;
+    state.pendingPathnameNavId = null;
   }
   const shouldNotify = urlChanged || state.hasPendingNavigationUpdate;
   state.hasPendingNavigationUpdate = false;

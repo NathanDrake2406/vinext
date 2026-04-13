@@ -23,12 +23,14 @@ import { notifyAppRouterTransitionStart } from "../client/instrumentation-client
 import {
   __basePath,
   activateNavigationSnapshot,
+  clearPendingPathname,
   commitClientNavigationState,
   consumePrefetchResponse,
   createClientNavigationRenderSnapshot,
   getCurrentNextUrl,
   getCurrentInterceptionContext,
   getClientNavigationRenderContext,
+  getClientNavigationState,
   getPrefetchCache,
   getPrefetchedUrls,
   pushHistoryStateWithoutNotify,
@@ -36,6 +38,7 @@ import {
   replaceHistoryStateWithoutNotify,
   restoreRscResponse,
   setClientParams,
+  setPendingPathname,
   snapshotRscResponse,
   setMountedSlotsHeader,
   setNavigationContext,
@@ -196,8 +199,10 @@ function drainPrePaintEffects(upToRenderId: number): void {
         // Winning navigation: run its actual pre-paint effect
         effect();
       } else {
-        // Superseded navigation: balance its activateNavigationSnapshot()
-        commitClientNavigationState();
+        // Superseded navigation: balance its activateNavigationSnapshot().
+        // Pass undefined navId intentionally so this cleanup cannot clear
+        // pendingPathname owned by the current active navigation.
+        commitClientNavigationState(undefined);
       }
     }
   }
@@ -206,10 +211,20 @@ function drainPrePaintEffects(upToRenderId: number): void {
 function createNavigationCommitEffect(
   href: string,
   historyUpdateMode: HistoryUpdateMode | undefined,
+  navId: number,
   params: Record<string, string | string[]>,
   previousNextUrl: string | null,
 ): () => void {
   return () => {
+    // Only update URL if this is still the active navigation.
+    // A newer navigation would have incremented activeNavigationId.
+    if (navId !== activeNavigationId) {
+      // This transition was superseded before commit; balance the active
+      // snapshot counter without clearing pendingPathname ownership.
+      commitClientNavigationState(undefined);
+      return;
+    }
+
     const targetHref = new URL(href, window.location.origin).href;
     stageClientParams(params);
     const preserveExistingState = historyUpdateMode === "replace";
@@ -224,7 +239,7 @@ function createNavigationCommitEffect(
       pushHistoryStateWithoutNotify(historyState, "", href);
     }
 
-    commitClientNavigationState();
+    commitClientNavigationState(navId);
   };
 }
 
@@ -631,7 +646,13 @@ async function renderNavigationPayload(
 
     queuePrePaintNavigationEffect(
       renderId,
-      createNavigationCommitEffect(targetHref, historyUpdateMode, params, pending.previousNextUrl),
+      createNavigationCommitEffect(
+        targetHref,
+        historyUpdateMode,
+        navId,
+        params,
+        pending.previousNextUrl,
+      ),
     );
     activateNavigationSnapshot();
     snapshotActivated = true;
@@ -655,7 +676,7 @@ async function renderNavigationPayload(
     const resolve = pendingNavigationCommits.get(renderId);
     pendingNavigationCommits.delete(renderId);
     if (snapshotActivated) {
-      commitClientNavigationState();
+      commitClientNavigationState(navId);
     }
     resolve?.();
     throw error;
@@ -863,17 +884,22 @@ async function main(): Promise<void> {
       const requestState = getRequestState(navigationKind, previousNextUrlOverride);
       const requestInterceptionContext = requestState.interceptionContext;
       const requestPreviousNextUrl = requestState.previousNextUrl;
-      // Use startTransition for same-route navigations (searchParam changes)
-      // so React keeps the old UI visible during the transition. For cross-route
-      // navigations (different pathname), use synchronous updates — React's
-      // startTransition hangs in Firefox when replacing the entire tree.
-      // NB: During rapid navigations, window.location.pathname may not reflect
-      // the previous navigation's URL yet (URL commit is deferred). This could
-      // cause misclassification (synchronous instead of startTransition or vice
-      // versa), resulting in slightly less smooth transitions but correct behavior.
-      const isSameRoute =
-        stripBasePath(url.pathname, __basePath) ===
+
+      // Compare against previous pending navigation first, then committed state.
+      // This avoids isSameRoute misclassification during rapid back-to-back clicks.
+      const navState = getClientNavigationState();
+      const currentPath =
+        navState?.pendingPathname ??
+        navState?.cachedPathname ??
         stripBasePath(window.location.pathname, __basePath);
+
+      const targetPath = stripBasePath(url.pathname, __basePath);
+      const isSameRoute = targetPath === currentPath;
+
+      // Set this navigation as the pending pathname, overwriting any previous.
+      // Pass navId so only this navigation (or a newer one) can clear it later.
+      setPendingPathname(url.pathname, navId);
+
       const elementsAtNavStart = getBrowserRouterState().elements;
       const mountedSlotsHeader = getMountedSlotIdsHeader(elementsAtNavStart);
       const cachedRoute = getVisitedResponse(
@@ -1054,7 +1080,13 @@ async function main(): Promise<void> {
       // before re-throwing, so this guard correctly skips the double-decrement case.
       if (_snapshotPending) {
         _snapshotPending = false;
-        commitClientNavigationState();
+        commitClientNavigationState(navId);
+      }
+      // Clear pending pathname on error so subsequent navigations compare correctly.
+      // Only clear if this is still the active navigation — a newer navigation
+      // has already overwritten pendingPathname with its own target.
+      if (navId === activeNavigationId) {
+        clearPendingPathname(navId);
       }
       // Don't hard-navigate to a stale URL if this navigation was superseded by
       // a newer one — the newer navigation is already in flight and would be clobbered.
