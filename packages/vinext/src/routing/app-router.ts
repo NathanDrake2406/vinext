@@ -143,6 +143,16 @@ export function invalidateAppRouteCache(): void {
   cachedPageExtensionsKey = null;
 }
 
+function hasParallelSlotDirectory(dir: string): boolean {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .some((entry) => entry.isDirectory() && entry.name.startsWith("@"));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Scan the app/ directory and return a list of routes.
  */
@@ -175,6 +185,28 @@ export async function appRouter(
   for await (const file of scanWithExtensions("**/route", appDir, matcher.extensions, excludeDir)) {
     const route = fileToAppRoute(file, appDir, "route", matcher);
     if (route) routes.push(route);
+  }
+
+  // Layouts with parallel slot pages are valid route entries even when the
+  // segment has no children page. Next.js uses this for modal/feed patterns
+  // like app/user/[id]/layout + @feed/page + @modal/default.
+  const routePatterns = new Set(routes.map((route) => route.pattern));
+  for await (const file of scanWithExtensions(
+    "**/layout",
+    appDir,
+    matcher.extensions,
+    excludeDir,
+  )) {
+    const dir = path.dirname(file);
+    const routeDir = dir === "." ? appDir : path.join(appDir, dir);
+    if (!hasParallelSlotDirectory(routeDir)) continue;
+    if (discoverParallelSlots(routeDir, appDir, matcher).length === 0) continue;
+
+    const route = directoryToAppRoute(dir, appDir, matcher, null, null);
+    if (!route || routePatterns.has(route.pattern)) continue;
+
+    routes.push(route);
+    routePatterns.add(route.pattern);
   }
 
   // Discover sub-routes created by nested pages within parallel slots.
@@ -417,6 +449,22 @@ function fileToAppRoute(
 ): AppRoute | null {
   // Remove the filename (page.tsx or route.ts)
   const dir = path.dirname(file);
+  return directoryToAppRoute(
+    dir,
+    appDir,
+    matcher,
+    type === "page" ? path.join(appDir, file) : null,
+    type === "route" ? path.join(appDir, file) : null,
+  );
+}
+
+function directoryToAppRoute(
+  dir: string,
+  appDir: string,
+  matcher: ValidFileMatcher,
+  pagePath: string | null,
+  routePath: string | null,
+): AppRoute | null {
   const segments = dir === "." ? [] : dir.split(path.sep);
 
   const params: string[] = [];
@@ -466,8 +514,8 @@ function fileToAppRoute(
 
   return {
     pattern: pattern === "/" ? "/" : pattern,
-    pagePath: type === "page" ? path.join(appDir, file) : null,
-    routePath: type === "route" ? path.join(appDir, file) : null,
+    pagePath,
+    routePath,
     layouts,
     templates,
     parallelSlots,
