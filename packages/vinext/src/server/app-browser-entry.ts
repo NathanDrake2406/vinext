@@ -915,6 +915,12 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
       `returned non-RSC content-type "${contentType || "(missing)"}"`,
     );
   }
+  // Missing body (e.g. 204 No Content, or an edge worker that returned ok
+  // headers without piping the stream) fails the same way downstream.
+  // Matches Next.js' `!res.body` branch in fetch-server-response.ts.
+  if (!rscResponse.body) {
+    return recoverFromBadInitialRscResponse("returned empty body");
+  }
   // Successful RSC response clears the guard so a subsequent reload of the
   // same path after a transient failure still gets one recovery attempt.
   clearReloadFlag();
@@ -1214,7 +1220,16 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           let hardNavTarget = currentHref;
           if (responseUrl) {
             const parsed = new URL(responseUrl, window.location.origin);
-            hardNavTarget = parsed.pathname.replace(/\.rsc$/, "") + parsed.search;
+            let pathname = parsed.pathname.replace(/\.rsc$/, "");
+            // toRscUrl strips trailing slash before appending .rsc, so the
+            // response URL loses it on the round-trip. Restore it when the
+            // original href had one so sites with trailingSlash:true don't
+            // incur an extra 308 to the canonical form on the error path.
+            const origPathname = new URL(currentHref, window.location.origin).pathname;
+            if (origPathname.length > 1 && origPathname.endsWith("/") && !pathname.endsWith("/")) {
+              pathname += "/";
+            }
+            hardNavTarget = pathname + parsed.search;
           }
           window.location.href = hardNavTarget;
           return;
