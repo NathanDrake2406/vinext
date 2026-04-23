@@ -88,10 +88,13 @@ test.describe("RSC fetch non-ok response handling", () => {
     // the fix is incomplete and a reload loop develops, the intercept hit
     // count will grow without bound.
     let aboutRscHits = 0;
-    await page.route("**/about.rsc**", (route) => {
+    await page.route(/\/about\.rsc(\?|$)/, (route) => {
       aboutRscHits += 1;
       return route.fulfill({
         status: 500,
+        // status 500 + text/html exercises both the !ok guard and the
+        // content-type guard at the nav site; editing either value in
+        // isolation drops the combined-guard coverage this test targets.
         contentType: "text/html",
         body: "<html><body><h1>Internal Server Error</h1></body></html>",
       });

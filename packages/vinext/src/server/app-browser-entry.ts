@@ -1019,12 +1019,14 @@ async function main(): Promise<void> {
   const rscStream = await readInitialRscStream();
   // null signals that readInitialRscStream aborted hydration — either because
   // a reload is in flight (first-attempt recovery) or the endpoint is
-  // persistently broken (post-reload). In both cases we must not assign
-  // __VINEXT_RSC_ROOT__ / __VINEXT_RSC_NAVIGATE__: the persistent-failure
-  // case would leave user clicks wired to a navigateRsc that renders into
-  // an unmounted root, and the reload-pending case would briefly expose a
-  // half-hydrated surface to external probes before the page unloads.
+  // persistently broken (post-reload). Bootstrap is a separate synchronous
+  // helper so the null-branch structurally cannot reach any __VINEXT_RSC_*
+  // global assignment, even if a future refactor interposes async work here.
   if (rscStream === null) return;
+  bootstrapHydration(rscStream);
+}
+
+function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   const root = normalizeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
   const initialNavigationSnapshot = createClientNavigationRenderSnapshot(
     window.location.href,
@@ -1192,21 +1194,29 @@ async function main(): Promise<void> {
         // or a proxy-rewritten response. Parsing such a body as an RSC stream
         // throws a cryptic "Connection closed" error. Match Next.js behavior
         // (fetch-server-response.ts:211, `!isFlightResponse || !res.ok || !res.body`):
-        // hard-navigate to the browser URL so the server can render the correct
+        // hard-navigate to the response URL so the server can render the correct
         // error page as HTML. The outer finally handles
         // settlePendingBrowserRouterState and clearPendingPathname on this
         // return path.
         //
-        // Invariant: `currentHref` is the browser-facing URL without the .rsc
-        // suffix, kept in sync with `history` across redirect hops in the
-        // redirect branch below (it reassigns `currentHref = destinationPath`
-        // before `continue`). A future refactor that breaks this invariant
-        // (e.g. follows a redirect without updating `currentHref`) would send
-        // the user to a stale hard-nav destination here.
+        // Prefer the post-redirect response URL over `currentHref`: on a
+        // redirect chain like `/old` → 307 → `/new` → 500, the browser's
+        // fetch already followed the redirect, so `navResponse.url` is the
+        // failing `/new` destination. Hard-navigating there directly avoids
+        // bouncing off `/old` just to re-follow the same 307, which would
+        // flash the wrong URL in the address bar and mis-key analytics.
+        // Matches Next.js' `doMpaNavigation(responseUrl.toString())`. Falls
+        // back to `currentHref` when no response URL is available.
         const navContentType = navResponse.headers.get("content-type") ?? "";
         const isRscResponse = navContentType.startsWith("text/x-component");
         if (!navResponse.ok || !isRscResponse || !navResponse.body) {
-          window.location.href = currentHref;
+          const responseUrl = navResponseUrl ?? navResponse.url;
+          let hardNavTarget = currentHref;
+          if (responseUrl) {
+            const parsed = new URL(responseUrl, window.location.origin);
+            hardNavTarget = parsed.pathname.replace(/\.rsc$/, "") + parsed.search;
+          }
+          window.location.href = hardNavTarget;
           return;
         }
 
