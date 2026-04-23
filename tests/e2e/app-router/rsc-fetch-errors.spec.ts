@@ -26,18 +26,22 @@ import { waitForAppRouterHydration } from "../helpers";
 
 const BASE = "http://localhost:4174";
 
-// Stream-parse errors thrown by createFromFetch / createFromReadableStream when
-// handed a non-RSC payload (HTML error body, wrong content-type, empty stream).
-// The pre-fix code path produces exactly these messages; filtering the console
-// error list to only these strings keeps the assertion specific to the bug
-// this PR fixes and immune to unrelated diagnostics logged by other code paths.
+// Stream-parse errors thrown by createFromFetch / createFromReadableStream
+// when handed a non-RSC payload (HTML error body, wrong content-type, empty
+// stream). The pre-fix failure path produces one of these diagnostics; the
+// filter here stays narrow on purpose so unrelated console errors (hydration
+// timing, third-party scripts, JSON.parse in fixture code) never
+// false-positive. Generic strings ("Connection closed", "Unexpected token")
+// are gated on an RSC-context co-marker so a benign third-party JSON.parse
+// diagnostic cannot satisfy them.
 function isRscStreamParseError(msg: string): boolean {
+  const hasRscContext = msg.includes("RSC") || msg.includes("vinext");
   return (
-    msg.includes("Connection closed") ||
     msg.includes("createFromFetch") ||
     msg.includes("createFromReadableStream") ||
     msg.includes("Failed to parse RSC") ||
-    msg.includes("Unexpected token")
+    (hasRscContext && msg.includes("Connection closed")) ||
+    (hasRscContext && msg.includes("Unexpected token"))
   );
 }
 
@@ -119,11 +123,14 @@ test.describe("RSC fetch non-ok response handling", () => {
     await page.waitForTimeout(1500);
     expect(page.url()).toBe(`${BASE}/about`);
 
-    // Expected sequence: exactly two hits — one from the client RSC nav
-    // fetch that triggered the hard-nav, and one from the post-reload
-    // initial RSC fetch that the sessionStorage guard recognises as a
-    // looped reload and aborts. A runaway loop would produce many more;
-    // any extra hit signals an unnecessary reload that would regress later.
+    // Expected trajectory: up to two hits — one from the home-page Link
+    // prefetch of /about.rsc (which the prefetch-cache discards because the
+    // response is !ok), and one from the client RSC nav fetch that triggers
+    // the hard-nav. Hydration timing can race the prefetch, in which case
+    // the count is 1. After the hard navigation to /about, the embedded-RSC
+    // branch in readInitialRscStream handles hydration without a fallback
+    // .rsc fetch, so no post-reload hits occur. A runaway reload loop would
+    // produce many more.
     expect(aboutRscHits).toBeLessThanOrEqual(2);
 
     const rscParseError = consoleErrors.find((msg) => isRscStreamParseError(msg));

@@ -826,13 +826,14 @@ function clearReloadFlag(): void {
 
 // A non-ok or wrong-content-type RSC response during initial hydration means
 // the server cannot deliver a valid RSC payload for this URL. Parsing the
-// response as RSC causes an opaque parse failure. Reload once so the server
-// has a chance to render the correct error page as HTML. Guard against
-// reload loops: if a prior reload for this exact path produced the same
-// failure, the endpoint is persistently broken — log and return a
-// never-resolving stream so hydration halts without throwing (which would
-// surface as an unhandled rejection). The SSR'd DOM stays visible.
-function recoverFromBadInitialRscResponse(reason: string): ReadableStream<Uint8Array> {
+// response as RSC causes an opaque parse failure. On the first attempt,
+// reload once so the server has a chance to render the correct error page
+// as HTML. On the second attempt (detected via the sessionStorage flag), the
+// endpoint is persistently broken — return null so the caller aborts the
+// whole hydration bootstrap (see main()). The server-rendered HTML stays
+// visible; no `__VINEXT_RSC_*` globals are registered, so external probes
+// do not see a half-hydrated page to interact with.
+function recoverFromBadInitialRscResponse(reason: string): ReadableStream<Uint8Array> | null {
   const currentPath = window.location.pathname + window.location.search;
   if (readReloadFlag() === currentPath) {
     clearReloadFlag();
@@ -840,16 +841,21 @@ function recoverFromBadInitialRscResponse(reason: string): ReadableStream<Uint8A
       `[vinext] Initial RSC fetch ${reason} after reload; aborting hydration. ` +
         "Server-rendered HTML remains visible; client components will not hydrate.",
     );
-    return new ReadableStream<Uint8Array>();
+    return null;
   }
   writeReloadFlag(currentPath);
+  // One-shot diagnostic so a production reload is traceable. Only fires once
+  // per broken path thanks to the sessionStorage flag above; not noisy.
+  console.warn(
+    `[vinext] Initial RSC fetch ${reason}; reloading once to let the server render the HTML error page`,
+  );
   window.location.reload();
   // Never-resolving stream so the caller does not proceed into
   // createFromReadableStream before the reload takes effect.
   return new ReadableStream<Uint8Array>();
 }
 
-async function readInitialRscStream(): Promise<ReadableStream<Uint8Array>> {
+async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null> {
   const vinext = getVinextBrowserGlobal();
 
   if (vinext.__VINEXT_RSC__ || vinext.__VINEXT_RSC_CHUNKS__ || vinext.__VINEXT_RSC_DONE__) {
@@ -1009,6 +1015,13 @@ async function main(): Promise<void> {
   registerServerActionCallback();
 
   const rscStream = await readInitialRscStream();
+  // null signals that readInitialRscStream aborted hydration (persistent RSC
+  // failure, post-reload). Do not continue — leaving the server-rendered
+  // HTML in place is the intended fallback, and we must not assign
+  // __VINEXT_RSC_ROOT__ / __VINEXT_RSC_NAVIGATE__ because that would make
+  // the page look hydrated to external probes and leave user clicks wired
+  // up to a navigateRsc that renders into an unmounted root.
+  if (rscStream === null) return;
   const root = normalizeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
   const initialNavigationSnapshot = createClientNavigationRenderSnapshot(
     window.location.href,
@@ -1177,10 +1190,16 @@ async function main(): Promise<void> {
         // throws a cryptic "Connection closed" error. Match Next.js behavior
         // (fetch-server-response.ts:211, `!isFlightResponse || !res.ok || !res.body`):
         // hard-navigate to the browser URL so the server can render the correct
-        // error page as HTML. currentHref is the browser-facing URL without
-        // the .rsc suffix. The outer finally handles
+        // error page as HTML. The outer finally handles
         // settlePendingBrowserRouterState and clearPendingPathname on this
         // return path.
+        //
+        // Invariant: `currentHref` is the browser-facing URL without the .rsc
+        // suffix, kept in sync with `history` across redirect hops in the
+        // redirect branch below (it reassigns `currentHref = destinationPath`
+        // before `continue`). A future refactor that breaks this invariant
+        // (e.g. follows a redirect without updating `currentHref`) would send
+        // the user to a stale hard-nav destination here.
         const navContentType = navResponse.headers.get("content-type") ?? "";
         const isRscResponse = navContentType.startsWith("text/x-component");
         if (!navResponse.ok || !isRscResponse || !navResponse.body) {
