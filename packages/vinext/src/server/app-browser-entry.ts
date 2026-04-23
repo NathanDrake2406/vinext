@@ -1401,5 +1401,12 @@ if (typeof document !== "undefined") {
   window.addEventListener("pagehide", () => {
     isPageUnloading = true;
   });
+  // Reset on pageshow so a bfcache-restored document does not resume with
+  // the flag stuck at true, which would silently swallow every subsequent
+  // RSC navigation error for the lifetime of that tab. Matches Next.js'
+  // fetch-server-response.ts handler pair.
+  window.addEventListener("pageshow", () => {
+    isPageUnloading = false;
+  });
   void main();
 }

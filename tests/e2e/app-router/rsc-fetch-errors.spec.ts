@@ -132,6 +132,11 @@ test.describe("RSC fetch non-ok response handling", () => {
     // branch in readInitialRscStream handles hydration without a fallback
     // .rsc fetch, so no post-reload hits occur. A runaway reload loop would
     // produce many more.
+    // Lower bound: at minimum, the client nav fetch that triggers the
+    // hard-nav must have fired. A value of 0 would mean the navigation
+    // skipped the RSC fetch entirely and the test is no longer exercising
+    // the !ok-guard path.
+    expect(aboutRscHits).toBeGreaterThanOrEqual(1);
     expect(aboutRscHits).toBeLessThanOrEqual(2);
 
     const rscParseError = consoleErrors.find((msg) => isRscStreamParseError(msg));
