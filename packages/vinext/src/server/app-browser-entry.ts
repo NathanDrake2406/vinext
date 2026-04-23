@@ -938,10 +938,6 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
 
   restoreHydrationNavigationContext(window.location.pathname, window.location.search, params);
 
-  if (!rscResponse.body) {
-    throw new Error("[vinext] Initial RSC response had no body");
-  }
-
   return rscResponse.body;
 }
 

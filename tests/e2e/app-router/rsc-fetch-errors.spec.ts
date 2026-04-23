@@ -165,6 +165,11 @@ test.describe("RSC fetch non-ok response handling", () => {
     // and mis-keying analytics.
     let srcRscHits = 0;
     let aboutRscHits = 0;
+    // Intercept chain depends on Playwright re-entering the route table on
+    // the 307 follow-up so both handlers fire in sequence (browser fetch
+    // defaults to redirect:follow). Migrating to a mocker that follows
+    // redirects without re-dispatching would silently skip the /about.rsc
+    // intercept and the test would fall through to the real backend.
     await page.route(/\/redirect-src\.rsc(\?|$)/, (route) => {
       srcRscHits += 1;
       return route.fulfill({
@@ -188,6 +193,15 @@ test.describe("RSC fetch non-ok response handling", () => {
       }
     });
 
+    // Capture the document URL at every main-frame navigation so we can
+    // assert the address bar never flashes /redirect-src en route to /about.
+    // Without this, a regression that dropped `navResponseUrl ?? navResponse.url`
+    // would still pass because the server's 307 converges to /about eventually.
+    const frameUrls: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) frameUrls.push(frame.url());
+    });
+
     await page.goto(`${BASE}/`);
     await waitForAppRouterHydration(page);
 
@@ -198,6 +212,7 @@ test.describe("RSC fetch non-ok response handling", () => {
     await navigationPromise;
 
     expect(page.url()).toBe(`${BASE}/about`);
+    expect(frameUrls.some((url) => url.includes("/redirect-src"))).toBe(false);
     expect(srcRscHits).toBeGreaterThanOrEqual(1);
     expect(aboutRscHits).toBeGreaterThanOrEqual(1);
 
