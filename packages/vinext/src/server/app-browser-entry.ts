@@ -844,12 +844,30 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array>> {
   // A non-ok RSC response during initial hydration means the server cannot
   // render an RSC payload for this URL (e.g. the page threw before streaming).
   // Parsing the HTML error body as RSC causes an opaque parse failure. Reload
-  // so the server renders the correct error page as HTML, and return a
-  // never-resolving stream so the caller never proceeds into createFromReadableStream.
+  // once so the server has a chance to render the correct error page as HTML.
+  //
+  // Guard against reload loops: if a prior reload for this exact path also
+  // produced non-ok, the RSC endpoint is persistently broken and reloading
+  // again would loop forever. Surface a console error instead and rethrow so
+  // the outer bootstrap can fall back to showing the server-rendered HTML.
   if (!rscResponse.ok) {
+    const reloadKey = "__vinext_rsc_initial_reload__";
+    const currentPath = window.location.pathname + window.location.search;
+    if (sessionStorage.getItem(reloadKey) === currentPath) {
+      sessionStorage.removeItem(reloadKey);
+      throw new Error(
+        `[vinext] Initial RSC fetch returned ${rscResponse.status} after reload; aborting hydration`,
+      );
+    }
+    sessionStorage.setItem(reloadKey, currentPath);
     window.location.reload();
+    // Return a never-resolving stream so the caller does not proceed into
+    // createFromReadableStream before the reload takes effect.
     return new ReadableStream<Uint8Array>();
   }
+  // Clear the reload guard on success so a subsequent navigation to the same
+  // path is not wrongly flagged as a looped reload.
+  sessionStorage.removeItem("__vinext_rsc_initial_reload__");
 
   let params: Record<string, string | string[]> = {};
   const paramsHeader = rscResponse.headers.get("X-Vinext-Params");

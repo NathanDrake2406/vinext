@@ -68,18 +68,19 @@ test.describe("RSC fetch non-ok response handling", () => {
   test("client navigation to a 500-route hard-navs to the destination URL without looping", async ({
     page,
   }) => {
-    // The slow-route fixture introduces a server delay but returns valid RSC.
-    // We need a route that returns a true 5xx. We use a direct fetch intercept
-    // via route interception to simulate a 500 on an RSC request.
-
-    // Intercept the .rsc request for /about and return a 500 error.
-    await page.route("**/about.rsc**", (route) =>
-      route.fulfill({
+    // Intercept the .rsc request for /about and return a 500 error. This
+    // intercept persists across navigations and reloads on this page, so if
+    // the fix is incomplete and a reload loop develops, the intercept hit
+    // count will grow without bound.
+    let aboutRscHits = 0;
+    await page.route("**/about.rsc**", (route) => {
+      aboutRscHits += 1;
+      return route.fulfill({
         status: 500,
         contentType: "text/html",
         body: "<html><body><h1>Internal Server Error</h1></body></html>",
-      }),
-    );
+      });
+    });
 
     await page.goto(`${BASE}/`);
     await waitForAppRouterHydration(page);
@@ -91,17 +92,28 @@ test.describe("RSC fetch non-ok response handling", () => {
       }
     });
 
-    // Trigger RSC navigation to /about, which will get a 500 from our intercept.
     const navigationPromise = page.waitForURL(`${BASE}/about`, { timeout: 10_000 });
     await page.evaluate(() => {
       void (window as any).__VINEXT_RSC_NAVIGATE__("/about");
     });
     await navigationPromise;
 
-    // Should land on /about (not /about.rsc — the RSC URL)
     expect(page.url()).toBe(`${BASE}/about`);
 
-    // No RSC stream-parse error should be logged
+    // Stability check: the hard-nav must settle. Without the
+    // readInitialRscStream reload-loop guard, the initial RSC fetch on the
+    // freshly-loaded /about page hits the intercepted 500 and reloads
+    // indefinitely. Wait long enough for a loop to manifest, then verify
+    // the URL is stable and the intercept fired a bounded number of times.
+    await page.waitForTimeout(1500);
+    expect(page.url()).toBe(`${BASE}/about`);
+
+    // Expected sequence: one hit from the client RSC nav fetch that triggered
+    // the hard-nav, plus at most one hit from the post-reload initial RSC
+    // fetch before the sessionStorage guard aborts further reloads. A runaway
+    // loop would produce many more.
+    expect(aboutRscHits).toBeLessThanOrEqual(3);
+
     const rscParseError = consoleErrors.find(
       (msg) =>
         msg.includes("RSC navigation error") ||
