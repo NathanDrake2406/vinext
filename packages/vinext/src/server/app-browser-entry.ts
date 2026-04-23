@@ -801,10 +801,63 @@ function restorePopstateScrollPosition(state: unknown): void {
   });
 }
 
+const RSC_RELOAD_KEY = "__vinext_rsc_initial_reload__";
+
+// sessionStorage can throw SecurityError in strict-mode iframes, storage-
+// disabled browsers, and some Safari private-browsing configurations. Wrap
+// every access so a recovery path for one error does not crash hydration.
+function readReloadFlag(): string | null {
+  try {
+    return sessionStorage.getItem(RSC_RELOAD_KEY);
+  } catch {
+    return null;
+  }
+}
+function writeReloadFlag(path: string): void {
+  try {
+    sessionStorage.setItem(RSC_RELOAD_KEY, path);
+  } catch {}
+}
+function clearReloadFlag(): void {
+  try {
+    sessionStorage.removeItem(RSC_RELOAD_KEY);
+  } catch {}
+}
+
+// A non-ok or wrong-content-type RSC response during initial hydration means
+// the server cannot deliver a valid RSC payload for this URL. Parsing the
+// response as RSC causes an opaque parse failure. Reload once so the server
+// has a chance to render the correct error page as HTML. Guard against
+// reload loops: if a prior reload for this exact path produced the same
+// failure, the endpoint is persistently broken — log and return a
+// never-resolving stream so hydration halts without throwing (which would
+// surface as an unhandled rejection). The SSR'd DOM stays visible.
+function recoverFromBadInitialRscResponse(reason: string): ReadableStream<Uint8Array> {
+  const currentPath = window.location.pathname + window.location.search;
+  if (readReloadFlag() === currentPath) {
+    clearReloadFlag();
+    console.error(
+      `[vinext] Initial RSC fetch ${reason} after reload; aborting hydration. ` +
+        "Server-rendered HTML remains visible; client components will not hydrate.",
+    );
+    return new ReadableStream<Uint8Array>();
+  }
+  writeReloadFlag(currentPath);
+  window.location.reload();
+  // Never-resolving stream so the caller does not proceed into
+  // createFromReadableStream before the reload takes effect.
+  return new ReadableStream<Uint8Array>();
+}
+
 async function readInitialRscStream(): Promise<ReadableStream<Uint8Array>> {
   const vinext = getVinextBrowserGlobal();
 
   if (vinext.__VINEXT_RSC__ || vinext.__VINEXT_RSC_CHUNKS__ || vinext.__VINEXT_RSC_DONE__) {
+    // Reaching the embedded-RSC branch means the server successfully rendered
+    // the page — any prior reload flag for this path is stale and must be
+    // cleared so a future failure gets its own fresh recovery attempt.
+    clearReloadFlag();
+
     if (vinext.__VINEXT_RSC__) {
       const embedData = vinext.__VINEXT_RSC__;
       delete vinext.__VINEXT_RSC__;
@@ -841,33 +894,22 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array>> {
 
   const rscResponse = await fetch(toRscUrl(window.location.pathname + window.location.search));
 
-  // A non-ok RSC response during initial hydration means the server cannot
-  // render an RSC payload for this URL (e.g. the page threw before streaming).
-  // Parsing the HTML error body as RSC causes an opaque parse failure. Reload
-  // once so the server has a chance to render the correct error page as HTML.
-  //
-  // Guard against reload loops: if a prior reload for this exact path also
-  // produced non-ok, the RSC endpoint is persistently broken and reloading
-  // again would loop forever. Surface a console error instead and rethrow so
-  // the outer bootstrap can fall back to showing the server-rendered HTML.
   if (!rscResponse.ok) {
-    const reloadKey = "__vinext_rsc_initial_reload__";
-    const currentPath = window.location.pathname + window.location.search;
-    if (sessionStorage.getItem(reloadKey) === currentPath) {
-      sessionStorage.removeItem(reloadKey);
-      throw new Error(
-        `[vinext] Initial RSC fetch returned ${rscResponse.status} after reload; aborting hydration`,
-      );
-    }
-    sessionStorage.setItem(reloadKey, currentPath);
-    window.location.reload();
-    // Return a never-resolving stream so the caller does not proceed into
-    // createFromReadableStream before the reload takes effect.
-    return new ReadableStream<Uint8Array>();
+    return recoverFromBadInitialRscResponse(`returned ${rscResponse.status}`);
   }
-  // Clear the reload guard on success so a subsequent navigation to the same
-  // path is not wrongly flagged as a looped reload.
-  sessionStorage.removeItem("__vinext_rsc_initial_reload__");
+  // Guard against proxies/CDNs that return 200 with a rewritten Content-Type
+  // (e.g. text/html instead of text/x-component). Such responses cannot be
+  // parsed as RSC and would throw the same opaque parse error this fallback
+  // exists to prevent.
+  const contentType = rscResponse.headers.get("content-type") ?? "";
+  if (!contentType.startsWith("text/x-component")) {
+    return recoverFromBadInitialRscResponse(
+      `returned non-RSC content-type "${contentType || "(missing)"}"`,
+    );
+  }
+  // Successful RSC response clears the guard so a subsequent reload of the
+  // same path after a transient failure still gets one recovery attempt.
+  clearReloadFlag();
 
   let params: Record<string, string | string[]> = {};
   const paramsHeader = rscResponse.headers.get("X-Vinext-Params");
@@ -1128,15 +1170,20 @@ async function main(): Promise<void> {
 
         if (navId !== activeNavigationId) return;
 
-        // Non-ok RSC response (404, 500, etc.) means the server returned an HTML
-        // error page instead of an RSC payload. Parsing HTML as an RSC stream
+        // Any response that isn't a valid RSC payload (non-ok status,
+        // missing/rewritten Content-Type, or missing body) means the server
+        // returned something we cannot parse — typically an HTML error page
+        // or a proxy-rewritten response. Parsing such a body as an RSC stream
         // throws a cryptic "Connection closed" error. Match Next.js behavior
-        // (fetch-server-response.ts:211): hard-navigate to the browser URL so the
-        // server can render the correct error page (404.tsx, 500.tsx, etc.).
-        // currentHref is the browser-facing URL without the .rsc suffix.
-        // The outer finally handles settlePendingBrowserRouterState and
-        // clearPendingPathname on this return path.
-        if (!navResponse.ok) {
+        // (fetch-server-response.ts:211, `!isFlightResponse || !res.ok || !res.body`):
+        // hard-navigate to the browser URL so the server can render the correct
+        // error page as HTML. currentHref is the browser-facing URL without
+        // the .rsc suffix. The outer finally handles
+        // settlePendingBrowserRouterState and clearPendingPathname on this
+        // return path.
+        const navContentType = navResponse.headers.get("content-type") ?? "";
+        const isRscResponse = navContentType.startsWith("text/x-component");
+        if (!navResponse.ok || !isRscResponse || !navResponse.body) {
           window.location.href = currentHref;
           return;
         }

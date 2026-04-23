@@ -108,11 +108,12 @@ test.describe("RSC fetch non-ok response handling", () => {
     await page.waitForTimeout(1500);
     expect(page.url()).toBe(`${BASE}/about`);
 
-    // Expected sequence: one hit from the client RSC nav fetch that triggered
-    // the hard-nav, plus at most one hit from the post-reload initial RSC
-    // fetch before the sessionStorage guard aborts further reloads. A runaway
-    // loop would produce many more.
-    expect(aboutRscHits).toBeLessThanOrEqual(3);
+    // Expected sequence: exactly two hits — one from the client RSC nav
+    // fetch that triggered the hard-nav, and one from the post-reload
+    // initial RSC fetch that the sessionStorage guard recognises as a
+    // looped reload and aborts. A runaway loop would produce many more;
+    // any extra hit signals an unnecessary reload that would regress later.
+    expect(aboutRscHits).toBeLessThanOrEqual(2);
 
     const rscParseError = consoleErrors.find(
       (msg) =>
