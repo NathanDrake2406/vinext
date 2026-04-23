@@ -1230,6 +1230,11 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
               pathname += "/";
             }
             hardNavTarget = pathname + parsed.search;
+            // Preserve the hash from the user's clicked href — a .rsc response
+            // URL never carries a fragment, so dropping it would silently strip
+            // `/foo#section` down to `/foo`.
+            const origHash = new URL(currentHref, window.location.origin).hash;
+            if (origHash) hardNavTarget += origHash;
           }
           window.location.href = hardNavTarget;
           return;

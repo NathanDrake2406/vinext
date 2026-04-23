@@ -124,8 +124,15 @@ test.describe("RSC fetch non-ok response handling", () => {
     // indefinitely — networkidle would never fire and the default timeout
     // catches that. Tracking actual request activity avoids flaky wall-clock
     // waits in CI.
+    const hitsBeforeNetworkIdle = aboutRscHits;
     await page.waitForLoadState("networkidle");
     expect(page.url()).toBe(`${BASE}/about`);
+    // Pin the embedded-RSC assumption: after the hard-nav lands on /about,
+    // hydration must come from the HTML-embedded RSC branch and issue no
+    // further .rsc fetches. If a future change makes the embed path
+    // conditional and falls back to a fetch, this count would grow and the
+    // test would flag it rather than silently relying on networkidle timing.
+    expect(aboutRscHits).toBe(hitsBeforeNetworkIdle);
 
     // Expected trajectory: up to two hits — one from the home-page Link
     // prefetch of /about.rsc (which the prefetch-cache discards because the
@@ -141,6 +148,58 @@ test.describe("RSC fetch non-ok response handling", () => {
     // the !ok-guard path.
     expect(aboutRscHits).toBeGreaterThanOrEqual(1);
     expect(aboutRscHits).toBeLessThanOrEqual(2);
+
+    const rscParseError = consoleErrors.find((msg) => isRscStreamParseError(msg));
+    expect(rscParseError).toBeUndefined();
+  });
+
+  test("redirect chain to a non-ok endpoint hard-navs to the post-redirect URL", async ({
+    page,
+  }) => {
+    // Chain: client nav to /redirect-src → fetch /redirect-src.rsc →
+    // 307 Location /about.rsc → 500. The hard-nav target must be /about
+    // (the post-redirect URL), not /redirect-src (the original request).
+    // Without the navResponseUrl ?? navResponse.url branch in the nav-site
+    // guard, the browser would bounce off /redirect-src and the server
+    // would re-issue the 307, flashing the wrong URL in the address bar
+    // and mis-keying analytics.
+    let srcRscHits = 0;
+    let aboutRscHits = 0;
+    await page.route(/\/redirect-src\.rsc(\?|$)/, (route) => {
+      srcRscHits += 1;
+      return route.fulfill({
+        status: 307,
+        headers: { Location: `${BASE}/about.rsc` },
+      });
+    });
+    await page.route(/\/about\.rsc(\?|$)/, (route) => {
+      aboutRscHits += 1;
+      return route.fulfill({
+        status: 500,
+        contentType: "text/html",
+        body: "<html><body><h1>Internal Server Error</h1></body></html>",
+      });
+    });
+
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") {
+        consoleErrors.push(msg.text());
+      }
+    });
+
+    await page.goto(`${BASE}/`);
+    await waitForAppRouterHydration(page);
+
+    const navigationPromise = page.waitForURL(`${BASE}/about`, { timeout: 10_000 });
+    await page.evaluate(() => {
+      void (window as any).__VINEXT_RSC_NAVIGATE__("/redirect-src");
+    });
+    await navigationPromise;
+
+    expect(page.url()).toBe(`${BASE}/about`);
+    expect(srcRscHits).toBeGreaterThanOrEqual(1);
+    expect(aboutRscHits).toBeGreaterThanOrEqual(1);
 
     const rscParseError = consoleErrors.find((msg) => isRscStreamParseError(msg));
     expect(rscParseError).toBeUndefined();
