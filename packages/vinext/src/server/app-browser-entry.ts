@@ -833,8 +833,8 @@ function clearReloadFlag(): void {
 // response as RSC causes an opaque parse failure. On the first attempt,
 // reload once so the server has a chance to render the correct error page
 // as HTML. On the second attempt (detected via the sessionStorage flag), the
-// endpoint is persistently broken. Both branches return null so main() aborts
-// the hydration bootstrap without registering `__VINEXT_RSC_*` globals —
+// endpoint is persistently broken. Returns null so main() aborts the
+// hydration bootstrap without registering `__VINEXT_RSC_*` globals —
 // including during the brief window between reload() firing and the page
 // actually unloading — so external probes never see a half-hydrated page.
 function recoverFromBadInitialRscResponse(reason: string): null {
@@ -845,15 +845,15 @@ function recoverFromBadInitialRscResponse(reason: string): null {
       `[vinext] Initial RSC fetch ${reason} after reload; aborting hydration. ` +
         "Server-rendered HTML remains visible; client components will not hydrate.",
     );
-    return null;
+  } else {
+    writeReloadFlag(currentPath);
+    // One-shot diagnostic so a production reload is traceable. Only fires once
+    // per broken path thanks to the sessionStorage flag above; not noisy.
+    console.warn(
+      `[vinext] Initial RSC fetch ${reason}; reloading once to let the server render the HTML error page`,
+    );
+    window.location.reload();
   }
-  writeReloadFlag(currentPath);
-  // One-shot diagnostic so a production reload is traceable. Only fires once
-  // per broken path thanks to the sessionStorage flag above; not noisy.
-  console.warn(
-    `[vinext] Initial RSC fetch ${reason}; reloading once to let the server render the HTML error page`,
-  );
-  window.location.reload();
   return null;
 }
 

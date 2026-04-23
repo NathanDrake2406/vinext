@@ -49,15 +49,15 @@ test.describe("RSC fetch non-ok response handling", () => {
   test("client navigation to a non-existent route hard-navs to the non-.rsc URL", async ({
     page,
   }) => {
-    await page.goto(`${BASE}/about`);
-    await waitForAppRouterHydration(page);
-
     const consoleErrors: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error") {
         consoleErrors.push(msg.text());
       }
     });
+
+    await page.goto(`${BASE}/about`);
+    await waitForAppRouterHydration(page);
 
     // Trigger RSC navigation to a route that does not exist (returns 404 HTML).
     // We need to wait for the hard navigation, so we listen for the URL to change.
@@ -97,15 +97,15 @@ test.describe("RSC fetch non-ok response handling", () => {
       });
     });
 
-    await page.goto(`${BASE}/`);
-    await waitForAppRouterHydration(page);
-
     const consoleErrors: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error") {
         consoleErrors.push(msg.text());
       }
     });
+
+    await page.goto(`${BASE}/`);
+    await waitForAppRouterHydration(page);
 
     const navigationPromise = page.waitForURL(`${BASE}/about`, { timeout: 10_000 });
     await page.evaluate(() => {
