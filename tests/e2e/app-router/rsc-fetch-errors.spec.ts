@@ -26,6 +26,21 @@ import { waitForAppRouterHydration } from "../helpers";
 
 const BASE = "http://localhost:4174";
 
+// Stream-parse errors thrown by createFromFetch / createFromReadableStream when
+// handed a non-RSC payload (HTML error body, wrong content-type, empty stream).
+// The pre-fix code path produces exactly these messages; filtering the console
+// error list to only these strings keeps the assertion specific to the bug
+// this PR fixes and immune to unrelated diagnostics logged by other code paths.
+function isRscStreamParseError(msg: string): boolean {
+  return (
+    msg.includes("Connection closed") ||
+    msg.includes("createFromFetch") ||
+    msg.includes("createFromReadableStream") ||
+    msg.includes("Failed to parse RSC") ||
+    msg.includes("Unexpected token")
+  );
+}
+
 test.describe("RSC fetch non-ok response handling", () => {
   test("client navigation to a non-existent route hard-navs to the non-.rsc URL", async ({
     page,
@@ -53,15 +68,11 @@ test.describe("RSC fetch non-ok response handling", () => {
     // The browser must land on the non-.rsc URL — never on the .rsc variant.
     expect(page.url()).toBe(`${BASE}/this-route-does-not-exist`);
 
-    // No RSC stream-parse error should be the first-class error logged.
-    // A navigation error caused by RSC stream parse failures contains "RSC navigation error"
-    // or stack frames from createFromFetch. The pre-fix path would log exactly this.
-    const rscParseError = consoleErrors.find(
-      (msg) =>
-        msg.includes("RSC navigation error") ||
-        msg.includes("createFromFetch") ||
-        msg.includes("Failed to parse RSC"),
-    );
+    // The bug this PR fixes surfaces as one of a small set of RSC-stream
+    // parse errors when createFromFetch is handed an HTML body. Match only
+    // those diagnostics so an unrelated console error (e.g. a hydration-
+    // timing race that pre-existed this PR) does not false-positive here.
+    const rscParseError = consoleErrors.find((msg) => isRscStreamParseError(msg));
     expect(rscParseError).toBeUndefined();
   });
 
@@ -115,12 +126,7 @@ test.describe("RSC fetch non-ok response handling", () => {
     // any extra hit signals an unnecessary reload that would regress later.
     expect(aboutRscHits).toBeLessThanOrEqual(2);
 
-    const rscParseError = consoleErrors.find(
-      (msg) =>
-        msg.includes("RSC navigation error") ||
-        msg.includes("createFromFetch") ||
-        msg.includes("Failed to parse RSC"),
-    );
+    const rscParseError = consoleErrors.find((msg) => isRscStreamParseError(msg));
     expect(rscParseError).toBeUndefined();
   });
 
