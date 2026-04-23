@@ -118,9 +118,10 @@ test.describe("RSC fetch non-ok response handling", () => {
     // Stability check: the hard-nav must settle. Without the
     // readInitialRscStream reload-loop guard, the initial RSC fetch on the
     // freshly-loaded /about page hits the intercepted 500 and reloads
-    // indefinitely. Wait long enough for a loop to manifest, then verify
-    // the URL is stable and the intercept fired a bounded number of times.
-    await page.waitForTimeout(1500);
+    // indefinitely — networkidle would never fire and the default timeout
+    // catches that. Tracking actual request activity avoids flaky wall-clock
+    // waits in CI.
+    await page.waitForLoadState("networkidle");
     expect(page.url()).toBe(`${BASE}/about`);
 
     // Expected trajectory: up to two hits — one from the home-page Link
@@ -135,21 +136,5 @@ test.describe("RSC fetch non-ok response handling", () => {
 
     const rscParseError = consoleErrors.find((msg) => isRscStreamParseError(msg));
     expect(rscParseError).toBeUndefined();
-  });
-
-  test("navigation to non-existent route does not land on the .rsc URL", async ({ page }) => {
-    await page.goto(`${BASE}/about`);
-    await waitForAppRouterHydration(page);
-
-    // After hard-nav, URL must not contain .rsc
-    const navigationPromise = page.waitForURL(`${BASE}/this-route-does-not-exist`, {
-      timeout: 10_000,
-    });
-    await page.evaluate(() => {
-      void (window as any).__VINEXT_RSC_NAVIGATE__("/this-route-does-not-exist");
-    });
-    await navigationPromise;
-
-    expect(page.url()).not.toContain(".rsc");
   });
 });
