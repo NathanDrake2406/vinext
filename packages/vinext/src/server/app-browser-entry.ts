@@ -845,15 +845,28 @@ function recoverFromBadInitialRscResponse(reason: string): null {
       `[vinext] Initial RSC fetch ${reason} after reload; aborting hydration. ` +
         "Server-rendered HTML remains visible; client components will not hydrate.",
     );
-  } else {
-    writeReloadFlag(currentPath);
-    // One-shot diagnostic so a production reload is traceable. Only fires once
-    // per broken path thanks to the sessionStorage flag above; not noisy.
-    console.warn(
-      `[vinext] Initial RSC fetch ${reason}; reloading once to let the server render the HTML error page`,
-    );
-    window.location.reload();
+    return null;
   }
+  writeReloadFlag(currentPath);
+  // Verify the write persisted. In storage-denied environments (strict-mode
+  // iframes, locked-down enterprise policies), every getItem returns null and
+  // every setItem silently no-ops, so the reload-loop guard cannot survive
+  // the reload — the page would loop forever. Abort instead so the user at
+  // least sees the server-rendered HTML.
+  if (readReloadFlag() !== currentPath) {
+    console.error(
+      `[vinext] Initial RSC fetch ${reason}; sessionStorage unavailable so the ` +
+        "reload-loop guard cannot persist — aborting hydration. " +
+        "Server-rendered HTML remains visible; client components will not hydrate.",
+    );
+    return null;
+  }
+  // One-shot diagnostic so a production reload is traceable. Only fires once
+  // per broken path thanks to the sessionStorage flag above; not noisy.
+  console.warn(
+    `[vinext] Initial RSC fetch ${reason}; reloading once to let the server render the HTML error page`,
+  );
+  window.location.reload();
   return null;
 }
 
@@ -1216,21 +1229,24 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           let hardNavTarget = currentHref;
           if (responseUrl) {
             const parsed = new URL(responseUrl, window.location.origin);
+            const origUrl = new URL(currentHref, window.location.origin);
             let pathname = parsed.pathname.replace(/\.rsc$/, "");
             // toRscUrl strips trailing slash before appending .rsc, so the
             // response URL loses it on the round-trip. Restore it when the
             // original href had one so sites with trailingSlash:true don't
             // incur an extra 308 to the canonical form on the error path.
-            const origPathname = new URL(currentHref, window.location.origin).pathname;
-            if (origPathname.length > 1 && origPathname.endsWith("/") && !pathname.endsWith("/")) {
+            if (
+              origUrl.pathname.length > 1 &&
+              origUrl.pathname.endsWith("/") &&
+              !pathname.endsWith("/")
+            ) {
               pathname += "/";
             }
             hardNavTarget = pathname + parsed.search;
             // Preserve the hash from the user's clicked href — a .rsc response
             // URL never carries a fragment, so dropping it would silently strip
             // `/foo#section` down to `/foo`.
-            const origHash = new URL(currentHref, window.location.origin).hash;
-            if (origHash) hardNavTarget += origHash;
+            if (origUrl.hash) hardNavTarget += origUrl.hash;
           }
           window.location.href = hardNavTarget;
           return;
