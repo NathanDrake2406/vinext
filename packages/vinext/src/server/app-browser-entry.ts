@@ -841,6 +841,16 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array>> {
 
   const rscResponse = await fetch(toRscUrl(window.location.pathname + window.location.search));
 
+  // A non-ok RSC response during initial hydration means the server cannot
+  // render an RSC payload for this URL (e.g. the page threw before streaming).
+  // Parsing the HTML error body as RSC causes an opaque parse failure. Reload
+  // so the server renders the correct error page as HTML, and return a
+  // never-resolving stream so the caller never proceeds into createFromReadableStream.
+  if (!rscResponse.ok) {
+    window.location.reload();
+    return new ReadableStream<Uint8Array>();
+  }
+
   let params: Record<string, string | string[]> = {};
   const paramsHeader = rscResponse.headers.get("X-Vinext-Params");
   if (paramsHeader) {
@@ -1099,6 +1109,19 @@ async function main(): Promise<void> {
         }
 
         if (navId !== activeNavigationId) return;
+
+        // Non-ok RSC response (404, 500, etc.) means the server returned an HTML
+        // error page instead of an RSC payload. Parsing HTML as an RSC stream
+        // throws a cryptic "Connection closed" error. Match Next.js behavior
+        // (fetch-server-response.ts:211): hard-navigate to the browser URL so the
+        // server can render the correct error page (404.tsx, 500.tsx, etc.).
+        // currentHref is the browser-facing URL without the .rsc suffix.
+        // The outer finally handles settlePendingBrowserRouterState and
+        // clearPendingPathname on this return path.
+        if (!navResponse.ok) {
+          window.location.href = currentHref;
+          return;
+        }
 
         const finalUrl = new URL(navResponseUrl ?? navResponse.url, window.location.origin);
         const requestedUrl = new URL(rscUrl, window.location.origin);
