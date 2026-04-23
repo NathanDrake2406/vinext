@@ -801,6 +801,10 @@ function restorePopstateScrollPosition(state: unknown): void {
   });
 }
 
+// Set on pagehide so the RSC navigation catch block can distinguish expected
+// fetch aborts (triggered by the unload itself) from real errors worth logging.
+let isPageUnloading = false;
+
 const RSC_RELOAD_KEY = "__vinext_rsc_initial_reload__";
 
 // sessionStorage can throw SecurityError in strict-mode iframes, storage-
@@ -829,11 +833,11 @@ function clearReloadFlag(): void {
 // response as RSC causes an opaque parse failure. On the first attempt,
 // reload once so the server has a chance to render the correct error page
 // as HTML. On the second attempt (detected via the sessionStorage flag), the
-// endpoint is persistently broken — return null so the caller aborts the
-// whole hydration bootstrap (see main()). The server-rendered HTML stays
-// visible; no `__VINEXT_RSC_*` globals are registered, so external probes
-// do not see a half-hydrated page to interact with.
-function recoverFromBadInitialRscResponse(reason: string): ReadableStream<Uint8Array> | null {
+// endpoint is persistently broken. Both branches return null so main() aborts
+// the hydration bootstrap without registering `__VINEXT_RSC_*` globals —
+// including during the brief window between reload() firing and the page
+// actually unloading — so external probes never see a half-hydrated page.
+function recoverFromBadInitialRscResponse(reason: string): null {
   const currentPath = window.location.pathname + window.location.search;
   if (readReloadFlag() === currentPath) {
     clearReloadFlag();
@@ -850,9 +854,7 @@ function recoverFromBadInitialRscResponse(reason: string): ReadableStream<Uint8A
     `[vinext] Initial RSC fetch ${reason}; reloading once to let the server render the HTML error page`,
   );
   window.location.reload();
-  // Never-resolving stream so the caller does not proceed into
-  // createFromReadableStream before the reload takes effect.
-  return new ReadableStream<Uint8Array>();
+  return null;
 }
 
 async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null> {
@@ -1015,12 +1017,13 @@ async function main(): Promise<void> {
   registerServerActionCallback();
 
   const rscStream = await readInitialRscStream();
-  // null signals that readInitialRscStream aborted hydration (persistent RSC
-  // failure, post-reload). Do not continue — leaving the server-rendered
-  // HTML in place is the intended fallback, and we must not assign
-  // __VINEXT_RSC_ROOT__ / __VINEXT_RSC_NAVIGATE__ because that would make
-  // the page look hydrated to external probes and leave user clicks wired
-  // up to a navigateRsc that renders into an unmounted root.
+  // null signals that readInitialRscStream aborted hydration — either because
+  // a reload is in flight (first-attempt recovery) or the endpoint is
+  // persistently broken (post-reload). In both cases we must not assign
+  // __VINEXT_RSC_ROOT__ / __VINEXT_RSC_NAVIGATE__: the persistent-failure
+  // case would leave user clicks wired to a navigateRsc that renders into
+  // an unmounted root, and the reload-pending case would briefly expose a
+  // half-hydrated surface to external probes before the page unloads.
   if (rscStream === null) return;
   const root = normalizeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
   const initialNavigationSnapshot = createClientNavigationRenderSnapshot(
@@ -1307,7 +1310,13 @@ async function main(): Promise<void> {
       // Don't hard-navigate to a stale URL if this navigation was superseded by
       // a newer one — the newer navigation is already in flight and would be clobbered.
       if (navId !== activeNavigationId) return;
-      console.error("[vinext] RSC navigation error:", error);
+      // Suppress the diagnostic when the page is unloading: a hard-nav or anchor
+      // click tears down the document and aborts any in-flight RSC fetch, which
+      // surfaces here as an error. The page is already going away, so the log
+      // is just noise. Mirrors Next.js' isPageUnloading pattern.
+      if (!isPageUnloading) {
+        console.error("[vinext] RSC navigation error:", error);
+      }
       window.location.href = currentHref;
     } finally {
       // Single settlement site: covers normal return, early returns on stale-id
@@ -1389,5 +1398,8 @@ async function main(): Promise<void> {
 }
 
 if (typeof document !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    isPageUnloading = true;
+  });
   void main();
 }
