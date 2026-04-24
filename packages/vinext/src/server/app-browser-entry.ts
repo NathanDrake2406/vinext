@@ -1071,6 +1071,12 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   window.__VINEXT_HYDRATED_AT = performance.now();
 
   window.__VINEXT_ARM_TRAVERSAL_PENDING__ = () => {
+    // Child useLayoutEffects fire before BrowserRoot's (child-first order),
+    // so a router.back() from a child's useLayoutEffect on mount can reach
+    // here before setBrowserRouterState is published. Skip arming in that
+    // window — the traversal itself still fires; only isPending tracking
+    // for this one call is missed.
+    if (!window.__VINEXT_APP_ROUTER_READY__) return;
     beginPendingBrowserRouterState();
   };
 
