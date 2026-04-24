@@ -1240,6 +1240,22 @@ export async function navigateClientSide(
 // useEffect dependency arrays, React.memo bailouts).
 // ---------------------------------------------------------------------------
 
+type BrowserNavigationTraversalHints = {
+  readonly canGoBack: boolean;
+  readonly canGoForward: boolean;
+};
+
+function getBrowserNavigationTraversalHints(): BrowserNavigationTraversalHints | null {
+  const nav = Reflect.get(window, "navigation");
+  if (!nav || typeof nav !== "object") return null;
+
+  const canGoBack = Reflect.get(nav, "canGoBack");
+  const canGoForward = Reflect.get(nav, "canGoForward");
+  if (typeof canGoBack !== "boolean" || typeof canGoForward !== "boolean") return null;
+
+  return { canGoBack, canGoForward };
+}
+
 /**
  * Programmatic `back` / `forward` run inside `React.startTransition` so that
  * `useTransition().isPending` latches true until the traversal commits. The
@@ -1266,8 +1282,8 @@ export async function navigateClientSide(
  */
 function runProgrammaticTraversal(direction: "back" | "forward"): void {
   React.startTransition(() => {
-    const nav = window.navigation;
-    if (nav !== undefined) {
+    const nav = getBrowserNavigationTraversalHints();
+    if (nav !== null) {
       const canTraverse = direction === "back" ? nav.canGoBack : nav.canGoForward;
       if (canTraverse) window.__VINEXT_ARM_TRAVERSAL_PENDING__?.();
     }

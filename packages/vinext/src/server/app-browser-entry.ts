@@ -594,6 +594,7 @@ function BrowserRoot({
       if (browserRouterStateRef === stateRef) {
         browserRouterStateRef = null;
         window.__VINEXT_APP_ROUTER_READY__ = false;
+        window.__VINEXT_ARM_TRAVERSAL_PENDING__ = undefined;
       }
       setMountedSlotsHeader(null);
     };
@@ -1076,7 +1077,9 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     // here before setBrowserRouterState is published. Skip arming in that
     // window — the traversal itself still fires; only isPending tracking
     // for this one call is missed.
-    if (!window.__VINEXT_APP_ROUTER_READY__) return;
+    if (!window.__VINEXT_APP_ROUTER_READY__ || !setBrowserRouterState || !browserRouterStateRef) {
+      return;
+    }
     beginPendingBrowserRouterState();
   };
 
