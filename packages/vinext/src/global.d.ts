@@ -111,6 +111,17 @@ declare global {
     __VINEXT_ARM_TRAVERSAL_PENDING__: (() => void) | undefined;
 
     /**
+     * Web Navigation API. Declared here because the TS version pinned by CI's
+     * stock `tsc` predates the Navigation API types in `lib.dom.d.ts`.
+     * We use only the traversal availability hints, so the surface is minimal.
+     * See https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API.
+     */
+    readonly navigation?: {
+      readonly canGoBack: boolean;
+      readonly canGoForward: boolean;
+    };
+
+    /**
      * A Promise that resolves when the current in-flight popstate RSC navigation
      * finishes rendering.
      * Set by the popstate handler in the browser RSC entry; read by
