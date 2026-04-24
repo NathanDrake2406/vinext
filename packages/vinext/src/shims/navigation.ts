@@ -1240,6 +1240,42 @@ export async function navigateClientSide(
 // useEffect dependency arrays, React.memo bailouts).
 // ---------------------------------------------------------------------------
 
+/**
+ * Programmatic `back` / `forward` run inside `React.startTransition` so that
+ * `useTransition().isPending` latches true until the traversal commits. The
+ * bare `window.history.back/forward()` call is a browser task scheduler: it
+ * returns synchronously and the popstate handler runs as a new task. If we
+ * left the transition empty, React would see no setState inside the
+ * callback and isPending would flash idle before the traversal committed.
+ *
+ * To bridge the gap we ask the App Router browser entry to arm a deferred
+ * `PendingBrowserRouterState` (a Promise published into the router's
+ * `useState` slot) inside the transition. When `navigateRsc` runs on
+ * popstate it adopts that pending and resolves it once the new route
+ * commits, preserving `isPending=true` across the async task boundary.
+ *
+ * Navigation API hint: `canGoBack` / `canGoForward` are synchronous
+ * availability checks. When `false`, `history.back/forward` is a no-op and
+ * no popstate will fire. Arming the pending in that case would leave it
+ * unsettled (until the next unrelated traversal auto-settles it and
+ * produces a misleading isPending period). We skip arming in that case.
+ *
+ * When the Navigation API is unavailable (very old browsers), we fall
+ * back to the bare traversal without arming. This matches Next.js
+ * degraded behavior; no hang, no safety timer required.
+ */
+function runProgrammaticTraversal(direction: "back" | "forward"): void {
+  React.startTransition(() => {
+    const nav = window.navigation;
+    if (nav !== undefined) {
+      const canTraverse = direction === "back" ? nav.canGoBack : nav.canGoForward;
+      if (canTraverse) window.__VINEXT_ARM_TRAVERSAL_PENDING__?.();
+    }
+    if (direction === "back") window.history.back();
+    else window.history.forward();
+  });
+}
+
 const _appRouter = {
   push(href: string, options?: { scroll?: boolean }): void {
     assertSafeNavigationUrl(href);
@@ -1257,11 +1293,11 @@ const _appRouter = {
   },
   back(): void {
     if (isServer) return;
-    window.history.back();
+    runProgrammaticTraversal("back");
   },
   forward(): void {
     if (isServer) return;
-    window.history.forward();
+    runProgrammaticTraversal("forward");
   },
   refresh(): void {
     if (isServer) return;

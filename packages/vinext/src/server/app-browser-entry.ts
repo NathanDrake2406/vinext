@@ -1069,6 +1069,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   );
   window.__VINEXT_HYDRATED_AT = performance.now();
 
+  window.__VINEXT_ARM_TRAVERSAL_PENDING__ = () => {
+    beginPendingBrowserRouterState();
+  };
+
   window.__VINEXT_RSC_NAVIGATE__ = async function navigateRsc(
     href: string,
     redirectDepth = 0,
@@ -1093,6 +1097,17 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     try {
       if (programmaticTransition) {
         pendingRouterState = beginPendingBrowserRouterState();
+      } else if (
+        activePendingBrowserRouterState !== null &&
+        !activePendingBrowserRouterState.settled
+      ) {
+        // Popstate path: the shim already armed a pending inside the user's
+        // `React.startTransition` (router.back / router.forward). Adopt it so
+        // the commit resolves the promise React's state slot is suspended on,
+        // keeping `useTransition().isPending` true across the async popstate
+        // task boundary. User-initiated popstates (keyboard, gesture, address
+        // bar) find no active pending and fall through unchanged.
+        pendingRouterState = activePendingBrowserRouterState;
       }
 
       while (true) {

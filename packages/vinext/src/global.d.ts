@@ -100,6 +100,17 @@ declare global {
       | undefined;
 
     /**
+     * Arms a deferred `PendingBrowserRouterState` inside the caller's
+     * `React.startTransition`. The App Router browser entry registers this
+     * hook at hydration time. Called by `router.back()` / `router.forward()`
+     * in the navigation shim so the subsequent popstate's `navigateRsc` can
+     * adopt the pending and keep `useTransition().isPending` true until the
+     * traversal commits. Undefined before hydration or on non-App-Router
+     * pages; callers must short-circuit with `?.()`.
+     */
+    __VINEXT_ARM_TRAVERSAL_PENDING__: (() => void) | undefined;
+
+    /**
      * A Promise that resolves when the current in-flight popstate RSC navigation
      * finishes rendering.
      * Set by the popstate handler in the browser RSC entry; read by
