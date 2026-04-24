@@ -79,6 +79,12 @@ declare global {
     __VINEXT_RSC_ROOT__: Root | undefined;
 
     /**
+     * True after the App Router browser root has committed and published the
+     * router state ref used by external navigation helpers.
+     */
+    __VINEXT_APP_ROUTER_READY__: boolean | undefined;
+
+    /**
      * The client-side RSC navigation function for App Router.
      * Registered by the browser RSC entry on `window` so that the navigation
      * shim, Link, and Form can trigger RSC re-fetches without a direct import.

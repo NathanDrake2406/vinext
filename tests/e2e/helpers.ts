@@ -11,7 +11,7 @@ export async function waitForHydration(page: Page): Promise<void> {
 
 /**
  * Wait for App Router (RSC) hydration to complete.
- * Checks for window.__VINEXT_RSC_ROOT__.
+ * Checks for the root plus the post-commit router readiness flag.
  *
  * Uses expect().toPass() for better error messages on timeout.
  * 10 second timeout matches Next.js hydration expectations.
@@ -19,8 +19,7 @@ export async function waitForHydration(page: Page): Promise<void> {
 export async function waitForAppRouterHydration(page: Page): Promise<void> {
   await expect(async () => {
     const ready = await page.evaluate(
-      () =>
-        Boolean(window.__VINEXT_RSC_ROOT__) && typeof window.__VINEXT_RSC_NAVIGATE__ === "function",
+      () => Boolean(window.__VINEXT_RSC_ROOT__) && window.__VINEXT_APP_ROUTER_READY__ === true,
     );
     expect(ready).toBe(true);
   }).toPass({ timeout: 10_000 });

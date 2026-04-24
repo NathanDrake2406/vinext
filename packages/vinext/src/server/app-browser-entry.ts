@@ -582,18 +582,18 @@ function BrowserRoot({
 
   // Publish the stable ref object and dispatch during layout commit. This keeps
   // the module-level escape hatches aligned with React's committed tree without
-  // performing module writes during render. __VINEXT_RSC_NAVIGATE__ is assigned
-  // after hydrateRoot() returns; by then this layout effect has already run for
-  // the hydration commit, so getBrowserRouterState() never observes a null ref.
+  // performing module writes during render.
   useLayoutEffect(() => {
     setBrowserRouterState = setTreeStateValue;
     browserRouterStateRef = stateRef;
+    window.__VINEXT_APP_ROUTER_READY__ = true;
     return () => {
       if (setBrowserRouterState === setTreeStateValue) {
         setBrowserRouterState = null;
       }
       if (browserRouterStateRef === stateRef) {
         browserRouterStateRef = null;
+        window.__VINEXT_APP_ROUTER_READY__ = false;
       }
       setMountedSlotsHeader(null);
     };
@@ -1053,6 +1053,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     window.location.href,
     latestClientParams,
   );
+  window.__VINEXT_APP_ROUTER_READY__ = false;
   replaceHistoryStateWithoutNotify(
     createHistoryStateWithPreviousNextUrl(window.history.state, null),
     "",
