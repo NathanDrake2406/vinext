@@ -1,7 +1,7 @@
 ---
 description: Vite, Next.js, TypeScript and JS build systems expert for vinext
 mode: primary
-model: anthropic/claude-opus-4-7
+model: openai/gpt-5.5
 temperature: 0.2
 ---
 
