@@ -582,11 +582,20 @@ function BrowserRoot({
 
   // Publish the stable ref object and dispatch during layout commit. This keeps
   // the module-level escape hatches aligned with React's committed tree without
-  // performing module writes during render.
+  // performing module writes during render. The arm hook is also (re)assigned
+  // here so it survives React 19 StrictMode dev's mount→cleanup→mount cycle;
+  // assigning it once at module load would leave it undefined for the rest of
+  // the session after the first cleanup.
   useLayoutEffect(() => {
     setBrowserRouterState = setTreeStateValue;
     browserRouterStateRef = stateRef;
     window.__VINEXT_APP_ROUTER_READY__ = true;
+    window.__VINEXT_ARM_TRAVERSAL_PENDING__ = () => {
+      if (!window.__VINEXT_APP_ROUTER_READY__ || !setBrowserRouterState || !browserRouterStateRef) {
+        return;
+      }
+      beginPendingBrowserRouterState();
+    };
     return () => {
       if (setBrowserRouterState === setTreeStateValue) {
         setBrowserRouterState = null;
@@ -1070,17 +1079,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   );
   window.__VINEXT_HYDRATED_AT = performance.now();
 
-  window.__VINEXT_ARM_TRAVERSAL_PENDING__ = () => {
-    // Child useLayoutEffects fire before BrowserRoot's (child-first order),
-    // so a router.back() from a child's useLayoutEffect on mount can reach
-    // here before setBrowserRouterState is published. Skip arming in that
-    // window — the traversal itself still fires; only isPending tracking
-    // for this one call is missed.
-    if (!window.__VINEXT_APP_ROUTER_READY__ || !setBrowserRouterState || !browserRouterStateRef) {
-      return;
-    }
-    beginPendingBrowserRouterState();
-  };
+  // The arm hook is assigned by BrowserRoot's mount effect, not here, so it
+  // survives React 19 StrictMode dev's mount→cleanup→mount cycle.
 
   window.__VINEXT_RSC_NAVIGATE__ = async function navigateRsc(
     href: string,
