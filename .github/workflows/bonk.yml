@@ -47,5 +47,5 @@ jobs:
           variant: "xhigh"
           permissions: write
           opencode_dev: false
-          opencode_version: 1.4.6
+          opencode_version: 1.4.11
           agent: viguy
