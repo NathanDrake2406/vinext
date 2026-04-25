@@ -107,6 +107,8 @@ function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): s
   const properties = [
     `href: ${JSON.stringify(`${route.servedUrl}?${createMetadataContentHash(buffer)}`)}`,
   ];
+  const isSvgRoute =
+    route.contentType === "image/svg+xml" || route.servedUrl.toLowerCase().endsWith(".svg");
   if (route.contentType) {
     properties.push(`type: ${JSON.stringify(route.contentType)}`);
   }
@@ -114,7 +116,9 @@ function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): s
   try {
     const dimensions = imageSize(buffer);
     if (route.type === "favicon" || route.type === "icon" || route.type === "apple-icon") {
-      if (dimensions.width && dimensions.height) {
+      if (isSvgRoute) {
+        properties.push(`sizes: ${JSON.stringify("any")}`);
+      } else if (dimensions.width && dimensions.height) {
         properties.push(`sizes: ${JSON.stringify(`${dimensions.width}x${dimensions.height}`)}`);
       } else {
         properties.push(`sizes: ${JSON.stringify("any")}`);

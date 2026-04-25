@@ -144,7 +144,29 @@ function normalizeIconEntries(icon: NonNullable<Metadata["icons"]>): IconEntry[]
   if (typeof iconValue === "string" || iconValue instanceof URL) {
     return [{ url: iconValue }];
   }
-  return [...iconValue];
+  if (Array.isArray(iconValue)) {
+    return [...iconValue];
+  }
+  if (typeof iconValue === "object" && iconValue !== null) {
+    const urlValue: unknown = Reflect.get(iconValue, "url");
+    if (typeof urlValue === "string" || (typeof urlValue === "object" && urlValue instanceof URL)) {
+      const normalizedEntry: IconEntry = { url: urlValue };
+      const sizes = Reflect.get(iconValue, "sizes");
+      if (typeof sizes === "string") {
+        normalizedEntry.sizes = sizes;
+      }
+      const type = Reflect.get(iconValue, "type");
+      if (typeof type === "string") {
+        normalizedEntry.type = type;
+      }
+      const media = Reflect.get(iconValue, "media");
+      if (typeof media === "string") {
+        normalizedEntry.media = media;
+      }
+      return [normalizedEntry];
+    }
+  }
+  return [];
 }
 
 function buildIconEntry(headData: MetadataRouteHeadData): IconEntry | null {

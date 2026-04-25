@@ -2919,6 +2919,28 @@ describe("metadata routes integration (App Router)", () => {
     expect(html).toMatch(/<link[^>]+rel="manifest"[^>]+href="[^"]*\/manifest\.webmanifest"[^>]*>/);
   });
 
+  it("injects sizes=any for static SVG icon metadata routes", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-svg-icon/metadata-svg-icon.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-svg-icon/metadata-svg-icon.test.ts
+    const res = await fetch(`${baseUrl}/metadata-svg-icon`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+
+    expect(html).toMatch(
+      /<link[^>]+rel="icon"[^>]+href="[^"]*\/metadata-svg-icon\/icon\.svg(?:\?[^"]+)?"[^>]+sizes="any"[^>]+type="image\/svg\+xml"[^>]*>/,
+    );
+  });
+
+  it("renders icons.icon descriptor object metadata without crashing", async () => {
+    const res = await fetch(`${baseUrl}/metadata-icons-object`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+
+    expect(html).toMatch(
+      /<link[^>]+rel="icon"[^>]+href="[^"]*\/metadata-icons-object\/object-icon\.png"[^>]+sizes="96x96"[^>]+type="image\/png"[^>]*>/,
+    );
+  });
+
   it("injects dynamic metadata image routes into the head", async () => {
     // Ported from Next.js: test/e2e/app-dir/metadata/metadata.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata/metadata.test.ts
