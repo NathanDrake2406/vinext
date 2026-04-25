@@ -1829,10 +1829,30 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     // Match metadata route — use pattern matching for dynamic segments,
     // strict equality for static paths.
     var _metaParams = null;
+    var _metaImageId = null;
+    var _hasGeneratedImageMetadata =
+      metaRoute.isDynamic &&
+      (metaRoute.type === "icon" ||
+        metaRoute.type === "apple-icon" ||
+        metaRoute.type === "opengraph-image" ||
+        metaRoute.type === "twitter-image") &&
+      typeof metaRoute.module.generateImageMetadata === "function";
     if (metaRoute.patternParts) {
       var _metaUrlParts = cleanPathname.split("/").filter(Boolean);
-      _metaParams = matchPattern(_metaUrlParts, metaRoute.patternParts);
+      if (_hasGeneratedImageMetadata && _metaUrlParts.length === metaRoute.patternParts.length + 1) {
+        _metaParams = matchPattern(_metaUrlParts.slice(0, metaRoute.patternParts.length), metaRoute.patternParts);
+        if (_metaParams) {
+          _metaImageId = _metaUrlParts[_metaUrlParts.length - 1];
+        }
+      } else {
+        _metaParams = matchPattern(_metaUrlParts, metaRoute.patternParts);
+      }
       if (!_metaParams) continue;
+    } else if (_hasGeneratedImageMetadata && cleanPathname.startsWith(metaRoute.servedUrl + "/")) {
+      var _metaImageSuffix = cleanPathname.slice(metaRoute.servedUrl.length + 1);
+      if (!_metaImageSuffix || _metaImageSuffix.includes("/")) continue;
+      _metaParams = Object.create(null);
+      _metaImageId = _metaImageSuffix;
     } else if (cleanPathname !== metaRoute.servedUrl) {
       continue;
     }
@@ -1840,7 +1860,35 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       // Dynamic metadata route — call the default export and serialize
       const metaFn = metaRoute.module.default;
       if (typeof metaFn === "function") {
-        const result = await metaFn({ params: makeThenableParams(_metaParams || {}) });
+        var _metaParamsThenable = makeThenableParams(_metaParams || {});
+        var result;
+        if (_hasGeneratedImageMetadata) {
+          if (_metaImageId === null) {
+            return new Response("Not Found", { status: 404 });
+          }
+          const imageMetadata = await metaRoute.module.generateImageMetadata({
+            params: _metaParamsThenable,
+          });
+          const matchedImageMetadata = Array.isArray(imageMetadata)
+            ? imageMetadata.find(function(item) {
+                if (!item || item.id == null) {
+                  throw new Error(
+                    "id property is required for every item returned from generateImageMetadata",
+                  );
+                }
+                return String(item.id) === _metaImageId;
+              })
+            : null;
+          if (!matchedImageMetadata || matchedImageMetadata.id == null) {
+            return new Response("Not Found", { status: 404 });
+          }
+          result = await metaFn({
+            params: _metaParamsThenable,
+            id: Promise.resolve(String(matchedImageMetadata.id)),
+          });
+        } else {
+          result = await metaFn({ params: _metaParamsThenable });
+        }
         let body;
         // If it's already a Response (e.g., ImageResponse), return directly
         if (result instanceof Response) return result;

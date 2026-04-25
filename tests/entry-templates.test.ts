@@ -217,6 +217,7 @@ describe("App Router entry templates", () => {
         type: "sitemap",
         isDynamic: true,
         filePath: "/tmp/test/app/sitemap.ts",
+        routePrefix: "",
         servedUrl: "/sitemap.xml",
         contentType: "application/xml",
       },
