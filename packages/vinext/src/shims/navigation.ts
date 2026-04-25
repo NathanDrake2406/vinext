@@ -1276,9 +1276,18 @@ function getBrowserNavigationTraversalHints(): BrowserNavigationTraversalHints |
  * unsettled (until the next unrelated traversal auto-settles it and
  * produces a misleading isPending period). We skip arming in that case.
  *
- * When the Navigation API is unavailable (very old browsers), we fall
- * back to the bare traversal without arming. This matches Next.js
- * degraded behavior; no hang, no safety timer required.
+ * When the Navigation API is unavailable (pre-Safari 18.4 / pre-Firefox 136),
+ * we deliberately skip arming and degrade to a bare traversal: we cannot
+ * detect no-op traversals without `canGoBack`/`canGoForward`, and arming
+ * unconditionally would leave the pending unsettled forever on the first
+ * no-op (hanging isPending). Matching Next.js' degraded behavior here
+ * (isPending may flash idle mid-traversal) is preferable to a hang. Do not
+ * "fix" this branch by arming unconditionally.
+ *
+ * Calling `router.back()` / `router.forward()` outside a `useTransition`
+ * still wraps the body in `React.startTransition`, matching `push`/`replace`.
+ * This is a behavior change vs. pre-PR (`history.back()` was synchronous),
+ * but is the only way `useTransition().isPending` can latch.
  */
 function runProgrammaticTraversal(direction: "back" | "forward"): void {
   React.startTransition(() => {
