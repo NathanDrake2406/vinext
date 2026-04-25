@@ -132,6 +132,40 @@ function selectDeepestRoutes(
   return selectedRoutes;
 }
 
+function isStringOrUrl(value: unknown): value is string | URL {
+  return typeof value === "string" || (typeof value === "object" && value instanceof URL);
+}
+
+function normalizeIconDescriptor(value: unknown): IconEntry | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const urlValue = Reflect.get(value, "url");
+  if (!isStringOrUrl(urlValue)) {
+    return null;
+  }
+
+  const entry: IconEntry = { url: urlValue };
+
+  const sizesValue = Reflect.get(value, "sizes");
+  if (typeof sizesValue === "string") {
+    entry.sizes = sizesValue;
+  }
+
+  const typeValue = Reflect.get(value, "type");
+  if (typeof typeValue === "string") {
+    entry.type = typeValue;
+  }
+
+  const mediaValue = Reflect.get(value, "media");
+  if (typeof mediaValue === "string") {
+    entry.media = mediaValue;
+  }
+
+  return entry;
+}
+
 function normalizeIconEntries(icon: NonNullable<Metadata["icons"]>): IconEntry[] {
   if (!icon || typeof icon !== "object") {
     return [];
@@ -141,32 +175,16 @@ function normalizeIconEntries(icon: NonNullable<Metadata["icons"]>): IconEntry[]
   if (!iconValue) {
     return [];
   }
-  if (typeof iconValue === "string" || iconValue instanceof URL) {
+  if (isStringOrUrl(iconValue)) {
     return [{ url: iconValue }];
   }
+
   if (Array.isArray(iconValue)) {
     return [...iconValue];
   }
-  if (typeof iconValue === "object" && iconValue !== null) {
-    const urlValue: unknown = Reflect.get(iconValue, "url");
-    if (typeof urlValue === "string" || (typeof urlValue === "object" && urlValue instanceof URL)) {
-      const normalizedEntry: IconEntry = { url: urlValue };
-      const sizes = Reflect.get(iconValue, "sizes");
-      if (typeof sizes === "string") {
-        normalizedEntry.sizes = sizes;
-      }
-      const type = Reflect.get(iconValue, "type");
-      if (typeof type === "string") {
-        normalizedEntry.type = type;
-      }
-      const media = Reflect.get(iconValue, "media");
-      if (typeof media === "string") {
-        normalizedEntry.media = media;
-      }
-      return [normalizedEntry];
-    }
-  }
-  return [];
+
+  const descriptor = normalizeIconDescriptor(iconValue);
+  return descriptor ? [descriptor] : [];
 }
 
 function buildIconEntry(headData: MetadataRouteHeadData): IconEntry | null {
