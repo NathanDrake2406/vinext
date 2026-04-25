@@ -166,6 +166,14 @@ function normalizeIconDescriptor(value: unknown): IconEntry | null {
   return entry;
 }
 
+function normalizeIconValue(value: unknown): IconEntry | null {
+  if (isStringOrUrl(value)) {
+    return { url: value };
+  }
+
+  return normalizeIconDescriptor(value);
+}
+
 function normalizeIconEntries(icon: NonNullable<Metadata["icons"]>): IconEntry[] {
   if (!icon || typeof icon !== "object") {
     return [];
@@ -175,16 +183,20 @@ function normalizeIconEntries(icon: NonNullable<Metadata["icons"]>): IconEntry[]
   if (!iconValue) {
     return [];
   }
-  if (isStringOrUrl(iconValue)) {
-    return [{ url: iconValue }];
-  }
 
   if (Array.isArray(iconValue)) {
-    return [...iconValue];
+    const normalizedEntries: IconEntry[] = [];
+    for (const value of iconValue) {
+      const normalizedValue = normalizeIconValue(value);
+      if (normalizedValue) {
+        normalizedEntries.push(normalizedValue);
+      }
+    }
+    return normalizedEntries;
   }
 
-  const descriptor = normalizeIconDescriptor(iconValue);
-  return descriptor ? [descriptor] : [];
+  const normalizedValue = normalizeIconValue(iconValue);
+  return normalizedValue ? [normalizedValue] : [];
 }
 
 function buildIconEntry(headData: MetadataRouteHeadData): IconEntry | null {
