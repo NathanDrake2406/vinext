@@ -665,14 +665,13 @@ function dispatchBrowserTree(
   };
 
   const applyAction = () => {
-    if (pendingRouterState) {
-      // The programmatic navigation is already running inside React.startTransition
-      // (from router.push/replace/refresh), so resolving the deferred promise is
-      // sufficient — no additional startTransition wrapper is needed below.
-      resolvePendingBrowserRouterState(pendingRouterState, action);
-      return;
-    }
-
+    // Resolve the adopted pending (so a useTransition consumer commits) and
+    // also write the concrete state. The unconditional setter heals rapid
+    // overlapping traversals: when two navigateRsc invocations share one
+    // activePendingBrowserRouterState, the older one's stale-id finally can
+    // settle that pending stale, leaving React's slot bound to a wrong-state
+    // promise resolution. The setter rebinds the slot to the correct state.
+    resolvePendingBrowserRouterState(pendingRouterState, action);
     setter(routerReducer(getBrowserRouterState(), action));
   };
 
