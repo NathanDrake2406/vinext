@@ -108,8 +108,10 @@ test.describe("Next.js compat: router.back / router.forward pending state", () =
     await page.click("#push-to-destination");
     await expect(page.locator("#page-b-marker")).toBeVisible({ timeout: 10_000 });
 
-    // User-initiated back (not through router.back) so that no pending is armed;
-    // history has a forward entry available for the forward traversal under test.
+    // Bare history.back() (not router.back()) on purpose: router.back() would
+    // arm a pending, and the forward observer's log would then capture the
+    // back traversal's "pending"/"idle" entries instead of isolating the
+    // forward traversal under test.
     await page.evaluate(() => window.history.back());
     await expect(page.locator("#page-a-marker")).toBeVisible({ timeout: 10_000 });
     await expect(page.locator("#forward-pending-state")).toHaveText("idle");
