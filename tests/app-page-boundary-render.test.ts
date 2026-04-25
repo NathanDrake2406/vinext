@@ -76,6 +76,7 @@ function createCommonOptions() {
       headers: null,
       status: null,
     },
+    metadataRoutes: [],
     renderToReadableStream: renderElementToStream,
     requestUrl: "https://example.com/posts/missing",
     resolveChildSegments() {
@@ -133,34 +134,33 @@ function GlobalErrorBoundary({ error }: { error: Error }) {
   return React.createElement("p", { "data-boundary": "global-error" }, `global:${error.message}`);
 }
 
+type TestModule = {
+  default: React.ComponentType<any>;
+  metadata?: { description: string };
+  viewport?: { themeColor: string };
+};
+
 const rootLayoutModule = {
-  default: RootLayout as React.ComponentType<any>,
+  default: RootLayout,
   metadata: { description: "Root layout description" },
   viewport: { themeColor: "#111111" },
-};
+} satisfies TestModule;
 
 const leafLayoutModule = {
-  default: LeafLayout as React.ComponentType<any>,
-};
+  default: LeafLayout,
+} satisfies TestModule;
 
 const notFoundModule = {
-  default: NotFoundBoundary as React.ComponentType<any>,
-};
+  default: NotFoundBoundary,
+} satisfies TestModule;
 
 const routeErrorModule = {
-  default: RouteErrorBoundary as React.ComponentType<any>,
-};
+  default: RouteErrorBoundary,
+} satisfies TestModule;
 
 const globalErrorModule = {
-  default: GlobalErrorBoundary as React.ComponentType<any>,
-};
-
-type TestModule =
-  | typeof rootLayoutModule
-  | typeof leafLayoutModule
-  | typeof notFoundModule
-  | typeof routeErrorModule
-  | typeof globalErrorModule;
+  default: GlobalErrorBoundary,
+} satisfies TestModule;
 
 const EMPTY_ROOT_LAYOUTS: readonly TestModule[] = [];
 
@@ -168,7 +168,7 @@ describe("app page boundary render helpers", () => {
   it("returns null when no HTTP access fallback boundary exists", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageHttpAccessFallback({
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
       ...common,
       matchedParams: { slug: "missing" },
       route: {
@@ -186,7 +186,7 @@ describe("app page boundary render helpers", () => {
   it("renders HTTP access fallbacks with layout metadata and wrapped HTML", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageHttpAccessFallback({
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
       ...common,
       matchedParams: { slug: "missing" },
       rootLayouts: [rootLayoutModule],
@@ -242,7 +242,7 @@ describe("app page boundary render helpers", () => {
   it("renders HTTP access fallback RSC responses as flat payloads", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageHttpAccessFallback({
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
       ...common,
       isRscRequest: true,
       matchedParams: { slug: "missing" },
@@ -294,7 +294,7 @@ describe("app page boundary render helpers", () => {
   it("uses null root layout metadata when a boundary payload has no route context", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageHttpAccessFallback({
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
       ...common,
       boundaryComponent: NotFoundBoundary,
       isRscRequest: true,
@@ -317,7 +317,7 @@ describe("app page boundary render helpers", () => {
     const common = createCommonOptions();
     const sanitizeErrorForClient = vi.fn((error: Error) => new Error(`safe:${error.message}`));
 
-    const response = await renderAppPageErrorBoundary({
+    const response = await renderAppPageErrorBoundary<TestModule>({
       ...common,
       error: new Error("secret"),
       matchedParams: { slug: "post" },
@@ -367,7 +367,7 @@ describe("app page boundary render helpers", () => {
   it("renders error boundary RSC responses as flat payloads", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageErrorBoundary({
+    const response = await renderAppPageErrorBoundary<TestModule>({
       ...common,
       error: new Error("secret"),
       isRscRequest: true,
@@ -398,7 +398,7 @@ describe("app page boundary render helpers", () => {
   it("renders global-error boundaries without layout wrapping", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageErrorBoundary({
+    const response = await renderAppPageErrorBoundary<TestModule>({
       ...common,
       error: new Error("boom"),
       globalErrorModule,

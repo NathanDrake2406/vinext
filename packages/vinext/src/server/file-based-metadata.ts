@@ -72,11 +72,15 @@ function normalizeRoutePrefixPattern(routePrefix: string): string {
 }
 
 function selectDeepestRoutes(
-  metadataRoutes: MetadataFileRoute[],
+  metadataRoutes: readonly MetadataFileRoute[] | null | undefined,
   kind: MetadataRouteHeadData["kind"],
   routePath: string,
   params: AppPageParams,
 ): MetadataFileRoute[] {
+  if (!metadataRoutes || metadataRoutes.length === 0) {
+    return [];
+  }
+
   let selectedScore = -1;
   const selectedRoutes: MetadataFileRoute[] = [];
 
@@ -407,7 +411,7 @@ export async function applyFileBasedMetadata(
   metadata: Metadata | null,
   routePath: string,
   params: AppPageParams,
-  metadataRoutes: MetadataFileRoute[],
+  metadataRoutes: readonly MetadataFileRoute[] | null | undefined,
 ): Promise<Metadata | null> {
   const faviconRoutes = selectDeepestRoutes(metadataRoutes, "favicon", routePath, params);
   const iconRoutes = selectDeepestRoutes(metadataRoutes, "icon", routePath, params);
