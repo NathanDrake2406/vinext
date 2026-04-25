@@ -348,13 +348,43 @@ export type MetadataFileRoute = {
   type: string;
   /** Whether this is a dynamic (code-generated) route */
   isDynamic: boolean;
+  /** Imported dynamic module for code-generated metadata routes. */
+  module?: Record<string, unknown>;
   /** Absolute file path */
   filePath: string;
+  /** Route prefix where this metadata applies, preserving dynamic segment names. */
+  routePrefix: string;
+  /** Pattern parts for matching dynamic metadata routes at request time. */
+  patternParts?: string[];
   /** URL path this file is served at */
   servedUrl: string;
   /** Content type for the response */
   contentType: string;
+  /** Optional metadata used to inject file-based routes into <head>. */
+  headData?: MetadataRouteHeadData;
+  /** Optional content hash for cache-busting metadata links. */
+  contentHash?: string;
 };
+
+export type MetadataRouteHeadData =
+  | {
+      kind: "favicon" | "icon" | "apple";
+      href: string;
+      type?: string;
+      sizes?: string;
+    }
+  | {
+      kind: "openGraph" | "twitter";
+      href: string;
+      type?: string;
+      width?: number;
+      height?: number;
+      alt?: string;
+    }
+  | {
+      kind: "manifest";
+      href: string;
+    };
 
 function metadataRouteSuffix(parentSegments: string[], metaType: string): string {
   if (metaType === "sitemap" || metaType === "robots" || metaType === "manifest") {
@@ -382,6 +412,51 @@ function withMetadataSuffix(urlPath: string, suffix: string): string {
   if (!suffix) return urlPath;
   const parsed = path.posix.parse(urlPath);
   return path.posix.join(parsed.dir || "/", `${parsed.name}-${suffix}${parsed.ext}`);
+}
+
+function getMetadataServedUrl(
+  metaType: string,
+  config: { urlPath: string },
+  ext: string,
+  isDynamic: boolean,
+  suffix: string,
+): string {
+  if (isDynamic) {
+    return withMetadataSuffix(config.urlPath, suffix);
+  }
+
+  if (
+    metaType === "icon" ||
+    metaType === "apple-icon" ||
+    metaType === "opengraph-image" ||
+    metaType === "twitter-image"
+  ) {
+    return withMetadataSuffix(`/${metaType}${ext}`, suffix);
+  }
+
+  return withMetadataSuffix(config.urlPath, suffix);
+}
+
+function replaceDynamicSegmentsWithPlaceholder(urlPrefix: string): string {
+  if (urlPrefix === "") {
+    return "";
+  }
+
+  const segments = urlPrefix
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => {
+      if (
+        (segment.startsWith("[") && segment.endsWith("]")) ||
+        (segment.startsWith("[...") && segment.endsWith("]")) ||
+        (segment.startsWith("[[...") && segment.endsWith("]]"))
+      ) {
+        return "-";
+      }
+      return segment;
+    });
+
+  return segments.length > 0 ? `/${segments.join("/")}` : "";
 }
 
 /**
@@ -426,13 +501,17 @@ export function scanMetadataFiles(appDir: string): MetadataFileRoute[] {
 
         if (!isStatic && !isDynamic) continue;
         const suffix = metadataRouteSuffix(parentSegments, metaType);
-        const urlPath = withMetadataSuffix(config.urlPath, suffix);
+        const urlPath = getMetadataServedUrl(metaType, config, ext, isDynamic, suffix);
+        const servedPrefix = isStatic
+          ? replaceDynamicSegmentsWithPlaceholder(urlPrefix)
+          : urlPrefix;
 
         routes.push({
           type: metaType,
           isDynamic,
           filePath: path.join(dir, fileName),
-          servedUrl: urlPrefix === "" ? urlPath : `${urlPrefix}${urlPath}`,
+          routePrefix: urlPrefix,
+          servedUrl: servedPrefix === "" ? urlPath : `${servedPrefix}${urlPath}`,
           contentType: isStatic
             ? getStaticContentType(ext, config.contentType)
             : config.contentType,

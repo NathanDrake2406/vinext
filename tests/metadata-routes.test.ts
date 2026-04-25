@@ -668,6 +668,7 @@ describe("scanMetadataFiles", () => {
     const icon = routes.find((r) => r.type === "icon");
     expect(icon).toBeDefined();
     expect(icon!.isDynamic).toBe(false);
+    expect(icon!.servedUrl).toBe("/icon.png");
     expect(icon!.contentType).toBe("image/png");
   });
 
@@ -684,6 +685,7 @@ describe("scanMetadataFiles", () => {
     const routes = scanMetadataFiles(tmpDir);
     const twitter = routes.find((r) => r.type === "twitter-image");
     expect(twitter).toBeDefined();
+    expect(twitter!.servedUrl).toBe("/twitter-image.jpg");
     expect(twitter!.contentType).toBe("image/jpeg");
   });
 
@@ -692,7 +694,7 @@ describe("scanMetadataFiles", () => {
     const routes = scanMetadataFiles(tmpDir);
     const apple = routes.find((r) => r.type === "apple-icon");
     expect(apple).toBeDefined();
-    expect(apple!.servedUrl).toBe("/apple-icon");
+    expect(apple!.servedUrl).toBe("/apple-icon.png");
   });
 
   it("nestable types discovered in subdirectories", () => {
@@ -705,7 +707,15 @@ describe("scanMetadataFiles", () => {
 
     const blogIcon = routes.find((r) => r.type === "icon" && r.servedUrl.includes("blog"));
     expect(blogIcon).toBeDefined();
-    expect(blogIcon!.servedUrl).toBe("/blog/icon");
+    expect(blogIcon!.servedUrl).toBe("/blog/icon.png");
+  });
+
+  it("static metadata files in dynamic segments use placeholder urls", () => {
+    createFile("blog/[slug]/icon.png");
+    const routes = scanMetadataFiles(tmpDir);
+    const blogIcon = routes.find((r) => r.type === "icon");
+    expect(blogIcon).toBeDefined();
+    expect(blogIcon!.servedUrl).toBe("/blog/-/icon.png");
   });
 
   it("non-nestable types only at root", () => {
@@ -724,7 +734,7 @@ describe("scanMetadataFiles", () => {
     const routes = scanMetadataFiles(tmpDir);
     const icon = routes.find((r) => r.type === "icon");
     expect(icon).toBeDefined();
-    expect(icon!.servedUrl).toMatch(/^\/icon-[0-9a-z]{6}$/);
+    expect(icon!.servedUrl).toMatch(/^\/icon-[0-9a-z]{6}\.png$/);
     expect(icon!.servedUrl).not.toContain("marketing");
   });
 
@@ -733,7 +743,7 @@ describe("scanMetadataFiles", () => {
     const routes = scanMetadataFiles(tmpDir);
     const icon = routes.find((r) => r.type === "icon");
     expect(icon).toBeDefined();
-    expect(icon!.servedUrl).toMatch(/^\/icon-[0-9a-z]{6}$/);
+    expect(icon!.servedUrl).toMatch(/^\/icon-[0-9a-z]{6}\.png$/);
     expect(icon!.servedUrl).not.toContain("@modal");
   });
 
@@ -742,7 +752,7 @@ describe("scanMetadataFiles", () => {
     const routes = scanMetadataFiles(tmpDir);
     const icon = routes.find((r) => r.type === "icon");
     expect(icon).toBeDefined();
-    expect(icon!.servedUrl).toBe("/icon");
+    expect(icon!.servedUrl).toBe("/icon.png");
   });
 
   it("skips metadata files inside private folders", () => {
@@ -757,8 +767,8 @@ describe("scanMetadataFiles", () => {
     const routes = scanMetadataFiles(tmpDir);
     const icons = routes.filter((r) => r.type === "icon");
     expect(icons).toHaveLength(2);
-    expect(icons.some((icon) => icon.servedUrl === "/icon")).toBe(true);
-    expect(icons.some((icon) => /^\/icon-[0-9a-z]{6}$/.test(icon.servedUrl))).toBe(true);
+    expect(icons.some((icon) => icon.servedUrl === "/icon.png")).toBe(true);
+    expect(icons.some((icon) => /^\/icon-[0-9a-z]{6}\.png$/.test(icon.servedUrl))).toBe(true);
   });
 
   it("dynamic takes priority over static at same URL", () => {

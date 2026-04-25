@@ -8,6 +8,8 @@
  * Previously housed in server/app-dev-server.ts.
  */
 import fs from "node:fs";
+import { createHash } from "node:crypto";
+import { imageSize } from "image-size";
 import { resolveEntryPath } from "./runtime-entry-module.js";
 import type {
   NextHeader,
@@ -63,6 +65,7 @@ const appPageBoundaryRenderPath = resolveEntryPath(
   "../server/app-page-boundary-render.js",
   import.meta.url,
 );
+const fileBasedMetadataPath = resolveEntryPath("../server/file-based-metadata.js", import.meta.url);
 const appElementsPath = resolveEntryPath("../server/app-elements.js", import.meta.url);
 const appPageRouteWiringPath = resolveEntryPath(
   "../server/app-page-route-wiring.js",
@@ -81,6 +84,65 @@ const routeTriePath = resolveEntryPath("../routing/route-trie.js", import.meta.u
 const metadataRoutesPath = resolveEntryPath("../server/metadata-routes.js", import.meta.url);
 const rootParamsShimPath = resolveEntryPath("../shims/root-params.js", import.meta.url);
 const errorCausePath = resolveEntryPath("../utils/error-cause.js", import.meta.url);
+
+function createMetadataContentHash(buffer: Buffer): string {
+  return createHash("sha1").update(buffer).digest("hex").slice(0, 16);
+}
+
+function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): string | null {
+  if (route.type === "manifest") {
+    return `{ kind: "manifest", href: ${JSON.stringify(route.servedUrl)} }`;
+  }
+
+  if (
+    route.type !== "favicon" &&
+    route.type !== "icon" &&
+    route.type !== "apple-icon" &&
+    route.type !== "opengraph-image" &&
+    route.type !== "twitter-image"
+  ) {
+    return null;
+  }
+
+  const properties = [
+    `href: ${JSON.stringify(`${route.servedUrl}?${createMetadataContentHash(buffer)}`)}`,
+  ];
+  if (route.contentType) {
+    properties.push(`type: ${JSON.stringify(route.contentType)}`);
+  }
+
+  try {
+    const dimensions = imageSize(buffer);
+    if (route.type === "favicon" || route.type === "icon" || route.type === "apple-icon") {
+      if (dimensions.width && dimensions.height) {
+        properties.push(`sizes: ${JSON.stringify(`${dimensions.width}x${dimensions.height}`)}`);
+      } else {
+        properties.push(`sizes: ${JSON.stringify("any")}`);
+      }
+    } else {
+      if (dimensions.width) {
+        properties.push(`width: ${dimensions.width}`);
+      }
+      if (dimensions.height) {
+        properties.push(`height: ${dimensions.height}`);
+      }
+    }
+  } catch {
+    if (route.type === "favicon" || route.type === "icon" || route.type === "apple-icon") {
+      properties.push(`sizes: ${JSON.stringify("any")}`);
+    }
+  }
+
+  const kind =
+    route.type === "apple-icon"
+      ? "apple"
+      : route.type === "opengraph-image"
+        ? "openGraph"
+        : route.type === "twitter-image"
+          ? "twitter"
+          : route.type;
+  return `{ kind: ${JSON.stringify(kind)}, ${properties.join(", ")} }`;
+}
 
 /**
  * Resolved config options relevant to App Router request handling.
@@ -305,27 +367,49 @@ ${slotEntries.join(",\n")}
         : null;
 
     if (mr.isDynamic) {
+      let contentHashCode = "undefined";
+      try {
+        contentHashCode = JSON.stringify(createMetadataContentHash(fs.readFileSync(mr.filePath)));
+      } catch {
+        // File unreadable — omit content hash for head injection.
+      }
+      const headDataCode =
+        mr.type === "manifest"
+          ? `\n    headData: { kind: "manifest", href: ${JSON.stringify(mr.servedUrl)} },`
+          : "";
       return `  {
     type: ${JSON.stringify(mr.type)},
     isDynamic: true,
+    routePrefix: ${JSON.stringify(mr.routePrefix)},
     servedUrl: ${JSON.stringify(mr.servedUrl)},
     contentType: ${JSON.stringify(mr.contentType)},
-    module: ${getImportVar(mr.filePath)},${patternParts ? `\n    patternParts: ${patternParts},` : ""}
+    contentHash: ${contentHashCode},
+    module: ${getImportVar(mr.filePath)},${patternParts ? `\n    patternParts: ${patternParts},` : ""}${headDataCode}
   }`;
     }
     // Static: read file and embed as base64
     let fileDataBase64 = "";
+    let headDataCode = "null";
+    let contentHashCode = "undefined";
     try {
       const buf = fs.readFileSync(mr.filePath);
       fileDataBase64 = buf.toString("base64");
+      contentHashCode = JSON.stringify(createMetadataContentHash(buf));
+      const resolvedHeadDataCode = createMetadataHeadDataCode(mr, buf);
+      if (resolvedHeadDataCode) {
+        headDataCode = resolvedHeadDataCode;
+      }
     } catch {
       // File unreadable — will serve empty response at runtime
     }
     return `  {
     type: ${JSON.stringify(mr.type)},
     isDynamic: false,
+    routePrefix: ${JSON.stringify(mr.routePrefix)},
     servedUrl: ${JSON.stringify(mr.servedUrl)},
     contentType: ${JSON.stringify(mr.contentType)},
+    contentHash: ${contentHashCode},
+    headData: ${headDataCode},
     fileDataBase64: ${JSON.stringify(fileDataBase64)},
   }`;
   });
@@ -374,6 +458,7 @@ import { setNavigationContext as _setNavigationContextOrig, getNavigationContext
 import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { NextRequest, NextFetchEvent } from "next/server";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
+import { applyFileBasedMetadata } from ${JSON.stringify(fileBasedMetadataPath)};
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
 ${effectiveMetaRoutes.length > 0 ? `import { sitemapToXml, robotsToText, manifestToJson } from ${JSON.stringify(metadataRoutesPath)};` : ""}
@@ -847,6 +932,7 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
     makeThenableParams,
     matchedParams: opts?.matchedParams ?? route?.params ?? {},
     middlewareContext: middlewareContext ?? __APP_PAGE_EMPTY_MW_CTX,
+    metadataRoutes,
     requestUrl: request.url,
     resolveChildSegments: __resolveAppPageChildSegments,
     rootForbiddenModule: rootForbiddenModule,
@@ -894,6 +980,7 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
     makeThenableParams,
     matchedParams: matchedParams ?? route?.params ?? {},
     middlewareContext: middlewareContext ?? __APP_PAGE_EMPTY_MW_CTX,
+    metadataRoutes,
     requestUrl: request.url,
     resolveChildSegments: __resolveAppPageChildSegments,
     rootLayouts: rootLayouts,
@@ -1114,7 +1201,13 @@ async function buildPageElements(route, params, routePath, pageRequest) {
 
   const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
   const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
-  const resolvedMetadata = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const resolvedMetadata = await applyFileBasedMetadata(
+    resolvedMetadataBase,
+    route.pattern,
+    params,
+    metadataRoutes,
+  );
   const resolvedViewport = mergeViewport(viewportList);
 
   // Build the route tree from the leaf page, then delegate the boundary/layout/

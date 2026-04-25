@@ -14,6 +14,8 @@ import {
 } from "../shims/metadata.js";
 import type { AppPageFontPreload } from "./app-page-execution.js";
 import type { AppPageMiddlewareContext } from "./app-page-response.js";
+import type { MetadataFileRoute } from "./metadata-routes.js";
+import { applyFileBasedMetadata } from "./file-based-metadata.js";
 import {
   renderAppPageBoundaryResponse,
   resolveAppPageErrorBoundary,
@@ -78,6 +80,7 @@ type AppPageBoundaryRenderCommonOptions<TModule extends AppPageModule = AppPageM
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
   makeThenableParams: (params: AppPageParams) => unknown;
   middlewareContext: AppPageMiddlewareContext;
+  metadataRoutes: MetadataFileRoute[];
   renderToReadableStream: (
     element: ReactNode | AppElements,
     options: { onError: AppPageBoundaryOnError },
@@ -119,6 +122,8 @@ function getDefaultExport<TModule extends AppPageModule>(
 async function resolveAppPageLayoutHead<TModule extends AppPageModule>(
   layoutModules: readonly (TModule | null | undefined)[],
   params: AppPageParams,
+  routePath: string,
+  metadataRoutes: MetadataFileRoute[],
 ): Promise<{ metadata: Metadata | null; viewport: Viewport }> {
   const filteredLayouts = layoutModules.filter(Boolean) as TModule[];
   const layoutMetadataPromises: Promise<Metadata | null>[] = [];
@@ -159,8 +164,10 @@ async function resolveAppPageLayoutHead<TModule extends AppPageModule>(
   const metadataList = metadataResults.filter(Boolean) as Metadata[];
   const viewportList = viewportResults.filter(Boolean) as Viewport[];
 
+  const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+
   return {
-    metadata: metadataList.length > 0 ? mergeMetadata(metadataList) : null,
+    metadata: await applyFileBasedMetadata(resolvedMetadataBase, routePath, params, metadataRoutes),
     viewport: mergeViewport(viewportList),
   };
 }
@@ -322,6 +329,8 @@ export async function renderAppPageHttpAccessFallback<TModule extends AppPageMod
   const { metadata, viewport } = await resolveAppPageLayoutHead(
     layoutModules,
     options.matchedParams,
+    options.route?.pattern ?? new URL(options.requestUrl).pathname,
+    options.metadataRoutes,
   );
 
   const headElements: ReactNode[] = [
@@ -375,11 +384,29 @@ export async function renderAppPageErrorBoundary<TModule extends AppPageModule>(
   const errorObject = options.sanitizeErrorForClient(rawError);
   const matchedParams = options.matchedParams ?? options.route?.params ?? {};
   const layoutModules = options.route?.layouts ?? options.rootLayouts;
+  const pathname = new URL(options.requestUrl).pathname;
+  const { metadata, viewport } = await resolveAppPageLayoutHead(
+    layoutModules,
+    matchedParams,
+    options.route?.pattern ?? pathname,
+    options.metadataRoutes,
+  );
+
+  const headElements: ReactNode[] = [createElement("meta", { charSet: "utf-8", key: "charset" })];
+  if (metadata) {
+    headElements.push(createElement(MetadataHead, { key: "metadata", metadata }));
+  }
+  headElements.push(createElement(ViewportHead, { key: "viewport", viewport }));
 
   const element = wrapRenderedBoundaryElement({
-    element: createElement(errorBoundary.component, {
-      error: errorObject,
-    }),
+    element: createElement(
+      Fragment,
+      null,
+      ...headElements,
+      createElement(errorBoundary.component, {
+        error: errorObject,
+      }),
+    ),
     globalErrorModule: options.globalErrorModule,
     includeGlobalErrorBoundary: !errorBoundary.isGlobalError,
     isRscRequest: options.isRscRequest,

@@ -150,8 +150,12 @@ export type Metadata = {
     images?:
       | string
       | URL
-      | { url: string | URL; width?: number; height?: number; alt?: string }
-      | Array<string | URL | { url: string | URL; width?: number; height?: number; alt?: string }>;
+      | { url: string | URL; width?: number; height?: number; alt?: string; type?: string }
+      | Array<
+          | string
+          | URL
+          | { url: string | URL; width?: number; height?: number; alt?: string; type?: string }
+        >;
     videos?: Array<{ url: string | URL; width?: number; height?: number }>;
     audio?: Array<{ url: string | URL }>;
     locale?: string;
@@ -169,8 +173,12 @@ export type Metadata = {
     images?:
       | string
       | URL
-      | { url: string | URL; alt?: string; width?: number; height?: number }
-      | Array<string | URL | { url: string | URL; alt?: string; width?: number; height?: number }>;
+      | { url: string | URL; alt?: string; width?: number; height?: number; type?: string }
+      | Array<
+          | string
+          | URL
+          | { url: string | URL; alt?: string; width?: number; height?: number; type?: string }
+        >;
     creator?: string;
     creatorId?: string;
     players?: TwitterPlayerDescriptor | TwitterPlayerDescriptor[];
@@ -549,6 +557,8 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
             elements.push(
               <meta key={key++} property="og:image:height" content={String(img.height)} />,
             );
+          if (img.type)
+            elements.push(<meta key={key++} property="og:image:type" content={img.type} />);
           if (img.alt)
             elements.push(<meta key={key++} property="og:image:alt" content={img.alt} />);
         }
@@ -596,8 +606,23 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
       for (const img of imgList) {
         const imgUrl = typeof img === "string" || img instanceof URL ? img : img.url;
         elements.push(<meta key={key++} name="twitter:image" content={resolveUrl(imgUrl)} />);
-        if (typeof img !== "string" && !(img instanceof URL) && img.alt) {
-          elements.push(<meta key={key++} name="twitter:image:alt" content={img.alt} />);
+        if (typeof img !== "string" && !(img instanceof URL)) {
+          if (img.type) {
+            elements.push(<meta key={key++} name="twitter:image:type" content={img.type} />);
+          }
+          if (img.width) {
+            elements.push(
+              <meta key={key++} name="twitter:image:width" content={String(img.width)} />,
+            );
+          }
+          if (img.height) {
+            elements.push(
+              <meta key={key++} name="twitter:image:height" content={String(img.height)} />,
+            );
+          }
+          if (img.alt) {
+            elements.push(<meta key={key++} name="twitter:image:alt" content={img.alt} />);
+          }
         }
       }
     }

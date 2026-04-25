@@ -2837,9 +2837,10 @@ describe("metadata routes integration (App Router)", () => {
     const appDir = path.resolve(import.meta.dirname, "./fixtures/app-basic/app");
     const routes = scanMetadataFiles(appDir);
 
-    const iconRoute = routes.find((r: { type: string }) => r.type === "icon");
+    const iconRoute = routes.find(
+      (r: { type: string; isDynamic: boolean }) => r.type === "icon" && r.isDynamic,
+    );
     expect(iconRoute).toBeDefined();
-    // Dynamic icon.tsx should take priority over static icon.png at same URL
     expect(iconRoute!.isDynamic).toBe(true);
     expect(iconRoute!.servedUrl).toBe("/icon");
     expect(iconRoute!.contentType).toBe("image/png");
@@ -2853,7 +2854,7 @@ describe("metadata routes integration (App Router)", () => {
     const appleIcon = routes.find((r: { type: string }) => r.type === "apple-icon");
     expect(appleIcon).toBeDefined();
     expect(appleIcon!.isDynamic).toBe(false);
-    expect(appleIcon!.servedUrl).toBe("/apple-icon");
+    expect(appleIcon!.servedUrl).toBe("/apple-icon.png");
     expect(appleIcon!.contentType).toBe("image/png");
   });
 
@@ -2864,15 +2865,15 @@ describe("metadata routes integration (App Router)", () => {
 
     const ogImage = routes.find(
       (r: { type: string; servedUrl: string }) =>
-        r.type === "opengraph-image" && r.servedUrl === "/about/opengraph-image",
+        r.type === "opengraph-image" && r.servedUrl === "/about/opengraph-image.png",
     );
     expect(ogImage).toBeDefined();
     expect(ogImage!.isDynamic).toBe(false);
     expect(ogImage!.contentType).toBe("image/png");
   });
 
-  it("serves static /apple-icon as PNG with cache headers", async () => {
-    const res = await fetch(`${baseUrl}/apple-icon`);
+  it("serves static /apple-icon.png as PNG with cache headers", async () => {
+    const res = await fetch(`${baseUrl}/apple-icon.png`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
@@ -2885,14 +2886,85 @@ describe("metadata routes integration (App Router)", () => {
     expect(magic[3]).toBe(0x47); // G
   });
 
-  it("serves nested static /about/opengraph-image as PNG", async () => {
-    const res = await fetch(`${baseUrl}/about/opengraph-image`);
+  it("serves nested static /about/opengraph-image.png as PNG", async () => {
+    const res = await fetch(`${baseUrl}/about/opengraph-image.png`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     const buf = await res.arrayBuffer();
     const magic = new Uint8Array(buf.slice(0, 4));
     expect(magic[0]).toBe(0x89);
     expect(magic[1]).toBe(0x50);
+  });
+
+  it("injects file-based metadata into head tags for static metadata files", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-static-file/metadata-static-file-static-route.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-static-file/metadata-static-file-static-route.test.ts
+    const res = await fetch(`${baseUrl}/metadata-static`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+
+    expect(html).toMatch(/<link[^>]+rel="icon"[^>]+href="[^"]*\/favicon\.ico(?:\?[^"]+)?"[^>]*>/);
+    expect(html).toMatch(
+      /<link[^>]+rel="apple-touch-icon"[^>]+href="[^"]*\/metadata-static\/apple-icon\.png(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<link[^>]+rel="icon"[^>]+href="[^"]*\/metadata-static\/icon\.png(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<meta[^>]+property="og:image"[^>]+content="[^"]*\/metadata-static\/opengraph-image\.png(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<meta[^>]+name="twitter:image"[^>]+content="[^"]*\/metadata-static\/twitter-image\.png(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(html).toMatch(/<link[^>]+rel="manifest"[^>]+href="[^"]*\/manifest\.webmanifest"[^>]*>/);
+  });
+
+  it("injects dynamic metadata image routes into the head", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata/metadata.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata/metadata.test.ts
+    const homeRes = await fetch(`${baseUrl}/`);
+    expect(homeRes.status).toBe(200);
+    const homeHtml = await homeRes.text();
+    expect(homeHtml).toMatch(
+      /<link[^>]+rel="icon"[^>]+href="[^"]*\/favicon\.ico(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(homeHtml).toMatch(
+      /<link[^>]+rel="icon"[^>]+href="[^"]*\/icon(?:\?[^"]+)?"[^>]+sizes="32x32"[^>]+type="image\/png"[^>]*>/,
+    );
+
+    const blogRes = await fetch(`${baseUrl}/blog/hello-world`);
+    expect(blogRes.status).toBe(200);
+    const blogHtml = await blogRes.text();
+    expect(blogHtml).toMatch(
+      /<meta[^>]+property="og:image"[^>]+content="[^"]*\/blog\/hello-world\/opengraph-image(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(blogHtml).toMatch(/<meta[^>]+property="og:image:width"[^>]+content="1200"[^>]*>/);
+    expect(blogHtml).toMatch(/<meta[^>]+property="og:image:height"[^>]+content="630"[^>]*>/);
+    expect(blogHtml).toMatch(/<meta[^>]+property="og:image:type"[^>]+content="image\/png"[^>]*>/);
+    expect(blogHtml).toMatch(
+      /<meta[^>]+property="og:image:alt"[^>]+content="Blog post open graph image"[^>]*>/,
+    );
+  });
+
+  it("uses placeholder urls for static metadata files in dynamic segments", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-static-file/metadata-static-file-dynamic-route.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-static-file/metadata-static-file-dynamic-route.test.ts
+    const res = await fetch(`${baseUrl}/metadata-dynamic-static/hello-world`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+
+    expect(html).toMatch(
+      /<link[^>]+rel="apple-touch-icon"[^>]+href="[^"]*\/metadata-dynamic-static\/-\/apple-icon\.png(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<link[^>]+rel="icon"[^>]+href="[^"]*\/metadata-dynamic-static\/-\/icon\.png(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<meta[^>]+property="og:image"[^>]+content="[^"]*\/metadata-dynamic-static\/-\/opengraph-image\.png(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<meta[^>]+name="twitter:image"[^>]+content="[^"]*\/metadata-dynamic-static\/-\/twitter-image\.png(?:\?[^"]+)?"[^>]*>/,
+    );
   });
 
   it("scanMetadataFiles discovers static favicon.ico at root", async () => {
@@ -2991,6 +3063,33 @@ describe("metadata routes integration (App Router)", () => {
     );
     expect(ogImage).toBeDefined();
     expect(ogImage!.isDynamic).toBe(true);
+  });
+
+  it("scanMetadataFiles discovers static metadata files in dynamic segments with placeholders", async () => {
+    const { scanMetadataFiles } = await import("../packages/vinext/src/server/metadata-routes.js");
+    const appDir = path.resolve(import.meta.dirname, "./fixtures/app-basic/app");
+    const routes = scanMetadataFiles(appDir);
+    const icon = routes.find(
+      (r: { type: string; servedUrl: string }) =>
+        r.type === "icon" && r.servedUrl === "/metadata-dynamic-static/-/icon.png",
+    );
+    expect(icon).toBeDefined();
+    expect(icon!.isDynamic).toBe(false);
+  });
+
+  it("serves static metadata files in dynamic segments from placeholder urls", async () => {
+    const res = await fetch(`${baseUrl}/metadata-dynamic-static/-/icon.png`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+  });
+
+  it("injects file-based metadata into not-found fallback pages", async () => {
+    const res = await fetch(`${baseUrl}/missing-metadata-page`);
+    expect(res.status).toBe(404);
+    const html = await res.text();
+    expect(html).toMatch(/<link[^>]+rel="icon"[^>]+href="[^"]*\/favicon\.ico(?:\?[^"]+)?"[^>]*>/);
+    expect(html).toMatch(/<link[^>]+rel="icon"[^>]+href="[^"]*\/icon(?:\?[^"]+)?"[^>]*>/);
+    expect(html).toMatch(/<link[^>]+rel="manifest"[^>]+href="[^"]*\/manifest\.webmanifest"[^>]*>/);
   });
 
   it("serves dynamic opengraph-image in dynamic segment with params", async () => {
