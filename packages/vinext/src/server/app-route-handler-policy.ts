@@ -64,6 +64,8 @@ export function isPossibleAppRouteActionRequest(
   return (
     request.headers.has("x-rsc-action") ||
     request.headers.has("next-action") ||
+    // Next.js uses strict equality here, so charset variants intentionally do
+    // not classify as action requests even though they are valid form posts.
     contentType === "application/x-www-form-urlencoded" ||
     contentType?.startsWith("multipart/form-data") === true
   );

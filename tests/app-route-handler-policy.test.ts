@@ -214,6 +214,22 @@ describe("app route handler policy helpers", () => {
     expect(
       isPossibleAppRouteActionRequest(
         new Request("https://example.com/api", {
+          method: "POST",
+          headers: { "next-action": "abc" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
           method: "GET",
           headers: { "content-type": "multipart/form-data; boundary=test" },
         }),

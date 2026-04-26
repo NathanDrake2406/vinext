@@ -29,9 +29,15 @@ export type HandleProgressiveServerActionRequestOptions = {
   setHeadersAccessPhase: (phase: HeadersAccessPhase) => HeadersAccessPhase;
 };
 
-type ActionRedirect = {
-  url: string;
-};
+type ActionControlResponse =
+  | {
+      kind: "redirect";
+      url: string;
+    }
+  | {
+      kind: "status";
+      statusCode: number;
+    };
 
 function isRequestBodyTooLarge(error: unknown): boolean {
   return error instanceof Error && error.message === "Request body too large";
@@ -45,25 +51,38 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-function getActionRedirect(error: unknown): ActionRedirect | null {
+function getActionControlResponse(error: unknown): ActionControlResponse | null {
   if (!error || typeof error !== "object" || !("digest" in error)) {
     return null;
   }
 
   const digest = String(error.digest);
-  if (!digest.startsWith("NEXT_REDIRECT;")) {
-    return null;
+  if (digest.startsWith("NEXT_REDIRECT;")) {
+    const parts = digest.split(";");
+    const encodedUrl = parts[2];
+    if (!encodedUrl) {
+      return null;
+    }
+
+    return {
+      kind: "redirect",
+      url: decodeURIComponent(encodedUrl),
+    };
   }
 
-  const parts = digest.split(";");
-  const encodedUrl = parts[2];
-  if (!encodedUrl) {
-    return null;
+  if (digest === "NEXT_NOT_FOUND" || digest.startsWith("NEXT_HTTP_ERROR_FALLBACK;")) {
+    const statusCode = digest === "NEXT_NOT_FOUND" ? 404 : parseInt(digest.split(";")[1], 10);
+    if (!Number.isInteger(statusCode)) {
+      return null;
+    }
+
+    return {
+      kind: "status",
+      statusCode,
+    };
   }
 
-  return {
-    url: decodeURIComponent(encodedUrl),
-  };
+  return null;
 }
 
 export function isProgressiveServerActionRequest(
@@ -71,7 +90,11 @@ export function isProgressiveServerActionRequest(
   contentType: string,
   actionId: string | null,
 ): boolean {
-  return request.method === "POST" && contentType.startsWith("multipart/form-data") && !actionId;
+  return (
+    request.method.toUpperCase() === "POST" &&
+    contentType.startsWith("multipart/form-data") &&
+    !actionId
+  );
 }
 
 export async function handleProgressiveServerActionRequest(
@@ -95,7 +118,13 @@ export async function handleProgressiveServerActionRequest(
   try {
     let body: FormData;
     try {
-      body = await options.readFormDataWithLimit(options.request, options.maxActionBodySize);
+      // Progressive submissions can still fall through to a regular page render when
+      // the multipart body is not an action payload. Read a clone so that fallback
+      // code can still consume the original request body.
+      body = await options.readFormDataWithLimit(
+        options.request.clone(),
+        options.maxActionBodySize,
+      );
     } catch (error) {
       if (isRequestBodyTooLarge(error)) {
         options.clearRequestContext();
@@ -115,20 +144,23 @@ export async function handleProgressiveServerActionRequest(
       return null;
     }
 
-    let actionRedirect: ActionRedirect | null = null;
+    let actionControlResponse: ActionControlResponse | null = null;
     const previousHeadersPhase = options.setHeadersAccessPhase("action");
     try {
       await action();
     } catch (error) {
-      actionRedirect = getActionRedirect(error);
-      if (!actionRedirect) {
+      actionControlResponse = getActionControlResponse(error);
+      if (!actionControlResponse) {
         throw error;
       }
     } finally {
       options.setHeadersAccessPhase(previousHeadersPhase);
     }
 
-    if (!actionRedirect) {
+    if (!actionControlResponse) {
+      // Next.js decodes form state and re-renders after a successful MPA action.
+      // vinext currently supports the redirect/error status cases; successful
+      // non-redirect actions intentionally fall through to the page render.
       return null;
     }
 
@@ -136,20 +168,27 @@ export async function handleProgressiveServerActionRequest(
     const actionDraftCookie = options.getDraftModeCookieHeader();
     options.clearRequestContext();
 
-    const redirectHeaders = new Headers({
-      Location: new URL(actionRedirect.url, options.request.url).toString(),
-    });
-    mergeMiddlewareResponseHeaders(redirectHeaders, options.middlewareHeaders);
+    const headers = new Headers();
+    if (actionControlResponse.kind === "redirect") {
+      headers.set("Location", new URL(actionControlResponse.url, options.request.url).toString());
+    }
+    mergeMiddlewareResponseHeaders(headers, options.middlewareHeaders);
     for (const cookie of actionPendingCookies) {
-      redirectHeaders.append("Set-Cookie", cookie);
+      headers.append("Set-Cookie", cookie);
     }
     if (actionDraftCookie) {
-      redirectHeaders.append("Set-Cookie", actionDraftCookie);
+      headers.append("Set-Cookie", actionDraftCookie);
     }
 
-    return new Response(null, { status: 303, headers: redirectHeaders });
+    return new Response(null, {
+      status: actionControlResponse.kind === "redirect" ? 303 : actionControlResponse.statusCode,
+      headers,
+    });
   } catch (error) {
     options.getAndClearPendingCookies();
+    // Next.js rethrows generic MPA action errors into its page render path.
+    // vinext does not yet implement that form-state render path, so unexpected
+    // action failures remain request failures here.
     console.error("[vinext] Server action error:", error);
     options.reportRequestError(
       normalizeError(error),

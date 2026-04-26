@@ -23,6 +23,17 @@ function createMultipartRequest(headers?: HeadersInit): Request {
   });
 }
 
+function createMultipartBodyRequest(body: FormData): Request {
+  return new Request("https://example.com/action-source", {
+    method: "POST",
+    body,
+    headers: {
+      host: "example.com",
+      origin: "https://example.com",
+    },
+  });
+}
+
 function createOptions(
   overrides: Partial<HandleProgressiveServerActionRequestOptions> = {},
 ): HandleProgressiveServerActionRequestOptions {
@@ -59,7 +70,7 @@ describe("app server action execution helpers", () => {
   it("identifies progressive multipart server action submissions", () => {
     expect(
       isProgressiveServerActionRequest(
-        { method: "POST" },
+        { method: "post" },
         "multipart/form-data; boundary=vinext",
         null,
       ),
@@ -86,6 +97,28 @@ describe("app server action execution helpers", () => {
     );
 
     expect(response).toBeNull();
+  });
+
+  it("returns null for non-action multipart posts without consuming the original body", async () => {
+    const formData = new FormData();
+    formData.set("field", "value");
+    const request = createMultipartBodyRequest(formData);
+
+    const response = await handleProgressiveServerActionRequest(
+      createOptions({
+        contentType: request.headers.get("content-type") ?? "",
+        async decodeAction() {
+          return null;
+        },
+        readFormDataWithLimit(readRequest) {
+          return readRequest.formData();
+        },
+        request,
+      }),
+    );
+
+    expect(response).toBeNull();
+    expect((await request.formData()).get("field")).toBe("value");
   });
 
   it("enforces content-length and stream body limits", async () => {
@@ -170,9 +203,64 @@ describe("app server action execution helpers", () => {
     expect(response?.status).toBe(303);
     expect(response?.headers.get("location")).toBe("https://example.com/result?ok=1");
     expect(response?.headers.get("x-middleware")).toBe("present");
-    expect(response?.headers.getSetCookie?.()).toEqual(["session=1; Path=/", "draft=1; Path=/"]);
+    expect(response?.headers.getSetCookie()).toEqual(["session=1; Path=/", "draft=1; Path=/"]);
     expect(phaseCalls).toEqual(["action", "render"]);
     expect(clearContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through after successful non-redirect actions without consuming the original body", async () => {
+    const formData = new FormData();
+    formData.set("$ACTION_ID_test", "");
+    formData.set("field", "value");
+    const request = createMultipartBodyRequest(formData);
+    let actionRan = false;
+
+    const response = await handleProgressiveServerActionRequest(
+      createOptions({
+        contentType: request.headers.get("content-type") ?? "",
+        async decodeAction() {
+          return () => {
+            actionRan = true;
+          };
+        },
+        readFormDataWithLimit(readRequest) {
+          return readRequest.formData();
+        },
+        request,
+      }),
+    );
+
+    expect(response).toBeNull();
+    expect(actionRan).toBe(true);
+    expect((await request.formData()).get("field")).toBe("value");
+  });
+
+  it("maps action HTTP fallback errors to status responses", async () => {
+    for (const [digest, statusCode] of [
+      ["NEXT_NOT_FOUND", 404],
+      ["NEXT_HTTP_ERROR_FALLBACK;403", 403],
+    ]) {
+      const clearContext = vi.fn();
+      const reportedErrors: Error[] = [];
+
+      const response = await handleProgressiveServerActionRequest(
+        createOptions({
+          clearRequestContext: clearContext,
+          async decodeAction() {
+            return () => {
+              throw { digest };
+            };
+          },
+          reportRequestError(error) {
+            reportedErrors.push(error);
+          },
+        }),
+      );
+
+      expect(response?.status).toBe(statusCode);
+      expect(reportedErrors).toEqual([]);
+      expect(clearContext).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("reports action execution failures and clears pending cookies", async () => {
