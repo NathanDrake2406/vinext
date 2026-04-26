@@ -1339,11 +1339,27 @@ describe("next/server shim", () => {
     expect(res.headers.get("Location")).toBe("https://example.com/new");
   });
 
+  // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
+  it("NextResponse.redirect() throws when using a relative URL", async () => {
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+
+    expect(() => NextResponse.redirect("/urls-b")).toThrow("URL is malformed");
+  });
+
   it("NextResponse.rewrite() sets x-middleware-rewrite header", async () => {
     const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
     const res = NextResponse.rewrite("https://example.com/internal");
 
     expect(res.headers.get("x-middleware-rewrite")).toBe("https://example.com/internal");
+  });
+
+  // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
+  it("NextResponse.rewrite() throws when using a relative URL", async () => {
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+
+    expect(() => NextResponse.rewrite("/urls-b")).toThrow("URL is malformed");
   });
 
   it("NextResponse.rewrite() forwards request header overrides", async () => {
@@ -5193,7 +5209,7 @@ describe("NextResponse.redirect() status codes", () => {
     const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
     const res = NextResponse.redirect("https://example.com", 301);
     expect(res.status).toBe(301);
-    expect(res.headers.get("Location")).toBe("https://example.com");
+    expect(res.headers.get("Location")).toBe("https://example.com/");
   });
 
   it("supports 302 Found", async () => {

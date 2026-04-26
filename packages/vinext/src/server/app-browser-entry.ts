@@ -76,6 +76,7 @@ import {
 } from "./app-browser-state.js";
 import { ElementsContext, Slot } from "../shims/slot.js";
 import { devOnCaughtError } from "./app-browser-error.js";
+import { DANGEROUS_URL_BLOCK_MESSAGE, isDangerousScheme } from "../shims/url-safety.js";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 
@@ -980,6 +981,11 @@ function registerServerActionCallback(): void {
 
     const actionRedirect = fetchResponse.headers.get("x-action-redirect");
     if (actionRedirect) {
+      if (isDangerousScheme(actionRedirect)) {
+        console.error(DANGEROUS_URL_BLOCK_MESSAGE);
+        return undefined;
+      }
+
       // Check for external URLs that need a hard redirect.
       try {
         const redirectUrl = new URL(actionRedirect, window.location.origin);
