@@ -124,6 +124,7 @@ async function resolveAppPageLayoutHead<TModule extends AppPageModule>(
   params: AppPageParams,
   routePath: string,
   metadataRoutes: MetadataFileRoute[],
+  route?: AppPageBoundaryRoute<TModule> | null,
 ): Promise<{ metadata: Metadata | null; viewport: Viewport }> {
   const filteredLayouts = layoutModules.filter(Boolean) as TModule[];
   const layoutMetadataPromises: Promise<Metadata | null>[] = [];
@@ -165,9 +166,24 @@ async function resolveAppPageLayoutHead<TModule extends AppPageModule>(
   const viewportList = viewportResults.filter(Boolean) as Viewport[];
 
   const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const routeSegments = route?.routeSegments ?? [];
+  const layoutTreePositions = route?.layoutTreePositions ?? [];
+  const metadataSources = metadataResults.map((metadata, index) => ({
+    routeSegments: routeSegments.slice(0, layoutTreePositions[index] ?? 0),
+    metadata,
+  }));
 
   return {
-    metadata: await applyFileBasedMetadata(resolvedMetadataBase, routePath, params, metadataRoutes),
+    metadata: await applyFileBasedMetadata(
+      resolvedMetadataBase,
+      routePath,
+      params,
+      metadataRoutes,
+      {
+        routeSegments,
+        metadataSources,
+      },
+    ),
     viewport: mergeViewport(viewportList),
   };
 }
@@ -331,6 +347,7 @@ export async function renderAppPageHttpAccessFallback<TModule extends AppPageMod
     options.matchedParams,
     options.route?.pattern ?? new URL(options.requestUrl).pathname,
     options.metadataRoutes,
+    options.route,
   );
 
   const headElements: ReactNode[] = [
@@ -390,6 +407,7 @@ export async function renderAppPageErrorBoundary<TModule extends AppPageModule>(
     matchedParams,
     options.route?.pattern ?? pathname,
     options.metadataRoutes,
+    options.route,
   );
 
   const headElements: ReactNode[] = [createElement("meta", { charSet: "utf-8", key: "charset" })];

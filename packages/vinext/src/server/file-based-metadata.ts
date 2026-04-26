@@ -36,6 +36,16 @@ type DynamicImageMetadataSource = {
   size?: DynamicImageSize;
 };
 
+type FileBasedMetadataSource = {
+  routeSegments: readonly string[];
+  metadata: Metadata | null;
+};
+
+type FileBasedMetadataOptions = {
+  routeSegments?: readonly string[] | null;
+  metadataSources?: readonly FileBasedMetadataSource[] | null;
+};
+
 function getRoutePrefix(route: MetadataFileRoute): string {
   return route.routePrefix;
 }
@@ -49,6 +59,31 @@ function routeApplies(routePath: string, routePrefix: string): boolean {
 
 function routeScore(routePrefix: string): number {
   return routePrefix.split("/").filter(Boolean).length;
+}
+
+function routeSegmentsApply(
+  routeSegments: readonly string[],
+  routePrefixSegments: readonly string[],
+): boolean {
+  if (routePrefixSegments.length > routeSegments.length) {
+    return false;
+  }
+
+  for (let index = 0; index < routePrefixSegments.length; index++) {
+    if (routeSegments[index] !== routePrefixSegments[index]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function routeSegmentsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && routeSegmentsApply(left, right);
+}
+
+function routeSpecificity(route: MetadataFileRoute): number {
+  return route.routeSegments?.length ?? routeScore(route.routePrefix);
 }
 
 function normalizeRoutePrefixPattern(routePrefix: string): string {
@@ -76,6 +111,7 @@ function selectDeepestRoutes(
   kind: MetadataRouteHeadData["kind"],
   routePath: string,
   params: AppPageParams,
+  routeSegments: readonly string[] | null | undefined,
 ): MetadataFileRoute[] {
   if (!metadataRoutes || metadataRoutes.length === 0) {
     return [];
@@ -108,6 +144,24 @@ function selectDeepestRoutes(
     const routePrefix = getRoutePrefix(route);
     const resolvedRoutePrefix = fillMetadataRouteSegments(routePrefix, params);
     const normalizedRoutePrefix = normalizeRoutePrefixPattern(routePrefix);
+    if (routeSegments && route.routeSegments) {
+      if (!routeSegmentsApply(routeSegments, route.routeSegments)) {
+        continue;
+      }
+      const currentScore = routeSpecificity(route);
+      if (currentScore > selectedScore) {
+        selectedScore = currentScore;
+        selectedRoutes.length = 0;
+        selectedRoutes.push(route);
+        continue;
+      }
+
+      if (currentScore === selectedScore) {
+        selectedRoutes.push(route);
+      }
+      continue;
+    }
+
     if (
       !routeApplies(routePath, routePrefix) &&
       !routeApplies(routePath, normalizedRoutePrefix) &&
@@ -116,7 +170,7 @@ function selectDeepestRoutes(
       continue;
     }
 
-    const currentScore = routeScore(routePrefix);
+    const currentScore = routeSpecificity(route);
     if (currentScore > selectedScore) {
       selectedScore = currentScore;
       selectedRoutes.length = 0;
@@ -318,6 +372,53 @@ function withContentHash(href: string, contentHash?: string): string {
   return `${href}?${contentHash}`;
 }
 
+function hasOwnProperty(source: object | null | undefined, key: string): boolean {
+  return Boolean(source && Object.prototype.hasOwnProperty.call(source, key));
+}
+
+function hasOpenGraphImages(metadata: Metadata | null | undefined): boolean {
+  return hasOwnProperty(metadata?.openGraph, "images");
+}
+
+function hasTwitterImages(metadata: Metadata | null | undefined): boolean {
+  return hasOwnProperty(metadata?.twitter, "images");
+}
+
+function getMetadataSourceForRoute(
+  route: MetadataFileRoute,
+  options: FileBasedMetadataOptions | undefined,
+  fallbackMetadata: Metadata | null,
+): Metadata | null {
+  if (!options?.metadataSources) {
+    return fallbackMetadata;
+  }
+
+  if (!route.routeSegments) {
+    return null;
+  }
+
+  for (let index = options.metadataSources.length - 1; index >= 0; index--) {
+    const source = options.metadataSources[index];
+    if (routeSegmentsEqual(source.routeSegments, route.routeSegments)) {
+      return source.metadata;
+    }
+  }
+
+  return null;
+}
+
+function socialRouteHasExplicitImagesAtSource(
+  route: MetadataFileRoute,
+  kind: "openGraph" | "twitter",
+  options: FileBasedMetadataOptions | undefined,
+  fallbackMetadata: Metadata | null,
+): boolean {
+  const sourceMetadata = getMetadataSourceForRoute(route, options, fallbackMetadata);
+  return kind === "openGraph"
+    ? hasOpenGraphImages(sourceMetadata)
+    : hasTwitterImages(sourceMetadata);
+}
+
 function readStringProperty(source: object, key: string): string | undefined {
   const value = Reflect.get(source, key);
   return typeof value === "string" ? value : undefined;
@@ -464,13 +565,45 @@ export async function applyFileBasedMetadata(
   routePath: string,
   params: AppPageParams,
   metadataRoutes: readonly MetadataFileRoute[] | null | undefined,
+  options?: FileBasedMetadataOptions,
 ): Promise<Metadata | null> {
-  const faviconRoutes = selectDeepestRoutes(metadataRoutes, "favicon", routePath, params);
-  const iconRoutes = selectDeepestRoutes(metadataRoutes, "icon", routePath, params);
-  const appleRoutes = selectDeepestRoutes(metadataRoutes, "apple", routePath, params);
-  const openGraphRoutes = selectDeepestRoutes(metadataRoutes, "openGraph", routePath, params);
-  const twitterRoutes = selectDeepestRoutes(metadataRoutes, "twitter", routePath, params);
-  const manifestRoutes = selectDeepestRoutes(metadataRoutes, "manifest", routePath, params);
+  const routeSegments = options?.routeSegments ?? null;
+  const faviconRoutes = selectDeepestRoutes(
+    metadataRoutes,
+    "favicon",
+    routePath,
+    params,
+    routeSegments,
+  );
+  const iconRoutes = selectDeepestRoutes(metadataRoutes, "icon", routePath, params, routeSegments);
+  const appleRoutes = selectDeepestRoutes(
+    metadataRoutes,
+    "apple",
+    routePath,
+    params,
+    routeSegments,
+  );
+  const openGraphRoutes = selectDeepestRoutes(
+    metadataRoutes,
+    "openGraph",
+    routePath,
+    params,
+    routeSegments,
+  ).filter((route) => !socialRouteHasExplicitImagesAtSource(route, "openGraph", options, metadata));
+  const twitterRoutes = selectDeepestRoutes(
+    metadataRoutes,
+    "twitter",
+    routePath,
+    params,
+    routeSegments,
+  ).filter((route) => !socialRouteHasExplicitImagesAtSource(route, "twitter", options, metadata));
+  const manifestRoutes = selectDeepestRoutes(
+    metadataRoutes,
+    "manifest",
+    routePath,
+    params,
+    routeSegments,
+  );
 
   const [
     faviconHeadData,
@@ -500,7 +633,7 @@ export async function applyFileBasedMetadata(
     return null;
   }
 
-  const nextMetadata: Metadata = metadata ? structuredClone(metadata) : {};
+  const nextMetadata: Metadata = metadata ? { ...metadata } : {};
   const hadExplicitIcons = Boolean(metadata?.icons);
 
   const faviconEntries: IconEntry[] = [];
@@ -552,7 +685,7 @@ export async function applyFileBasedMetadata(
     }
   }
 
-  if (!nextMetadata.openGraph?.images && openGraphHeadData.length > 0) {
+  if (openGraphHeadData.length > 0) {
     const socialEntries: SocialImageEntry[] = [];
     for (const headData of openGraphHeadData) {
       const socialEntry = buildSocialEntry(headData);
@@ -569,7 +702,7 @@ export async function applyFileBasedMetadata(
     }
   }
 
-  if (!nextMetadata.twitter?.images && twitterHeadData.length > 0) {
+  if (twitterHeadData.length > 0) {
     const socialEntries: SocialImageEntry[] = [];
     for (const headData of twitterHeadData) {
       const socialEntry = buildSocialEntry(headData);
@@ -586,11 +719,7 @@ export async function applyFileBasedMetadata(
     }
   }
 
-  if (
-    !nextMetadata.manifest &&
-    manifestHeadData.length > 0 &&
-    manifestHeadData[0].kind === "manifest"
-  ) {
+  if (manifestHeadData.length > 0 && manifestHeadData[0].kind === "manifest") {
     nextMetadata.manifest = manifestHeadData[0].href;
   }
 

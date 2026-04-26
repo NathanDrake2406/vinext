@@ -354,6 +354,8 @@ export type MetadataFileRoute = {
   filePath: string;
   /** Route prefix where this metadata applies, preserving dynamic segment names. */
   routePrefix: string;
+  /** Raw app tree segments where this metadata file is colocated. */
+  routeSegments?: string[];
   /** Pattern parts for matching dynamic metadata routes at request time. */
   patternParts?: string[];
   /** URL path this file is served at */
@@ -364,6 +366,8 @@ export type MetadataFileRoute = {
   headData?: MetadataRouteHeadData;
   /** Optional content hash for cache-busting metadata links. */
   contentHash?: string;
+  /** Sibling .alt.txt file for static social image metadata routes. */
+  altFilePath?: string;
 };
 
 export type MetadataRouteHeadData =
@@ -505,16 +509,22 @@ export function scanMetadataFiles(appDir: string): MetadataFileRoute[] {
         const servedPrefix = isStatic
           ? replaceDynamicSegmentsWithPlaceholder(urlPrefix)
           : urlPrefix;
+        const altFilePath =
+          isStatic && (metaType === "opengraph-image" || metaType === "twitter-image")
+            ? resolveStaticMetadataAltFilePath(dir, baseName)
+            : undefined;
 
         routes.push({
           type: metaType,
           isDynamic,
           filePath: path.join(dir, fileName),
           routePrefix: urlPrefix,
+          routeSegments: parentSegments,
           servedUrl: servedPrefix === "" ? urlPath : `${servedPrefix}${urlPath}`,
           contentType: isStatic
             ? getStaticContentType(ext, config.contentType)
             : config.contentType,
+          altFilePath,
         });
       }
     }
@@ -536,6 +546,11 @@ export function scanMetadataFiles(appDir: string): MetadataFileRoute[] {
     // If both are static or both dynamic, keep the first one found
   }
   return Array.from(byUrl.values());
+}
+
+function resolveStaticMetadataAltFilePath(dir: string, baseName: string): string | undefined {
+  const altPath = path.join(dir, `${baseName}.alt.txt`);
+  return fs.existsSync(altPath) ? altPath : undefined;
 }
 
 function getStaticContentType(ext: string, fallback: string): string {

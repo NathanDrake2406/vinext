@@ -2914,7 +2914,13 @@ describe("metadata routes integration (App Router)", () => {
       /<meta[^>]+property="og:image"[^>]+content="[^"]*\/metadata-static\/opengraph-image\.png(?:\?[^"]+)?"[^>]*>/,
     );
     expect(html).toMatch(
+      /<meta[^>]+property="og:image:alt"[^>]+content="Static OG image alt text[^"]*"[^>]*>/,
+    );
+    expect(html).toMatch(
       /<meta[^>]+name="twitter:image"[^>]+content="[^"]*\/metadata-static\/twitter-image\.png(?:\?[^"]+)?"[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<meta[^>]+name="twitter:image:alt"[^>]+content="Static Twitter image alt text[^"]*"[^>]*>/,
     );
     expect(html).toMatch(/<link[^>]+rel="manifest"[^>]+href="[^"]*\/manifest\.webmanifest"[^>]*>/);
   });

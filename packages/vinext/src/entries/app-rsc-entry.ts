@@ -101,6 +101,18 @@ function readMetadataRouteFile(route: MetadataFileRoute): Buffer {
   }
 }
 
+function readMetadataRouteTextFile(filePath: string, route: MetadataFileRoute): string {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    const reason = error instanceof Error && error.message ? `: ${error.message}` : "";
+    throw new Error(
+      `[vinext] Failed to read metadata route file ${filePath} for ${route.servedUrl}${reason}`,
+      { cause: error },
+    );
+  }
+}
+
 function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): string | null {
   if (route.type === "manifest") {
     return `{ kind: "manifest", href: ${JSON.stringify(route.servedUrl)} }`;
@@ -123,6 +135,9 @@ function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): s
     route.contentType === "image/svg+xml" || route.servedUrl.toLowerCase().endsWith(".svg");
   if (route.contentType) {
     properties.push(`type: ${JSON.stringify(route.contentType)}`);
+  }
+  if ((route.type === "opengraph-image" || route.type === "twitter-image") && route.altFilePath) {
+    properties.push(`alt: ${JSON.stringify(readMetadataRouteTextFile(route.altFilePath, route))}`);
   }
 
   try {
@@ -392,6 +407,7 @@ ${slotEntries.join(",\n")}
     type: ${JSON.stringify(mr.type)},
     isDynamic: true,
     routePrefix: ${JSON.stringify(mr.routePrefix)},
+    routeSegments: ${JSON.stringify(mr.routeSegments ?? [])},
     servedUrl: ${JSON.stringify(mr.servedUrl)},
     contentType: ${JSON.stringify(mr.contentType)},
     contentHash: ${contentHashCode},
@@ -411,6 +427,7 @@ ${slotEntries.join(",\n")}
     type: ${JSON.stringify(mr.type)},
     isDynamic: false,
     routePrefix: ${JSON.stringify(mr.routePrefix)},
+    routeSegments: ${JSON.stringify(mr.routeSegments ?? [])},
     servedUrl: ${JSON.stringify(mr.servedUrl)},
     contentType: ${JSON.stringify(mr.contentType)},
     contentHash: ${contentHashCode},
@@ -1207,11 +1224,26 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
   const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
   const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const metadataSources = layoutMetaResults.map(function(result, index) {
+    const treePosition = route.layoutTreePositions[index] ?? 0;
+    return {
+      routeSegments: route.routeSegments.slice(0, treePosition),
+      metadata: result,
+    };
+  });
+  metadataSources.push({
+    routeSegments: route.routeSegments,
+    metadata: pageMeta,
+  });
   const resolvedMetadata = await applyFileBasedMetadata(
     resolvedMetadataBase,
     route.pattern,
     params,
     metadataRoutes,
+    {
+      routeSegments: route.routeSegments,
+      metadataSources,
+    },
   );
   const resolvedViewport = mergeViewport(viewportList);
 

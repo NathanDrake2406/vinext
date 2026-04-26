@@ -849,11 +849,26 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
   const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
   const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const metadataSources = layoutMetaResults.map(function(result, index) {
+    const treePosition = route.layoutTreePositions[index] ?? 0;
+    return {
+      routeSegments: route.routeSegments.slice(0, treePosition),
+      metadata: result,
+    };
+  });
+  metadataSources.push({
+    routeSegments: route.routeSegments,
+    metadata: pageMeta,
+  });
   const resolvedMetadata = await applyFileBasedMetadata(
     resolvedMetadataBase,
     route.pattern,
     params,
     metadataRoutes,
+    {
+      routeSegments: route.routeSegments,
+      metadataSources,
+    },
   );
   const resolvedViewport = mergeViewport(viewportList);
 
@@ -3230,11 +3245,26 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
   const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
   const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const metadataSources = layoutMetaResults.map(function(result, index) {
+    const treePosition = route.layoutTreePositions[index] ?? 0;
+    return {
+      routeSegments: route.routeSegments.slice(0, treePosition),
+      metadata: result,
+    };
+  });
+  metadataSources.push({
+    routeSegments: route.routeSegments,
+    metadata: pageMeta,
+  });
   const resolvedMetadata = await applyFileBasedMetadata(
     resolvedMetadataBase,
     route.pattern,
     params,
     metadataRoutes,
+    {
+      routeSegments: route.routeSegments,
+      metadataSources,
+    },
   );
   const resolvedViewport = mergeViewport(viewportList);
 
@@ -5618,11 +5648,26 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
   const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
   const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const metadataSources = layoutMetaResults.map(function(result, index) {
+    const treePosition = route.layoutTreePositions[index] ?? 0;
+    return {
+      routeSegments: route.routeSegments.slice(0, treePosition),
+      metadata: result,
+    };
+  });
+  metadataSources.push({
+    routeSegments: route.routeSegments,
+    metadata: pageMeta,
+  });
   const resolvedMetadata = await applyFileBasedMetadata(
     resolvedMetadataBase,
     route.pattern,
     params,
     metadataRoutes,
+    {
+      routeSegments: route.routeSegments,
+      metadataSources,
+    },
   );
   const resolvedViewport = mergeViewport(viewportList);
 
@@ -8029,11 +8074,26 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
   const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
   const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const metadataSources = layoutMetaResults.map(function(result, index) {
+    const treePosition = route.layoutTreePositions[index] ?? 0;
+    return {
+      routeSegments: route.routeSegments.slice(0, treePosition),
+      metadata: result,
+    };
+  });
+  metadataSources.push({
+    routeSegments: route.routeSegments,
+    metadata: pageMeta,
+  });
   const resolvedMetadata = await applyFileBasedMetadata(
     resolvedMetadataBase,
     route.pattern,
     params,
     metadataRoutes,
+    {
+      routeSegments: route.routeSegments,
+      metadataSources,
+    },
   );
   const resolvedViewport = mergeViewport(viewportList);
 
@@ -10110,6 +10170,7 @@ const metadataRoutes = [
     type: "sitemap",
     isDynamic: true,
     routePrefix: "",
+    routeSegments: [],
     servedUrl: "/sitemap.xml",
     contentType: "application/xml",
     contentHash: "241a6c01e81ba42e",
@@ -10422,11 +10483,26 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
   const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
   const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const metadataSources = layoutMetaResults.map(function(result, index) {
+    const treePosition = route.layoutTreePositions[index] ?? 0;
+    return {
+      routeSegments: route.routeSegments.slice(0, treePosition),
+      metadata: result,
+    };
+  });
+  metadataSources.push({
+    routeSegments: route.routeSegments,
+    metadata: pageMeta,
+  });
   const resolvedMetadata = await applyFileBasedMetadata(
     resolvedMetadataBase,
     route.pattern,
     params,
     metadataRoutes,
+    {
+      routeSegments: route.routeSegments,
+      metadataSources,
+    },
   );
   const resolvedViewport = mergeViewport(viewportList);
 
@@ -12803,11 +12879,26 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
   const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
   const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
+  const metadataSources = layoutMetaResults.map(function(result, index) {
+    const treePosition = route.layoutTreePositions[index] ?? 0;
+    return {
+      routeSegments: route.routeSegments.slice(0, treePosition),
+      metadata: result,
+    };
+  });
+  metadataSources.push({
+    routeSegments: route.routeSegments,
+    metadata: pageMeta,
+  });
   const resolvedMetadata = await applyFileBasedMetadata(
     resolvedMetadataBase,
     route.pattern,
     params,
     metadataRoutes,
+    {
+      routeSegments: route.routeSegments,
+      metadataSources,
+    },
   );
   const resolvedViewport = mergeViewport(viewportList);
 
