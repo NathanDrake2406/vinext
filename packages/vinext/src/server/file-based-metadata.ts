@@ -145,6 +145,8 @@ function selectDeepestRoutes(
     const resolvedRoutePrefix = fillMetadataRouteSegments(routePrefix, params);
     const normalizedRoutePrefix = normalizeRoutePrefixPattern(routePrefix);
     if (routeSegments && route.routeSegments) {
+      // Raw app-tree segments are authoritative when present. Falling back to
+      // visible URL prefixes here would reintroduce route-group collisions.
       if (!routeSegmentsApply(routeSegments, route.routeSegments)) {
         continue;
       }

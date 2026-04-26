@@ -450,11 +450,7 @@ function replaceDynamicSegmentsWithPlaceholder(urlPrefix: string): string {
     .split("/")
     .filter(Boolean)
     .map((segment) => {
-      if (
-        (segment.startsWith("[") && segment.endsWith("]")) ||
-        (segment.startsWith("[...") && segment.endsWith("]")) ||
-        (segment.startsWith("[[...") && segment.endsWith("]]"))
-      ) {
+      if (segment.startsWith("[") && segment.endsWith("]")) {
         return "-";
       }
       return segment;

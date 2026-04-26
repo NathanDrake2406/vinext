@@ -46,9 +46,26 @@ describe("applyFileBasedMetadata", () => {
   });
 
   it("lets a leaf file image replace inherited parent Open Graph images", async () => {
-    const parentMetadata: Metadata = { openGraph: { images: ["/parent-og.png"] } };
+    const parentMetadata: Metadata = {
+      openGraph: {
+        description: "Parent description",
+        images: ["/parent-og.png"],
+        siteName: "Parent site",
+        title: "Parent title",
+        type: "article",
+      },
+    };
     const leafMetadata: Metadata = { title: "Blog" };
-    const mergedMetadata: Metadata = { title: "Blog", openGraph: { images: ["/parent-og.png"] } };
+    const mergedMetadata: Metadata = {
+      title: "Blog",
+      openGraph: {
+        description: "Parent description",
+        images: ["/parent-og.png"],
+        siteName: "Parent site",
+        title: "Parent title",
+        type: "article",
+      },
+    };
     const routes: MetadataFileRoute[] = [
       {
         type: "opengraph-image",
@@ -73,6 +90,10 @@ describe("applyFileBasedMetadata", () => {
     expect(result?.openGraph?.images).toEqual([
       { url: "/blog/opengraph-image.png?hash", type: "image/png", width: 1200, height: 630 },
     ]);
+    expect(result?.openGraph?.description).toBe("Parent description");
+    expect(result?.openGraph?.siteName).toBe("Parent site");
+    expect(result?.openGraph?.title).toBe("Parent title");
+    expect(result?.openGraph?.type).toBe("article");
   });
 
   it("keeps same-segment explicit Open Graph images ahead of file images", async () => {
