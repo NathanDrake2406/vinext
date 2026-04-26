@@ -89,6 +89,18 @@ function createMetadataContentHash(buffer: Buffer): string {
   return createHash("sha1").update(buffer).digest("hex").slice(0, 16);
 }
 
+function readMetadataRouteFile(route: MetadataFileRoute): Buffer {
+  try {
+    return fs.readFileSync(route.filePath);
+  } catch (error) {
+    const reason = error instanceof Error && error.message ? `: ${error.message}` : "";
+    throw new Error(
+      `[vinext] Failed to read metadata route file ${route.filePath} for ${route.servedUrl}${reason}`,
+      { cause: error },
+    );
+  }
+}
+
 function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): string | null {
   if (route.type === "manifest") {
     return `{ kind: "manifest", href: ${JSON.stringify(route.servedUrl)} }`;
@@ -371,12 +383,7 @@ ${slotEntries.join(",\n")}
         : null;
 
     if (mr.isDynamic) {
-      let contentHashCode = "undefined";
-      try {
-        contentHashCode = JSON.stringify(createMetadataContentHash(fs.readFileSync(mr.filePath)));
-      } catch {
-        // File unreadable — omit content hash for head injection.
-      }
+      const contentHashCode = JSON.stringify(createMetadataContentHash(readMetadataRouteFile(mr)));
       const headDataCode =
         mr.type === "manifest"
           ? `\n    headData: { kind: "manifest", href: ${JSON.stringify(mr.servedUrl)} },`
@@ -392,19 +399,13 @@ ${slotEntries.join(",\n")}
   }`;
     }
     // Static: read file and embed as base64
-    let fileDataBase64 = "";
     let headDataCode = "null";
-    let contentHashCode = "undefined";
-    try {
-      const buf = fs.readFileSync(mr.filePath);
-      fileDataBase64 = buf.toString("base64");
-      contentHashCode = JSON.stringify(createMetadataContentHash(buf));
-      const resolvedHeadDataCode = createMetadataHeadDataCode(mr, buf);
-      if (resolvedHeadDataCode) {
-        headDataCode = resolvedHeadDataCode;
-      }
-    } catch {
-      // File unreadable — will serve empty response at runtime
+    const buf = readMetadataRouteFile(mr);
+    const fileDataBase64 = buf.toString("base64");
+    const contentHashCode = JSON.stringify(createMetadataContentHash(buf));
+    const resolvedHeadDataCode = createMetadataHeadDataCode(mr, buf);
+    if (resolvedHeadDataCode) {
+      headDataCode = resolvedHeadDataCode;
     }
     return `  {
     type: ${JSON.stringify(mr.type)},

@@ -123,6 +123,7 @@ const minimalAppRoutes: AppRoute[] = [
 // Pages Router snapshots below. Run `pnpm test tests/entry-templates.test.ts -u`
 // to update them after intentional fixture changes.
 const PAGES_FIXTURE_DIR = path.resolve(import.meta.dirname, "./fixtures/pages-basic");
+const APP_FIXTURE_DIR = path.resolve(import.meta.dirname, "./fixtures/app-basic/app");
 
 // ── App Router entry templates ────────────────────────────────────────
 
@@ -216,7 +217,7 @@ describe("App Router entry templates", () => {
       {
         type: "sitemap",
         isDynamic: true,
-        filePath: "/tmp/test/app/sitemap.ts",
+        filePath: path.join(APP_FIXTURE_DIR, "sitemap.ts"),
         routePrefix: "",
         servedUrl: "/sitemap.xml",
         contentType: "application/xml",
@@ -232,6 +233,40 @@ describe("App Router entry templates", () => {
       false,
     );
     expect(stabilize(code)).toMatchSnapshot();
+  });
+
+  it("generateRscEntry fails with a path-specific error when a static metadata file cannot be read", () => {
+    const metadataRoutes: MetadataFileRoute[] = [
+      {
+        type: "icon",
+        isDynamic: false,
+        filePath: "/tmp/test/app/missing-icon.png",
+        routePrefix: "",
+        servedUrl: "/icon.png",
+        contentType: "image/png",
+      },
+    ];
+
+    expect(() =>
+      generateRscEntry("/tmp/test/app", minimalAppRoutes, null, metadataRoutes, null, "", false),
+    ).toThrow("[vinext] Failed to read metadata route file /tmp/test/app/missing-icon.png");
+  });
+
+  it("generateRscEntry fails with a path-specific error when a dynamic metadata file hash cannot be read", () => {
+    const metadataRoutes: MetadataFileRoute[] = [
+      {
+        type: "icon",
+        isDynamic: true,
+        filePath: "/tmp/test/app/missing-icon.tsx",
+        routePrefix: "",
+        servedUrl: "/icon",
+        contentType: "image/png",
+      },
+    ];
+
+    expect(() =>
+      generateRscEntry("/tmp/test/app", minimalAppRoutes, null, metadataRoutes, null, "", false),
+    ).toThrow("[vinext] Failed to read metadata route file /tmp/test/app/missing-icon.tsx");
   });
 
   it("generateRscEntry uses buildPageElements in the server-action re-render path", () => {

@@ -9979,7 +9979,7 @@ import * as mod_7 from "/tmp/test/app/dashboard/template.tsx";
 import * as mod_8 from "/tmp/test/app/dashboard/loading.tsx";
 import * as mod_9 from "/tmp/test/app/dashboard/error.tsx";
 import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
-import * as mod_11 from "/tmp/test/app/sitemap.ts";
+import * as mod_11 from "<ROOT>/tests/fixtures/app-basic/app/sitemap.ts";
 
 
 
@@ -10112,7 +10112,7 @@ const metadataRoutes = [
     routePrefix: "",
     servedUrl: "/sitemap.xml",
     contentType: "application/xml",
-    contentHash: undefined,
+    contentHash: "241a6c01e81ba42e",
     module: mod_11,
   }
 ];
