@@ -390,6 +390,18 @@ export type MetadataRouteHeadData =
       href: string;
     };
 
+export function getMetadataRouteKind(
+  route: Pick<MetadataFileRoute, "type">,
+): MetadataRouteHeadData["kind"] | null {
+  if (route.type === "favicon") return "favicon";
+  if (route.type === "icon") return "icon";
+  if (route.type === "apple-icon") return "apple";
+  if (route.type === "opengraph-image") return "openGraph";
+  if (route.type === "twitter-image") return "twitter";
+  if (route.type === "manifest") return "manifest";
+  return null;
+}
+
 function metadataRouteSuffix(parentSegments: string[], metaType: string): string {
   if (metaType === "sitemap" || metaType === "robots" || metaType === "manifest") {
     // Sitemap is exempt per Next.js. Robots and manifest are also safe to

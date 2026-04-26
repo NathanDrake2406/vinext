@@ -1,5 +1,9 @@
 import type { Metadata } from "../shims/metadata.js";
-import type { MetadataFileRoute, MetadataRouteHeadData } from "./metadata-routes.js";
+import {
+  getMetadataRouteKind,
+  type MetadataFileRoute,
+  type MetadataRouteHeadData,
+} from "./metadata-routes.js";
 
 type AppPageParams = Record<string, string | string[]>;
 
@@ -121,21 +125,7 @@ function selectDeepestRoutes(
   const selectedRoutes: MetadataFileRoute[] = [];
 
   for (const route of metadataRoutes) {
-    const routeKind =
-      route.headData?.kind ??
-      (route.type === "icon"
-        ? "icon"
-        : route.type === "apple-icon"
-          ? "apple"
-          : route.type === "opengraph-image"
-            ? "openGraph"
-            : route.type === "twitter-image"
-              ? "twitter"
-              : route.type === "manifest"
-                ? "manifest"
-                : route.type === "favicon"
-                  ? "favicon"
-                  : null);
+    const routeKind = route.headData?.kind ?? getMetadataRouteKind(route);
 
     if (routeKind !== kind) {
       continue;
@@ -507,6 +497,7 @@ async function resolveRouteHeadData(
     return route.headData ? [route.headData] : [];
   }
 
+  // servedUrl must stay query-free here; content hashes are appended after dynamic segment filling.
   const resolvedUrl = fillMetadataRouteSegments(route.servedUrl, params);
   const metadataSources = await resolveDynamicImageMetadataSources(route, params);
   const resolvedHeadData: MetadataRouteHeadData[] = [];
@@ -682,7 +673,7 @@ export async function applyFileBasedMetadata(
       nextIcons.apple = appleEntries;
     }
 
-    if (nextIcons.icon || nextIcons.apple) {
+    if (iconEntries.length > 0 || appleEntries.length > 0) {
       nextMetadata.icons = nextIcons;
     }
   }

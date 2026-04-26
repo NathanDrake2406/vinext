@@ -1512,6 +1512,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: { "Content-Type": metaRoute.contentType },
         });
       }
+      console.warn("[vinext] Dynamic metadata route " + metaRoute.servedUrl + " has no default export.");
+      return new Response("Not Found", { status: 404 });
     } else {
       // Static metadata file — decode from embedded base64 data
       try {
@@ -3914,6 +3916,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: { "Content-Type": metaRoute.contentType },
         });
       }
+      console.warn("[vinext] Dynamic metadata route " + metaRoute.servedUrl + " has no default export.");
+      return new Response("Not Found", { status: 404 });
     } else {
       // Static metadata file — decode from embedded base64 data
       try {
@@ -6311,6 +6315,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: { "Content-Type": metaRoute.contentType },
         });
       }
+      console.warn("[vinext] Dynamic metadata route " + metaRoute.servedUrl + " has no default export.");
+      return new Response("Not Found", { status: 404 });
     } else {
       // Static metadata file — decode from embedded base64 data
       try {
@@ -8740,6 +8746,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: { "Content-Type": metaRoute.contentType },
         });
       }
+      console.warn("[vinext] Dynamic metadata route " + metaRoute.servedUrl + " has no default export.");
+      return new Response("Not Found", { status: 404 });
     } else {
       // Static metadata file — decode from embedded base64 data
       try {
@@ -11146,6 +11154,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: { "Content-Type": metaRoute.contentType },
         });
       }
+      console.warn("[vinext] Dynamic metadata route " + metaRoute.servedUrl + " has no default export.");
+      return new Response("Not Found", { status: 404 });
     } else {
       // Static metadata file — decode from embedded base64 data
       try {
@@ -13909,6 +13919,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: { "Content-Type": metaRoute.contentType },
         });
       }
+      console.warn("[vinext] Dynamic metadata route " + metaRoute.servedUrl + " has no default export.");
+      return new Response("Not Found", { status: 404 });
     } else {
       // Static metadata file — decode from embedded base64 data
       try {

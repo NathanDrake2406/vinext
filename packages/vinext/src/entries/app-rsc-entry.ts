@@ -19,7 +19,7 @@ import type {
 } from "../config/next-config.js";
 import type { AppRoute } from "../routing/app-router.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
-import type { MetadataFileRoute } from "../server/metadata-routes.js";
+import { getMetadataRouteKind, type MetadataFileRoute } from "../server/metadata-routes.js";
 import {
   generateMiddlewareMatcherCode,
   generateNormalizePathCode,
@@ -118,13 +118,8 @@ function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): s
     return `{ kind: "manifest", href: ${JSON.stringify(route.servedUrl)} }`;
   }
 
-  if (
-    route.type !== "favicon" &&
-    route.type !== "icon" &&
-    route.type !== "apple-icon" &&
-    route.type !== "opengraph-image" &&
-    route.type !== "twitter-image"
-  ) {
+  const routeKind = getMetadataRouteKind(route);
+  if (!routeKind || routeKind === "manifest") {
     return null;
   }
 
@@ -136,13 +131,13 @@ function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): s
   if (route.contentType) {
     properties.push(`type: ${JSON.stringify(route.contentType)}`);
   }
-  if ((route.type === "opengraph-image" || route.type === "twitter-image") && route.altFilePath) {
+  if ((routeKind === "openGraph" || routeKind === "twitter") && route.altFilePath) {
     properties.push(`alt: ${JSON.stringify(readMetadataRouteTextFile(route.altFilePath, route))}`);
   }
 
   try {
     const dimensions = imageSize(buffer);
-    if (route.type === "favicon" || route.type === "icon" || route.type === "apple-icon") {
+    if (routeKind === "favicon" || routeKind === "icon" || routeKind === "apple") {
       if (isSvgRoute) {
         properties.push(`sizes: ${JSON.stringify("any")}`);
       } else if (dimensions.width && dimensions.height) {
@@ -159,20 +154,12 @@ function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): s
       }
     }
   } catch {
-    if (route.type === "favicon" || route.type === "icon" || route.type === "apple-icon") {
+    if (routeKind === "favicon" || routeKind === "icon" || routeKind === "apple") {
       properties.push(`sizes: ${JSON.stringify("any")}`);
     }
   }
 
-  const kind =
-    route.type === "apple-icon"
-      ? "apple"
-      : route.type === "opengraph-image"
-        ? "openGraph"
-        : route.type === "twitter-image"
-          ? "twitter"
-          : route.type;
-  return `{ kind: ${JSON.stringify(kind)}, ${properties.join(", ")} }`;
+  return `{ kind: ${JSON.stringify(routeKind)}, ${properties.join(", ")} }`;
 }
 
 /**
@@ -1938,6 +1925,8 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           headers: { "Content-Type": metaRoute.contentType },
         });
       }
+      console.warn("[vinext] Dynamic metadata route " + metaRoute.servedUrl + " has no default export.");
+      return new Response("Not Found", { status: 404 });
     } else {
       // Static metadata file — decode from embedded base64 data
       try {
