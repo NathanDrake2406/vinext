@@ -168,6 +168,52 @@ test.describe("Next.js compat: router.back / router.forward pending state", () =
     ).toBe(-1);
   });
 
+  test("one-entry-deep router.back(); router.back(); only arms the real traversal", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/nextjs-compat/router-back-forward-pending`);
+    await waitForAppRouterHydration(page);
+    await expect(page.locator("#page-a-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.click("#push-to-destination");
+    await expect(page.locator("#page-b-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any;
+      const originalArm = window.__VINEXT_ARM_TRAVERSAL_PENDING__;
+      const originalBack = window.history.back.bind(window.history);
+      w.__vinextTraversalArmCount = 0;
+      w.__vinextHistoryBackCount = 0;
+      window.__VINEXT_ARM_TRAVERSAL_PENDING__ = () => {
+        w.__vinextTraversalArmCount += 1;
+        originalArm?.();
+      };
+      window.history.back = () => {
+        w.__vinextHistoryBackCount += 1;
+        if (w.__vinextHistoryBackCount === 1) {
+          originalBack();
+        }
+      };
+    });
+
+    await page.click("#router-double-back-btn", { noWaitAfter: true });
+
+    await expect(page.locator("#page-a-marker")).toBeVisible({ timeout: 10_000 });
+    await expect
+      .poll(() => page.evaluate(() => window.location.pathname))
+      .toBe("/nextjs-compat/router-back-forward-pending");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const w = window as any;
+          return w.__vinextTraversalArmCount;
+        }),
+      )
+      .toBe(1);
+  });
+
   test("router.back() then router.forward() round-trips cleanly across separate clicks", async ({
     page,
   }) => {

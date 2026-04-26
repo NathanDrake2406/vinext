@@ -138,10 +138,12 @@ function isRouterStatePromise(
 let setBrowserRouterState: Dispatch<AppRouterState | Promise<AppRouterState>> | null = null;
 let browserRouterStateRef: { current: AppRouterState } | null = null;
 let activePendingBrowserRouterState: PendingBrowserRouterState | null = null;
-// FIFO queue of pendings armed by router.back() / router.forward(), separate
-// from activePendingBrowserRouterState (used by push/replace/refresh). Keeps
-// each traversal popstate adopting only the pending its own arm hook created,
-// even when push/replace/refresh runs in between.
+// FIFO queue of pendings armed by router.back() / router.forward().
+// Push/replace/refresh use activePendingBrowserRouterState instead, so a
+// popstate cannot accidentally adopt a regular navigation's pending. The
+// queue owns adoption order only; React still has one router useState slot,
+// so dispatchBrowserTree resolves the adopted promise and then writes the
+// concrete reducer result to converge that slot after overlapping work.
 const traversalPendingQueue: PendingBrowserRouterState[] = [];
 let latestClientParams: Record<string, string | string[]> = {};
 const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
@@ -711,11 +713,12 @@ function dispatchBrowserTree(
   };
 
   const applyAction = () => {
-    // Resolve the adopted pending and also write concrete state. Resolve
-    // first so any `use(pending.promise)`-suspended render unsuspends in the
-    // same commit the setter targets. The unconditional setter heals slot
-    // races where an earlier navigation's stale-id finally settled the
-    // pending React's slot was bound to.
+    // Resolve the adopted promise, then publish the concrete reducer result.
+    // Example: router.back() arms p1, router.forward() arms p2, and the p1
+    // popstate commits after p2 already replaced the React slot. Resolving p1
+    // completes the transition that owns it; the direct setter keeps the slot
+    // converged on the newest reducer state instead of whichever promise was
+    // most recently installed.
     resolvePendingBrowserRouterState(pendingRouterState, action);
     setter(routerReducer(getBrowserRouterState(), action));
   };

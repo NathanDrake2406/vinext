@@ -1243,6 +1243,9 @@ export async function navigateClientSide(
 type BrowserNavigationTraversalHints = {
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
+  readonly currentEntryKey: string | null;
+  readonly currentEntryIndex: number | null;
+  readonly entries: readonly BrowserNavigationHistoryEntry[] | null;
 };
 
 type WindowWithNavigationProperty = {
@@ -1254,6 +1257,23 @@ type BrowserNavigationTraversalHintFields = {
   readonly canGoForward: unknown;
 };
 
+type BrowserNavigationEntryListFields = {
+  readonly currentEntry: unknown;
+  readonly entries: () => unknown;
+};
+
+type BrowserNavigationHistoryEntry = {
+  readonly index: number;
+  readonly key: string;
+  readonly sameDocument: boolean;
+};
+
+type BrowserNavigationHistoryEntryFields = {
+  readonly index: unknown;
+  readonly key: unknown;
+  readonly sameDocument: unknown;
+};
+
 function hasNavigationProperty(value: object): value is WindowWithNavigationProperty {
   return "navigation" in value;
 }
@@ -1262,17 +1282,99 @@ function hasTraversalHintFields(value: object): value is BrowserNavigationTraver
   return "canGoBack" in value && "canGoForward" in value;
 }
 
+function hasEntryListFields(value: object): value is BrowserNavigationEntryListFields {
+  return "currentEntry" in value && "entries" in value && typeof value.entries === "function";
+}
+
+function hasHistoryEntryFields(value: object): value is BrowserNavigationHistoryEntryFields {
+  return "index" in value && "key" in value && "sameDocument" in value;
+}
+
+function readBrowserNavigationHistoryEntry(entry: unknown): BrowserNavigationHistoryEntry | null {
+  if (!entry || typeof entry !== "object") return null;
+  if (!hasHistoryEntryFields(entry)) return null;
+  const { index, key, sameDocument } = entry;
+  if (typeof index !== "number" || typeof key !== "string" || typeof sameDocument !== "boolean") {
+    return null;
+  }
+  return { index, key, sameDocument };
+}
+
+function readBrowserNavigationHistoryEntries(
+  nav: object,
+): Pick<BrowserNavigationTraversalHints, "currentEntryIndex" | "currentEntryKey" | "entries"> {
+  if (!hasEntryListFields(nav)) {
+    return { currentEntryIndex: null, currentEntryKey: null, entries: null };
+  }
+
+  const currentEntry = readBrowserNavigationHistoryEntry(nav.currentEntry);
+  let rawEntries: unknown;
+  try {
+    rawEntries = nav.entries();
+  } catch {
+    return { currentEntryIndex: null, currentEntryKey: null, entries: null };
+  }
+  if (!currentEntry || !Array.isArray(rawEntries)) {
+    return { currentEntryIndex: null, currentEntryKey: null, entries: null };
+  }
+
+  const entries: BrowserNavigationHistoryEntry[] = [];
+  for (const entry of rawEntries) {
+    const parsed = readBrowserNavigationHistoryEntry(entry);
+    if (!parsed) {
+      return { currentEntryIndex: null, currentEntryKey: null, entries: null };
+    }
+    entries.push(parsed);
+  }
+
+  return {
+    currentEntryIndex: currentEntry.index,
+    currentEntryKey: currentEntry.key,
+    entries,
+  };
+}
+
 function readBrowserNavigationTraversalHints(nav: unknown): BrowserNavigationTraversalHints | null {
   if (!nav || typeof nav !== "object") return null;
   if (!hasTraversalHintFields(nav)) return null;
   const { canGoBack, canGoForward } = nav;
   if (typeof canGoBack !== "boolean" || typeof canGoForward !== "boolean") return null;
-  return { canGoBack, canGoForward };
+  return {
+    canGoBack,
+    canGoForward,
+    ...readBrowserNavigationHistoryEntries(nav),
+  };
 }
 
 function getBrowserNavigationTraversalHints(): BrowserNavigationTraversalHints | null {
   if (!hasNavigationProperty(window)) return null;
   return readBrowserNavigationTraversalHints(window.navigation);
+}
+
+let optimisticTraversalBaseEntryKey: string | null = null;
+let optimisticTraversalIndexOffset = 0;
+
+function canOptimisticallyTraverseSameDocument(
+  direction: "back" | "forward",
+  nav: BrowserNavigationTraversalHints,
+): boolean | null {
+  if (nav.currentEntryKey === null || nav.currentEntryIndex === null || nav.entries === null) {
+    return null;
+  }
+
+  if (nav.currentEntryKey !== optimisticTraversalBaseEntryKey) {
+    optimisticTraversalBaseEntryKey = nav.currentEntryKey;
+    optimisticTraversalIndexOffset = 0;
+  }
+
+  const currentIndex = nav.currentEntryIndex + optimisticTraversalIndexOffset;
+  const targetIndex = direction === "back" ? currentIndex - 1 : currentIndex + 1;
+  const targetEntry = nav.entries.find((entry) => entry.index === targetIndex);
+  return targetEntry?.sameDocument === true;
+}
+
+function markOptimisticTraversal(direction: "back" | "forward"): void {
+  optimisticTraversalIndexOffset += direction === "back" ? -1 : 1;
 }
 
 /**
@@ -1290,10 +1392,12 @@ function getBrowserNavigationTraversalHints(): BrowserNavigationTraversalHints |
  * commits, preserving `isPending=true` across the async task boundary.
  *
  * Navigation API hint: `canGoBack` / `canGoForward` are synchronous
- * availability checks. When `false`, `history.back/forward` is a no-op and
- * no popstate will fire. Arming the pending in that case would leave it
- * unsettled (until the next unrelated traversal auto-settles it and
- * produces a misleading isPending period). We skip arming in that case.
+ * availability checks, but they do not update until a scheduled traversal
+ * commits. We therefore budget same-tick traversals against
+ * `navigation.entries()` when available: `router.back(); router.back();`
+ * with only one same-document entry behind it arms only the first call. When
+ * the exact target entry is unavailable, we fall back to the coarse boolean
+ * hints and still skip known no-ops.
  *
  * When the Navigation API is unavailable (pre-Safari 18.4 / pre-Firefox 136),
  * we deliberately skip arming and degrade to a bare traversal: we cannot
@@ -1312,8 +1416,14 @@ function runProgrammaticTraversal(direction: "back" | "forward"): void {
   React.startTransition(() => {
     const nav = getBrowserNavigationTraversalHints();
     if (nav !== null) {
-      const canTraverse = direction === "back" ? nav.canGoBack : nav.canGoForward;
-      if (canTraverse) window.__VINEXT_ARM_TRAVERSAL_PENDING__?.();
+      const hintedCanTraverse = direction === "back" ? nav.canGoBack : nav.canGoForward;
+      const sameDocumentTarget = canOptimisticallyTraverseSameDocument(direction, nav);
+      const canTraverse = sameDocumentTarget ?? hintedCanTraverse;
+      const armTraversalPending = window.__VINEXT_ARM_TRAVERSAL_PENDING__;
+      if (canTraverse && armTraversalPending) {
+        armTraversalPending();
+        markOptimisticTraversal(direction);
+      }
     }
     if (direction === "back") window.history.back();
     else window.history.forward();
