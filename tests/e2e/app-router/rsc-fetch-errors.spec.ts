@@ -156,27 +156,14 @@ test.describe("RSC fetch non-ok response handling", () => {
   test("redirect chain to a non-ok endpoint hard-navs to the post-redirect URL", async ({
     page,
   }) => {
-    // Chain: client nav to /redirect-src → fetch /redirect-src.rsc →
+    // Chain: client nav to /redirect-test → fetch /redirect-test.rsc →
     // 307 Location /about.rsc → 500. The hard-nav target must be /about
-    // (the post-redirect URL), not /redirect-src (the original request).
+    // (the post-redirect URL), not /redirect-test (the original request).
     // Without the navResponseUrl ?? navResponse.url branch in the nav-site
-    // guard, the browser would bounce off /redirect-src and the server
+    // guard, the browser would bounce off /redirect-test and the server
     // would re-issue the 307, flashing the wrong URL in the address bar
     // and mis-keying analytics.
-    let srcRscHits = 0;
     let aboutRscHits = 0;
-    // Intercept chain depends on Playwright re-entering the route table on
-    // the 307 follow-up so both handlers fire in sequence (browser fetch
-    // defaults to redirect:follow). Migrating to a mocker that follows
-    // redirects without re-dispatching would silently skip the /about.rsc
-    // intercept and the test would fall through to the real backend.
-    await page.route(/\/redirect-src\.rsc(\?|$)/, (route) => {
-      srcRscHits += 1;
-      return route.fulfill({
-        status: 307,
-        headers: { Location: `${BASE}/about.rsc` },
-      });
-    });
     await page.route(/\/about\.rsc(\?|$)/, (route) => {
       aboutRscHits += 1;
       return route.fulfill({
@@ -207,13 +194,12 @@ test.describe("RSC fetch non-ok response handling", () => {
 
     const navigationPromise = page.waitForURL(`${BASE}/about`, { timeout: 10_000 });
     await page.evaluate(() => {
-      void (window as any).__VINEXT_RSC_NAVIGATE__("/redirect-src");
+      void (window as any).__VINEXT_RSC_NAVIGATE__("/redirect-test");
     });
     await navigationPromise;
 
     expect(page.url()).toBe(`${BASE}/about`);
-    expect(frameUrls.some((url) => url.includes("/redirect-src"))).toBe(false);
-    expect(srcRscHits).toBeGreaterThanOrEqual(1);
+    expect(frameUrls.some((url) => url.includes("/redirect-test"))).toBe(false);
     expect(aboutRscHits).toBeGreaterThanOrEqual(1);
 
     const rscParseError = consoleErrors.find((msg) => isRscStreamParseError(msg));
