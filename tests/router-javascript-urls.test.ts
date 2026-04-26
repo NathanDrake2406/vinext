@@ -11,6 +11,15 @@ import { describe, it, expect } from "vite-plus/test";
 // navigation kicks off, at the top of push/replace/prefetch. Even server-side
 // calls throw, matching Next.js intent and giving SSR-safe regression coverage
 // in node-based unit tests.
+//
+// Coverage split:
+//   Ported from the Next.js E2E suite above: javascript: cases for
+//     push/replace/prefetch plus the obfuscation variants that Next.js's
+//     javascript-url.ts regex covers (uppercase, embedded tabs, leading
+//     whitespace).
+//   Vinext-only extensions: data: and vbscript: cases. Vinext intentionally
+//     extends the dangerous-scheme block to those schemes via the shared
+//     isDangerousScheme helper. Rationale and scope: shims/url-safety.ts:20-21.
 
 const BLOCK_MESSAGE = "Next.js has blocked a javascript: URL as a security precaution.";
 
