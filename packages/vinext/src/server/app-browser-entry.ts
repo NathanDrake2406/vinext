@@ -140,6 +140,9 @@ let browserRouterStateRef: { current: AppRouterState } | null = null;
 let activePendingBrowserRouterState: PendingBrowserRouterState | null = null;
 let latestClientParams: Record<string, string | string[]> = {};
 const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
+let resolveBrowserRouterStateReady: (() => void) | null = null;
+let browserRouterStateReadyPromise: Promise<void> | null = null;
+let browserRouterStateHasCommitted = false;
 
 function isServerActionResult(value: unknown): value is ServerActionResult {
   return !!value && typeof value === "object" && "root" in value;
@@ -157,6 +160,28 @@ function getBrowserRouterState(): AppRouterState {
     throw new Error("[vinext] Browser router state is not initialized");
   }
   return browserRouterStateRef.current;
+}
+
+function waitForBrowserRouterStateReady(): Promise<void> {
+  if (browserRouterStateRef || browserRouterStateHasCommitted) {
+    return Promise.resolve();
+  }
+
+  if (!browserRouterStateReadyPromise) {
+    browserRouterStateReadyPromise = new Promise((resolve) => {
+      resolveBrowserRouterStateReady = resolve;
+    });
+  }
+
+  return browserRouterStateReadyPromise;
+}
+
+function markBrowserRouterStateReady(): void {
+  browserRouterStateHasCommitted = true;
+  const resolveReady = resolveBrowserRouterStateReady;
+  resolveBrowserRouterStateReady = null;
+  browserRouterStateReadyPromise = null;
+  resolveReady?.();
 }
 
 function beginPendingBrowserRouterState(): PendingBrowserRouterState {
@@ -588,6 +613,7 @@ function BrowserRoot({
   useLayoutEffect(() => {
     setBrowserRouterState = setTreeStateValue;
     browserRouterStateRef = stateRef;
+    markBrowserRouterStateReady();
     return () => {
       if (setBrowserRouterState === setTreeStateValue) {
         setBrowserRouterState = null;
@@ -1121,6 +1147,9 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     let redirectCount = redirectDepth;
 
     try {
+      await waitForBrowserRouterStateReady();
+      if (navId !== activeNavigationId) return;
+
       if (programmaticTransition) {
         pendingRouterState = beginPendingBrowserRouterState();
       }
