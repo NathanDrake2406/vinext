@@ -5209,6 +5209,7 @@ describe("NextResponse.redirect() status codes", () => {
     const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
     const res = NextResponse.redirect("https://example.com", 301);
     expect(res.status).toBe(301);
+    // validateURL() normalizes via `new URL()`, adding a trailing slash for origin-only URLs.
     expect(res.headers.get("Location")).toBe("https://example.com/");
   });
 

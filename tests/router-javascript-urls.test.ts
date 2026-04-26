@@ -45,13 +45,13 @@ describe("App Router useRouter() blocks dangerous URI schemes", () => {
   it("router.push throws on data: URL", async () => {
     const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
     const router = useRouter();
-    expect(() => router.push("data:text/html,<script>alert(1)</script>")).toThrow();
+    expect(() => router.push("data:text/html,<script>alert(1)</script>")).toThrow(BLOCK_MESSAGE);
   });
 
   it("router.push throws on vbscript: URL", async () => {
     const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
     const router = useRouter();
-    expect(() => router.push("vbscript:MsgBox(1)")).toThrow();
+    expect(() => router.push("vbscript:MsgBox(1)")).toThrow(BLOCK_MESSAGE);
   });
 
   it("router.push throws on obfuscated javascript: URL with embedded tabs", async () => {
