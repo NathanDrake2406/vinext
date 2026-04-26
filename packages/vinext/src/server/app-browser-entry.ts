@@ -143,7 +143,9 @@ let activePendingBrowserRouterState: PendingBrowserRouterState | null = null;
 // popstate cannot accidentally adopt a regular navigation's pending. The
 // queue owns adoption order only; React still has one router useState slot,
 // so dispatchBrowserTree resolves the adopted promise and then writes the
-// concrete reducer result to converge that slot after overlapping work.
+// concrete reducer result to converge that slot after overlapping work. A
+// user-initiated popstate can still consume a queued programmatic pending;
+// that affects transition timing, not the final committed tree.
 const traversalPendingQueue: PendingBrowserRouterState[] = [];
 let latestClientParams: Record<string, string | string[]> = {};
 const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
@@ -214,6 +216,8 @@ function armTraversalPendingBrowserRouterState(): PendingBrowserRouterState {
 function dequeueTraversalPendingBrowserRouterState(): PendingBrowserRouterState | null {
   while (traversalPendingQueue.length > 0) {
     const pending = traversalPendingQueue.shift()!;
+    // Normally settle/resolve removes entries first; this keeps a settled
+    // out-of-band entry from being adopted by a later popstate.
     if (!pending.settled) return pending;
   }
   return null;

@@ -214,6 +214,45 @@ test.describe("Next.js compat: router.back / router.forward pending state", () =
       .toBe(1);
   });
 
+  test("user popstate resets same-tick traversal budgeting", async ({ page }) => {
+    await page.goto(`${BASE}/nextjs-compat/router-back-forward-pending`);
+    await waitForAppRouterHydration(page);
+    await expect(page.locator("#page-a-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.click("#push-to-destination");
+    await expect(page.locator("#page-b-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.click("#router-back-btn");
+    await expect(page.locator("#page-a-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.evaluate(() => window.history.forward());
+    await expect(page.locator("#page-b-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any;
+      const originalArm = window.__VINEXT_ARM_TRAVERSAL_PENDING__;
+      w.__vinextTraversalArmCount = 0;
+      window.__VINEXT_ARM_TRAVERSAL_PENDING__ = () => {
+        w.__vinextTraversalArmCount += 1;
+        originalArm?.();
+      };
+    });
+
+    await page.click("#router-back-btn", { noWaitAfter: true });
+
+    await expect(page.locator("#page-a-marker")).toBeVisible({ timeout: 10_000 });
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const w = window as any;
+          return w.__vinextTraversalArmCount;
+        }),
+      )
+      .toBe(1);
+  });
+
   test("router.back() then router.forward() round-trips cleanly across separate clicks", async ({
     page,
   }) => {

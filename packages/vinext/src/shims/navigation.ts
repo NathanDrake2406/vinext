@@ -1377,6 +1377,11 @@ function markOptimisticTraversal(direction: "back" | "forward"): void {
   optimisticTraversalIndexOffset += direction === "back" ? -1 : 1;
 }
 
+function resetOptimisticTraversalBudget(): void {
+  optimisticTraversalBaseEntryKey = null;
+  optimisticTraversalIndexOffset = 0;
+}
+
 /**
  * Programmatic `back` / `forward` run inside `React.startTransition` so that
  * `useTransition().isPending` latches true until the traversal commits. The
@@ -1395,9 +1400,9 @@ function markOptimisticTraversal(direction: "back" | "forward"): void {
  * availability checks, but they do not update until a scheduled traversal
  * commits. We therefore budget same-tick traversals against
  * `navigation.entries()` when available: `router.back(); router.back();`
- * with only one same-document entry behind it arms only the first call. When
- * the exact target entry is unavailable, we fall back to the coarse boolean
- * hints and still skip known no-ops.
+ * with only one same-document entry behind it arms only the first call. The
+ * budget resets on every popstate so it only tracks same-task arms and cannot
+ * desync after user-initiated browser back/forward.
  *
  * When the Navigation API is unavailable (pre-Safari 18.4 / pre-Firefox 136),
  * we deliberately skip arming and degrade to a bare traversal: we cannot
@@ -1737,6 +1742,7 @@ if (!isServer) {
     // App Router scroll restoration is handled in server/app-browser-entry.ts:697
     // with RSC navigation coordination (waits for pending navigation to settle).
     window.addEventListener("popstate", (event) => {
+      resetOptimisticTraversalBudget();
       if (typeof window.__VINEXT_RSC_NAVIGATE__ !== "function") {
         commitClientNavigationState();
         restoreScrollPosition(event.state);
