@@ -325,6 +325,7 @@ ${slotEntries.join(",\n")}
   return `
 import {
   renderToReadableStream as _renderToReadableStream,
+  decodeAction,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -1758,7 +1759,105 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   });
 
   // Handle server action POST requests
-  const actionId = request.headers.get("x-rsc-action");
+  const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
+  const actionContentType = request.headers.get("content-type") || "";
+  const isMultipartAction = request.method === "POST" && actionContentType.startsWith("multipart/form-data");
+
+  if (isMultipartAction && !actionId) {
+    // ── CSRF protection ─────────────────────────────────────────────────
+    // Multipart POSTs without the fetch-action header are progressive
+    // enhancement submissions from browser forms. Next.js still routes them
+    // through the server action decoder and lets decodeAction decide whether
+    // the form contains action metadata.
+    const csrfResponse = validateCsrfOrigin(request, __allowedOrigins);
+    if (csrfResponse) return csrfResponse;
+
+    const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
+    if (contentLength > __MAX_ACTION_BODY_SIZE) {
+      setHeadersContext(null);
+      setNavigationContext(null);
+      return new Response("Payload Too Large", { status: 413 });
+    }
+
+    try {
+      let body;
+      try {
+        body = await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE);
+      } catch (sizeErr) {
+        if (sizeErr && sizeErr.message === "Request body too large") {
+          setHeadersContext(null);
+          setNavigationContext(null);
+          return new Response("Payload Too Large", { status: 413 });
+        }
+        throw sizeErr;
+      }
+
+      const payloadResponse = await validateServerActionPayload(body);
+      if (payloadResponse) {
+        setHeadersContext(null);
+        setNavigationContext(null);
+        return payloadResponse;
+      }
+
+      const action = await decodeAction(body);
+      if (typeof action === "function") {
+        let actionRedirect = null;
+        const previousHeadersPhase = setHeadersAccessPhase("action");
+        try {
+          await action();
+        } catch (e) {
+          if (e && typeof e === "object" && "digest" in e) {
+            const digest = String(e.digest);
+            if (digest.startsWith("NEXT_REDIRECT;")) {
+              const parts = digest.split(";");
+              actionRedirect = {
+                url: decodeURIComponent(parts[2]),
+              };
+            } else {
+              throw e;
+            }
+          } else {
+            throw e;
+          }
+        } finally {
+          setHeadersAccessPhase(previousHeadersPhase);
+        }
+
+        if (actionRedirect) {
+          const actionPendingCookies = getAndClearPendingCookies();
+          const actionDraftCookie = getDraftModeCookieHeader();
+          setHeadersContext(null);
+          setNavigationContext(null);
+          const redirectHeaders = new Headers({
+            Location: new URL(actionRedirect.url, request.url).toString(),
+          });
+          __mergeMiddlewareResponseHeaders(redirectHeaders, _mwCtx.headers);
+          for (const cookie of actionPendingCookies) {
+            redirectHeaders.append("Set-Cookie", cookie);
+          }
+          if (actionDraftCookie) redirectHeaders.append("Set-Cookie", actionDraftCookie);
+          return new Response(null, { status: 303, headers: redirectHeaders });
+        }
+      }
+    } catch (err) {
+      getAndClearPendingCookies();
+      console.error("[vinext] Server action error:", err);
+      _reportRequestError(
+        err instanceof Error ? err : new Error(String(err)),
+        { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
+        { routerKind: "App Router", routePath: cleanPathname, routeType: "action" },
+      );
+      setHeadersContext(null);
+      setNavigationContext(null);
+      return new Response(
+        process.env.NODE_ENV === "production"
+          ? "Internal Server Error"
+          : "Server action failed: " + (err && err.message ? err.message : String(err)),
+        { status: 500 },
+      );
+    }
+  }
+
   if (request.method === "POST" && actionId) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
@@ -1778,10 +1877,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
 
     try {
-      const contentType = request.headers.get("content-type") || "";
       let body;
       try {
-        body = contentType.startsWith("multipart/form-data")
+        body = actionContentType.startsWith("multipart/form-data")
           ? await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE)
           : await __readBodyWithLimit(request, __MAX_ACTION_BODY_SIZE);
       } catch (sizeErr) {

@@ -51,6 +51,24 @@ type AppRouteHandlerSpecialError =
       statusCode: number;
     };
 
+type AppRouteHandlerSpecialErrorOptions = {
+  isAction: boolean;
+};
+
+export function isPossibleAppRouteActionRequest(
+  request: Pick<Request, "headers" | "method">,
+): boolean {
+  if (request.method.toUpperCase() !== "POST") return false;
+
+  const contentType = request.headers.get("content-type");
+  return (
+    request.headers.has("x-rsc-action") ||
+    request.headers.has("next-action") ||
+    contentType === "application/x-www-form-urlencoded" ||
+    contentType?.startsWith("multipart/form-data") === true
+  );
+}
+
 export function getAppRouteHandlerRevalidateSeconds(
   handler: Pick<AppRouteHandlerModule, "revalidate">,
 ): number | null {
@@ -147,6 +165,7 @@ export function shouldWriteAppRouteHandlerCache(
 export function resolveAppRouteHandlerSpecialError(
   error: unknown,
   requestUrl: string,
+  options?: AppRouteHandlerSpecialErrorOptions,
 ): AppRouteHandlerSpecialError | null {
   if (!(error && typeof error === "object" && "digest" in error)) {
     return null;
@@ -159,7 +178,7 @@ export function resolveAppRouteHandlerSpecialError(
     return {
       kind: "redirect",
       location: new URL(redirectUrl, requestUrl).toString(),
-      statusCode: parts[3] ? parseInt(parts[3], 10) : 307,
+      statusCode: options?.isAction ? 303 : parts[3] ? parseInt(parts[3], 10) : 307,
     };
   }
 
