@@ -53,6 +53,28 @@ export function BackClient({ pageId }: { pageId: "b" | "b2" }) {
       >
         Push to step2
       </button>
+      <button
+        id="router-back-then-forward-btn"
+        onClick={() => {
+          startTransition(() => {
+            router.back();
+            router.forward();
+          });
+        }}
+      >
+        Router back then forward in one transition
+      </button>
+      <button
+        id="router-back-then-push-btn"
+        onClick={() => {
+          startTransition(() => {
+            router.back();
+            router.push("/nextjs-compat/router-back-forward-pending/destination/step2");
+          });
+        }}
+      >
+        Router back then push in one transition
+      </button>
     </div>
   );
 }

@@ -188,4 +188,44 @@ test.describe("Next.js compat: router.back / router.forward pending state", () =
     await expect(page.locator("#page-b2-marker")).toBeVisible({ timeout: 10_000 });
     expect(page.url()).toBe(`${BASE}/nextjs-compat/router-back-forward-pending/destination/step2`);
   });
+
+  // Same-transition mixed-direction: locks down per-call traversal pending
+  // ownership. Two history-API calls in opposite directions inside one
+  // startTransition must each resolve their own armed pending so the final
+  // committed tree matches the final URL (B2, the forward target).
+  test("router.back(); router.forward(); in one transition commits to forward target", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/nextjs-compat/router-back-forward-pending`);
+    await waitForAppRouterHydration(page);
+
+    await page.click("#push-to-destination");
+    await expect(page.locator("#page-b-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.click("#push-to-step2");
+    await expect(page.locator("#page-b2-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.click("#router-back-then-forward-btn", { noWaitAfter: true });
+
+    await expect(page.locator("#page-b2-marker")).toBeVisible({ timeout: 10_000 });
+    expect(page.url()).toBe(`${BASE}/nextjs-compat/router-back-forward-pending/destination/step2`);
+  });
+
+  // Cross-kind overlap: a router.push() interleaved with a router.back() must
+  // not hijack the back's armed pending via a shared module slot. Per-call
+  // ownership keeps each navigation's pending isolated.
+  test("router.back(); router.push(); in one transition commits push destination", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/nextjs-compat/router-back-forward-pending`);
+    await waitForAppRouterHydration(page);
+
+    await page.click("#push-to-destination");
+    await expect(page.locator("#page-b-marker")).toBeVisible({ timeout: 10_000 });
+
+    await page.click("#router-back-then-push-btn", { noWaitAfter: true });
+
+    await expect(page.locator("#page-b2-marker")).toBeVisible({ timeout: 10_000 });
+    expect(page.url()).toBe(`${BASE}/nextjs-compat/router-back-forward-pending/destination/step2`);
+  });
 });
