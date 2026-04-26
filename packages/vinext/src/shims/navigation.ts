@@ -1246,14 +1246,14 @@ type BrowserNavigationTraversalHints = {
 };
 
 function getBrowserNavigationTraversalHints(): BrowserNavigationTraversalHints | null {
-  const nav = Reflect.get(window, "navigation");
-  if (!nav || typeof nav !== "object") return null;
-
-  const canGoBack = Reflect.get(nav, "canGoBack");
-  const canGoForward = Reflect.get(nav, "canGoForward");
-  if (typeof canGoBack !== "boolean" || typeof canGoForward !== "boolean") return null;
-
-  return { canGoBack, canGoForward };
+  const nav = (
+    window as Window & {
+      navigation?: { canGoBack?: unknown; canGoForward?: unknown };
+    }
+  ).navigation;
+  if (!nav) return null;
+  if (typeof nav.canGoBack !== "boolean" || typeof nav.canGoForward !== "boolean") return null;
+  return { canGoBack: nav.canGoBack, canGoForward: nav.canGoForward };
 }
 
 /**
