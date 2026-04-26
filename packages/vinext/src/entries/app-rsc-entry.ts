@@ -791,6 +791,7 @@ const rootNotFoundModule = ${rootNotFoundVar ? rootNotFoundVar : "null"};
 const rootForbiddenModule = ${rootForbiddenVar ? rootForbiddenVar : "null"};
 const rootUnauthorizedModule = ${rootUnauthorizedVar ? rootUnauthorizedVar : "null"};
 const rootLayouts = [${rootLayoutVars.join(", ")}];
+const __APP_PAGE_EMPTY_MW_CTX = { headers: null, status: null };
 
 /**
  * Render an HTTP access fallback page (not-found/forbidden/unauthorized) with layouts and noindex meta.
@@ -799,7 +800,7 @@ const rootLayouts = [${rootLayoutVars.join(", ")}];
  * @param opts.boundaryComponent - Override the boundary component (for layout-level notFound)
  * @param opts.layouts - Override the layouts to wrap with (for layout-level notFound, excludes the throwing layout)
  */
-async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, request, opts, scriptNonce) {
+async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, request, opts, scriptNonce, middlewareContext) {
   return __renderAppPageHttpAccessFallback({
     boundaryComponent: opts?.boundaryComponent ?? null,
     buildFontLinkHeader: __buildAppPageFontLinkHeader,
@@ -822,6 +823,7 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
     },
     makeThenableParams,
     matchedParams: opts?.matchedParams ?? route?.params ?? {},
+    middlewareContext: middlewareContext ?? __APP_PAGE_EMPTY_MW_CTX,
     requestUrl: request.url,
     resolveChildSegments: __resolveAppPageChildSegments,
     rootForbiddenModule: rootForbiddenModule,
@@ -836,8 +838,8 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
 }
 
 /** Convenience: render a not-found page (404) */
-async function renderNotFoundPage(route, isRscRequest, request, matchedParams, scriptNonce) {
-  return renderHTTPAccessFallbackPage(route, 404, isRscRequest, request, { matchedParams }, scriptNonce);
+async function renderNotFoundPage(route, isRscRequest, request, matchedParams, scriptNonce, middlewareContext) {
+  return renderHTTPAccessFallbackPage(route, 404, isRscRequest, request, { matchedParams }, scriptNonce, middlewareContext);
 }
 
 /**
@@ -847,7 +849,7 @@ async function renderNotFoundPage(route, isRscRequest, request, matchedParams, s
  * Next.js returns HTTP 200 when error.tsx catches an error (the error is "handled"
  * by the boundary). This matches that behavior intentionally.
  */
-async function renderErrorBoundaryPage(route, error, isRscRequest, request, matchedParams, scriptNonce) {
+async function renderErrorBoundaryPage(route, error, isRscRequest, request, matchedParams, scriptNonce, middlewareContext) {
   return __renderAppPageErrorBoundary({
     buildFontLinkHeader: __buildAppPageFontLinkHeader,
     clearRequestContext() {
@@ -869,6 +871,7 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
     },
     makeThenableParams,
     matchedParams: matchedParams ?? route?.params ?? {},
+    middlewareContext: middlewareContext ?? __APP_PAGE_EMPTY_MW_CTX,
     requestUrl: request.url,
     resolveChildSegments: __resolveAppPageChildSegments,
     rootLayouts: rootLayouts,
@@ -2061,11 +2064,13 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         : ""
     }
     // Render custom not-found page if available, otherwise plain 404
-    const notFoundResponse = await renderNotFoundPage(null, isRscRequest, request, undefined, _scriptNonce);
+    const notFoundResponse = await renderNotFoundPage(null, isRscRequest, request, undefined, _scriptNonce, _mwCtx);
     if (notFoundResponse) return notFoundResponse;
     setHeadersContext(null);
     setNavigationContext(null);
-    return new Response("Not Found", { status: 404 });
+    const notFoundHeaders = new Headers();
+    __mergeMiddlewareResponseHeaders(notFoundHeaders, _mwCtx.headers);
+    return new Response("Not Found", { status: 404, headers: notFoundHeaders });
   }
 
   const { route, params } = match;
@@ -2446,7 +2451,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       });
     },
     renderErrorBoundaryPage(buildErr) {
-      return renderErrorBoundaryPage(route, buildErr, isRscRequest, request, params, _scriptNonce);
+      return renderErrorBoundaryPage(route, buildErr, isRscRequest, request, params, _scriptNonce, _mwCtx);
     },
     renderSpecialError(__buildSpecialError) {
       return __buildAppPageSpecialErrorResponse({
@@ -2454,6 +2459,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           setHeadersContext(null);
           setNavigationContext(null);
         },
+        middlewareContext: _mwCtx,
         renderFallbackPage(statusCode) {
           return renderHTTPAccessFallbackPage(
             route,
@@ -2464,6 +2470,10 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
               matchedParams: params,
             },
             _scriptNonce,
+            // buildAppPageSpecialErrorResponse merges _mwCtx onto this returned
+            // fallback response; keep this inner boundary render unmerged so
+            // additive headers like Set-Cookie and Vary are not duplicated.
+            null,
           );
         },
         requestUrl: request.url,
@@ -2563,7 +2573,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     revalidateSeconds,
     mountedSlotsHeader: __mountedSlotsHeader,
     renderErrorBoundaryResponse(renderErr) {
-      return renderErrorBoundaryPage(route, renderErr, isRscRequest, request, params, _scriptNonce);
+      return renderErrorBoundaryPage(route, renderErr, isRscRequest, request, params, _scriptNonce, _mwCtx);
     },
     async renderLayoutSpecialError(__layoutSpecialError, li) {
       return __buildAppPageSpecialErrorResponse({
@@ -2571,6 +2581,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           setHeadersContext(null);
           setNavigationContext(null);
         },
+        middlewareContext: _mwCtx,
         renderFallbackPage(statusCode) {
           // Find the not-found component from the parent level (the boundary that
           // would catch this in Next.js). Walk up from the throwing layout to find
@@ -2597,6 +2608,10 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
               matchedParams: params,
             },
             _scriptNonce,
+            // buildAppPageSpecialErrorResponse merges _mwCtx onto this returned
+            // fallback response; keep this inner boundary render unmerged so
+            // additive headers like Set-Cookie and Vary are not duplicated.
+            null,
           );
         },
         requestUrl: request.url,
@@ -2609,6 +2624,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           setHeadersContext(null);
           setNavigationContext(null);
         },
+        middlewareContext: _mwCtx,
         renderFallbackPage(statusCode) {
           return renderHTTPAccessFallbackPage(
             route,
@@ -2619,6 +2635,10 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
               matchedParams: params,
             },
             _scriptNonce,
+            // buildAppPageSpecialErrorResponse merges _mwCtx onto this returned
+            // fallback response; keep this inner boundary render unmerged so
+            // additive headers like Set-Cookie and Vary are not duplicated.
+            null,
           );
         },
         requestUrl: request.url,

@@ -1,3 +1,5 @@
+import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
+
 export type AppPageParams = Record<string, string | string[]>;
 
 type ResolveAppPageHttpAccessBoundaryComponentOptions<TModule, TComponent> = {
@@ -67,6 +69,7 @@ type RenderAppPageBoundaryResponseOptions<TElement> = {
   createRscOnErrorHandler: () => AppPageBoundaryOnError;
   element: TElement;
   isRscRequest: boolean;
+  middlewareHeaders?: Headers | null;
   renderToReadableStream: (
     element: TElement,
     options: { onError: AppPageBoundaryOnError },
@@ -182,9 +185,15 @@ export async function renderAppPageBoundaryResponse<TElement>(
     // Do NOT clear request-scoped context here. RSC responses are consumed lazily
     // by the client, so headers()/cookies() and async server components still need
     // their ALS-backed state while the stream is being read.
+    const headers = new Headers({
+      "Content-Type": "text/x-component; charset=utf-8",
+      Vary: "RSC, Accept",
+    });
+    mergeMiddlewareResponseHeaders(headers, options.middlewareHeaders ?? null);
+
     return new Response(rscStream, {
       status: options.status,
-      headers: { "Content-Type": "text/x-component; charset=utf-8", Vary: "RSC, Accept" },
+      headers,
     });
   }
 

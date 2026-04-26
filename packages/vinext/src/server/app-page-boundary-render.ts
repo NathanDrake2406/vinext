@@ -13,6 +13,7 @@ import {
   type Viewport,
 } from "../shims/metadata.js";
 import type { AppPageFontPreload } from "./app-page-execution.js";
+import type { AppPageMiddlewareContext } from "./app-page-response.js";
 import {
   renderAppPageBoundaryResponse,
   resolveAppPageErrorBoundary,
@@ -76,6 +77,7 @@ type AppPageBoundaryRenderCommonOptions<TModule extends AppPageModule = AppPageM
   isRscRequest: boolean;
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
   makeThenableParams: (params: AppPageParams) => unknown;
+  middlewareContext: AppPageMiddlewareContext;
   renderToReadableStream: (
     element: ReactNode | AppElements,
     options: { onError: AppPageBoundaryOnError },
@@ -278,6 +280,7 @@ async function renderAppPageBoundaryElementResponse<TModule extends AppPageModul
         clearRequestContext: options.clearRequestContext,
         fontData,
         fontLinkHeader: options.buildFontLinkHeader(fontData.preloads),
+        middlewareHeaders: options.middlewareContext.headers,
         navigationContext: options.getNavigationContext(),
         rscStream,
         scriptNonce: options.scriptNonce,
@@ -290,6 +293,7 @@ async function renderAppPageBoundaryElementResponse<TModule extends AppPageModul
     },
     element: payload,
     isRscRequest: options.isRscRequest,
+    middlewareHeaders: options.middlewareContext.headers,
     renderToReadableStream: options.renderToReadableStream,
     status: options.status,
   });

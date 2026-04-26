@@ -20,6 +20,18 @@ function createStream(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function createMiddlewareContext() {
+  const headers = new Headers();
+  headers.set("x-middleware-security", "present");
+  headers.append("set-cookie", "session=rotated; Path=/; HttpOnly");
+  headers.set("vary", "x-auth-state");
+
+  return {
+    headers,
+    status: 299,
+  };
+}
+
 describe("app page execution helpers", () => {
   it("parses redirect and access-fallback digests", () => {
     expect(
@@ -49,6 +61,7 @@ describe("app page execution helpers", () => {
 
     const redirectResponse = await buildAppPageSpecialErrorResponse({
       clearRequestContext,
+      middlewareContext: createMiddlewareContext(),
       requestUrl: "https://example.com/start",
       specialError: {
         kind: "redirect",
@@ -59,14 +72,23 @@ describe("app page execution helpers", () => {
 
     expect(redirectResponse.status).toBe(307);
     expect(redirectResponse.headers.get("location")).toBe("https://example.com/redirected");
+    expect(redirectResponse.headers.get("x-middleware-security")).toBe("present");
+    expect(redirectResponse.headers.get("vary")).toBe("x-auth-state");
+    expect(redirectResponse.headers.getSetCookie()).toContain("session=rotated; Path=/; HttpOnly");
     expect(clearRequestContext).toHaveBeenCalledTimes(1);
 
     clearRequestContext.mockClear();
 
     const fallbackResponse = await buildAppPageSpecialErrorResponse({
       clearRequestContext,
+      middlewareContext: createMiddlewareContext(),
       renderFallbackPage(statusCode) {
-        return Promise.resolve(new Response(`fallback:${statusCode}`, { status: statusCode }));
+        return Promise.resolve(
+          new Response(`fallback:${statusCode}`, {
+            headers: { Vary: "RSC, Accept" },
+            status: statusCode,
+          }),
+        );
       },
       requestUrl: "https://example.com/start",
       specialError: {
@@ -76,6 +98,14 @@ describe("app page execution helpers", () => {
     });
 
     expect(fallbackResponse.status).toBe(404);
+    expect(fallbackResponse.headers.get("x-middleware-security")).toBe("present");
+    expect(fallbackResponse.headers.get("vary")).toBe("RSC, Accept, x-auth-state");
+    expect(fallbackResponse.headers.getSetCookie()).toContain("session=rotated; Path=/; HttpOnly");
+    expect(
+      fallbackResponse.headers
+        .getSetCookie()
+        .filter((cookie) => cookie === "session=rotated; Path=/; HttpOnly"),
+    ).toHaveLength(1);
     await expect(fallbackResponse.text()).resolves.toBe("fallback:404");
     expect(clearRequestContext).not.toHaveBeenCalled();
   });
@@ -85,6 +115,7 @@ describe("app page execution helpers", () => {
 
     const response = await buildAppPageSpecialErrorResponse({
       clearRequestContext,
+      middlewareContext: createMiddlewareContext(),
       renderFallbackPage() {
         return Promise.resolve(null);
       },
@@ -96,6 +127,9 @@ describe("app page execution helpers", () => {
     });
 
     expect(response.status).toBe(401);
+    expect(response.headers.get("x-middleware-security")).toBe("present");
+    expect(response.headers.get("vary")).toBe("x-auth-state");
+    expect(response.headers.getSetCookie()).toContain("session=rotated; Path=/; HttpOnly");
     await expect(response.text()).resolves.toBe("Unauthorized");
     expect(clearRequestContext).toHaveBeenCalledTimes(1);
   });

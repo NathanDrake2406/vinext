@@ -4472,6 +4472,24 @@ describe("generateRscEntry ISR code generation", () => {
     expect(code).toContain("return __renderAppPageErrorBoundary({");
   });
 
+  it("generated code threads middleware headers into page boundary and special-error responses", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
+
+    expect(code).toContain("const __APP_PAGE_EMPTY_MW_CTX = { headers: null, status: null };");
+    expect(code).toContain("middlewareContext: middlewareContext ?? __APP_PAGE_EMPTY_MW_CTX");
+    expect(code).toContain("middlewareContext: _mwCtx");
+    expect(code).toContain("__mergeMiddlewareResponseHeaders(notFoundHeaders, _mwCtx.headers)");
+
+    const specialErrorStart = code.indexOf("renderSpecialError(__buildSpecialError)");
+    const specialErrorEnd = code.indexOf("resolveSpecialError:", specialErrorStart);
+    const specialErrorBody = code.slice(specialErrorStart, specialErrorEnd);
+    expect(specialErrorBody).toContain("middlewareContext: _mwCtx");
+    expect(specialErrorBody).toContain(
+      "additive headers like Set-Cookie and Vary are not duplicated.",
+    );
+    expect(specialErrorBody).toContain("null,");
+  });
+
   it("generated code delegates page cache HIT handling to a typed helper", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
     expect(code).toContain("readAppPageCacheResponse as __readAppPageCacheResponse");

@@ -1,4 +1,5 @@
 import type { AppPageFontPreload } from "./app-page-execution.js";
+import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 
 export type AppPageFontData = {
   links: string[];
@@ -32,6 +33,7 @@ type RenderAppPageHtmlStreamOptions = {
 type RenderAppPageHtmlResponseOptions = {
   clearRequestContext: () => void;
   fontLinkHeader?: string;
+  middlewareHeaders?: Headers | null;
   status: number;
 } & RenderAppPageHtmlStreamOptions;
 
@@ -148,14 +150,16 @@ export async function renderAppPageHtmlResponse(
     options.clearRequestContext();
   });
 
-  const headers: Record<string, string> = {
+  const headers = new Headers({
     "Content-Type": "text/html; charset=utf-8",
     Vary: "RSC, Accept",
-  };
+  });
 
   if (options.fontLinkHeader) {
-    headers.Link = options.fontLinkHeader;
+    headers.set("Link", options.fontLinkHeader);
   }
+
+  mergeMiddlewareResponseHeaders(headers, options.middlewareHeaders ?? null);
 
   return new Response(safeStream, {
     status: options.status,

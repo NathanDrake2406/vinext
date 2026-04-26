@@ -1,5 +1,6 @@
 import type { LayoutFlags } from "./app-elements.js";
 import type { ClassificationReason } from "../build/layout-classification-types.js";
+import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 
 export type { LayoutFlags };
 export type { ClassificationReason };
@@ -20,6 +21,7 @@ type AppPageRscStreamCapture = {
 
 type BuildAppPageSpecialErrorResponseOptions = {
   clearRequestContext: () => void;
+  middlewareContext?: { headers: Headers | null };
   renderFallbackPage?: (statusCode: number) => Promise<Response | null>;
   requestUrl: string;
   specialError: AppPageSpecialError;
@@ -84,6 +86,20 @@ function getAppPageStatusText(statusCode: number): string {
   return statusCode === 403 ? "Forbidden" : statusCode === 401 ? "Unauthorized" : "Not Found";
 }
 
+function mergeAppPageSpecialErrorHeaders(
+  response: Response,
+  middlewareContext: { headers: Headers | null } | undefined,
+): Response {
+  const headers = new Headers(response.headers);
+  mergeMiddlewareResponseHeaders(headers, middlewareContext?.headers ?? null);
+
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
 export function resolveAppPageSpecialError(error: unknown): AppPageSpecialError | null {
   if (!(error && typeof error === "object" && "digest" in error)) {
     return null;
@@ -115,23 +131,33 @@ export async function buildAppPageSpecialErrorResponse(
 ): Promise<Response> {
   if (options.specialError.kind === "redirect") {
     options.clearRequestContext();
-    return Response.redirect(
-      new URL(options.specialError.location, options.requestUrl),
-      options.specialError.statusCode,
-    );
+    const headers = new Headers({
+      Location: new URL(options.specialError.location, options.requestUrl).toString(),
+    });
+    // Middleware may contribute response headers here, but redirect() owns the
+    // status. Do not apply middlewareContext.status on special-error responses.
+    mergeMiddlewareResponseHeaders(headers, options.middlewareContext?.headers ?? null);
+
+    return new Response(null, {
+      headers,
+      status: options.specialError.statusCode,
+    });
   }
 
   if (options.renderFallbackPage) {
     const fallbackResponse = await options.renderFallbackPage(options.specialError.statusCode);
     if (fallbackResponse) {
-      return fallbackResponse;
+      return mergeAppPageSpecialErrorHeaders(fallbackResponse, options.middlewareContext);
     }
   }
 
   options.clearRequestContext();
-  return new Response(getAppPageStatusText(options.specialError.statusCode), {
-    status: options.specialError.statusCode,
-  });
+  return mergeAppPageSpecialErrorHeaders(
+    new Response(getAppPageStatusText(options.specialError.statusCode), {
+      status: options.specialError.statusCode,
+    }),
+    options.middlewareContext,
+  );
 }
 
 /** See `LayoutFlags` type docblock in app-elements.ts for lifecycle. */
