@@ -1245,15 +1245,34 @@ type BrowserNavigationTraversalHints = {
   readonly canGoForward: boolean;
 };
 
+type WindowWithNavigationProperty = {
+  readonly navigation: unknown;
+};
+
+type BrowserNavigationTraversalHintFields = {
+  readonly canGoBack: unknown;
+  readonly canGoForward: unknown;
+};
+
+function hasNavigationProperty(value: object): value is WindowWithNavigationProperty {
+  return "navigation" in value;
+}
+
+function hasTraversalHintFields(value: object): value is BrowserNavigationTraversalHintFields {
+  return "canGoBack" in value && "canGoForward" in value;
+}
+
+function readBrowserNavigationTraversalHints(nav: unknown): BrowserNavigationTraversalHints | null {
+  if (!nav || typeof nav !== "object") return null;
+  if (!hasTraversalHintFields(nav)) return null;
+  const { canGoBack, canGoForward } = nav;
+  if (typeof canGoBack !== "boolean" || typeof canGoForward !== "boolean") return null;
+  return { canGoBack, canGoForward };
+}
+
 function getBrowserNavigationTraversalHints(): BrowserNavigationTraversalHints | null {
-  const nav = (
-    window as Window & {
-      navigation?: { canGoBack?: unknown; canGoForward?: unknown };
-    }
-  ).navigation;
-  if (!nav) return null;
-  if (typeof nav.canGoBack !== "boolean" || typeof nav.canGoForward !== "boolean") return null;
-  return { canGoBack: nav.canGoBack, canGoForward: nav.canGoForward };
+  if (!hasNavigationProperty(window)) return null;
+  return readBrowserNavigationTraversalHints(window.navigation);
 }
 
 /**
