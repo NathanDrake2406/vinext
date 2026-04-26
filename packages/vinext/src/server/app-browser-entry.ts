@@ -138,6 +138,11 @@ function isRouterStatePromise(
 let setBrowserRouterState: Dispatch<AppRouterState | Promise<AppRouterState>> | null = null;
 let browserRouterStateRef: { current: AppRouterState } | null = null;
 let activePendingBrowserRouterState: PendingBrowserRouterState | null = null;
+// FIFO queue of pendings armed by router.back() / router.forward(), separate
+// from activePendingBrowserRouterState (used by push/replace/refresh). Keeps
+// each traversal popstate adopting only the pending its own arm hook created,
+// even when push/replace/refresh runs in between.
+const traversalPendingQueue: PendingBrowserRouterState[] = [];
 let latestClientParams: Record<string, string | string[]> = {};
 const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 
@@ -184,6 +189,39 @@ function beginPendingBrowserRouterState(): PendingBrowserRouterState {
   return pending;
 }
 
+function armTraversalPendingBrowserRouterState(): PendingBrowserRouterState {
+  const setter = getBrowserRouterStateSetter();
+
+  let resolve!: (state: AppRouterState) => void;
+  const promise = new Promise<AppRouterState>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  const pending: PendingBrowserRouterState = {
+    promise,
+    resolve,
+    settled: false,
+  };
+
+  traversalPendingQueue.push(pending);
+  setter(promise);
+
+  return pending;
+}
+
+function dequeueTraversalPendingBrowserRouterState(): PendingBrowserRouterState | null {
+  while (traversalPendingQueue.length > 0) {
+    const pending = traversalPendingQueue.shift()!;
+    if (!pending.settled) return pending;
+  }
+  return null;
+}
+
+function clearPendingFromTraversalQueue(pending: PendingBrowserRouterState): void {
+  const index = traversalPendingQueue.indexOf(pending);
+  if (index !== -1) traversalPendingQueue.splice(index, 1);
+}
+
 function settlePendingBrowserRouterState(
   pending: PendingBrowserRouterState | null | undefined,
 ): void {
@@ -195,6 +233,7 @@ function settlePendingBrowserRouterState(
   if (activePendingBrowserRouterState === pending) {
     activePendingBrowserRouterState = null;
   }
+  clearPendingFromTraversalQueue(pending);
 }
 
 function resolvePendingBrowserRouterState(
@@ -209,6 +248,7 @@ function resolvePendingBrowserRouterState(
   if (activePendingBrowserRouterState === pending) {
     activePendingBrowserRouterState = null;
   }
+  clearPendingFromTraversalQueue(pending);
 }
 
 function applyClientParams(params: Record<string, string | string[]>): void {
@@ -580,12 +620,9 @@ function BrowserRoot({
   const stateRef = useRef(treeState);
   stateRef.current = treeState;
 
-  // Publish the stable ref object and dispatch during layout commit. This keeps
-  // the module-level escape hatches aligned with React's committed tree without
-  // performing module writes during render. The arm hook is also (re)assigned
-  // here so it survives React 19 StrictMode dev's mount→cleanup→mount cycle;
-  // assigning it once at module load would leave it undefined for the rest of
-  // the session after the first cleanup.
+  // Publish the stable ref object and dispatch during layout commit. The arm
+  // hook is (re)assigned here so it survives React 19 StrictMode dev's
+  // mount→cleanup→mount cycle.
   useLayoutEffect(() => {
     setBrowserRouterState = setTreeStateValue;
     browserRouterStateRef = stateRef;
@@ -594,7 +631,7 @@ function BrowserRoot({
       if (!window.__VINEXT_APP_ROUTER_READY__ || !setBrowserRouterState || !browserRouterStateRef) {
         return;
       }
-      beginPendingBrowserRouterState();
+      armTraversalPendingBrowserRouterState();
     };
     return () => {
       if (setBrowserRouterState === setTreeStateValue) {
@@ -674,12 +711,11 @@ function dispatchBrowserTree(
   };
 
   const applyAction = () => {
-    // Resolve the adopted pending (so a useTransition consumer commits) and
-    // also write the concrete state. The unconditional setter heals rapid
-    // overlapping traversals: when two navigateRsc invocations share one
-    // activePendingBrowserRouterState, the older one's stale-id finally can
-    // settle that pending stale, leaving React's slot bound to a wrong-state
-    // promise resolution. The setter rebinds the slot to the correct state.
+    // Resolve the adopted pending and also write concrete state. Resolve
+    // first so any `use(pending.promise)`-suspended render unsuspends in the
+    // same commit the setter targets. The unconditional setter heals slot
+    // races where an earlier navigation's stale-id finally settled the
+    // pending React's slot was bound to.
     resolvePendingBrowserRouterState(pendingRouterState, action);
     setter(routerReducer(getBrowserRouterState(), action));
   };
@@ -1062,7 +1098,6 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     window.location.href,
     latestClientParams,
   );
-  window.__VINEXT_APP_ROUTER_READY__ = false;
   replaceHistoryStateWithoutNotify(
     createHistoryStateWithPreviousNextUrl(window.history.state, null),
     "",
@@ -1078,9 +1113,6 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     import.meta.env.DEV ? { onCaughtError: devOnCaughtError } : undefined,
   );
   window.__VINEXT_HYDRATED_AT = performance.now();
-
-  // The arm hook is assigned by BrowserRoot's mount effect, not here, so it
-  // survives React 19 StrictMode dev's mount→cleanup→mount cycle.
 
   window.__VINEXT_RSC_NAVIGATE__ = async function navigateRsc(
     href: string,
@@ -1106,17 +1138,12 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     try {
       if (programmaticTransition) {
         pendingRouterState = beginPendingBrowserRouterState();
-      } else if (
-        activePendingBrowserRouterState !== null &&
-        !activePendingBrowserRouterState.settled
-      ) {
-        // Popstate path: the shim already armed a pending inside the user's
-        // `React.startTransition` (router.back / router.forward). Adopt it so
-        // the commit resolves the promise React's state slot is suspended on,
-        // keeping `useTransition().isPending` true across the async popstate
-        // task boundary. User-initiated popstates (keyboard, gesture, address
-        // bar) find no active pending and fall through unchanged.
-        pendingRouterState = activePendingBrowserRouterState;
+      } else {
+        // Popstate path: pull the arm-hook pending FIFO so each traversal
+        // resolves only the pending its own router.back/forward armed,
+        // independent of any push/replace/refresh that ran in between.
+        // User-initiated popstates find an empty queue and fall through.
+        pendingRouterState = dequeueTraversalPendingBrowserRouterState();
       }
 
       while (true) {
