@@ -1147,11 +1147,15 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     let redirectCount = redirectDepth;
 
     try {
-      await waitForBrowserRouterStateReady();
-      if (navId !== activeNavigationId) return;
-
-      if (programmaticTransition) {
+      if (programmaticTransition && browserRouterStateRef) {
         pendingRouterState = beginPendingBrowserRouterState();
+      } else {
+        await waitForBrowserRouterStateReady();
+        if (navId !== activeNavigationId) return;
+
+        if (programmaticTransition) {
+          pendingRouterState = beginPendingBrowserRouterState();
+        }
       }
 
       while (true) {
