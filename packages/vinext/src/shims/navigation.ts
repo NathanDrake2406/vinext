@@ -1248,83 +1248,41 @@ type BrowserNavigationTraversalHints = {
   readonly entries: readonly BrowserNavigationHistoryEntry[] | null;
 };
 
-type WindowWithNavigationProperty = {
-  readonly navigation: unknown;
+type BrowserNavigationHistoryEntry = Pick<NavigationHistoryEntry, "index" | "key" | "sameDocument">;
+
+type BrowserNavigationProbe = {
+  readonly canGoBack?: unknown;
+  readonly canGoForward?: unknown;
+  readonly currentEntry?: BrowserNavigationHistoryEntry | null;
+  readonly entries?: () => readonly BrowserNavigationHistoryEntry[];
 };
 
-type BrowserNavigationTraversalHintFields = {
-  readonly canGoBack: unknown;
-  readonly canGoForward: unknown;
+type BrowserNavigationSource = {
+  readonly navigation?: BrowserNavigationProbe | null;
 };
 
-type BrowserNavigationEntryListFields = {
-  readonly currentEntry: unknown;
-  readonly entries: () => unknown;
-};
-
-type BrowserNavigationHistoryEntry = {
-  readonly index: number;
-  readonly key: string;
-  readonly sameDocument: boolean;
-};
-
-type BrowserNavigationHistoryEntryFields = {
-  readonly index: unknown;
-  readonly key: unknown;
-  readonly sameDocument: unknown;
-};
-
-function hasNavigationProperty(value: object): value is WindowWithNavigationProperty {
-  return "navigation" in value;
-}
-
-function hasTraversalHintFields(value: object): value is BrowserNavigationTraversalHintFields {
-  return "canGoBack" in value && "canGoForward" in value;
-}
-
-function hasEntryListFields(value: object): value is BrowserNavigationEntryListFields {
-  return "currentEntry" in value && "entries" in value && typeof value.entries === "function";
-}
-
-function hasHistoryEntryFields(value: object): value is BrowserNavigationHistoryEntryFields {
-  return "index" in value && "key" in value && "sameDocument" in value;
-}
-
-function readBrowserNavigationHistoryEntry(entry: unknown): BrowserNavigationHistoryEntry | null {
-  if (!entry || typeof entry !== "object") return null;
-  if (!hasHistoryEntryFields(entry)) return null;
-  const { index, key, sameDocument } = entry;
-  if (typeof index !== "number" || typeof key !== "string" || typeof sameDocument !== "boolean") {
-    return null;
-  }
-  return { index, key, sameDocument };
-}
+const unavailableBrowserNavigationEntries = {
+  currentEntryIndex: null,
+  currentEntryKey: null,
+  entries: null,
+} satisfies Pick<
+  BrowserNavigationTraversalHints,
+  "currentEntryIndex" | "currentEntryKey" | "entries"
+>;
 
 function readBrowserNavigationHistoryEntries(
-  nav: object,
+  nav: BrowserNavigationProbe,
 ): Pick<BrowserNavigationTraversalHints, "currentEntryIndex" | "currentEntryKey" | "entries"> {
-  if (!hasEntryListFields(nav)) {
-    return { currentEntryIndex: null, currentEntryKey: null, entries: null };
+  const { currentEntry } = nav;
+  if (!currentEntry || typeof nav.entries !== "function") {
+    return unavailableBrowserNavigationEntries;
   }
 
-  const currentEntry = readBrowserNavigationHistoryEntry(nav.currentEntry);
-  let rawEntries: unknown;
+  let entries: readonly BrowserNavigationHistoryEntry[];
   try {
-    rawEntries = nav.entries();
+    entries = nav.entries();
   } catch {
-    return { currentEntryIndex: null, currentEntryKey: null, entries: null };
-  }
-  if (!currentEntry || !Array.isArray(rawEntries)) {
-    return { currentEntryIndex: null, currentEntryKey: null, entries: null };
-  }
-
-  const entries: BrowserNavigationHistoryEntry[] = [];
-  for (const entry of rawEntries) {
-    const parsed = readBrowserNavigationHistoryEntry(entry);
-    if (!parsed) {
-      return { currentEntryIndex: null, currentEntryKey: null, entries: null };
-    }
-    entries.push(parsed);
+    return unavailableBrowserNavigationEntries;
   }
 
   return {
@@ -1334,9 +1292,11 @@ function readBrowserNavigationHistoryEntries(
   };
 }
 
-function readBrowserNavigationTraversalHints(nav: unknown): BrowserNavigationTraversalHints | null {
-  if (!nav || typeof nav !== "object") return null;
-  if (!hasTraversalHintFields(nav)) return null;
+function readBrowserNavigationTraversalHints(
+  source: BrowserNavigationSource,
+): BrowserNavigationTraversalHints | null {
+  const nav = source.navigation;
+  if (!nav) return null;
   const { canGoBack, canGoForward } = nav;
   if (typeof canGoBack !== "boolean" || typeof canGoForward !== "boolean") return null;
   return {
@@ -1347,8 +1307,7 @@ function readBrowserNavigationTraversalHints(nav: unknown): BrowserNavigationTra
 }
 
 function getBrowserNavigationTraversalHints(): BrowserNavigationTraversalHints | null {
-  if (!hasNavigationProperty(window)) return null;
-  return readBrowserNavigationTraversalHints(window.navigation);
+  return readBrowserNavigationTraversalHints(window);
 }
 
 let optimisticTraversalBaseEntryKey: string | null = null;
