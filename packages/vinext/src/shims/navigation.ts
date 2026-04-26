@@ -1257,7 +1257,7 @@ type BrowserNavigationProbe = {
   readonly entries?: () => readonly BrowserNavigationHistoryEntry[];
 };
 
-type BrowserNavigationSource = {
+type BrowserNavigationSource = Window & {
   readonly navigation?: BrowserNavigationProbe | null;
 };
 
