@@ -15,6 +15,7 @@ import {
   sitemapToXml,
   robotsToText,
   manifestToJson,
+  matchMetadataRoutePattern,
   scanMetadataFiles,
   METADATA_FILE_MAP,
   type SitemapEntry,
@@ -28,6 +29,26 @@ import {
 function expectSitemapToMatchNext(entries: SitemapEntry[]): void {
   expect(sitemapToXml(entries)).toBe(nextResolveSitemap(entries));
 }
+
+describe("matchMetadataRoutePattern", () => {
+  it("matches catch-all params before metadata file suffixes", () => {
+    expect(
+      matchMetadataRoutePattern(
+        ["metadata-multi-catchall", "a", "b", "icon"],
+        ["metadata-multi-catchall", ":slug+", "icon"],
+      ),
+    ).toEqual({ slug: ["a", "b"] });
+  });
+
+  it("returns null when a required catch-all param has no segments", () => {
+    expect(
+      matchMetadataRoutePattern(
+        ["metadata-multi-catchall", "icon"],
+        ["metadata-multi-catchall", ":slug+", "icon"],
+      ),
+    ).toBeNull();
+  });
+});
 
 // ─── sitemapToXml ───────────────────────────────────────────────────────
 

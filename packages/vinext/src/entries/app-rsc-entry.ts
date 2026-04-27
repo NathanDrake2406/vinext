@@ -470,7 +470,7 @@ import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewp
 import { applyFileBasedMetadata } from ${JSON.stringify(fileBasedMetadataPath)};
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
-${effectiveMetaRoutes.length > 0 ? `import { sitemapToXml, robotsToText, manifestToJson } from ${JSON.stringify(metadataRoutesPath)};` : ""}
+${effectiveMetaRoutes.length > 0 ? `import { isValidMetadataImageId, manifestToJson, matchMetadataRoutePattern as __matchMetadataRoutePattern, robotsToText, sitemapToXml } from ${JSON.stringify(metadataRoutesPath)};` : ""}
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from ${JSON.stringify(configMatchersPath)};
 import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
@@ -1053,49 +1053,6 @@ function matchPattern(urlParts, patternParts) {
   }
   if (urlParts.length !== patternParts.length) return null;
   return params;
-}
-
-function matchMetadataRoutePattern(urlParts, patternParts) {
-  const params = Object.create(null);
-
-  function matchFrom(urlIndex, patternIndex) {
-    if (patternIndex === patternParts.length) {
-      return urlIndex === urlParts.length;
-    }
-
-    const pp = patternParts[patternIndex];
-    if (pp.endsWith("+") || pp.endsWith("*")) {
-      const paramName = pp.slice(1, -1);
-      const minLength = pp.endsWith("+") ? 1 : 0;
-      for (let endIndex = urlIndex + minLength; endIndex <= urlParts.length; endIndex++) {
-        params[paramName] = urlParts.slice(urlIndex, endIndex);
-        if (matchFrom(endIndex, patternIndex + 1)) {
-          return true;
-        }
-      }
-      delete params[paramName];
-      return false;
-    }
-
-    if (pp.startsWith(":")) {
-      if (urlIndex >= urlParts.length) {
-        return false;
-      }
-      params[pp.slice(1)] = urlParts[urlIndex];
-      if (matchFrom(urlIndex + 1, patternIndex + 1)) {
-        return true;
-      }
-      delete params[pp.slice(1)];
-      return false;
-    }
-
-    if (urlIndex >= urlParts.length || urlParts[urlIndex] !== pp) {
-      return false;
-    }
-    return matchFrom(urlIndex + 1, patternIndex + 1);
-  }
-
-  return matchFrom(0, 0) ? params : null;
 }
 
 function mergeMatchedParams(sourceParams, targetParams) {
@@ -1907,13 +1864,13 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     if (metaRoute.patternParts) {
       var _metaUrlParts = cleanPathname.split("/").filter(Boolean);
       if (_hasGeneratedImageMetadata && _metaUrlParts.length > 0) {
-        _metaParams = matchMetadataRoutePattern(_metaUrlParts.slice(0, -1), metaRoute.patternParts);
+        _metaParams = __matchMetadataRoutePattern(_metaUrlParts.slice(0, -1), metaRoute.patternParts);
         if (_metaParams) {
           _metaImageId = _metaUrlParts[_metaUrlParts.length - 1];
         }
       }
       if (!_metaParams) {
-        _metaParams = matchMetadataRoutePattern(_metaUrlParts, metaRoute.patternParts);
+        _metaParams = __matchMetadataRoutePattern(_metaUrlParts, metaRoute.patternParts);
       }
       if (!_metaParams) continue;
     } else if (_hasGeneratedImageMetadata && cleanPathname.startsWith(metaRoute.servedUrl + "/")) {
