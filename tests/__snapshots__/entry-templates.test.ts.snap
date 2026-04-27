@@ -44,15 +44,17 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
-import { NextRequest, NextFetchEvent } from "next/server";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 
 
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from "<ROOT>/packages/vinext/src/config/config-matchers.js";
-import { decodePathParams as __decodePathParams } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { decodePathParams as __decodePathParams, normalizePath as __normalizePath } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { normalizePathnameForRouteMatch as __normalizePathnameForRouteMatch, normalizePathnameForRouteMatchStrict as __normalizePathnameForRouteMatchStrict } from "<ROOT>/packages/vinext/src/routing/utils.js";
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from "<ROOT>/packages/vinext/src/server/middleware-request-headers.js";
-import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { applyAppMiddleware as __applyAppMiddleware } from "<ROOT>/packages/vinext/src/server/app-middleware.js";
 import {
   isKnownDynamicAppRoute as __isKnownDynamicAppRoute,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-runtime.js";
@@ -854,8 +856,6 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   });
 }
 
-
-
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
@@ -922,128 +922,6 @@ function __validateDevRequestOrigin(request) {
   return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
 }
 
-
-// ── ReDoS-safe regex compilation (still needed for middleware matching) ──
-
-function __isSafeRegex(pattern) {
-  const quantifierAtDepth = [];
-  let depth = 0;
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "\\\\") { i += 2; continue; }
-    if (ch === "[") {
-      i++;
-      while (i < pattern.length && pattern[i] !== "]") {
-        if (pattern[i] === "\\\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      if (quantifierAtDepth.length <= depth) quantifierAtDepth.push(false);
-      else quantifierAtDepth[depth] = false;
-      i++;
-      continue;
-    }
-    if (ch === ")") {
-      const hadQ = depth > 0 && quantifierAtDepth[depth];
-      if (depth > 0) depth--;
-      const next = pattern[i + 1];
-      if (next === "+" || next === "*" || next === "{") {
-        if (hadQ) return false;
-        if (depth >= 0 && depth < quantifierAtDepth.length) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "+" || ch === "*") {
-      if (depth > 0) quantifierAtDepth[depth] = true;
-      i++;
-      continue;
-    }
-    if (ch === "?") {
-      const prev = i > 0 ? pattern[i - 1] : "";
-      if (prev !== "+" && prev !== "*" && prev !== "?" && prev !== "}") {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "{") {
-      let j = i + 1;
-      while (j < pattern.length && /[\\d,]/.test(pattern[j])) j++;
-      if (j < pattern.length && pattern[j] === "}" && j > i + 1) {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-        i = j + 1;
-        continue;
-      }
-    }
-    i++;
-  }
-  return true;
-}
-function __safeRegExp(pattern, flags) {
-  if (!__isSafeRegex(pattern)) {
-    console.warn("[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
-    return null;
-  }
-  try { return new RegExp(pattern, flags); } catch { return null; }
-}
-
-// ── Path normalization ──────────────────────────────────────────────────
-
-function __normalizePath(pathname) {
-  if (
-    pathname === "/" ||
-    (pathname.length > 1 &&
-      pathname[0] === "/" &&
-      !pathname.includes("//") &&
-      !pathname.includes("/./") &&
-      !pathname.includes("/../") &&
-      !pathname.endsWith("/.") &&
-      !pathname.endsWith("/.."))
-  ) {
-    return pathname;
-  }
-  const segments = pathname.split("/");
-  const resolved = [];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") { resolved.pop(); }
-    else { resolved.push(seg); }
-  }
-  return "/" + resolved.join("/");
-}
-
-const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
-function __decodeRouteSegment(segment) {
-  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
-    return encodeURIComponent(char);
-  });
-}
-function __decodeRouteSegmentSafe(segment) {
-  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
-}
-function __normalizePathnameForRouteMatch(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegmentSafe(segments[i]));
-  }
-  return normalized.join("/");
-}
-function __normalizePathnameForRouteMatchStrict(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegment(segments[i]));
-  }
-  return normalized.join("/");
-}
 
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
@@ -2373,15 +2251,17 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
-import { NextRequest, NextFetchEvent } from "next/server";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 
 
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from "<ROOT>/packages/vinext/src/config/config-matchers.js";
-import { decodePathParams as __decodePathParams } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { decodePathParams as __decodePathParams, normalizePath as __normalizePath } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { normalizePathnameForRouteMatch as __normalizePathnameForRouteMatch, normalizePathnameForRouteMatchStrict as __normalizePathnameForRouteMatchStrict } from "<ROOT>/packages/vinext/src/routing/utils.js";
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from "<ROOT>/packages/vinext/src/server/middleware-request-headers.js";
-import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { applyAppMiddleware as __applyAppMiddleware } from "<ROOT>/packages/vinext/src/server/app-middleware.js";
 import {
   isKnownDynamicAppRoute as __isKnownDynamicAppRoute,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-runtime.js";
@@ -3183,8 +3063,6 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   });
 }
 
-
-
 const __basePath = "/base";
 const __trailingSlash = true;
 const __i18nConfig = null;
@@ -3251,128 +3129,6 @@ function __validateDevRequestOrigin(request) {
   return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
 }
 
-
-// ── ReDoS-safe regex compilation (still needed for middleware matching) ──
-
-function __isSafeRegex(pattern) {
-  const quantifierAtDepth = [];
-  let depth = 0;
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "\\\\") { i += 2; continue; }
-    if (ch === "[") {
-      i++;
-      while (i < pattern.length && pattern[i] !== "]") {
-        if (pattern[i] === "\\\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      if (quantifierAtDepth.length <= depth) quantifierAtDepth.push(false);
-      else quantifierAtDepth[depth] = false;
-      i++;
-      continue;
-    }
-    if (ch === ")") {
-      const hadQ = depth > 0 && quantifierAtDepth[depth];
-      if (depth > 0) depth--;
-      const next = pattern[i + 1];
-      if (next === "+" || next === "*" || next === "{") {
-        if (hadQ) return false;
-        if (depth >= 0 && depth < quantifierAtDepth.length) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "+" || ch === "*") {
-      if (depth > 0) quantifierAtDepth[depth] = true;
-      i++;
-      continue;
-    }
-    if (ch === "?") {
-      const prev = i > 0 ? pattern[i - 1] : "";
-      if (prev !== "+" && prev !== "*" && prev !== "?" && prev !== "}") {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "{") {
-      let j = i + 1;
-      while (j < pattern.length && /[\\d,]/.test(pattern[j])) j++;
-      if (j < pattern.length && pattern[j] === "}" && j > i + 1) {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-        i = j + 1;
-        continue;
-      }
-    }
-    i++;
-  }
-  return true;
-}
-function __safeRegExp(pattern, flags) {
-  if (!__isSafeRegex(pattern)) {
-    console.warn("[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
-    return null;
-  }
-  try { return new RegExp(pattern, flags); } catch { return null; }
-}
-
-// ── Path normalization ──────────────────────────────────────────────────
-
-function __normalizePath(pathname) {
-  if (
-    pathname === "/" ||
-    (pathname.length > 1 &&
-      pathname[0] === "/" &&
-      !pathname.includes("//") &&
-      !pathname.includes("/./") &&
-      !pathname.includes("/../") &&
-      !pathname.endsWith("/.") &&
-      !pathname.endsWith("/.."))
-  ) {
-    return pathname;
-  }
-  const segments = pathname.split("/");
-  const resolved = [];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") { resolved.pop(); }
-    else { resolved.push(seg); }
-  }
-  return "/" + resolved.join("/");
-}
-
-const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
-function __decodeRouteSegment(segment) {
-  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
-    return encodeURIComponent(char);
-  });
-}
-function __decodeRouteSegmentSafe(segment) {
-  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
-}
-function __normalizePathnameForRouteMatch(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegmentSafe(segments[i]));
-  }
-  return normalized.join("/");
-}
-function __normalizePathnameForRouteMatchStrict(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegment(segments[i]));
-  }
-  return normalized.join("/");
-}
 
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
@@ -4708,15 +4464,17 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
-import { NextRequest, NextFetchEvent } from "next/server";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 
 
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from "<ROOT>/packages/vinext/src/config/config-matchers.js";
-import { decodePathParams as __decodePathParams } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { decodePathParams as __decodePathParams, normalizePath as __normalizePath } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { normalizePathnameForRouteMatch as __normalizePathnameForRouteMatch, normalizePathnameForRouteMatchStrict as __normalizePathnameForRouteMatchStrict } from "<ROOT>/packages/vinext/src/routing/utils.js";
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from "<ROOT>/packages/vinext/src/server/middleware-request-headers.js";
-import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { applyAppMiddleware as __applyAppMiddleware } from "<ROOT>/packages/vinext/src/server/app-middleware.js";
 import {
   isKnownDynamicAppRoute as __isKnownDynamicAppRoute,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-runtime.js";
@@ -5519,8 +5277,6 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   });
 }
 
-
-
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
@@ -5587,128 +5343,6 @@ function __validateDevRequestOrigin(request) {
   return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
 }
 
-
-// ── ReDoS-safe regex compilation (still needed for middleware matching) ──
-
-function __isSafeRegex(pattern) {
-  const quantifierAtDepth = [];
-  let depth = 0;
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "\\\\") { i += 2; continue; }
-    if (ch === "[") {
-      i++;
-      while (i < pattern.length && pattern[i] !== "]") {
-        if (pattern[i] === "\\\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      if (quantifierAtDepth.length <= depth) quantifierAtDepth.push(false);
-      else quantifierAtDepth[depth] = false;
-      i++;
-      continue;
-    }
-    if (ch === ")") {
-      const hadQ = depth > 0 && quantifierAtDepth[depth];
-      if (depth > 0) depth--;
-      const next = pattern[i + 1];
-      if (next === "+" || next === "*" || next === "{") {
-        if (hadQ) return false;
-        if (depth >= 0 && depth < quantifierAtDepth.length) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "+" || ch === "*") {
-      if (depth > 0) quantifierAtDepth[depth] = true;
-      i++;
-      continue;
-    }
-    if (ch === "?") {
-      const prev = i > 0 ? pattern[i - 1] : "";
-      if (prev !== "+" && prev !== "*" && prev !== "?" && prev !== "}") {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "{") {
-      let j = i + 1;
-      while (j < pattern.length && /[\\d,]/.test(pattern[j])) j++;
-      if (j < pattern.length && pattern[j] === "}" && j > i + 1) {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-        i = j + 1;
-        continue;
-      }
-    }
-    i++;
-  }
-  return true;
-}
-function __safeRegExp(pattern, flags) {
-  if (!__isSafeRegex(pattern)) {
-    console.warn("[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
-    return null;
-  }
-  try { return new RegExp(pattern, flags); } catch { return null; }
-}
-
-// ── Path normalization ──────────────────────────────────────────────────
-
-function __normalizePath(pathname) {
-  if (
-    pathname === "/" ||
-    (pathname.length > 1 &&
-      pathname[0] === "/" &&
-      !pathname.includes("//") &&
-      !pathname.includes("/./") &&
-      !pathname.includes("/../") &&
-      !pathname.endsWith("/.") &&
-      !pathname.endsWith("/.."))
-  ) {
-    return pathname;
-  }
-  const segments = pathname.split("/");
-  const resolved = [];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") { resolved.pop(); }
-    else { resolved.push(seg); }
-  }
-  return "/" + resolved.join("/");
-}
-
-const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
-function __decodeRouteSegment(segment) {
-  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
-    return encodeURIComponent(char);
-  });
-}
-function __decodeRouteSegmentSafe(segment) {
-  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
-}
-function __normalizePathnameForRouteMatch(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegmentSafe(segments[i]));
-  }
-  return normalized.join("/");
-}
-function __normalizePathnameForRouteMatchStrict(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegment(segments[i]));
-  }
-  return normalized.join("/");
-}
 
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
@@ -7038,15 +6672,17 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
-import { NextRequest, NextFetchEvent } from "next/server";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 import * as _instrumentation from "/tmp/test/instrumentation.ts";
 
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from "<ROOT>/packages/vinext/src/config/config-matchers.js";
-import { decodePathParams as __decodePathParams } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { decodePathParams as __decodePathParams, normalizePath as __normalizePath } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { normalizePathnameForRouteMatch as __normalizePathnameForRouteMatch, normalizePathnameForRouteMatchStrict as __normalizePathnameForRouteMatchStrict } from "<ROOT>/packages/vinext/src/routing/utils.js";
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from "<ROOT>/packages/vinext/src/server/middleware-request-headers.js";
-import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { applyAppMiddleware as __applyAppMiddleware } from "<ROOT>/packages/vinext/src/server/app-middleware.js";
 import {
   isKnownDynamicAppRoute as __isKnownDynamicAppRoute,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-runtime.js";
@@ -7878,8 +7514,6 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   });
 }
 
-
-
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
@@ -7946,128 +7580,6 @@ function __validateDevRequestOrigin(request) {
   return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
 }
 
-
-// ── ReDoS-safe regex compilation (still needed for middleware matching) ──
-
-function __isSafeRegex(pattern) {
-  const quantifierAtDepth = [];
-  let depth = 0;
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "\\\\") { i += 2; continue; }
-    if (ch === "[") {
-      i++;
-      while (i < pattern.length && pattern[i] !== "]") {
-        if (pattern[i] === "\\\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      if (quantifierAtDepth.length <= depth) quantifierAtDepth.push(false);
-      else quantifierAtDepth[depth] = false;
-      i++;
-      continue;
-    }
-    if (ch === ")") {
-      const hadQ = depth > 0 && quantifierAtDepth[depth];
-      if (depth > 0) depth--;
-      const next = pattern[i + 1];
-      if (next === "+" || next === "*" || next === "{") {
-        if (hadQ) return false;
-        if (depth >= 0 && depth < quantifierAtDepth.length) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "+" || ch === "*") {
-      if (depth > 0) quantifierAtDepth[depth] = true;
-      i++;
-      continue;
-    }
-    if (ch === "?") {
-      const prev = i > 0 ? pattern[i - 1] : "";
-      if (prev !== "+" && prev !== "*" && prev !== "?" && prev !== "}") {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "{") {
-      let j = i + 1;
-      while (j < pattern.length && /[\\d,]/.test(pattern[j])) j++;
-      if (j < pattern.length && pattern[j] === "}" && j > i + 1) {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-        i = j + 1;
-        continue;
-      }
-    }
-    i++;
-  }
-  return true;
-}
-function __safeRegExp(pattern, flags) {
-  if (!__isSafeRegex(pattern)) {
-    console.warn("[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
-    return null;
-  }
-  try { return new RegExp(pattern, flags); } catch { return null; }
-}
-
-// ── Path normalization ──────────────────────────────────────────────────
-
-function __normalizePath(pathname) {
-  if (
-    pathname === "/" ||
-    (pathname.length > 1 &&
-      pathname[0] === "/" &&
-      !pathname.includes("//") &&
-      !pathname.includes("/./") &&
-      !pathname.includes("/../") &&
-      !pathname.endsWith("/.") &&
-      !pathname.endsWith("/.."))
-  ) {
-    return pathname;
-  }
-  const segments = pathname.split("/");
-  const resolved = [];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") { resolved.pop(); }
-    else { resolved.push(seg); }
-  }
-  return "/" + resolved.join("/");
-}
-
-const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
-function __decodeRouteSegment(segment) {
-  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
-    return encodeURIComponent(char);
-  });
-}
-function __decodeRouteSegmentSafe(segment) {
-  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
-}
-function __normalizePathnameForRouteMatch(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegmentSafe(segments[i]));
-  }
-  return normalized.join("/");
-}
-function __normalizePathnameForRouteMatchStrict(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegment(segments[i]));
-  }
-  return normalized.join("/");
-}
 
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
@@ -9400,15 +8912,17 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
-import { NextRequest, NextFetchEvent } from "next/server";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 
 import { sitemapToXml, robotsToText, manifestToJson } from "<ROOT>/packages/vinext/src/server/metadata-routes.js";
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from "<ROOT>/packages/vinext/src/config/config-matchers.js";
-import { decodePathParams as __decodePathParams } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { decodePathParams as __decodePathParams, normalizePath as __normalizePath } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { normalizePathnameForRouteMatch as __normalizePathnameForRouteMatch, normalizePathnameForRouteMatchStrict as __normalizePathnameForRouteMatchStrict } from "<ROOT>/packages/vinext/src/routing/utils.js";
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from "<ROOT>/packages/vinext/src/server/middleware-request-headers.js";
-import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { applyAppMiddleware as __applyAppMiddleware } from "<ROOT>/packages/vinext/src/server/app-middleware.js";
 import {
   isKnownDynamicAppRoute as __isKnownDynamicAppRoute,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-runtime.js";
@@ -10217,8 +9731,6 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   });
 }
 
-
-
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
@@ -10285,128 +9797,6 @@ function __validateDevRequestOrigin(request) {
   return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
 }
 
-
-// ── ReDoS-safe regex compilation (still needed for middleware matching) ──
-
-function __isSafeRegex(pattern) {
-  const quantifierAtDepth = [];
-  let depth = 0;
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "\\\\") { i += 2; continue; }
-    if (ch === "[") {
-      i++;
-      while (i < pattern.length && pattern[i] !== "]") {
-        if (pattern[i] === "\\\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      if (quantifierAtDepth.length <= depth) quantifierAtDepth.push(false);
-      else quantifierAtDepth[depth] = false;
-      i++;
-      continue;
-    }
-    if (ch === ")") {
-      const hadQ = depth > 0 && quantifierAtDepth[depth];
-      if (depth > 0) depth--;
-      const next = pattern[i + 1];
-      if (next === "+" || next === "*" || next === "{") {
-        if (hadQ) return false;
-        if (depth >= 0 && depth < quantifierAtDepth.length) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "+" || ch === "*") {
-      if (depth > 0) quantifierAtDepth[depth] = true;
-      i++;
-      continue;
-    }
-    if (ch === "?") {
-      const prev = i > 0 ? pattern[i - 1] : "";
-      if (prev !== "+" && prev !== "*" && prev !== "?" && prev !== "}") {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "{") {
-      let j = i + 1;
-      while (j < pattern.length && /[\\d,]/.test(pattern[j])) j++;
-      if (j < pattern.length && pattern[j] === "}" && j > i + 1) {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-        i = j + 1;
-        continue;
-      }
-    }
-    i++;
-  }
-  return true;
-}
-function __safeRegExp(pattern, flags) {
-  if (!__isSafeRegex(pattern)) {
-    console.warn("[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
-    return null;
-  }
-  try { return new RegExp(pattern, flags); } catch { return null; }
-}
-
-// ── Path normalization ──────────────────────────────────────────────────
-
-function __normalizePath(pathname) {
-  if (
-    pathname === "/" ||
-    (pathname.length > 1 &&
-      pathname[0] === "/" &&
-      !pathname.includes("//") &&
-      !pathname.includes("/./") &&
-      !pathname.includes("/../") &&
-      !pathname.endsWith("/.") &&
-      !pathname.endsWith("/.."))
-  ) {
-    return pathname;
-  }
-  const segments = pathname.split("/");
-  const resolved = [];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") { resolved.pop(); }
-    else { resolved.push(seg); }
-  }
-  return "/" + resolved.join("/");
-}
-
-const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
-function __decodeRouteSegment(segment) {
-  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
-    return encodeURIComponent(char);
-  });
-}
-function __decodeRouteSegmentSafe(segment) {
-  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
-}
-function __normalizePathnameForRouteMatch(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegmentSafe(segments[i]));
-  }
-  return normalized.join("/");
-}
-function __normalizePathnameForRouteMatchStrict(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegment(segments[i]));
-  }
-  return normalized.join("/");
-}
 
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
@@ -11736,15 +11126,17 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
-import { NextRequest, NextFetchEvent } from "next/server";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 import * as middlewareModule from "/tmp/test/middleware.ts";
 
 
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from "<ROOT>/packages/vinext/src/config/config-matchers.js";
-import { decodePathParams as __decodePathParams } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { decodePathParams as __decodePathParams, normalizePath as __normalizePath } from "<ROOT>/packages/vinext/src/server/normalize-path.js";
+import { normalizePathnameForRouteMatch as __normalizePathnameForRouteMatch, normalizePathnameForRouteMatchStrict as __normalizePathnameForRouteMatchStrict } from "<ROOT>/packages/vinext/src/routing/utils.js";
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from "<ROOT>/packages/vinext/src/server/middleware-request-headers.js";
-import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash } from "<ROOT>/packages/vinext/src/server/request-pipeline.js";
+import { applyAppMiddleware as __applyAppMiddleware } from "<ROOT>/packages/vinext/src/server/app-middleware.js";
 import {
   isKnownDynamicAppRoute as __isKnownDynamicAppRoute,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-runtime.js";
@@ -12546,237 +11938,6 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   });
 }
 
-
-const __mwPatternCache = new Map();
-function __extractConstraint(str, re) {
-  if (str[re.lastIndex] !== "(") return null;
-  const start = re.lastIndex + 1;
-  let depth = 1;
-  let i = start;
-  while (i < str.length && depth > 0) {
-    if (str[i] === "(") depth++;
-    else if (str[i] === ")") depth--;
-    i++;
-  }
-  if (depth !== 0) return null;
-  re.lastIndex = i;
-  return str.slice(start, i - 1);
-}
-function __compileMwPattern(pattern) {
-  const hasConstraints = /:[\\w-]+[*+]?\\(/.test(pattern);
-  if (!hasConstraints && (pattern.includes("(") || pattern.includes("\\\\"))) {
-    return __safeRegExp("^" + pattern + "$");
-  }
-  let regexStr = "";
-  const tokenRe = /\\/:([\\w-]+)\\*|\\/:([\\w-]+)\\+|:([\\w-]+)|[.]|[^/:.]+|./g;
-  let tok;
-  while ((tok = tokenRe.exec(pattern)) !== null) {
-    if (tok[1] !== undefined) {
-      const c1 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
-      regexStr += c1 !== null ? "(?:/(" + c1 + "))?" : "(?:/.*)?";
-    }
-    else if (tok[2] !== undefined) {
-      const c2 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
-      regexStr += c2 !== null ? "(?:/(" + c2 + "))" : "(?:/.+)";
-    }
-    else if (tok[3] !== undefined) {
-      const constraint = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
-      const isOptional = pattern[tokenRe.lastIndex] === "?";
-      if (isOptional) tokenRe.lastIndex += 1;
-      const group = constraint !== null ? "(" + constraint + ")" : "([^/]+)";
-      if (isOptional && regexStr.endsWith("/")) {
-        regexStr = regexStr.slice(0, -1) + "(?:/" + group + ")?";
-      } else if (isOptional) {
-        regexStr += group + "?";
-      } else {
-        regexStr += group;
-      }
-    }
-    else if (tok[0] === ".") { regexStr += "\\\\."; }
-    else { regexStr += tok[0]; }
-  }
-  return __safeRegExp("^" + regexStr + "$");
-}
-function matchMiddlewarePattern(pathname, pattern) {
-  let cached = __mwPatternCache.get(pattern);
-  if (cached === undefined) {
-    cached = __compileMwPattern(pattern);
-    __mwPatternCache.set(pattern, cached);
-  }
-  return cached ? cached.test(pathname) : pathname === pattern;
-}
-
-const __middlewareConditionRegexCache = new Map();
-// Requestless matcher checks reuse this singleton. Treat it as immutable.
-const __emptyMiddlewareRequestContext = {
-  headers: new Headers(),
-  cookies: {},
-  query: new URLSearchParams(),
-  host: "",
-};
-
-function __normalizeMiddlewareHost(hostHeader, fallbackHostname) {
-  const host = hostHeader ?? fallbackHostname;
-  return host.split(":", 1)[0].toLowerCase();
-}
-
-function __parseMiddlewareCookies(cookieHeader) {
-  if (!cookieHeader) return {};
-  const cookies = {};
-  for (const part of cookieHeader.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    const key = part.slice(0, eq).trim();
-    const value = part.slice(eq + 1).trim();
-    if (key) cookies[key] = value;
-  }
-  return cookies;
-}
-
-function __middlewareRequestContextFromRequest(request) {
-  if (!request) return __emptyMiddlewareRequestContext;
-  const url = new URL(request.url);
-  return {
-    headers: request.headers,
-    cookies: __parseMiddlewareCookies(request.headers.get("cookie")),
-    query: url.searchParams,
-    host: __normalizeMiddlewareHost(request.headers.get("host"), url.hostname),
-  };
-}
-
-function __stripMiddlewareLocalePrefix(pathname, i18nConfig) {
-  if (pathname === "/") return null;
-  const segments = pathname.split("/");
-  const firstSegment = segments[1];
-  if (!firstSegment || !i18nConfig || !i18nConfig.locales.includes(firstSegment)) {
-    return null;
-  }
-  const stripped = "/" + segments.slice(2).join("/");
-  return stripped === "/" ? "/" : stripped.replace(/\\/+$/, "") || "/";
-}
-
-function __matchMiddlewareMatcherPattern(pathname, pattern, i18nConfig) {
-  if (!i18nConfig) return matchMiddlewarePattern(pathname, pattern);
-  const localeStrippedPathname = __stripMiddlewareLocalePrefix(pathname, i18nConfig);
-  return matchMiddlewarePattern(localeStrippedPathname ?? pathname, pattern);
-}
-
-function __middlewareConditionRegex(value) {
-  if (__middlewareConditionRegexCache.has(value)) {
-    return __middlewareConditionRegexCache.get(value);
-  }
-  const re = __safeRegExp(value);
-  __middlewareConditionRegexCache.set(value, re);
-  return re;
-}
-
-function __checkMiddlewareCondition(condition, ctx) {
-  switch (condition.type) {
-    case "header": {
-      const headerValue = ctx.headers.get(condition.key);
-      if (headerValue === null) return false;
-      if (condition.value !== undefined) {
-        const re = __middlewareConditionRegex(condition.value);
-        if (re) return re.test(headerValue);
-        return headerValue === condition.value;
-      }
-      return true;
-    }
-    case "cookie": {
-      const cookieValue = ctx.cookies[condition.key];
-      if (cookieValue === undefined) return false;
-      if (condition.value !== undefined) {
-        const re = __middlewareConditionRegex(condition.value);
-        if (re) return re.test(cookieValue);
-        return cookieValue === condition.value;
-      }
-      return true;
-    }
-    case "query": {
-      const queryValue = ctx.query.get(condition.key);
-      if (queryValue === null) return false;
-      if (condition.value !== undefined) {
-        const re = __middlewareConditionRegex(condition.value);
-        if (re) return re.test(queryValue);
-        return queryValue === condition.value;
-      }
-      return true;
-    }
-    case "host": {
-      if (condition.value !== undefined) {
-        const re = __middlewareConditionRegex(condition.value);
-        if (re) return re.test(ctx.host);
-        return ctx.host === condition.value;
-      }
-      return ctx.host === condition.key;
-    }
-    default:
-      return false;
-  }
-}
-
-function __checkMiddlewareHasConditions(has, missing, ctx) {
-  if (has) {
-    for (const condition of has) {
-      if (!__checkMiddlewareCondition(condition, ctx)) return false;
-    }
-  }
-  if (missing) {
-    for (const condition of missing) {
-      if (__checkMiddlewareCondition(condition, ctx)) return false;
-    }
-  }
-  return true;
-}
-
-// Keep this in sync with isValidMiddlewareMatcherObject in middleware.ts.
-function __isValidMiddlewareMatcherObject(matcher) {
-  if (!matcher || typeof matcher !== "object" || Array.isArray(matcher)) return false;
-  if (typeof matcher.source !== "string") return false;
-  for (const key of Object.keys(matcher)) {
-    if (key !== "source" && key !== "locale" && key !== "has" && key !== "missing") {
-      return false;
-    }
-  }
-  if ("locale" in matcher && matcher.locale !== undefined && matcher.locale !== false) return false;
-  if ("has" in matcher && matcher.has !== undefined && !Array.isArray(matcher.has)) return false;
-  if ("missing" in matcher && matcher.missing !== undefined && !Array.isArray(matcher.missing)) {
-    return false;
-  }
-  return true;
-}
-
-function __matchMiddlewareObject(pathname, matcher, i18nConfig) {
-  return matcher.locale === false
-    ? matchMiddlewarePattern(pathname, matcher.source)
-    : __matchMiddlewareMatcherPattern(pathname, matcher.source, i18nConfig);
-}
-
-function matchesMiddleware(pathname, matcher, request, i18nConfig) {
-  if (!matcher) {
-    return true;
-  }
-  if (typeof matcher === "string") {
-    return __matchMiddlewareMatcherPattern(pathname, matcher, i18nConfig);
-  }
-  if (!Array.isArray(matcher)) {
-    return false;
-  }
-  const requestContext = __middlewareRequestContextFromRequest(request);
-  for (const m of matcher) {
-    if (typeof m === "string") {
-      if (__matchMiddlewareMatcherPattern(pathname, m, i18nConfig)) return true;
-      continue;
-    }
-    if (__isValidMiddlewareMatcherObject(m)) {
-      if (!__matchMiddlewareObject(pathname, m, i18nConfig)) continue;
-      if (!__checkMiddlewareHasConditions(m.has, m.missing, requestContext)) continue;
-      return true;
-    }
-  }
-  return false;
-}
-
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
@@ -12843,128 +12004,6 @@ function __validateDevRequestOrigin(request) {
   return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
 }
 
-
-// ── ReDoS-safe regex compilation (still needed for middleware matching) ──
-
-function __isSafeRegex(pattern) {
-  const quantifierAtDepth = [];
-  let depth = 0;
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "\\\\") { i += 2; continue; }
-    if (ch === "[") {
-      i++;
-      while (i < pattern.length && pattern[i] !== "]") {
-        if (pattern[i] === "\\\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      if (quantifierAtDepth.length <= depth) quantifierAtDepth.push(false);
-      else quantifierAtDepth[depth] = false;
-      i++;
-      continue;
-    }
-    if (ch === ")") {
-      const hadQ = depth > 0 && quantifierAtDepth[depth];
-      if (depth > 0) depth--;
-      const next = pattern[i + 1];
-      if (next === "+" || next === "*" || next === "{") {
-        if (hadQ) return false;
-        if (depth >= 0 && depth < quantifierAtDepth.length) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "+" || ch === "*") {
-      if (depth > 0) quantifierAtDepth[depth] = true;
-      i++;
-      continue;
-    }
-    if (ch === "?") {
-      const prev = i > 0 ? pattern[i - 1] : "";
-      if (prev !== "+" && prev !== "*" && prev !== "?" && prev !== "}") {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "{") {
-      let j = i + 1;
-      while (j < pattern.length && /[\\d,]/.test(pattern[j])) j++;
-      if (j < pattern.length && pattern[j] === "}" && j > i + 1) {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-        i = j + 1;
-        continue;
-      }
-    }
-    i++;
-  }
-  return true;
-}
-function __safeRegExp(pattern, flags) {
-  if (!__isSafeRegex(pattern)) {
-    console.warn("[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
-    return null;
-  }
-  try { return new RegExp(pattern, flags); } catch { return null; }
-}
-
-// ── Path normalization ──────────────────────────────────────────────────
-
-function __normalizePath(pathname) {
-  if (
-    pathname === "/" ||
-    (pathname.length > 1 &&
-      pathname[0] === "/" &&
-      !pathname.includes("//") &&
-      !pathname.includes("/./") &&
-      !pathname.includes("/../") &&
-      !pathname.endsWith("/.") &&
-      !pathname.endsWith("/.."))
-  ) {
-    return pathname;
-  }
-  const segments = pathname.split("/");
-  const resolved = [];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") { resolved.pop(); }
-    else { resolved.push(seg); }
-  }
-  return "/" + resolved.join("/");
-}
-
-const __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
-function __decodeRouteSegment(segment) {
-  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
-    return encodeURIComponent(char);
-  });
-}
-function __decodeRouteSegmentSafe(segment) {
-  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
-}
-function __normalizePathnameForRouteMatch(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegmentSafe(segments[i]));
-  }
-  return normalized.join("/");
-}
-function __normalizePathnameForRouteMatchStrict(pathname) {
-  const segments = pathname.split("/");
-  const normalized = [];
-  for (let i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegment(segments[i]));
-  }
-  return normalized.join("/");
-}
 
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
@@ -13242,142 +12281,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   // every response path without module-level state that races on Workers.
 
   
-  // In hybrid app+pages dev mode the connect handler already ran middleware
-  // and forwarded the results via x-vinext-mw-ctx. Reconstruct _mwCtx from
-  // the forwarded data instead of re-running the middleware function.
-  // Guarded by NODE_ENV because this header only exists in dev (the connect
-  // handler sets it). In production there is no connect handler, so an
-  // attacker-supplied header must not be trusted.
-  let __mwCtxApplied = false;
-  if (process.env.NODE_ENV !== "production") {
-    const __mwCtxHeader = request.headers.get("x-vinext-mw-ctx");
-    if (__mwCtxHeader) {
-      try {
-        const __mwCtxData = JSON.parse(__mwCtxHeader);
-        if (__mwCtxData.h && __mwCtxData.h.length > 0) {
-          // Note: h may include x-middleware-request-* internal headers so
-          // applyMiddlewareRequestHeaders() can unpack them below.
-          // processMiddlewareHeaders() strips them before any response.
-          _mwCtx.headers = new Headers();
-          for (const [key, value] of __mwCtxData.h) {
-            _mwCtx.headers.append(key, value);
-          }
-        }
-        if (__mwCtxData.s != null) {
-          _mwCtx.status = __mwCtxData.s;
-        }
-        // Apply forwarded middleware rewrite so routing uses the rewritten path.
-        // The RSC plugin constructs its Request from the original HTTP request,
-        // not from req.url, so the connect handler's req.url rewrite is invisible.
-        if (__mwCtxData.r) {
-          const __rewriteParsed = new URL(__mwCtxData.r, request.url);
-          cleanPathname = __rewriteParsed.pathname;
-          url.search = __rewriteParsed.search;
-        }
-        // Flag set after full context application — if any step fails (e.g. malformed
-        // rewrite URL), we fall back to re-running middleware as a safety net.
-        __mwCtxApplied = true;
-      } catch (e) {
-        console.error("[vinext] Failed to parse forwarded middleware context:", e);
-      }
-    }
-  }
-  if (!__mwCtxApplied) {
-   // Run proxy/middleware if present and path matches.
-   // Validate exports match the file type (proxy.ts vs middleware.ts), matching Next.js behavior.
-   // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/proxy-missing-export/proxy-missing-export.test.ts
-  const _isProxy = false;
-  const middlewareFn = _isProxy
-    ? (middlewareModule.proxy ?? middlewareModule.default)
-    : (middlewareModule.middleware ?? middlewareModule.default);
-  if (typeof middlewareFn !== "function") {
-    const _fileType = _isProxy ? "Proxy" : "Middleware";
-    const _expectedExport = _isProxy ? "proxy" : "middleware";
-    throw new Error("The " + _fileType + " file must export a function named \`" + _expectedExport + "\` or a \`default\` function.");
-  }
-  const middlewareMatcher = middlewareModule.config?.matcher;
-  if (matchesMiddleware(cleanPathname, middlewareMatcher, request, __i18nConfig)) {
-    try {
-      // Wrap in NextRequest so middleware gets .nextUrl, .cookies, .geo, .ip, etc.
-       // Always construct a new Request with the fully decoded + normalized pathname
-       // so middleware and the router see the same canonical path.
-      const mwUrl = new URL(request.url);
-      mwUrl.pathname = cleanPathname;
-      const mwRequest = new Request(mwUrl, request);
-      const __mwNextConfig = (__basePath || __i18nConfig) ? { basePath: __basePath, i18n: __i18nConfig ?? undefined } : undefined;
-      const nextRequest = mwRequest instanceof NextRequest ? mwRequest : new NextRequest(mwRequest, __mwNextConfig ? { nextConfig: __mwNextConfig } : undefined);
-      const mwFetchEvent = new NextFetchEvent({ page: cleanPathname });
-      let mwResponse;
-      try {
-        mwResponse = await middlewareFn(nextRequest, mwFetchEvent);
-      } finally {
-        const _mwWaitUntil = mwFetchEvent.drainWaitUntil();
-        const _mwExecCtx = _getRequestExecutionContext();
-        if (_mwExecCtx && typeof _mwExecCtx.waitUntil === "function") { _mwExecCtx.waitUntil(_mwWaitUntil); }
-      }
-      if (mwResponse) {
-        // Check for x-middleware-next (continue)
-        if (mwResponse.headers.get("x-middleware-next") === "1") {
-          // Middleware wants to continue — collect all headers except the two
-          // control headers we've already consumed.  x-middleware-request-*
-          // headers are kept so applyMiddlewareRequestHeaders() can unpack them;
-          // the blanket strip loop after that call removes every remaining
-          // x-middleware-* header before the set is merged into the response.
-           _mwCtx.headers = new Headers();
-          for (const [key, value] of mwResponse.headers) {
-            if (key !== "x-middleware-next" && key !== "x-middleware-rewrite") {
-              _mwCtx.headers.append(key, value);
-            }
-          }
-        } else {
-          // Check for redirect
-          if (mwResponse.status >= 300 && mwResponse.status < 400) {
-            return mwResponse;
-          }
-          // Check for rewrite
-          const rewriteUrl = mwResponse.headers.get("x-middleware-rewrite");
-          if (rewriteUrl) {
-            const rewriteParsed = new URL(rewriteUrl, request.url);
-            cleanPathname = rewriteParsed.pathname;
-            // Carry over query params from the rewrite URL so that
-            // searchParams props, useSearchParams(), and navigation context
-            // reflect the rewrite destination, not the original request.
-            url.search = rewriteParsed.search;
-            // Capture custom status code from rewrite (e.g. NextResponse.rewrite(url, { status: 403 }))
-            if (mwResponse.status !== 200) {
-              _mwCtx.status = mwResponse.status;
-            }
-            // Also save any other headers from the rewrite response
-            _mwCtx.headers = new Headers();
-            for (const [key, value] of mwResponse.headers) {
-              if (key !== "x-middleware-next" && key !== "x-middleware-rewrite") {
-                _mwCtx.headers.append(key, value);
-              }
-            }
-          } else {
-            // Middleware returned a custom response
-            return mwResponse;
-          }
-        }
-      }
-    } catch (err) {
-      console.error("[vinext] Middleware error:", err);
-      return new Response("Internal Server Error", { status: 500 });
-    }
-  }
-  } // end of if (!__mwCtxApplied)
-
-  // Unpack x-middleware-request-* headers into the request context so that
-  // headers() returns the middleware-modified headers instead of the original
-  // request headers. Strip ALL x-middleware-* headers from the set that will
-  // be merged into the outgoing HTTP response — this prefix is reserved for
-  // internal routing signals and must never reach clients.
-  if (_mwCtx.headers) {
-    // Preserve the pre-strip header set so route handlers can reconstruct
-    // a request object with middleware header overrides applied.
-    _mwCtx.requestHeaders = new Headers(_mwCtx.headers);
-    applyMiddlewareRequestHeaders(_mwCtx.headers);
-    processMiddlewareHeaders(_mwCtx.headers);
+  const __mwResult = await __applyAppMiddleware({
+    basePath: __basePath,
+    cleanPathname,
+    context: _mwCtx,
+    i18nConfig: __i18nConfig,
+    isProxy: false,
+    module: middlewareModule,
+    request,
+  });
+  if (__mwResult.kind === "response") return __mwResult.response;
+  cleanPathname = __mwResult.cleanPathname;
+  if (__mwResult.search !== null) {
+    url.search = __mwResult.search;
   }
   
 
@@ -14522,6 +13438,7 @@ import { getSSRFontLinks as _getSSRFontLinks, getSSRFontStyles as _getSSRFontSty
 import { getSSRFontStyles as _getSSRFontStylesLocal, getSSRFontPreloads as _getSSRFontPreloadsLocal } from "next/font/local";
 import { sanitizeDestination as sanitizeDestinationLocal } from "<ROOT>/packages/vinext/src/config/config-matchers.js";
 import { runWithExecutionContext as _runWithExecutionContext, getRequestExecutionContext as _getRequestExecutionContext } from "<ROOT>/packages/vinext/src/shims/request-context.js";
+import { runGeneratedMiddleware as __runGeneratedMiddleware } from "<ROOT>/packages/vinext/src/server/middleware-runtime.js";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from "<ROOT>/packages/vinext/src/routing/route-trie.js";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { resolvePagesI18nRequest } from "<ROOT>/packages/vinext/src/server/pages-i18n.js";
@@ -14538,7 +13455,6 @@ import { resolvePagesPageData as __resolvePagesPageData } from "<ROOT>/packages/
 import { renderPagesPageResponse as __renderPagesPageResponse } from "<ROOT>/packages/vinext/src/server/pages-page-response.js";
 import * as _instrumentation from "<ROOT>/tests/fixtures/pages-basic/instrumentation.ts";
 import * as middlewareModule from "<ROOT>/tests/fixtures/pages-basic/middleware.ts";
-import { NextRequest, NextFetchEvent } from "next/server";
 
 // Run instrumentation register() once at module evaluation time — before any
 // requests are handled. Matches Next.js semantics: register() is called once
@@ -15143,449 +14059,15 @@ export async function handleApiRoute(request, url) {
 }
 
 
-// --- Middleware support (generated from middleware-codegen.ts) ---
-
-function __normalizePath(pathname) {
-  if (
-    pathname === "/" ||
-    (pathname.length > 1 &&
-      pathname[0] === "/" &&
-      !pathname.includes("//") &&
-      !pathname.includes("/./") &&
-      !pathname.includes("/../") &&
-      !pathname.endsWith("/.") &&
-      !pathname.endsWith("/.."))
-  ) {
-    return pathname;
-  }
-  var segments = pathname.split("/");
-  var resolved = [];
-  for (var i = 0; i < segments.length; i++) {
-    var seg = segments[i];
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") { resolved.pop(); }
-    else { resolved.push(seg); }
-  }
-  return "/" + resolved.join("/");
-}
-
-var __pathDelimiterRegex = /([/#?\\\\]|%(2f|23|3f|5c))/gi;
-function __decodeRouteSegment(segment) {
-  return decodeURIComponent(segment).replace(__pathDelimiterRegex, function (char) {
-    return encodeURIComponent(char);
-  });
-}
-function __decodeRouteSegmentSafe(segment) {
-  try { return __decodeRouteSegment(segment); } catch (e) { return segment; }
-}
-function __normalizePathnameForRouteMatch(pathname) {
-  var segments = pathname.split("/");
-  var normalized = [];
-  for (var i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegmentSafe(segments[i]));
-  }
-  return normalized.join("/");
-}
-function __normalizePathnameForRouteMatchStrict(pathname) {
-  var segments = pathname.split("/");
-  var normalized = [];
-  for (var i = 0; i < segments.length; i++) {
-    normalized.push(__decodeRouteSegment(segments[i]));
-  }
-  return normalized.join("/");
-}
-
-function __isSafeRegex(pattern) {
-  var quantifierAtDepth = [];
-  var depth = 0;
-  var i = 0;
-  while (i < pattern.length) {
-    var ch = pattern[i];
-    if (ch === "\\\\") { i += 2; continue; }
-    if (ch === "[") {
-      i++;
-      while (i < pattern.length && pattern[i] !== "]") {
-        if (pattern[i] === "\\\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      if (quantifierAtDepth.length <= depth) quantifierAtDepth.push(false);
-      else quantifierAtDepth[depth] = false;
-      i++;
-      continue;
-    }
-    if (ch === ")") {
-      var hadQ = depth > 0 && quantifierAtDepth[depth];
-      if (depth > 0) depth--;
-      var next = pattern[i + 1];
-      if (next === "+" || next === "*" || next === "{") {
-        if (hadQ) return false;
-        if (depth >= 0 && depth < quantifierAtDepth.length) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "+" || ch === "*") {
-      if (depth > 0) quantifierAtDepth[depth] = true;
-      i++;
-      continue;
-    }
-    if (ch === "?") {
-      var prev = i > 0 ? pattern[i - 1] : "";
-      if (prev !== "+" && prev !== "*" && prev !== "?" && prev !== "}") {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "{") {
-      var j = i + 1;
-      while (j < pattern.length && /[\\d,]/.test(pattern[j])) j++;
-      if (j < pattern.length && pattern[j] === "}" && j > i + 1) {
-        if (depth > 0) quantifierAtDepth[depth] = true;
-        i = j + 1;
-        continue;
-      }
-    }
-    i++;
-  }
-  return true;
-}
-function __safeRegExp(pattern, flags) {
-  if (!__isSafeRegex(pattern)) {
-    console.warn("[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
-    return null;
-  }
-  try { return new RegExp(pattern, flags); } catch { return null; }
-}
-
-var __mwPatternCache = new Map();
-function __extractConstraint(str, re) {
-  if (str[re.lastIndex] !== "(") return null;
-  var start = re.lastIndex + 1;
-  var depth = 1;
-  var i = start;
-  while (i < str.length && depth > 0) {
-    if (str[i] === "(") depth++;
-    else if (str[i] === ")") depth--;
-    i++;
-  }
-  if (depth !== 0) return null;
-  re.lastIndex = i;
-  return str.slice(start, i - 1);
-}
-function __compileMwPattern(pattern) {
-  var hasConstraints = /:[\\w-]+[*+]?\\(/.test(pattern);
-  if (!hasConstraints && (pattern.includes("(") || pattern.includes("\\\\"))) {
-    return __safeRegExp("^" + pattern + "$");
-  }
-  var regexStr = "";
-  var tokenRe = /\\/:([\\w-]+)\\*|\\/:([\\w-]+)\\+|:([\\w-]+)|[.]|[^/:.]+|./g;
-  var tok;
-  while ((tok = tokenRe.exec(pattern)) !== null) {
-    if (tok[1] !== undefined) {
-      var c1 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
-      regexStr += c1 !== null ? "(?:/(" + c1 + "))?" : "(?:/.*)?";
-    }
-    else if (tok[2] !== undefined) {
-      var c2 = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
-      regexStr += c2 !== null ? "(?:/(" + c2 + "))" : "(?:/.+)";
-    }
-    else if (tok[3] !== undefined) {
-      var constraint = hasConstraints ? __extractConstraint(pattern, tokenRe) : null;
-      var isOptional = pattern[tokenRe.lastIndex] === "?";
-      if (isOptional) tokenRe.lastIndex += 1;
-      var group = constraint !== null ? "(" + constraint + ")" : "([^/]+)";
-      if (isOptional && regexStr.endsWith("/")) {
-        regexStr = regexStr.slice(0, -1) + "(?:/" + group + ")?";
-      } else if (isOptional) {
-        regexStr += group + "?";
-      } else {
-        regexStr += group;
-      }
-    }
-    else if (tok[0] === ".") { regexStr += "\\\\."; }
-    else { regexStr += tok[0]; }
-  }
-  return __safeRegExp("^" + regexStr + "$");
-}
-function matchMiddlewarePattern(pathname, pattern) {
-  var cached = __mwPatternCache.get(pattern);
-  if (cached === undefined) {
-    cached = __compileMwPattern(pattern);
-    __mwPatternCache.set(pattern, cached);
-  }
-  return cached ? cached.test(pathname) : pathname === pattern;
-}
-
-var __middlewareConditionRegexCache = new Map();
-// Requestless matcher checks reuse this singleton. Treat it as immutable.
-var __emptyMiddlewareRequestContext = {
-  headers: new Headers(),
-  cookies: {},
-  query: new URLSearchParams(),
-  host: "",
-};
-
-function __normalizeMiddlewareHost(hostHeader, fallbackHostname) {
-  var host = hostHeader ?? fallbackHostname;
-  return host.split(":", 1)[0].toLowerCase();
-}
-
-function __parseMiddlewareCookies(cookieHeader) {
-  if (!cookieHeader) return {};
-  var cookies = {};
-  for (var part of cookieHeader.split(";")) {
-    var eq = part.indexOf("=");
-    if (eq === -1) continue;
-    var key = part.slice(0, eq).trim();
-    var value = part.slice(eq + 1).trim();
-    if (key) cookies[key] = value;
-  }
-  return cookies;
-}
-
-function __middlewareRequestContextFromRequest(request) {
-  if (!request) return __emptyMiddlewareRequestContext;
-  var url = new URL(request.url);
-  return {
-    headers: request.headers,
-    cookies: __parseMiddlewareCookies(request.headers.get("cookie")),
-    query: url.searchParams,
-    host: __normalizeMiddlewareHost(request.headers.get("host"), url.hostname),
-  };
-}
-
-function __stripMiddlewareLocalePrefix(pathname, i18nConfig) {
-  if (pathname === "/") return null;
-  var segments = pathname.split("/");
-  var firstSegment = segments[1];
-  if (!firstSegment || !i18nConfig || !i18nConfig.locales.includes(firstSegment)) {
-    return null;
-  }
-  var stripped = "/" + segments.slice(2).join("/");
-  return stripped === "/" ? "/" : stripped.replace(/\\/+$/, "") || "/";
-}
-
-function __matchMiddlewareMatcherPattern(pathname, pattern, i18nConfig) {
-  if (!i18nConfig) return matchMiddlewarePattern(pathname, pattern);
-  var localeStrippedPathname = __stripMiddlewareLocalePrefix(pathname, i18nConfig);
-  return matchMiddlewarePattern(localeStrippedPathname ?? pathname, pattern);
-}
-
-function __middlewareConditionRegex(value) {
-  if (__middlewareConditionRegexCache.has(value)) {
-    return __middlewareConditionRegexCache.get(value);
-  }
-  var re = __safeRegExp(value);
-  __middlewareConditionRegexCache.set(value, re);
-  return re;
-}
-
-function __checkMiddlewareCondition(condition, ctx) {
-  switch (condition.type) {
-    case "header": {
-      var headerValue = ctx.headers.get(condition.key);
-      if (headerValue === null) return false;
-      if (condition.value !== undefined) {
-        var re = __middlewareConditionRegex(condition.value);
-        if (re) return re.test(headerValue);
-        return headerValue === condition.value;
-      }
-      return true;
-    }
-    case "cookie": {
-      var cookieValue = ctx.cookies[condition.key];
-      if (cookieValue === undefined) return false;
-      if (condition.value !== undefined) {
-        var re = __middlewareConditionRegex(condition.value);
-        if (re) return re.test(cookieValue);
-        return cookieValue === condition.value;
-      }
-      return true;
-    }
-    case "query": {
-      var queryValue = ctx.query.get(condition.key);
-      if (queryValue === null) return false;
-      if (condition.value !== undefined) {
-        var re = __middlewareConditionRegex(condition.value);
-        if (re) return re.test(queryValue);
-        return queryValue === condition.value;
-      }
-      return true;
-    }
-    case "host": {
-      if (condition.value !== undefined) {
-        var re = __middlewareConditionRegex(condition.value);
-        if (re) return re.test(ctx.host);
-        return ctx.host === condition.value;
-      }
-      return ctx.host === condition.key;
-    }
-    default:
-      return false;
-  }
-}
-
-function __checkMiddlewareHasConditions(has, missing, ctx) {
-  if (has) {
-    for (var condition of has) {
-      if (!__checkMiddlewareCondition(condition, ctx)) return false;
-    }
-  }
-  if (missing) {
-    for (var condition of missing) {
-      if (__checkMiddlewareCondition(condition, ctx)) return false;
-    }
-  }
-  return true;
-}
-
-// Keep this in sync with isValidMiddlewareMatcherObject in middleware.ts.
-function __isValidMiddlewareMatcherObject(matcher) {
-  if (!matcher || typeof matcher !== "object" || Array.isArray(matcher)) return false;
-  if (typeof matcher.source !== "string") return false;
-  for (var key of Object.keys(matcher)) {
-    if (key !== "source" && key !== "locale" && key !== "has" && key !== "missing") {
-      return false;
-    }
-  }
-  if ("locale" in matcher && matcher.locale !== undefined && matcher.locale !== false) return false;
-  if ("has" in matcher && matcher.has !== undefined && !Array.isArray(matcher.has)) return false;
-  if ("missing" in matcher && matcher.missing !== undefined && !Array.isArray(matcher.missing)) {
-    return false;
-  }
-  return true;
-}
-
-function __matchMiddlewareObject(pathname, matcher, i18nConfig) {
-  return matcher.locale === false
-    ? matchMiddlewarePattern(pathname, matcher.source)
-    : __matchMiddlewareMatcherPattern(pathname, matcher.source, i18nConfig);
-}
-
-function matchesMiddleware(pathname, matcher, request, i18nConfig) {
-  if (!matcher) {
-    return true;
-  }
-  if (typeof matcher === "string") {
-    return __matchMiddlewareMatcherPattern(pathname, matcher, i18nConfig);
-  }
-  if (!Array.isArray(matcher)) {
-    return false;
-  }
-  var requestContext = __middlewareRequestContextFromRequest(request);
-  for (var m of matcher) {
-    if (typeof m === "string") {
-      if (__matchMiddlewareMatcherPattern(pathname, m, i18nConfig)) return true;
-      continue;
-    }
-    if (__isValidMiddlewareMatcherObject(m)) {
-      if (!__matchMiddlewareObject(pathname, m, i18nConfig)) continue;
-      if (!__checkMiddlewareHasConditions(m.has, m.missing, requestContext)) continue;
-      return true;
-    }
-  }
-  return false;
-}
-
 export async function runMiddleware(request, ctx) {
-  if (ctx) return _runWithExecutionContext(ctx, () => _runMiddleware(request));
-  return _runMiddleware(request);
-}
-
-async function _runMiddleware(request) {
-  var isProxy = false;
-  var middlewareFn = isProxy
-    ? (middlewareModule.proxy ?? middlewareModule.default)
-    : (middlewareModule.middleware ?? middlewareModule.default);
-  if (typeof middlewareFn !== "function") {
-    var fileType = isProxy ? "Proxy" : "Middleware";
-    var expectedExport = isProxy ? "proxy" : "middleware";
-    throw new Error("The " + fileType + " file must export a function named \`" + expectedExport + "\` or a \`default\` function.");
-  }
-
-  var config = middlewareModule.config;
-  var matcher = config && config.matcher;
-  var url = new URL(request.url);
-
-  // Normalize pathname before matching to prevent path-confusion bypasses
-  // (percent-encoding like /%61dmin, double slashes like /dashboard//settings).
-  var decodedPathname;
-  try { decodedPathname = __normalizePathnameForRouteMatchStrict(url.pathname); } catch (e) {
-    return { continue: false, response: new Response("Bad Request", { status: 400 }) };
-  }
-  var normalizedPathname = __normalizePath(decodedPathname);
-
-  if (!matchesMiddleware(normalizedPathname, matcher, request, i18nConfig)) return { continue: true };
-
-   // Construct a new Request with the decoded + normalized pathname so middleware
-   // always sees the same canonical path that the router uses.
-  var mwRequest = request;
-  if (normalizedPathname !== url.pathname) {
-    var mwUrl = new URL(url);
-    mwUrl.pathname = normalizedPathname;
-    mwRequest = new Request(mwUrl, request);
-  }
-  var __mwNextConfig = (vinextConfig.basePath || i18nConfig) ? { basePath: vinextConfig.basePath, i18n: i18nConfig || undefined } : undefined;
-  var nextRequest = mwRequest instanceof NextRequest ? mwRequest : new NextRequest(mwRequest, __mwNextConfig ? { nextConfig: __mwNextConfig } : undefined);
-  var fetchEvent = new NextFetchEvent({ page: normalizedPathname });
-  var response;
-  try { response = await middlewareFn(nextRequest, fetchEvent); }
-  catch (e) {
-    console.error("[vinext] Middleware error:", e);
-    var _mwCtxErr = _getRequestExecutionContext();
-    if (_mwCtxErr && typeof _mwCtxErr.waitUntil === "function") { _mwCtxErr.waitUntil(fetchEvent.drainWaitUntil()); } else { fetchEvent.drainWaitUntil(); }
-    return { continue: false, response: new Response("Internal Server Error", { status: 500 }) };
-  }
-  var _mwCtx = _getRequestExecutionContext();
-  if (_mwCtx && typeof _mwCtx.waitUntil === "function") { _mwCtx.waitUntil(fetchEvent.drainWaitUntil()); } else { fetchEvent.drainWaitUntil(); }
-
-  if (!response) return { continue: true };
-
-  if (response.headers.get("x-middleware-next") === "1") {
-    var rHeaders = new Headers();
-    for (var [key, value] of response.headers) {
-      // Keep x-middleware-request-* headers so the production server can
-      // apply middleware-request header overrides before stripping internals
-      // from the final client response.
-      if (
-        !key.startsWith("x-middleware-") ||
-        key === "x-middleware-override-headers" ||
-        key.startsWith("x-middleware-request-")
-      ) rHeaders.append(key, value);
-    }
-    return { continue: true, responseHeaders: rHeaders };
-  }
-
-  if (response.status >= 300 && response.status < 400) {
-    var location = response.headers.get("Location") || response.headers.get("location");
-    if (location) {
-      var rdHeaders = new Headers();
-      for (var [rk, rv] of response.headers) {
-        if (!rk.startsWith("x-middleware-") && rk.toLowerCase() !== "location") rdHeaders.append(rk, rv);
-      }
-      return { continue: false, redirectUrl: location, redirectStatus: response.status, responseHeaders: rdHeaders };
-    }
-  }
-
-  var rewriteUrl = response.headers.get("x-middleware-rewrite");
-  if (rewriteUrl) {
-    var rwHeaders = new Headers();
-    for (var [k, v] of response.headers) {
-      if (!k.startsWith("x-middleware-") || k === "x-middleware-override-headers" || k.startsWith("x-middleware-request-")) rwHeaders.append(k, v);
-    }
-    var rewritePath;
-    try { var parsed = new URL(rewriteUrl, request.url); rewritePath = parsed.pathname + parsed.search; }
-    catch { rewritePath = rewriteUrl; }
-    return { continue: true, rewriteUrl: rewritePath, rewriteStatus: response.status !== 200 ? response.status : undefined, responseHeaders: rwHeaders };
-  }
-
-  return { continue: false, response: response };
+  return __runGeneratedMiddleware({
+    basePath: vinextConfig.basePath,
+    ctx,
+    i18nConfig,
+    isProxy: false,
+    module: middlewareModule,
+    request,
+  });
 }
 
 "
