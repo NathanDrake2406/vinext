@@ -54,6 +54,7 @@ import { normalizePathnameForRouteMatchStrict } from "../routing/utils.js";
 import type { ExecutionContextLike } from "../shims/request-context.js";
 import { readPrerenderSecret } from "../build/server-manifest.js";
 import { seedMemoryCacheFromPrerender } from "./seed-cache.js";
+import { installSocketErrorBackstop } from "./socket-error-backstop.js";
 
 /** Convert a Node.js IncomingMessage into a ReadableStream for Web Request body. */
 function readNodeStream(req: IncomingMessage): ReadableStream<Uint8Array> {
@@ -812,6 +813,15 @@ async function sendWebResponse(
  * Pages Router (dist/server/entry.js) and configures the appropriate handler.
  */
 export async function startProdServer(options: ProdServerOptions = {}) {
+  // Process-level peer-disconnect backstop. Idempotent via the
+  // Symbol.for guard inside installSocketErrorBackstop, so this call
+  // is a no-op when index.ts has already installed it. Kept here so
+  // entry points that load prod-server without going through index.ts
+  // (none today, but preserves Next.js's "install everywhere a Node
+  // HTTP server runs" parity) still get the backstop. Prerender
+  // bypass is fire-time via VINEXT_PRERENDER, not install-time.
+  installSocketErrorBackstop();
+
   const {
     port = process.env.PORT ? parseInt(process.env.PORT) : 3000,
     host = "0.0.0.0",

@@ -13,6 +13,7 @@ import type { NitroRouteRuleConfig } from "./build/nitro-route-rules.js";
 import { createValidFileMatcher } from "./routing/file-matcher.js";
 import { createSSRHandler } from "./server/dev-server.js";
 import { handleApiRoute } from "./server/api-handler.js";
+import { installSocketErrorBackstop } from "./server/socket-error-backstop.js";
 import { createDirectRunner } from "./server/dev-module-runner.js";
 import { generateRscEntry } from "./entries/app-rsc-entry.js";
 import { generateSsrEntry } from "./entries/app-ssr-entry.js";
@@ -113,6 +114,14 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
+
+// Install the process-level peer-disconnect backstop at module load.
+// Vite plugin lifecycle hooks (config / configureServer) proved
+// timing-fragile in vite-plus — install was silently skipped,
+// confirmed via VINEXT_DEBUG_SOCKET_ERRORS=1. Skips Vitest workers
+// via env-var gate; bypasses during prerender via fire-time
+// VINEXT_PRERENDER check. See socket-error-backstop.ts.
+installSocketErrorBackstop();
 
 type ASTNode = ReturnType<typeof parseAst>["body"][number]["parent"];
 
@@ -2004,44 +2013,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         server.httpServer?.on("connection", (socket) => {
           socket.on("error", () => {});
         });
-
-        // Backstop for stream-pipe paths the connection-level guard misses.
-        // When a Readable is piped to a Writable that has no 'error' listener,
-        // Node's pipe() machinery re-emits the source's error onto the
-        // destination, which then throws (e.g. fromWeb(fetch().body).pipe(res)
-        // in proxyExternalRewriteNode, or any streaming surface inside
-        // @vitejs/plugin-rsc). Outbound sockets created by fetch() also never
-        // fire 'connection' on server.httpServer. Filtering by error code
-        // keeps real bugs surfacing — only peer-disconnect codes are dropped.
-        //
-        // Skipped in middleware mode (httpServer is null): the embedding host
-        // owns process-level handlers, and we have no reliable teardown hook
-        // to remove ours, so installation would leak.
-        if (server.httpServer) {
-          const isPeerDisconnect = (err: unknown): boolean => {
-            const code = (err as { code?: string } | null)?.code;
-            return code === "ECONNRESET" || code === "EPIPE" || code === "ECONNABORTED";
-          };
-          // Synchronous throw inside an uncaughtException listener aborts
-          // the process the same way no listener would (stack to stderr,
-          // non-zero exit). Re-throwing on nextTick instead would re-enter
-          // this same listener and loop indefinitely, silently swallowing
-          // genuine errors.
-          const onUncaught = (err: Error) => {
-            if (isPeerDisconnect(err)) return;
-            throw err;
-          };
-          const onUnhandledRejection = (reason: unknown) => {
-            if (isPeerDisconnect(reason)) return;
-            throw reason;
-          };
-          process.on("uncaughtException", onUncaught);
-          process.on("unhandledRejection", onUnhandledRejection);
-          server.httpServer.once("close", () => {
-            process.removeListener("uncaughtException", onUncaught);
-            process.removeListener("unhandledRejection", onUnhandledRejection);
-          });
-        }
 
         server.watcher.on("add", (filePath: string) => {
           if (hasPagesDir && filePath.startsWith(pagesDir) && pageExtensions.test(filePath)) {
