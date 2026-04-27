@@ -1,6 +1,8 @@
 import type { Metadata } from "../shims/metadata.js";
 import {
+  getMetadataImageRouteKind,
   getMetadataRouteKind,
+  isValidMetadataImageId,
   type MetadataFileRoute,
   type MetadataRouteHeadData,
 } from "./metadata-routes.js";
@@ -50,9 +52,12 @@ type FileBasedMetadataOptions = {
   metadataSources?: readonly FileBasedMetadataSource[] | null;
 };
 
-function getRoutePrefix(route: MetadataFileRoute): string {
-  return route.routePrefix;
-}
+type IconMap = {
+  icon?: string | URL | IconEntry | IconEntry[];
+  shortcut?: string | URL | Array<string | URL>;
+  apple?: string | URL | AppleIconEntry | AppleIconEntry[];
+  other?: Array<{ rel: string; url: string | URL; sizes?: string; type?: string }>;
+};
 
 function routeApplies(routePath: string, routePrefix: string): boolean {
   if (!routePrefix) {
@@ -131,9 +136,7 @@ function selectDeepestRoutes(
       continue;
     }
 
-    const routePrefix = getRoutePrefix(route);
-    const resolvedRoutePrefix = fillMetadataRouteSegments(routePrefix, params);
-    const normalizedRoutePrefix = normalizeRoutePrefixPattern(routePrefix);
+    const routePrefix = route.routePrefix;
     if (routeSegments && route.routeSegments) {
       // Raw app-tree segments are authoritative when present. Falling back to
       // visible URL prefixes here would reintroduce route-group collisions.
@@ -154,10 +157,12 @@ function selectDeepestRoutes(
       continue;
     }
 
+    const resolvedRoutePrefix = fillMetadataRouteSegments(routePrefix, params);
+    const normalizedRoutePrefix = normalizeRoutePrefixPattern(routePrefix);
     if (
       !routeApplies(routePath, routePrefix) &&
       !routeApplies(routePath, normalizedRoutePrefix) &&
-      !routeApplies(routePath, resolvedRoutePrefix)
+      (!resolvedRoutePrefix || !routeApplies(routePath, resolvedRoutePrefix))
     ) {
       continue;
     }
@@ -221,7 +226,27 @@ function normalizeIconValue(value: unknown): IconEntry | null {
 }
 
 function normalizeIconEntries(icon: NonNullable<Metadata["icons"]>): IconEntry[] {
-  if (!icon || typeof icon !== "object") {
+  if (isStringOrUrl(icon)) {
+    return [{ url: icon }];
+  }
+
+  if (Array.isArray(icon)) {
+    const normalizedEntries: IconEntry[] = [];
+    for (const value of icon) {
+      const normalizedValue = normalizeIconValue(value);
+      if (normalizedValue) {
+        normalizedEntries.push(normalizedValue);
+      }
+    }
+    return normalizedEntries;
+  }
+
+  const normalizedTopLevelValue = normalizeIconDescriptor(icon);
+  if (normalizedTopLevelValue) {
+    return [normalizedTopLevelValue];
+  }
+
+  if (!isIconMap(icon)) {
     return [];
   }
 
@@ -243,6 +268,26 @@ function normalizeIconEntries(icon: NonNullable<Metadata["icons"]>): IconEntry[]
 
   const normalizedValue = normalizeIconValue(iconValue);
   return normalizedValue ? [normalizedValue] : [];
+}
+
+function isIconMap(value: Metadata["icons"]): value is IconMap {
+  if (!value || typeof value !== "object" || value instanceof URL || Array.isArray(value)) {
+    return false;
+  }
+  return normalizeIconDescriptor(value) === null;
+}
+
+function cloneIconMap(value: Metadata["icons"]): IconMap {
+  if (!value) {
+    return {};
+  }
+
+  if (isIconMap(value)) {
+    return { ...value };
+  }
+
+  const iconEntries = normalizeIconEntries(value);
+  return iconEntries.length > 0 ? { icon: iconEntries } : {};
 }
 
 function buildIconEntry(headData: MetadataRouteHeadData): IconEntry | null {
@@ -313,7 +358,7 @@ function appendParamValue(target: string[], value: string | string[]): void {
   target.push(value);
 }
 
-function fillMetadataRouteSegments(servedUrl: string, params: AppPageParams): string {
+function fillMetadataRouteSegments(servedUrl: string, params: AppPageParams): string | null {
   const segments = servedUrl.split("/").filter(Boolean);
   const resolvedSegments: string[] = [];
 
@@ -330,8 +375,8 @@ function fillMetadataRouteSegments(servedUrl: string, params: AppPageParams): st
     if (segment.startsWith("[...") && segment.endsWith("]")) {
       const paramName = segment.slice(4, -1);
       const value = params[paramName];
-      if (value === undefined) {
-        return servedUrl;
+      if (value === undefined || (Array.isArray(value) ? value.length === 0 : value === "")) {
+        return null;
       }
       appendParamValue(resolvedSegments, value);
       continue;
@@ -345,16 +390,30 @@ function fillMetadataRouteSegments(servedUrl: string, params: AppPageParams): st
         continue;
       }
       if (Array.isArray(value) && value.length > 0) {
+        if (value.length > 1) {
+          return null;
+        }
         resolvedSegments.push(value[0]);
         continue;
       }
-      return servedUrl;
+      return null;
     }
 
     resolvedSegments.push(segment);
   }
 
   return resolvedSegments.length > 0 ? `/${resolvedSegments.join("/")}` : "/";
+}
+
+function normalizeMetadataImageId(route: MetadataFileRoute, id: string | number): string | null {
+  const normalizedId = String(id);
+  if (!isValidMetadataImageId(normalizedId)) {
+    console.warn(
+      `[vinext] Skipping metadata route ${route.servedUrl} image id "${normalizedId}" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.`,
+    );
+    return null;
+  }
+  return normalizedId;
 }
 
 function withContentHash(href: string, contentHash?: string): string {
@@ -488,35 +547,43 @@ async function resolveRouteHeadData(
     return route.headData ? [route.headData] : [];
   }
 
-  if (
-    route.type !== "icon" &&
-    route.type !== "apple-icon" &&
-    route.type !== "opengraph-image" &&
-    route.type !== "twitter-image"
-  ) {
+  const routeKind = getMetadataImageRouteKind(route);
+  if (!routeKind) {
     return route.headData ? [route.headData] : [];
   }
 
   // servedUrl must stay query-free here; content hashes are appended after dynamic segment filling.
   const resolvedUrl = fillMetadataRouteSegments(route.servedUrl, params);
+  if (!resolvedUrl) {
+    console.warn(
+      `[vinext] Skipping metadata route ${route.servedUrl} because params did not fill all dynamic segments.`,
+    );
+    return [];
+  }
   const metadataSources = await resolveDynamicImageMetadataSources(route, params);
   const resolvedHeadData: MetadataRouteHeadData[] = [];
 
   for (const metadataSource of metadataSources) {
-    const hrefBase =
-      metadataSource.id !== undefined ? `${resolvedUrl}/${String(metadataSource.id)}` : resolvedUrl;
+    let hrefBase = resolvedUrl;
+    if (metadataSource.id !== undefined) {
+      const normalizedId = normalizeMetadataImageId(route, metadataSource.id);
+      if (!normalizedId) {
+        continue;
+      }
+      hrefBase = `${resolvedUrl}/${normalizedId}`;
+    }
     const href = withContentHash(hrefBase, route.contentHash);
     const contentType = metadataSource.contentType ?? route.contentType;
     const size = metadataSource.size;
 
-    if (route.type === "icon" || route.type === "apple-icon") {
+    if (routeKind === "icon" || routeKind === "apple") {
       let sizes: string | undefined;
       if (size?.width !== undefined && size.height !== undefined) {
         sizes = `${size.width}x${size.height}`;
       }
 
       resolvedHeadData.push({
-        kind: route.type === "apple-icon" ? "apple" : "icon",
+        kind: routeKind,
         href,
         sizes,
         type: contentType,
@@ -525,7 +592,7 @@ async function resolveRouteHeadData(
     }
 
     resolvedHeadData.push({
-      kind: route.type === "opengraph-image" ? "openGraph" : "twitter",
+      kind: routeKind,
       href,
       alt: metadataSource.alt,
       height: size?.height,
@@ -560,6 +627,10 @@ export async function applyFileBasedMetadata(
   metadataRoutes: readonly MetadataFileRoute[] | null | undefined,
   options?: FileBasedMetadataOptions,
 ): Promise<Metadata | null> {
+  if (!metadataRoutes || metadataRoutes.length === 0) {
+    return metadata;
+  }
+
   const routeSegments = options?.routeSegments ?? null;
   const faviconRoutes = selectDeepestRoutes(
     metadataRoutes,
@@ -637,18 +708,14 @@ export async function applyFileBasedMetadata(
     }
   }
   if (faviconEntries.length > 0) {
-    const nextIcons: NonNullable<Metadata["icons"]> = nextMetadata.icons
-      ? { ...nextMetadata.icons }
-      : {};
+    const nextIcons = cloneIconMap(nextMetadata.icons);
     const normalizedIcons = normalizeIconEntries(nextIcons);
     nextIcons.icon = [...faviconEntries, ...normalizedIcons];
     nextMetadata.icons = nextIcons;
   }
 
   if (!hadExplicitIcons) {
-    const nextIcons: NonNullable<Metadata["icons"]> = nextMetadata.icons
-      ? { ...nextMetadata.icons }
-      : {};
+    const nextIcons = cloneIconMap(nextMetadata.icons);
 
     const iconEntries: IconEntry[] = [];
     for (const headData of iconHeadData) {

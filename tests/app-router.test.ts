@@ -3164,6 +3164,12 @@ describe("metadata routes integration (App Router)", () => {
     const res = await fetch(`${baseUrl}/metadata-multi-image/big/icon/missing`);
     expect(res.status).toBe(404);
   });
+
+  it("serves generateImageMetadata ids after catch-all metadata route params", async () => {
+    const res = await fetch(`${baseUrl}/metadata-multi-catchall/a/b/icon/a-b-small`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("image/png");
+  });
 });
 
 describe("App Router next.config.js features (dev server integration)", () => {

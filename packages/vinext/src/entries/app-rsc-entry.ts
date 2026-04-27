@@ -1055,6 +1055,49 @@ function matchPattern(urlParts, patternParts) {
   return params;
 }
 
+function matchMetadataRoutePattern(urlParts, patternParts) {
+  const params = Object.create(null);
+
+  function matchFrom(urlIndex, patternIndex) {
+    if (patternIndex === patternParts.length) {
+      return urlIndex === urlParts.length;
+    }
+
+    const pp = patternParts[patternIndex];
+    if (pp.endsWith("+") || pp.endsWith("*")) {
+      const paramName = pp.slice(1, -1);
+      const minLength = pp.endsWith("+") ? 1 : 0;
+      for (let endIndex = urlIndex + minLength; endIndex <= urlParts.length; endIndex++) {
+        params[paramName] = urlParts.slice(urlIndex, endIndex);
+        if (matchFrom(endIndex, patternIndex + 1)) {
+          return true;
+        }
+      }
+      delete params[paramName];
+      return false;
+    }
+
+    if (pp.startsWith(":")) {
+      if (urlIndex >= urlParts.length) {
+        return false;
+      }
+      params[pp.slice(1)] = urlParts[urlIndex];
+      if (matchFrom(urlIndex + 1, patternIndex + 1)) {
+        return true;
+      }
+      delete params[pp.slice(1)];
+      return false;
+    }
+
+    if (urlIndex >= urlParts.length || urlParts[urlIndex] !== pp) {
+      return false;
+    }
+    return matchFrom(urlIndex + 1, patternIndex + 1);
+  }
+
+  return matchFrom(0, 0) ? params : null;
+}
+
 function mergeMatchedParams(sourceParams, targetParams) {
   return Object.assign(Object.create(null), sourceParams, targetParams);
 }
@@ -1863,13 +1906,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       typeof metaRoute.module.generateImageMetadata === "function";
     if (metaRoute.patternParts) {
       var _metaUrlParts = cleanPathname.split("/").filter(Boolean);
-      if (_hasGeneratedImageMetadata && _metaUrlParts.length === metaRoute.patternParts.length + 1) {
-        _metaParams = matchPattern(_metaUrlParts.slice(0, metaRoute.patternParts.length), metaRoute.patternParts);
+      if (_hasGeneratedImageMetadata && _metaUrlParts.length > 0) {
+        _metaParams = matchMetadataRoutePattern(_metaUrlParts.slice(0, -1), metaRoute.patternParts);
         if (_metaParams) {
           _metaImageId = _metaUrlParts[_metaUrlParts.length - 1];
         }
-      } else {
-        _metaParams = matchPattern(_metaUrlParts, metaRoute.patternParts);
+      }
+      if (!_metaParams) {
+        _metaParams = matchMetadataRoutePattern(_metaUrlParts, metaRoute.patternParts);
       }
       if (!_metaParams) continue;
     } else if (_hasGeneratedImageMetadata && cleanPathname.startsWith(metaRoute.servedUrl + "/")) {

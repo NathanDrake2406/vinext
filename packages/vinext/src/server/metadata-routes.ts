@@ -402,6 +402,69 @@ export function getMetadataRouteKind(
   return null;
 }
 
+export function getMetadataImageRouteKind(
+  route: Pick<MetadataFileRoute, "type">,
+): Extract<MetadataRouteHeadData["kind"], "icon" | "apple" | "openGraph" | "twitter"> | null {
+  const kind = getMetadataRouteKind(route);
+  if (kind === "icon" || kind === "apple" || kind === "openGraph" || kind === "twitter") {
+    return kind;
+  }
+  return null;
+}
+
+const metadataImageIdPattern = /^[a-zA-Z0-9-_.]+$/;
+
+export function isValidMetadataImageId(id: string): boolean {
+  return metadataImageIdPattern.test(id);
+}
+
+export function matchMetadataRoutePattern(
+  urlParts: string[],
+  patternParts: string[],
+): Record<string, string | string[]> | null {
+  const params: Record<string, string | string[]> = Object.create(null);
+
+  function matchFrom(urlIndex: number, patternIndex: number): boolean {
+    if (patternIndex === patternParts.length) {
+      return urlIndex === urlParts.length;
+    }
+
+    const patternPart = patternParts[patternIndex];
+    if (patternPart.startsWith(":") && (patternPart.endsWith("+") || patternPart.endsWith("*"))) {
+      const paramName = patternPart.slice(1, -1);
+      const minLength = patternPart.endsWith("+") ? 1 : 0;
+      for (let endIndex = urlIndex + minLength; endIndex <= urlParts.length; endIndex++) {
+        params[paramName] = urlParts.slice(urlIndex, endIndex);
+        if (matchFrom(endIndex, patternIndex + 1)) {
+          return true;
+        }
+      }
+      delete params[paramName];
+      return false;
+    }
+
+    if (patternPart.startsWith(":")) {
+      if (urlIndex >= urlParts.length) {
+        return false;
+      }
+      const paramName = patternPart.slice(1);
+      params[paramName] = urlParts[urlIndex];
+      if (matchFrom(urlIndex + 1, patternIndex + 1)) {
+        return true;
+      }
+      delete params[paramName];
+      return false;
+    }
+
+    if (urlIndex >= urlParts.length || urlParts[urlIndex] !== patternPart) {
+      return false;
+    }
+    return matchFrom(urlIndex + 1, patternIndex + 1);
+  }
+
+  return matchFrom(0, 0) ? params : null;
+}
+
 function metadataRouteSuffix(parentSegments: string[], metaType: string): string {
   if (metaType === "sitemap" || metaType === "robots" || metaType === "manifest") {
     // Sitemap is exempt per Next.js. Robots and manifest are also safe to
