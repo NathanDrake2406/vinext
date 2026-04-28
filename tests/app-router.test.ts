@@ -3170,6 +3170,12 @@ describe("metadata routes integration (App Router)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("image/png");
   });
+
+  it("serves valid generateImageMetadata ids when invalid siblings are present", async () => {
+    const res = await fetch(`${baseUrl}/metadata-invalid-id-sibling/icon/good`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("image/png");
+  });
 });
 
 describe("App Router next.config.js features (dev server integration)", () => {

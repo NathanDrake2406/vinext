@@ -1513,9 +1513,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
                 }
                 const itemId = String(item.id);
                 if (!isValidMetadataImageId(itemId)) {
-                  throw new Error(
-                    "id property returned from generateImageMetadata must match /^[a-zA-Z0-9-_.]+$/",
+                  console.warn(
+                    '[vinext] Skipping metadata route ' +
+                      metaRoute.servedUrl +
+                      ' image id "' +
+                      itemId +
+                      '" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
                   );
+                  return false;
                 }
                 return itemId === _metaImageId;
               })
@@ -3964,9 +3969,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
                 }
                 const itemId = String(item.id);
                 if (!isValidMetadataImageId(itemId)) {
-                  throw new Error(
-                    "id property returned from generateImageMetadata must match /^[a-zA-Z0-9-_.]+$/",
+                  console.warn(
+                    '[vinext] Skipping metadata route ' +
+                      metaRoute.servedUrl +
+                      ' image id "' +
+                      itemId +
+                      '" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
                   );
+                  return false;
                 }
                 return itemId === _metaImageId;
               })
@@ -6410,9 +6420,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
                 }
                 const itemId = String(item.id);
                 if (!isValidMetadataImageId(itemId)) {
-                  throw new Error(
-                    "id property returned from generateImageMetadata must match /^[a-zA-Z0-9-_.]+$/",
+                  console.warn(
+                    '[vinext] Skipping metadata route ' +
+                      metaRoute.servedUrl +
+                      ' image id "' +
+                      itemId +
+                      '" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
                   );
+                  return false;
                 }
                 return itemId === _metaImageId;
               })
@@ -8888,9 +8903,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
                 }
                 const itemId = String(item.id);
                 if (!isValidMetadataImageId(itemId)) {
-                  throw new Error(
-                    "id property returned from generateImageMetadata must match /^[a-zA-Z0-9-_.]+$/",
+                  console.warn(
+                    '[vinext] Skipping metadata route ' +
+                      metaRoute.servedUrl +
+                      ' image id "' +
+                      itemId +
+                      '" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
                   );
+                  return false;
                 }
                 return itemId === _metaImageId;
               })
@@ -11343,9 +11363,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
                 }
                 const itemId = String(item.id);
                 if (!isValidMetadataImageId(itemId)) {
-                  throw new Error(
-                    "id property returned from generateImageMetadata must match /^[a-zA-Z0-9-_.]+$/",
+                  console.warn(
+                    '[vinext] Skipping metadata route ' +
+                      metaRoute.servedUrl +
+                      ' image id "' +
+                      itemId +
+                      '" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
                   );
+                  return false;
                 }
                 return itemId === _metaImageId;
               })
@@ -14155,9 +14180,14 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
                 }
                 const itemId = String(item.id);
                 if (!isValidMetadataImageId(itemId)) {
-                  throw new Error(
-                    "id property returned from generateImageMetadata must match /^[a-zA-Z0-9-_.]+$/",
+                  console.warn(
+                    '[vinext] Skipping metadata route ' +
+                      metaRoute.servedUrl +
+                      ' image id "' +
+                      itemId +
+                      '" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
                   );
+                  return false;
                 }
                 return itemId === _metaImageId;
               })

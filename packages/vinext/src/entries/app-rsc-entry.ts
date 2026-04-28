@@ -1901,7 +1901,18 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
                     "id property is required for every item returned from generateImageMetadata",
                   );
                 }
-                return String(item.id) === _metaImageId;
+                const itemId = String(item.id);
+                if (!isValidMetadataImageId(itemId)) {
+                  console.warn(
+                    '[vinext] Skipping metadata route ' +
+                      metaRoute.servedUrl +
+                      ' image id "' +
+                      itemId +
+                      '" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
+                  );
+                  return false;
+                }
+                return itemId === _metaImageId;
               })
             : null;
           if (!matchedImageMetadata || matchedImageMetadata.id == null) {
