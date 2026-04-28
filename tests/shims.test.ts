@@ -1992,6 +1992,43 @@ describe('"use cache" runtime', () => {
     expect(callCount).toBe(2);
   });
 
+  it("scopes shared cache entries by build ID", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    const previousBuildId = process.env.__VINEXT_BUILD_ID;
+    try {
+      let callCount = 0;
+
+      process.env.__VINEXT_BUILD_ID = "build-one";
+      const firstBuild = registerCachedFunction(async () => {
+        callCount++;
+        return { version: "old" };
+      }, "test:same-id");
+
+      expect(await firstBuild()).toEqual({ version: "old" });
+      expect(callCount).toBe(1);
+
+      process.env.__VINEXT_BUILD_ID = "build-two";
+      const secondBuild = registerCachedFunction(async () => {
+        callCount++;
+        return { version: "new" };
+      }, "test:same-id");
+
+      expect(await secondBuild()).toEqual({ version: "new" });
+      expect(callCount).toBe(2);
+    } finally {
+      if (previousBuildId === undefined) {
+        delete process.env.__VINEXT_BUILD_ID;
+      } else {
+        process.env.__VINEXT_BUILD_ID = previousBuildId;
+      }
+    }
+  });
+
   it("registerCachedFunction respects cacheLife inside cached function", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
