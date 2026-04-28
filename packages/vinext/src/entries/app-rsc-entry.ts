@@ -57,6 +57,7 @@ const appRouteHandlerCachePath = resolveEntryPath(
   "../server/app-route-handler-cache.js",
   import.meta.url,
 );
+const implicitTagsPath = resolveEntryPath("../server/implicit-tags.js", import.meta.url);
 const appPageCachePath = resolveEntryPath("../server/app-page-cache.js", import.meta.url);
 const appPageExecutionPath = resolveEntryPath("../server/app-page-execution.js", import.meta.url);
 const appPageBoundaryRenderPath = resolveEntryPath(
@@ -431,6 +432,7 @@ import {
 import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from ${JSON.stringify(appRouteHandlerResponsePath)};
+import { buildPageCacheTags } from ${JSON.stringify(implicitTagsPath)};
 import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from ${JSON.stringify(requestContextShimPath)};
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
@@ -487,27 +489,6 @@ async function __isrGet(key) {
 async function __isrSet(key, data, revalidateSeconds, tags) {
   const handler = getCacheHandler();
   await handler.set(key, data, { revalidate: revalidateSeconds, tags: Array.isArray(tags) ? tags : [] });
-}
-function __pageCacheTags(pathname, extraTags) {
-  const tags = [pathname, "_N_T_" + pathname];
-  // Layout hierarchy tags — matches Next.js getDerivedTags.
-  tags.push("_N_T_/layout");
-  const segments = pathname.split("/");
-  let built = "";
-  for (let i = 1; i < segments.length; i++) {
-    if (segments[i]) {
-      built += "/" + segments[i];
-      tags.push("_N_T_" + built + "/layout");
-    }
-  }
-  // Leaf page tag — revalidatePath(path, "page") targets this.
-  tags.push("_N_T_" + built + "/page");
-  if (Array.isArray(extraTags)) {
-    for (const tag of extraTags) {
-      if (!tags.includes(tag)) tags.push(tag);
-    }
-  }
-  return tags;
 }
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -2121,7 +2102,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   }
 
   const { route, params } = match;
-  setCurrentFetchSoftTags(__pageCacheTags(cleanPathname, []));
+  setCurrentFetchSoftTags(
+    buildPageCacheTags(cleanPathname, [], route.routeSegments, route.routeHandler ? "route" : "page"),
+  );
 
   // Update navigation context with matched params
   setNavigationContext({
@@ -2135,6 +2118,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     const handler = route.routeHandler;
     const method = request.method.toUpperCase();
     const revalidateSeconds = __getAppRouteHandlerRevalidateSeconds(handler);
+    const __buildRouteHandlerPageCacheTags = function(pathname, extraTags) {
+      return buildPageCacheTags(pathname, extraTags, route.routeSegments, "route");
+    };
     if (__hasAppRouteHandlerDefaultExport(handler) && process.env.NODE_ENV === "development") {
       console.error(
         "[vinext] Detected default export in route handler " + route.pattern + ". Export a named export for each HTTP method instead.",
@@ -2178,7 +2164,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     ) {
       const __cachedRouteResponse = await __readAppRouteHandlerCacheResponse({
         basePath: __basePath,
-        buildPageCacheTags: __pageCacheTags,
+        buildPageCacheTags: __buildRouteHandlerPageCacheTags,
         cleanPathname,
         clearRequestContext: function() {
           setHeadersContext(null);
@@ -2208,7 +2194,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           });
           await _runWithUnifiedCtx(__revalUCtx, async () => {
             _ensureFetchPatch();
-            setCurrentFetchSoftTags(__pageCacheTags(cleanPathname, []));
+            setCurrentFetchSoftTags(buildPageCacheTags(cleanPathname, [], route.routeSegments, "route"));
             await renderFn();
           });
         },
@@ -2223,7 +2209,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     if (typeof handlerFn === "function") {
       return __executeAppRouteHandler({
         basePath: __basePath,
-        buildPageCacheTags: __pageCacheTags,
+        buildPageCacheTags: __buildRouteHandlerPageCacheTags,
         cleanPathname,
         clearRequestContext: function() {
           setHeadersContext(null);
@@ -2359,7 +2345,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         });
         return _runWithUnifiedCtx(__revalUCtx, async () => {
           _ensureFetchPatch();
-          setCurrentFetchSoftTags(__pageCacheTags(cleanPathname, []));
+          setCurrentFetchSoftTags(buildPageCacheTags(cleanPathname, [], route.routeSegments, "page"));
           setNavigationContext({ pathname: cleanPathname, searchParams: new URLSearchParams(), params });
           // Slot context (X-Vinext-Mounted-Slots) is inherited from the
           // triggering request so the regen result is cached under the
@@ -2390,7 +2376,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           setNavigationContext(null);
           const __freshHtml = await __readAppPageTextStream(__revalHtmlStream);
           const __freshRscData = await __revalRscCapture.capturedRscDataPromise;
-          const __pageTags = __pageCacheTags(cleanPathname, getCollectedFetchTags());
+          const __pageTags = buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page");
           return { html: __freshHtml, rscData: __freshRscData, tags: __pageTags };
         });
       },
@@ -2558,7 +2544,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     getFontStyles: _getSSRFontStyles,
     getNavigationContext: _getNavigationContext,
     getPageTags() {
-      return __pageCacheTags(cleanPathname, getCollectedFetchTags());
+      return buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page");
     },
     getRequestCacheLife() {
       return _consumeRequestScopedCacheLife();

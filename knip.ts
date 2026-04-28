@@ -70,8 +70,8 @@ export default {
     // probed via require.resolve
     "next-intl",
 
-    // vitest reporter
-    "agent",
+    // vitest reporter used outside CI
+    ...(process.env.CI ? [] : ["agent"]),
 
     // internal module name, not an actual dependency
     "private-next-instrumentation-client",
