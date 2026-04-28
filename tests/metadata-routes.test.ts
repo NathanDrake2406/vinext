@@ -48,6 +48,11 @@ describe("matchMetadataRoutePattern", () => {
       ),
     ).toBeNull();
   });
+
+  it("treats literal segments ending in catch-all markers as literals", () => {
+    expect(matchMetadataRoutePattern(["docs+", "icon"], ["docs+", "icon"])).toEqual({});
+    expect(matchMetadataRoutePattern(["docs", "icon"], ["docs+", "icon"])).toBeNull();
+  });
 });
 
 // ─── sitemapToXml ───────────────────────────────────────────────────────
