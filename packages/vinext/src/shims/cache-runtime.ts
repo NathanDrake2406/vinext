@@ -94,7 +94,8 @@ type RscModule = {
 function getUseCacheBuildId(): string | undefined {
   try {
     // Keep this direct reference so Vite's define transform can inline it for
-    // Worker bundles where the process global might not exist at runtime.
+    // Worker bundles where the process global might not exist at runtime. A
+    // typeof process guard would return before the inlined build ID is reached.
     return process.env.__VINEXT_BUILD_ID;
   } catch (error) {
     if (error instanceof ReferenceError) return undefined;
@@ -334,11 +335,11 @@ export function registerCachedFunction<T extends (...args: any[]) => Promise<any
   // Per-request ("use cache: private") caching still works in dev since
   // it's scoped to a single request and doesn't persist across HMR.
   const isDev = typeof process !== "undefined" && process.env.NODE_ENV === "development";
+  const buildId = getUseCacheBuildId();
 
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   const cachedFn = async (...args: any[]): Promise<any> => {
     const rsc = await getRscModule();
-    const buildId = getUseCacheBuildId();
 
     // Build the cache key. Use encodeReply (RSC protocol) when available —
     // it correctly handles React elements as temporary references (excluded
