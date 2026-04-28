@@ -761,6 +761,26 @@ describe("App Router integration", () => {
     expect(html).toContain('content="noindex"');
   });
 
+  it("forbidden() thrown from a layout uses the forbidden boundary", async () => {
+    // Ported from Next.js: test/e2e/app-dir/forbidden/basic/forbidden-basic.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/forbidden/basic/forbidden-basic.test.ts
+    const res = await fetch(`${baseUrl}/nextjs-compat/layout-forbidden-boundary`);
+    expect(res.status).toBe(403);
+    const html = await res.text();
+    expect(html).toContain("403 - Forbidden");
+    expect(html).not.toContain("404 - Page Not Found");
+  });
+
+  it("unauthorized() thrown from a layout uses the unauthorized boundary", async () => {
+    // Ported from Next.js: test/e2e/app-dir/unauthorized/basic/unauthorized-basic.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/unauthorized/basic/unauthorized-basic.test.ts
+    const res = await fetch(`${baseUrl}/nextjs-compat/layout-unauthorized-boundary`);
+    expect(res.status).toBe(401);
+    const html = await res.text();
+    expect(html).toContain("401 - Unauthorized");
+    expect(html).not.toContain("404 - Page Not Found");
+  });
+
   // ── Client hook usage without "use client" (#834) ──
   // When a Server Component imports a client-only hook from next/navigation
   // without the "use client" directive, vinext should surface a clear error

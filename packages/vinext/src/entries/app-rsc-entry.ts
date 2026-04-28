@@ -59,6 +59,7 @@ const appRouteHandlerCachePath = resolveEntryPath(
 );
 const appPageCachePath = resolveEntryPath("../server/app-page-cache.js", import.meta.url);
 const appPageExecutionPath = resolveEntryPath("../server/app-page-execution.js", import.meta.url);
+const appPageBoundaryPath = resolveEntryPath("../server/app-page-boundary.js", import.meta.url);
 const appPageBoundaryRenderPath = resolveEntryPath(
   "../server/app-page-boundary-render.js",
   import.meta.url,
@@ -68,6 +69,8 @@ const appPageRouteWiringPath = resolveEntryPath(
   "../server/app-page-route-wiring.js",
   import.meta.url,
 );
+const appPageHeadPath = resolveEntryPath("../server/app-page-head.js", import.meta.url);
+const appPageParamsPath = resolveEntryPath("../server/app-page-params.js", import.meta.url);
 const appPageRenderPath = resolveEntryPath("../server/app-page-render.js", import.meta.url);
 const appPageResponsePath = resolveEntryPath("../server/app-page-response.js", import.meta.url);
 const cspPath = resolveEntryPath("../server/csp.js", import.meta.url);
@@ -163,16 +166,23 @@ export function generateRscEntry(
     for (const tmpl of route.templates) getImportVar(tmpl);
     if (route.loadingPath) getImportVar(route.loadingPath);
     if (route.errorPath) getImportVar(route.errorPath);
-    if (route.layoutErrorPaths)
+    if (route.layoutErrorPaths) {
       for (const ep of route.layoutErrorPaths) {
         if (ep) getImportVar(ep);
       }
+    }
     if (route.notFoundPath) getImportVar(route.notFoundPath);
     for (const nfp of route.notFoundPaths || []) {
       if (nfp) getImportVar(nfp);
     }
     if (route.forbiddenPath) getImportVar(route.forbiddenPath);
+    for (const fp of route.forbiddenPaths || []) {
+      if (fp) getImportVar(fp);
+    }
     if (route.unauthorizedPath) getImportVar(route.unauthorizedPath);
+    for (const up of route.unauthorizedPaths || []) {
+      if (up) getImportVar(up);
+    }
     // Register parallel slot modules
     for (const slot of route.parallelSlots) {
       if (slot.pagePath) getImportVar(slot.pagePath);
@@ -195,6 +205,12 @@ export function generateRscEntry(
     const layoutVars = route.layouts.map((l) => getImportVar(l));
     const templateVars = route.templates.map((t) => getImportVar(t));
     const notFoundVars = (route.notFoundPaths || []).map((nf) => (nf ? getImportVar(nf) : "null"));
+    const forbiddenVars = (route.forbiddenPaths || []).map((fp) =>
+      fp ? getImportVar(fp) : "null",
+    );
+    const unauthorizedVars = (route.unauthorizedPaths || []).map((up) =>
+      up ? getImportVar(up) : "null",
+    );
     const slotEntries = route.parallelSlots.map((slot) => {
       const interceptEntries = slot.interceptingRoutes.map(
         (ir) => `        {
@@ -245,7 +261,9 @@ ${slotEntries.join(",\n")}
     notFound: ${route.notFoundPath ? getImportVar(route.notFoundPath) : "null"},
     notFounds: [${notFoundVars.join(", ")}],
     forbidden: ${route.forbiddenPath ? getImportVar(route.forbiddenPath) : "null"},
+    forbiddens: [${forbiddenVars.join(", ")}],
     unauthorized: ${route.unauthorizedPath ? getImportVar(route.unauthorizedPath) : "null"},
+    unauthorizeds: [${unauthorizedVars.join(", ")}],
   }`;
   });
 
@@ -370,7 +388,6 @@ import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
 import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { NextRequest, NextFetchEvent } from "next/server";
-import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
 ${effectiveMetaRoutes.length > 0 ? `import { sitemapToXml, robotsToText, manifestToJson } from ${JSON.stringify(metadataRoutesPath)};` : ""}
@@ -403,6 +420,9 @@ import {
   teeAppPageRscStreamForCapture as __teeAppPageRscStreamForCapture,
 } from ${JSON.stringify(appPageExecutionPath)};
 import {
+  resolveAppPageParentHttpAccessBoundaryModule as __resolveAppPageParentHttpAccessBoundaryModule,
+} from ${JSON.stringify(appPageBoundaryPath)};
+import {
   renderAppPageErrorBoundary as __renderAppPageErrorBoundary,
   renderAppPageHttpAccessFallback as __renderAppPageHttpAccessFallback,
 } from ${JSON.stringify(appPageBoundaryRenderPath)};
@@ -415,6 +435,13 @@ import {
   createAppPageTreePath as __createAppPageTreePath,
   resolveAppPageChildSegments as __resolveAppPageChildSegments,
 } from ${JSON.stringify(appPageRouteWiringPath)};
+import {
+  resolveAppPageSegmentParams as __resolveAppPageSegmentParams,
+} from ${JSON.stringify(appPageParamsPath)};
+import {
+  collectAppPageSearchParams as __collectAppPageSearchParams,
+  resolveAppPageHead as __resolveAppPageHead,
+} from ${JSON.stringify(appPageHeadPath)};
 import {
   renderAppPageLifecycle as __renderAppPageLifecycle,
 } from ${JSON.stringify(appPageRenderPath)};
@@ -1027,83 +1054,18 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     };
   }
 
-  // Resolve metadata and viewport from layouts and page.
-  //
-  // generateMetadata() accepts a "parent" (Promise of ResolvedMetadata) as its
-  // second argument (Next.js 13+). The parent resolves to the accumulated
-  // merged metadata of all ancestor segments, enabling patterns like:
-  //
-  //   const previousImages = (await parent).openGraph?.images ?? []
-  //   return { openGraph: { images: ['/new-image.jpg', ...previousImages] } }
-  //
-  // Next.js uses an eager-execution-with-serial-resolution approach:
-  // all generateMetadata() calls are kicked off concurrently, but each
-  // segment's "parent" promise resolves only after the preceding segment's
-  // metadata is resolved and merged. This preserves concurrency for I/O-bound
-  // work while guaranteeing that parent data is available when needed.
-  //
-  // We build a chain: layoutParentPromises[0] = Promise.resolve({}) (no parent
-  // for root layout), layoutParentPromises[i+1] resolves to merge(layouts[0..i]),
-  // and pageParentPromise resolves to merge(all layouts).
-  //
-  // IMPORTANT: Layout metadata errors are swallowed (.catch(() => null)) because
-  // a layout's generateMetadata() failing should not crash the page.
-  // Page metadata errors are NOT swallowed — if the page's generateMetadata()
-  // throws, the error propagates out of buildPageElement() so the caller can
-  // route it to the nearest error.tsx boundary (or global-error.tsx).
-  const layoutMods = route.layouts.filter(Boolean);
-
-  // Convert URLSearchParams → plain object for page generateMetadata() and
-  // pageProps.searchParams. Built before the layout loop so the page metadata
-  // call (below) and pageProps can reference the same object.
-  // NOTE: Layouts do NOT receive searchParams in generateMetadata() — only
-  // pages do. This matches Next.js behavior (resolve-metadata.ts:777).
-  const spObj = Object.create(null);
-  let hasSearchParams = false;
-  if (searchParams && searchParams.forEach) {
-    searchParams.forEach(function(v, k) {
-      hasSearchParams = true;
-      if (k in spObj) {
-        spObj[k] = Array.isArray(spObj[k]) ? spObj[k].concat(v) : [spObj[k], v];
-      } else {
-        spObj[k] = v;
-      }
-    });
-  }
-
-  // Build the parent promise chain and kick off metadata resolution in one pass.
-  // Each layout module is called exactly once. layoutMetaPromises[i] is the
-  // promise for layout[i]'s own metadata result.
-  //
-  // All calls are kicked off immediately (concurrent I/O), but each layout's
-  // "parent" promise only resolves after the preceding layout's metadata is done.
-  const layoutMetaPromises = [];
-  let accumulatedMetaPromise = Promise.resolve({});
-  for (let i = 0; i < layoutMods.length; i++) {
-    const parentForThisLayout = accumulatedMetaPromise;
-    // Kick off this layout's metadata resolution now (concurrent with others).
-    const metaPromise = resolveModuleMetadata(layoutMods[i], params, undefined, parentForThisLayout)
-      .catch((err) => { console.error("[vinext] Layout generateMetadata() failed:", err); return null; });
-    layoutMetaPromises.push(metaPromise);
-    // Advance accumulator: resolves to merged(layouts[0..i]) once layout[i] is done.
-    accumulatedMetaPromise = metaPromise.then(async (result) =>
-      result ? mergeMetadata([await parentForThisLayout, result]) : await parentForThisLayout
-    );
-  }
-  // Page's parent is the fully-accumulated layout metadata.
-  const pageParentPromise = accumulatedMetaPromise;
-
-  const [layoutMetaResults, layoutVpResults, pageMeta, pageVp] = await Promise.all([
-    Promise.all(layoutMetaPromises),
-    Promise.all(layoutMods.map((mod) => resolveModuleViewport(mod, params).catch((err) => { console.error("[vinext] Layout generateViewport() failed:", err); return null; }))),
-    route.page ? resolveModuleMetadata(route.page, params, spObj, pageParentPromise) : Promise.resolve(null),
-    route.page ? resolveModuleViewport(route.page, params) : Promise.resolve(null),
-  ]);
-
-  const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
-  const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
-  const resolvedMetadata = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
-  const resolvedViewport = mergeViewport(viewportList);
+  const __headResult = await __resolveAppPageHead({
+    layoutModules: route.layouts,
+    layoutTreePositions: route.layoutTreePositions,
+    pageModule: route.page,
+    params,
+    routeSegments: route.routeSegments,
+    searchParams,
+  });
+  const spObj = __headResult.searchParamsObject;
+  const hasSearchParams = __headResult.hasSearchParams;
+  const resolvedMetadata = __headResult.metadata;
+  const resolvedViewport = __headResult.viewport;
 
   // Build the route tree from the leaf page, then delegate the boundary/layout/
   // template/segment wiring to a typed runtime helper so the generated entry
@@ -2583,21 +2545,20 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     probeLayoutAt(li) {
       const LayoutComp = route.layouts[li]?.default;
       if (!LayoutComp) return null;
-      return LayoutComp({ params: _asyncLayoutParams, children: null });
+      return LayoutComp({
+        params: makeThenableParams(__resolveAppPageSegmentParams(
+          route.routeSegments,
+          route.layoutTreePositions?.[li] ?? 0,
+          params,
+        )),
+        children: null,
+      });
     },
     probePage() {
       if (!PageComponent) return null;
-      const _probeSearchObj = {};
-      url.searchParams.forEach(function(v, k) {
-        if (k in _probeSearchObj) {
-          _probeSearchObj[k] = Array.isArray(_probeSearchObj[k])
-            ? _probeSearchObj[k].concat(v)
-            : [_probeSearchObj[k], v];
-        } else {
-          _probeSearchObj[k] = v;
-        }
-      });
-      const _asyncSearchParams = makeThenableParams(_probeSearchObj);
+      const _asyncSearchParams = makeThenableParams(
+        __collectAppPageSearchParams(url.searchParams).searchParamsObject,
+      );
       return PageComponent({ params: _asyncLayoutParams, searchParams: _asyncSearchParams });
     },
     classification: {
@@ -2633,19 +2594,16 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         },
         middlewareContext: _mwCtx,
         renderFallbackPage(statusCode) {
-          // Find the not-found component from the parent level (the boundary that
-          // would catch this in Next.js). Walk up from the throwing layout to find
-          // the nearest not-found at a parent layout's directory.
-          let parentNotFound = null;
-          if (route.notFounds) {
-            for (let pi = li - 1; pi >= 0; pi--) {
-              if (route.notFounds[pi]?.default) {
-                parentNotFound = route.notFounds[pi].default;
-                break;
-              }
-            }
-          }
-          if (!parentNotFound) parentNotFound = ${rootNotFoundVar ? `${rootNotFoundVar}?.default` : "null"};
+          const parentBoundary = __resolveAppPageParentHttpAccessBoundaryModule({
+            layoutIndex: li,
+            rootForbiddenModule: ${rootForbiddenVar ?? "null"},
+            rootNotFoundModule: ${rootNotFoundVar ?? "null"},
+            rootUnauthorizedModule: ${rootUnauthorizedVar ?? "null"},
+            routeForbiddenModules: route.forbiddens,
+            routeNotFoundModules: route.notFounds,
+            routeUnauthorizedModules: route.unauthorizeds,
+            statusCode,
+          })?.default ?? null;
           const parentLayouts = route.layouts.slice(0, li);
           return renderHTTPAccessFallbackPage(
             route,
@@ -2653,7 +2611,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
             isRscRequest,
             request,
             {
-              boundaryComponent: parentNotFound,
+              boundaryComponent: parentBoundary,
               layouts: parentLayouts,
               matchedParams: params,
             },
