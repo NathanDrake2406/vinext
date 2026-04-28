@@ -308,13 +308,13 @@ describe("app route handler execution helpers", () => {
         headerName: "x-middleware-next",
         headerValue: "1",
         message:
-          "NextResponse.next() was used in a app route handler, this is not supported. See here for more info: https://nextjs.org/docs/messages/next-response-next-in-app-route-handler",
+          "NextResponse.next() was used in an app route handler, this is not supported. See here for more info: https://nextjs.org/docs/messages/next-response-next-in-app-route-handler",
       },
       {
         headerName: "x-middleware-rewrite",
         headerValue: "https://example.com/rewritten",
         message:
-          "NextResponse.rewrite() was used in a app route handler, this is not currently supported. Please remove the invocation to continue.",
+          "NextResponse.rewrite() was used in an app route handler, this is not currently supported. Please remove the invocation to continue.",
       },
     ];
 
