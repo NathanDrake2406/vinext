@@ -297,4 +297,92 @@ describe("app route handler execution helpers", () => {
 
     errorSpy.mockRestore();
   });
+
+  it("rejects middleware control responses returned from route handlers", async () => {
+    // The NextResponse.next() case is ported from Next.js:
+    // test/e2e/app-dir/app-routes/app-custom-routes.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-routes/app-custom-routes.test.ts
+    // The NextResponse.rewrite() case mirrors the adjacent App Route module validation.
+    const cases = [
+      {
+        headerName: "x-middleware-next",
+        headerValue: "1",
+        message:
+          "NextResponse.next() was used in a app route handler, this is not supported. See here for more info: https://nextjs.org/docs/messages/next-response-next-in-app-route-handler",
+      },
+      {
+        headerName: "x-middleware-rewrite",
+        headerValue: "https://example.com/rewritten",
+        message:
+          "NextResponse.rewrite() was used in a app route handler, this is not currently supported. Please remove the invocation to continue.",
+      },
+    ];
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      for (const testCase of cases) {
+        const dynamicUsage = createDynamicUsageState();
+        const reportedErrors: Error[] = [];
+        let wroteCache = false;
+        let didClearRequestContext = false;
+
+        const response = await executeAppRouteHandler({
+          buildPageCacheTags(pathname, extraTags) {
+            return [pathname, ...extraTags];
+          },
+          cleanPathname: "/api/middleware-control",
+          clearRequestContext() {
+            didClearRequestContext = true;
+          },
+          consumeDynamicUsage: dynamicUsage.consumeDynamicUsage,
+          executionContext: null,
+          getAndClearPendingCookies() {
+            return [];
+          },
+          getCollectedFetchTags() {
+            return [];
+          },
+          getDraftModeCookieHeader() {
+            return null;
+          },
+          handler: { dynamic: "auto" },
+          handlerFn() {
+            return new Response("should not be sent", {
+              headers: { [testCase.headerName]: testCase.headerValue },
+            });
+          },
+          isAutoHead: false,
+          isProduction: true,
+          isrRouteKey(pathname) {
+            return "route:" + pathname;
+          },
+          async isrSet() {
+            wroteCache = true;
+          },
+          markDynamicUsage: dynamicUsage.markDynamicUsage,
+          method: "GET",
+          middlewareContext: { headers: null, status: null },
+          params: {},
+          reportRequestError(error) {
+            reportedErrors.push(error);
+          },
+          request: new Request("https://example.com/api/middleware-control"),
+          revalidateSeconds: 60,
+          routePattern: "/api/middleware-control",
+          setHeadersAccessPhase() {
+            return "render";
+          },
+        });
+
+        expect(response.status).toBe(500);
+        await expect(response.text()).resolves.toBe("");
+        expect(reportedErrors.map((error) => error.message)).toEqual([testCase.message]);
+        expect(wroteCache).toBe(false);
+        expect(didClearRequestContext).toBe(true);
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });

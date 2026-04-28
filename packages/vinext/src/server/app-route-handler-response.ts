@@ -22,6 +22,11 @@ type FinalizeRouteHandlerResponseOptions = {
 // See .nextjs-ref/packages/next/src/server/lib/cache-control.ts.
 const NEVER_CACHE_CONTROL = "private, no-cache, no-store, max-age=0, must-revalidate";
 
+const APP_ROUTE_REWRITE_ERROR =
+  "NextResponse.rewrite() was used in a app route handler, this is not currently supported. Please remove the invocation to continue.";
+const APP_ROUTE_NEXT_ERROR =
+  "NextResponse.next() was used in a app route handler, this is not supported. See here for more info: https://nextjs.org/docs/messages/next-response-next-in-app-route-handler";
+
 function buildRouteHandlerCacheControl(
   cacheState: BuildRouteHandlerCachedResponseOptions["cacheState"],
   revalidateSeconds: number,
@@ -57,6 +62,18 @@ export function applyRouteHandlerMiddlewareContext(
     statusText: response.statusText,
     headers: responseHeaders,
   });
+}
+
+export function assertSupportedAppRouteHandlerResponse(response: Response): void {
+  // NextResponse.next() and rewrite() are middleware control-flow signals.
+  // Once an App Route handler has returned, Next.js rejects those responses.
+  if (response.headers.has("x-middleware-rewrite")) {
+    throw new Error(APP_ROUTE_REWRITE_ERROR);
+  }
+
+  if (response.headers.get("x-middleware-next") === "1") {
+    throw new Error(APP_ROUTE_NEXT_ERROR);
+  }
 }
 
 export function buildRouteHandlerCachedResponse(

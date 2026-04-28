@@ -631,6 +631,20 @@ describe("App Router integration", () => {
     expect(body).toBe("");
   });
 
+  it("rejects middleware control responses returned from route handlers", async () => {
+    // The NextResponse.next() case is ported from Next.js:
+    // test/e2e/app-dir/app-routes/app-custom-routes.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-routes/app-custom-routes.test.ts
+    // The NextResponse.rewrite() case mirrors the adjacent App Route module validation.
+    const nextRes = await fetch(`${baseUrl}/api/invalid-next-response-next`);
+    expect(nextRes.status).toBe(500);
+    expect(await nextRes.text()).toBe("");
+
+    const rewriteRes = await fetch(`${baseUrl}/api/invalid-next-response-rewrite`);
+    expect(rewriteRes.status).toBe(500);
+    expect(await rewriteRes.text()).toBe("");
+  });
+
   it("catches redirect() thrown in route handlers", async () => {
     const res = await fetch(`${baseUrl}/api/redirect-route`, { redirect: "manual" });
     expect(res.status).toBe(307);

@@ -12,6 +12,7 @@ import {
 import {
   applyRouteHandlerMiddlewareContext,
   applyRouteHandlerRevalidateHeader,
+  assertSupportedAppRouteHandlerResponse,
   buildAppRouteCacheValue,
   finalizeRouteHandlerResponse,
   markRouteHandlerCacheMiss,
@@ -109,6 +110,7 @@ export async function executeAppRouteHandler(
 
   try {
     const { dynamicUsedInHandler, response } = await runAppRouteHandler(options);
+    assertSupportedAppRouteHandlerResponse(response);
     const handlerSetCacheControl = response.headers.has("cache-control");
 
     if (dynamicUsedInHandler) {
