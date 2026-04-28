@@ -567,6 +567,10 @@ type ClientNavigationState = {
   navigationSnapshotActiveCount: number;
 };
 
+type CommitClientNavigationStateOptions = {
+  releaseSnapshot?: boolean;
+};
+
 type ClientNavigationGlobal = typeof globalThis & {
   [_CLIENT_NAV_STATE_KEY]?: ClientNavigationState;
   [_MOUNTED_SLOTS_HEADER_KEY]?: string | null;
@@ -1016,19 +1020,23 @@ function withSuppressedUrlNotifications<T>(fn: () => T): T {
  * Commit pending client navigation state to committed snapshots.
  *
  * navId is optional: callers that don't own pendingPathname (for example,
- * superseded pre-paint cleanup) may pass undefined to flush snapshot/params
- * state without clearing pendingPathname owned by the active navigation.
+ * superseded pre-paint cleanup) may pass undefined to flush URL/params state
+ * without clearing pendingPathname owned by the active navigation. Such callers
+ * must opt in explicitly if they also own an activated render snapshot.
  */
-export function commitClientNavigationState(navId?: number): void {
+export function commitClientNavigationState(
+  navId?: number,
+  options?: CommitClientNavigationStateOptions,
+): void {
   if (isServer) return;
   const state = getClientNavigationState();
   if (!state) return;
 
-  // Only decrement the snapshot counter if a snapshot was previously activated.
-  // Several code paths call commit without a prior activateNavigationSnapshot()
-  // — hash-only changes (navigateClientSide), Pages Router popstate, and
-  // patched history.pushState/replaceState — which legitimately have count == 0.
-  if (state.navigationSnapshotActiveCount > 0) {
+  // Only navigation-owned commits may release a render snapshot. Ownerless URL
+  // syncs still update committed pathname/search state, but must not consume
+  // the active snapshot for an in-flight App Router transition.
+  const shouldReleaseSnapshot = navId !== undefined || options?.releaseSnapshot === true;
+  if (shouldReleaseSnapshot && state.navigationSnapshotActiveCount > 0) {
     state.navigationSnapshotActiveCount -= 1;
   }
 

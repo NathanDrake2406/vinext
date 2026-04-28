@@ -271,7 +271,7 @@ function drainPrePaintEffects(upToRenderId: number): void {
         // Superseded navigation: balance its activateNavigationSnapshot().
         // Pass undefined navId intentionally so this cleanup cannot clear
         // pendingPathname owned by the current active navigation.
-        commitClientNavigationState(undefined);
+        commitClientNavigationState(undefined, { releaseSnapshot: true });
       }
     }
   }
@@ -290,7 +290,7 @@ function createNavigationCommitEffect(
     if (navId !== activeNavigationId) {
       // This transition was superseded before commit; balance the active
       // snapshot counter without clearing pendingPathname ownership.
-      commitClientNavigationState(undefined);
+      commitClientNavigationState(undefined, { releaseSnapshot: true });
       return;
     }
 

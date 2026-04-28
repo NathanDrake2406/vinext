@@ -43,6 +43,92 @@ describe("next/navigation shim", () => {
     expect(typeof router.prefetch).toBe("function");
   });
 
+  it("keeps pending render snapshot active when external history.pushState syncs the URL", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win = {
+      location: {
+        pathname: "/current",
+        search: "?from=committed",
+        hash: "",
+        href: "http://localhost/current?from=committed",
+        origin: "http://localhost",
+      },
+      history: {
+        state: null,
+        pushState(_data: unknown, _unused: string, url?: string | URL | null) {
+          if (!url) return;
+          const parsed = new URL(url, win.location.href);
+          win.location.pathname = parsed.pathname;
+          win.location.search = parsed.search;
+          win.location.hash = parsed.hash;
+          win.location.href = parsed.href;
+        },
+        replaceState(_data: unknown, _unused: string, url?: string | URL | null) {
+          if (!url) return;
+          const parsed = new URL(url, win.location.href);
+          win.location.pathname = parsed.pathname;
+          win.location.search = parsed.search;
+          win.location.hash = parsed.hash;
+          win.location.href = parsed.href;
+        },
+      },
+      addEventListener: vi.fn(),
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const React = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const navigation = await import("../packages/vinext/src/shims/navigation.js");
+      const Context = navigation.getClientNavigationRenderContext();
+      if (!Context) {
+        throw new Error("Expected client navigation render context");
+      }
+
+      navigation.activateNavigationSnapshot();
+      const snapshot = navigation.createClientNavigationRenderSnapshot(
+        "http://localhost/pending?from=snapshot",
+        {},
+      );
+
+      const readHookValues = () => {
+        let pathname = "";
+        let search = "";
+        function Probe() {
+          pathname = navigation.usePathname();
+          search = navigation.useSearchParams().toString();
+          return React.createElement("span", null, pathname);
+        }
+
+        renderToStaticMarkup(
+          React.createElement(Context.Provider, { value: snapshot }, React.createElement(Probe)),
+        );
+
+        return { pathname, search };
+      };
+
+      expect(readHookValues()).toEqual({
+        pathname: "/pending",
+        search: "from=snapshot",
+      });
+
+      win.history.pushState(null, "", "/ownerless?from=history");
+
+      expect(readHookValues()).toEqual({
+        pathname: "/pending",
+        search: "from=snapshot",
+      });
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
   it("exports redirect, notFound, permanentRedirect", async () => {
     const nav = await import("../packages/vinext/src/shims/navigation.js");
     expect(typeof nav.redirect).toBe("function");
