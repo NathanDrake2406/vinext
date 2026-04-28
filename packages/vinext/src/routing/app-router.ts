@@ -218,6 +218,7 @@ export async function appRouter(
   const slotSubRoutes = discoverSlotSubRoutes(routes, appDir, matcher);
   routes.push(...slotSubRoutes);
 
+  validatePageRouteConflicts(routes, appDir);
   validateRoutePatterns(routes.map((route) => route.pattern));
   const interceptTargetPatterns = [
     ...new Set(
@@ -237,6 +238,46 @@ export async function appRouter(
   cachedAppDir = appDir;
   cachedPageExtensionsKey = pageExtensionsKey;
   return routes;
+}
+
+function validatePageRouteConflicts(routes: AppRoute[], appDir: string): void {
+  const byPattern = new Map<string, { pagePath: string | null; routePath: string | null }>();
+
+  for (const route of routes) {
+    const entry = byPattern.get(route.pattern);
+    if (!entry) {
+      byPattern.set(route.pattern, {
+        pagePath: route.pagePath,
+        routePath: route.routePath,
+      });
+      continue;
+    }
+
+    if (!entry.pagePath && route.pagePath) {
+      entry.pagePath = route.pagePath;
+    }
+    if (!entry.routePath && route.routePath) {
+      entry.routePath = route.routePath;
+    }
+  }
+
+  for (const [pattern, entry] of byPattern) {
+    if (!entry.pagePath || !entry.routePath) continue;
+
+    throw new Error(
+      `Conflicting route and page at ${pattern}: route at ${formatAppFilePath(
+        entry.routePath,
+        appDir,
+      )} and page at ${formatAppFilePath(entry.pagePath, appDir)}`,
+    );
+  }
+}
+
+function formatAppFilePath(filePath: string, appDir: string): string {
+  const relativePath = path.relative(appDir, filePath).replace(/\\/g, "/");
+  const parsedPath = path.parse(relativePath);
+  const withoutExtension = path.join(parsedPath.dir, parsedPath.name).replace(/\\/g, "/");
+  return withoutExtension.startsWith("/") ? withoutExtension : `/${withoutExtension}`;
 }
 
 /**
@@ -1012,6 +1053,22 @@ function computeInterceptTarget(
           climbed++;
         }
       }
+      if (climbed < levelsToClimb) {
+        const interceptionRoute = formatInterceptionRoutePath(
+          routeSegments,
+          convention,
+          interceptSegment,
+          path.relative(interceptRoot, currentDir).split(path.sep).filter(Boolean),
+        );
+        if (convention === "..") {
+          throw new Error(
+            `Invalid interception route: ${interceptionRoute}. Cannot use (..) marker at the root level, use (.) instead.`,
+          );
+        }
+        throw new Error(
+          `Invalid interception route: ${interceptionRoute}. Cannot use (..)(..) marker at the root level or one level up.`,
+        );
+      }
       baseParts = routeSegments.slice(0, cutIndex);
       break;
     }
@@ -1033,6 +1090,36 @@ function computeInterceptTarget(
 
   const pattern = "/" + urlSegments.join("/");
   return { pattern: pattern === "/" ? "/" : pattern, params };
+}
+
+function formatInterceptionRoutePath(
+  routeSegments: string[],
+  convention: string,
+  interceptSegment: string,
+  nestedParts: string[],
+): string {
+  const marker = markerForInterceptionConvention(convention);
+  const convertedRoute = convertSegmentsToRouteParts(routeSegments);
+  const prefix = convertedRoute ? convertedRoute.urlSegments : [];
+  const routePath = [...prefix, `${marker}${interceptSegment}`, ...nestedParts]
+    .filter(Boolean)
+    .join("/");
+  return routePath ? `/${routePath}` : "/";
+}
+
+function markerForInterceptionConvention(convention: string): string {
+  switch (convention) {
+    case ".":
+      return "(.)";
+    case "..":
+      return "(..)";
+    case "../..":
+      return "(..)(..)";
+    case "...":
+      return "(...)";
+    default:
+      return "";
+  }
 }
 
 /**

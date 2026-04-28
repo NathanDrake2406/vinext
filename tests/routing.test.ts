@@ -328,6 +328,22 @@ describe("appRouter - route discovery", () => {
     expect(apiPatterns).toContain("/api/hello");
   });
 
+  it("rejects page and route handler files at the same app route", async () => {
+    // Next.js docs forbid page.js and route.js at the same normalized route:
+    // https://github.com/vercel/next.js/blob/ae61573e062e900050b8e6b24626e450accc4570/docs/01-app/01-getting-started/15-route-handlers.mdx#L150-L163
+    await withTempDir("vinext-app-page-route-conflict-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "foo"), { recursive: true });
+      await writeFile(path.join(appDir, "foo", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "foo", "route.ts"), EMPTY_ROUTE);
+
+      invalidateAppRouteCache();
+      await expect(appRouter(appDir)).rejects.toThrow(
+        "Conflicting route and page at /foo: route at /foo/route and page at /foo/page",
+      );
+    });
+  });
+
   it("discovers layouts from root to leaf", async () => {
     const routes = await appRouter(APP_FIXTURE_DIR);
     const homeRoute = routes.find((r) => r.pattern === "/");
@@ -607,6 +623,69 @@ describe("appRouter - route discovery", () => {
       expect(modalSlot!.interceptingRoutes).toHaveLength(1);
       expect(modalSlot!.interceptingRoutes[0].targetPattern).toBe("/photos/:slug+");
       expect(modalSlot!.interceptingRoutes[0].params).toEqual(["slug"]);
+    });
+  });
+
+  it("rejects (..) intercepting routes at the normalized root", async () => {
+    // Ported from Next.js:
+    // packages/next/src/shared/lib/router/utils/interception-routes.test.ts
+    // https://github.com/vercel/next.js/blob/ae61573e062e900050b8e6b24626e450accc4570/packages/next/src/shared/lib/router/utils/interception-routes.test.ts#L66-L75
+    await withTempDir("vinext-app-intercept-root-parent-marker-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "@modal", "(..)foo"), { recursive: true });
+      await writeFile(path.join(appDir, "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "@modal", "(..)foo", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      await expect(appRouter(appDir)).rejects.toThrow(
+        "Cannot use (..) marker at the root level, use (.) instead.",
+      );
+    });
+  });
+
+  it("rejects (..) intercepting routes at the root after route group normalization", async () => {
+    // Next.js validates the normalized intercepting route, so transparent
+    // route groups do not make an upward marker valid at the URL root.
+    // https://github.com/vercel/next.js/blob/ae61573e062e900050b8e6b24626e450accc4570/packages/next/src/shared/lib/router/utils/interception-routes.ts#L60-L95
+    await withTempDir("vinext-app-intercept-group-root-parent-marker-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "(group)", "@modal", "(..)foo"), { recursive: true });
+      await writeFile(path.join(appDir, "(group)", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "(group)", "@modal", "(..)foo", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      await expect(appRouter(appDir)).rejects.toThrow(
+        "Cannot use (..) marker at the root level, use (.) instead.",
+      );
+    });
+  });
+
+  it("rejects (..)(..) intercepting routes at root or one visible level up", async () => {
+    // Ported from Next.js:
+    // packages/next/src/shared/lib/router/utils/interception-routes.test.ts
+    // https://github.com/vercel/next.js/blob/ae61573e062e900050b8e6b24626e450accc4570/packages/next/src/shared/lib/router/utils/interception-routes.test.ts#L66-L75
+    await withTempDir("vinext-app-intercept-two-up-marker-root-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "@modal", "(..)(..)foo"), { recursive: true });
+      await writeFile(path.join(appDir, "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "@modal", "(..)(..)foo", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      await expect(appRouter(appDir)).rejects.toThrow(
+        "Cannot use (..)(..) marker at the root level or one level up.",
+      );
+    });
+
+    await withTempDir("vinext-app-intercept-two-up-marker-one-level-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "feed", "@modal", "(..)(..)foo"), { recursive: true });
+      await writeFile(path.join(appDir, "feed", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "feed", "@modal", "(..)(..)foo", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      await expect(appRouter(appDir)).rejects.toThrow(
+        "Cannot use (..)(..) marker at the root level or one level up.",
+      );
     });
   });
 
