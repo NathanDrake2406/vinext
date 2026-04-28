@@ -18,7 +18,8 @@ jobs:
       (
         github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'COLLABORATOR' ||
-        github.event.comment.author_association == 'OWNER'
+        github.event.comment.author_association == 'OWNER' ||
+        github.event.sender.login == 'NathanDrake2406'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -42,7 +43,7 @@ jobs:
           CLOUDFLARE_GATEWAY_ID: ${{ secrets.CF_AI_GATEWAY_NAME }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_AI_GATEWAY_TOKEN }}
         with:
-          model: "cloudflare-ai-gateway/anthropic/claude-opus-4-7"
+          model: "cloudflare-ai-gateway/anthropic/claude-opus-4-6"
           mentions: "/bigbonk"
           variant: "max"
           permissions: write
