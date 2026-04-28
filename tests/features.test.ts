@@ -2317,6 +2317,17 @@ describe("MetadataHead rendering", () => {
     expect(html).toContain('sizes="180x180"');
   });
 
+  it("renders top-level icon shorthand metadata", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(MetadataHead, {
+        metadata: { icons: "/manual-icon.png" },
+      }),
+    );
+
+    expect(html).toContain('rel="icon"');
+    expect(html).toContain('href="/manual-icon.png"');
+  });
+
   it("renders alternate hreflang links", () => {
     const html = renderToStaticMarkup(
       React.createElement(MetadataHead, {

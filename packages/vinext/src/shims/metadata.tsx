@@ -184,12 +184,7 @@ export type Metadata = {
     players?: TwitterPlayerDescriptor | TwitterPlayerDescriptor[];
     app?: TwitterAppDescriptor;
   };
-  icons?: {
-    icon?: string | URL | IconDescriptor | IconDescriptor[];
-    shortcut?: string | URL | Array<string | URL>;
-    apple?: string | URL | AppleIconDescriptor | AppleIconDescriptor[];
-    other?: Array<{ rel: string; url: string | URL; sizes?: string; type?: string }>;
-  };
+  icons?: IconsMetadata;
   manifest?: string | URL;
   alternates?: {
     canonical?: string | URL;
@@ -292,6 +287,18 @@ type AppleIconDescriptor = {
   type?: string;
 };
 
+type IconInput = string | URL | IconDescriptor;
+type AppleIconInput = string | URL | AppleIconDescriptor;
+
+type IconsMap = {
+  icon?: IconInput | IconInput[];
+  shortcut?: string | URL | Array<string | URL>;
+  apple?: AppleIconInput | AppleIconInput[];
+  other?: Array<{ rel: string; url: string | URL; sizes?: string; type?: string }>;
+};
+
+type IconsMetadata = IconInput | IconInput[] | IconsMap;
+
 /**
  * Merge metadata from multiple sources (layouts + page).
  *
@@ -393,30 +400,61 @@ export async function resolveModuleMetadata(
  * React component that renders metadata as HTML head elements.
  * Used by the RSC entry to inject into the <head>.
  */
-function normalizeIconHeadEntries(icon: NonNullable<Metadata["icons"]>["icon"]): IconDescriptor[] {
+function isIconDescriptor(value: unknown): value is IconDescriptor {
+  if (typeof value !== "object" || value === null || value instanceof URL || Array.isArray(value)) {
+    return false;
+  }
+  const urlValue = Reflect.get(value, "url");
+  return typeof urlValue === "string" || urlValue instanceof URL;
+}
+
+function isIconsMap(value: IconsMetadata): value is IconsMap {
+  return (
+    typeof value === "object" &&
+    !(value instanceof URL) &&
+    !Array.isArray(value) &&
+    !isIconDescriptor(value)
+  );
+}
+
+function normalizeIconHeadEntry(icon: IconInput): IconDescriptor {
+  if (typeof icon === "string" || icon instanceof URL) {
+    return { url: icon };
+  }
+  return icon;
+}
+
+function normalizeIconHeadEntries(icon: IconInput | IconInput[] | undefined): IconDescriptor[] {
   if (!icon) {
     return [];
   }
 
-  if (typeof icon === "string" || icon instanceof URL) {
-    return [{ url: icon }];
+  if (Array.isArray(icon)) {
+    return icon.map(normalizeIconHeadEntry);
   }
 
-  return Array.isArray(icon) ? icon : [icon];
+  return [normalizeIconHeadEntry(icon)];
+}
+
+function normalizeAppleIconHeadEntry(apple: AppleIconInput): AppleIconDescriptor {
+  if (typeof apple === "string" || apple instanceof URL) {
+    return { url: apple };
+  }
+  return apple;
 }
 
 function normalizeAppleIconHeadEntries(
-  apple: NonNullable<Metadata["icons"]>["apple"],
+  apple: AppleIconInput | AppleIconInput[] | undefined,
 ): AppleIconDescriptor[] {
   if (!apple) {
     return [];
   }
 
-  if (typeof apple === "string" || apple instanceof URL) {
-    return [{ url: apple }];
+  if (Array.isArray(apple)) {
+    return apple.map(normalizeAppleIconHeadEntry);
   }
 
-  return Array.isArray(apple) ? apple : [apple];
+  return [normalizeAppleIconHeadEntry(apple)];
 }
 
 export function MetadataHead({ metadata }: { metadata: Metadata }) {
@@ -710,17 +748,22 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
 
   // Icons
   if (metadata.icons) {
-    const { icon, shortcut, apple, other } = metadata.icons;
+    const iconEntries = isIconsMap(metadata.icons)
+      ? normalizeIconHeadEntries(metadata.icons.icon)
+      : normalizeIconHeadEntries(metadata.icons);
+
     // Shortcut icon
-    if (shortcut) {
-      const shortcuts = Array.isArray(shortcut) ? shortcut : [shortcut];
+    if (isIconsMap(metadata.icons) && metadata.icons.shortcut) {
+      const shortcuts = Array.isArray(metadata.icons.shortcut)
+        ? metadata.icons.shortcut
+        : [metadata.icons.shortcut];
       for (const s of shortcuts) {
         elements.push(<link key={key++} rel="shortcut icon" href={resolveUrl(s)} />);
       }
     }
     // Icon
-    if (icon) {
-      for (const i of normalizeIconHeadEntries(icon)) {
+    if (iconEntries.length > 0) {
+      for (const i of iconEntries) {
         elements.push(
           <link
             key={key++}
@@ -734,8 +777,8 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
       }
     }
     // Apple touch icon
-    if (apple) {
-      for (const a of normalizeAppleIconHeadEntries(apple)) {
+    if (isIconsMap(metadata.icons) && metadata.icons.apple) {
+      for (const a of normalizeAppleIconHeadEntries(metadata.icons.apple)) {
         elements.push(
           <link
             key={key++}
@@ -748,8 +791,8 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
       }
     }
     // Other custom icon relations
-    if (other) {
-      for (const o of other) {
+    if (isIconsMap(metadata.icons) && metadata.icons.other) {
+      for (const o of metadata.icons.other) {
         elements.push(
           <link
             key={key++}
