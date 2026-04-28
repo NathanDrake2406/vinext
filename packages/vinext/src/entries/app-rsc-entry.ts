@@ -7,9 +7,6 @@
  *
  * Previously housed in server/app-dev-server.ts.
  */
-import fs from "node:fs";
-import { createHash } from "node:crypto";
-import { imageSize } from "image-size";
 import { resolveEntryPath } from "./runtime-entry-module.js";
 import type {
   NextHeader,
@@ -19,7 +16,11 @@ import type {
 } from "../config/next-config.js";
 import type { AppRoute } from "../routing/app-router.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
-import { getMetadataRouteKind, type MetadataFileRoute } from "../server/metadata-routes.js";
+import type { MetadataFileRoute } from "../server/metadata-routes.js";
+import {
+  createMetadataRouteEntryData,
+  createMetadataRouteEntrySource,
+} from "../server/metadata-route-build-data.js";
 import {
   generateMiddlewareMatcherCode,
   generateNormalizePathCode,
@@ -84,83 +85,6 @@ const routeTriePath = resolveEntryPath("../routing/route-trie.js", import.meta.u
 const metadataRoutesPath = resolveEntryPath("../server/metadata-routes.js", import.meta.url);
 const rootParamsShimPath = resolveEntryPath("../shims/root-params.js", import.meta.url);
 const errorCausePath = resolveEntryPath("../utils/error-cause.js", import.meta.url);
-
-function createMetadataContentHash(buffer: Buffer): string {
-  return createHash("sha1").update(buffer).digest("hex").slice(0, 16);
-}
-
-function readMetadataRouteFile(route: MetadataFileRoute): Buffer {
-  try {
-    return fs.readFileSync(route.filePath);
-  } catch (error) {
-    const reason = error instanceof Error && error.message ? `: ${error.message}` : "";
-    throw new Error(
-      `[vinext] Failed to read metadata route file ${route.filePath} for ${route.servedUrl}${reason}`,
-      { cause: error },
-    );
-  }
-}
-
-function readMetadataRouteTextFile(filePath: string, route: MetadataFileRoute): string {
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    const reason = error instanceof Error && error.message ? `: ${error.message}` : "";
-    throw new Error(
-      `[vinext] Failed to read metadata route file ${filePath} for ${route.servedUrl}${reason}`,
-      { cause: error },
-    );
-  }
-}
-
-function createMetadataHeadDataCode(route: MetadataFileRoute, buffer: Buffer): string | null {
-  if (route.type === "manifest") {
-    return `{ kind: "manifest", href: ${JSON.stringify(route.servedUrl)} }`;
-  }
-
-  const routeKind = getMetadataRouteKind(route);
-  if (!routeKind || routeKind === "manifest") {
-    return null;
-  }
-
-  const properties = [
-    `href: ${JSON.stringify(`${route.servedUrl}?${createMetadataContentHash(buffer)}`)}`,
-  ];
-  const isSvgRoute =
-    route.contentType === "image/svg+xml" || route.servedUrl.toLowerCase().endsWith(".svg");
-  if (route.contentType) {
-    properties.push(`type: ${JSON.stringify(route.contentType)}`);
-  }
-  if ((routeKind === "openGraph" || routeKind === "twitter") && route.altFilePath) {
-    properties.push(`alt: ${JSON.stringify(readMetadataRouteTextFile(route.altFilePath, route))}`);
-  }
-
-  try {
-    const dimensions = imageSize(buffer);
-    if (routeKind === "favicon" || routeKind === "icon" || routeKind === "apple") {
-      if (isSvgRoute) {
-        properties.push(`sizes: ${JSON.stringify("any")}`);
-      } else if (dimensions.width && dimensions.height) {
-        properties.push(`sizes: ${JSON.stringify(`${dimensions.width}x${dimensions.height}`)}`);
-      } else {
-        properties.push(`sizes: ${JSON.stringify("any")}`);
-      }
-    } else {
-      if (dimensions.width) {
-        properties.push(`width: ${dimensions.width}`);
-      }
-      if (dimensions.height) {
-        properties.push(`height: ${dimensions.height}`);
-      }
-    }
-  } catch {
-    if (routeKind === "favicon" || routeKind === "icon" || routeKind === "apple") {
-      properties.push(`sizes: ${JSON.stringify("any")}`);
-    }
-  }
-
-  return `{ kind: ${JSON.stringify(routeKind)}, ${properties.join(", ")} }`;
-}
 
 /**
  * Resolved config options relevant to App Router request handling.
@@ -384,43 +308,11 @@ ${slotEntries.join(",\n")}
           )
         : null;
 
-    if (mr.isDynamic) {
-      const contentHashCode = JSON.stringify(createMetadataContentHash(readMetadataRouteFile(mr)));
-      const headDataCode =
-        mr.type === "manifest"
-          ? `\n    headData: { kind: "manifest", href: ${JSON.stringify(mr.servedUrl)} },`
-          : "";
-      return `  {
-    type: ${JSON.stringify(mr.type)},
-    isDynamic: true,
-    routePrefix: ${JSON.stringify(mr.routePrefix)},
-    routeSegments: ${JSON.stringify(mr.routeSegments ?? [])},
-    servedUrl: ${JSON.stringify(mr.servedUrl)},
-    contentType: ${JSON.stringify(mr.contentType)},
-    contentHash: ${contentHashCode},
-    module: ${getImportVar(mr.filePath)},${patternParts ? `\n    patternParts: ${patternParts},` : ""}${headDataCode}
-  }`;
-    }
-    // Static: read file and embed as base64
-    let headDataCode = "null";
-    const buf = readMetadataRouteFile(mr);
-    const fileDataBase64 = buf.toString("base64");
-    const contentHashCode = JSON.stringify(createMetadataContentHash(buf));
-    const resolvedHeadDataCode = createMetadataHeadDataCode(mr, buf);
-    if (resolvedHeadDataCode) {
-      headDataCode = resolvedHeadDataCode;
-    }
-    return `  {
-    type: ${JSON.stringify(mr.type)},
-    isDynamic: false,
-    routePrefix: ${JSON.stringify(mr.routePrefix)},
-    routeSegments: ${JSON.stringify(mr.routeSegments ?? [])},
-    servedUrl: ${JSON.stringify(mr.servedUrl)},
-    contentType: ${JSON.stringify(mr.contentType)},
-    contentHash: ${contentHashCode},
-    headData: ${headDataCode},
-    fileDataBase64: ${JSON.stringify(fileDataBase64)},
-  }`;
+    return createMetadataRouteEntrySource({
+      entryData: createMetadataRouteEntryData(mr),
+      moduleName: mr.isDynamic ? getImportVar(mr.filePath) : undefined,
+      patternParts,
+    });
   });
 
   return `
