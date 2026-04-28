@@ -689,6 +689,33 @@ describe("appRouter - route discovery", () => {
     });
   });
 
+  it("allows (..) intercepting routes in route groups with one visible parent segment", async () => {
+    // Next.js validates the normalized intercepting route: /(group) is root,
+    // but /shop/(group) has one visible segment and can climb to /.
+    // https://github.com/vercel/next.js/blob/ae61573e062e900050b8e6b24626e450accc4570/packages/next/src/shared/lib/router/utils/interception-routes.ts#L60-L95
+    await withTempDir("vinext-app-intercept-group-with-visible-parent-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "shop", "(group)", "@modal", "(..)foo"), {
+        recursive: true,
+      });
+      await writeFile(path.join(appDir, "shop", "(group)", "page.tsx"), EMPTY_PAGE);
+      await writeFile(
+        path.join(appDir, "shop", "(group)", "@modal", "(..)foo", "page.tsx"),
+        EMPTY_PAGE,
+      );
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const shopRoute = routes.find((route) => route.pattern === "/shop");
+      expect(shopRoute).toBeDefined();
+
+      const modalSlot = shopRoute!.parallelSlots.find((slot) => slot.name === "modal");
+      expect(modalSlot).toBeDefined();
+      expect(modalSlot!.interceptingRoutes).toHaveLength(1);
+      expect(modalSlot!.interceptingRoutes[0].targetPattern).toBe("/foo");
+    });
+  });
+
   it("(..) climbs visible route segments, not filesystem dirs (route group between segments)", async () => {
     // Bug: computeInterceptTarget uses path.dirname() which counts filesystem dirs,
     // but (..) should count visible route segments (skipping route groups).

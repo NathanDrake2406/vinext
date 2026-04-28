@@ -243,6 +243,8 @@ export async function appRouter(
 function validatePageRouteConflicts(routes: AppRoute[], appDir: string): void {
   const byPattern = new Map<string, { pagePath: string | null; routePath: string | null }>();
 
+  // validateRoutePatterns() would also reject page/route pairs because they
+  // share a URL pattern. Keep this pass first so the error names both files.
   for (const route of routes) {
     const entry = byPattern.get(route.pattern);
     if (!entry) {
@@ -1100,7 +1102,9 @@ function formatInterceptionRoutePath(
 ): string {
   const marker = markerForInterceptionConvention(convention);
   const convertedRoute = convertSegmentsToRouteParts(routeSegments);
-  const prefix = convertedRoute ? convertedRoute.urlSegments : [];
+  const prefix = convertedRoute
+    ? convertedRoute.urlSegments
+    : routeSegments.filter((segment) => !isInvisibleSegment(segment));
   const routePath = [...prefix, `${marker}${interceptSegment}`, ...nestedParts]
     .filter(Boolean)
     .join("/");
