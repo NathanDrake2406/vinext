@@ -5,6 +5,11 @@ import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/ro
 import { isValidModulePath } from "../packages/vinext/src/client/validate-module-path.js";
 import vinext from "../packages/vinext/src/index.js";
 import type { Plugin } from "vite-plus";
+import type {
+  CacheHandler,
+  CacheHandlerValue,
+  IncrementalCacheValue,
+} from "../packages/vinext/src/shims/cache.js";
 
 const FIXTURE_DIR = PAGES_FIXTURE_DIR;
 
@@ -1918,6 +1923,140 @@ describe("next/cache shim", () => {
     expect(callCount).toBe(2);
 
     setCacheHandler(new MemoryCacheHandler());
+  });
+
+  it("unstable_cache serves stale entries and refreshes them in the background during App Router requests", async () => {
+    const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const setBodies: string[] = [];
+    let callCount = 0;
+
+    const handler: CacheHandler = {
+      async get(): Promise<CacheHandlerValue> {
+        return {
+          lastModified: Date.now() - 2_000,
+          cacheState: "stale",
+          value: {
+            kind: "FETCH",
+            data: {
+              headers: {},
+              body: JSON.stringify({ v: "stale-value" }),
+              url: "unstable_cache:stale-swr-test:[]",
+            },
+            tags: ["stale-swr"],
+            revalidate: 1,
+          },
+        };
+      },
+      async set(_key: string, data: IncrementalCacheValue | null) {
+        if (data?.kind === "FETCH") {
+          setBodies.push(data.data.body);
+        }
+      },
+      async revalidateTag(_tags: string | string[]) {},
+    };
+
+    setCacheHandler(handler);
+
+    const cached = unstable_cache(
+      async () => {
+        callCount++;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return "fresh-value";
+      },
+      ["stale-swr-test"],
+      { tags: ["stale-swr"], revalidate: 1 },
+    );
+
+    // Matches Next.js App Router semantics: stale entries schedule a
+    // pending revalidate and return the stale response immediately.
+    // Source: https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/spec-extension/unstable-cache.ts
+    const requestContext = createRequestContext({
+      unstableCacheRevalidation: "background",
+      executionContext: {
+        waitUntil(promise) {
+          waitUntilPromises.push(promise);
+        },
+      },
+    });
+
+    try {
+      const result = await Promise.race([
+        runWithRequestContext(requestContext, () => cached()),
+        new Promise((resolve) => setTimeout(() => resolve("blocked"), 10)),
+      ]);
+
+      expect(result).toBe("stale-value");
+      expect(callCount).toBe(1);
+      expect(waitUntilPromises).toHaveLength(1);
+      expect(setBodies).toEqual([]);
+
+      await Promise.all(waitUntilPromises);
+
+      expect(setBodies).toEqual([JSON.stringify({ v: "fresh-value" })]);
+    } finally {
+      setCacheHandler(new MemoryCacheHandler());
+    }
+  });
+
+  it("unstable_cache blocks on stale entries inside revalidation scopes", async () => {
+    const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    let callCount = 0;
+    const handler: CacheHandler = {
+      async get(): Promise<CacheHandlerValue> {
+        return {
+          lastModified: Date.now() - 2_000,
+          cacheState: "stale",
+          value: {
+            kind: "FETCH",
+            data: {
+              headers: {},
+              body: JSON.stringify({ v: "stale-value" }),
+              url: "unstable_cache:foreground-test:[]",
+            },
+            tags: ["foreground"],
+            revalidate: 1,
+          },
+        };
+      },
+      async set() {},
+      async revalidateTag(_tags: string | string[]) {},
+    };
+
+    setCacheHandler(handler);
+
+    const cached = unstable_cache(
+      async () => {
+        callCount++;
+        return "fresh-value";
+      },
+      ["foreground-test"],
+      { tags: ["foreground"], revalidate: 1 },
+    );
+
+    // Next.js foreground-revalidates stale unstable_cache entries while
+    // regenerating a static/ISR page so the regenerated page stores fresh data.
+    // Source test: https://github.com/vercel/next.js/blob/canary/test/production/app-dir/unstable-cache-foreground-revalidate/unstable-cache-foreground-revalidate.test.ts
+    const requestContext = createRequestContext({
+      unstableCacheRevalidation: "foreground",
+    });
+
+    try {
+      await expect(runWithRequestContext(requestContext, () => cached())).resolves.toBe(
+        "fresh-value",
+      );
+      expect(callCount).toBe(1);
+    } finally {
+      setCacheHandler(new MemoryCacheHandler());
+    }
   });
 
   it("unstable_cache with no revalidate option caches indefinitely", async () => {

@@ -1307,6 +1307,7 @@ export default async function handler(request, ctx) {
   const __uCtx = _createUnifiedCtx({
     headersContext: headersCtx,
     executionContext: ctx ?? _getRequestExecutionContext() ?? null,
+    unstableCacheRevalidation: "background",
   });
   return _runWithUnifiedCtx(__uCtx, async () => {
     _ensureFetchPatch();
@@ -2205,6 +2206,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
           const __revalUCtx = _createUnifiedCtx({
             headersContext: __revalHeadCtx,
             executionContext: _getRequestExecutionContext(),
+            unstableCacheRevalidation: "foreground",
           });
           await _runWithUnifiedCtx(__revalUCtx, async () => {
             _ensureFetchPatch();
@@ -2356,6 +2358,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         const __revalUCtx = _createUnifiedCtx({
           headersContext: __revalHeadCtx,
           executionContext: _getRequestExecutionContext(),
+          unstableCacheRevalidation: "foreground",
         });
         return _runWithUnifiedCtx(__revalUCtx, async () => {
           _ensureFetchPatch();

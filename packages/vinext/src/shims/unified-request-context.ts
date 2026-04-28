@@ -92,6 +92,7 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     serverContext: null,
     serverInsertedHTMLCallbacks: [],
     requestScopedCacheLife: null,
+    unstableCacheRevalidation: "foreground",
     _privateCache: null,
     currentRequestTags: [],
     currentFetchSoftTags: [],
