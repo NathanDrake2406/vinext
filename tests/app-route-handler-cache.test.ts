@@ -231,6 +231,67 @@ describe("app route handler cache helpers", () => {
     expect(isKnownDynamicAppRoute(routePattern)).toBe(true);
   });
 
+  it("rejects invalid route handler responses during background regeneration", async () => {
+    const dynamicUsage = createDynamicUsageState();
+    const scheduledRegens: Array<() => Promise<void>> = [];
+    let wroteCache = false;
+
+    const response = await readAppRouteHandlerCacheResponse({
+      buildPageCacheTags(pathname, extraTags) {
+        return [pathname, ...extraTags];
+      },
+      cleanPathname: "/api/stale-invalid",
+      clearRequestContext() {},
+      consumeDynamicUsage: dynamicUsage.consumeDynamicUsage,
+      getCollectedFetchTags() {
+        return [];
+      },
+      handlerFn() {
+        return new Response("should not be cached", {
+          headers: { "x-middleware-next": "1" },
+        });
+      },
+      isAutoHead: false,
+      async isrGet() {
+        return buildISRCacheEntry(buildCachedRouteValue("from-stale"), true);
+      },
+      isrRouteKey(pathname) {
+        return "route:" + pathname;
+      },
+      async isrSet() {
+        wroteCache = true;
+      },
+      markDynamicUsage: dynamicUsage.markDynamicUsage,
+      middlewareContext: { headers: null, status: null },
+      params: {},
+      requestUrl: "https://example.com/api/stale-invalid",
+      revalidateSearchParams: new URLSearchParams(),
+      revalidateSeconds: 60,
+      routePattern: "/api/stale-invalid",
+      async runInRevalidationContext(renderFn) {
+        await renderFn();
+      },
+      scheduleBackgroundRegeneration(_key, renderFn) {
+        scheduledRegens.push(renderFn);
+      },
+      setNavigationContext() {},
+    });
+
+    expect(response?.headers.get("x-vinext-cache")).toBe("STALE");
+    await expect(response?.text()).resolves.toBe("from-stale");
+    expect(scheduledRegens).toHaveLength(1);
+
+    const scheduledRegenRun = scheduledRegens[0];
+    if (!scheduledRegenRun) {
+      throw new Error("Expected scheduled route regeneration");
+    }
+
+    await expect(scheduledRegenRun()).rejects.toThrow(
+      "NextResponse.next() was used in a app route handler",
+    );
+    expect(wroteCache).toBe(false);
+  });
+
   it("falls through on cache read errors", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

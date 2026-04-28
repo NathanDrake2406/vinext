@@ -3,6 +3,7 @@ import type { CachedRouteValue } from "../packages/vinext/src/shims/cache.js";
 import {
   applyRouteHandlerMiddlewareContext,
   applyRouteHandlerRevalidateHeader,
+  assertSupportedAppRouteHandlerResponse,
   buildAppRouteCacheValue,
   buildRouteHandlerCachedResponse,
   finalizeRouteHandlerResponse,
@@ -217,6 +218,30 @@ describe("app route handler response helpers", () => {
 
     expect(response.headers.get("cache-control")).toBe("s-maxage=30, stale-while-revalidate");
     expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+  });
+
+  it("only rejects the active x-middleware-next control signal", () => {
+    expect(() =>
+      assertSupportedAppRouteHandlerResponse(
+        new Response(null, {
+          headers: { "x-middleware-next": "0" },
+        }),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertSupportedAppRouteHandlerResponse(
+        new Response(null, {
+          headers: { "x-middleware-next": "true" },
+        }),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertSupportedAppRouteHandlerResponse(
+        new Response(null, {
+          headers: { "x-middleware-next": "1" },
+        }),
+      ),
+    ).toThrow("NextResponse.next() was used in a app route handler");
   });
 
   it("emits a no-store Cache-Control for revalidate = 0 route handlers", () => {

@@ -3,6 +3,7 @@ import type { ISRCacheEntry } from "./isr-cache.js";
 import type { RouteHandlerMiddlewareContext } from "./app-route-handler-response.js";
 import {
   applyRouteHandlerMiddlewareContext,
+  assertSupportedAppRouteHandlerResponse,
   buildAppRouteCacheValue,
   buildRouteHandlerCachedResponse,
 } from "./app-route-handler-response.js";
@@ -102,6 +103,7 @@ export async function readAppRouteHandlerCacheResponse(
           });
 
           options.setNavigationContext(null);
+          assertSupportedAppRouteHandlerResponse(response);
 
           if (dynamicUsedInHandler) {
             markKnownDynamicAppRoute(options.routePattern);
