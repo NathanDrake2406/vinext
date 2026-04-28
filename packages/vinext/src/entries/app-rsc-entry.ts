@@ -72,6 +72,7 @@ const appPageRenderPath = resolveEntryPath("../server/app-page-render.js", impor
 const appPageResponsePath = resolveEntryPath("../server/app-page-response.js", import.meta.url);
 const cspPath = resolveEntryPath("../server/csp.js", import.meta.url);
 const appPageRequestPath = resolveEntryPath("../server/app-page-request.js", import.meta.url);
+const appPageMethodPath = resolveEntryPath("../server/app-page-method.js", import.meta.url);
 const appRouteHandlerResponsePath = resolveEntryPath(
   "../server/app-route-handler-response.js",
   import.meta.url,
@@ -428,6 +429,9 @@ import {
   resolveAppPageIntercept as __resolveAppPageIntercept,
   validateAppPageDynamicParams as __validateAppPageDynamicParams,
 } from ${JSON.stringify(appPageRequestPath)};
+import {
+  resolveAppPageMethodResponse as __resolveAppPageMethodResponse,
+} from ${JSON.stringify(appPageMethodPath)};
 import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from ${JSON.stringify(appRouteHandlerResponsePath)};
@@ -2281,6 +2285,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const dynamicParamsConfig = route.page?.dynamicParams; // true (default) | false
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
+  const __methodResponse = __resolveAppPageMethodResponse({
+    dynamicConfig,
+    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
+    isDynamicRoute: route.isDynamic,
+    middlewareHeaders: _mwCtx.headers,
+    request,
+    revalidateSeconds,
+  });
+  if (__methodResponse) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __methodResponse;
+  }
 
   // force-static: replace headers/cookies context with empty values and
   // clear searchParams so dynamic APIs return defaults instead of real data

@@ -72,6 +72,20 @@ describe("App Router integration", () => {
     expect(html).toContain("This is the about page.");
   });
 
+  // Ported from Next.js: test/e2e/prerender.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/prerender.test.ts
+  it("returns Method Not Allowed for non-action mutation requests to App Router pages", async () => {
+    const staticPageResponse = await fetch(`${baseUrl}/about`, { method: "POST" });
+    expect(staticPageResponse.status).toBe(405);
+    expect(staticPageResponse.headers.get("allow")).toBe("GET, HEAD");
+    expect(await staticPageResponse.text()).toContain("Method Not Allowed");
+
+    const ssgPageResponse = await fetch(`${baseUrl}/isr-test`, { method: "PUT" });
+    expect(ssgPageResponse.status).toBe(405);
+    expect(ssgPageResponse.headers.get("allow")).toBe("GET, HEAD");
+    expect(await ssgPageResponse.text()).toContain("Method Not Allowed");
+  });
+
   it("resolves tsconfig path aliases (@/ imports)", async () => {
     const { res, html } = await fetchHtml(baseUrl, "/alias-test");
     expect(res.status).toBe(200);

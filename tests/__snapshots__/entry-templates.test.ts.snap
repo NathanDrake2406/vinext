@@ -105,6 +105,9 @@ import {
   validateAppPageDynamicParams as __validateAppPageDynamicParams,
 } from "<ROOT>/packages/vinext/src/server/app-page-request.js";
 import {
+  resolveAppPageMethodResponse as __resolveAppPageMethodResponse,
+} from "<ROOT>/packages/vinext/src/server/app-page-method.js";
+import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
 import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
@@ -1955,6 +1958,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const dynamicParamsConfig = route.page?.dynamicParams; // true (default) | false
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
+  const __methodResponse = __resolveAppPageMethodResponse({
+    dynamicConfig,
+    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
+    isDynamicRoute: route.isDynamic,
+    middlewareHeaders: _mwCtx.headers,
+    request,
+    revalidateSeconds,
+  });
+  if (__methodResponse) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __methodResponse;
+  }
 
   // force-static: replace headers/cookies context with empty values and
   // clear searchParams so dynamic APIs return defaults instead of real data
@@ -2496,6 +2512,9 @@ import {
   resolveAppPageIntercept as __resolveAppPageIntercept,
   validateAppPageDynamicParams as __validateAppPageDynamicParams,
 } from "<ROOT>/packages/vinext/src/server/app-page-request.js";
+import {
+  resolveAppPageMethodResponse as __resolveAppPageMethodResponse,
+} from "<ROOT>/packages/vinext/src/server/app-page-method.js";
 import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
@@ -4353,6 +4372,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const dynamicParamsConfig = route.page?.dynamicParams; // true (default) | false
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
+  const __methodResponse = __resolveAppPageMethodResponse({
+    dynamicConfig,
+    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
+    isDynamicRoute: route.isDynamic,
+    middlewareHeaders: _mwCtx.headers,
+    request,
+    revalidateSeconds,
+  });
+  if (__methodResponse) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __methodResponse;
+  }
 
   // force-static: replace headers/cookies context with empty values and
   // clear searchParams so dynamic APIs return defaults instead of real data
@@ -4894,6 +4926,9 @@ import {
   resolveAppPageIntercept as __resolveAppPageIntercept,
   validateAppPageDynamicParams as __validateAppPageDynamicParams,
 } from "<ROOT>/packages/vinext/src/server/app-page-request.js";
+import {
+  resolveAppPageMethodResponse as __resolveAppPageMethodResponse,
+} from "<ROOT>/packages/vinext/src/server/app-page-method.js";
 import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
@@ -6746,6 +6781,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const dynamicParamsConfig = route.page?.dynamicParams; // true (default) | false
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
+  const __methodResponse = __resolveAppPageMethodResponse({
+    dynamicConfig,
+    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
+    isDynamicRoute: route.isDynamic,
+    middlewareHeaders: _mwCtx.headers,
+    request,
+    revalidateSeconds,
+  });
+  if (__methodResponse) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __methodResponse;
+  }
 
   // force-static: replace headers/cookies context with empty values and
   // clear searchParams so dynamic APIs return defaults instead of real data
@@ -7287,6 +7335,9 @@ import {
   resolveAppPageIntercept as __resolveAppPageIntercept,
   validateAppPageDynamicParams as __validateAppPageDynamicParams,
 } from "<ROOT>/packages/vinext/src/server/app-page-request.js";
+import {
+  resolveAppPageMethodResponse as __resolveAppPageMethodResponse,
+} from "<ROOT>/packages/vinext/src/server/app-page-method.js";
 import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
@@ -9171,6 +9222,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const dynamicParamsConfig = route.page?.dynamicParams; // true (default) | false
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
+  const __methodResponse = __resolveAppPageMethodResponse({
+    dynamicConfig,
+    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
+    isDynamicRoute: route.isDynamic,
+    middlewareHeaders: _mwCtx.headers,
+    request,
+    revalidateSeconds,
+  });
+  if (__methodResponse) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __methodResponse;
+  }
 
   // force-static: replace headers/cookies context with empty values and
   // clear searchParams so dynamic APIs return defaults instead of real data
@@ -9712,6 +9776,9 @@ import {
   resolveAppPageIntercept as __resolveAppPageIntercept,
   validateAppPageDynamicParams as __validateAppPageDynamicParams,
 } from "<ROOT>/packages/vinext/src/server/app-page-request.js";
+import {
+  resolveAppPageMethodResponse as __resolveAppPageMethodResponse,
+} from "<ROOT>/packages/vinext/src/server/app-page-method.js";
 import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
@@ -11570,6 +11637,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const dynamicParamsConfig = route.page?.dynamicParams; // true (default) | false
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
+  const __methodResponse = __resolveAppPageMethodResponse({
+    dynamicConfig,
+    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
+    isDynamicRoute: route.isDynamic,
+    middlewareHeaders: _mwCtx.headers,
+    request,
+    revalidateSeconds,
+  });
+  if (__methodResponse) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __methodResponse;
+  }
 
   // force-static: replace headers/cookies context with empty values and
   // clear searchParams so dynamic APIs return defaults instead of real data
@@ -12111,6 +12191,9 @@ import {
   resolveAppPageIntercept as __resolveAppPageIntercept,
   validateAppPageDynamicParams as __validateAppPageDynamicParams,
 } from "<ROOT>/packages/vinext/src/server/app-page-request.js";
+import {
+  resolveAppPageMethodResponse as __resolveAppPageMethodResponse,
+} from "<ROOT>/packages/vinext/src/server/app-page-method.js";
 import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
@@ -14329,6 +14412,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   const dynamicParamsConfig = route.page?.dynamicParams; // true (default) | false
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
+  const __methodResponse = __resolveAppPageMethodResponse({
+    dynamicConfig,
+    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
+    isDynamicRoute: route.isDynamic,
+    middlewareHeaders: _mwCtx.headers,
+    request,
+    revalidateSeconds,
+  });
+  if (__methodResponse) {
+    setHeadersContext(null);
+    setNavigationContext(null);
+    return __methodResponse;
+  }
 
   // force-static: replace headers/cookies context with empty values and
   // clear searchParams so dynamic APIs return defaults instead of real data
