@@ -620,6 +620,7 @@ function BrowserRoot({
       }
       if (browserRouterStateRef === stateRef) {
         browserRouterStateRef = null;
+        browserRouterStateHasCommitted = false;
       }
       setMountedSlotsHeader(null);
     };

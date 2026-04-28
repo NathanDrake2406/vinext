@@ -185,12 +185,9 @@ export type Metadata = {
     app?: TwitterAppDescriptor;
   };
   icons?: {
-    icon?:
-      | string
-      | URL
-      | Array<{ url: string | URL; sizes?: string; type?: string; media?: string }>;
+    icon?: string | URL | IconDescriptor | IconDescriptor[];
     shortcut?: string | URL | Array<string | URL>;
-    apple?: string | URL | Array<{ url: string | URL; sizes?: string; type?: string }>;
+    apple?: string | URL | AppleIconDescriptor | AppleIconDescriptor[];
     other?: Array<{ rel: string; url: string | URL; sizes?: string; type?: string }>;
   };
   manifest?: string | URL;
@@ -280,6 +277,19 @@ type TwitterAppDescriptor = {
     googleplay?: string | URL;
   };
   name?: string;
+};
+
+type IconDescriptor = {
+  url: string | URL;
+  sizes?: string;
+  type?: string;
+  media?: string;
+};
+
+type AppleIconDescriptor = {
+  url: string | URL;
+  sizes?: string;
+  type?: string;
 };
 
 /**
@@ -383,6 +393,32 @@ export async function resolveModuleMetadata(
  * React component that renders metadata as HTML head elements.
  * Used by the RSC entry to inject into the <head>.
  */
+function normalizeIconHeadEntries(icon: NonNullable<Metadata["icons"]>["icon"]): IconDescriptor[] {
+  if (!icon) {
+    return [];
+  }
+
+  if (typeof icon === "string" || icon instanceof URL) {
+    return [{ url: icon }];
+  }
+
+  return Array.isArray(icon) ? icon : [icon];
+}
+
+function normalizeAppleIconHeadEntries(
+  apple: NonNullable<Metadata["icons"]>["apple"],
+): AppleIconDescriptor[] {
+  if (!apple) {
+    return [];
+  }
+
+  if (typeof apple === "string" || apple instanceof URL) {
+    return [{ url: apple }];
+  }
+
+  return Array.isArray(apple) ? apple : [apple];
+}
+
 export function MetadataHead({ metadata }: { metadata: Metadata }) {
   const elements: React.ReactElement[] = [];
   let key = 0;
@@ -684,8 +720,7 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
     }
     // Icon
     if (icon) {
-      const icons = typeof icon === "string" || icon instanceof URL ? [{ url: icon }] : icon;
-      for (const i of icons) {
+      for (const i of normalizeIconHeadEntries(icon)) {
         elements.push(
           <link
             key={key++}
@@ -700,8 +735,7 @@ export function MetadataHead({ metadata }: { metadata: Metadata }) {
     }
     // Apple touch icon
     if (apple) {
-      const apples = typeof apple === "string" || apple instanceof URL ? [{ url: apple }] : apple;
-      for (const a of apples) {
+      for (const a of normalizeAppleIconHeadEntries(apple)) {
         elements.push(
           <link
             key={key++}

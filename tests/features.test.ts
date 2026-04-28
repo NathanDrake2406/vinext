@@ -2297,6 +2297,26 @@ describe("MetadataHead rendering", () => {
     expect(html).toContain('rel="shortcut icon"');
   });
 
+  it("renders single descriptor icon objects", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(MetadataHead, {
+        metadata: {
+          icons: {
+            apple: { url: "/apple-icon.png", sizes: "180x180", type: "image/png" },
+            icon: { url: "/icon.png", sizes: "96x96", type: "image/png" },
+          },
+        },
+      }),
+    );
+
+    expect(html).toContain('rel="icon"');
+    expect(html).toContain('href="/icon.png"');
+    expect(html).toContain('sizes="96x96"');
+    expect(html).toContain('rel="apple-touch-icon"');
+    expect(html).toContain('href="/apple-icon.png"');
+    expect(html).toContain('sizes="180x180"');
+  });
+
   it("renders alternate hreflang links", () => {
     const html = renderToStaticMarkup(
       React.createElement(MetadataHead, {
