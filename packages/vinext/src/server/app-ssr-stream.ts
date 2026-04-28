@@ -5,6 +5,8 @@ type RscEmbedTransform = {
   finalize(): Promise<string>;
 };
 
+type HtmlInsertion = string | (() => string);
+
 /**
  * Fix invalid preload "as" values in RSC Flight hint lines before they reach
  * the client. React Flight emits HL hints with as="stylesheet" for CSS, but
@@ -96,22 +98,39 @@ export function fixPreloadAs(html: string): string {
  */
 export function createTickBufferedTransform(
   rscEmbed: RscEmbedTransform,
-  injectHTML = "",
+  injectHTML: HtmlInsertion = "",
 ): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  const insertsPerFlush = typeof injectHTML === "function";
   let injected = false;
   let buffered: string[] = [];
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const readInsertion = (): string =>
+    typeof injectHTML === "function" ? injectHTML() : injectHTML;
+  const emitInsertion = (controller: TransformStreamDefaultController<Uint8Array>): void => {
+    const insertion = readInsertion();
+    if (insertion) {
+      controller.enqueue(encoder.encode(insertion));
+    }
+  };
 
   const flushBuffered = (controller: TransformStreamDefaultController<Uint8Array>): void => {
+    if (buffered.length === 0) return;
+
+    if (injected && insertsPerFlush) {
+      // Emit newly collected server-inserted HTML before the next Fizz HTML
+      // batch so CSS-in-JS styles precede the elements they style.
+      emitInsertion(controller);
+    }
+
     for (const chunk of buffered) {
       if (!injected) {
         const headEnd = chunk.indexOf("</head>");
         if (headEnd !== -1) {
           const before = chunk.slice(0, headEnd);
           const after = chunk.slice(headEnd);
-          controller.enqueue(encoder.encode(before + injectHTML + after));
+          controller.enqueue(encoder.encode(before + readInsertion() + after));
           injected = true;
           continue;
         }
@@ -153,8 +172,11 @@ export function createTickBufferedTransform(
 
       flushBuffered(controller);
 
-      if (!injected && injectHTML) {
-        controller.enqueue(encoder.encode(injectHTML));
+      if (!injected) {
+        emitInsertion(controller);
+        injected = true;
+      } else if (insertsPerFlush) {
+        emitInsertion(controller);
       }
 
       const finalScripts = await rscEmbed.finalize();

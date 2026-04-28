@@ -9,7 +9,7 @@ import type { NavigationContext } from "../shims/navigation.js";
 import {
   ServerInsertedHTMLContext,
   clearServerInsertedHTML,
-  flushServerInsertedHTML,
+  renderServerInsertedHTML,
   setNavigationContext,
   useServerInsertedHTML,
 } from "../shims/navigation.js";
@@ -23,6 +23,7 @@ import {
   safeJsonStringify,
 } from "./html.js";
 import { createRscEmbedTransform, createTickBufferedTransform } from "./app-ssr-stream.js";
+import { deferUntilStreamConsumed } from "./app-page-stream.js";
 import {
   normalizeAppElements,
   readAppElementsMetadata,
@@ -177,6 +178,11 @@ export async function handleSsr(
 
     clearServerInsertedHTML();
 
+    const cleanup = (): void => {
+      setNavigationContext(null);
+      clearServerInsertedHTML();
+    };
+
     try {
       const [ssrStream, embedStream] = rscStream.tee();
       const rscEmbed = createRscEmbedTransform(embedStream, options?.scriptNonce);
@@ -227,20 +233,29 @@ export async function handleSsr(
         },
       });
 
-      const insertedHTML = renderInsertedHtml(flushServerInsertedHTML());
       const fontHTML = renderFontHtml(fontData, options?.scriptNonce);
-      const injectHTML = buildHeadInjectionHtml(
-        navContext,
-        bootstrapScriptContent,
-        insertedHTML,
-        fontHTML,
-        options?.scriptNonce,
-      );
+      let didInjectHeadHTML = false;
+      const getInsertedHTML = (): string => {
+        const insertedHTML = renderInsertedHtml(renderServerInsertedHTML());
+        if (didInjectHeadHTML) return insertedHTML;
 
-      return htmlStream.pipeThrough(createTickBufferedTransform(rscEmbed, injectHTML));
-    } finally {
-      setNavigationContext(null);
-      clearServerInsertedHTML();
+        didInjectHeadHTML = true;
+        return buildHeadInjectionHtml(
+          navContext,
+          bootstrapScriptContent,
+          insertedHTML,
+          fontHTML,
+          options?.scriptNonce,
+        );
+      };
+
+      return deferUntilStreamConsumed(
+        htmlStream.pipeThrough(createTickBufferedTransform(rscEmbed, getInsertedHTML)),
+        cleanup,
+      );
+    } catch (error) {
+      cleanup();
+      throw error;
     }
   }) as Promise<ReadableStream<Uint8Array>>;
 }
