@@ -808,11 +808,11 @@ function scrollToHashTarget(hash: string): void {
 
     const idElement = document.getElementById(fragment);
     if (idElement) {
-      idElement.scrollIntoView();
+      idElement.scrollIntoView({ behavior: "auto" });
       return;
     }
 
-    document.getElementsByName(fragment)[0]?.scrollIntoView();
+    document.getElementsByName(fragment)[0]?.scrollIntoView({ behavior: "auto" });
   });
 }
 
