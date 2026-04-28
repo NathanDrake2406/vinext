@@ -1394,6 +1394,52 @@ describe("matchAppRoute - URL matching", () => {
 
   // --- Inherited parallel slots ---
 
+  it("does not attach pre-root parallel slots when the root layout is below app", async () => {
+    // Next.js allows multiple root layouts when app/layout is omitted:
+    // https://github.com/vercel/next.js/blob/ae61573e062e900050b8e6b24626e450accc4570/docs/01-app/03-api-reference/03-file-conventions/layout.mdx#L140-L145
+    // Parallel route children above the selected root layout are not available to that root:
+    // https://github.com/vercel/next.js/blob/ae61573e062e900050b8e6b24626e450accc4570/packages/next/src/server/app-render/create-component-tree.tsx#L1273-L1290
+    await withTempDir("vinext-app-pre-root-parallel-slot-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+
+      await mkdir(path.join(appDir, "@modal"), { recursive: true });
+      await mkdir(path.join(appDir, "(group)"), { recursive: true });
+      await writeFile(path.join(appDir, "@modal", "default.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "(group)", "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "(group)", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const homeRoute = routes.find((route) => route.pattern === "/");
+
+      expect(homeRoute).toBeDefined();
+      expect(homeRoute!.layouts).toEqual([path.join(appDir, "(group)", "layout.tsx")]);
+      expect(homeRoute!.parallelSlots.find((slot) => slot.name === "modal")).toBeUndefined();
+    });
+  });
+
+  it("attaches parallel slots inside the selected root layout subtree", async () => {
+    await withTempDir("vinext-app-root-subtree-parallel-slot-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+
+      await mkdir(path.join(appDir, "(group)", "@modal"), { recursive: true });
+      await writeFile(path.join(appDir, "(group)", "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "(group)", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "(group)", "@modal", "default.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const homeRoute = routes.find((route) => route.pattern === "/");
+
+      expect(homeRoute).toBeDefined();
+      const modalSlot = homeRoute!.parallelSlots.find((slot) => slot.name === "modal");
+      expect(modalSlot).toBeDefined();
+      expect(modalSlot!.ownerDir).toBe(path.join(appDir, "(group)", "@modal"));
+      expect(modalSlot!.layoutIndex).toBe(0);
+      expect(modalSlot!.defaultPath).toBe(path.join(appDir, "(group)", "@modal", "default.tsx"));
+    });
+  });
+
   it("preserves same-named parallel slots from multiple layout levels", async () => {
     await withTempDir("vinext-app-parallel-slot-priority-", async (tmpDir) => {
       const appDir = path.join(tmpDir, "app");
