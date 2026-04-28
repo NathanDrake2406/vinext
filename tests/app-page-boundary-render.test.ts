@@ -6,6 +6,7 @@ import {
   renderAppPageHttpAccessFallback,
 } from "../packages/vinext/src/server/app-page-boundary-render.js";
 import type { AppElements } from "../packages/vinext/src/server/app-elements.js";
+import type { MetadataFileRoute } from "../packages/vinext/src/server/metadata-routes.js";
 
 function createStreamFromMarkup(markup: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -362,6 +363,63 @@ describe("app page boundary render helpers", () => {
     expect(response?.headers.get("x-middleware-security")).toBe("present");
     expect(response?.headers.get("vary")).toBe("RSC, Accept, x-auth-state");
     expect(response?.headers.getSetCookie()).toContain("session=rotated; Path=/; HttpOnly");
+  });
+
+  it("renders error boundaries when dynamic file metadata resolution fails", async () => {
+    const error = new Error("metadata boom");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const common = createCommonOptions();
+    const metadataRoutes: MetadataFileRoute[] = [
+      {
+        type: "opengraph-image",
+        isDynamic: true,
+        filePath: "/tmp/app/posts/[slug]/opengraph-image.tsx",
+        routePrefix: "/posts/[slug]",
+        routeSegments: ["posts", "[slug]"],
+        servedUrl: "/posts/[slug]/opengraph-image",
+        contentType: "image/png",
+        contentHash: "hash",
+        module: {
+          generateImageMetadata() {
+            throw error;
+          },
+        },
+      },
+    ];
+
+    try {
+      const response = await renderAppPageErrorBoundary<TestModule>({
+        ...common,
+        error: new Error("secret"),
+        matchedParams: { slug: "post" },
+        metadataRoutes,
+        route: {
+          error: routeErrorModule,
+          layoutTreePositions: [0],
+          layouts: [rootLayoutModule],
+          params: { slug: "post" },
+          pattern: "/posts/[slug]",
+          routeSegments: ["posts", "[slug]"],
+        },
+        sanitizeErrorForClient(error: Error) {
+          return error;
+        },
+      });
+
+      expect(response?.status).toBe(200);
+      expect(consoleError).toHaveBeenCalledWith(
+        "[vinext] File-based metadata resolution failed while rendering error boundary for /posts/[slug]:",
+        error,
+      );
+
+      const html = await response?.text();
+      expect(html).toContain('data-boundary="route-error"');
+      expect(html).toContain("route:secret");
+      expect(html).toContain('content="Root layout description"');
+      expect(html).not.toContain("opengraph-image");
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("renders error boundary RSC responses as flat payloads", async () => {

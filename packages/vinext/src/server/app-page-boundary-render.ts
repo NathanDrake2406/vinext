@@ -113,6 +113,10 @@ type RenderAppPageErrorBoundaryOptions<TModule extends AppPageModule = AppPageMo
   sanitizeErrorForClient: (error: Error) => Error;
 } & AppPageBoundaryRenderCommonOptions<TModule>;
 
+type ResolveAppPageLayoutHeadOptions = {
+  fallbackOnFileMetadataError?: boolean;
+};
+
 function getDefaultExport<TModule extends AppPageModule>(
   module: TModule | null | undefined,
 ): AppPageComponent | null {
@@ -125,6 +129,7 @@ async function resolveAppPageLayoutHead<TModule extends AppPageModule>(
   routePath: string,
   metadataRoutes: MetadataFileRoute[],
   route?: AppPageBoundaryRoute<TModule> | null,
+  options?: ResolveAppPageLayoutHeadOptions,
 ): Promise<{ metadata: Metadata | null; viewport: Viewport }> {
   const filteredLayouts = layoutModules.filter(Boolean) as TModule[];
   const layoutMetadataPromises: Promise<Metadata | null>[] = [];
@@ -172,9 +177,10 @@ async function resolveAppPageLayoutHead<TModule extends AppPageModule>(
     routeSegments: routeSegments.slice(0, layoutTreePositions[index] ?? 0),
     metadata,
   }));
+  let metadata = resolvedMetadataBase;
 
-  return {
-    metadata: await applyFileBasedMetadata(
+  try {
+    metadata = await applyFileBasedMetadata(
       resolvedMetadataBase,
       routePath,
       params,
@@ -183,7 +189,19 @@ async function resolveAppPageLayoutHead<TModule extends AppPageModule>(
         routeSegments,
         metadataSources,
       },
-    ),
+    );
+  } catch (error) {
+    if (!options?.fallbackOnFileMetadataError) {
+      throw error;
+    }
+    console.error(
+      `[vinext] File-based metadata resolution failed while rendering error boundary for ${routePath}:`,
+      error,
+    );
+  }
+
+  return {
+    metadata,
     viewport: mergeViewport(viewportList),
   };
 }
@@ -408,6 +426,7 @@ export async function renderAppPageErrorBoundary<TModule extends AppPageModule>(
     options.route?.pattern ?? pathname,
     options.metadataRoutes,
     options.route,
+    { fallbackOnFileMetadataError: true },
   );
 
   const headElements: ReactNode[] = [createElement("meta", { charSet: "utf-8", key: "charset" })];
