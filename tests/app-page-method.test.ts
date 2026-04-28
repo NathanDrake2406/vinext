@@ -35,6 +35,27 @@ describe("app page method policy", () => {
     expect(response).toBeNull();
   });
 
+  it("does not let middleware headers override the 405 Allow header", () => {
+    const middlewareHeaders = new Headers({
+      Allow: "POST",
+      "x-from-middleware": "1",
+    });
+
+    const response = resolveAppPageMethodResponse({
+      hasGenerateStaticParams: false,
+      isDynamicRoute: false,
+      middlewareHeaders,
+      request: new Request("https://example.com/about", { method: "PUT" }),
+      revalidateSeconds: null,
+    });
+
+    if (!response) {
+      throw new Error("Expected a Method Not Allowed response");
+    }
+    expect(response.headers.get("allow")).toBe("GET, HEAD");
+    expect(response.headers.get("x-from-middleware")).toBe("1");
+  });
+
   it("treats ISR and generateStaticParams routes as SSG candidates", () => {
     expect(
       isStaticOrSsgAppPageCandidate({

@@ -53,10 +53,9 @@ export function resolveAppPageMethodResponse(
     return null;
   }
 
-  const headers = new Headers({
-    Allow: "GET, HEAD",
-  });
+  const headers = new Headers();
   mergeMiddlewareResponseHeaders(headers, options.middlewareHeaders ?? null);
+  headers.set("Allow", "GET, HEAD");
 
   return new Response("Method Not Allowed", {
     headers,
