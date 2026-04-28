@@ -82,8 +82,11 @@ const appRouteHandlerResponsePath = resolveEntryPath(
   import.meta.url,
 );
 const routeTriePath = resolveEntryPath("../routing/route-trie.js", import.meta.url);
-const metadataRoutesPath = resolveEntryPath("../server/metadata-routes.js", import.meta.url);
 const rootParamsShimPath = resolveEntryPath("../shims/root-params.js", import.meta.url);
+const metadataRouteResponsePath = resolveEntryPath(
+  "../server/metadata-route-response.js",
+  import.meta.url,
+);
 const errorCausePath = resolveEntryPath("../utils/error-cause.js", import.meta.url);
 
 /**
@@ -362,7 +365,7 @@ import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewp
 import { applyFileBasedMetadata } from ${JSON.stringify(fileBasedMetadataPath)};
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
-${effectiveMetaRoutes.length > 0 ? `import { isValidMetadataImageId, manifestToJson, matchMetadataRoutePattern as __matchMetadataRoutePattern, robotsToText, sitemapToXml } from ${JSON.stringify(metadataRoutesPath)};` : ""}
+import { handleMetadataRouteRequest as __handleMetadataRouteRequest } from ${JSON.stringify(metadataRouteResponsePath)};
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from ${JSON.stringify(configMatchersPath)};
 import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
@@ -1712,142 +1715,12 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     return Response.redirect(new URL(__imgResult, url.origin).href, 302);
   }
 
-  // Handle metadata routes (sitemap.xml, robots.txt, manifest.webmanifest, etc.)
-  for (const metaRoute of metadataRoutes) {
-    // generateSitemaps() support — paginated sitemaps at /{prefix}/sitemap/{id}.xml
-    // When a sitemap module exports generateSitemaps, the base URL (e.g. /products/sitemap.xml)
-    // is no longer served. Instead, individual sitemaps are served at /products/sitemap/{id}.xml.
-    if (
-      metaRoute.type === "sitemap" &&
-      metaRoute.isDynamic &&
-      typeof metaRoute.module.generateSitemaps === "function"
-    ) {
-      const sitemapPrefix = metaRoute.servedUrl.slice(0, -4); // strip ".xml"
-      // Match exactly /{prefix}/{id}.xml — one segment only (no slashes in id)
-      if (cleanPathname.startsWith(sitemapPrefix + "/") && cleanPathname.endsWith(".xml")) {
-        const rawId = cleanPathname.slice(sitemapPrefix.length + 1, -4);
-        if (rawId.includes("/")) continue; // multi-segment — not a paginated sitemap
-        const sitemaps = await metaRoute.module.generateSitemaps();
-        const matched = sitemaps.find(function(s) { return String(s.id) === rawId; });
-        if (!matched) return new Response("Not Found", { status: 404 });
-        // Pass the original typed id from generateSitemaps() so numeric IDs stay numeric.
-        // TODO: wrap with makeThenableParams-style Promise when upgrading to Next.js 16
-        // full-Promise param semantics (id becomes Promise<string> in v16).
-        const result = await metaRoute.module.default({ id: matched.id });
-        if (result instanceof Response) return result;
-        return new Response(sitemapToXml(result), {
-          headers: { "Content-Type": metaRoute.contentType },
-        });
-      }
-      // Skip — the base servedUrl is not served when generateSitemaps exists
-      continue;
-    }
-    // Match metadata route — use pattern matching for dynamic segments,
-    // strict equality for static paths.
-    var _metaParams = null;
-    var _metaImageId = null;
-    var _hasGeneratedImageMetadata =
-      metaRoute.isDynamic &&
-      (metaRoute.type === "icon" ||
-        metaRoute.type === "apple-icon" ||
-        metaRoute.type === "opengraph-image" ||
-        metaRoute.type === "twitter-image") &&
-      typeof metaRoute.module.generateImageMetadata === "function";
-    if (metaRoute.patternParts) {
-      var _metaUrlParts = cleanPathname.split("/").filter(Boolean);
-      if (_hasGeneratedImageMetadata && _metaUrlParts.length > 0) {
-        _metaParams = __matchMetadataRoutePattern(_metaUrlParts.slice(0, -1), metaRoute.patternParts);
-        if (_metaParams) {
-          _metaImageId = _metaUrlParts[_metaUrlParts.length - 1];
-        }
-      }
-      if (!_metaParams) {
-        _metaParams = __matchMetadataRoutePattern(_metaUrlParts, metaRoute.patternParts);
-      }
-      if (!_metaParams) continue;
-    } else if (_hasGeneratedImageMetadata && cleanPathname.startsWith(metaRoute.servedUrl + "/")) {
-      var _metaImageSuffix = cleanPathname.slice(metaRoute.servedUrl.length + 1);
-      if (!_metaImageSuffix || _metaImageSuffix.includes("/")) continue;
-      _metaParams = Object.create(null);
-      _metaImageId = _metaImageSuffix;
-    } else if (cleanPathname !== metaRoute.servedUrl) {
-      continue;
-    }
-    if (metaRoute.isDynamic) {
-      // Dynamic metadata route — call the default export and serialize
-      const metaFn = metaRoute.module.default;
-      if (typeof metaFn === "function") {
-        var _metaParamsThenable = makeThenableParams(_metaParams || {});
-        var result;
-        if (_hasGeneratedImageMetadata) {
-          if (_metaImageId === null) {
-            return new Response("Not Found", { status: 404 });
-          }
-          const imageMetadata = await metaRoute.module.generateImageMetadata({
-            params: _metaParamsThenable,
-          });
-          const matchedImageMetadata = Array.isArray(imageMetadata)
-            ? imageMetadata.find(function(item) {
-                if (!item || item.id == null) {
-                  throw new Error(
-                    "id property is required for every item returned from generateImageMetadata",
-                  );
-                }
-                const itemId = String(item.id);
-                if (!isValidMetadataImageId(itemId)) {
-                  console.warn(
-                    '[vinext] Skipping metadata route ' +
-                      metaRoute.servedUrl +
-                      ' image id "' +
-                      itemId +
-                      '" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
-                  );
-                  return false;
-                }
-                return itemId === _metaImageId;
-              })
-            : null;
-          if (!matchedImageMetadata || matchedImageMetadata.id == null) {
-            return new Response("Not Found", { status: 404 });
-          }
-          result = await metaFn({
-            params: _metaParamsThenable,
-            id: Promise.resolve(String(matchedImageMetadata.id)),
-          });
-        } else {
-          result = await metaFn({ params: _metaParamsThenable });
-        }
-        let body;
-        // If it's already a Response (e.g., ImageResponse), return directly
-        if (result instanceof Response) return result;
-        // Serialize based on type
-        if (metaRoute.type === "sitemap") body = sitemapToXml(result);
-        else if (metaRoute.type === "robots") body = robotsToText(result);
-        else if (metaRoute.type === "manifest") body = manifestToJson(result);
-        else body = JSON.stringify(result);
-        return new Response(body, {
-          headers: { "Content-Type": metaRoute.contentType },
-        });
-      }
-      console.warn("[vinext] Dynamic metadata route " + metaRoute.servedUrl + " has no default export.");
-      return new Response("Not Found", { status: 404 });
-    } else {
-      // Static metadata file — decode from embedded base64 data
-      try {
-        const binary = atob(metaRoute.fileDataBase64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        return new Response(bytes, {
-          headers: {
-            "Content-Type": metaRoute.contentType,
-            "Cache-Control": "public, max-age=0, must-revalidate",
-          },
-        });
-      } catch {
-        return new Response("Not Found", { status: 404 });
-      }
-    }
-  }
+  const metadataRouteResponse = await __handleMetadataRouteRequest({
+    metadataRoutes,
+    cleanPathname,
+    makeThenableParams,
+  });
+  if (metadataRouteResponse) return metadataRouteResponse;
 
   // Serve public/ files as filesystem routes after middleware and before
   // afterFiles/fallback rewrites, matching Next.js routing semantics.
