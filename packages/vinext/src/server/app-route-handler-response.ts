@@ -23,9 +23,9 @@ type FinalizeRouteHandlerResponseOptions = {
 const NEVER_CACHE_CONTROL = "private, no-cache, no-store, max-age=0, must-revalidate";
 
 const APP_ROUTE_REWRITE_ERROR =
-  "NextResponse.rewrite() was used in a app route handler, this is not currently supported. Please remove the invocation to continue.";
+  "NextResponse.rewrite() was used in an app route handler, this is not currently supported. Please remove the invocation to continue.";
 const APP_ROUTE_NEXT_ERROR =
-  "NextResponse.next() was used in a app route handler, this is not supported. See here for more info: https://nextjs.org/docs/messages/next-response-next-in-app-route-handler";
+  "NextResponse.next() was used in an app route handler, this is not supported. See here for more info: https://nextjs.org/docs/messages/next-response-next-in-app-route-handler";
 
 function buildRouteHandlerCacheControl(
   cacheState: BuildRouteHandlerCachedResponseOptions["cacheState"],
