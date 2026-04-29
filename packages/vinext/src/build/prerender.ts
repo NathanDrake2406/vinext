@@ -45,6 +45,7 @@ export type PrerenderRouteResult =
       status: "rendered";
       outputFiles: string[];
       revalidate: number | false;
+      expire?: number;
       /**
        * The concrete prerendered URL path, e.g. `/blog/hello-world`.
        * Only present when the route is dynamic and `path` differs from `route`.
@@ -591,6 +592,7 @@ export async function prerenderPages({
             status: "rendered",
             outputFiles,
             revalidate,
+            ...(typeof revalidate === "number" ? { expire: config.expireTime } : {}),
             router: "pages",
             ...(urlPath !== route.pattern ? { path: urlPath } : {}),
           };
@@ -1056,6 +1058,7 @@ export async function prerenderApp({
           status: "rendered",
           outputFiles,
           revalidate,
+          ...(typeof revalidate === "number" ? { expire: config.expireTime } : {}),
           router: "app",
           ...(urlPath !== routePattern ? { path: urlPath } : {}),
         };
@@ -1159,6 +1162,7 @@ export function writePrerenderIndex(
         route: r.route,
         status: r.status,
         revalidate: r.revalidate,
+        ...(typeof r.revalidate === "number" ? { expire: r.expire } : {}),
         router: r.router,
         ...(r.path ? { path: r.path } : {}),
       };

@@ -462,7 +462,10 @@ export function registerCachedFunction<T extends (...args: any[]) => Promise<any
       await handler.set(cacheKey, cacheValue, {
         fetchCache: true,
         tags: ctx.tags,
-        revalidate: revalidateSeconds,
+        cacheControl: {
+          revalidate: revalidateSeconds,
+          expire: effectiveLife.expire,
+        },
       });
     } catch {
       // Result not serializable — skip caching, still return the result

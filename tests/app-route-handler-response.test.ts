@@ -96,11 +96,12 @@ describe("app route handler response helpers", () => {
 
     const hit = buildRouteHandlerCachedResponse(cachedValue, {
       cacheState: "HIT",
+      expireSeconds: 300,
       isHead: false,
       revalidateSeconds: 60,
     });
     expect(hit.headers.get("x-vinext-cache")).toBe("HIT");
-    expect(hit.headers.get("cache-control")).toBe("s-maxage=60, stale-while-revalidate");
+    expect(hit.headers.get("cache-control")).toBe("s-maxage=60, stale-while-revalidate=240");
     await expect(hit.text()).resolves.toBe("from-cache");
 
     const staleHead = buildRouteHandlerCachedResponse(cachedValue, {

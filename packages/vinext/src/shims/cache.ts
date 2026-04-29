@@ -174,6 +174,7 @@ type MemoryEntry = {
   tags: string[];
   lastModified: number;
   revalidateAt: number | null;
+  expireAt: number | null;
 };
 
 function readStringArrayField(ctx: Record<string, unknown> | undefined, field: string): string[] {
@@ -182,18 +183,26 @@ function readStringArrayField(ctx: Record<string, unknown> | undefined, field: s
   return value.filter((item): item is string => typeof item === "string");
 }
 
-/**
- * Shape of the optional `ctx` argument passed to `CacheHandler.set()`.
- * Covers both the older `{ revalidate: number }` shape and the newer
- * `{ cacheControl: { revalidate: number } }` shape (Next.js 16).
- */
-type SetCtx = {
-  tags?: string[];
-  fetchCache?: boolean;
-  revalidate?: number;
-  cacheControl?: { revalidate?: number };
-  [key: string]: unknown;
-};
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordField(
+  ctx: Record<string, unknown> | undefined,
+  field: string,
+): Record<string, unknown> | undefined {
+  const value = ctx?.[field];
+  return isUnknownRecord(value) ? value : undefined;
+}
+
+function readCacheControlNumberField(
+  ctx: Record<string, unknown> | undefined,
+  field: string,
+): number | undefined {
+  const cacheControl = readRecordField(ctx, "cacheControl");
+  const value = cacheControl?.[field] ?? ctx?.[field];
+  return typeof value === "number" ? value : undefined;
+}
 
 export class MemoryCacheHandler implements CacheHandler {
   private store = new Map<string, MemoryEntry>();
@@ -221,7 +230,14 @@ export class MemoryCacheHandler implements CacheHandler {
       }
     }
 
-    // Check time-based expiry — return stale entry with cacheState="stale"
+    // Check hard expiry first. Past `expire`, Next.js blocks on fresh
+    // regeneration instead of serving stale with background work.
+    if (entry.expireAt !== null && Date.now() > entry.expireAt) {
+      this.store.delete(key);
+      return null;
+    }
+
+    // Check time-based revalidation — return stale entry with cacheState="stale"
     // instead of deleting, so ISR can serve stale-while-revalidate
     if (entry.revalidateAt !== null && Date.now() > entry.revalidateAt) {
       return {
@@ -242,40 +258,42 @@ export class MemoryCacheHandler implements CacheHandler {
     data: IncrementalCacheValue | null,
     ctx?: Record<string, unknown>,
   ): Promise<void> {
-    const typedCtx = ctx as SetCtx | undefined;
     const tagSet = new Set<string>();
     if (data && "tags" in data && Array.isArray(data.tags)) {
       for (const t of data.tags) tagSet.add(t);
     }
-    if (typedCtx && Array.isArray(typedCtx.tags)) {
-      for (const t of typedCtx.tags) tagSet.add(t);
+    for (const t of readStringArrayField(ctx, "tags")) {
+      tagSet.add(t);
     }
     const tags = [...tagSet];
 
     // Resolve effective revalidate — data overrides ctx.
     // revalidate: 0 means "don't cache", so skip storage entirely.
     let effectiveRevalidate: number | undefined;
-    if (typedCtx) {
-      const revalidate = typedCtx.cacheControl?.revalidate ?? typedCtx.revalidate;
-      if (typeof revalidate === "number") {
-        effectiveRevalidate = revalidate;
-      }
-    }
+    let effectiveExpire: number | undefined;
+    effectiveRevalidate = readCacheControlNumberField(ctx, "revalidate");
+    effectiveExpire = readCacheControlNumberField(ctx, "expire");
     if (data && "revalidate" in data && typeof data.revalidate === "number") {
       effectiveRevalidate = data.revalidate;
     }
     if (effectiveRevalidate === 0) return;
 
+    const now = Date.now();
     const revalidateAt =
       typeof effectiveRevalidate === "number" && effectiveRevalidate > 0
-        ? Date.now() + effectiveRevalidate * 1000
+        ? now + effectiveRevalidate * 1000
+        : null;
+    const expireAt =
+      typeof effectiveExpire === "number" && effectiveExpire > 0
+        ? now + effectiveExpire * 1000
         : null;
 
     this.store.set(key, {
       value: data,
       tags,
-      lastModified: Date.now(),
+      lastModified: now,
       revalidateAt,
+      expireAt,
     });
   }
 

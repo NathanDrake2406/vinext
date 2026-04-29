@@ -39,6 +39,7 @@ function createOptions(
     },
     isrGet: vi.fn().mockResolvedValue(null),
     isrSet: vi.fn(async () => {}),
+    expireSeconds: 300,
     pageModule: {},
     params: { slug: "post" },
     query: { slug: "post" },
@@ -231,6 +232,8 @@ describe("pages page data", () => {
         pageData: { title: "fresh" },
       }),
       15,
+      undefined,
+      300,
     );
   });
 

@@ -1,4 +1,9 @@
 import type { CachedRouteValue } from "../shims/cache.js";
+import {
+  buildRevalidateCacheControl,
+  NEVER_CACHE_CONTROL,
+  STALE_REVALIDATE_CACHE_CONTROL,
+} from "./cache-control.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 
 export type RouteHandlerMiddlewareContext = {
@@ -8,6 +13,7 @@ export type RouteHandlerMiddlewareContext = {
 
 type BuildRouteHandlerCachedResponseOptions = {
   cacheState: "HIT" | "STALE";
+  expireSeconds?: number;
   isHead: boolean;
   revalidateSeconds: number;
 };
@@ -18,10 +24,6 @@ type FinalizeRouteHandlerResponseOptions = {
   isHead: boolean;
 };
 
-// Matches Next.js's getCacheControlHeader for revalidate === 0.
-// See .nextjs-ref/packages/next/src/server/lib/cache-control.ts.
-const NEVER_CACHE_CONTROL = "private, no-cache, no-store, max-age=0, must-revalidate";
-
 const APP_ROUTE_REWRITE_ERROR =
   "NextResponse.rewrite() was used in a app route handler, this is not currently supported. Please remove the invocation to continue.";
 const APP_ROUTE_NEXT_ERROR =
@@ -30,6 +32,7 @@ const APP_ROUTE_NEXT_ERROR =
 function buildRouteHandlerCacheControl(
   cacheState: BuildRouteHandlerCachedResponseOptions["cacheState"],
   revalidateSeconds: number,
+  expireSeconds?: number,
 ): string {
   if (revalidateSeconds === 0) {
     // A cached response is never produced for revalidate = 0 (the ISR write
@@ -40,10 +43,10 @@ function buildRouteHandlerCacheControl(
   }
 
   if (cacheState === "STALE") {
-    return "s-maxage=0, stale-while-revalidate";
+    return STALE_REVALIDATE_CACHE_CONTROL;
   }
 
-  return `s-maxage=${revalidateSeconds}, stale-while-revalidate`;
+  return buildRevalidateCacheControl(revalidateSeconds, expireSeconds);
 }
 
 export function applyRouteHandlerMiddlewareContext(
@@ -93,7 +96,11 @@ export function buildRouteHandlerCachedResponse(
   headers.set("X-Vinext-Cache", options.cacheState);
   headers.set(
     "Cache-Control",
-    buildRouteHandlerCacheControl(options.cacheState, options.revalidateSeconds),
+    buildRouteHandlerCacheControl(
+      options.cacheState,
+      options.revalidateSeconds,
+      options.expireSeconds,
+    ),
   );
 
   return new Response(options.isHead ? null : cachedValue.body, {
@@ -105,8 +112,12 @@ export function buildRouteHandlerCachedResponse(
 export function applyRouteHandlerRevalidateHeader(
   response: Response,
   revalidateSeconds: number,
+  expireSeconds?: number,
 ): void {
-  response.headers.set("cache-control", buildRouteHandlerCacheControl("HIT", revalidateSeconds));
+  response.headers.set(
+    "cache-control",
+    buildRouteHandlerCacheControl("HIT", revalidateSeconds, expireSeconds),
+  );
 }
 
 export function markRouteHandlerCacheMiss(response: Response): void {

@@ -40,11 +40,15 @@ describe("app page cache helpers", () => {
 
     const htmlResponse = buildAppPageCachedResponse(cachedValue, {
       cacheState: "HIT",
+      expireSeconds: 300,
       isRscRequest: false,
       revalidateSeconds: 60,
     });
     expect(htmlResponse?.status).toBe(201);
     expect(htmlResponse?.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(htmlResponse?.headers.get("cache-control")).toBe(
+      "s-maxage=60, stale-while-revalidate=240",
+    );
     expect(htmlResponse?.headers.get("x-vinext-cache")).toBe("HIT");
     await expect(htmlResponse?.text()).resolves.toBe("<h1>cached</h1>");
 
@@ -161,6 +165,7 @@ describe("app page cache helpers", () => {
       key: string;
       html: string;
       hasRscData: boolean;
+      expireSeconds: number | undefined;
       revalidateSeconds: number;
       tags: string[];
     }> = [];
@@ -179,16 +184,18 @@ describe("app page cache helpers", () => {
       isrRscKey(pathname, mountedSlotsHeader) {
         return `rsc:${pathname}:${mountedSlotsHeader ?? "none"}`;
       },
-      async isrSet(key, data, revalidateSeconds, tags) {
+      async isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
         isrSetCalls.push({
           key,
           html: data.html,
           hasRscData: Boolean(data.rscData),
+          expireSeconds,
           revalidateSeconds,
           tags,
         });
       },
       mountedSlotsHeader: "slot:auth:/",
+      expireSeconds: 300,
       revalidateSeconds: 60,
       async renderFreshPageForCache() {
         return {
@@ -212,6 +219,7 @@ describe("app page cache helpers", () => {
         key: "rsc:/stale:slot:auth:/",
         html: "",
         hasRscData: true,
+        expireSeconds: 300,
         revalidateSeconds: 60,
         tags: ["/stale", "_N_T_/stale"],
       },
@@ -239,6 +247,7 @@ describe("app page cache helpers", () => {
       async isrSet(key) {
         isrSetCalls.push(key);
       },
+      expireSeconds: 300,
       revalidateSeconds: 60,
       async renderFreshPageForCache() {
         return {
@@ -338,6 +347,7 @@ describe("app page cache helpers", () => {
       key: string;
       html: string;
       hasRscData: boolean;
+      expireSeconds: number | undefined;
       revalidateSeconds: number;
       tags: string[];
     }> = [];
@@ -368,15 +378,17 @@ describe("app page cache helpers", () => {
         isrRscKey(pathname) {
           return "rsc:" + pathname;
         },
-        async isrSet(key, data, revalidateSeconds, tags) {
+        async isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
           isrSetCalls.push({
             key,
             html: data.html,
             hasRscData: Boolean(data.rscData),
+            expireSeconds,
             revalidateSeconds,
             tags,
           });
         },
+        expireSeconds: 300,
         revalidateSeconds: 60,
         waitUntil(promise) {
           pendingCacheWrites.push(promise);
@@ -395,6 +407,7 @@ describe("app page cache helpers", () => {
         key: "html:/fresh",
         html: "<h1>fresh</h1>",
         hasRscData: false,
+        expireSeconds: 300,
         revalidateSeconds: 60,
         tags: ["/fresh", "_N_T_/fresh"],
       },
@@ -402,6 +415,7 @@ describe("app page cache helpers", () => {
         key: "rsc:/fresh",
         html: "",
         hasRscData: true,
+        expireSeconds: 300,
         revalidateSeconds: 60,
         tags: ["/fresh", "_N_T_/fresh"],
       },
@@ -416,6 +430,7 @@ describe("app page cache helpers", () => {
       key: string;
       html: string;
       hasRscData: boolean;
+      expireSeconds: number | undefined;
       revalidateSeconds: number;
       tags: string[];
     }> = [];
@@ -436,15 +451,17 @@ describe("app page cache helpers", () => {
       isrRscKey(pathname) {
         return "rsc:" + pathname;
       },
-      async isrSet(key, data, revalidateSeconds, tags) {
+      async isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
         isrSetCalls.push({
           key,
           html: data.html,
           hasRscData: Boolean(data.rscData),
+          expireSeconds,
           revalidateSeconds,
           tags,
         });
       },
+      expireSeconds: 300,
       revalidateSeconds: 60,
       waitUntil(promise) {
         pendingCacheWrites.push(promise);
@@ -461,6 +478,7 @@ describe("app page cache helpers", () => {
         key: "rsc:/fresh-rsc",
         html: "",
         hasRscData: true,
+        expireSeconds: 300,
         revalidateSeconds: 60,
         tags: ["/fresh-rsc", "_N_T_/fresh-rsc"],
       },

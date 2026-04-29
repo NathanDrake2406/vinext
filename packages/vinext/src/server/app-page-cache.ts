@@ -1,4 +1,5 @@
 import type { CachedAppPageValue } from "../shims/cache.js";
+import { buildRevalidateCacheControl, STALE_REVALIDATE_CACHE_CONTROL } from "./cache-control.js";
 import { buildAppPageCacheValue, type ISRCacheEntry } from "./isr-cache.js";
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
@@ -8,6 +9,7 @@ type AppPageCacheSetter = (
   data: CachedAppPageValue,
   revalidateSeconds: number,
   tags: string[],
+  expireSeconds?: number,
 ) => Promise<void>;
 type AppPageBackgroundRegenerator = (key: string, renderFn: () => Promise<void>) => void;
 
@@ -19,6 +21,7 @@ type AppPageCacheRenderResult = {
 
 type BuildAppPageCachedResponseOptions = {
   cacheState: "HIT" | "STALE";
+  expireSeconds?: number;
   isRscRequest: boolean;
   mountedSlotsHeader?: string | null;
   revalidateSeconds: number;
@@ -34,6 +37,7 @@ type ReadAppPageCacheResponseOptions = {
   isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
   isrSet: AppPageCacheSetter;
   mountedSlotsHeader?: string | null;
+  expireSeconds?: number;
   revalidateSeconds: number;
   renderFreshPageForCache: () => Promise<AppPageCacheRenderResult>;
   scheduleBackgroundRegeneration: AppPageBackgroundRegenerator;
@@ -47,6 +51,7 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   isrHtmlKey: (pathname: string) => string;
   isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
   isrSet: AppPageCacheSetter;
+  expireSeconds?: number;
   revalidateSeconds: number;
   waitUntil?: (promise: Promise<void>) => void;
 };
@@ -61,6 +66,7 @@ type ScheduleAppPageRscCacheWriteOptions = {
   isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
   isrSet: AppPageCacheSetter;
   mountedSlotsHeader?: string | null;
+  expireSeconds?: number;
   revalidateSeconds: number;
   waitUntil?: (promise: Promise<void>) => void;
 };
@@ -68,12 +74,13 @@ type ScheduleAppPageRscCacheWriteOptions = {
 function buildAppPageCacheControl(
   cacheState: BuildAppPageCachedResponseOptions["cacheState"],
   revalidateSeconds: number,
+  expireSeconds?: number,
 ): string {
   if (cacheState === "STALE") {
-    return "s-maxage=0, stale-while-revalidate";
+    return STALE_REVALIDATE_CACHE_CONTROL;
   }
 
-  return `s-maxage=${revalidateSeconds}, stale-while-revalidate`;
+  return buildRevalidateCacheControl(revalidateSeconds, expireSeconds);
 }
 
 function getCachedAppPageValue(entry: ISRCacheEntry | null): CachedAppPageValue | null {
@@ -88,7 +95,11 @@ export function buildAppPageCachedResponse(
   // falsy statuses still fall back to 200 rather than being forwarded through.
   const status = cachedValue.status || 200;
   const headers = {
-    "Cache-Control": buildAppPageCacheControl(options.cacheState, options.revalidateSeconds),
+    "Cache-Control": buildAppPageCacheControl(
+      options.cacheState,
+      options.revalidateSeconds,
+      options.expireSeconds,
+    ),
     Vary: "RSC, Accept",
     "X-Vinext-Cache": options.cacheState,
   };
@@ -139,6 +150,7 @@ export async function readAppPageCacheResponse(
     if (cachedValue && !cached?.isStale) {
       const hitResponse = buildAppPageCachedResponse(cachedValue, {
         cacheState: "HIT",
+        expireSeconds: options.expireSeconds,
         isRscRequest: options.isRscRequest,
         mountedSlotsHeader: options.mountedSlotsHeader,
         revalidateSeconds: options.revalidateSeconds,
@@ -171,6 +183,7 @@ export async function readAppPageCacheResponse(
             buildAppPageCacheValue("", revalidatedPage.rscData, 200),
             options.revalidateSeconds,
             revalidatedPage.tags,
+            options.expireSeconds,
           ),
         ];
 
@@ -185,6 +198,7 @@ export async function readAppPageCacheResponse(
               buildAppPageCacheValue(revalidatedPage.html, undefined, 200),
               options.revalidateSeconds,
               revalidatedPage.tags,
+              options.expireSeconds,
             ),
           );
         }
@@ -195,6 +209,7 @@ export async function readAppPageCacheResponse(
 
       const staleResponse = buildAppPageCachedResponse(cachedValue, {
         cacheState: "STALE",
+        expireSeconds: options.expireSeconds,
         isRscRequest: options.isRscRequest,
         mountedSlotsHeader: options.mountedSlotsHeader,
         revalidateSeconds: options.revalidateSeconds,
@@ -255,6 +270,7 @@ export function finalizeAppPageHtmlCacheResponse(
           buildAppPageCacheValue(chunks.join(""), undefined, 200),
           options.revalidateSeconds,
           pageTags,
+          options.expireSeconds,
         ),
       ];
 
@@ -266,6 +282,7 @@ export function finalizeAppPageHtmlCacheResponse(
               buildAppPageCacheValue("", rscData, 200),
               options.revalidateSeconds,
               pageTags,
+              options.expireSeconds,
             ),
           ),
         );
@@ -315,6 +332,7 @@ export function scheduleAppPageRscCacheWrite(
         buildAppPageCacheValue("", rscData, 200),
         options.revalidateSeconds,
         options.getPageTags(),
+        options.expireSeconds,
       );
       options.isrDebug?.("RSC cache written", rscKey);
     } catch (cacheError) {

@@ -85,6 +85,7 @@ const routeTriePath = resolveEntryPath("../routing/route-trie.js", import.meta.u
 const metadataRoutesPath = resolveEntryPath("../server/metadata-routes.js", import.meta.url);
 const rootParamsShimPath = resolveEntryPath("../shims/root-params.js", import.meta.url);
 const errorCausePath = resolveEntryPath("../utils/error-cause.js", import.meta.url);
+const isrCachePath = resolveEntryPath("../server/isr-cache.js", import.meta.url);
 
 /**
  * Resolved config options relevant to App Router request handling.
@@ -104,6 +105,8 @@ export type AppRouterConfig = {
   allowedDevOrigins?: string[];
   /** Body size limit for server actions in bytes (from experimental.serverActions.bodySizeLimit). */
   bodySizeLimit?: number;
+  /** Maximum age in seconds for stale ISR entries before blocking regeneration. */
+  expireTime?: number;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   /**
@@ -144,6 +147,7 @@ export function generateRscEntry(
   const headers = config?.headers ?? [];
   const allowedOrigins = config?.allowedOrigins ?? [];
   const bodySizeLimit = config?.bodySizeLimit ?? 1 * 1024 * 1024;
+  const expireTime = config?.expireTime ?? 31_536_000;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
   const publicFiles = config?.publicFiles ?? [];
@@ -466,9 +470,10 @@ import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from ${JSON.stringify(appRouteHandlerResponsePath)};
 import { buildPageCacheTags } from ${JSON.stringify(implicitTagsPath)};
-import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
+import { _consumeRequestScopedCacheLife } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from ${JSON.stringify(requestContextShimPath)};
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from ${JSON.stringify(rootParamsShimPath)};
+import { isrGet as __sharedIsrGet, isrSet as __sharedIsrSet } from ${JSON.stringify(isrCachePath)};
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from ${JSON.stringify(routeTriePath)};
 // Import server-only state module to register ALS-backed accessors.
@@ -512,24 +517,17 @@ function __clearRequestContext() {
   // setNavigationContext(null) already clears root params internally
 }
 
-// ISR cache is disabled in dev mode — every request re-renders fresh,
-// matching Next.js dev behavior. Cache-Control headers are still emitted
-// based on export const revalidate for testing purposes.
-// Production ISR uses the MemoryCacheHandler (or configured KV handler).
-//
-// These helpers are inlined instead of imported from isr-cache.js because
-// the virtual RSC entry module runs in the RSC Vite environment which
-// cannot use dynamic imports at the module-evaluation level for server-only
-// modules, and direct imports must use the pre-computed absolute paths.
 async function __isrGet(key) {
-  const handler = getCacheHandler();
-  const result = await handler.get(key);
-  if (!result || !result.value) return null;
-  return { value: result, isStale: result.cacheState === "stale" };
+  return __sharedIsrGet(key);
 }
-async function __isrSet(key, data, revalidateSeconds, tags) {
-  const handler = getCacheHandler();
-  await handler.set(key, data, { revalidate: revalidateSeconds, tags: Array.isArray(tags) ? tags : [] });
+async function __isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+  return __sharedIsrSet(
+    key,
+    data,
+    revalidateSeconds,
+    Array.isArray(tags) ? tags : [],
+    expireSeconds
+  );
 }
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -1118,6 +1116,7 @@ ${middlewarePath ? generateMiddlewareMatcherCode("modern") : ""}
 const __basePath = ${JSON.stringify(bp)};
 const __trailingSlash = ${JSON.stringify(ts)};
 const __i18nConfig = ${JSON.stringify(i18nConfig)};
+const __expireTime = ${JSON.stringify(expireTime)};
 const __configRedirects = ${JSON.stringify(redirects)};
 const __configRewrites = ${JSON.stringify(rewrites)};
 const __configHeaders = ${JSON.stringify(headers)};
@@ -2146,6 +2145,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params,
         requestUrl: request.url,
         revalidateSearchParams: url.searchParams,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         runInRevalidationContext: async function(renderFn) {
@@ -2197,6 +2197,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params: makeThenableParams(params),
         reportRequestError: _reportRequestError,
         request,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         setHeadersAccessPhase,
@@ -2304,6 +2305,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       isrRscKey: __isrRscKey,
       isrSet: __isrSet,
       mountedSlotsHeader: __mountedSlotsHeader,
+      expireSeconds: __expireTime,
       revalidateSeconds,
       renderFreshPageForCache: async function() {
         // Re-render the page to produce fresh HTML + RSC data for the cache
@@ -2574,6 +2576,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         }
       },
     },
+    expireSeconds: __expireTime,
     revalidateSeconds,
     mountedSlotsHeader: __mountedSlotsHeader,
     renderErrorBoundaryResponse(renderErr) {

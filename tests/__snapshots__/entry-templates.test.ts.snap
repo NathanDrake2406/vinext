@@ -120,9 +120,10 @@ import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
 import { buildPageCacheTags } from "<ROOT>/packages/vinext/src/server/implicit-tags.js";
-import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
+import { _consumeRequestScopedCacheLife } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from "<ROOT>/packages/vinext/src/shims/request-context.js";
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from "<ROOT>/packages/vinext/src/shims/root-params.js";
+import { isrGet as __sharedIsrGet, isrSet as __sharedIsrSet } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from "<ROOT>/packages/vinext/src/routing/route-trie.js";
 // Import server-only state module to register ALS-backed accessors.
@@ -166,24 +167,17 @@ function __clearRequestContext() {
   // setNavigationContext(null) already clears root params internally
 }
 
-// ISR cache is disabled in dev mode — every request re-renders fresh,
-// matching Next.js dev behavior. Cache-Control headers are still emitted
-// based on export const revalidate for testing purposes.
-// Production ISR uses the MemoryCacheHandler (or configured KV handler).
-//
-// These helpers are inlined instead of imported from isr-cache.js because
-// the virtual RSC entry module runs in the RSC Vite environment which
-// cannot use dynamic imports at the module-evaluation level for server-only
-// modules, and direct imports must use the pre-computed absolute paths.
 async function __isrGet(key) {
-  const handler = getCacheHandler();
-  const result = await handler.get(key);
-  if (!result || !result.value) return null;
-  return { value: result, isStale: result.cacheState === "stale" };
+  return __sharedIsrGet(key);
 }
-async function __isrSet(key, data, revalidateSeconds, tags) {
-  const handler = getCacheHandler();
-  await handler.set(key, data, { revalidate: revalidateSeconds, tags: Array.isArray(tags) ? tags : [] });
+async function __isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+  return __sharedIsrSet(
+    key,
+    data,
+    revalidateSeconds,
+    Array.isArray(tags) ? tags : [],
+    expireSeconds
+  );
 }
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -859,6 +853,7 @@ async function buildPageElements(route, params, routePath, pageRequest) {
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
+const __expireTime = 31536000;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
@@ -1811,6 +1806,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params,
         requestUrl: request.url,
         revalidateSearchParams: url.searchParams,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         runInRevalidationContext: async function(renderFn) {
@@ -1862,6 +1858,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params: makeThenableParams(params),
         reportRequestError: _reportRequestError,
         request,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         setHeadersAccessPhase,
@@ -1969,6 +1966,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       isrRscKey: __isrRscKey,
       isrSet: __isrSet,
       mountedSlotsHeader: __mountedSlotsHeader,
+      expireSeconds: __expireTime,
       revalidateSeconds,
       renderFreshPageForCache: async function() {
         // Re-render the page to produce fresh HTML + RSC data for the cache
@@ -2239,6 +2237,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         }
       },
     },
+    expireSeconds: __expireTime,
     revalidateSeconds,
     mountedSlotsHeader: __mountedSlotsHeader,
     renderErrorBoundaryResponse(renderErr) {
@@ -2449,9 +2448,10 @@ import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
 import { buildPageCacheTags } from "<ROOT>/packages/vinext/src/server/implicit-tags.js";
-import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
+import { _consumeRequestScopedCacheLife } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from "<ROOT>/packages/vinext/src/shims/request-context.js";
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from "<ROOT>/packages/vinext/src/shims/root-params.js";
+import { isrGet as __sharedIsrGet, isrSet as __sharedIsrSet } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from "<ROOT>/packages/vinext/src/routing/route-trie.js";
 // Import server-only state module to register ALS-backed accessors.
@@ -2495,24 +2495,17 @@ function __clearRequestContext() {
   // setNavigationContext(null) already clears root params internally
 }
 
-// ISR cache is disabled in dev mode — every request re-renders fresh,
-// matching Next.js dev behavior. Cache-Control headers are still emitted
-// based on export const revalidate for testing purposes.
-// Production ISR uses the MemoryCacheHandler (or configured KV handler).
-//
-// These helpers are inlined instead of imported from isr-cache.js because
-// the virtual RSC entry module runs in the RSC Vite environment which
-// cannot use dynamic imports at the module-evaluation level for server-only
-// modules, and direct imports must use the pre-computed absolute paths.
 async function __isrGet(key) {
-  const handler = getCacheHandler();
-  const result = await handler.get(key);
-  if (!result || !result.value) return null;
-  return { value: result, isStale: result.cacheState === "stale" };
+  return __sharedIsrGet(key);
 }
-async function __isrSet(key, data, revalidateSeconds, tags) {
-  const handler = getCacheHandler();
-  await handler.set(key, data, { revalidate: revalidateSeconds, tags: Array.isArray(tags) ? tags : [] });
+async function __isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+  return __sharedIsrSet(
+    key,
+    data,
+    revalidateSeconds,
+    Array.isArray(tags) ? tags : [],
+    expireSeconds
+  );
 }
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -3188,6 +3181,7 @@ async function buildPageElements(route, params, routePath, pageRequest) {
 const __basePath = "/base";
 const __trailingSlash = true;
 const __i18nConfig = null;
+const __expireTime = 31536000;
 const __configRedirects = [{"source":"/old","destination":"/new","permanent":true}];
 const __configRewrites = {"beforeFiles":[{"source":"/api/:path*","destination":"/backend/:path*"}],"afterFiles":[],"fallback":[]};
 const __configHeaders = [{"source":"/api/:path*","headers":[{"key":"X-Custom","value":"test"}]}];
@@ -4146,6 +4140,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params,
         requestUrl: request.url,
         revalidateSearchParams: url.searchParams,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         runInRevalidationContext: async function(renderFn) {
@@ -4197,6 +4192,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params: makeThenableParams(params),
         reportRequestError: _reportRequestError,
         request,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         setHeadersAccessPhase,
@@ -4304,6 +4300,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       isrRscKey: __isrRscKey,
       isrSet: __isrSet,
       mountedSlotsHeader: __mountedSlotsHeader,
+      expireSeconds: __expireTime,
       revalidateSeconds,
       renderFreshPageForCache: async function() {
         // Re-render the page to produce fresh HTML + RSC data for the cache
@@ -4574,6 +4571,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         }
       },
     },
+    expireSeconds: __expireTime,
     revalidateSeconds,
     mountedSlotsHeader: __mountedSlotsHeader,
     renderErrorBoundaryResponse(renderErr) {
@@ -4784,9 +4782,10 @@ import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
 import { buildPageCacheTags } from "<ROOT>/packages/vinext/src/server/implicit-tags.js";
-import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
+import { _consumeRequestScopedCacheLife } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from "<ROOT>/packages/vinext/src/shims/request-context.js";
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from "<ROOT>/packages/vinext/src/shims/root-params.js";
+import { isrGet as __sharedIsrGet, isrSet as __sharedIsrSet } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from "<ROOT>/packages/vinext/src/routing/route-trie.js";
 // Import server-only state module to register ALS-backed accessors.
@@ -4830,24 +4829,17 @@ function __clearRequestContext() {
   // setNavigationContext(null) already clears root params internally
 }
 
-// ISR cache is disabled in dev mode — every request re-renders fresh,
-// matching Next.js dev behavior. Cache-Control headers are still emitted
-// based on export const revalidate for testing purposes.
-// Production ISR uses the MemoryCacheHandler (or configured KV handler).
-//
-// These helpers are inlined instead of imported from isr-cache.js because
-// the virtual RSC entry module runs in the RSC Vite environment which
-// cannot use dynamic imports at the module-evaluation level for server-only
-// modules, and direct imports must use the pre-computed absolute paths.
 async function __isrGet(key) {
-  const handler = getCacheHandler();
-  const result = await handler.get(key);
-  if (!result || !result.value) return null;
-  return { value: result, isStale: result.cacheState === "stale" };
+  return __sharedIsrGet(key);
 }
-async function __isrSet(key, data, revalidateSeconds, tags) {
-  const handler = getCacheHandler();
-  await handler.set(key, data, { revalidate: revalidateSeconds, tags: Array.isArray(tags) ? tags : [] });
+async function __isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+  return __sharedIsrSet(
+    key,
+    data,
+    revalidateSeconds,
+    Array.isArray(tags) ? tags : [],
+    expireSeconds
+  );
 }
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -5524,6 +5516,7 @@ async function buildPageElements(route, params, routePath, pageRequest) {
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
+const __expireTime = 31536000;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
@@ -6476,6 +6469,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params,
         requestUrl: request.url,
         revalidateSearchParams: url.searchParams,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         runInRevalidationContext: async function(renderFn) {
@@ -6527,6 +6521,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params: makeThenableParams(params),
         reportRequestError: _reportRequestError,
         request,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         setHeadersAccessPhase,
@@ -6634,6 +6629,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       isrRscKey: __isrRscKey,
       isrSet: __isrSet,
       mountedSlotsHeader: __mountedSlotsHeader,
+      expireSeconds: __expireTime,
       revalidateSeconds,
       renderFreshPageForCache: async function() {
         // Re-render the page to produce fresh HTML + RSC data for the cache
@@ -6904,6 +6900,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         }
       },
     },
+    expireSeconds: __expireTime,
     revalidateSeconds,
     mountedSlotsHeader: __mountedSlotsHeader,
     renderErrorBoundaryResponse(renderErr) {
@@ -7114,9 +7111,10 @@ import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
 import { buildPageCacheTags } from "<ROOT>/packages/vinext/src/server/implicit-tags.js";
-import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
+import { _consumeRequestScopedCacheLife } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from "<ROOT>/packages/vinext/src/shims/request-context.js";
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from "<ROOT>/packages/vinext/src/shims/root-params.js";
+import { isrGet as __sharedIsrGet, isrSet as __sharedIsrSet } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from "<ROOT>/packages/vinext/src/routing/route-trie.js";
 // Import server-only state module to register ALS-backed accessors.
@@ -7160,24 +7158,17 @@ function __clearRequestContext() {
   // setNavigationContext(null) already clears root params internally
 }
 
-// ISR cache is disabled in dev mode — every request re-renders fresh,
-// matching Next.js dev behavior. Cache-Control headers are still emitted
-// based on export const revalidate for testing purposes.
-// Production ISR uses the MemoryCacheHandler (or configured KV handler).
-//
-// These helpers are inlined instead of imported from isr-cache.js because
-// the virtual RSC entry module runs in the RSC Vite environment which
-// cannot use dynamic imports at the module-evaluation level for server-only
-// modules, and direct imports must use the pre-computed absolute paths.
 async function __isrGet(key) {
-  const handler = getCacheHandler();
-  const result = await handler.get(key);
-  if (!result || !result.value) return null;
-  return { value: result, isStale: result.cacheState === "stale" };
+  return __sharedIsrGet(key);
 }
-async function __isrSet(key, data, revalidateSeconds, tags) {
-  const handler = getCacheHandler();
-  await handler.set(key, data, { revalidate: revalidateSeconds, tags: Array.isArray(tags) ? tags : [] });
+async function __isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+  return __sharedIsrSet(
+    key,
+    data,
+    revalidateSeconds,
+    Array.isArray(tags) ? tags : [],
+    expireSeconds
+  );
 }
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -7883,6 +7874,7 @@ async function buildPageElements(route, params, routePath, pageRequest) {
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
+const __expireTime = 31536000;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
@@ -8838,6 +8830,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params,
         requestUrl: request.url,
         revalidateSearchParams: url.searchParams,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         runInRevalidationContext: async function(renderFn) {
@@ -8889,6 +8882,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params: makeThenableParams(params),
         reportRequestError: _reportRequestError,
         request,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         setHeadersAccessPhase,
@@ -8996,6 +8990,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       isrRscKey: __isrRscKey,
       isrSet: __isrSet,
       mountedSlotsHeader: __mountedSlotsHeader,
+      expireSeconds: __expireTime,
       revalidateSeconds,
       renderFreshPageForCache: async function() {
         // Re-render the page to produce fresh HTML + RSC data for the cache
@@ -9266,6 +9261,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         }
       },
     },
+    expireSeconds: __expireTime,
     revalidateSeconds,
     mountedSlotsHeader: __mountedSlotsHeader,
     renderErrorBoundaryResponse(renderErr) {
@@ -9476,9 +9472,10 @@ import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
 import { buildPageCacheTags } from "<ROOT>/packages/vinext/src/server/implicit-tags.js";
-import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
+import { _consumeRequestScopedCacheLife } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from "<ROOT>/packages/vinext/src/shims/request-context.js";
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from "<ROOT>/packages/vinext/src/shims/root-params.js";
+import { isrGet as __sharedIsrGet, isrSet as __sharedIsrSet } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from "<ROOT>/packages/vinext/src/routing/route-trie.js";
 // Import server-only state module to register ALS-backed accessors.
@@ -9522,24 +9519,17 @@ function __clearRequestContext() {
   // setNavigationContext(null) already clears root params internally
 }
 
-// ISR cache is disabled in dev mode — every request re-renders fresh,
-// matching Next.js dev behavior. Cache-Control headers are still emitted
-// based on export const revalidate for testing purposes.
-// Production ISR uses the MemoryCacheHandler (or configured KV handler).
-//
-// These helpers are inlined instead of imported from isr-cache.js because
-// the virtual RSC entry module runs in the RSC Vite environment which
-// cannot use dynamic imports at the module-evaluation level for server-only
-// modules, and direct imports must use the pre-computed absolute paths.
 async function __isrGet(key) {
-  const handler = getCacheHandler();
-  const result = await handler.get(key);
-  if (!result || !result.value) return null;
-  return { value: result, isStale: result.cacheState === "stale" };
+  return __sharedIsrGet(key);
 }
-async function __isrSet(key, data, revalidateSeconds, tags) {
-  const handler = getCacheHandler();
-  await handler.set(key, data, { revalidate: revalidateSeconds, tags: Array.isArray(tags) ? tags : [] });
+async function __isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+  return __sharedIsrSet(
+    key,
+    data,
+    revalidateSeconds,
+    Array.isArray(tags) ? tags : [],
+    expireSeconds
+  );
 }
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -10222,6 +10212,7 @@ async function buildPageElements(route, params, routePath, pageRequest) {
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
+const __expireTime = 31536000;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
@@ -11174,6 +11165,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params,
         requestUrl: request.url,
         revalidateSearchParams: url.searchParams,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         runInRevalidationContext: async function(renderFn) {
@@ -11225,6 +11217,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params: makeThenableParams(params),
         reportRequestError: _reportRequestError,
         request,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         setHeadersAccessPhase,
@@ -11332,6 +11325,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       isrRscKey: __isrRscKey,
       isrSet: __isrSet,
       mountedSlotsHeader: __mountedSlotsHeader,
+      expireSeconds: __expireTime,
       revalidateSeconds,
       renderFreshPageForCache: async function() {
         // Re-render the page to produce fresh HTML + RSC data for the cache
@@ -11602,6 +11596,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         }
       },
     },
+    expireSeconds: __expireTime,
     revalidateSeconds,
     mountedSlotsHeader: __mountedSlotsHeader,
     renderErrorBoundaryResponse(renderErr) {
@@ -11812,9 +11807,10 @@ import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-response.js";
 import { buildPageCacheTags } from "<ROOT>/packages/vinext/src/server/implicit-tags.js";
-import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
+import { _consumeRequestScopedCacheLife } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from "<ROOT>/packages/vinext/src/shims/request-context.js";
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from "<ROOT>/packages/vinext/src/shims/root-params.js";
+import { isrGet as __sharedIsrGet, isrSet as __sharedIsrSet } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from "<ROOT>/packages/vinext/src/routing/route-trie.js";
 // Import server-only state module to register ALS-backed accessors.
@@ -11858,24 +11854,17 @@ function __clearRequestContext() {
   // setNavigationContext(null) already clears root params internally
 }
 
-// ISR cache is disabled in dev mode — every request re-renders fresh,
-// matching Next.js dev behavior. Cache-Control headers are still emitted
-// based on export const revalidate for testing purposes.
-// Production ISR uses the MemoryCacheHandler (or configured KV handler).
-//
-// These helpers are inlined instead of imported from isr-cache.js because
-// the virtual RSC entry module runs in the RSC Vite environment which
-// cannot use dynamic imports at the module-evaluation level for server-only
-// modules, and direct imports must use the pre-computed absolute paths.
 async function __isrGet(key) {
-  const handler = getCacheHandler();
-  const result = await handler.get(key);
-  if (!result || !result.value) return null;
-  return { value: result, isStale: result.cacheState === "stale" };
+  return __sharedIsrGet(key);
 }
-async function __isrSet(key, data, revalidateSeconds, tags) {
-  const handler = getCacheHandler();
-  await handler.set(key, data, { revalidate: revalidateSeconds, tags: Array.isArray(tags) ? tags : [] });
+async function __isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+  return __sharedIsrSet(
+    key,
+    data,
+    revalidateSeconds,
+    Array.isArray(tags) ? tags : [],
+    expireSeconds
+  );
 }
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -12780,6 +12769,7 @@ function matchesMiddleware(pathname, matcher, request, i18nConfig) {
 const __basePath = "";
 const __trailingSlash = false;
 const __i18nConfig = null;
+const __expireTime = 31536000;
 const __configRedirects = [];
 const __configRewrites = {"beforeFiles":[],"afterFiles":[],"fallback":[]};
 const __configHeaders = [];
@@ -13870,6 +13860,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params,
         requestUrl: request.url,
         revalidateSearchParams: url.searchParams,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         runInRevalidationContext: async function(renderFn) {
@@ -13921,6 +13912,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         params: makeThenableParams(params),
         reportRequestError: _reportRequestError,
         request,
+        expireSeconds: __expireTime,
         revalidateSeconds,
         routePattern: route.pattern,
         setHeadersAccessPhase,
@@ -14028,6 +14020,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       isrRscKey: __isrRscKey,
       isrSet: __isrSet,
       mountedSlotsHeader: __mountedSlotsHeader,
+      expireSeconds: __expireTime,
       revalidateSeconds,
       renderFreshPageForCache: async function() {
         // Re-render the page to produce fresh HTML + RSC data for the cache
@@ -14298,6 +14291,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         }
       },
     },
+    expireSeconds: __expireTime,
     revalidateSeconds,
     mountedSlotsHeader: __mountedSlotsHeader,
     renderErrorBoundaryResponse(renderErr) {
@@ -14559,13 +14553,13 @@ const i18nConfig = null;
 const buildId = "test-build-id";
 
 // Full resolved config for production server (embedded at build time)
-export const vinextConfig = {"basePath":"","trailingSlash":false,"redirects":[{"source":"/old-about","destination":"/about","permanent":true},{"source":"/repeat-redirect/:id","destination":"/docs/:id/:id","permanent":false},{"source":"/redirect-before-middleware-rewrite","destination":"/about","permanent":false},{"source":"/redirect-before-middleware-response","destination":"/about","permanent":false}],"rewrites":{"beforeFiles":[{"source":"/before-rewrite","destination":"/about"},{"source":"/repeat-rewrite/:id","destination":"/docs/:id/:id"},{"source":"/mw-gated-before","has":[{"type":"cookie","key":"mw-before-user"}],"destination":"/about"}],"afterFiles":[{"source":"/after-rewrite","destination":"/about"},{"source":"/mw-gated-rewrite","has":[{"type":"cookie","key":"mw-user"}],"destination":"/about"}],"fallback":[{"source":"/fallback-rewrite","destination":"/about"}]},"headers":[{"source":"/api/(.*)","headers":[{"key":"X-Custom-Header","value":"vinext"}]},{"source":"/about","has":[{"type":"cookie","key":"logged-in"}],"headers":[{"key":"X-Auth-Only-Header","value":"1"}]},{"source":"/about","missing":[{"type":"cookie","key":"logged-in"}],"headers":[{"key":"X-Guest-Only-Header","value":"1"}]},{"source":"/ssr","headers":[{"key":"Vary","value":"Accept-Language"}]},{"source":"/headers-before-middleware-rewrite","headers":[{"key":"X-Rewrite-Source-Header","value":"1"}]}],"i18n":null,"images":{}};
+export const vinextConfig = {"basePath":"","trailingSlash":false,"redirects":[{"source":"/old-about","destination":"/about","permanent":true},{"source":"/repeat-redirect/:id","destination":"/docs/:id/:id","permanent":false},{"source":"/redirect-before-middleware-rewrite","destination":"/about","permanent":false},{"source":"/redirect-before-middleware-response","destination":"/about","permanent":false}],"rewrites":{"beforeFiles":[{"source":"/before-rewrite","destination":"/about"},{"source":"/repeat-rewrite/:id","destination":"/docs/:id/:id"},{"source":"/mw-gated-before","has":[{"type":"cookie","key":"mw-before-user"}],"destination":"/about"}],"afterFiles":[{"source":"/after-rewrite","destination":"/about"},{"source":"/mw-gated-rewrite","has":[{"type":"cookie","key":"mw-user"}],"destination":"/about"}],"fallback":[{"source":"/fallback-rewrite","destination":"/about"}]},"headers":[{"source":"/api/(.*)","headers":[{"key":"X-Custom-Header","value":"vinext"}]},{"source":"/about","has":[{"type":"cookie","key":"logged-in"}],"headers":[{"key":"X-Auth-Only-Header","value":"1"}]},{"source":"/about","missing":[{"type":"cookie","key":"logged-in"}],"headers":[{"key":"X-Guest-Only-Header","value":"1"}]},{"source":"/ssr","headers":[{"key":"Vary","value":"Accept-Language"}]},{"source":"/headers-before-middleware-rewrite","headers":[{"key":"X-Rewrite-Source-Header","value":"1"}]}],"expireTime":31536000,"i18n":null,"images":{}};
 
 function isrGet(key) {
   return __sharedIsrGet(key);
 }
-function isrSet(key, data, revalidateSeconds, tags) {
-  return __sharedIsrSet(key, data, revalidateSeconds, tags);
+function isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+  return __sharedIsrSet(key, data, revalidateSeconds, tags, expireSeconds);
 }
 function triggerBackgroundRegeneration(key, renderFn) {
   return __sharedTriggerBackgroundRegeneration(key, renderFn);
@@ -15018,6 +15012,7 @@ async function _renderPage(request, url, manifest, middlewareHeaders) {
         isrCacheKey,
         isrGet,
         isrSet,
+        expireSeconds: vinextConfig.expireTime,
         pageModule,
         params,
         query,
@@ -15090,6 +15085,7 @@ async function _renderPage(request, url, manifest, middlewareHeaders) {
         getSSRHeadHTML: typeof getSSRHeadHTML === "function" ? getSSRHeadHTML : undefined,
         gsspRes,
         isrCacheKey,
+        expireSeconds: vinextConfig.expireTime,
         isrRevalidateSeconds,
         isrSet,
         i18n: {

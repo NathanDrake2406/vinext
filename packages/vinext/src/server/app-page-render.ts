@@ -43,10 +43,12 @@ type AppPageCacheSetter = (
   data: CachedAppPageValue,
   revalidateSeconds: number,
   tags: string[],
+  expireSeconds?: number,
 ) => Promise<void>;
 
 type AppPageRequestCacheLife = {
   revalidate?: number;
+  expire?: number;
 };
 
 type RenderAppPageLifecycleOptions = {
@@ -78,6 +80,7 @@ type RenderAppPageLifecycleOptions = {
   params: Record<string, unknown>;
   probeLayoutAt: (layoutIndex: number) => unknown;
   probePage: () => unknown;
+  expireSeconds?: number;
   revalidateSeconds: number | null;
   renderErrorBoundaryResponse: (error: unknown) => Promise<Response | null>;
   renderLayoutSpecialError: (
@@ -164,6 +167,7 @@ export async function renderAppPageLifecycle(
   });
 
   let revalidateSeconds = options.revalidateSeconds;
+  let expireSeconds = options.expireSeconds;
   const rscCapture = teeAppPageRscStreamForCapture(
     rscStream,
     options.isProduction &&
@@ -183,6 +187,7 @@ export async function renderAppPageLifecycle(
       isForceDynamic: options.isForceDynamic,
       isForceStatic: options.isForceStatic,
       isProduction: options.isProduction,
+      expireSeconds,
       revalidateSeconds,
     });
     const rscResponse = buildAppPageRscResponse(rscForResponse, {
@@ -210,6 +215,7 @@ export async function renderAppPageLifecycle(
       isrRscKey: options.isrRscKey,
       isrSet: options.isrSet,
       mountedSlotsHeader: options.mountedSlotsHeader,
+      expireSeconds,
       revalidateSeconds: revalidateSeconds ?? 0,
       waitUntil(promise) {
         options.waitUntil?.(promise);
@@ -280,6 +286,9 @@ export async function renderAppPageLifecycle(
   if (requestCacheLife?.revalidate !== undefined && revalidateSeconds === null) {
     revalidateSeconds = requestCacheLife.revalidate;
   }
+  if (requestCacheLife?.expire !== undefined) {
+    expireSeconds = requestCacheLife.expire;
+  }
 
   // Defer clearRequestContext() until the HTML stream is fully consumed by the
   // HTTP layer. The RSC/SSR pipeline is lazy — Server Components execute while
@@ -298,6 +307,7 @@ export async function renderAppPageLifecycle(
     isForceDynamic: options.isForceDynamic,
     isForceStatic: options.isForceStatic,
     isProduction: options.isProduction,
+    expireSeconds,
     revalidateSeconds,
   });
   const htmlResponseTiming = buildResponseTiming({
@@ -326,6 +336,7 @@ export async function renderAppPageLifecycle(
       isrHtmlKey: options.isrHtmlKey,
       isrRscKey: options.isrRscKey,
       isrSet: options.isrSet,
+      expireSeconds,
       revalidateSeconds: revalidateSeconds ?? 0,
       waitUntil(cachePromise) {
         options.waitUntil?.(cachePromise);

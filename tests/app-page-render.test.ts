@@ -257,6 +257,7 @@ describe("app page render lifecycle", () => {
       expect.objectContaining({ kind: "APP_PAGE" }),
       60,
       ["_N_T_/posts/post"],
+      undefined,
     );
     expect(consumeDynamicUsage).toHaveBeenCalledTimes(2);
   });
@@ -303,6 +304,7 @@ describe("app page render lifecycle", () => {
       expect.objectContaining({ kind: "APP_PAGE" }),
       30,
       ["_N_T_/posts/post"],
+      undefined,
     );
     expect(common.isrSet).toHaveBeenNthCalledWith(
       2,
@@ -310,6 +312,7 @@ describe("app page render lifecycle", () => {
       expect.objectContaining({ kind: "APP_PAGE" }),
       30,
       ["_N_T_/posts/post"],
+      undefined,
     );
   });
 

@@ -86,6 +86,8 @@ type KVCacheEntry = {
   lastModified: number;
   /** Absolute timestamp (ms) after which the entry is "stale" (but still served). */
   revalidateAt: number | null;
+  /** Absolute timestamp (ms) after which the entry must block on fresh render. */
+  expireAt?: number | null;
 };
 
 /** Key prefix for tag invalidation timestamps. */
@@ -122,6 +124,27 @@ function readStringArrayField(ctx: Record<string, unknown> | undefined, field: s
   const value = ctx?.[field];
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string");
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordField(
+  ctx: Record<string, unknown> | undefined,
+  field: string,
+): Record<string, unknown> | undefined {
+  const value = ctx?.[field];
+  return isUnknownRecord(value) ? value : undefined;
+}
+
+function readCacheControlNumberField(
+  ctx: Record<string, unknown> | undefined,
+  field: string,
+): number | undefined {
+  const cacheControl = readRecordField(ctx, "cacheControl");
+  const value = cacheControl?.[field] ?? ctx?.[field];
+  return typeof value === "number" ? value : undefined;
 }
 
 function validUniqueTags(tags: string[]): string[] {
@@ -220,7 +243,12 @@ export class KVCacheHandler implements CacheHandler {
       return null;
     }
 
-    // Check time-based expiry — return stale with cacheState
+    if (entry.expireAt !== undefined && entry.expireAt !== null && Date.now() > entry.expireAt) {
+      this._deleteInBackground(kvKey);
+      return null;
+    }
+
+    // Check time-based revalidation — return stale with cacheState
     if (entry.revalidateAt !== null && Date.now() > entry.revalidateAt) {
       return {
         lastModified: entry.lastModified,
@@ -311,21 +339,22 @@ export class KVCacheHandler implements CacheHandler {
     // Resolve effective revalidate — data overrides ctx.
     // revalidate: 0 means "don't cache", so skip storage entirely.
     let effectiveRevalidate: number | undefined;
-    if (ctx) {
-      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-      const revalidate = (ctx as any).cacheControl?.revalidate ?? (ctx as any).revalidate;
-      if (typeof revalidate === "number") {
-        effectiveRevalidate = revalidate;
-      }
-    }
+    let effectiveExpire: number | undefined;
+    effectiveRevalidate = readCacheControlNumberField(ctx, "revalidate");
+    effectiveExpire = readCacheControlNumberField(ctx, "expire");
     if (data && "revalidate" in data && typeof data.revalidate === "number") {
       effectiveRevalidate = data.revalidate;
     }
     if (effectiveRevalidate === 0) return Promise.resolve();
 
+    const now = Date.now();
     const revalidateAt =
       typeof effectiveRevalidate === "number" && effectiveRevalidate > 0
-        ? Date.now() + effectiveRevalidate * 1000
+        ? now + effectiveRevalidate * 1000
+        : null;
+    const expireAt =
+      typeof effectiveExpire === "number" && effectiveExpire > 0
+        ? now + effectiveExpire * 1000
         : null;
 
     // Prepare entry — convert ArrayBuffers to base64 for JSON storage
@@ -334,8 +363,9 @@ export class KVCacheHandler implements CacheHandler {
     const entry: KVCacheEntry = {
       value: serializable,
       tags,
-      lastModified: Date.now(),
+      lastModified: now,
       revalidateAt,
+      expireAt,
     };
 
     // KV TTL is decoupled from the revalidation period.
@@ -505,6 +535,9 @@ function validateCacheEntry(raw: unknown): KVCacheEntry | null {
   if (typeof obj.lastModified !== "number") return null;
   if (!Array.isArray(obj.tags)) return null;
   if (obj.revalidateAt !== null && typeof obj.revalidateAt !== "number") return null;
+  if (obj.expireAt !== undefined && obj.expireAt !== null && typeof obj.expireAt !== "number") {
+    return null;
+  }
 
   // value must be null or a valid cache value object with a known kind
   if (obj.value !== null) {
