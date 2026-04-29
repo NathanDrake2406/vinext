@@ -221,7 +221,7 @@ describe("app page boundary render helpers", () => {
   it("preserves middleware headers on HTTP access fallback HTML responses", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageHttpAccessFallback({
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
       ...common,
       matchedParams: { slug: "missing" },
       middlewareContext: createMiddlewareContext(),
@@ -272,7 +272,7 @@ describe("app page boundary render helpers", () => {
   it("preserves middleware headers on HTTP access fallback RSC responses", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageHttpAccessFallback({
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
       ...common,
       isRscRequest: true,
       matchedParams: { slug: "missing" },
@@ -344,7 +344,7 @@ describe("app page boundary render helpers", () => {
   it("preserves middleware headers on error boundary responses", async () => {
     const common = createCommonOptions();
 
-    const response = await renderAppPageErrorBoundary({
+    const response = await renderAppPageErrorBoundary<TestModule>({
       ...common,
       error: new Error("secret"),
       matchedParams: { slug: "post" },
