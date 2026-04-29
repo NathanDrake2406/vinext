@@ -789,6 +789,26 @@ describe("App Router integration", () => {
     expect(html).toContain('content="noindex"');
   });
 
+  it("forbidden() thrown from a layout uses the forbidden boundary", async () => {
+    // Ported from Next.js: test/e2e/app-dir/forbidden/basic/forbidden-basic.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/forbidden/basic/forbidden-basic.test.ts
+    const res = await fetch(`${baseUrl}/nextjs-compat/layout-forbidden-boundary`);
+    expect(res.status).toBe(403);
+    const html = await res.text();
+    expect(html).toContain("403 - Forbidden");
+    expect(html).not.toContain("404 - Page Not Found");
+  });
+
+  it("unauthorized() thrown from a layout uses the unauthorized boundary", async () => {
+    // Ported from Next.js: test/e2e/app-dir/unauthorized/basic/unauthorized-basic.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/unauthorized/basic/unauthorized-basic.test.ts
+    const res = await fetch(`${baseUrl}/nextjs-compat/layout-unauthorized-boundary`);
+    expect(res.status).toBe(401);
+    const html = await res.text();
+    expect(html).toContain("401 - Unauthorized");
+    expect(html).not.toContain("404 - Page Not Found");
+  });
+
   // ── Client hook usage without "use client" (#834) ──
   // When a Server Component imports a client-only hook from next/navigation
   // without the "use client" directive, vinext should surface a clear error
@@ -4571,10 +4591,16 @@ describe("generateRscEntry ISR code generation", () => {
   it("generated code threads collected fetch tags into page ISR writes", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
     expect(code).toContain("getCollectedFetchTags");
-    expect(code).toContain("function __pageCacheTags(pathname, extraTags)");
-    expect(code).toContain('const tags = [pathname, "_N_T_" + pathname]');
+    expect(code).toContain("buildPageCacheTags");
     expect(code).toContain(
-      "const __pageTags = __pageCacheTags(cleanPathname, getCollectedFetchTags())",
+      'buildPageCacheTags(cleanPathname, [], route.routeSegments, route.routeHandler ? "route" : "page")',
+    );
+    expect(code).toContain(
+      "const __buildRouteHandlerPageCacheTags = function(pathname, extraTags) {",
+    );
+    expect(code).toContain("buildPageCacheTags: __buildRouteHandlerPageCacheTags");
+    expect(code).toContain(
+      'const __pageTags = buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page")',
     );
     expect(code).toContain("Array.isArray(tags) ? tags : []");
   });
@@ -4837,7 +4863,9 @@ describe("generateRscEntry ISR code generation", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
     expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
     expect(code).toContain("getPageTags() {");
-    expect(code).toContain("return __pageCacheTags(cleanPathname, getCollectedFetchTags())");
+    expect(code).toContain(
+      'return buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page")',
+    );
     // Background regen still writes fresh RSC bytes directly.
     expect(code).toContain("rscData: __freshRscData");
   });

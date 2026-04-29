@@ -1,7 +1,22 @@
 import { describe, expect, it } from "vite-plus/test";
-import { resolveAppPageHead } from "../packages/vinext/src/server/app-page-head.js";
+import {
+  collectAppPageSearchParams,
+  resolveAppPageHead,
+} from "../packages/vinext/src/server/app-page-head.js";
+import type { AppPageParams } from "../packages/vinext/src/server/app-page-boundary.js";
 
 describe("app page head resolution", () => {
+  it("collects repeated search params into a null-prototype object", () => {
+    const { hasSearchParams, pageSearchParams } = collectAppPageSearchParams(
+      new URLSearchParams("__proto__=safe&tag=a&tag=b"),
+    );
+
+    expect(hasSearchParams).toBe(true);
+    expect(Object.getPrototypeOf(pageSearchParams)).toBe(null);
+    expect(Reflect.get(pageSearchParams, "__proto__")).toBe("safe");
+    expect(pageSearchParams.tag).toEqual(["a", "b"]);
+  });
+
   it("preserves query keys that collide with Object prototype names", async () => {
     let generatedSearchParams: Record<string, unknown> | undefined;
 
@@ -159,6 +174,99 @@ describe("app page head resolution", () => {
       title: "Root",
     });
     expect(nestedLayoutParamsSeen).toEqual([{}]);
+  });
+
+  it("passes scoped params to layout metadata and full params/searchParams to page metadata", async () => {
+    // Ported from Next.js: test/e2e/app-dir/layout-params/layout-params.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/layout-params/layout-params.test.ts
+    const layoutParamCalls: AppPageParams[] = [];
+    let pageParams: AppPageParams | null = null;
+    let pageSearchParams: Record<string, string | string[]> = {};
+
+    const rootLayout = {
+      async generateMetadata({ params }: { params: Promise<AppPageParams> }) {
+        layoutParamCalls.push(await params);
+        return { title: "root" };
+      },
+    };
+    const categoryLayout = {
+      async generateMetadata({ params }: { params: Promise<AppPageParams> }) {
+        layoutParamCalls.push(await params);
+        return { description: "category" };
+      },
+    };
+    const page = {
+      async generateMetadata({
+        params,
+        searchParams,
+      }: {
+        params: Promise<AppPageParams>;
+        searchParams: Promise<Record<string, string | string[]>>;
+      }) {
+        pageParams = await params;
+        pageSearchParams = await searchParams;
+        return { keywords: ["page"] };
+      },
+    };
+
+    const result = await resolveAppPageHead<Record<string, unknown>>({
+      layoutModules: [rootLayout, categoryLayout],
+      layoutTreePositions: [1, 2],
+      metadataRoutes: [],
+      pageModule: page,
+      params: { category: "books", id: "dune" },
+      routePath: "/shop/[category]/[id]",
+      routeSegments: ["shop", "[category]", "[id]"],
+      searchParams: new URLSearchParams("tag=a&tag=b&q=hello"),
+    });
+
+    expect(layoutParamCalls).toEqual([{}, { category: "books" }]);
+    expect(pageParams).toEqual({ category: "books", id: "dune" });
+    expect({ ...pageSearchParams }).toEqual({
+      q: "hello",
+      tag: ["a", "b"],
+    });
+    expect(result.hasSearchParams).toBe(true);
+    expect(result.metadata).toMatchObject({
+      description: "category",
+      keywords: ["page"],
+    });
+  });
+
+  it("bubbles layout metadata errors", async () => {
+    await expect(
+      resolveAppPageHead<Record<string, unknown>>({
+        layoutModules: [
+          {
+            generateMetadata() {
+              throw new Error("layout metadata failed");
+            },
+          },
+        ],
+        metadataRoutes: [],
+        params: {},
+        routePath: "/",
+        routeSegments: [],
+      }),
+    ).rejects.toThrow("layout metadata failed");
+  });
+
+  it("bubbles layout viewport errors", async () => {
+    await expect(
+      resolveAppPageHead<Record<string, unknown>>({
+        layoutModules: [
+          {
+            generateViewport() {
+              throw new Error("layout viewport failed");
+            },
+          },
+        ],
+        metadataRoutes: [],
+        params: {},
+        routePath: "/",
+        routeSegments: [],
+      }),
+    ).rejects.toThrow("layout viewport failed");
   });
 
   it("includes active parallel route metadata in resolved head", async () => {

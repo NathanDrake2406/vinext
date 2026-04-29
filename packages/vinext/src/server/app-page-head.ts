@@ -8,6 +8,7 @@ import {
 } from "../shims/metadata.js";
 import { applyFileBasedMetadata } from "./file-based-metadata.js";
 import type { AppPageParams } from "./app-page-boundary.js";
+import { resolveAppPageSegmentParams } from "./app-page-params.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
 
 type AppPageSearchParams = Record<string, string | string[]>;
@@ -69,6 +70,11 @@ type ResolveAppPageHeadResult = {
   viewport: Viewport;
 };
 
+type AppPageSearchParamsCollection = {
+  hasSearchParams: boolean;
+  pageSearchParams: AppPageSearchParams;
+};
+
 type ResolvedParallelRouteHead = {
   metadataResults: (Metadata | null)[];
   metadataSources: AppPageHeadSource[];
@@ -101,10 +107,9 @@ function isPresent<T>(value: T | null | undefined): value is T {
   return value !== null && value !== undefined;
 }
 
-function createAppPageSearchParams(searchParams: URLSearchParams | null | undefined): {
-  hasSearchParams: boolean;
-  pageSearchParams: AppPageSearchParams;
-} {
+export function collectAppPageSearchParams(
+  searchParams: URLSearchParams | null | undefined,
+): AppPageSearchParamsCollection {
   const pageSearchParams: AppPageSearchParams = Object.create(null);
   let hasSearchParams = false;
 
@@ -167,34 +172,6 @@ function createLayoutInputs<TModule extends AppPageHeadModule>(
   return layoutInputs;
 }
 
-function getParamNameForSegment(segment: string): string | null {
-  if (segment.startsWith("[[...") && segment.endsWith("]]")) {
-    return segment.slice(5, -2);
-  }
-  if (segment.startsWith("[...") && segment.endsWith("]")) {
-    return segment.slice(4, -1);
-  }
-  if (segment.startsWith("[") && segment.endsWith("]")) {
-    return segment.slice(1, -1);
-  }
-  return null;
-}
-
-function filterParamsForRouteSegments(
-  params: AppPageParams,
-  routeSegments: readonly string[],
-  segmentCount: number,
-): AppPageParams {
-  const scopedParams: AppPageParams = {};
-  for (const segment of routeSegments.slice(0, segmentCount)) {
-    const paramName = getParamNameForSegment(segment);
-    if (paramName && params[paramName] !== undefined) {
-      scopedParams[paramName] = params[paramName];
-    }
-  }
-  return scopedParams;
-}
-
 async function resolveLayoutMetadata<TModule extends AppPageHeadModule>(
   layoutInputs: readonly AppPageHeadLayout<TModule>[],
   params: AppPageParams,
@@ -205,21 +182,19 @@ async function resolveLayoutMetadata<TModule extends AppPageHeadModule>(
 
   for (const layoutInput of layoutInputs) {
     const parentForLayout = accumulatedMetadata;
-    const layoutParams = filterParamsForRouteSegments(
-      params,
+    const layoutParams = resolveAppPageSegmentParams(
       routeSegments,
       layoutInput.treePosition,
+      params,
     );
     const metadataPromise = resolveModuleMetadata(
       layoutInput.module,
       layoutParams,
       undefined,
       parentForLayout,
-    ).catch((error) => {
-      console.error("[vinext] Layout generateMetadata() failed:", error);
-      return null;
-    });
+    );
     layoutMetadataPromises.push(metadataPromise);
+    void metadataPromise.catch(() => null);
 
     accumulatedMetadata = metadataPromise.then(async (metadataResult) => {
       if (metadataResult) {
@@ -227,6 +202,7 @@ async function resolveLayoutMetadata<TModule extends AppPageHeadModule>(
       }
       return parentForLayout;
     });
+    void accumulatedMetadata.catch(() => null);
   }
 
   return Promise.all(layoutMetadataPromises);
@@ -239,15 +215,12 @@ async function resolveLayoutViewport<TModule extends AppPageHeadModule>(
 ): Promise<(Viewport | null)[]> {
   return Promise.all(
     layoutInputs.map((layoutInput) => {
-      const layoutParams = filterParamsForRouteSegments(
-        params,
+      const layoutParams = resolveAppPageSegmentParams(
         routeSegments,
         layoutInput.treePosition,
+        params,
       );
-      return resolveModuleViewport(layoutInput.module, layoutParams).catch((error) => {
-        console.error("[vinext] Layout generateViewport() failed:", error);
-        return null;
-      });
+      return resolveModuleViewport(layoutInput.module, layoutParams);
     }),
   );
 }
@@ -275,10 +248,7 @@ async function resolveParallelRouteHead<TModule extends AppPageHeadModule>(
       params,
       undefined,
       accumulatedMetadata,
-    ).catch((error) => {
-      console.error("[vinext] Parallel route layout generateMetadata() failed:", error);
-      return null;
-    });
+    );
     metadataResults.push(layoutMetadata);
     metadataSources.push({ metadata: layoutMetadata, routeSegments });
     if (layoutMetadata) {
@@ -286,12 +256,10 @@ async function resolveParallelRouteHead<TModule extends AppPageHeadModule>(
       accumulatedMetadata = parentForLayout.then(async (parentMetadata) =>
         mergeMetadata([parentMetadata, layoutMetadata]),
       );
+      void accumulatedMetadata.catch(() => null);
     }
 
-    const layoutViewport = await resolveModuleViewport(layoutModule, params).catch((error) => {
-      console.error("[vinext] Parallel route layout generateViewport() failed:", error);
-      return null;
-    });
+    const layoutViewport = await resolveModuleViewport(layoutModule, params);
     viewportResults.push(layoutViewport);
   }
 
@@ -319,16 +287,18 @@ export async function resolveAppPageHead<TModule extends AppPageHeadModule>(
   const layoutTreePositions = options.layoutTreePositions ?? [];
   const layoutInputs = createLayoutInputs(options.layoutModules, layoutTreePositions);
   const layoutSourcePositions = layoutInputs.map((input) => input.treePosition);
-  const { hasSearchParams, pageSearchParams } = createAppPageSearchParams(options.searchParams);
+  const { hasSearchParams, pageSearchParams } = collectAppPageSearchParams(options.searchParams);
   const layoutMetadataPromise = resolveLayoutMetadata(layoutInputs, options.params, routeSegments);
   const layoutViewportPromise = resolveLayoutViewport(layoutInputs, options.params, routeSegments);
 
   const layoutMetadataResultsForParent = layoutMetadataPromise.then((metadataResults) =>
     metadataResults.filter(isPresent),
   );
+  void layoutMetadataResultsForParent.catch(() => null);
   const pageParentPromise = layoutMetadataResultsForParent.then((metadataResults) =>
     metadataResults.length > 0 ? mergeMetadata(metadataResults) : {},
   );
+  void pageParentPromise.catch(() => null);
   const pageMetadataPromise = options.pageModule
     ? resolveModuleMetadata(options.pageModule, options.params, pageSearchParams, pageParentPromise)
     : Promise.resolve(null);

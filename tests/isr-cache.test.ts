@@ -17,6 +17,7 @@ import {
   getRevalidateDuration,
   triggerBackgroundRegeneration,
 } from "../packages/vinext/src/server/isr-cache.js";
+import { buildPageCacheTags } from "../packages/vinext/src/server/implicit-tags.js";
 import { runWithExecutionContext } from "../packages/vinext/src/shims/request-context.js";
 import {
   createRequestContext,
@@ -327,26 +328,17 @@ describe("triggerBackgroundRegeneration", () => {
 describe("revalidatePath type parameter", () => {
   let handler: MemoryCacheHandler;
 
-  /**
-   * Mirrors `__pageCacheTags` in app-rsc-entry.ts — keep in sync.
-   */
-  function deriveImplicitTags(pathname: string): string[] {
-    const tags = ["_N_T_/layout"];
-    const segments = pathname.split("/");
-    let built = "";
-    for (let i = 1; i < segments.length; i++) {
-      if (segments[i]) {
-        built += "/" + segments[i];
-        tags.push(`_N_T_${built}/layout`);
-      }
-    }
-    tags.push(`_N_T_${built}/page`);
-    return tags;
+  function staticRouteSegments(pathname: string): string[] {
+    return pathname.split("/").filter(Boolean);
   }
 
   /** Helper: store a FETCH cache entry with path + implicit hierarchy tags. */
-  async function seedEntry(path: string, body: string): Promise<void> {
-    const tags = [path, `_N_T_${path}`, ...deriveImplicitTags(path)];
+  async function seedEntry(
+    path: string,
+    body: string,
+    routeSegments = staticRouteSegments(path),
+  ): Promise<void> {
+    const tags = buildPageCacheTags(path, [], routeSegments, "page");
     const value: CachedFetchValue = {
       kind: "FETCH",
       data: { headers: {}, body, url: path },
@@ -406,6 +398,21 @@ describe("revalidatePath type parameter", () => {
     expect(await handler.get("entry:/about")).toBeNull();
     // /about/team should remain
     expect(await handler.get("entry:/about/team")).not.toBeNull();
+  });
+
+  it("uses route pattern tags for typed dynamic route invalidation", async () => {
+    await seedEntry("/blog/hello", "hello", ["blog", "[slug]"]);
+
+    await revalidatePath("/blog/hello", "layout");
+    expect(await handler.get("entry:/blog/hello")).not.toBeNull();
+
+    await revalidatePath("/blog/[slug]", "layout");
+    expect(await handler.get("entry:/blog/hello")).toBeNull();
+
+    await seedEntry("/blog/hello", "hello", ["blog", "[slug]"]);
+
+    await revalidatePath("/blog/hello");
+    expect(await handler.get("entry:/blog/hello")).toBeNull();
   });
 
   it("handles deeply nested children under a layout prefix", async () => {
