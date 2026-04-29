@@ -77,7 +77,10 @@ const appRouteHandlerResponsePath = resolveEntryPath(
   "../server/app-route-handler-response.js",
   import.meta.url,
 );
-const routeTriePath = resolveEntryPath("../routing/route-trie.js", import.meta.url);
+const appRscRouteMatchingPath = resolveEntryPath(
+  "../server/app-rsc-route-matching.js",
+  import.meta.url,
+);
 const metadataRoutesPath = resolveEntryPath("../server/metadata-routes.js", import.meta.url);
 const rootParamsShimPath = resolveEntryPath("../shims/root-params.js", import.meta.url);
 const errorCausePath = resolveEntryPath("../utils/error-cause.js", import.meta.url);
@@ -279,10 +282,10 @@ ${slotEntries.join(",\n")}
   // without filesystem access (e.g., Cloudflare Workers).
   //
   // For metadata routes in dynamic segments (e.g., /blog/[slug]/opengraph-image),
-  // generate patternParts so the runtime can use matchPattern() instead of strict
-  // equality — the same matching used for intercept routes.
+  // generate patternParts so the runtime can use shared route-pattern matching
+  // instead of strict equality — the same matching used for intercept routes.
   const metaRouteEntries = effectiveMetaRoutes.map((mr) => {
-    // Convert dynamic segments in servedUrl to matchPattern format.
+    // Convert dynamic segments in servedUrl to the shared route-pattern format.
     // Keep in sync with routing/app-router.ts patternParts generation.
     //   [param]       → :param
     //   [...param]    → :param+
@@ -441,7 +444,10 @@ import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from ${JSON.stringify(requestContextShimPath)};
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from ${JSON.stringify(rootParamsShimPath)};
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
-import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from ${JSON.stringify(routeTriePath)};
+import {
+  createAppRscRouteMatcher as __createAppRscRouteMatcher,
+  matchAppRscRoutePattern as __matchAppRscRoutePattern,
+} from ${JSON.stringify(appRscRouteMatchingPath)};
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
 import { runWithRequestContext as _runWithUnifiedCtx, createRequestContext as _createUnifiedCtx } from "vinext/unified-request-context";
@@ -612,11 +618,11 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
     }
   : undefined;
 
-// Normalize null-prototype objects from matchPattern() into thenable objects
+// Normalize null-prototype objects from route-pattern matching into thenable objects
 // that work both as Promises (for Next.js 15+ async params) and as plain
 // objects with synchronous property access (for pre-15 code like params.id).
 //
-// matchPattern() uses Object.create(null), producing objects without
+// route-pattern matching uses Object.create(null), producing objects without
 // Object.prototype. The RSC serializer rejects these. Spreading ({...obj})
 // restores a normal prototype. Object.assign onto the Promise preserves
 // synchronous property access (params.id, params.slug) that existing
@@ -805,7 +811,7 @@ function __VINEXT_CLASS_REASONS(routeIdx) {
 const routes = [
 ${routeEntries.join(",\n")}
 ];
-const _routeTrie = _buildRouteTrie(routes);
+const __routeMatcher = __createAppRscRouteMatcher(routes);
 
 const metadataRoutes = [
 ${metaRouteEntries.join(",\n")}
@@ -905,13 +911,7 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
 }
 
 function matchRoute(url) {
-  const pathname = url.split("?")[0];
-  let normalizedUrl = pathname === "/" ? "/" : pathname.replace(/\\/$/, "");
-   // NOTE: Do NOT decodeURIComponent here. The caller is responsible for decoding
-   // the pathname exactly once at the request entry point. Decoding again here
-   // would cause inconsistent path matching between middleware and routing.
-  const urlParts = normalizedUrl.split("/").filter(Boolean);
-  return _trieMatch(_routeTrie, urlParts);
+  return __routeMatcher.matchRoute(url);
 }
 
 function __createStaticFileSignal(pathname, _mwCtx) {
@@ -929,86 +929,12 @@ function __createStaticFileSignal(pathname, _mwCtx) {
   });
 }
 
-// matchPattern is kept for findIntercept (linear scan over small interceptLookup array).
-function matchPattern(urlParts, patternParts) {
-  const params = Object.create(null);
-  for (let i = 0; i < patternParts.length; i++) {
-    const pp = patternParts[i];
-    if (pp.endsWith("+")) {
-      if (i !== patternParts.length - 1) return null;
-      const paramName = pp.slice(1, -1);
-      const remaining = urlParts.slice(i);
-      if (remaining.length === 0) return null;
-      params[paramName] = remaining;
-      return params;
-    }
-    if (pp.endsWith("*")) {
-      if (i !== patternParts.length - 1) return null;
-      const paramName = pp.slice(1, -1);
-      params[paramName] = urlParts.slice(i);
-      return params;
-    }
-    if (pp.startsWith(":")) {
-      if (i >= urlParts.length) return null;
-      params[pp.slice(1)] = urlParts[i];
-      continue;
-    }
-    if (i >= urlParts.length || urlParts[i] !== pp) return null;
-  }
-  if (urlParts.length !== patternParts.length) return null;
-  return params;
-}
-
-function mergeMatchedParams(sourceParams, targetParams) {
-  return Object.assign(Object.create(null), sourceParams, targetParams);
-}
-
-// Build a global intercepting route lookup for RSC navigation.
-// Maps target URL patterns to { sourceRouteIndex, slotKey, interceptPage, interceptLayouts, params }.
-const interceptLookup = [];
-for (let ri = 0; ri < routes.length; ri++) {
-  const r = routes[ri];
-  if (!r.slots) continue;
-  for (const [slotKey, slotMod] of Object.entries(r.slots)) {
-    if (!slotMod.intercepts) continue;
-    for (const intercept of slotMod.intercepts) {
-      interceptLookup.push({
-        sourceRouteIndex: ri,
-        slotKey,
-        targetPattern: intercept.targetPattern,
-        targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
-        interceptLayouts: intercept.interceptLayouts,
-        page: intercept.page,
-        params: intercept.params,
-      });
-    }
-  }
-}
-
 /**
  * Check if a pathname matches any intercepting route.
  * Returns the match info or null.
  */
 function findIntercept(pathname, sourcePathname = null) {
-  const urlParts = pathname.split("/").filter(Boolean);
-  for (const entry of interceptLookup) {
-    const params = matchPattern(urlParts, entry.targetPatternParts);
-    if (params !== null) {
-      let sourceParams = Object.create(null);
-      if (sourcePathname !== null) {
-        const sourceRoute = routes[entry.sourceRouteIndex];
-        const sourceParts = sourcePathname.split("/").filter(Boolean);
-        const matchedSourceParams = sourceRoute
-          ? matchPattern(sourceParts, sourceRoute.patternParts)
-          : null;
-        if (matchedSourceParams !== null) {
-          sourceParams = matchedSourceParams;
-        }
-      }
-      return { ...entry, matchedParams: mergeMatchedParams(sourceParams, params) };
-    }
-  }
-  return null;
+  return __routeMatcher.findIntercept(pathname, sourcePathname);
 }
 
 async function buildPageElements(route, params, routePath, pageRequest) {
@@ -1738,7 +1664,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     var _metaParams = null;
     if (metaRoute.patternParts) {
       var _metaUrlParts = cleanPathname.split("/").filter(Boolean);
-      _metaParams = matchPattern(_metaUrlParts, metaRoute.patternParts);
+      _metaParams = __matchAppRscRoutePattern(_metaUrlParts, metaRoute.patternParts);
       if (!_metaParams) continue;
     } else if (cleanPathname !== metaRoute.servedUrl) {
       continue;
