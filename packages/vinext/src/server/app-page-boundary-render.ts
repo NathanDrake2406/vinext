@@ -2,20 +2,11 @@ import { Fragment, createElement, type ComponentType, type ReactNode } from "rea
 import { buildClientHookErrorMessage } from "../shims/client-hook-error.js";
 import { ErrorBoundary } from "../shims/error-boundary.js";
 import { LayoutSegmentProvider } from "../shims/layout-segment-context.js";
-import {
-  MetadataHead,
-  ViewportHead,
-  mergeMetadata,
-  mergeViewport,
-  resolveModuleMetadata,
-  resolveModuleViewport,
-  type Metadata,
-  type Viewport,
-} from "../shims/metadata.js";
+import { MetadataHead, ViewportHead } from "../shims/metadata.js";
 import type { AppPageFontPreload } from "./app-page-execution.js";
 import type { AppPageMiddlewareContext } from "./app-page-response.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
-import { applyFileBasedMetadata } from "./file-based-metadata.js";
+import { resolveAppPageHead } from "./app-page-head.js";
 import {
   renderAppPageBoundaryResponse,
   resolveAppPageErrorBoundary,
@@ -113,97 +104,10 @@ type RenderAppPageErrorBoundaryOptions<TModule extends AppPageModule = AppPageMo
   sanitizeErrorForClient: (error: Error) => Error;
 } & AppPageBoundaryRenderCommonOptions<TModule>;
 
-type ResolveAppPageLayoutHeadOptions = {
-  fallbackOnFileMetadataError?: boolean;
-};
-
 function getDefaultExport<TModule extends AppPageModule>(
   module: TModule | null | undefined,
 ): AppPageComponent | null {
   return module?.default ?? null;
-}
-
-async function resolveAppPageLayoutHead<TModule extends AppPageModule>(
-  layoutModules: readonly (TModule | null | undefined)[],
-  params: AppPageParams,
-  routePath: string,
-  metadataRoutes: MetadataFileRoute[],
-  route?: AppPageBoundaryRoute<TModule> | null,
-  options?: ResolveAppPageLayoutHeadOptions,
-): Promise<{ metadata: Metadata | null; viewport: Viewport }> {
-  const filteredLayouts = layoutModules.filter(Boolean) as TModule[];
-  const layoutMetadataPromises: Promise<Metadata | null>[] = [];
-  let accumulatedMetadata = Promise.resolve<Metadata>({});
-
-  for (let index = 0; index < filteredLayouts.length; index++) {
-    const parentForLayout = accumulatedMetadata;
-    const metadataPromise = resolveModuleMetadata(
-      filteredLayouts[index],
-      params,
-      undefined,
-      parentForLayout,
-    ).catch((error) => {
-      console.error("[vinext] Layout generateMetadata() failed:", error);
-      return null;
-    });
-    layoutMetadataPromises.push(metadataPromise);
-    accumulatedMetadata = metadataPromise.then(async (metadataResult) => {
-      if (metadataResult) {
-        return mergeMetadata([await parentForLayout, metadataResult]);
-      }
-      return parentForLayout;
-    });
-  }
-
-  const [metadataResults, viewportResults] = await Promise.all([
-    Promise.all(layoutMetadataPromises),
-    Promise.all(
-      filteredLayouts.map((layoutModule) =>
-        resolveModuleViewport(layoutModule, params).catch((error) => {
-          console.error("[vinext] Layout generateViewport() failed:", error);
-          return null;
-        }),
-      ),
-    ),
-  ]);
-
-  const metadataList = metadataResults.filter(Boolean) as Metadata[];
-  const viewportList = viewportResults.filter(Boolean) as Viewport[];
-
-  const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
-  const routeSegments = route?.routeSegments ?? [];
-  const layoutTreePositions = route?.layoutTreePositions ?? [];
-  const metadataSources = metadataResults.map((metadata, index) => ({
-    routeSegments: routeSegments.slice(0, layoutTreePositions[index] ?? 0),
-    metadata,
-  }));
-  let metadata = resolvedMetadataBase;
-
-  try {
-    metadata = await applyFileBasedMetadata(
-      resolvedMetadataBase,
-      routePath,
-      params,
-      metadataRoutes,
-      {
-        routeSegments,
-        metadataSources,
-      },
-    );
-  } catch (error) {
-    if (!options?.fallbackOnFileMetadataError) {
-      throw error;
-    }
-    console.error(
-      `[vinext] File-based metadata resolution failed while rendering error boundary for ${routePath}:`,
-      error,
-    );
-  }
-
-  return {
-    metadata,
-    viewport: mergeViewport(viewportList),
-  };
 }
 
 function wrapRenderedBoundaryElement<TModule extends AppPageModule>(
@@ -360,13 +264,14 @@ export async function renderAppPageHttpAccessFallback<TModule extends AppPageMod
   }
 
   const layoutModules = options.layoutModules ?? options.route?.layouts ?? options.rootLayouts;
-  const { metadata, viewport } = await resolveAppPageLayoutHead(
+  const { metadata, viewport } = await resolveAppPageHead({
     layoutModules,
-    options.matchedParams,
-    options.route?.pattern ?? new URL(options.requestUrl).pathname,
-    options.metadataRoutes,
-    options.route,
-  );
+    layoutTreePositions: options.route?.layoutTreePositions,
+    metadataRoutes: options.metadataRoutes,
+    params: options.matchedParams,
+    routePath: options.route?.pattern ?? new URL(options.requestUrl).pathname,
+    routeSegments: options.route?.routeSegments,
+  });
 
   const headElements: ReactNode[] = [
     createElement("meta", { charSet: "utf-8", key: "charset" }),
@@ -420,14 +325,15 @@ export async function renderAppPageErrorBoundary<TModule extends AppPageModule>(
   const matchedParams = options.matchedParams ?? options.route?.params ?? {};
   const layoutModules = options.route?.layouts ?? options.rootLayouts;
   const pathname = new URL(options.requestUrl).pathname;
-  const { metadata, viewport } = await resolveAppPageLayoutHead(
+  const { metadata, viewport } = await resolveAppPageHead({
+    fallbackOnFileMetadataError: true,
     layoutModules,
-    matchedParams,
-    options.route?.pattern ?? pathname,
-    options.metadataRoutes,
-    options.route,
-    { fallbackOnFileMetadataError: true },
-  );
+    layoutTreePositions: options.route?.layoutTreePositions,
+    metadataRoutes: options.metadataRoutes,
+    params: matchedParams,
+    routePath: options.route?.pattern ?? pathname,
+    routeSegments: options.route?.routeSegments,
+  });
 
   const headElements: ReactNode[] = [createElement("meta", { charSet: "utf-8", key: "charset" })];
   if (metadata) {

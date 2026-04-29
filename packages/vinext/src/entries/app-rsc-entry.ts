@@ -66,7 +66,7 @@ const appPageBoundaryRenderPath = resolveEntryPath(
   "../server/app-page-boundary-render.js",
   import.meta.url,
 );
-const fileBasedMetadataPath = resolveEntryPath("../server/file-based-metadata.js", import.meta.url);
+const appPageHeadPath = resolveEntryPath("../server/app-page-head.js", import.meta.url);
 const appElementsPath = resolveEntryPath("../server/app-elements.js", import.meta.url);
 const appPageRouteWiringPath = resolveEntryPath(
   "../server/app-page-route-wiring.js",
@@ -361,8 +361,6 @@ import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
 import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { NextRequest, NextFetchEvent } from "next/server";
-import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
-import { applyFileBasedMetadata } from ${JSON.stringify(fileBasedMetadataPath)};
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
 import { handleMetadataRouteRequest as __handleMetadataRouteRequest } from ${JSON.stringify(metadataRouteResponsePath)};
@@ -398,6 +396,9 @@ import {
   renderAppPageErrorBoundary as __renderAppPageErrorBoundary,
   renderAppPageHttpAccessFallback as __renderAppPageHttpAccessFallback,
 } from ${JSON.stringify(appPageBoundaryRenderPath)};
+import {
+  resolveAppPageHead as __resolveAppPageHead,
+} from ${JSON.stringify(appPageHeadPath)};
 import {
   APP_INTERCEPTION_CONTEXT_KEY as __APP_INTERCEPTION_CONTEXT_KEY,
   createAppPayloadRouteId as __createAppPayloadRouteId,
@@ -1030,104 +1031,21 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     };
   }
 
-  // Resolve metadata and viewport from layouts and page.
-  //
-  // generateMetadata() accepts a "parent" (Promise of ResolvedMetadata) as its
-  // second argument (Next.js 13+). The parent resolves to the accumulated
-  // merged metadata of all ancestor segments, enabling patterns like:
-  //
-  //   const previousImages = (await parent).openGraph?.images ?? []
-  //   return { openGraph: { images: ['/new-image.jpg', ...previousImages] } }
-  //
-  // Next.js uses an eager-execution-with-serial-resolution approach:
-  // all generateMetadata() calls are kicked off concurrently, but each
-  // segment's "parent" promise resolves only after the preceding segment's
-  // metadata is resolved and merged. This preserves concurrency for I/O-bound
-  // work while guaranteeing that parent data is available when needed.
-  //
-  // We build a chain: layoutParentPromises[0] = Promise.resolve({}) (no parent
-  // for root layout), layoutParentPromises[i+1] resolves to merge(layouts[0..i]),
-  // and pageParentPromise resolves to merge(all layouts).
-  //
-  // IMPORTANT: Layout metadata errors are swallowed (.catch(() => null)) because
-  // a layout's generateMetadata() failing should not crash the page.
-  // Page metadata errors are NOT swallowed — if the page's generateMetadata()
-  // throws, the error propagates out of buildPageElement() so the caller can
-  // route it to the nearest error.tsx boundary (or global-error.tsx).
-  const layoutMods = route.layouts.filter(Boolean);
-
-  // Convert URLSearchParams → plain object for page generateMetadata() and
-  // pageProps.searchParams. Built before the layout loop so the page metadata
-  // call (below) and pageProps can reference the same object.
-  // NOTE: Layouts do NOT receive searchParams in generateMetadata() — only
-  // pages do. This matches Next.js behavior (resolve-metadata.ts:777).
-  const spObj = Object.create(null);
-  let hasSearchParams = false;
-  if (searchParams && searchParams.forEach) {
-    searchParams.forEach(function(v, k) {
-      hasSearchParams = true;
-      if (k in spObj) {
-        spObj[k] = Array.isArray(spObj[k]) ? spObj[k].concat(v) : [spObj[k], v];
-      } else {
-        spObj[k] = v;
-      }
-    });
-  }
-
-  // Build the parent promise chain and kick off metadata resolution in one pass.
-  // Each layout module is called exactly once. layoutMetaPromises[i] is the
-  // promise for layout[i]'s own metadata result.
-  //
-  // All calls are kicked off immediately (concurrent I/O), but each layout's
-  // "parent" promise only resolves after the preceding layout's metadata is done.
-  const layoutMetaPromises = [];
-  let accumulatedMetaPromise = Promise.resolve({});
-  for (let i = 0; i < layoutMods.length; i++) {
-    const parentForThisLayout = accumulatedMetaPromise;
-    // Kick off this layout's metadata resolution now (concurrent with others).
-    const metaPromise = resolveModuleMetadata(layoutMods[i], params, undefined, parentForThisLayout)
-      .catch((err) => { console.error("[vinext] Layout generateMetadata() failed:", err); return null; });
-    layoutMetaPromises.push(metaPromise);
-    // Advance accumulator: resolves to merged(layouts[0..i]) once layout[i] is done.
-    accumulatedMetaPromise = metaPromise.then(async (result) =>
-      result ? mergeMetadata([await parentForThisLayout, result]) : await parentForThisLayout
-    );
-  }
-  // Page's parent is the fully-accumulated layout metadata.
-  const pageParentPromise = accumulatedMetaPromise;
-
-  const [layoutMetaResults, layoutVpResults, pageMeta, pageVp] = await Promise.all([
-    Promise.all(layoutMetaPromises),
-    Promise.all(layoutMods.map((mod) => resolveModuleViewport(mod, params).catch((err) => { console.error("[vinext] Layout generateViewport() failed:", err); return null; }))),
-    route.page ? resolveModuleMetadata(route.page, params, spObj, pageParentPromise) : Promise.resolve(null),
-    route.page ? resolveModuleViewport(route.page, params) : Promise.resolve(null),
-  ]);
-
-  const metadataList = [...layoutMetaResults.filter(Boolean), ...(pageMeta ? [pageMeta] : [])];
-  const viewportList = [...layoutVpResults.filter(Boolean), ...(pageVp ? [pageVp] : [])];
-  const resolvedMetadataBase = metadataList.length > 0 ? mergeMetadata(metadataList) : null;
-  const metadataSources = layoutMetaResults.map(function(result, index) {
-    const treePosition = route.layoutTreePositions[index] ?? 0;
-    return {
-      routeSegments: route.routeSegments.slice(0, treePosition),
-      metadata: result,
-    };
-  });
-  metadataSources.push({
-    routeSegments: route.routeSegments,
-    metadata: pageMeta,
-  });
-  const resolvedMetadata = await applyFileBasedMetadata(
-    resolvedMetadataBase,
-    route.pattern,
-    params,
+  const {
+    hasSearchParams,
+    metadata: resolvedMetadata,
+    pageSearchParams,
+    viewport: resolvedViewport,
+  } = await __resolveAppPageHead({
+    layoutModules: route.layouts,
+    layoutTreePositions: route.layoutTreePositions,
     metadataRoutes,
-    {
-      routeSegments: route.routeSegments,
-      metadataSources,
-    },
-  );
-  const resolvedViewport = mergeViewport(viewportList);
+    pageModule: route.page,
+    params,
+    routePath: route.pattern,
+    routeSegments: route.routeSegments,
+    searchParams,
+  });
 
   // Build the route tree from the leaf page, then delegate the boundary/layout/
   // template/segment wiring to a typed runtime helper so the generated entry
@@ -1137,7 +1055,7 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     // Always provide searchParams prop when the URL object is available, even
     // when the query string is empty -- pages that do "await searchParams" need
     // it to be a thenable rather than undefined.
-    pageProps.searchParams = makeThenableParams(spObj);
+    pageProps.searchParams = makeThenableParams(pageSearchParams);
     // If the URL has query parameters, mark the page as dynamic.
     // In Next.js, only accessing the searchParams prop signals dynamic usage,
     // but a Proxy-based approach doesn't work here because React's RSC debug
