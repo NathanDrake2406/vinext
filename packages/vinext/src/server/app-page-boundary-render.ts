@@ -184,6 +184,38 @@ function resolveAppPageBoundaryRootLayoutTreePath<TModule extends AppPageModule>
   return null;
 }
 
+function resolveHttpAccessFallbackHeadRouteSegments<TModule extends AppPageModule>(
+  route: AppPageBoundaryRoute<TModule> | null | undefined,
+  layoutModules: readonly (TModule | null | undefined)[],
+): readonly string[] | undefined {
+  if (!route?.routeSegments) {
+    return undefined;
+  }
+
+  if (!route.layouts || layoutModules.length >= route.layouts.length) {
+    return route.routeSegments;
+  }
+
+  const lastIncludedLayoutIndex = layoutModules.length - 1;
+  if (lastIncludedLayoutIndex < 0) {
+    return [];
+  }
+
+  const segmentCount = route.layoutTreePositions?.[lastIncludedLayoutIndex] ?? 0;
+  return route.routeSegments.slice(0, segmentCount);
+}
+
+function resolveHttpAccessFallbackHeadLayoutTreePositions<TModule extends AppPageModule>(
+  route: AppPageBoundaryRoute<TModule> | null | undefined,
+  layoutModules: readonly (TModule | null | undefined)[],
+): readonly number[] | null | undefined {
+  if (!route?.layouts || layoutModules.length >= route.layouts.length) {
+    return route?.layoutTreePositions;
+  }
+
+  return route.layoutTreePositions?.slice(0, layoutModules.length);
+}
+
 function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
   options: AppPageBoundaryRscPayloadOptions<TModule>,
 ): AppElements {
@@ -264,13 +296,17 @@ export async function renderAppPageHttpAccessFallback<TModule extends AppPageMod
   }
 
   const layoutModules = options.layoutModules ?? options.route?.layouts ?? options.rootLayouts;
+  const routeSegments = resolveHttpAccessFallbackHeadRouteSegments(options.route, layoutModules);
   const { metadata, viewport } = await resolveAppPageHead({
     layoutModules,
-    layoutTreePositions: options.route?.layoutTreePositions,
+    layoutTreePositions: resolveHttpAccessFallbackHeadLayoutTreePositions(
+      options.route,
+      layoutModules,
+    ),
     metadataRoutes: options.metadataRoutes,
     params: options.matchedParams,
     routePath: options.route?.pattern ?? new URL(options.requestUrl).pathname,
-    routeSegments: options.route?.routeSegments,
+    routeSegments,
   });
 
   const headElements: ReactNode[] = [

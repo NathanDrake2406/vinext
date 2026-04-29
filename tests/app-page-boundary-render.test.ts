@@ -218,6 +218,50 @@ describe("app page boundary render helpers", () => {
     expect(html).toContain('content="noindex"');
   });
 
+  it("does not inject child route file metadata into layout-level HTTP access fallbacks", async () => {
+    const common = createCommonOptions();
+    const metadataRoutes: MetadataFileRoute[] = [
+      {
+        type: "opengraph-image",
+        isDynamic: false,
+        filePath: "/tmp/app/posts/[slug]/opengraph-image.png",
+        routePrefix: "/posts/[slug]",
+        routeSegments: ["posts", "[slug]"],
+        servedUrl: "/posts/-/opengraph-image.png",
+        contentType: "image/png",
+        headData: {
+          kind: "openGraph",
+          href: "/posts/-/opengraph-image.png?hash",
+          type: "image/png",
+          width: 1200,
+          height: 630,
+        },
+      },
+    ];
+
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
+      ...common,
+      layoutModules: [rootLayoutModule],
+      matchedParams: { slug: "missing" },
+      metadataRoutes,
+      route: {
+        layoutTreePositions: [0, 1],
+        layouts: [rootLayoutModule, leafLayoutModule],
+        notFound: notFoundModule,
+        params: { slug: "missing" },
+        pattern: "/posts/[slug]",
+        routeSegments: ["posts", "[slug]"],
+      },
+      statusCode: 404,
+    });
+
+    expect(response?.status).toBe(404);
+
+    const html = await response?.text();
+    expect(html).toContain('content="Root layout description"');
+    expect(html).not.toContain("opengraph-image");
+  });
+
   it("preserves middleware headers on HTTP access fallback HTML responses", async () => {
     const common = createCommonOptions();
 

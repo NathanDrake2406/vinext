@@ -339,6 +339,35 @@ describe("applyFileBasedMetadata", () => {
     ]);
   });
 
+  it("applies metadata from an active parallel slot page", async () => {
+    const routes: MetadataFileRoute[] = [
+      {
+        type: "opengraph-image",
+        isDynamic: false,
+        filePath: "/tmp/app/parallel/@parallel/opengraph-image.png",
+        routePrefix: "/parallel",
+        routeSegments: ["parallel", "@parallel"],
+        servedUrl: "/parallel/opengraph-image-slot.png",
+        contentType: "image/png",
+        headData: { ...ogHeadData, href: "/parallel/opengraph-image-slot.png?hash" },
+      },
+    ];
+
+    const result = await applyFileBasedMetadata(null, "/parallel", {}, routes, {
+      routeSegments: ["parallel"],
+      metadataSources: [{ routeSegments: ["parallel"], metadata: null }],
+    });
+
+    expect(result?.openGraph?.images).toEqual([
+      {
+        url: "/parallel/opengraph-image-slot.png?hash",
+        type: "image/png",
+        width: 1200,
+        height: 630,
+      },
+    ]);
+  });
+
   it("drops generateImageMetadata ids that are not path-segment safe", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const routes: MetadataFileRoute[] = [

@@ -88,6 +88,25 @@ function routeSegmentsApply(
   return true;
 }
 
+function removeParallelRouteSegments(routeSegments: readonly string[]): string[] {
+  return routeSegments.filter((segment) => !segment.startsWith("@"));
+}
+
+function routeSegmentsApplyWithParallelSlots(
+  routeSegments: readonly string[],
+  routePrefixSegments: readonly string[],
+): boolean {
+  if (routeSegmentsApply(routeSegments, routePrefixSegments)) {
+    return true;
+  }
+
+  const visiblePrefixSegments = removeParallelRouteSegments(routePrefixSegments);
+  return (
+    visiblePrefixSegments.length !== routePrefixSegments.length &&
+    routeSegmentsApply(routeSegments, visiblePrefixSegments)
+  );
+}
+
 function routeSpecificity(route: MetadataFileRoute): number {
   return route.routeSegments?.length ?? routeScore(route.routePrefix);
 }
@@ -137,7 +156,7 @@ function selectDeepestRoutes(
     if (routeSegments && route.routeSegments) {
       // Raw app-tree segments are authoritative when present. Falling back to
       // visible URL prefixes here would reintroduce route-group collisions.
-      if (!routeSegmentsApply(routeSegments, route.routeSegments)) {
+      if (!routeSegmentsApplyWithParallelSlots(routeSegments, route.routeSegments)) {
         continue;
       }
       const currentScore = routeSpecificity(route);
