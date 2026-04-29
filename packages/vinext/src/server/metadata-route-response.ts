@@ -260,7 +260,10 @@ async function callDynamicMetadataRoute(
   }
 
   return new Response(body, {
-    headers: { "Content-Type": route.contentType },
+    headers: {
+      "Content-Type": route.contentType,
+      "Cache-Control": "public, max-age=0, must-revalidate",
+    },
   });
 }
 

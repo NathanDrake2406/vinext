@@ -502,6 +502,8 @@ function iconRouteHasExplicitIconsAtSource(
   options: FileBasedMetadataOptions | undefined,
   fallbackMetadata: Metadata | null,
 ): boolean {
+  // Next suppresses file icon routes when any resolved icons metadata exists.
+  // Social image routes stay segment-scoped instead of using this merged fallback.
   return hasIcons(fallbackMetadata) || hasIcons(getMetadataSourceForRoute(route, options, null));
 }
 
@@ -650,16 +652,10 @@ async function resolveHeadDataList(
   routes: MetadataFileRoute[],
   params: AppPageParams,
 ): Promise<MetadataRouteHeadData[]> {
-  const headDataList: MetadataRouteHeadData[] = [];
-
-  for (const route of routes) {
-    const routeHeadData = await resolveRouteHeadData(route, params);
-    for (const headData of routeHeadData) {
-      headDataList.push(headData);
-    }
-  }
-
-  return headDataList;
+  const headDataList = await Promise.all(
+    routes.map((route) => resolveRouteHeadData(route, params)),
+  );
+  return headDataList.flat();
 }
 
 export async function applyFileBasedMetadata(

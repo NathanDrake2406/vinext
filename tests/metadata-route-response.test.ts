@@ -95,6 +95,30 @@ describe("handleMetadataRouteRequest", () => {
     expect(await response?.text()).toContain("https://example.com/products/0");
   });
 
+  it("sets explicit cache control on generated metadata route responses", async () => {
+    const route = {
+      type: "robots",
+      isDynamic: true,
+      filePath: "/tmp/app/robots.ts",
+      routePrefix: "",
+      routeSegments: [],
+      servedUrl: "/robots.txt",
+      contentType: "text/plain",
+      module: {
+        default: () => ({ rules: { userAgent: "*" } }),
+      },
+    } satisfies MetadataFileRoute;
+
+    const response = await handleMetadataRouteRequest({
+      metadataRoutes: [route],
+      cleanPathname: "/robots.txt",
+      makeThenableParams,
+    });
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+  });
+
   it("throws when generateSitemaps returns an entry without id", async () => {
     const route = {
       type: "sitemap",

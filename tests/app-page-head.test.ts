@@ -128,6 +128,39 @@ describe("app page head resolution", () => {
     expect(pageParentImages).toEqual(["/root-og.png", "/nested-og.png"]);
   });
 
+  it("keeps layout tree positions aligned when layout module slots are empty", async () => {
+    const nestedLayoutParamsSeen: unknown[] = [];
+
+    const rootLayout = {
+      metadata: {
+        title: "Root",
+      },
+    };
+    const nestedLayout = {
+      async generateMetadata(props: { params?: Promise<Record<string, string | string[]>> }) {
+        nestedLayoutParamsSeen.push(await props.params);
+        return {
+          description: "Nested",
+        };
+      },
+    };
+
+    const result = await resolveAppPageHead<Record<string, unknown>>({
+      layoutModules: [rootLayout, null, nestedLayout],
+      layoutTreePositions: [0, 2, 1],
+      metadataRoutes: [],
+      params: { slug: "post" },
+      routePath: "/blog/[slug]",
+      routeSegments: ["blog", "[slug]"],
+    });
+
+    expect(result.metadata).toEqual({
+      description: "Nested",
+      title: "Root",
+    });
+    expect(nestedLayoutParamsSeen).toEqual([{}]);
+  });
+
   it("includes active parallel route metadata in resolved head", async () => {
     const slotParentDescriptions: unknown[] = [];
     const rootLayout = {

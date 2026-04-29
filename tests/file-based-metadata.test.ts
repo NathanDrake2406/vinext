@@ -302,6 +302,61 @@ describe("applyFileBasedMetadata", () => {
     expect(result?.openGraph?.images).toEqual(["/manual-og.png"]);
   });
 
+  it("lets a leaf Twitter file image replace inherited parent Twitter images", async () => {
+    const parentMetadata: Metadata = {
+      twitter: {
+        card: "summary_large_image",
+        images: ["/parent-twitter.png"],
+      },
+    };
+    const leafMetadata: Metadata = { title: "Blog" };
+    const mergedMetadata: Metadata = {
+      title: "Blog",
+      twitter: {
+        card: "summary_large_image",
+        images: ["/parent-twitter.png"],
+      },
+    };
+    const routes: MetadataFileRoute[] = [
+      {
+        type: "twitter-image",
+        isDynamic: false,
+        filePath: "/tmp/app/blog/twitter-image.png",
+        routePrefix: "/blog",
+        routeSegments: ["blog"],
+        servedUrl: "/blog/twitter-image.png",
+        contentType: "image/png",
+        headData: {
+          kind: "twitter",
+          href: "/blog/twitter-image.png?hash",
+          type: "image/png",
+          width: 1200,
+          height: 630,
+          alt: "Twitter alt",
+        },
+      },
+    ];
+
+    const result = await applyFileBasedMetadata(mergedMetadata, "/blog", {}, routes, {
+      routeSegments: ["blog"],
+      metadataSources: [
+        { routeSegments: [], metadata: parentMetadata },
+        { routeSegments: ["blog"], metadata: leafMetadata },
+      ],
+    });
+
+    expect(result?.twitter?.card).toBe("summary_large_image");
+    expect(result?.twitter?.images).toEqual([
+      {
+        alt: "Twitter alt",
+        height: 630,
+        type: "image/png",
+        url: "/blog/twitter-image.png?hash",
+        width: 1200,
+      },
+    ]);
+  });
+
   it("applies file manifest metadata over config manifest metadata", async () => {
     const metadata: Metadata = { manifest: "/manual.webmanifest" };
     const routes: MetadataFileRoute[] = [
@@ -517,6 +572,59 @@ describe("applyFileBasedMetadata", () => {
       {
         type: "image/png",
         url: "/blog/post/opengraph-image/post?hash",
+      },
+    ]);
+  });
+
+  it("injects multiple generateImageMetadata entries", async () => {
+    const routes: MetadataFileRoute[] = [
+      {
+        type: "opengraph-image",
+        isDynamic: true,
+        filePath: "/tmp/app/opengraph-image.tsx",
+        routePrefix: "",
+        routeSegments: [],
+        servedUrl: "/opengraph-image",
+        contentType: "image/png",
+        contentHash: "hash",
+        module: {
+          generateImageMetadata: async () => [
+            {
+              id: "small",
+              alt: "Small image",
+              contentType: "image/jpeg",
+              size: { width: 640, height: 360 },
+            },
+            {
+              id: "large",
+              alt: "Large image",
+              contentType: "image/png",
+              size: { width: 1200, height: 630 },
+            },
+          ],
+        },
+      },
+    ];
+
+    const result = await applyFileBasedMetadata(null, "/", {}, routes, {
+      routeSegments: [],
+      metadataSources: [{ routeSegments: [], metadata: null }],
+    });
+
+    expect(result?.openGraph?.images).toEqual([
+      {
+        alt: "Small image",
+        height: 360,
+        type: "image/jpeg",
+        url: "/opengraph-image/small?hash",
+        width: 640,
+      },
+      {
+        alt: "Large image",
+        height: 630,
+        type: "image/png",
+        url: "/opengraph-image/large?hash",
+        width: 1200,
       },
     ]);
   });

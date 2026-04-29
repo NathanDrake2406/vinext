@@ -19,6 +19,11 @@ type AppPageHeadSource = {
   routeSegments: readonly string[];
 };
 
+type AppPageHeadLayout<TModule extends AppPageHeadModule> = {
+  module: TModule;
+  treePosition: number;
+};
+
 type AppPageHeadParallelRoute<TModule extends AppPageHeadModule = AppPageHeadModule> = {
   layoutModule?: TModule | null;
   layoutModules?: readonly (TModule | null | undefined)[] | null;
@@ -142,6 +147,26 @@ function createMetadataSources(
   return metadataSources;
 }
 
+function createLayoutInputs<TModule extends AppPageHeadModule>(
+  layoutModules: readonly (TModule | null | undefined)[],
+  layoutTreePositions: readonly number[],
+): AppPageHeadLayout<TModule>[] {
+  const layoutInputs: AppPageHeadLayout<TModule>[] = [];
+
+  for (let index = 0; index < layoutModules.length; index++) {
+    const layoutModule = layoutModules[index];
+    if (!isPresent(layoutModule)) {
+      continue;
+    }
+    layoutInputs.push({
+      module: layoutModule,
+      treePosition: layoutTreePositions[index] ?? 0,
+    });
+  }
+
+  return layoutInputs;
+}
+
 function getParamNameForSegment(segment: string): string | null {
   if (segment.startsWith("[[...") && segment.endsWith("]]")) {
     return segment.slice(5, -2);
@@ -171,24 +196,22 @@ function filterParamsForRouteSegments(
 }
 
 async function resolveLayoutMetadata<TModule extends AppPageHeadModule>(
-  layoutModules: readonly TModule[],
+  layoutInputs: readonly AppPageHeadLayout<TModule>[],
   params: AppPageParams,
   routeSegments: readonly string[],
-  layoutTreePositions: readonly number[],
 ): Promise<(Metadata | null)[]> {
   const layoutMetadataPromises: Promise<Metadata | null>[] = [];
   let accumulatedMetadata = Promise.resolve<Metadata>({});
 
-  for (let index = 0; index < layoutModules.length; index++) {
-    const layoutModule = layoutModules[index];
+  for (const layoutInput of layoutInputs) {
     const parentForLayout = accumulatedMetadata;
     const layoutParams = filterParamsForRouteSegments(
       params,
       routeSegments,
-      layoutTreePositions[index] ?? 0,
+      layoutInput.treePosition,
     );
     const metadataPromise = resolveModuleMetadata(
-      layoutModule,
+      layoutInput.module,
       layoutParams,
       undefined,
       parentForLayout,
@@ -210,19 +233,18 @@ async function resolveLayoutMetadata<TModule extends AppPageHeadModule>(
 }
 
 async function resolveLayoutViewport<TModule extends AppPageHeadModule>(
-  layoutModules: readonly TModule[],
+  layoutInputs: readonly AppPageHeadLayout<TModule>[],
   params: AppPageParams,
   routeSegments: readonly string[],
-  layoutTreePositions: readonly number[],
 ): Promise<(Viewport | null)[]> {
   return Promise.all(
-    layoutModules.map((layoutModule, index) => {
+    layoutInputs.map((layoutInput) => {
       const layoutParams = filterParamsForRouteSegments(
         params,
         routeSegments,
-        layoutTreePositions[index] ?? 0,
+        layoutInput.treePosition,
       );
-      return resolveModuleViewport(layoutModule, layoutParams).catch((error) => {
+      return resolveModuleViewport(layoutInput.module, layoutParams).catch((error) => {
         console.error("[vinext] Layout generateViewport() failed:", error);
         return null;
       });
@@ -293,22 +315,13 @@ async function resolveParallelRouteHead<TModule extends AppPageHeadModule>(
 export async function resolveAppPageHead<TModule extends AppPageHeadModule>(
   options: ResolveAppPageHeadOptions<TModule>,
 ): Promise<ResolveAppPageHeadResult> {
-  const layoutModules = options.layoutModules.filter(isPresent);
   const routeSegments = options.routeSegments ?? [];
   const layoutTreePositions = options.layoutTreePositions ?? [];
+  const layoutInputs = createLayoutInputs(options.layoutModules, layoutTreePositions);
+  const layoutSourcePositions = layoutInputs.map((input) => input.treePosition);
   const { hasSearchParams, pageSearchParams } = createAppPageSearchParams(options.searchParams);
-  const layoutMetadataPromise = resolveLayoutMetadata(
-    layoutModules,
-    options.params,
-    routeSegments,
-    layoutTreePositions,
-  );
-  const layoutViewportPromise = resolveLayoutViewport(
-    layoutModules,
-    options.params,
-    routeSegments,
-    layoutTreePositions,
-  );
+  const layoutMetadataPromise = resolveLayoutMetadata(layoutInputs, options.params, routeSegments);
+  const layoutViewportPromise = resolveLayoutViewport(layoutInputs, options.params, routeSegments);
 
   const layoutMetadataResultsForParent = layoutMetadataPromise.then((metadataResults) =>
     metadataResults.filter(isPresent),
@@ -366,7 +379,7 @@ export async function resolveAppPageHead<TModule extends AppPageHeadModule>(
   const metadataSources = createMetadataSources(
     layoutMetadataResults,
     routeSegments,
-    layoutTreePositions,
+    layoutSourcePositions,
     pageMetadata,
     Boolean(options.pageModule),
   );
