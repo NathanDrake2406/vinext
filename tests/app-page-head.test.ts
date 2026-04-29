@@ -2,6 +2,36 @@ import { describe, expect, it } from "vite-plus/test";
 import { resolveAppPageHead } from "../packages/vinext/src/server/app-page-head.js";
 
 describe("app page head resolution", () => {
+  it("preserves query keys that collide with Object prototype names", async () => {
+    let generatedSearchParams: Record<string, unknown> | undefined;
+
+    const page = {
+      async generateMetadata(props: { searchParams?: Promise<Record<string, unknown>> }) {
+        generatedSearchParams = await props.searchParams;
+        return null;
+      },
+    };
+
+    const result = await resolveAppPageHead<Record<string, unknown>>({
+      layoutModules: [],
+      metadataRoutes: [],
+      pageModule: page,
+      params: {},
+      routePath: "/",
+      routeSegments: [],
+      searchParams: new URLSearchParams(
+        "constructor=ctor&toString=stringifier&__proto__=prototype",
+      ),
+    });
+
+    expect(Reflect.get(result.pageSearchParams, "constructor")).toBe("ctor");
+    expect(Reflect.get(result.pageSearchParams, "toString")).toBe("stringifier");
+    expect(Reflect.get(result.pageSearchParams, "__proto__")).toBe("prototype");
+    expect(Reflect.get(generatedSearchParams ?? {}, "constructor")).toBe("ctor");
+    expect(Reflect.get(generatedSearchParams ?? {}, "toString")).toBe("stringifier");
+    expect(Reflect.get(generatedSearchParams ?? {}, "__proto__")).toBe("prototype");
+  });
+
   it("resolves layout and page metadata with parent chaining and page-only search params", async () => {
     const layoutSearchParamsSeen: unknown[] = [];
     const pageParentImages: unknown[] = [];

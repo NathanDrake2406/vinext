@@ -46,7 +46,7 @@ function createAppPageSearchParams(searchParams: URLSearchParams | null | undefi
   hasSearchParams: boolean;
   pageSearchParams: AppPageSearchParams;
 } {
-  const pageSearchParams: AppPageSearchParams = {};
+  const pageSearchParams: AppPageSearchParams = Object.create(null);
   let hasSearchParams = false;
 
   searchParams?.forEach((value, key) => {

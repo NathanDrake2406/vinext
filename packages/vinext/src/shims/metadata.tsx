@@ -14,9 +14,42 @@ import React from "react";
  * Normalize null-prototype objects from matchPattern() into thenable objects.
  * See entries/app-rsc-entry.ts makeThenableParams() for full explanation.
  */
-function makeThenableParams<T extends Record<string, unknown>>(obj: T): Promise<T> & T {
-  const plain = { ...obj } as T;
-  return Object.assign(Promise.resolve(plain), plain);
+function hasParamProperty<T extends Record<string, unknown>>(obj: T, prop: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, prop);
+}
+
+function makeThenableParams<T extends Record<string, unknown>>(obj: T) {
+  const plain = { ...obj };
+  const promise = Promise.resolve(plain);
+
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      if (hasParamProperty(plain, prop)) {
+        return Reflect.get(plain, prop);
+      }
+
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (hasParamProperty(plain, prop)) {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: Reflect.get(plain, prop),
+          writable: true,
+        };
+      }
+
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+    has(target, prop) {
+      return hasParamProperty(plain, prop) || Reflect.has(target, prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(plain);
+    },
+  });
 }
 
 export type Viewport = {

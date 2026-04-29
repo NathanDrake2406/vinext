@@ -293,12 +293,39 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
 //
 // matchPattern() uses Object.create(null), producing objects without
 // Object.prototype. The RSC serializer rejects these. Spreading ({...obj})
-// restores a normal prototype. Object.assign onto the Promise preserves
-// synchronous property access (params.id, params.slug) that existing
-// components and test fixtures rely on.
+// restores a normal prototype. A Proxy preserves synchronous property access
+// (params.id, params.slug) without mutating the Promise object, which would
+// break if user params/searchParams contain keys like "constructor".
 function makeThenableParams(obj) {
   const plain = { ...obj };
-  return Object.assign(Promise.resolve(plain), plain);
+  const promise = Promise.resolve(plain);
+  const hasParamProperty = (prop) => Object.prototype.hasOwnProperty.call(plain, prop);
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      if (hasParamProperty(prop)) {
+        return Reflect.get(plain, prop);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (hasParamProperty(prop)) {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: Reflect.get(plain, prop),
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+    has(target, prop) {
+      return hasParamProperty(prop) || Reflect.has(target, prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(plain);
+    },
+  });
 }
 
 // djb2 hash — matches Next.js's stringHash for digest generation.
@@ -2563,12 +2590,39 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
 //
 // matchPattern() uses Object.create(null), producing objects without
 // Object.prototype. The RSC serializer rejects these. Spreading ({...obj})
-// restores a normal prototype. Object.assign onto the Promise preserves
-// synchronous property access (params.id, params.slug) that existing
-// components and test fixtures rely on.
+// restores a normal prototype. A Proxy preserves synchronous property access
+// (params.id, params.slug) without mutating the Promise object, which would
+// break if user params/searchParams contain keys like "constructor".
 function makeThenableParams(obj) {
   const plain = { ...obj };
-  return Object.assign(Promise.resolve(plain), plain);
+  const promise = Promise.resolve(plain);
+  const hasParamProperty = (prop) => Object.prototype.hasOwnProperty.call(plain, prop);
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      if (hasParamProperty(prop)) {
+        return Reflect.get(plain, prop);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (hasParamProperty(prop)) {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: Reflect.get(plain, prop),
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+    has(target, prop) {
+      return hasParamProperty(prop) || Reflect.has(target, prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(plain);
+    },
+  });
 }
 
 // djb2 hash — matches Next.js's stringHash for digest generation.
@@ -4839,12 +4893,39 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
 //
 // matchPattern() uses Object.create(null), producing objects without
 // Object.prototype. The RSC serializer rejects these. Spreading ({...obj})
-// restores a normal prototype. Object.assign onto the Promise preserves
-// synchronous property access (params.id, params.slug) that existing
-// components and test fixtures rely on.
+// restores a normal prototype. A Proxy preserves synchronous property access
+// (params.id, params.slug) without mutating the Promise object, which would
+// break if user params/searchParams contain keys like "constructor".
 function makeThenableParams(obj) {
   const plain = { ...obj };
-  return Object.assign(Promise.resolve(plain), plain);
+  const promise = Promise.resolve(plain);
+  const hasParamProperty = (prop) => Object.prototype.hasOwnProperty.call(plain, prop);
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      if (hasParamProperty(prop)) {
+        return Reflect.get(plain, prop);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (hasParamProperty(prop)) {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: Reflect.get(plain, prop),
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+    has(target, prop) {
+      return hasParamProperty(prop) || Reflect.has(target, prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(plain);
+    },
+  });
 }
 
 // djb2 hash — matches Next.js's stringHash for digest generation.
@@ -7110,12 +7191,39 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
 //
 // matchPattern() uses Object.create(null), producing objects without
 // Object.prototype. The RSC serializer rejects these. Spreading ({...obj})
-// restores a normal prototype. Object.assign onto the Promise preserves
-// synchronous property access (params.id, params.slug) that existing
-// components and test fixtures rely on.
+// restores a normal prototype. A Proxy preserves synchronous property access
+// (params.id, params.slug) without mutating the Promise object, which would
+// break if user params/searchParams contain keys like "constructor".
 function makeThenableParams(obj) {
   const plain = { ...obj };
-  return Object.assign(Promise.resolve(plain), plain);
+  const promise = Promise.resolve(plain);
+  const hasParamProperty = (prop) => Object.prototype.hasOwnProperty.call(plain, prop);
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      if (hasParamProperty(prop)) {
+        return Reflect.get(plain, prop);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (hasParamProperty(prop)) {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: Reflect.get(plain, prop),
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+    has(target, prop) {
+      return hasParamProperty(prop) || Reflect.has(target, prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(plain);
+    },
+  });
 }
 
 // djb2 hash — matches Next.js's stringHash for digest generation.
@@ -9413,12 +9521,39 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
 //
 // matchPattern() uses Object.create(null), producing objects without
 // Object.prototype. The RSC serializer rejects these. Spreading ({...obj})
-// restores a normal prototype. Object.assign onto the Promise preserves
-// synchronous property access (params.id, params.slug) that existing
-// components and test fixtures rely on.
+// restores a normal prototype. A Proxy preserves synchronous property access
+// (params.id, params.slug) without mutating the Promise object, which would
+// break if user params/searchParams contain keys like "constructor".
 function makeThenableParams(obj) {
   const plain = { ...obj };
-  return Object.assign(Promise.resolve(plain), plain);
+  const promise = Promise.resolve(plain);
+  const hasParamProperty = (prop) => Object.prototype.hasOwnProperty.call(plain, prop);
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      if (hasParamProperty(prop)) {
+        return Reflect.get(plain, prop);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (hasParamProperty(prop)) {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: Reflect.get(plain, prop),
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+    has(target, prop) {
+      return hasParamProperty(prop) || Reflect.has(target, prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(plain);
+    },
+  });
 }
 
 // djb2 hash — matches Next.js's stringHash for digest generation.
@@ -11693,12 +11828,39 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
 //
 // matchPattern() uses Object.create(null), producing objects without
 // Object.prototype. The RSC serializer rejects these. Spreading ({...obj})
-// restores a normal prototype. Object.assign onto the Promise preserves
-// synchronous property access (params.id, params.slug) that existing
-// components and test fixtures rely on.
+// restores a normal prototype. A Proxy preserves synchronous property access
+// (params.id, params.slug) without mutating the Promise object, which would
+// break if user params/searchParams contain keys like "constructor".
 function makeThenableParams(obj) {
   const plain = { ...obj };
-  return Object.assign(Promise.resolve(plain), plain);
+  const promise = Promise.resolve(plain);
+  const hasParamProperty = (prop) => Object.prototype.hasOwnProperty.call(plain, prop);
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      if (hasParamProperty(prop)) {
+        return Reflect.get(plain, prop);
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (hasParamProperty(prop)) {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: Reflect.get(plain, prop),
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+    has(target, prop) {
+      return hasParamProperty(prop) || Reflect.has(target, prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(plain);
+    },
+  });
 }
 
 // djb2 hash — matches Next.js's stringHash for digest generation.

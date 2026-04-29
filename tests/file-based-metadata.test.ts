@@ -394,6 +394,38 @@ describe("applyFileBasedMetadata", () => {
     ]);
   });
 
+  it("passes thenable params with sync properties to generateImageMetadata", async () => {
+    const routes: MetadataFileRoute[] = [
+      {
+        type: "opengraph-image",
+        isDynamic: true,
+        filePath: "/tmp/app/blog/[slug]/opengraph-image.tsx",
+        routePrefix: "/blog/[slug]",
+        routeSegments: ["blog", "[slug]"],
+        servedUrl: "/blog/[slug]/opengraph-image",
+        contentType: "image/png",
+        contentHash: "hash",
+        module: {
+          generateImageMetadata: async (props: {
+            params: Promise<{ slug: string }> & { slug?: string };
+          }) => [{ id: props.params.slug }],
+        },
+      },
+    ];
+
+    const result = await applyFileBasedMetadata(null, "/blog/post", { slug: "post" }, routes, {
+      routeSegments: ["blog", "[slug]"],
+      metadataSources: [{ routeSegments: ["blog", "[slug]"], metadata: null }],
+    });
+
+    expect(result?.openGraph?.images).toEqual([
+      {
+        type: "image/png",
+        url: "/blog/post/opengraph-image/post?hash",
+      },
+    ]);
+  });
+
   it("drops dynamic metadata head URLs when params cannot fill servedUrl segments", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const routes: MetadataFileRoute[] = [
