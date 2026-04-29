@@ -64,4 +64,58 @@ describe("handleMetadataRouteRequest", () => {
     expect(response).toBeNull();
     expect(generateSitemapsReads).toBe(1);
   });
+
+  it("passes generated sitemap id as a promise of the URL string id", async () => {
+    let receivedPromise = false;
+    const route = {
+      type: "sitemap",
+      isDynamic: true,
+      filePath: "/tmp/app/products/sitemap.ts",
+      routePrefix: "/products",
+      routeSegments: ["products"],
+      servedUrl: "/products/sitemap.xml",
+      contentType: "application/xml",
+      module: {
+        generateSitemaps: () => [{ id: 0 }],
+        default: async ({ id }: { id: Promise<string | undefined> }) => {
+          receivedPromise = id instanceof Promise;
+          return [{ url: `https://example.com/products/${await id}` }];
+        },
+      },
+    } satisfies MetadataFileRoute;
+
+    const response = await handleMetadataRouteRequest({
+      metadataRoutes: [route],
+      cleanPathname: "/products/sitemap/0.xml",
+      makeThenableParams,
+    });
+
+    expect(response?.status).toBe(200);
+    expect(receivedPromise).toBe(true);
+    expect(await response?.text()).toContain("https://example.com/products/0");
+  });
+
+  it("throws when generateSitemaps returns an entry without id", async () => {
+    const route = {
+      type: "sitemap",
+      isDynamic: true,
+      filePath: "/tmp/app/products/sitemap.ts",
+      routePrefix: "/products",
+      routeSegments: ["products"],
+      servedUrl: "/products/sitemap.xml",
+      contentType: "application/xml",
+      module: {
+        generateSitemaps: () => [{}],
+        default: () => [{ url: "https://example.com/products/0" }],
+      },
+    } satisfies MetadataFileRoute;
+
+    await expect(
+      handleMetadataRouteRequest({
+        metadataRoutes: [route],
+        cleanPathname: "/products/sitemap/0.xml",
+        makeThenableParams,
+      }),
+    ).rejects.toThrow("id property is required for every item returned from generateSitemaps");
+  });
 });

@@ -4738,6 +4738,44 @@ describe("generateRscEntry ISR code generation", () => {
     expect(code).toContain("interceptLayouts: [mod_");
     expect(code).toContain("interceptLayouts: intercept.interceptLayouts");
     expect(code).toContain("layoutModules: opts.interceptLayouts || null");
+    expect(code).toContain(
+      "resolveActiveParallelRouteHeadInputs as __resolveActiveParallelRouteHeadInputs",
+    );
+    expect(code).toContain("parallelRoutes: __resolveActiveParallelRouteHeadInputs({");
+    expect(code).toContain("interceptPage: opts?.interceptPage ?? null");
+  });
+
+  it("generated code seeds root params around prerender generateStaticParams", () => {
+    const routeWithRootParams: AppRoute = {
+      errorPath: null,
+      forbiddenPath: null,
+      isDynamic: true,
+      layoutErrorPaths: [null],
+      layouts: ["/tmp/test/app/[locale]/layout.tsx"],
+      layoutTreePositions: [1],
+      loadingPath: null,
+      notFoundPath: null,
+      notFoundPaths: [null],
+      pagePath: "/tmp/test/app/[locale]/blog/[slug]/page.tsx",
+      parallelSlots: [],
+      params: ["locale", "slug"],
+      pattern: "/:locale/blog/:slug",
+      patternParts: [":locale", "blog", ":slug"],
+      rootParamNames: ["locale"],
+      routePath: null,
+      routeSegments: ["[locale]", "blog", "[slug]"],
+      templates: [],
+      templateTreePositions: [],
+      unauthorizedPath: null,
+    };
+
+    const code = generateRscEntry("/tmp/test/app", [routeWithRootParams]);
+
+    expect(code).toContain("const rootParamNamesMap = {");
+    expect(code).toContain('"/:locale/blog/:slug": ["locale"]');
+    expect(code).toContain("callAppPrerenderStaticParams as __callAppPrerenderStaticParams");
+    expect(code).toContain("const result = await __callAppPrerenderStaticParams({");
+    expect(code).toContain("rootParamNamesByPattern: rootParamNamesMap");
   });
 
   it("generated code delegates page boundary rendering to typed helpers", () => {

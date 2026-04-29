@@ -501,6 +501,16 @@ function getMetadataServedUrl(
   suffix: string,
   routeBaseName: string,
 ): string {
+  if (
+    isDynamic &&
+    (metaType === "icon" ||
+      metaType === "apple-icon" ||
+      metaType === "opengraph-image" ||
+      metaType === "twitter-image")
+  ) {
+    return withMetadataSuffix(`/${routeBaseName}`, suffix);
+  }
+
   if (isDynamic) {
     return withMetadataSuffix(config.urlPath, suffix);
   }
@@ -521,25 +531,19 @@ function getMetadataServedUrl(
   return withMetadataSuffix(config.urlPath, suffix);
 }
 
-function matchMetadataFileBaseName(
-  metaType: string,
-  staticExtensions: readonly string[],
-  baseName: string,
-  ext: string,
-): string | null {
+function matchMetadataFileBaseName(metaType: string, baseName: string): string | null {
   if (baseName === metaType) {
     return baseName;
   }
 
   if (
-    staticExtensions.includes(ext) &&
-    (metaType === "icon" ||
-      metaType === "apple-icon" ||
-      metaType === "opengraph-image" ||
-      metaType === "twitter-image")
+    metaType === "icon" ||
+    metaType === "apple-icon" ||
+    metaType === "opengraph-image" ||
+    metaType === "twitter-image"
   ) {
     const suffix = baseName.slice(metaType.length);
-    if (/^\d+$/.test(suffix)) {
+    if (/^\d$/.test(suffix)) {
       return baseName;
     }
   }
@@ -595,12 +599,7 @@ export function scanMetadataFiles(appDir: string): MetadataFileRoute[] {
       const ext = fileName.slice(baseName.length);
 
       for (const [metaType, config] of Object.entries(METADATA_FILE_MAP)) {
-        const routeBaseName = matchMetadataFileBaseName(
-          metaType,
-          config.staticExtensions,
-          baseName,
-          ext,
-        );
+        const routeBaseName = matchMetadataFileBaseName(metaType, baseName);
         if (!routeBaseName) continue;
 
         // Check nestability — non-nestable types only at root

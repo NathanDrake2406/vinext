@@ -39,6 +39,9 @@ export default {
         // from disk via `fs`), so knip wouldn't otherwise trace them.
         "src/server/app-browser-entry.ts",
         "src/server/app-ssr-entry.ts",
+        // Runtime helpers imported by generated RSC entry source strings.
+        "src/server/app-page-head.ts",
+        "src/server/app-prerender-static-params.ts",
         // Client-side instrumentation bundle: loaded as a side-effect module
         // by the generated hydration entries (import "vinext/instrumentation-client"),
         // so its public surface (clientInstrumentationHooks, getClientInstrumentationHooks)

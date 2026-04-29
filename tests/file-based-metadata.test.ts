@@ -124,6 +124,39 @@ describe("applyFileBasedMetadata", () => {
     expect(result?.icons).toBe("/manual-icon.png");
   });
 
+  it("keeps inherited explicit icon metadata ahead of leaf file icon routes", async () => {
+    const parentMetadata: Metadata = { icons: "/parent-icon.png" };
+    const leafMetadata: Metadata = { title: "Leaf" };
+    const mergedMetadata: Metadata = { icons: "/parent-icon.png", title: "Leaf" };
+    const routes: MetadataFileRoute[] = [
+      {
+        type: "icon",
+        isDynamic: false,
+        filePath: "/tmp/app/blog/icon.png",
+        routePrefix: "/blog",
+        routeSegments: ["blog"],
+        servedUrl: "/blog/icon.png",
+        contentType: "image/png",
+        headData: {
+          kind: "icon",
+          href: "/blog/icon.png?hash",
+          type: "image/png",
+          sizes: "32x32",
+        },
+      },
+    ];
+
+    const result = await applyFileBasedMetadata(mergedMetadata, "/blog", {}, routes, {
+      routeSegments: ["blog"],
+      metadataSources: [
+        { routeSegments: [], metadata: parentMetadata },
+        { routeSegments: ["blog"], metadata: leafMetadata },
+      ],
+    });
+
+    expect(result?.icons).toBe("/parent-icon.png");
+  });
+
   it("preserves explicit shorthand icon metadata when prepending a favicon", async () => {
     const metadata: Metadata = { icons: "/manual-icon.png" };
     const routes: MetadataFileRoute[] = [

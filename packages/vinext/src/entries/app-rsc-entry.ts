@@ -74,6 +74,10 @@ const appPageRouteWiringPath = resolveEntryPath(
 );
 const appPageRenderPath = resolveEntryPath("../server/app-page-render.js", import.meta.url);
 const appPageResponsePath = resolveEntryPath("../server/app-page-response.js", import.meta.url);
+const appPrerenderStaticParamsPath = resolveEntryPath(
+  "../server/app-prerender-static-params.js",
+  import.meta.url,
+);
 const cspPath = resolveEntryPath("../server/csp.js", import.meta.url);
 const appPageRequestPath = resolveEntryPath("../server/app-page-request.js", import.meta.url);
 const appPageMethodPath = resolveEntryPath("../server/app-page-method.js", import.meta.url);
@@ -398,8 +402,10 @@ import {
   renderAppPageHttpAccessFallback as __renderAppPageHttpAccessFallback,
 } from ${JSON.stringify(appPageBoundaryRenderPath)};
 import {
+  resolveActiveParallelRouteHeadInputs as __resolveActiveParallelRouteHeadInputs,
   resolveAppPageHead as __resolveAppPageHead,
 } from ${JSON.stringify(appPageHeadPath)};
+import { callAppPrerenderStaticParams as __callAppPrerenderStaticParams } from ${JSON.stringify(appPrerenderStaticParamsPath)};
 import {
   APP_INTERCEPTION_CONTEXT_KEY as __APP_INTERCEPTION_CONTEXT_KEY,
   createAppPayloadRouteId as __createAppPayloadRouteId,
@@ -1029,12 +1035,15 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     layoutTreePositions: route.layoutTreePositions,
     metadataRoutes,
     pageModule: route.page,
-    parallelRoutes: Object.values(route.slots ?? {}).map((slot) => ({
-      layoutModule: slot.layout,
-      pageModule: slot.page,
+    parallelRoutes: __resolveActiveParallelRouteHeadInputs({
+      interceptLayouts: opts?.interceptLayouts ?? null,
+      interceptPage: opts?.interceptPage ?? null,
+      interceptParams: opts?.interceptParams ?? null,
+      interceptSlotKey: opts?.interceptSlotKey ?? null,
       params,
       routeSegments: route.routeSegments,
-    })),
+      slots: route.slots,
+    }),
     params,
     routePath: route.pattern,
     routeSegments: route.routeSegments,
@@ -1226,6 +1235,12 @@ ${routes
   )
   .join("\n")}
 };
+const rootParamNamesMap = {
+${routes
+  .filter((r) => r.isDynamic && r.pagePath && r.rootParamNames && r.rootParamNames.length > 0)
+  .map((r) => `  ${JSON.stringify(r.pattern)}: ${JSON.stringify(r.rootParamNames)},`)
+  .join("\n")}
+};
 
 export default async function handler(request, ctx) {
   ${
@@ -1362,7 +1377,12 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       // so user-authored generateStaticParams always receives { params: {} }
       // rather than { params: 5 } or similar if input is malformed.
       const params = (typeof raw === "object" && raw !== null && !Array.isArray(raw)) ? raw : {};
-      const result = await fn({ params });
+      const result = await __callAppPrerenderStaticParams({
+        fn,
+        params,
+        pattern,
+        rootParamNamesByPattern: rootParamNamesMap,
+      });
       return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
     } catch (e) {
       return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });

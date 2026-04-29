@@ -653,6 +653,31 @@ describe("scanMetadataFiles", () => {
     expect(sitemap!.servedUrl).toBe("/sitemap.xml");
   });
 
+  it("discovers one-digit dynamic image metadata variants", () => {
+    createFile("opengraph-image2.tsx");
+    createFile("twitter-image2.tsx");
+    const routes = scanMetadataFiles(tmpDir);
+    const openGraph = routes.find((r) => r.type === "opengraph-image");
+    const twitter = routes.find((r) => r.type === "twitter-image");
+
+    expect(openGraph).toMatchObject({
+      isDynamic: true,
+      servedUrl: "/opengraph-image2",
+    });
+    expect(twitter).toMatchObject({
+      isDynamic: true,
+      servedUrl: "/twitter-image2",
+    });
+  });
+
+  it("ignores multi-digit metadata image variants", () => {
+    createFile("icon10.png");
+    createFile("opengraph-image10.tsx");
+    const routes = scanMetadataFiles(tmpDir);
+
+    expect(routes).toHaveLength(0);
+  });
+
   it("discovers robots.txt at root", () => {
     createFile("robots.txt");
     const routes = scanMetadataFiles(tmpDir);

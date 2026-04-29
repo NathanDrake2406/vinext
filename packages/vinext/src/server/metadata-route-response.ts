@@ -109,18 +109,18 @@ function matchMetadataRoute(
   return cleanPathname === route.servedUrl ? { params: null, imageId: null } : null;
 }
 
-function findGeneratedSitemapEntry(entries: unknown, rawId: string): object | null {
+function findGeneratedSitemapId(entries: unknown, rawId: string): string | null {
   if (!Array.isArray(entries)) {
     return null;
   }
 
   for (const entry of entries) {
-    if (!isObject(entry)) {
-      continue;
+    if (!isObject(entry) || Reflect.get(entry, "id") == null) {
+      throw new Error("id property is required for every item returned from generateSitemaps");
     }
     const id = Reflect.get(entry, "id");
-    if (id !== undefined && String(id) === rawId) {
-      return entry;
+    if (String(id) === rawId) {
+      return rawId;
     }
   }
 
@@ -147,13 +147,13 @@ async function handleGeneratedSitemap(
     return null;
   }
 
-  const matched = findGeneratedSitemapEntry(await generateSitemaps({}), rawId);
-  if (!matched) {
+  const matchedId = findGeneratedSitemapId(await generateSitemaps({}), rawId);
+  if (!matchedId) {
     return new Response("Not Found", { status: 404 });
   }
 
   const result = await defaultExport({
-    id: Reflect.get(matched, "id"),
+    id: Promise.resolve(matchedId),
   });
   if (result instanceof Response) {
     return result;

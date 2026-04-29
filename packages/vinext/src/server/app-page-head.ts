@@ -21,9 +21,27 @@ type AppPageHeadSource = {
 
 type AppPageHeadParallelRoute<TModule extends AppPageHeadModule = AppPageHeadModule> = {
   layoutModule?: TModule | null;
+  layoutModules?: readonly (TModule | null | undefined)[] | null;
   pageModule?: TModule | null;
   params?: AppPageParams | null;
   routeSegments?: readonly string[] | null;
+};
+
+type AppPageHeadSlot<TModule extends AppPageHeadModule = AppPageHeadModule> = {
+  layout?: TModule | null;
+  page?: TModule | null;
+};
+
+type ResolveActiveParallelRouteHeadInputsOptions<
+  TModule extends AppPageHeadModule = AppPageHeadModule,
+> = {
+  interceptLayouts?: readonly (TModule | null | undefined)[] | null;
+  interceptPage?: TModule | null;
+  interceptParams?: AppPageParams | null;
+  interceptSlotKey?: string | null;
+  params: AppPageParams;
+  routeSegments: readonly string[];
+  slots?: Record<string, AppPageHeadSlot<TModule>> | null;
 };
 
 type ResolveAppPageHeadOptions<TModule extends AppPageHeadModule = AppPageHeadModule> = {
@@ -51,6 +69,28 @@ type ResolvedParallelRouteHead = {
   metadataSources: AppPageHeadSource[];
   viewportResults: (Viewport | null)[];
 };
+
+export function resolveActiveParallelRouteHeadInputs<TModule extends AppPageHeadModule>(
+  options: ResolveActiveParallelRouteHeadInputsOptions<TModule>,
+): AppPageHeadParallelRoute<TModule>[] {
+  return Object.entries(options.slots ?? {}).map(([slotKey, slot]) => {
+    if (options.interceptSlotKey === slotKey && options.interceptPage) {
+      return {
+        layoutModules: options.interceptLayouts ?? [],
+        pageModule: options.interceptPage,
+        params: options.interceptParams ?? options.params,
+        routeSegments: options.routeSegments,
+      };
+    }
+
+    return {
+      layoutModules: slot.layout ? [slot.layout] : [],
+      pageModule: slot.page,
+      params: options.params,
+      routeSegments: options.routeSegments,
+    };
+  });
+}
 
 function isPresent<T>(value: T | null | undefined): value is T {
   return value !== null && value !== undefined;
@@ -203,10 +243,13 @@ async function resolveParallelRouteHead<TModule extends AppPageHeadModule>(
   const viewportResults: (Viewport | null)[] = [];
   const metadataSources: AppPageHeadSource[] = [];
   let accumulatedMetadata = parent;
+  const layoutModules = [...(parallelRoute.layoutModules ?? []), parallelRoute.layoutModule].filter(
+    isPresent,
+  );
 
-  if (parallelRoute.layoutModule) {
+  for (const layoutModule of layoutModules) {
     const layoutMetadata = await resolveModuleMetadata(
-      parallelRoute.layoutModule,
+      layoutModule,
       params,
       undefined,
       accumulatedMetadata,
@@ -223,12 +266,10 @@ async function resolveParallelRouteHead<TModule extends AppPageHeadModule>(
       );
     }
 
-    const layoutViewport = await resolveModuleViewport(parallelRoute.layoutModule, params).catch(
-      (error) => {
-        console.error("[vinext] Parallel route layout generateViewport() failed:", error);
-        return null;
-      },
-    );
+    const layoutViewport = await resolveModuleViewport(layoutModule, params).catch((error) => {
+      console.error("[vinext] Parallel route layout generateViewport() failed:", error);
+      return null;
+    });
     viewportResults.push(layoutViewport);
   }
 
@@ -238,19 +279,11 @@ async function resolveParallelRouteHead<TModule extends AppPageHeadModule>(
       params,
       pageSearchParams,
       accumulatedMetadata,
-    ).catch((error) => {
-      console.error("[vinext] Parallel route page generateMetadata() failed:", error);
-      return null;
-    });
+    );
     metadataResults.push(pageMetadata);
     metadataSources.push({ metadata: pageMetadata, routeSegments });
 
-    const pageViewport = await resolveModuleViewport(parallelRoute.pageModule, params).catch(
-      (error) => {
-        console.error("[vinext] Parallel route page generateViewport() failed:", error);
-        return null;
-      },
-    );
+    const pageViewport = await resolveModuleViewport(parallelRoute.pageModule, params);
     viewportResults.push(pageViewport);
   }
 

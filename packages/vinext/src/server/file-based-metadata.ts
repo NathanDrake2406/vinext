@@ -459,7 +459,7 @@ function hasTwitterImages(metadata: Metadata | null | undefined): boolean {
 }
 
 function hasIcons(metadata: Metadata | null | undefined): boolean {
-  return hasOwnProperty(metadata, "icons");
+  return Boolean(metadata?.icons);
 }
 
 function getMetadataSourceForRoute(
@@ -502,7 +502,7 @@ function iconRouteHasExplicitIconsAtSource(
   options: FileBasedMetadataOptions | undefined,
   fallbackMetadata: Metadata | null,
 ): boolean {
-  return hasIcons(getMetadataSourceForRoute(route, options, fallbackMetadata));
+  return hasIcons(fallbackMetadata) || hasIcons(getMetadataSourceForRoute(route, options, null));
 }
 
 function readStringProperty(source: object, key: string): string | undefined {

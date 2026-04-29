@@ -178,4 +178,28 @@ describe("app page head resolution", () => {
       title: "Page title",
     });
   });
+
+  it("bubbles active parallel page metadata errors", async () => {
+    await expect(
+      resolveAppPageHead<Record<string, unknown>>({
+        layoutModules: [],
+        layoutTreePositions: [],
+        metadataRoutes: [],
+        pageModule: null,
+        parallelRoutes: [
+          {
+            pageModule: {
+              generateMetadata() {
+                throw new Error("slot metadata failed");
+              },
+            },
+            routeSegments: ["dashboard"],
+          },
+        ],
+        params: {},
+        routePath: "/dashboard",
+        routeSegments: ["dashboard"],
+      }),
+    ).rejects.toThrow("slot metadata failed");
+  });
 });
