@@ -499,6 +499,7 @@ function getMetadataServedUrl(
   ext: string,
   isDynamic: boolean,
   suffix: string,
+  routeBaseName: string,
 ): string {
   if (isDynamic) {
     return withMetadataSuffix(config.urlPath, suffix);
@@ -510,10 +511,36 @@ function getMetadataServedUrl(
     metaType === "opengraph-image" ||
     metaType === "twitter-image"
   ) {
-    return withMetadataSuffix(`/${metaType}${ext}`, suffix);
+    return withMetadataSuffix(`/${routeBaseName}${ext}`, suffix);
   }
 
   return withMetadataSuffix(config.urlPath, suffix);
+}
+
+function matchMetadataFileBaseName(
+  metaType: string,
+  staticExtensions: readonly string[],
+  baseName: string,
+  ext: string,
+): string | null {
+  if (baseName === metaType) {
+    return baseName;
+  }
+
+  if (
+    staticExtensions.includes(ext) &&
+    (metaType === "icon" ||
+      metaType === "apple-icon" ||
+      metaType === "opengraph-image" ||
+      metaType === "twitter-image")
+  ) {
+    const suffix = baseName.slice(metaType.length);
+    if (/^\d+$/.test(suffix)) {
+      return baseName;
+    }
+  }
+
+  return null;
 }
 
 function replaceDynamicSegmentsWithPlaceholder(urlPrefix: string): string {
@@ -564,8 +591,13 @@ export function scanMetadataFiles(appDir: string): MetadataFileRoute[] {
       const ext = fileName.slice(baseName.length);
 
       for (const [metaType, config] of Object.entries(METADATA_FILE_MAP)) {
-        // Check if the base name matches
-        if (baseName !== metaType) continue;
+        const routeBaseName = matchMetadataFileBaseName(
+          metaType,
+          config.staticExtensions,
+          baseName,
+          ext,
+        );
+        if (!routeBaseName) continue;
 
         // Check nestability — non-nestable types only at root
         if (!config.nestable && urlPrefix !== "") continue;
@@ -576,7 +608,14 @@ export function scanMetadataFiles(appDir: string): MetadataFileRoute[] {
 
         if (!isStatic && !isDynamic) continue;
         const suffix = metadataRouteSuffix(parentSegments, metaType);
-        const urlPath = getMetadataServedUrl(metaType, config, ext, isDynamic, suffix);
+        const urlPath = getMetadataServedUrl(
+          metaType,
+          config,
+          ext,
+          isDynamic,
+          suffix,
+          routeBaseName,
+        );
         const servedPrefix = isStatic
           ? replaceDynamicSegmentsWithPlaceholder(urlPrefix)
           : urlPrefix;

@@ -698,6 +698,26 @@ describe("scanMetadataFiles", () => {
     expect(icon!.contentType).toBe("image/png");
   });
 
+  it("discovers numbered static image metadata files", () => {
+    createFile("icon1.png");
+    createFile("apple-icon2.jpg");
+    createFile("opengraph-image3.png");
+    createFile("twitter-image4.gif");
+
+    const routes = scanMetadataFiles(tmpDir);
+
+    expect(routes.find((r) => r.type === "icon" && r.servedUrl === "/icon1.png")).toBeDefined();
+    expect(
+      routes.find((r) => r.type === "apple-icon" && r.servedUrl === "/apple-icon2.jpg"),
+    ).toBeDefined();
+    expect(
+      routes.find((r) => r.type === "opengraph-image" && r.servedUrl === "/opengraph-image3.png"),
+    ).toBeDefined();
+    expect(
+      routes.find((r) => r.type === "twitter-image" && r.servedUrl === "/twitter-image4.gif"),
+    ).toBeDefined();
+  });
+
   it("discovers opengraph-image.tsx", () => {
     createFile("opengraph-image.tsx");
     const routes = scanMetadataFiles(tmpDir);

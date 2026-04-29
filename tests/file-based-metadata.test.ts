@@ -45,7 +45,7 @@ describe("applyFileBasedMetadata", () => {
     });
   });
 
-  it("keeps explicit icon and apple metadata ahead of file icon routes", async () => {
+  it("applies file icon and apple metadata ahead of config icon metadata", async () => {
     const metadata: Metadata = {
       icons: {
         apple: "/manual-apple.png",
@@ -91,12 +91,18 @@ describe("applyFileBasedMetadata", () => {
     });
 
     expect(result?.icons).toEqual({
-      apple: "/manual-apple.png",
-      icon: "/manual-icon.png",
+      apple: [
+        { url: "/apple-icon.png?hash", sizes: "180x180", type: "image/png" },
+        { url: "/manual-apple.png" },
+      ],
+      icon: [
+        { url: "/icon.png?hash", sizes: "32x32", type: "image/png" },
+        { url: "/manual-icon.png" },
+      ],
     });
   });
 
-  it("keeps explicit shorthand icon metadata ahead of file icon routes", async () => {
+  it("applies file icon metadata ahead of config shorthand icon metadata", async () => {
     const metadata: Metadata = { icons: "/manual-icon.png" };
     const routes: MetadataFileRoute[] = [
       {
@@ -121,7 +127,12 @@ describe("applyFileBasedMetadata", () => {
       metadataSources: [{ routeSegments: [], metadata }],
     });
 
-    expect(result?.icons).toBe("/manual-icon.png");
+    expect(result?.icons).toEqual({
+      icon: [
+        { url: "/icon.png?hash", sizes: "32x32", type: "image/png" },
+        { url: "/manual-icon.png" },
+      ],
+    });
   });
 
   it("preserves explicit shorthand icon metadata when prepending a favicon", async () => {
@@ -243,7 +254,7 @@ describe("applyFileBasedMetadata", () => {
     expect(result?.openGraph?.type).toBe("article");
   });
 
-  it("keeps same-segment explicit Open Graph images ahead of file images", async () => {
+  it("applies same-segment file Open Graph images over config images", async () => {
     const leafMetadata: Metadata = { openGraph: { images: ["/manual-og.png"] } };
     const routes: MetadataFileRoute[] = [
       {
@@ -266,7 +277,9 @@ describe("applyFileBasedMetadata", () => {
       ],
     });
 
-    expect(result?.openGraph?.images).toEqual(["/manual-og.png"]);
+    expect(result?.openGraph?.images).toEqual([
+      { url: "/blog/opengraph-image.png?hash", type: "image/png", width: 1200, height: 630 },
+    ]);
   });
 
   it("applies file manifest metadata over config manifest metadata", async () => {
@@ -353,6 +366,39 @@ describe("applyFileBasedMetadata", () => {
       expect(result).toBeNull();
       expect(warn).toHaveBeenCalledWith(
         '[vinext] Skipping metadata route /opengraph-image image id "a/b" because metadata image ids must match /^[a-zA-Z0-9-_.]+$/.',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("drops generateImageMetadata entries without ids", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const routes: MetadataFileRoute[] = [
+      {
+        type: "opengraph-image",
+        isDynamic: true,
+        filePath: "/tmp/app/opengraph-image.tsx",
+        routePrefix: "",
+        routeSegments: [],
+        servedUrl: "/opengraph-image",
+        contentType: "image/png",
+        contentHash: "hash",
+        module: {
+          generateImageMetadata: async () => [{ alt: "missing id" }],
+        },
+      },
+    ];
+
+    try {
+      const result = await applyFileBasedMetadata(null, "/", {}, routes, {
+        routeSegments: [],
+        metadataSources: [{ routeSegments: [], metadata: null }],
+      });
+
+      expect(result).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        "[vinext] Skipping metadata route /opengraph-image image metadata entry because generateImageMetadata entries must include an id.",
       );
     } finally {
       warn.mockRestore();

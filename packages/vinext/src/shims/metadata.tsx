@@ -378,9 +378,11 @@ export async function resolveModuleMetadata(
     // Next.js 16 passes params/searchParams as Promises (async pattern).
     // makeThenableParams() normalises null-prototype + preserves sync access.
     const asyncParams = makeThenableParams(params);
-    const sp = searchParams ?? {};
-    const asyncSp = makeThenableParams(sp);
-    return await mod.generateMetadata({ params: asyncParams, searchParams: asyncSp }, parent);
+    const props =
+      searchParams === undefined
+        ? { params: asyncParams }
+        : { params: asyncParams, searchParams: makeThenableParams(searchParams) };
+    return await mod.generateMetadata(props, parent);
   }
   if (mod.metadata && typeof mod.metadata === "object") {
     return mod.metadata as Metadata;

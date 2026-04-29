@@ -10,6 +10,8 @@
  *   Vite's pluginContainer.load() on the virtual module IDs.
  */
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 import { describe, it, expect, afterAll } from "vite-plus/test";
 import { createServer, type ViteDevServer } from "vite-plus";
 import { generateRscEntry } from "../packages/vinext/src/entries/app-rsc-entry.js";
@@ -267,6 +269,30 @@ describe("App Router entry templates", () => {
     expect(() =>
       generateRscEntry("/tmp/test/app", minimalAppRoutes, null, metadataRoutes, null, "", false),
     ).toThrow("[vinext] Failed to read metadata route file /tmp/test/app/missing-icon.tsx");
+  });
+
+  it("generateRscEntry fails with a path-specific error when static image dimensions cannot be read", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-entry-metadata-"));
+    const filePath = path.join(tmpDir, "icon.png");
+    fs.writeFileSync(filePath, "not a png");
+    const metadataRoutes: MetadataFileRoute[] = [
+      {
+        type: "icon",
+        isDynamic: false,
+        filePath,
+        routePrefix: "",
+        servedUrl: "/icon.png",
+        contentType: "image/png",
+      },
+    ];
+
+    try {
+      expect(() =>
+        generateRscEntry("/tmp/test/app", minimalAppRoutes, null, metadataRoutes, null, "", false),
+      ).toThrow(`[vinext] Failed to read metadata image dimensions for ${filePath} (/icon.png)`);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("generateRscEntry uses buildPageElements in the server-action re-render path", () => {

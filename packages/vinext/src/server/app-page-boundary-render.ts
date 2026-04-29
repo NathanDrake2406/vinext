@@ -325,21 +325,23 @@ export async function renderAppPageErrorBoundary<TModule extends AppPageModule>(
   const matchedParams = options.matchedParams ?? options.route?.params ?? {};
   const layoutModules = options.route?.layouts ?? options.rootLayouts;
   const pathname = new URL(options.requestUrl).pathname;
-  const { metadata, viewport } = await resolveAppPageHead({
-    fallbackOnFileMetadataError: true,
-    layoutModules,
-    layoutTreePositions: options.route?.layoutTreePositions,
-    metadataRoutes: options.metadataRoutes,
-    params: matchedParams,
-    routePath: options.route?.pattern ?? pathname,
-    routeSegments: options.route?.routeSegments,
-  });
 
   const headElements: ReactNode[] = [createElement("meta", { charSet: "utf-8", key: "charset" })];
-  if (metadata) {
-    headElements.push(createElement(MetadataHead, { key: "metadata", metadata }));
+  if (!errorBoundary.isGlobalError) {
+    const { metadata, viewport } = await resolveAppPageHead({
+      fallbackOnFileMetadataError: true,
+      layoutModules,
+      layoutTreePositions: options.route?.layoutTreePositions,
+      metadataRoutes: options.metadataRoutes,
+      params: matchedParams,
+      routePath: options.route?.pattern ?? pathname,
+      routeSegments: options.route?.routeSegments,
+    });
+    if (metadata) {
+      headElements.push(createElement(MetadataHead, { key: "metadata", metadata }));
+    }
+    headElements.push(createElement(ViewportHead, { key: "viewport", viewport }));
   }
-  headElements.push(createElement(ViewportHead, { key: "viewport", viewport }));
 
   const element = wrapRenderedBoundaryElement({
     element: createElement(

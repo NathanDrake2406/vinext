@@ -88,10 +88,6 @@ function routeSegmentsApply(
   return true;
 }
 
-function routeSegmentsEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && routeSegmentsApply(left, right);
-}
-
 function routeSpecificity(route: MetadataFileRoute): number {
   return route.routeSegments?.length ?? routeScore(route.routePrefix);
 }
@@ -325,6 +321,13 @@ function buildAppleEntry(headData: MetadataRouteHeadData): AppleIconEntry | null
   return appleEntry;
 }
 
+function normalizeAppleEntry(value: string | URL | AppleIconEntry): AppleIconEntry {
+  if (isStringOrUrl(value)) {
+    return { url: value };
+  }
+  return { ...value };
+}
+
 function buildSocialEntry(headData: MetadataRouteHeadData): SocialImageEntry | null {
   if (headData.kind !== "openGraph" && headData.kind !== "twitter") {
     return null;
@@ -424,53 +427,6 @@ function withContentHash(href: string, contentHash?: string): string {
   return `${href}?${contentHash}`;
 }
 
-function hasOwnProperty(source: object | null | undefined, key: string): boolean {
-  return Boolean(source && Object.prototype.hasOwnProperty.call(source, key));
-}
-
-function hasOpenGraphImages(metadata: Metadata | null | undefined): boolean {
-  return hasOwnProperty(metadata?.openGraph, "images");
-}
-
-function hasTwitterImages(metadata: Metadata | null | undefined): boolean {
-  return hasOwnProperty(metadata?.twitter, "images");
-}
-
-function getMetadataSourceForRoute(
-  route: MetadataFileRoute,
-  options: FileBasedMetadataOptions | undefined,
-  fallbackMetadata: Metadata | null,
-): Metadata | null {
-  if (!options?.metadataSources) {
-    return fallbackMetadata;
-  }
-
-  if (!route.routeSegments) {
-    return null;
-  }
-
-  for (let index = options.metadataSources.length - 1; index >= 0; index--) {
-    const source = options.metadataSources[index];
-    if (routeSegmentsEqual(source.routeSegments, route.routeSegments)) {
-      return source.metadata;
-    }
-  }
-
-  return null;
-}
-
-function socialRouteHasExplicitImagesAtSource(
-  route: MetadataFileRoute,
-  kind: "openGraph" | "twitter",
-  options: FileBasedMetadataOptions | undefined,
-  fallbackMetadata: Metadata | null,
-): boolean {
-  const sourceMetadata = getMetadataSourceForRoute(route, options, fallbackMetadata);
-  return kind === "openGraph"
-    ? hasOpenGraphImages(sourceMetadata)
-    : hasTwitterImages(sourceMetadata);
-}
-
 function readStringProperty(source: object, key: string): string | undefined {
   const value = Reflect.get(source, key);
   return typeof value === "string" ? value : undefined;
@@ -534,7 +490,14 @@ async function resolveDynamicImageMetadataSources(
   const sources: DynamicImageMetadataSource[] = [];
   for (const entry of result) {
     if (typeof entry === "object" && entry !== null) {
-      sources.push(readDynamicImageMetadataSource(entry));
+      const source = readDynamicImageMetadataSource(entry);
+      if (source.id === undefined) {
+        console.warn(
+          `[vinext] Skipping metadata route ${route.servedUrl} image metadata entry because generateImageMetadata entries must include an id.`,
+        );
+        continue;
+      }
+      sources.push(source);
     }
   }
   return sources;
@@ -654,14 +617,14 @@ export async function applyFileBasedMetadata(
     routePath,
     params,
     routeSegments,
-  ).filter((route) => !socialRouteHasExplicitImagesAtSource(route, "openGraph", options, metadata));
+  );
   const twitterRoutes = selectDeepestRoutes(
     metadataRoutes,
     "twitter",
     routePath,
     params,
     routeSegments,
-  ).filter((route) => !socialRouteHasExplicitImagesAtSource(route, "twitter", options, metadata));
+  );
   const manifestRoutes = selectDeepestRoutes(
     metadataRoutes,
     "manifest",
@@ -699,7 +662,6 @@ export async function applyFileBasedMetadata(
   }
 
   const nextMetadata: Metadata = metadata ? { ...metadata } : {};
-  const hadExplicitIcons = Boolean(metadata?.icons);
 
   const faviconEntries: IconEntry[] = [];
   for (const headData of faviconHeadData) {
@@ -715,7 +677,7 @@ export async function applyFileBasedMetadata(
     nextMetadata.icons = nextIcons;
   }
 
-  if (!hadExplicitIcons) {
+  {
     const nextIcons = cloneIconMap(nextMetadata.icons);
 
     const iconEntries: IconEntry[] = [];
@@ -727,7 +689,7 @@ export async function applyFileBasedMetadata(
     }
     if (iconEntries.length > 0) {
       const normalizedIcons = normalizeIconEntries(nextIcons);
-      nextIcons.icon = [...normalizedIcons, ...iconEntries];
+      nextIcons.icon = [...iconEntries, ...normalizedIcons];
     }
 
     const appleEntries: AppleIconEntry[] = [];
@@ -738,7 +700,16 @@ export async function applyFileBasedMetadata(
       }
     }
     if (appleEntries.length > 0) {
-      nextIcons.apple = appleEntries;
+      const existingApple = nextIcons.apple;
+      const normalizedAppleEntries: AppleIconEntry[] = [];
+      if (Array.isArray(existingApple)) {
+        for (const entry of existingApple) {
+          normalizedAppleEntries.push(normalizeAppleEntry(entry));
+        }
+      } else if (existingApple) {
+        normalizedAppleEntries.push(normalizeAppleEntry(existingApple));
+      }
+      nextIcons.apple = [...appleEntries, ...normalizedAppleEntries];
     }
 
     if (iconEntries.length > 0 || appleEntries.length > 0) {

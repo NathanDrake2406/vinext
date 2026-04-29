@@ -118,7 +118,7 @@ describe("app page head resolution", () => {
     });
     expect(result.pageSearchParams).toEqual({ tag: ["next", "vinext"] });
     expect(result.hasSearchParams).toBe(true);
-    await expect(layoutSearchParamsSeen[0]).resolves.toEqual({});
+    expect(layoutSearchParamsSeen).toEqual([undefined]);
     expect(pageParentImages).toEqual(["/root-og.png", "/nested-og.png"]);
   });
 });

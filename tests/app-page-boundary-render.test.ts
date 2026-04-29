@@ -477,5 +477,7 @@ describe("app page boundary render helpers", () => {
     expect(html).toContain('data-boundary="global-error"');
     expect(html).toContain("global:boom");
     expect(html).not.toContain('data-layout="root"');
+    expect(html).not.toContain("Root layout description");
+    expect(html).not.toContain('name="viewport"');
   });
 });

@@ -69,15 +69,19 @@ function readMetadataRouteAltText(route: MetadataFileRoute): string | undefined 
   return route.altFilePath ? readMetadataRouteTextFile(route.altFilePath, route) : undefined;
 }
 
-function readMetadataImageDimensions(buffer: Buffer): ImageDimensions {
+function readMetadataImageDimensions(buffer: Buffer, route: MetadataFileRoute): ImageDimensions {
   try {
     const dimensions = imageSize(buffer);
     return {
       width: dimensions.width,
       height: dimensions.height,
     };
-  } catch {
-    return {};
+  } catch (error) {
+    const reason = error instanceof Error && error.message ? `: ${error.message}` : "";
+    throw new Error(
+      `[vinext] Failed to read metadata image dimensions for ${route.filePath} (${route.servedUrl})${reason}`,
+      { cause: error },
+    );
   }
 }
 
@@ -166,7 +170,7 @@ export function createMetadataRouteEntryData(route: MetadataFileRoute): Metadata
     headData: createMetadataHeadData({
       route,
       contentHash,
-      dimensions: readMetadataImageDimensions(buffer),
+      dimensions: readMetadataImageDimensions(buffer, route),
       altText: readMetadataRouteAltText(route),
     }),
     fileDataBase64: buffer.toString("base64"),

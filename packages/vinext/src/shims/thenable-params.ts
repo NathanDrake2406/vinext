@@ -2,13 +2,17 @@ function hasParamProperty<T extends Record<string, unknown>>(obj: T, prop: Prope
   return Object.prototype.hasOwnProperty.call(obj, prop);
 }
 
+function isPromiseMethod(prop: PropertyKey): boolean {
+  return prop === "then" || prop === "catch" || prop === "finally";
+}
+
 export function makeThenableParams<T extends Record<string, unknown>>(obj: T) {
   const plain = { ...obj };
   const promise = Promise.resolve(plain);
 
   return new Proxy(promise, {
     get(target, prop, receiver) {
-      if (hasParamProperty(plain, prop)) {
+      if (!isPromiseMethod(prop) && hasParamProperty(plain, prop)) {
         return Reflect.get(plain, prop);
       }
 
@@ -16,7 +20,7 @@ export function makeThenableParams<T extends Record<string, unknown>>(obj: T) {
       return typeof value === "function" ? value.bind(target) : value;
     },
     getOwnPropertyDescriptor(target, prop) {
-      if (hasParamProperty(plain, prop)) {
+      if (!isPromiseMethod(prop) && hasParamProperty(plain, prop)) {
         return {
           configurable: true,
           enumerable: true,
@@ -28,10 +32,10 @@ export function makeThenableParams<T extends Record<string, unknown>>(obj: T) {
       return Reflect.getOwnPropertyDescriptor(target, prop);
     },
     has(target, prop) {
-      return hasParamProperty(plain, prop) || Reflect.has(target, prop);
+      return Reflect.has(target, prop) || hasParamProperty(plain, prop);
     },
     ownKeys() {
-      return Reflect.ownKeys(plain);
+      return Reflect.ownKeys(plain).filter((prop) => !isPromiseMethod(prop));
     },
   });
 }
