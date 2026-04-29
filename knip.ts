@@ -84,9 +84,6 @@ export default {
     "tests/e2e/app-router/nextjs-compat/playwright.nextjs-compat.config.ts",
     // stub module loaded via `path.resolve()` as a Vite alias target
     "packages/vinext/src/client/empty-module.ts",
-    // Imported by the generated App Router RSC entry; knip cannot trace
-    // imports emitted into virtual module source.
-    "packages/vinext/src/server/metadata-route-response.ts",
   ],
   // Catalog check is noisy here (deps consumed from the workspace's own
   // sub-packages or `examples/**` which we intentionally ignore).
