@@ -83,6 +83,7 @@ const appRouteHandlerResponsePath = resolveEntryPath(
 );
 const routeTriePath = resolveEntryPath("../routing/route-trie.js", import.meta.url);
 const rootParamsShimPath = resolveEntryPath("../shims/root-params.js", import.meta.url);
+const thenableParamsShimPath = resolveEntryPath("../shims/thenable-params.js", import.meta.url);
 const metadataRouteResponsePath = resolveEntryPath(
   "../server/metadata-route-response.js",
   import.meta.url,
@@ -430,6 +431,7 @@ import {
 import { _consumeRequestScopedCacheLife, getCacheHandler } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from ${JSON.stringify(requestContextShimPath)};
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from ${JSON.stringify(rootParamsShimPath)};
+import { makeThenableParams } from ${JSON.stringify(thenableParamsShimPath)};
 import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import { buildRouteTrie as _buildRouteTrie, trieMatch as _trieMatch } from ${JSON.stringify(routeTriePath)};
 // Import server-only state module to register ALS-backed accessors.
@@ -601,47 +603,6 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
       console.debug("[vinext] CLS:", layoutId, reason);
     }
   : undefined;
-
-// Normalize null-prototype objects from matchPattern() into thenable objects
-// that work both as Promises (for Next.js 15+ async params) and as plain
-// objects with synchronous property access (for pre-15 code like params.id).
-//
-// matchPattern() uses Object.create(null), producing objects without
-// Object.prototype. The RSC serializer rejects these. Spreading ({...obj})
-// restores a normal prototype. A Proxy preserves synchronous property access
-// (params.id, params.slug) without mutating the Promise object, which would
-// break if user params/searchParams contain keys like "constructor".
-function makeThenableParams(obj) {
-  const plain = { ...obj };
-  const promise = Promise.resolve(plain);
-  const hasParamProperty = (prop) => Object.prototype.hasOwnProperty.call(plain, prop);
-  return new Proxy(promise, {
-    get(target, prop, receiver) {
-      if (hasParamProperty(prop)) {
-        return Reflect.get(plain, prop);
-      }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-    getOwnPropertyDescriptor(target, prop) {
-      if (hasParamProperty(prop)) {
-        return {
-          configurable: true,
-          enumerable: true,
-          value: Reflect.get(plain, prop),
-          writable: true,
-        };
-      }
-      return Reflect.getOwnPropertyDescriptor(target, prop);
-    },
-    has(target, prop) {
-      return hasParamProperty(prop) || Reflect.has(target, prop);
-    },
-    ownKeys() {
-      return Reflect.ownKeys(plain);
-    },
-  });
-}
 
 // djb2 hash — matches Next.js's stringHash for digest generation.
 // Produces a stable numeric string from error message + stack.
