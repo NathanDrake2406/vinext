@@ -2,6 +2,10 @@ import { describe, expect, it } from "vite-plus/test";
 import { handleMetadataRouteRequest } from "../packages/vinext/src/server/metadata-route-response.js";
 import type { MetadataFileRoute } from "../packages/vinext/src/server/metadata-routes.js";
 
+type MetadataRuntimeRoute = MetadataFileRoute & {
+  fileDataBase64?: string;
+};
+
 function makeThenableParams(params: Record<string, string | string[]>): unknown {
   return Object.assign(Promise.resolve(params), params);
 }
@@ -92,7 +96,49 @@ describe("handleMetadataRouteRequest", () => {
 
     expect(response?.status).toBe(200);
     expect(receivedPromise).toBe(true);
+    expect(response?.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
     expect(await response?.text()).toContain("https://example.com/products/0");
+  });
+
+  it("throws when matched static metadata route data is missing", async () => {
+    const route = {
+      type: "icon",
+      isDynamic: false,
+      filePath: "/tmp/app/icon.png",
+      routePrefix: "",
+      routeSegments: [],
+      servedUrl: "/icon.png",
+      contentType: "image/png",
+    } satisfies MetadataFileRoute;
+
+    await expect(
+      handleMetadataRouteRequest({
+        metadataRoutes: [route],
+        cleanPathname: "/icon.png",
+        makeThenableParams,
+      }),
+    ).rejects.toThrow("Static metadata route /icon.png is missing embedded file data");
+  });
+
+  it("throws when matched static metadata route data is corrupt", async () => {
+    const route = {
+      type: "icon",
+      isDynamic: false,
+      filePath: "/tmp/app/icon.png",
+      routePrefix: "",
+      routeSegments: [],
+      servedUrl: "/icon.png",
+      contentType: "image/png",
+      fileDataBase64: "%%%",
+    } satisfies MetadataRuntimeRoute;
+
+    await expect(
+      handleMetadataRouteRequest({
+        metadataRoutes: [route],
+        cleanPathname: "/icon.png",
+        makeThenableParams,
+      }),
+    ).rejects.toThrow("Failed to decode embedded metadata route file data for /icon.png");
   });
 
   it("sets explicit cache control on generated metadata route responses", async () => {

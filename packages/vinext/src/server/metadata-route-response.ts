@@ -162,7 +162,10 @@ async function handleGeneratedSitemap(
     throw new TypeError("Metadata sitemap routes must return an array.");
   }
   return new Response(sitemapToXml(result), {
-    headers: { "Content-Type": route.contentType },
+    headers: {
+      "Content-Type": route.contentType,
+      "Cache-Control": "public, max-age=0, must-revalidate",
+    },
   });
 }
 
@@ -269,7 +272,9 @@ async function callDynamicMetadataRoute(
 
 function serveStaticMetadataRoute(route: MetadataRuntimeRoute): Response {
   if (typeof route.fileDataBase64 !== "string") {
-    return new Response("Not Found", { status: 404 });
+    throw new Error(
+      `[vinext] Static metadata route ${route.servedUrl} is missing embedded file data.`,
+    );
   }
 
   try {
@@ -284,8 +289,12 @@ function serveStaticMetadataRoute(route: MetadataRuntimeRoute): Response {
         "Cache-Control": "public, max-age=0, must-revalidate",
       },
     });
-  } catch {
-    return new Response("Not Found", { status: 404 });
+  } catch (error) {
+    const reason = error instanceof Error && error.message ? `: ${error.message}` : "";
+    throw new Error(
+      `[vinext] Failed to decode embedded metadata route file data for ${route.servedUrl}${reason}`,
+      { cause: error },
+    );
   }
 }
 
