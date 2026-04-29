@@ -234,6 +234,25 @@ describe("next/font/google shim", () => {
     expect(explicit.variable).toBe(implicit.variable);
   });
 
+  it("normalizes identity inputs that emit equivalent Google font output", async () => {
+    const { createFontLoader } = await import("../packages/vinext/src/shims/font-google.js");
+    const CanonicalIdentity = createFontLoader("Canonical Identity");
+    const canonical = CanonicalIdentity({
+      weight: ["400", "700"],
+      subsets: ["latin", "latin-ext"],
+      fallback: ["Arial", "Helvetica"],
+    });
+    const equivalent = CanonicalIdentity({
+      weight: ["700", "400"],
+      style: ["normal"],
+      subsets: ["latin-ext", "latin"],
+      fallback: [" Arial ", "Helvetica"],
+    });
+
+    expect(equivalent.className).toBe(canonical.className);
+    expect(equivalent.variable).toBe(canonical.variable);
+  });
+
   it("does not emit Next-incompatible :root font variable rules", async () => {
     const { createFontLoader, getSSRFontStyles } =
       await import("../packages/vinext/src/shims/font-google.js");

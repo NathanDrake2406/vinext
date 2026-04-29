@@ -116,9 +116,32 @@ function fontClassSegment(family: string): string {
   return segment || "font";
 }
 
-function normalizeStringOption(value: string | string[] | undefined): string {
+function normalizeStringSetOption(value: string | string[] | undefined): string {
   if (!value) return "";
-  return (Array.isArray(value) ? value : [value]).join(",");
+  const values = Array.isArray(value) ? value : [value];
+  return [...new Set(values.map((item) => item.trim()).filter(Boolean))].sort().join(",");
+}
+
+function normalizeWeightOption(value: string | string[] | undefined): string {
+  const normalized = normalizeStringSetOption(value);
+  return normalized === "variable" ? "" : normalized;
+}
+
+function normalizeStyleOption(value: string | string[] | undefined): string {
+  const values = new Set(
+    (Array.isArray(value) ? value : value ? [value] : [])
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+  const hasItalic = values.has("italic");
+  const hasNormal = values.has("normal");
+  if (!hasItalic) return "";
+  return hasNormal ? "italic,normal" : "italic";
+}
+
+function normalizeFallbackOption(value: string[] | undefined): string {
+  if (!value) return "";
+  return value.map((item) => item.trim()).join(",");
 }
 
 function normalizeBooleanOption(value: boolean | undefined): string {
@@ -151,14 +174,14 @@ function createFontIdentity(
       family,
       fontFamily,
       cssVarName,
-      normalizeStringOption(options.weight),
-      normalizeStringOption(options.style),
-      normalizeStringOption(options.subsets),
+      normalizeWeightOption(options.weight),
+      normalizeStyleOption(options.style),
+      normalizeStringSetOption(options.subsets),
       options.display ?? "swap",
       normalizeBooleanOption(options.preload),
-      normalizeStringOption(options.fallback),
+      normalizeFallbackOption(options.fallback),
       normalizeStringOrBooleanOption(options.adjustFontFallback),
-      normalizeStringOption(options.axes),
+      normalizeStringSetOption(options.axes),
       options._selfHostedCSS ?? "",
     ].join("\0"),
   );
