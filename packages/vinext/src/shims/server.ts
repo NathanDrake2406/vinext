@@ -192,7 +192,7 @@ export class NextResponse<_Body = unknown> extends Response {
 
   constructor(body?: BodyInit | null, init?: ResponseInit) {
     super(body, init);
-    this._cookies = new ResponseCookies(this.headers);
+    this._cookies = new MiddlewareResponseCookies(this.headers);
   }
 
   get cookies(): ResponseCookies {
@@ -691,6 +691,45 @@ export class ResponseCookies {
     for (const { serialized } of this._parsed.values()) {
       this._headers.append("Set-Cookie", serialized);
     }
+  }
+}
+
+class MiddlewareResponseCookies extends ResponseCookies {
+  private _responseHeaders: Headers;
+
+  constructor(headers: Headers) {
+    super(headers);
+    this._responseHeaders = headers;
+  }
+
+  override set(
+    ...args:
+      | [name: string, value: string, options?: CookieOptions]
+      | [options: CookieOptions & { name: string; value: string }]
+  ): this {
+    super.set(...args);
+    this._syncMiddlewareCookieHeader();
+    return this;
+  }
+
+  override delete(
+    ...args:
+      | [name: string]
+      | [options: Omit<CookieOptions & { name: string }, "maxAge" | "expires">]
+  ): this {
+    super.delete(...args);
+    this._syncMiddlewareCookieHeader();
+    return this;
+  }
+
+  private _syncMiddlewareCookieHeader(): void {
+    const cookies = this._responseHeaders.getSetCookie();
+    if (cookies.length === 0) {
+      this._responseHeaders.delete("x-middleware-set-cookie");
+      return;
+    }
+
+    this._responseHeaders.set("x-middleware-set-cookie", cookies.join(","));
   }
 }
 

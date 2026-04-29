@@ -3306,7 +3306,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain(":path*");
   });
 
-  it("validates proxy.ts exports in generated middleware dispatch (matching Next.js)", () => {
+  it("threads proxy.ts identity into shared middleware runtime", () => {
     const code = generateRscEntry(
       "/tmp/test/app",
       minimalRoutes,
@@ -3316,10 +3316,10 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       "",
       false,
     );
-    // For proxy.ts files, named proxy export is preferred over default
-    expect(code).toContain("middlewareModule.proxy ?? middlewareModule.default");
-    // Should throw if no valid export found
-    expect(code).toContain("must export a function named");
+    expect(code).toContain("import { applyAppMiddleware as __applyAppMiddleware }");
+    expect(code).toContain("const __mwResult = await __applyAppMiddleware({");
+    expect(code).toContain("isProxy: true");
+    expect(code).toContain("module: middlewareModule");
   });
 
   it("propagates middleware waitUntil promises to the Workers execution context", () => {
@@ -3437,6 +3437,25 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain("proxyExternalRequest");
     // beforeFiles rewrite should check for external URL
     expect(code).toContain("isExternalUrl(__rewritten)");
+  });
+
+  // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
+  it("generated RSC entry delegates middleware rewrite handling to the shared runtime", () => {
+    const code = generateRscEntry(
+      "/tmp/test/app",
+      minimalRoutes,
+      "/tmp/test/middleware.ts",
+      [],
+      null,
+      "",
+      false,
+    );
+    expect(code).toContain("import { applyAppMiddleware as __applyAppMiddleware }");
+    expect(code).toContain("const __mwResult = await __applyAppMiddleware({");
+    expect(code).toContain("module: middlewareModule");
+    expect(code).not.toContain('mwResponse.headers.get("x-middleware-rewrite")');
+    expect(code).not.toContain("__proxyExternalMiddlewareRewrite(");
   });
 
   it("generates external URL checks for afterFiles rewrites", () => {
@@ -4280,6 +4299,7 @@ describe("App Router external rewrite proxy credential forwarding", () => {
   let mockPort: number;
   let capturedHeaders: import("node:http").IncomingHttpHeaders | null = null;
   let capturedUrl: URL | null = null;
+  let capturedBody: string | null = null;
   let mockResponseMode: "plain" | "gzipHeaderAndBody" = "plain";
   let server: ViteDevServer;
   let baseUrl: string;
@@ -4290,20 +4310,25 @@ describe("App Router external rewrite proxy credential forwarding", () => {
     mockServer = http.createServer((req, res) => {
       capturedHeaders = req.headers;
       capturedUrl = new URL(req.url ?? "/", `http://localhost:${mockPort || 80}`);
-      if (mockResponseMode === "gzipHeaderAndBody") {
-        const payload = "proxied gzipped body";
-        const gzipped = zlib.gzipSync(Buffer.from(payload));
-        res.writeHead(200, {
-          "Content-Type": "text/plain",
-          "Content-Encoding": "gzip",
-          "Content-Length": String(gzipped.byteLength),
-          "x-custom": "keep-me",
-        });
-        res.end(gzipped);
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("proxied ok");
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      req.on("end", () => {
+        capturedBody = Buffer.concat(chunks).toString("utf8");
+        if (mockResponseMode === "gzipHeaderAndBody") {
+          const payload = "proxied gzipped body";
+          const gzipped = zlib.gzipSync(Buffer.from(payload));
+          res.writeHead(200, {
+            "Content-Type": "text/plain",
+            "Content-Encoding": "gzip",
+            "Content-Length": String(gzipped.byteLength),
+            "x-custom": "keep-me",
+          });
+          res.end(gzipped);
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("proxied ok");
+      });
     });
     await new Promise<void>((resolve) => mockServer.listen(0, resolve));
     const addr = mockServer.address();
@@ -4311,6 +4336,7 @@ describe("App Router external rewrite proxy credential forwarding", () => {
 
     // 2. Set env var so the app-basic next.config.ts adds the external rewrite
     process.env.TEST_EXTERNAL_PROXY_TARGET = `http://localhost:${mockPort}`;
+    process.env.TEST_MIDDLEWARE_EXTERNAL_PROXY_TARGET = `http://localhost:${mockPort}`;
 
     // 3. Start the App Router dev server (reads next.config.ts at boot)
     ({ server, baseUrl } = await startFixtureServer(APP_FIXTURE_DIR, { appRouter: true }));
@@ -4318,6 +4344,7 @@ describe("App Router external rewrite proxy credential forwarding", () => {
 
   afterAll(async () => {
     delete process.env.TEST_EXTERNAL_PROXY_TARGET;
+    delete process.env.TEST_MIDDLEWARE_EXTERNAL_PROXY_TARGET;
     await server?.close();
     await new Promise<void>((resolve) => mockServer?.close(() => resolve()));
   });
@@ -4365,6 +4392,43 @@ describe("App Router external rewrite proxy credential forwarding", () => {
       ["a", "2"],
       ["b", "3"],
     ]);
+  });
+
+  // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
+  it("proxies external URLs returned by middleware rewrites with body and headers", async () => {
+    mockResponseMode = "plain";
+    capturedHeaders = null;
+    capturedUrl = null;
+    capturedBody = null;
+
+    const body = JSON.stringify({ hello: "world" });
+    const response = await fetch(`${baseUrl}/middleware-external-rewrite?via=middleware`, {
+      method: "POST",
+      body,
+      headers: {
+        "content-type": "application/json",
+        Cookie: "session=secret123",
+        "x-from-test": "keep-me",
+        "x-middleware-test-rewrite-target": `http://localhost:${mockPort}`,
+        "x-middleware-test-request-override": "1",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("proxied ok");
+    expect(capturedUrl).not.toBeNull();
+    expect(capturedUrl!.pathname).toBe("/middleware-external-target");
+    expect([...capturedUrl!.searchParams.entries()]).toEqual([["via", "middleware"]]);
+    expect(capturedBody).toBe(body);
+    expect(capturedHeaders!["cookie"]).toBe("session=secret123");
+    expect(capturedHeaders!["x-from-test"]).toBe("keep-me");
+    expect(capturedHeaders!["x-hello-from-middleware1"]).toBe("hello");
+    expect(capturedHeaders!["x-hello-from-middleware2"]).toBe("world");
+    expect(capturedHeaders!["x-middleware-rewrite"]).toBeUndefined();
+    expect(capturedHeaders!["x-middleware-test-rewrite-target"]).toBeUndefined();
+    expect(capturedHeaders!["x-middleware-test-request-override"]).toBeUndefined();
+    expect(capturedHeaders!["x-vinext-mw-ctx"]).toBeUndefined();
   });
 
   it("strips content-encoding and content-length for Node fetch auto-decompression", async () => {

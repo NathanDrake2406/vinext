@@ -1,5 +1,6 @@
 import type { CachedRouteValue } from "../shims/cache.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
+import { processMiddlewareHeaders } from "./request-pipeline.js";
 
 export type RouteHandlerMiddlewareContext = {
   headers: Headers | null;
@@ -26,6 +27,13 @@ const APP_ROUTE_REWRITE_ERROR =
   "NextResponse.rewrite() was used in a app route handler, this is not currently supported. Please remove the invocation to continue.";
 const APP_ROUTE_NEXT_ERROR =
   "NextResponse.next() was used in a app route handler, this is not supported. See here for more info: https://nextjs.org/docs/messages/next-response-next-in-app-route-handler";
+
+function hasMiddlewareHeader(headers: Headers): boolean {
+  for (const key of headers.keys()) {
+    if (key.startsWith("x-middleware-")) return true;
+  }
+  return false;
+}
 
 function buildRouteHandlerCacheControl(
   cacheState: BuildRouteHandlerCachedResponseOptions["cacheState"],
@@ -166,7 +174,14 @@ export async function buildAppRouteCacheValue(response: Response): Promise<Cache
   const headers: CachedRouteValue["headers"] = {};
 
   response.headers.forEach((value, key) => {
-    if (key === "set-cookie" || key === "x-vinext-cache" || key === "cache-control") return;
+    if (
+      key === "set-cookie" ||
+      key === "x-vinext-cache" ||
+      key === "cache-control" ||
+      key.startsWith("x-middleware-")
+    ) {
+      return;
+    }
     headers[key] = value;
   });
   const setCookies = response.headers.getSetCookie?.() ?? [];
@@ -187,11 +202,17 @@ export function finalizeRouteHandlerResponse(
   options: FinalizeRouteHandlerResponseOptions,
 ): Response {
   const { pendingCookies, draftCookie, isHead } = options;
-  if (pendingCookies.length === 0 && !draftCookie && !isHead) {
+  if (
+    pendingCookies.length === 0 &&
+    !draftCookie &&
+    !isHead &&
+    !hasMiddlewareHeader(response.headers)
+  ) {
     return response;
   }
 
   const headers = new Headers(response.headers);
+  processMiddlewareHeaders(headers);
   applyMutableCookieFallbacks(headers, pendingCookies);
   if (draftCookie) {
     headers.append("Set-Cookie", draftCookie);

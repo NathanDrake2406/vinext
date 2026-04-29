@@ -120,6 +120,7 @@ describe("app route handler response helpers", () => {
         "content-type": "text/plain",
         "cache-control": "s-maxage=60, stale-while-revalidate",
         "x-vinext-cache": "MISS",
+        "x-middleware-set-cookie": "internal=1; Path=/",
         "x-extra": "kept",
       },
     });
@@ -236,6 +237,24 @@ describe("app route handler response helpers", () => {
       "session=returned; Path=/; HttpOnly",
       "response-only=1; Path=/",
     ]);
+    await expect(result.text()).resolves.toBe("body");
+  });
+
+  it("strips internal middleware headers from finalized route handler responses", async () => {
+    const response = new Response("body", {
+      headers: [
+        ["set-cookie", "session=abc; Path=/"],
+        ["x-middleware-set-cookie", "session=abc; Path=/"],
+      ],
+    });
+
+    const result = finalizeRouteHandlerResponse(response, {
+      pendingCookies: [],
+      isHead: false,
+    });
+
+    expect(result.headers.get("x-middleware-set-cookie")).toBeNull();
+    expect(result.headers.getSetCookie()).toEqual(["session=abc; Path=/"]);
     await expect(result.text()).resolves.toBe("body");
   });
 

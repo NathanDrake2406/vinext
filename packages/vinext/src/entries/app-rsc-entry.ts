@@ -18,12 +18,6 @@ import type {
 import type { AppRoute } from "../routing/app-router.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
-import {
-  generateMiddlewareMatcherCode,
-  generateNormalizePathCode,
-  generateSafeRegExpCode,
-  generateRouteMatchNormalizationCode,
-} from "../server/middleware-codegen.js";
 import { isProxyFile } from "../server/middleware.js";
 
 // Pre-computed absolute paths for generated-code imports. The virtual RSC
@@ -31,12 +25,14 @@ import { isProxyFile } from "../server/middleware.js";
 // resolve these at code-generation time and embed them as absolute paths.
 const configMatchersPath = resolveEntryPath("../config/config-matchers.js", import.meta.url);
 const requestPipelinePath = resolveEntryPath("../server/request-pipeline.js", import.meta.url);
+const appMiddlewarePath = resolveEntryPath("../server/app-middleware.js", import.meta.url);
 const middlewareRequestHeadersPath = resolveEntryPath(
   "../server/middleware-request-headers.js",
   import.meta.url,
 );
 const requestContextShimPath = resolveEntryPath("../shims/request-context.js", import.meta.url);
 const normalizePathModulePath = resolveEntryPath("../server/normalize-path.js", import.meta.url);
+const routingUtilsPath = resolveEntryPath("../routing/utils.js", import.meta.url);
 const appRouteHandlerRuntimePath = resolveEntryPath(
   "../server/app-route-handler-runtime.js",
   import.meta.url,
@@ -390,15 +386,17 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, applyMiddlewareRequestHeaders, getHeadersContext, setHeadersAccessPhase } from "next/headers";
-import { NextRequest, NextFetchEvent } from "next/server";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
 ${effectiveMetaRoutes.length > 0 ? `import { sitemapToXml, robotsToText, manifestToJson } from ${JSON.stringify(metadataRoutesPath)};` : ""}
 import { requestContextFromRequest, normalizeHost, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from ${JSON.stringify(configMatchersPath)};
-import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
+import { decodePathParams as __decodePathParams, normalizePath as __normalizePath } from ${JSON.stringify(normalizePathModulePath)};
+import { normalizePathnameForRouteMatch as __normalizePathnameForRouteMatch, normalizePathnameForRouteMatchStrict as __normalizePathnameForRouteMatchStrict } from ${JSON.stringify(routingUtilsPath)};
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
-import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from ${JSON.stringify(requestPipelinePath)};
+import { validateCsrfOrigin, validateServerActionPayload, validateImageUrl, guardProtocolRelativeUrl, hasBasePath, stripBasePath, normalizeTrailingSlash } from ${JSON.stringify(requestPipelinePath)};
+import { applyAppMiddleware as __applyAppMiddleware } from ${JSON.stringify(appMiddlewarePath)};
 import {
   isKnownDynamicAppRoute as __isKnownDynamicAppRoute,
 } from ${JSON.stringify(appRouteHandlerRuntimePath)};
@@ -1113,8 +1111,6 @@ async function buildPageElements(route, params, routePath, pageRequest) {
   });
 }
 
-${middlewarePath ? generateMiddlewareMatcherCode("modern") : ""}
-
 const __basePath = ${JSON.stringify(bp)};
 const __trailingSlash = ${JSON.stringify(ts)};
 const __i18nConfig = ${JSON.stringify(i18nConfig)};
@@ -1125,13 +1121,6 @@ const __publicFiles = new Set(${JSON.stringify(publicFiles)});
 const __allowedOrigins = ${JSON.stringify(allowedOrigins)};
 
 ${generateDevOriginCheckCode(config?.allowedDevOrigins)}
-
-// ── ReDoS-safe regex compilation (still needed for middleware matching) ──
-${generateSafeRegExpCode("modern")}
-
-// ── Path normalization ──────────────────────────────────────────────────
-${generateNormalizePathCode("modern")}
-${generateRouteMatchNormalizationCode("modern")}
 
 // ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
 //    external URL proxy, cookie parsing, and request context are imported from
@@ -1475,142 +1464,19 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   ${
     middlewarePath
       ? `
-  // In hybrid app+pages dev mode the connect handler already ran middleware
-  // and forwarded the results via x-vinext-mw-ctx. Reconstruct _mwCtx from
-  // the forwarded data instead of re-running the middleware function.
-  // Guarded by NODE_ENV because this header only exists in dev (the connect
-  // handler sets it). In production there is no connect handler, so an
-  // attacker-supplied header must not be trusted.
-  let __mwCtxApplied = false;
-  if (process.env.NODE_ENV !== "production") {
-    const __mwCtxHeader = request.headers.get("x-vinext-mw-ctx");
-    if (__mwCtxHeader) {
-      try {
-        const __mwCtxData = JSON.parse(__mwCtxHeader);
-        if (__mwCtxData.h && __mwCtxData.h.length > 0) {
-          // Note: h may include x-middleware-request-* internal headers so
-          // applyMiddlewareRequestHeaders() can unpack them below.
-          // processMiddlewareHeaders() strips them before any response.
-          _mwCtx.headers = new Headers();
-          for (const [key, value] of __mwCtxData.h) {
-            _mwCtx.headers.append(key, value);
-          }
-        }
-        if (__mwCtxData.s != null) {
-          _mwCtx.status = __mwCtxData.s;
-        }
-        // Apply forwarded middleware rewrite so routing uses the rewritten path.
-        // The RSC plugin constructs its Request from the original HTTP request,
-        // not from req.url, so the connect handler's req.url rewrite is invisible.
-        if (__mwCtxData.r) {
-          const __rewriteParsed = new URL(__mwCtxData.r, request.url);
-          cleanPathname = __rewriteParsed.pathname;
-          url.search = __rewriteParsed.search;
-        }
-        // Flag set after full context application — if any step fails (e.g. malformed
-        // rewrite URL), we fall back to re-running middleware as a safety net.
-        __mwCtxApplied = true;
-      } catch (e) {
-        console.error("[vinext] Failed to parse forwarded middleware context:", e);
-      }
-    }
-  }
-  if (!__mwCtxApplied) {
-   // Run proxy/middleware if present and path matches.
-   // Validate exports match the file type (proxy.ts vs middleware.ts), matching Next.js behavior.
-   // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/proxy-missing-export/proxy-missing-export.test.ts
-  const _isProxy = ${JSON.stringify(isProxyFile(middlewarePath))};
-  const middlewareFn = _isProxy
-    ? (middlewareModule.proxy ?? middlewareModule.default)
-    : (middlewareModule.middleware ?? middlewareModule.default);
-  if (typeof middlewareFn !== "function") {
-    const _fileType = _isProxy ? "Proxy" : "Middleware";
-    const _expectedExport = _isProxy ? "proxy" : "middleware";
-    throw new Error("The " + _fileType + " file must export a function named \`" + _expectedExport + "\` or a \`default\` function.");
-  }
-  const middlewareMatcher = middlewareModule.config?.matcher;
-  if (matchesMiddleware(cleanPathname, middlewareMatcher, request, __i18nConfig)) {
-    try {
-      // Wrap in NextRequest so middleware gets .nextUrl, .cookies, .geo, .ip, etc.
-       // Always construct a new Request with the fully decoded + normalized pathname
-       // so middleware and the router see the same canonical path.
-      const mwUrl = new URL(request.url);
-      mwUrl.pathname = cleanPathname;
-      const mwRequest = new Request(mwUrl, request);
-      const __mwNextConfig = (__basePath || __i18nConfig) ? { basePath: __basePath, i18n: __i18nConfig ?? undefined } : undefined;
-      const nextRequest = mwRequest instanceof NextRequest ? mwRequest : new NextRequest(mwRequest, __mwNextConfig ? { nextConfig: __mwNextConfig } : undefined);
-      const mwFetchEvent = new NextFetchEvent({ page: cleanPathname });
-      let mwResponse;
-      try {
-        mwResponse = await middlewareFn(nextRequest, mwFetchEvent);
-      } finally {
-        const _mwWaitUntil = mwFetchEvent.drainWaitUntil();
-        const _mwExecCtx = _getRequestExecutionContext();
-        if (_mwExecCtx && typeof _mwExecCtx.waitUntil === "function") { _mwExecCtx.waitUntil(_mwWaitUntil); }
-      }
-      if (mwResponse) {
-        // Check for x-middleware-next (continue)
-        if (mwResponse.headers.get("x-middleware-next") === "1") {
-          // Middleware wants to continue — collect all headers except the two
-          // control headers we've already consumed.  x-middleware-request-*
-          // headers are kept so applyMiddlewareRequestHeaders() can unpack them;
-          // the blanket strip loop after that call removes every remaining
-          // x-middleware-* header before the set is merged into the response.
-           _mwCtx.headers = new Headers();
-          for (const [key, value] of mwResponse.headers) {
-            if (key !== "x-middleware-next" && key !== "x-middleware-rewrite") {
-              _mwCtx.headers.append(key, value);
-            }
-          }
-        } else {
-          // Check for redirect
-          if (mwResponse.status >= 300 && mwResponse.status < 400) {
-            return mwResponse;
-          }
-          // Check for rewrite
-          const rewriteUrl = mwResponse.headers.get("x-middleware-rewrite");
-          if (rewriteUrl) {
-            const rewriteParsed = new URL(rewriteUrl, request.url);
-            cleanPathname = rewriteParsed.pathname;
-            // Carry over query params from the rewrite URL so that
-            // searchParams props, useSearchParams(), and navigation context
-            // reflect the rewrite destination, not the original request.
-            url.search = rewriteParsed.search;
-            // Capture custom status code from rewrite (e.g. NextResponse.rewrite(url, { status: 403 }))
-            if (mwResponse.status !== 200) {
-              _mwCtx.status = mwResponse.status;
-            }
-            // Also save any other headers from the rewrite response
-            _mwCtx.headers = new Headers();
-            for (const [key, value] of mwResponse.headers) {
-              if (key !== "x-middleware-next" && key !== "x-middleware-rewrite") {
-                _mwCtx.headers.append(key, value);
-              }
-            }
-          } else {
-            // Middleware returned a custom response
-            return mwResponse;
-          }
-        }
-      }
-    } catch (err) {
-      console.error("[vinext] Middleware error:", err);
-      return new Response("Internal Server Error", { status: 500 });
-    }
-  }
-  } // end of if (!__mwCtxApplied)
-
-  // Unpack x-middleware-request-* headers into the request context so that
-  // headers() returns the middleware-modified headers instead of the original
-  // request headers. Strip ALL x-middleware-* headers from the set that will
-  // be merged into the outgoing HTTP response — this prefix is reserved for
-  // internal routing signals and must never reach clients.
-  if (_mwCtx.headers) {
-    // Preserve the pre-strip header set so route handlers can reconstruct
-    // a request object with middleware header overrides applied.
-    _mwCtx.requestHeaders = new Headers(_mwCtx.headers);
-    applyMiddlewareRequestHeaders(_mwCtx.headers);
-    processMiddlewareHeaders(_mwCtx.headers);
+  const __mwResult = await __applyAppMiddleware({
+    basePath: __basePath,
+    cleanPathname,
+    context: _mwCtx,
+    i18nConfig: __i18nConfig,
+    isProxy: ${JSON.stringify(isProxyFile(middlewarePath))},
+    module: middlewareModule,
+    request,
+  });
+  if (__mwResult.kind === "response") return __mwResult.response;
+  cleanPathname = __mwResult.cleanPathname;
+  if (__mwResult.search !== null) {
+    url.search = __mwResult.search;
   }
   `
       : ""
