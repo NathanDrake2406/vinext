@@ -130,10 +130,10 @@ function findGeneratedSitemapEntry(entries: unknown, rawId: string): object | nu
 async function handleGeneratedSitemap(
   route: MetadataRuntimeRoute,
   cleanPathname: string,
+  generateSitemaps: MetadataRouteFunction,
 ): Promise<Response | null> {
-  const generateSitemaps = readFunction(route.module, "generateSitemaps");
   const defaultExport = readFunction(route.module, "default");
-  if (route.type !== "sitemap" || !route.isDynamic || !generateSitemaps || !defaultExport) {
+  if (!defaultExport) {
     return null;
   }
 
@@ -290,17 +290,20 @@ export async function handleMetadataRouteRequest(
   options: MetadataRouteRequestOptions,
 ): Promise<Response | null> {
   for (const route of options.metadataRoutes) {
-    const generatedSitemapResponse = await handleGeneratedSitemap(route, options.cleanPathname);
-    if (generatedSitemapResponse) {
-      return generatedSitemapResponse;
-    }
+    if (route.type === "sitemap" && route.isDynamic) {
+      const generateSitemaps = readFunction(route.module, "generateSitemaps");
+      if (generateSitemaps) {
+        const generatedSitemapResponse = await handleGeneratedSitemap(
+          route,
+          options.cleanPathname,
+          generateSitemaps,
+        );
+        if (generatedSitemapResponse) {
+          return generatedSitemapResponse;
+        }
 
-    if (
-      route.type === "sitemap" &&
-      route.isDynamic &&
-      readFunction(route.module, "generateSitemaps")
-    ) {
-      continue;
+        continue;
+      }
     }
 
     const match = matchMetadataRoute(route, options.cleanPathname);
