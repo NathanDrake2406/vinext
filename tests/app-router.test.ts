@@ -4591,16 +4591,11 @@ describe("generateRscEntry ISR code generation", () => {
   it("generated code threads collected fetch tags into page ISR writes", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
     expect(code).toContain("getCollectedFetchTags");
-    expect(code).toContain("buildPageCacheTags");
+    expect(code).toContain("function __pageCacheTags(pathname, extraTags)");
+    expect(code).toContain("buildPageCacheTags: __pageCacheTags");
+    expect(code).toContain("setCurrentFetchSoftTags(__pageCacheTags(cleanPathname, []))");
     expect(code).toContain(
-      'buildPageCacheTags(cleanPathname, [], route.routeSegments, route.routeHandler ? "route" : "page")',
-    );
-    expect(code).toContain(
-      "const __buildRouteHandlerPageCacheTags = function(pathname, extraTags) {",
-    );
-    expect(code).toContain("buildPageCacheTags: __buildRouteHandlerPageCacheTags");
-    expect(code).toContain(
-      'const __pageTags = buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page")',
+      "const __pageTags = __pageCacheTags(cleanPathname, getCollectedFetchTags())",
     );
     expect(code).toContain("Array.isArray(tags) ? tags : []");
   });
@@ -4863,9 +4858,7 @@ describe("generateRscEntry ISR code generation", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
     expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
     expect(code).toContain("getPageTags() {");
-    expect(code).toContain(
-      'return buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page")',
-    );
+    expect(code).toContain("return __pageCacheTags(cleanPathname, getCollectedFetchTags())");
     // Background regen still writes fresh RSC bytes directly.
     expect(code).toContain("rscData: __freshRscData");
   });

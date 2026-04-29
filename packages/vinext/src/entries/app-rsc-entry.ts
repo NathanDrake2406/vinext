@@ -2535,7 +2535,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
             isRscRequest,
             request,
             {
-              boundaryComponent: parentNotFound,
+              boundaryComponent: statusCode === 404 ? parentNotFound : null,
               layouts: parentLayouts,
               matchedParams: params,
             },
