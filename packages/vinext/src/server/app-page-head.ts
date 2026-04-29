@@ -73,6 +73,7 @@ export async function resolveAppPageHead<TModule extends AppPageHeadModule>(
 ): Promise<ResolveAppPageHeadResult> {
   const { hasSearchParams, searchParamsObject } = collectAppPageSearchParams(options.searchParams);
   const layoutMetadataPromises: Promise<Metadata | null>[] = [];
+  const layoutViewportPromises: Promise<Viewport | null>[] = [];
   let accumulatedMetadata = Promise.resolve<Metadata>({});
 
   for (let index = 0; index < options.layoutModules.length; index++) {
@@ -94,6 +95,7 @@ export async function resolveAppPageHead<TModule extends AppPageHeadModule>(
       parentForLayout,
     );
     layoutMetadataPromises.push(metadataPromise);
+    layoutViewportPromises.push(resolveModuleViewport(layoutModule, layoutParams));
     accumulatedMetadata = metadataPromise.then(async (metadataResult) =>
       metadataResult ? mergeMetadata([await parentForLayout, metadataResult]) : parentForLayout,
     );
@@ -107,21 +109,7 @@ export async function resolveAppPageHead<TModule extends AppPageHeadModule>(
   const [layoutMetadataResults, layoutViewportResults, pageMetadata, pageViewport] =
     await Promise.all([
       Promise.all(layoutMetadataPromises),
-      Promise.all(
-        options.layoutModules.map((layoutModule, index) => {
-          if (!layoutModule) {
-            return Promise.resolve(null);
-          }
-          return resolveModuleViewport(
-            layoutModule,
-            resolveAppPageSegmentParams(
-              options.routeSegments,
-              options.layoutTreePositions?.[index] ?? 0,
-              options.params,
-            ),
-          );
-        }),
-      ),
+      Promise.all(layoutViewportPromises),
       options.pageModule
         ? resolveModuleMetadata(
             options.pageModule,

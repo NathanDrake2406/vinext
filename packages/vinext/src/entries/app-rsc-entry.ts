@@ -2502,7 +2502,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   // Note: CSS is automatically injected by @vitejs/plugin-rsc's
   // rscCssTransform — no manual loadCss() call needed.
   const _hasLoadingBoundary = !!(route.loading && route.loading.default);
-  const _asyncLayoutParams = makeThenableParams(params);
+  const _asyncRouteParams = makeThenableParams(params);
   return __renderAppPageLifecycle({
     cleanPathname,
     clearRequestContext() {
@@ -2559,7 +2559,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       const _asyncSearchParams = makeThenableParams(
         __collectAppPageSearchParams(url.searchParams).searchParamsObject,
       );
-      return PageComponent({ params: _asyncLayoutParams, searchParams: _asyncSearchParams });
+      return PageComponent({ params: _asyncRouteParams, searchParams: _asyncSearchParams });
     },
     classification: {
       getLayoutId(index) {
