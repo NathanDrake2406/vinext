@@ -224,6 +224,16 @@ describe("next/font/google shim", () => {
     expect(second.variable).toBe(first.variable);
   });
 
+  it("normalizes explicit display swap to the same identity as the default", async () => {
+    const { createFontLoader } = await import("../packages/vinext/src/shims/font-google.js");
+    const DisplayDefault = createFontLoader("Display Default");
+    const implicit = DisplayDefault({ weight: ["400"], subsets: ["latin"] });
+    const explicit = DisplayDefault({ weight: ["400"], subsets: ["latin"], display: "swap" });
+
+    expect(explicit.className).toBe(implicit.className);
+    expect(explicit.variable).toBe(implicit.variable);
+  });
+
   it("does not emit Next-incompatible :root font variable rules", async () => {
     const { createFontLoader, getSSRFontStyles } =
       await import("../packages/vinext/src/shims/font-google.js");
@@ -289,6 +299,19 @@ describe("next/font/google shim", () => {
     expect(result.style.fontFamily).not.toMatch(/[^\\]'; }/);
   });
 
+  it("sanitizes generated class selectors for crafted font family names", async () => {
+    const mod = await import("../packages/vinext/src/shims/font-google.js");
+    const fonts = mod.default as any;
+    const result = fonts["Evil']; } body { color: red; } .x { font-family: '"]({
+      weight: ["400"],
+    });
+
+    expect(result.className).toMatch(/^__font_[a-z0-9_-]+_[a-z0-9]+$/);
+    expect(result.variable).toMatch(/^__variable_[a-z0-9_-]+_[a-z0-9]+$/);
+    expect(result.className).not.toMatch(/[;{}'"\s]/);
+    expect(result.variable).not.toMatch(/[;{}'"\s]/);
+  });
+
   it("escapes backslashes in font family names", async () => {
     const mod = await import("../packages/vinext/src/shims/font-google.js");
     const fonts = mod.default as any;
@@ -339,16 +362,19 @@ describe("next/font/google shim", () => {
 
   it("accepts valid CSS variable names", async () => {
     const mod = await import("../packages/vinext/src/shims/font-google.js");
-    const Inter = mod.createFontLoader("Inter");
-    const result = Inter({
+    const ValidVarTest = mod.createFontLoader("Valid Var Test");
+    const beforeStyles = mod.getSSRFontStyles();
+    const result = ValidVarTest({
       weight: ["400"],
-      variable: "--font-inter",
+      variable: "--font-valid-var-test",
     });
     expect(result.className).toBeDefined();
-    // Should use the provided variable name in the CSS
+    expect(result.variable).toBeDefined();
+
     const styles = mod.getSSRFontStyles();
-    const hasVar = styles.some((s: string) => s.includes("--font-inter"));
-    expect(hasVar).toBe(true);
+    const addedStyles = styles.slice(beforeStyles.length);
+    expect(addedStyles.some((s: string) => s.includes(`.${result.variable}`))).toBe(true);
+    expect(addedStyles.some((s: string) => s.includes("--font-valid-var-test"))).toBe(true);
   });
 });
 

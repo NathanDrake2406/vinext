@@ -109,7 +109,11 @@ function toVarName(family: string): string {
 }
 
 function fontClassSegment(family: string): string {
-  return family.toLowerCase().replace(/\s+/g, "_");
+  const segment = family
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return segment || "font";
 }
 
 function normalizeStringOption(value: string | string[] | undefined): string {
@@ -150,7 +154,7 @@ function createFontIdentity(
       normalizeStringOption(options.weight),
       normalizeStringOption(options.style),
       normalizeStringOption(options.subsets),
-      options.display ?? "",
+      options.display ?? "swap",
       normalizeBooleanOption(options.preload),
       normalizeStringOption(options.fallback),
       normalizeStringOrBooleanOption(options.adjustFontFallback),
