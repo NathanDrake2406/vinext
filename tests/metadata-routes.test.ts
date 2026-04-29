@@ -670,6 +670,15 @@ describe("scanMetadataFiles", () => {
     expect(manifest!.servedUrl).toBe("/manifest.webmanifest");
   });
 
+  it("discovers manifest.json at root with its static URL", () => {
+    createFile("manifest.json");
+    const routes = scanMetadataFiles(tmpDir);
+    const manifest = routes.find((r) => r.type === "manifest");
+    expect(manifest).toBeDefined();
+    expect(manifest!.servedUrl).toBe("/manifest.json");
+    expect(manifest!.contentType).toBe("application/manifest+json");
+  });
+
   it("discovers favicon.ico at root", () => {
     createFile("favicon.ico");
     const routes = scanMetadataFiles(tmpDir);

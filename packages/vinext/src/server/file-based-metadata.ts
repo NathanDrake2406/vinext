@@ -446,6 +446,65 @@ function withContentHash(href: string, contentHash?: string): string {
   return `${href}?${contentHash}`;
 }
 
+function hasOwnProperty(source: object | null | undefined, key: string): boolean {
+  return Boolean(source && Object.prototype.hasOwnProperty.call(source, key));
+}
+
+function hasOpenGraphImages(metadata: Metadata | null | undefined): boolean {
+  return hasOwnProperty(metadata?.openGraph, "images");
+}
+
+function hasTwitterImages(metadata: Metadata | null | undefined): boolean {
+  return hasOwnProperty(metadata?.twitter, "images");
+}
+
+function hasIcons(metadata: Metadata | null | undefined): boolean {
+  return hasOwnProperty(metadata, "icons");
+}
+
+function getMetadataSourceForRoute(
+  route: MetadataFileRoute,
+  options: FileBasedMetadataOptions | undefined,
+  fallbackMetadata: Metadata | null,
+): Metadata | null {
+  if (!options?.metadataSources) {
+    return fallbackMetadata;
+  }
+
+  if (!route.routeSegments) {
+    return null;
+  }
+
+  for (let index = options.metadataSources.length - 1; index >= 0; index--) {
+    const source = options.metadataSources[index];
+    if (routeSegmentsApplyWithParallelSlots(source.routeSegments, route.routeSegments)) {
+      return source.metadata;
+    }
+  }
+
+  return null;
+}
+
+function socialRouteHasExplicitImagesAtSource(
+  route: MetadataFileRoute,
+  kind: "openGraph" | "twitter",
+  options: FileBasedMetadataOptions | undefined,
+  fallbackMetadata: Metadata | null,
+): boolean {
+  const sourceMetadata = getMetadataSourceForRoute(route, options, fallbackMetadata);
+  return kind === "openGraph"
+    ? hasOpenGraphImages(sourceMetadata)
+    : hasTwitterImages(sourceMetadata);
+}
+
+function iconRouteHasExplicitIconsAtSource(
+  route: MetadataFileRoute,
+  options: FileBasedMetadataOptions | undefined,
+  fallbackMetadata: Metadata | null,
+): boolean {
+  return hasIcons(getMetadataSourceForRoute(route, options, fallbackMetadata));
+}
+
 function readStringProperty(source: object, key: string): string | undefined {
   const value = Reflect.get(source, key);
   return typeof value === "string" ? value : undefined;
@@ -622,28 +681,34 @@ export async function applyFileBasedMetadata(
     params,
     routeSegments,
   );
-  const iconRoutes = selectDeepestRoutes(metadataRoutes, "icon", routePath, params, routeSegments);
+  const iconRoutes = selectDeepestRoutes(
+    metadataRoutes,
+    "icon",
+    routePath,
+    params,
+    routeSegments,
+  ).filter((route) => !iconRouteHasExplicitIconsAtSource(route, options, metadata));
   const appleRoutes = selectDeepestRoutes(
     metadataRoutes,
     "apple",
     routePath,
     params,
     routeSegments,
-  );
+  ).filter((route) => !iconRouteHasExplicitIconsAtSource(route, options, metadata));
   const openGraphRoutes = selectDeepestRoutes(
     metadataRoutes,
     "openGraph",
     routePath,
     params,
     routeSegments,
-  );
+  ).filter((route) => !socialRouteHasExplicitImagesAtSource(route, "openGraph", options, metadata));
   const twitterRoutes = selectDeepestRoutes(
     metadataRoutes,
     "twitter",
     routePath,
     params,
     routeSegments,
-  );
+  ).filter((route) => !socialRouteHasExplicitImagesAtSource(route, "twitter", options, metadata));
   const manifestRoutes = selectDeepestRoutes(
     metadataRoutes,
     "manifest",

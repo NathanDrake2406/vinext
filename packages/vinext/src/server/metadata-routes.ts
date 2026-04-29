@@ -505,6 +505,10 @@ function getMetadataServedUrl(
     return withMetadataSuffix(config.urlPath, suffix);
   }
 
+  if (metaType === "manifest") {
+    return withMetadataSuffix(`/${routeBaseName}${ext}`, suffix);
+  }
+
   if (
     metaType === "icon" ||
     metaType === "apple-icon" ||
@@ -631,9 +635,12 @@ export function scanMetadataFiles(appDir: string): MetadataFileRoute[] {
           routePrefix: urlPrefix,
           routeSegments: parentSegments,
           servedUrl: servedPrefix === "" ? urlPath : `${servedPrefix}${urlPath}`,
-          contentType: isStatic
-            ? getStaticContentType(ext, config.contentType)
-            : config.contentType,
+          contentType:
+            isStatic && metaType === "manifest"
+              ? config.contentType
+              : isStatic
+                ? getStaticContentType(ext, config.contentType)
+                : config.contentType,
           altFilePath,
         });
       }

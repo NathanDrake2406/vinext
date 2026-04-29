@@ -150,6 +150,13 @@ function createBaseEntryData(
   };
 }
 
+function readStaticMetadataImageDimensions(
+  route: MetadataFileRoute,
+  buffer: Buffer,
+): ImageDimensions {
+  return route.contentType.startsWith("image/") ? readMetadataImageDimensions(buffer, route) : {};
+}
+
 export function createMetadataRouteEntryData(route: MetadataFileRoute): MetadataRouteEntryData {
   const buffer = readMetadataRouteFile(route);
   const contentHash = createMetadataContentHash(buffer);
@@ -170,7 +177,7 @@ export function createMetadataRouteEntryData(route: MetadataFileRoute): Metadata
     headData: createMetadataHeadData({
       route,
       contentHash,
-      dimensions: readMetadataImageDimensions(buffer, route),
+      dimensions: readStaticMetadataImageDimensions(route, buffer),
       altText: readMetadataRouteAltText(route),
     }),
     fileDataBase64: buffer.toString("base64"),

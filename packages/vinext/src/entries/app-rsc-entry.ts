@@ -1029,6 +1029,12 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     layoutTreePositions: route.layoutTreePositions,
     metadataRoutes,
     pageModule: route.page,
+    parallelRoutes: Object.values(route.slots ?? {}).map((slot) => ({
+      layoutModule: slot.layout,
+      pageModule: slot.page,
+      params,
+      routeSegments: route.routeSegments,
+    })),
     params,
     routePath: route.pattern,
     routeSegments: route.routeSegments,

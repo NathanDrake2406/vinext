@@ -34,6 +34,7 @@ describe("app page head resolution", () => {
 
   it("resolves layout and page metadata with parent chaining and page-only search params", async () => {
     const layoutSearchParamsSeen: unknown[] = [];
+    const layoutParamsSeen: unknown[] = [];
     const pageParentImages: unknown[] = [];
 
     const rootLayout = {
@@ -48,8 +49,12 @@ describe("app page head resolution", () => {
       },
     };
     const nestedLayout = {
-      async generateMetadata(props: { searchParams?: unknown }, parent: Promise<unknown>) {
+      async generateMetadata(
+        props: { params?: Promise<Record<string, string | string[]>>; searchParams?: unknown },
+        parent: Promise<unknown>,
+      ) {
         layoutSearchParamsSeen.push(props.searchParams);
+        layoutParamsSeen.push(await props.params);
         const parentMetadata = await parent;
         const parentOpenGraph =
           typeof parentMetadata === "object" && parentMetadata
@@ -119,6 +124,58 @@ describe("app page head resolution", () => {
     expect(result.pageSearchParams).toEqual({ tag: ["next", "vinext"] });
     expect(result.hasSearchParams).toBe(true);
     expect(layoutSearchParamsSeen).toEqual([undefined]);
+    expect(layoutParamsSeen).toEqual([{}]);
     expect(pageParentImages).toEqual(["/root-og.png", "/nested-og.png"]);
+  });
+
+  it("includes active parallel route metadata in resolved head", async () => {
+    const slotParentDescriptions: unknown[] = [];
+    const rootLayout = {
+      metadata: {
+        description: "Root description",
+        title: "Root title",
+      },
+    };
+    const page = {
+      metadata: {
+        title: "Page title",
+      },
+    };
+    const slotPage = {
+      async generateMetadata(_props: unknown, parent: Promise<Record<string, unknown>>) {
+        const parentMetadata = await parent;
+        slotParentDescriptions.push(parentMetadata.description);
+        return {
+          openGraph: {
+            title: "Slot OG title",
+          },
+        };
+      },
+    };
+
+    const result = await resolveAppPageHead<Record<string, unknown>>({
+      layoutModules: [rootLayout],
+      layoutTreePositions: [0],
+      metadataRoutes: [],
+      pageModule: page,
+      parallelRoutes: [
+        {
+          pageModule: slotPage,
+          routeSegments: ["dashboard"],
+        },
+      ],
+      params: {},
+      routePath: "/dashboard",
+      routeSegments: ["dashboard"],
+    });
+
+    expect(slotParentDescriptions).toEqual(["Root description"]);
+    expect(result.metadata).toEqual({
+      description: "Root description",
+      openGraph: {
+        title: "Slot OG title",
+      },
+      title: "Page title",
+    });
   });
 });

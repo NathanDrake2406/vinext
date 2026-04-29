@@ -295,6 +295,30 @@ describe("App Router entry templates", () => {
     }
   });
 
+  it("generateRscEntry does not read image dimensions for static text metadata files", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-entry-metadata-"));
+    const filePath = path.join(tmpDir, "manifest.json");
+    fs.writeFileSync(filePath, JSON.stringify({ name: "test" }));
+    const metadataRoutes: MetadataFileRoute[] = [
+      {
+        type: "manifest",
+        isDynamic: false,
+        filePath,
+        routePrefix: "",
+        servedUrl: "/manifest.webmanifest",
+        contentType: "application/manifest+json",
+      },
+    ];
+
+    try {
+      expect(() =>
+        generateRscEntry("/tmp/test/app", minimalAppRoutes, null, metadataRoutes, null, "", false),
+      ).not.toThrow();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("generateRscEntry uses buildPageElements in the server-action re-render path", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
     // PR 2c returns the flat elements payload instead of the monolithic page
