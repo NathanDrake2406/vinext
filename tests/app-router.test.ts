@@ -2269,11 +2269,19 @@ describe("App Router Production server (startProdServer)", () => {
     // Wait for cache entry to become stale (revalidate=1, generous margin for slow CI)
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    // STALE — serves stale data, triggers background regen
+    // STALE — serves stale data, triggers background regen.
+    // The stale response must return quickly: it must NOT block on the
+    // background regeneration. Measure total duration to catch regressions.
+    const staleStart = Date.now();
     const staleRes = await fetch(`${baseUrl}/api/static-data`);
+    const staleDuration = Date.now() - staleStart;
     expect(staleRes.headers.get("x-vinext-cache")).toBe("STALE");
     const staleBody = await staleRes.json();
     expect(staleBody.timestamp).toBe(cachedTimestamp); // Still the old data
+
+    // The stale response must arrive promptly; background regen runs
+    // out-of-band via ctx.waitUntil(). Allow 500ms for cold-start latency.
+    expect(staleDuration).toBeLessThan(500);
 
     // Poll until background regen completes (up to 5s)
     const deadline = Date.now() + 5000;
@@ -2288,6 +2296,48 @@ describe("App Router Production server (startProdServer)", () => {
     // HIT — fresh data from background regen
     expect(freshRes.headers.get("x-vinext-cache")).toBe("HIT");
     expect(freshBody.timestamp).not.toBe(cachedTimestamp); // New data
+  });
+
+  // Test pattern ported from Next.js:
+  // test/e2e/app-dir/use-cache-swr/use-cache-swr.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/use-cache-swr/use-cache-swr.test.ts
+  // (adapted from "use cache" SWR to route handler ISR with export const revalidate)
+  it("route handler ISR: STALE completes quickly without blocking on background regen", async () => {
+    // /api/slow-isr has revalidate=1 and a 1s handler delay.
+    // Populate the cache (cold request, takes ~1s).
+    const coldStart = Date.now();
+    const cold = await fetch(`${baseUrl}/api/slow-isr`);
+    expect(cold.status).toBe(200);
+    const coldBody = await cold.json();
+    const coldDuration = Date.now() - coldStart;
+    expect(coldDuration).toBeGreaterThanOrEqual(700); // roughly 1s handler delay
+
+    // Wait for the 1s revalidate window to expire.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    // Stale request: must return the cached value quickly (< 500ms), not
+    // the full 1s handler duration. If the response is blocked on background
+    // regeneration, this will take ≥ 1s and fail.
+    const staleStart = Date.now();
+    const stale = await fetch(`${baseUrl}/api/slow-isr`);
+    const staleDuration = Date.now() - staleStart;
+    expect(stale.headers.get("x-vinext-cache")).toBe("STALE");
+    const staleBody = await stale.json();
+    expect(staleBody.timestamp).toBe(coldBody.timestamp); // Still the old data
+    expect(staleDuration).toBeLessThan(500);
+
+    // Wait for background regen to complete, then verify fresh data.
+    const deadline = Date.now() + 5000;
+    let freshRes: Response;
+    let freshBody: { timestamp: number };
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      freshRes = await fetch(`${baseUrl}/api/slow-isr`);
+      freshBody = await freshRes.json();
+    } while (freshRes.headers.get("x-vinext-cache") !== "HIT" && Date.now() < deadline);
+
+    expect(freshRes.headers.get("x-vinext-cache")).toBe("HIT");
+    expect(freshBody.timestamp).not.toBe(coldBody.timestamp);
   });
 
   it("route handler ISR: auto-HEAD returns cached headers with empty body", async () => {
