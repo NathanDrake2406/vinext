@@ -43,9 +43,7 @@ const appServerActionExecutionPath = resolveEntryPath(
 );
 const appRscErrorsPath = resolveEntryPath("../server/app-rsc-errors.js", import.meta.url);
 const implicitTagsPath = resolveEntryPath("../server/implicit-tags.js", import.meta.url);
-const appPageCachePath = resolveEntryPath("../server/app-page-cache.js", import.meta.url);
 const appPageExecutionPath = resolveEntryPath("../server/app-page-execution.js", import.meta.url);
-const appPageBoundaryPath = resolveEntryPath("../server/app-page-boundary.js", import.meta.url);
 const appPageBoundaryRenderPath = resolveEntryPath(
   "../server/app-page-boundary-render.js",
   import.meta.url,
@@ -57,15 +55,9 @@ const appPageRouteWiringPath = resolveEntryPath(
 );
 const appPageHeadPath = resolveEntryPath("../server/app-page-head.js", import.meta.url);
 const appPageParamsPath = resolveEntryPath("../server/app-page-params.js", import.meta.url);
-const appPageRenderPath = resolveEntryPath("../server/app-page-render.js", import.meta.url);
 const appPageResponsePath = resolveEntryPath("../server/app-page-response.js", import.meta.url);
+const appPageDispatchPath = resolveEntryPath("../server/app-page-dispatch.js", import.meta.url);
 const cspPath = resolveEntryPath("../server/csp.js", import.meta.url);
-const appPageRequestPath = resolveEntryPath("../server/app-page-request.js", import.meta.url);
-const appPageMethodPath = resolveEntryPath("../server/app-page-method.js", import.meta.url);
-const appStaticGenerationPath = resolveEntryPath(
-  "../server/app-static-generation.js",
-  import.meta.url,
-);
 const appRscRouteMatchingPath = resolveEntryPath(
   "../server/app-rsc-route-matching.js",
   import.meta.url,
@@ -212,17 +204,10 @@ import {
   createRscOnErrorHandler as __createRscOnErrorHandler,
   sanitizeErrorForClient as __sanitizeErrorForClient,
 } from ${JSON.stringify(appRscErrorsPath)};
-import { readAppPageCacheResponse as __readAppPageCacheResponse } from ${JSON.stringify(appPageCachePath)};
 import {
   buildAppPageFontLinkHeader as __buildAppPageFontLinkHeader,
-  buildAppPageSpecialErrorResponse as __buildAppPageSpecialErrorResponse,
-  readAppPageTextStream as __readAppPageTextStream,
   resolveAppPageSpecialError as __resolveAppPageSpecialError,
-  teeAppPageRscStreamForCapture as __teeAppPageRscStreamForCapture,
 } from ${JSON.stringify(appPageExecutionPath)};
-import {
-  resolveAppPageParentHttpAccessBoundaryModule as __resolveAppPageParentHttpAccessBoundaryModule,
-} from ${JSON.stringify(appPageBoundaryPath)};
 import {
   renderAppPageErrorBoundary as __renderAppPageErrorBoundary,
   renderAppPageHttpAccessFallback as __renderAppPageHttpAccessFallback,
@@ -245,29 +230,17 @@ import {
   resolveAppPageHead as __resolveAppPageHead,
 } from ${JSON.stringify(appPageHeadPath)};
 import {
-  renderAppPageLifecycle as __renderAppPageLifecycle,
-} from ${JSON.stringify(appPageRenderPath)};
-import {
   mergeMiddlewareResponseHeaders as __mergeMiddlewareResponseHeaders,
 } from ${JSON.stringify(appPageResponsePath)};
+import {
+  dispatchAppPage as __dispatchAppPage,
+} from ${JSON.stringify(appPageDispatchPath)};
 import { getScriptNonceFromHeaderSources as __getScriptNonceFromHeaderSources } from ${JSON.stringify(cspPath)};
-import {
-  buildAppPageElement as __buildAppPageElement,
-  resolveAppPageIntercept as __resolveAppPageIntercept,
-  validateAppPageDynamicParams as __validateAppPageDynamicParams,
-} from ${JSON.stringify(appPageRequestPath)};
-import {
-  resolveAppPageMethodResponse as __resolveAppPageMethodResponse,
-} from ${JSON.stringify(appPageMethodPath)};
-import {
-  createStaticGenerationHeadersContext as __createStaticGenerationHeadersContext,
-} from ${JSON.stringify(appStaticGenerationPath)};
 import { buildPageCacheTags } from ${JSON.stringify(implicitTagsPath)};
-import { _consumeRequestScopedCacheLife } from "next/cache";
 import { getRequestExecutionContext as _getRequestExecutionContext } from ${JSON.stringify(requestContextShimPath)};
 import { setRootParams as __setRootParams, pickRootParams as __pickRootParams } from ${JSON.stringify(rootParamsShimPath)};
 import { makeThenableParams } from ${JSON.stringify(thenableParamsShimPath)};
-import { ensureFetchPatch as _ensureFetchPatch, getCollectedFetchTags, setCurrentFetchSoftTags } from "vinext/fetch-cache";
+import { ensureFetchPatch as _ensureFetchPatch, setCurrentFetchSoftTags } from "vinext/fetch-cache";
 import {
   createAppRscRouteMatcher as __createAppRscRouteMatcher,
 } from ${JSON.stringify(appRscRouteMatchingPath)};
@@ -1138,9 +1111,6 @@ ${prerenderPagesLoaderOption}
   }
 
   const { route, params } = match;
-  setCurrentFetchSoftTags(
-    buildPageCacheTags(cleanPathname, [], route.routeSegments, route.routeHandler ? "route" : "page"),
-  );
 
   // Update navigation context with matched params
   setNavigationContext({
@@ -1152,6 +1122,9 @@ ${prerenderPagesLoaderOption}
 
   // Handle route.ts API handlers
   if (route.routeHandler) {
+    setCurrentFetchSoftTags(
+      buildPageCacheTags(cleanPathname, [], route.routeSegments, "route"),
+    );
     return __dispatchAppRouteHandler({
       basePath: __basePath,
       cleanPathname,
@@ -1177,343 +1150,56 @@ ${prerenderPagesLoaderOption}
     });
   }
 
-  // Build the component tree: layouts wrapping the page
-  const hasPageModule = !!route.page;
   const PageComponent = route.page?.default;
-  if (hasPageModule && !PageComponent) {
-    __clearRequestContext();
-    return new Response("Page has no default export", { status: 500 });
-  }
-
-  // Read route segment config from page module exports
-  let revalidateSeconds = typeof route.page?.revalidate === "number" ? route.page.revalidate : null;
-  const dynamicConfig = route.page?.dynamic; // 'auto' | 'force-dynamic' | 'force-static' | 'error'
-  const dynamicParamsConfig = route.page?.dynamicParams; // true (default) | false
-  const isForceStatic = dynamicConfig === "force-static";
-  const isDynamicError = dynamicConfig === "error";
-  const __methodResponse = __resolveAppPageMethodResponse({
-    dynamicConfig,
-    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
-    isDynamicRoute: route.isDynamic,
-    middlewareHeaders: _mwCtx.headers,
-    request,
-    revalidateSeconds,
-  });
-  if (__methodResponse) {
-    __clearRequestContext();
-    return __methodResponse;
-  }
-
-  // force-static: replace headers/cookies context with empty values and
-  // clear searchParams so dynamic APIs return defaults instead of real data
-  if (isForceStatic) {
-    setHeadersContext(__createStaticGenerationHeadersContext({
-      dynamicConfig,
-      routeKind: "page",
-      routePattern: route.pattern,
-    }));
-    setNavigationContext({
-      pathname: cleanPathname,
-      searchParams: new URLSearchParams(),
-      params,
-    });
-  }
-
-  // dynamic = 'error': install an access error so request APIs fail with the
-  // static-generation message even for legacy sync property access.
-  if (isDynamicError) {
-    setHeadersContext(__createStaticGenerationHeadersContext({
-      dynamicConfig,
-      routeKind: "page",
-      routePattern: route.pattern,
-    }));
-    setNavigationContext({
-      pathname: cleanPathname,
-      searchParams: new URLSearchParams(),
-      params,
-    });
-  }
-
-  // force-dynamic: set no-store Cache-Control
-  const isForceDynamic = dynamicConfig === "force-dynamic";
-
-  // ── ISR cache read (production only) ─────────────────────────────────────
-  // Read from cache BEFORE generateStaticParams and all rendering work.
-  // This is the critical performance optimization: on a cache hit we skip
-  // ALL expensive work (generateStaticParams, buildPageElement, layout probe,
-  // page probe, renderToReadableStream, SSR). Both HTML and RSC requests
-  // (client-side navigation / prefetch) are served from cache.
-  //
-  // HTML and RSC are stored under separate keys (matching Next.js's .html/.rsc
-  // file layout) so each request type reads and writes independently — no races,
-  // no partial-entry sentinels, no read-before-write hacks needed.
-  //
-  // force-static and dynamic='error' are compatible with ISR — they control
-  // how dynamic APIs behave during rendering, not whether results are cached.
-  // Only force-dynamic truly bypasses the ISR cache.
-  if (
-    process.env.NODE_ENV === "production" &&
-    !isForceDynamic &&
-    (isRscRequest || !_scriptNonce) &&
-    revalidateSeconds !== null && revalidateSeconds > 0 && revalidateSeconds !== Infinity
-  ) {
-    const __cachedPageResponse = await __readAppPageCacheResponse({
-      cleanPathname,
-      clearRequestContext: function() {
-        __clearRequestContext();
-      },
-      isRscRequest,
-      isrDebug: __isrDebug,
-      isrGet: __isrGet,
-      isrHtmlKey: __isrHtmlKey,
-      isrRscKey: __isrRscKey,
-      isrSet: __isrSet,
-      mountedSlotsHeader: __mountedSlotsHeader,
-      revalidateSeconds,
-      renderFreshPageForCache: async function() {
-        // Re-render the page to produce fresh HTML + RSC data for the cache
-        // Use an empty headers context for background regeneration — not the original
-        // user request — to prevent user-specific cookies/auth headers from leaking
-        // into content that is cached and served to all subsequent users.
-        const __revalHeadCtx = __createStaticGenerationHeadersContext({
-          dynamicConfig,
-          routeKind: "page",
-          routePattern: route.pattern,
-        });
-        const __revalUCtx = _createUnifiedCtx({
-          headersContext: __revalHeadCtx,
-          executionContext: _getRequestExecutionContext(),
-          unstableCacheRevalidation: "foreground",
-        });
-        return _runWithUnifiedCtx(__revalUCtx, async () => {
-          _ensureFetchPatch();
-          setCurrentFetchSoftTags(buildPageCacheTags(cleanPathname, [], route.routeSegments, "page"));
-          setNavigationContext({ pathname: cleanPathname, searchParams: new URLSearchParams(), params });
-          // Slot context (X-Vinext-Mounted-Slots) is inherited from the
-          // triggering request so the regen result is cached under the
-          // correct slot-variant key.
-          const __revalElement = await buildPageElements(
-            route,
-            params,
-            cleanPathname,
-            {
-              opts: undefined,
-              searchParams: new URLSearchParams(),
-              isRscRequest,
-              request,
-              mountedSlotsHeader: __mountedSlotsHeader,
-            },
-          );
-          const __revalOnError = createRscOnErrorHandler(request, cleanPathname, route.pattern);
-          const __revalRscStream = renderToReadableStream(__revalElement, { onError: __revalOnError });
-          const __revalRscCapture = __teeAppPageRscStreamForCapture(__revalRscStream, true);
-          const __revalFontData = { links: _getSSRFontLinks(), styles: _getSSRFontStyles(), preloads: _getSSRFontPreloads() };
-          const __revalSsrEntry = await import.meta.viteRsc.loadModule("ssr", "index");
-          const __revalCapturedRscRef = { value: null };
-          const __revalHtmlStream = await __revalSsrEntry.handleSsr(
-            __revalRscCapture.ssrStream,
-            _getNavigationContext(),
-            __revalFontData,
-            __revalRscCapture.sideStream
-              ? { sideStream: __revalRscCapture.sideStream, capturedRscDataRef: __revalCapturedRscRef }
-              : undefined,
-          );
-          __clearRequestContext();
-          const __freshHtml = await __readAppPageTextStream(__revalHtmlStream);
-          const __freshRscData = __revalCapturedRscRef.value ? await __revalCapturedRscRef.value : null;
-          const __pageTags = buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page");
-          return { html: __freshHtml, rscData: __freshRscData, tags: __pageTags };
-        });
-      },
-      scheduleBackgroundRegeneration(key, renderFn) {
-        __triggerBackgroundRegeneration(key, renderFn, {
-          routerKind: "App Router",
-          routePath: route.pattern,
-          routeType: "render",
-        });
-      },
-    });
-    if (__cachedPageResponse) {
-      return __cachedPageResponse;
-    }
-  }
-
-  // dynamicParams = false: only params from generateStaticParams are allowed.
-  // This runs AFTER the ISR cache read so that a cache hit skips this work entirely.
-  const __dynamicParamsResponse = await __validateAppPageDynamicParams({
-    clearRequestContext() {
-      __clearRequestContext();
-    },
-    enforceStaticParamsOnly: dynamicParamsConfig === false,
-    generateStaticParams: route.page?.generateStaticParams,
-    isDynamicRoute: route.isDynamic,
-    logGenerateStaticParamsError(err) {
-      console.error("[vinext] generateStaticParams error:", err);
-    },
-    params,
-  });
-  if (__dynamicParamsResponse) {
-    return __dynamicParamsResponse;
-  }
-
-  // Check for intercepting routes on RSC requests (client-side navigation).
-  // If the target URL matches an intercepting route in a parallel slot,
-  // render the source route with the intercepting page in the slot.
-  const __interceptResult = await __resolveAppPageIntercept({
-    buildPageElement(interceptRoute, interceptParams, interceptOpts, interceptSearchParams) {
-      return buildPageElements(
-        interceptRoute,
-        interceptParams,
-        cleanPathname,
-        {
-          opts: interceptOpts,
-          searchParams: interceptSearchParams,
-          isRscRequest,
-          request,
-          mountedSlotsHeader: __mountedSlotsHeader,
-        },
-      );
-    },
-    cleanPathname,
-    currentRoute: route,
-    findIntercept(pathname) {
-      return findIntercept(pathname, interceptionContextHeader);
-    },
-    getRouteParamNames(sourceRoute) {
-      return sourceRoute.params;
-    },
-    getSourceRoute(sourceRouteIndex) {
-      return routes[sourceRouteIndex];
-    },
-    isRscRequest,
-    renderInterceptResponse(sourceRoute, interceptElement) {
-      const interceptOnError = createRscOnErrorHandler(
-        request,
-        cleanPathname,
-        sourceRoute.pattern,
-      );
-      const interceptStream = renderToReadableStream(interceptElement, {
-        onError: interceptOnError,
-      });
-      // Do NOT clear headers/navigation context here — the RSC stream is consumed lazily
-      // by the client, and async server components that run during consumption need the
-      // context to still be live. The AsyncLocalStorage scope from runWithRequestContext
-      // handles cleanup naturally when all async continuations complete.
-      const interceptHeaders = new Headers({
-        "Content-Type": "text/x-component; charset=utf-8",
-        "Vary": "RSC, Accept",
-      });
-      __mergeMiddlewareResponseHeaders(interceptHeaders, _mwCtx.headers);
-      return new Response(interceptStream, {
-        status: _mwCtx.status ?? 200,
-        headers: interceptHeaders,
-      });
-    },
-    searchParams: url.searchParams,
-    setNavigationContext,
-    toInterceptOpts(intercept) {
-      return {
-        interceptionContext: interceptionContextHeader,
-        interceptLayouts: intercept.interceptLayouts,
-        interceptSlotKey: intercept.slotKey,
-        interceptPage: intercept.page,
-        interceptParams: intercept.matchedParams,
-      };
-    },
-  });
-  if (__interceptResult.response) {
-    return __interceptResult.response;
-  }
-  const interceptOpts = __interceptResult.interceptOpts;
-
-  const __pageBuildResult = await __buildAppPageElement({
-    buildPageElement() {
-      return buildPageElements(route, params, cleanPathname, {
-        opts: interceptOpts,
-        searchParams: url.searchParams,
+  const _asyncRouteParams = makeThenableParams(params);
+  return __dispatchAppPage({
+    buildPageElement(targetRoute, targetParams, targetOpts, targetSearchParams) {
+      return buildPageElements(targetRoute, targetParams, cleanPathname, {
+        opts: targetOpts,
+        searchParams: targetSearchParams,
         isRscRequest,
         request,
         mountedSlotsHeader: __mountedSlotsHeader,
       });
     },
-    renderErrorBoundaryPage(buildErr) {
-      return renderErrorBoundaryPage(route, buildErr, isRscRequest, request, params, _scriptNonce, _mwCtx);
-    },
-    renderSpecialError(__buildSpecialError) {
-      return __buildAppPageSpecialErrorResponse({
-        clearRequestContext() {
-          __clearRequestContext();
-        },
-        middlewareContext: _mwCtx,
-        renderFallbackPage(statusCode) {
-          return renderHTTPAccessFallbackPage(
-            route,
-            statusCode,
-            isRscRequest,
-            request,
-            {
-              matchedParams: params,
-            },
-            _scriptNonce,
-            // buildAppPageSpecialErrorResponse merges _mwCtx onto this returned
-            // fallback response; keep this inner boundary render unmerged so
-            // additive headers like Set-Cookie and Vary are not duplicated.
-            null,
-          );
-        },
-        requestUrl: request.url,
-        specialError: __buildSpecialError,
-      });
-    },
-    resolveSpecialError: __resolveAppPageSpecialError,
-  });
-  if (__pageBuildResult.response) {
-    return __pageBuildResult.response;
-  }
-  const element = __pageBuildResult.element;
-
-  // Note: CSS is automatically injected by @vitejs/plugin-rsc's
-  // rscCssTransform — no manual loadCss() call needed.
-  const _hasLoadingBoundary = !!(route.loading && route.loading.default);
-  const _asyncRouteParams = makeThenableParams(params);
-  return __renderAppPageLifecycle({
     cleanPathname,
     clearRequestContext() {
       __clearRequestContext();
     },
-    consumeDynamicUsage,
-    consumeInvalidDynamicUsageError,
     createRscOnErrorHandler(pathname, routePath) {
       return createRscOnErrorHandler(request, pathname, routePath);
     },
-    element,
-    getDraftModeCookieHeader,
+    debugClassification: __classDebug,
+    dynamicConfig: route.page?.dynamic,
+    dynamicParamsConfig: route.page?.dynamicParams,
+    findIntercept(pathname) {
+      return findIntercept(pathname, interceptionContextHeader);
+    },
+    generateStaticParams: route.page?.generateStaticParams,
     getFontLinks: _getSSRFontLinks,
     getFontPreloads: _getSSRFontPreloads,
     getFontStyles: _getSSRFontStyles,
     getNavigationContext: _getNavigationContext,
-    getPageTags() {
-      return buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page");
+    getSourceRoute(sourceRouteIndex) {
+      return routes[sourceRouteIndex];
     },
-    getRequestCacheLife() {
-      return _consumeRequestScopedCacheLife();
-    },
+    hasGenerateStaticParams: typeof route.page?.generateStaticParams === "function",
+    hasPageDefaultExport: !!PageComponent,
+    hasPageModule: !!route.page,
     handlerStart: __reqStart,
-    hasLoadingBoundary: _hasLoadingBoundary,
-    isDynamicError,
-    isForceDynamic,
-    isForceStatic,
+    interceptionContext: interceptionContextHeader,
     isProduction: process.env.NODE_ENV === "production",
     isRscRequest,
     isrDebug: __isrDebug,
+    isrGet: __isrGet,
     isrHtmlKey: __isrHtmlKey,
     isrRscKey: __isrRscKey,
     isrSet: __isrSet,
-    layoutCount: route.layouts?.length ?? 0,
     loadSsrHandler() {
       return import.meta.viteRsc.loadModule("ssr", "index");
     },
     middlewareContext: _mwCtx,
+    mountedSlotsHeader: __mountedSlotsHeader,
     params,
     probeLayoutAt(li) {
       const LayoutComp = route.layouts[li]?.default;
@@ -1534,109 +1220,28 @@ ${prerenderPagesLoaderOption}
       );
       return PageComponent({ params: _asyncRouteParams, searchParams: _asyncSearchParams });
     },
-    classification: {
-      getLayoutId(index) {
-        const tp = route.layoutTreePositions?.[index] ?? 0;
-        return "layout:" + __createAppPageTreePath(route.routeSegments, tp);
-      },
-      buildTimeClassifications: route.__buildTimeClassifications,
-      buildTimeReasons: route.__buildTimeReasons,
-      debugClassification: __classDebug,
-      async runWithIsolatedDynamicScope(fn) {
-        const priorDynamic = consumeDynamicUsage();
-        try {
-          const result = await fn();
-          const dynamicDetected = consumeDynamicUsage();
-          return { result, dynamicDetected };
-        } finally {
-          consumeDynamicUsage();
-          if (priorDynamic) markDynamicUsage();
-        }
-      },
-    },
-    revalidateSeconds,
-    mountedSlotsHeader: __mountedSlotsHeader,
-    renderErrorBoundaryResponse(renderErr) {
+    renderErrorBoundaryPage(renderErr) {
       return renderErrorBoundaryPage(route, renderErr, isRscRequest, request, params, _scriptNonce, _mwCtx);
     },
-    async renderLayoutSpecialError(__layoutSpecialError, li) {
-      return __buildAppPageSpecialErrorResponse({
-        clearRequestContext() {
-          __clearRequestContext();
-        },
-        middlewareContext: _mwCtx,
-        renderFallbackPage(statusCode) {
-          const parentBoundary = __resolveAppPageParentHttpAccessBoundaryModule({
-            layoutIndex: li,
-            rootForbiddenModule: ${rootForbiddenVar ?? "null"},
-            rootNotFoundModule: ${rootNotFoundVar ?? "null"},
-            rootUnauthorizedModule: ${rootUnauthorizedVar ?? "null"},
-            routeForbiddenModules: route.forbiddens,
-            routeNotFoundModules: route.notFounds,
-            routeUnauthorizedModules: route.unauthorizeds,
-            statusCode,
-          })?.default ?? null;
-          const parentLayouts = route.layouts.slice(0, li);
-          return renderHTTPAccessFallbackPage(
-            route,
-            statusCode,
-            isRscRequest,
-            request,
-            {
-              boundaryComponent: parentBoundary,
-              layouts: parentLayouts,
-              matchedParams: params,
-            },
-            _scriptNonce,
-            // buildAppPageSpecialErrorResponse merges _mwCtx onto this returned
-            // fallback response; keep this inner boundary render unmerged so
-            // additive headers like Set-Cookie and Vary are not duplicated.
-            null,
-          );
-        },
-        requestUrl: request.url,
-        specialError: __layoutSpecialError,
-      });
-    },
-    async renderPageSpecialError(specialError) {
-      return __buildAppPageSpecialErrorResponse({
-        clearRequestContext() {
-          __clearRequestContext();
-        },
-        middlewareContext: _mwCtx,
-        renderFallbackPage(statusCode) {
-          return renderHTTPAccessFallbackPage(
-            route,
-            statusCode,
-            isRscRequest,
-            request,
-            {
-              matchedParams: params,
-            },
-            _scriptNonce,
-            // buildAppPageSpecialErrorResponse merges _mwCtx onto this returned
-            // fallback response; keep this inner boundary render unmerged so
-            // additive headers like Set-Cookie and Vary are not duplicated.
-            null,
-          );
-        },
-        requestUrl: request.url,
-        specialError,
-      });
+    renderHttpAccessFallbackPage(statusCode, opts, middlewareContext) {
+      return renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, request, opts, _scriptNonce, middlewareContext);
     },
     renderToReadableStream,
-    routeHasLocalBoundary: !!(route?.error?.default) || !!(route?.errors && route.errors.some(function(e) { return e?.default; })),
-    routePattern: route.pattern,
+    request,
+    revalidateSeconds: typeof route.page?.revalidate === "number" ? route.page.revalidate : null,
+    rootForbiddenModule,
+    rootNotFoundModule,
+    rootUnauthorizedModule,
+    route,
     runWithSuppressedHookWarning(probe) {
-      // Run inside ALS context so the module-level console.error patch suppresses
-      // "Invalid hook call" only for this request's probe — concurrent requests
-      // each have their own ALS store and are unaffected.
       return _suppressHookWarningAls.run(true, probe);
     },
-    scriptNonce: _scriptNonce,
-    waitUntil(__cachePromise) {
-      _getRequestExecutionContext()?.waitUntil(__cachePromise);
+    scheduleBackgroundRegeneration(key, renderFn, errorContext) {
+      __triggerBackgroundRegeneration(key, renderFn, errorContext);
     },
+    scriptNonce: _scriptNonce,
+    searchParams: url.searchParams,
+    setNavigationContext,
   });
 }
 

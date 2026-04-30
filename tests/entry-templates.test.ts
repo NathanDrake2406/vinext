@@ -537,6 +537,20 @@ describe("App Router entry templates", () => {
     expect(code).not.toContain("const __actionRerenderTarget =");
   });
 
+  it("generateRscEntry delegates app page dispatch to the shared helper", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
+    const stableCode = stabilize(code);
+
+    expect(stableCode).toContain('from "<ROOT>/packages/vinext/src/server/app-page-dispatch.js";');
+    expect(code).toContain("dispatchAppPage as __dispatchAppPage");
+    expect(code).toContain("return __dispatchAppPage({");
+    expect(code).not.toContain(
+      "const __dynamicParamsResponse = await __validateAppPageDynamicParams",
+    );
+    expect(code).not.toContain("const __pageBuildResult = await __buildAppPageElement");
+    expect(code).not.toContain("return __renderAppPageLifecycle({");
+  });
+
   it("generateRscEntry reuses the canonical tree-path helper for no-export page payloads", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
 

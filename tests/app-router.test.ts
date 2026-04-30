@@ -3559,7 +3559,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain("module: middlewareModule");
   });
 
-  it("propagates middleware waitUntil promises to the Workers execution context", () => {
+  it("seeds the Workers execution context for shared middleware runtime", () => {
     const code = generateRscEntry(
       "/tmp/test/app",
       minimalRoutes,
@@ -3569,12 +3569,12 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       "",
       false,
     );
-    // drainWaitUntil() must be registered with the execution context so
-    // Workers keeps the isolate alive for background promises.
+    // Middleware waitUntil draining lives in the shared middleware runtime.
+    // The generated entry is responsible for seeding the per-request Workers
+    // execution context that shared runtime reads from.
     expect(code).toContain("_getRequestExecutionContext()");
-    expect(code).toContain("waitUntil");
-    // Must NOT discard the drainWaitUntil() return value
-    expect(code).not.toMatch(/^\s*mwFetchEvent\.drainWaitUntil\(\);$/m);
+    expect(code).toContain("executionContext: ctx ?? _getRequestExecutionContext() ?? null");
+    expect(code).toContain("const __mwResult = await __applyAppMiddleware({");
   });
 
   it("applies redirects before middleware in the handler", () => {
@@ -4584,20 +4584,19 @@ describe("generateRscEntry ISR code generation", () => {
     expect(code).not.toContain("const __pendingRegenerations = new Map()");
   });
 
-  it("generated code threads collected fetch tags into page ISR writes and delegates route ISR", () => {
+  it("generated code delegates page dispatch and route ISR separately", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("getCollectedFetchTags");
-    expect(code).toContain(
-      'buildPageCacheTags(cleanPathname, [], route.routeSegments, route.routeHandler ? "route" : "page")',
-    );
+    expect(code).toContain("buildPageCacheTags");
+    expect(code).toContain('buildPageCacheTags(cleanPathname, [], route.routeSegments, "route")');
+    expect(code).toContain("dispatchAppPage as __dispatchAppPage");
+    expect(code).toContain("return __dispatchAppPage({");
     expect(code).toContain("dispatchAppRouteHandler as __dispatchAppRouteHandler");
     expect(code).toContain("return __dispatchAppRouteHandler({");
     expect(code).toContain("scheduleBackgroundRegeneration: __triggerBackgroundRegeneration");
-    expect(code).toContain(
-      'const __pageTags = buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page")',
-    );
     expect(code).toContain("isrSet: __isrSet");
+    expect(code).not.toContain("getCollectedFetchTags");
     expect(code).not.toContain("function __pageCacheTags(");
+    expect(code).not.toContain('route.routeHandler ? "route" : "page"');
   });
 
   it("generated handler exports async function handler(request, ctx)", () => {
@@ -4609,7 +4608,9 @@ describe("generateRscEntry ISR code generation", () => {
   it("generated code leaves cache handler access to the ISR cache module", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
     expect(code).not.toContain("getCacheHandler");
-    expect(code).toContain('"next/cache"');
+    expect(code).toContain("server/isr-cache.js");
+    expect(code).toContain("isrGet as __isrGet");
+    expect(code).toContain("isrSet as __isrSet");
   });
 
   it("generated code stores root layout params separately from leaf params", () => {
@@ -4660,53 +4661,26 @@ describe("generateRscEntry ISR code generation", () => {
     setRootParams(null);
   });
 
-  it("generated code delegates page response policy to typed helpers", () => {
+  it("generated code delegates app page dispatch to a typed helper", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
-    expect(code).not.toContain("buildAppPageHtmlResponse as __buildAppPageHtmlResponse");
-    expect(code).not.toContain("buildAppPageRscResponse as __buildAppPageRscResponse");
-    expect(code).not.toContain(
-      "resolveAppPageHtmlResponsePolicy as __resolveAppPageHtmlResponsePolicy",
-    );
-    expect(code).not.toContain(
-      "resolveAppPageRscResponsePolicy as __resolveAppPageRscResponsePolicy",
-    );
-  });
-
-  it("generated code delegates page render lifecycle to a typed helper", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
-    expect(code).toContain("resolveAppPageSpecialError as __resolveAppPageSpecialError");
+    expect(code).toContain("dispatchAppPage as __dispatchAppPage");
+    expect(code).toContain("return __dispatchAppPage({");
     expect(code).toContain(
-      "buildAppPageSpecialErrorResponse as __buildAppPageSpecialErrorResponse",
+      "buildPageElement(targetRoute, targetParams, targetOpts, targetSearchParams)",
     );
-    expect(code).toContain("return __renderAppPageLifecycle({");
-  });
-
-  it("generated code handles SSR special errors without a legacy handleRenderError helper", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("renderErrorBoundaryResponse(renderErr) {");
-    expect(code).toContain("return renderErrorBoundaryPage(route, renderErr");
-    expect(code).not.toContain("handleRenderError(ssrErr)");
-  });
-
-  it("generated code delegates page HTML stream plumbing to typed helpers", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
+    expect(code).toContain("renderErrorBoundaryPage(renderErr) {");
+    expect(code).toContain("renderHttpAccessFallbackPage(statusCode, opts, middlewareContext) {");
     expect(code).toContain("getFontLinks: _getSSRFontLinks");
     expect(code).toContain("getFontPreloads: _getSSRFontPreloads");
     expect(code).toContain("getFontStyles: _getSSRFontStyles");
-    expect(code).toContain("getDraftModeCookieHeader");
-  });
-
-  it("generated code delegates page request orchestration to typed helpers", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("validateAppPageDynamicParams as __validateAppPageDynamicParams");
-    expect(code).toContain("resolveAppPageIntercept as __resolveAppPageIntercept");
-    expect(code).toContain("buildAppPageElement as __buildAppPageElement");
-    expect(code).toContain("const __dynamicParamsResponse = await __validateAppPageDynamicParams");
-    expect(code).toContain("const __interceptResult = await __resolveAppPageIntercept({");
-    expect(code).toContain("const __pageBuildResult = await __buildAppPageElement({");
+    expect(code).toContain("isrHtmlKey: __isrHtmlKey");
+    expect(code).toContain("isrRscKey: __isrRscKey");
+    expect(code).toContain("scheduleBackgroundRegeneration(key, renderFn, errorContext)");
+    expect(code).not.toContain("return __renderAppPageLifecycle({");
+    expect(code).not.toContain(
+      "const __dynamicParamsResponse = await __validateAppPageDynamicParams",
+    );
+    expect(code).not.toContain("const __pageBuildResult = await __buildAppPageElement");
   });
 
   it("generated code threads intercept layout modules through slot overrides", () => {
@@ -4813,116 +4787,16 @@ describe("generateRscEntry ISR code generation", () => {
     expect(code).toContain("return __renderAppPageErrorBoundary({");
   });
 
-  it("generated code threads middleware headers into page boundary and special-error responses", () => {
+  it("generated code threads middleware context into page dispatch and boundary rendering", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
 
     expect(code).toContain("const __APP_PAGE_EMPTY_MW_CTX = { headers: null, status: null };");
     expect(code).toContain("middlewareContext: middlewareContext ?? __APP_PAGE_EMPTY_MW_CTX");
     expect(code).toContain("middlewareContext: _mwCtx");
     expect(code).toContain("__mergeMiddlewareResponseHeaders(notFoundHeaders, _mwCtx.headers)");
-
-    const specialErrorStart = code.indexOf("renderSpecialError(__buildSpecialError)");
-    const specialErrorEnd = code.indexOf("resolveSpecialError:", specialErrorStart);
-    const specialErrorBody = code.slice(specialErrorStart, specialErrorEnd);
-    expect(specialErrorBody).toContain("middlewareContext: _mwCtx");
-    expect(specialErrorBody).toContain(
-      "additive headers like Set-Cookie and Vary are not duplicated.",
-    );
-    expect(specialErrorBody).toContain("null,");
-  });
-
-  it("generated code delegates page cache HIT handling to a typed helper", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("readAppPageCacheResponse as __readAppPageCacheResponse");
-    expect(code).toContain("await __readAppPageCacheResponse({");
-  });
-
-  it("generated code delegates page cache STALE handling to the same helper", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("readAppPageCacheResponse as __readAppPageCacheResponse");
-    expect(code).toContain("scheduleBackgroundRegeneration(key, renderFn) {");
-    expect(code).toContain('routerKind: "App Router"');
-    expect(code).toContain('routeType: "render"');
-    expect(code).toContain("renderFreshPageForCache: async function()");
-  });
-
-  it("generated code uses request execution context for background cache write", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("_getRequestExecutionContext()?.waitUntil");
-  });
-
-  it("generated code delegates live page rendering to the typed lifecycle helper", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("teeAppPageRscStreamForCapture as __teeAppPageRscStreamForCapture");
-    expect(code).toContain("readAppPageTextStream as __readAppPageTextStream");
-    expect(code).toContain("const __revalRscCapture = __teeAppPageRscStreamForCapture(");
-    expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
-  });
-
-  it("generated code stores rscData in the ISR cache entry", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
-    expect(code).toContain("getPageTags() {");
-    expect(code).toContain(
-      'return buildPageCacheTags(cleanPathname, getCollectedFetchTags(), route.routeSegments, "page")',
-    );
-    // Background regen still writes fresh RSC bytes directly.
-    expect(code).toContain("rscData: __freshRscData");
-  });
-
-  it("generated code threads page cache keys into the typed lifecycle helper", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
-    expect(code).toContain("isrHtmlKey: __isrHtmlKey");
-    expect(code).toContain("isrRscKey: __isrRscKey");
-  });
-
-  it("generated code treats html:'' partial entries as MISS for HTML requests", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    // APP_PAGE ISR reads now flow through the typed page-cache helper.
-    expect(code).toContain("readAppPageCacheResponse as __readAppPageCacheResponse");
-    expect(code).toContain("await __readAppPageCacheResponse({");
-    expect(code).toContain("isrHtmlKey: __isrHtmlKey");
-    expect(code).toContain("isrRscKey: __isrRscKey");
-  });
-
-  it("generated code serves cached rscData for RSC requests on HIT", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    // The helper receives the request type so it can serve cached RSC responses.
-    expect(code).toContain("readAppPageCacheResponse as __readAppPageCacheResponse");
-    expect(code).toContain("isRscRequest,");
-  });
-
-  it("ISR cache read fires before buildPageElement (early return on HIT)", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    // The page-cache helper call must appear before the typed page-build helper
-    // so cache hits still short-circuit before the page render path starts.
-    const isrReadIdx = code.indexOf("await __readAppPageCacheResponse(");
-    const buildPageIdx = code.indexOf("const __pageBuildResult = await __buildAppPageElement");
-    expect(isrReadIdx).toBeGreaterThan(-1);
-    expect(buildPageIdx).toBeGreaterThan(-1);
-    expect(isrReadIdx).toBeLessThan(buildPageIdx);
-  });
-
-  it("ISR cache read fires before generateStaticParams (skips expensive work on HIT)", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    // The page-cache helper call must appear before the dynamic params validation helper
-    // so cache hits skip the generateStaticParams path entirely.
-    const isrReadIdx = code.indexOf("await __readAppPageCacheResponse(");
-    const gspIdx = code.indexOf(
-      "const __dynamicParamsResponse = await __validateAppPageDynamicParams",
-    );
-    expect(isrReadIdx).toBeGreaterThan(-1);
-    expect(gspIdx).toBeGreaterThan(-1);
-    expect(isrReadIdx).toBeLessThan(gspIdx);
-  });
-
-  it("generated code delegates two-phase page cache logic to the typed lifecycle helper", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    expect(code).toContain("renderAppPageLifecycle as __renderAppPageLifecycle");
-    expect(code).toContain("consumeDynamicUsage,");
-    expect(code).toContain("getRequestCacheLife() {");
-    expect(code).toContain("return _consumeRequestScopedCacheLife()");
+    expect(code).toContain("renderHTTPAccessFallbackPage(route, statusCode");
+    expect(code).toContain("return renderErrorBoundaryPage(route, renderErr");
+    expect(code).not.toContain("renderSpecialError(__buildSpecialError)");
   });
 
   // Route handler ISR code generation tests
@@ -4953,17 +4827,11 @@ describe("generateRscEntry ISR code generation", () => {
 
   it("generated code merges middleware headers into intercept route responses", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
-    // The renderInterceptResponse callback must call mergeMiddlewareResponseHeaders
-    // to apply middleware headers (auth cookies, CORS, security headers) to
-    // intercepting route RSC responses.
-    expect(code).toContain("mergeMiddlewareResponseHeaders");
-    // The call must appear between renderInterceptResponse and searchParams
-    // (the next callback in the options object), ensuring it's inside the
-    // intercept response construction path.
-    const interceptStart = code.indexOf("renderInterceptResponse(sourceRoute, interceptElement)");
-    const interceptEnd = code.indexOf("searchParams:", interceptStart);
-    const interceptBody = code.slice(interceptStart, interceptEnd);
-    expect(interceptBody).toContain("mergeMiddlewareResponseHeaders");
+    // Intercept response construction now lives in app-page-dispatch; generated
+    // code passes the middleware response state into that helper.
+    expect(code).toContain("return __dispatchAppPage({");
+    expect(code).toContain("middlewareContext: _mwCtx");
+    expect(code).not.toContain("renderInterceptResponse(sourceRoute, interceptElement)");
   });
 
   it("generated code merges middleware headers into server action re-render responses", () => {

@@ -70,20 +70,20 @@ type ResolveAppPageActionRerenderTargetResult<TRoute, TInterceptOpts> = {
   route: TRoute;
 };
 
-type ResolveAppPageInterceptOptions<TRoute, TPage, TInterceptOpts> = {
+type ResolveAppPageInterceptOptions<TRoute, TPage, TInterceptOpts, TElement> = {
   buildPageElement: (
     route: TRoute,
     params: AppPageParams,
     interceptOpts: TInterceptOpts | undefined,
     searchParams: URLSearchParams,
-  ) => Promise<unknown>;
+  ) => Promise<TElement>;
   cleanPathname: string;
   currentRoute: TRoute;
   findIntercept: (pathname: string) => AppPageInterceptMatch<TPage> | null;
   getRouteParamNames: (route: TRoute) => readonly string[];
   getSourceRoute: (sourceRouteIndex: number) => TRoute | undefined;
   isRscRequest: boolean;
-  renderInterceptResponse: (route: TRoute, element: unknown) => Promise<Response> | Response;
+  renderInterceptResponse: (route: TRoute, element: TElement) => Promise<Response> | Response;
   searchParams: URLSearchParams;
   setNavigationContext: (context: {
     params: AppPageParams;
@@ -267,8 +267,8 @@ export function resolveAppPageActionRerenderTarget<TRoute, TPage, TInterceptOpts
   };
 }
 
-export async function resolveAppPageIntercept<TRoute, TPage, TInterceptOpts>(
-  options: ResolveAppPageInterceptOptions<TRoute, TPage, TInterceptOpts>,
+export async function resolveAppPageIntercept<TRoute, TPage, TInterceptOpts, TElement>(
+  options: ResolveAppPageInterceptOptions<TRoute, TPage, TInterceptOpts, TElement>,
 ): Promise<ResolveAppPageInterceptResult<TInterceptOpts>> {
   const interceptState = resolveAppPageInterceptState({
     cleanPathname: options.cleanPathname,
