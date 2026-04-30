@@ -178,8 +178,66 @@ function normalizeError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function getErrorMessage(error: unknown): string {
+function getServerActionFailureMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
+}
+
+export async function readActionBodyWithLimit(request: Request, maxBytes: number): Promise<string> {
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalSize = 0;
+
+  for (;;) {
+    const result = await reader.read();
+    if (result.done) break;
+
+    totalSize += result.value.byteLength;
+    if (totalSize > maxBytes) {
+      await reader.cancel();
+      throw new Error("Request body too large");
+    }
+    chunks.push(decoder.decode(result.value, { stream: true }));
+  }
+
+  chunks.push(decoder.decode());
+  return chunks.join("");
+}
+
+export async function readActionFormDataWithLimit(
+  request: Request,
+  maxBytes: number,
+): Promise<FormData> {
+  if (!request.body) return new FormData();
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalSize = 0;
+
+  for (;;) {
+    const result = await reader.read();
+    if (result.done) break;
+
+    totalSize += result.value.byteLength;
+    if (totalSize > maxBytes) {
+      await reader.cancel();
+      throw new Error("Request body too large");
+    }
+    chunks.push(result.value);
+  }
+
+  const combined = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return new Response(combined, {
+    headers: { "Content-Type": request.headers.get("content-type") || "" },
+  }).formData();
 }
 
 function getErrorDigest(error: unknown): string | null {
@@ -271,7 +329,7 @@ function createServerActionErrorResponse(
   return new Response(
     process.env.NODE_ENV === "production"
       ? "Internal Server Error"
-      : "Server action failed: " + getErrorMessage(error),
+      : "Server action failed: " + getServerActionFailureMessage(error),
     { status: 500 },
   );
 }
@@ -414,7 +472,7 @@ export async function handleProgressiveServerActionRequest(
     return new Response(
       process.env.NODE_ENV === "production"
         ? "Internal Server Error"
-        : "Server action failed: " + getErrorMessage(error),
+        : "Server action failed: " + getServerActionFailureMessage(error),
       { status: 500 },
     );
   }
