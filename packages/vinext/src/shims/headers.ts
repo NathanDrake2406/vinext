@@ -36,6 +36,8 @@ export type HeadersAccessPhase = "render" | "action" | "route-handler";
 export type VinextHeadersShimState = {
   headersContext: HeadersContext | null;
   dynamicUsageDetected: boolean;
+  /** Error recorded by throwIfInsideCacheScope for dev diagnostics, persists even if caught by user code. */
+  invalidDynamicUsageError: unknown;
   pendingSetCookies: string[];
   draftModeCookieHeader: string | null;
   phase: HeadersAccessPhase;
@@ -57,6 +59,7 @@ const _als = (_g[_ALS_KEY] ??=
 const _fallbackState = (_g[_FALLBACK_KEY] ??= {
   headersContext: null,
   dynamicUsageDetected: false,
+  invalidDynamicUsageError: null,
   pendingSetCookies: [],
   draftModeCookieHeader: null,
   phase: "render",
@@ -202,19 +205,54 @@ function _isInsideUnstableCache(): boolean {
  */
 export function throwIfInsideCacheScope(apiName: string): void {
   if (_isInsideUseCache()) {
-    throw new Error(
+    const error = new Error(
       `\`${apiName}\` cannot be called inside "use cache". ` +
         `If you need this data inside a cached function, call \`${apiName}\` ` +
         "outside and pass the required data as an argument.",
     );
+    // Record the error on the request context so it survives user try/catch
+    // and can be forwarded to the dev overlay on client-side navigations.
+    // Ported from Next.js: workStore.invalidDynamicUsageError assignment in
+    // packages/next/src/server/app-render/app-render.tsx
+    // https://github.com/vercel/next.js/commit/f5e54c06726b571a042fce67417e40a29f6b8689
+    try {
+      const ctx = getRequestContext();
+      if (ctx) ctx.invalidDynamicUsageError = error;
+    } catch {
+      // Ignore — best-effort recording for dev diagnostics
+    }
+    throw error;
   }
   if (_isInsideUnstableCache()) {
-    throw new Error(
+    const error = new Error(
       `\`${apiName}\` cannot be called inside a function cached with \`unstable_cache()\`. ` +
         `If you need this data inside a cached function, call \`${apiName}\` ` +
         "outside and pass the required data as an argument.",
     );
+    try {
+      const ctx = getRequestContext();
+      if (ctx) ctx.invalidDynamicUsageError = error;
+    } catch {
+      // Ignore
+    }
+    throw error;
   }
+}
+
+/**
+ * Check, consume, and return any invalid dynamic usage error recorded during
+ * the render (e.g. cookies() called inside "use cache"). This error persists
+ * even if the throw was caught by user-code try/catch, so it can surface on
+ * client-side navigations where the static shell validation is skipped.
+ * Ported from Next.js: workStore.invalidDynamicUsageError in
+ * packages/next/src/server/app-render/app-render.tsx
+ * https://github.com/vercel/next.js/commit/f5e54c06726b571a042fce67417e40a29f6b8689
+ */
+export function consumeInvalidDynamicUsageError(): unknown {
+  const state = _getState();
+  const err = state.invalidDynamicUsageError;
+  state.invalidDynamicUsageError = null;
+  return err;
 }
 
 /**
@@ -310,6 +348,7 @@ export function runWithHeadersContext<T>(
   const state: VinextHeadersShimState = {
     headersContext: ctx,
     dynamicUsageDetected: false,
+    invalidDynamicUsageError: null,
     pendingSetCookies: [],
     draftModeCookieHeader: null,
     phase: "render",

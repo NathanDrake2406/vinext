@@ -188,7 +188,7 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
@@ -1478,6 +1478,7 @@ ${prerenderPagesLoaderOption}
       __clearRequestContext();
     },
     consumeDynamicUsage,
+    consumeInvalidDynamicUsageError,
     createRscOnErrorHandler(pathname, routePath) {
       return createRscOnErrorHandler(request, pathname, routePath);
     },

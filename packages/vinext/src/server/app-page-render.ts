@@ -53,6 +53,8 @@ type RenderAppPageLifecycleOptions = {
   cleanPathname: string;
   clearRequestContext: () => void;
   consumeDynamicUsage: () => boolean;
+  /** Read and clear any invalid dynamic usage error recorded during render (dev-only). */
+  consumeInvalidDynamicUsageError?: () => unknown;
   createRscOnErrorHandler: (pathname: string, routePath: string) => AppPageBoundaryOnError;
   getFontLinks: () => string[];
   getFontPreloads: () => AppPageFontPreload[];
@@ -116,6 +118,68 @@ function buildResponseTiming(
     renderEnd: options.renderEnd,
     responseKind: options.responseKind,
   };
+}
+
+/**
+ * Wraps an RSC response body to report invalid dynamic usage errors after the
+ * stream is fully consumed. In dev mode, errors from cookies()/headers() inside
+ * "use cache" may be caught by user try/catch and silently swallowed — this
+ * wrapper waits for the stream to drain and surfaces any recorded error to the
+ * terminal (and, via HMR, the browser dev overlay).
+ * Ported from Next.js: https://github.com/vercel/next.js/commit/f5e54c06726b571a042fce67417e40a29f6b8689
+ */
+function wrapRscResponseForDevErrorReporting(
+  response: Response,
+  consumeInvalidDynamicUsageError: () => unknown,
+): Response {
+  const originalBody = response.body;
+  if (!originalBody) return response;
+
+  let consumed = false;
+  const onConsumed = () => {
+    if (consumed) return;
+    consumed = true;
+    const error = consumeInvalidDynamicUsageError();
+    if (error) {
+      console.error("[vinext] Invalid dynamic usage:", error);
+    }
+  };
+
+  const cleanup = new TransformStream<Uint8Array, Uint8Array>({
+    flush() {
+      onConsumed();
+    },
+  });
+
+  const piped = originalBody.pipeThrough(cleanup);
+  const reader = piped.getReader();
+  const wrappedStream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      return reader.read().then(
+        ({ done, value }) => {
+          if (done) {
+            controller.close();
+          } else {
+            controller.enqueue(value);
+          }
+        },
+        (streamError) => {
+          onConsumed();
+          controller.error(streamError);
+        },
+      );
+    },
+    cancel(reason) {
+      onConsumed();
+      return reader.cancel(reason);
+    },
+  });
+
+  return new Response(wrappedStream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 export async function renderAppPageLifecycle(
@@ -198,7 +262,24 @@ export async function renderAppPageLifecycle(
       }),
     });
 
-    return finalizeAppPageRscCacheResponse(rscResponse, {
+    // In dev mode, wrap the RSC response body to forward invalid dynamic usage
+    // errors after the stream is consumed. This mirrors Next.js behavior where
+    // workStore.invalidDynamicUsageError is checked after the accumulated chunks
+    // promise resolves (app-render.tsx generateDynamicFlightRenderResultWithStagesInDev).
+    // Ported from Next.js: https://github.com/vercel/next.js/commit/f5e54c06726b571a042fce67417e40a29f6b8689
+    //
+    // Note: This only covers RSC responses (client-side navigations). The HTML path
+    // (initial page loads) intentionally defers this coverage — the error is still
+    // thrown through the RSC pipeline and captured by rscErrorTracker.onRenderError
+    // if uncaught by user code. Full parity with Next.js would require checking
+    // invalidDynamicUsageError after SSR rendering, which is deferred as out of scope
+    // for this PR focused on client-side navigations.
+    const devRscResponse =
+      !options.isProduction && rscResponse.body && options.consumeInvalidDynamicUsageError
+        ? wrapRscResponseForDevErrorReporting(rscResponse, options.consumeInvalidDynamicUsageError)
+        : rscResponse;
+
+    return finalizeAppPageRscCacheResponse(devRscResponse, {
       capturedRscDataPromise: options.isProduction ? isrRscDataPromise : null,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,

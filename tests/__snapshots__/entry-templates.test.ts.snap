@@ -22,7 +22,7 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 
@@ -1377,6 +1377,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       __clearRequestContext();
     },
     consumeDynamicUsage,
+    consumeInvalidDynamicUsageError,
     createRscOnErrorHandler(pathname, routePath) {
       return createRscOnErrorHandler(request, pathname, routePath);
     },
@@ -1560,7 +1561,7 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 
@@ -2921,6 +2922,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       __clearRequestContext();
     },
     consumeDynamicUsage,
+    consumeInvalidDynamicUsageError,
     createRscOnErrorHandler(pathname, routePath) {
       return createRscOnErrorHandler(request, pathname, routePath);
     },
@@ -3104,7 +3106,7 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 
@@ -4460,6 +4462,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       __clearRequestContext();
     },
     consumeDynamicUsage,
+    consumeInvalidDynamicUsageError,
     createRscOnErrorHandler(pathname, routePath) {
       return createRscOnErrorHandler(request, pathname, routePath);
     },
@@ -4643,7 +4646,7 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 import * as _instrumentation from "/tmp/test/instrumentation.ts";
@@ -6031,6 +6034,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       __clearRequestContext();
     },
     consumeDynamicUsage,
+    consumeInvalidDynamicUsageError,
     createRscOnErrorHandler(pathname, routePath) {
       return createRscOnErrorHandler(request, pathname, routePath);
     },
@@ -6214,7 +6218,7 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 
 
@@ -7579,6 +7583,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       __clearRequestContext();
     },
     consumeDynamicUsage,
+    consumeInvalidDynamicUsageError,
     createRscOnErrorHandler(pathname, routePath) {
       return createRscOnErrorHandler(request, pathname, routePath);
     },
@@ -7762,7 +7767,7 @@ function renderToReadableStream(model, options) {
 }
 import { createElement } from "react";
 import { setNavigationContext as _setNavigationContextOrig, getNavigationContext as _getNavigationContext } from "next/navigation";
-import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
+import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, markDynamicUsage, getHeadersContext, setHeadersAccessPhase } from "next/headers";
 import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 import * as middlewareModule from "/tmp/test/middleware.ts";
 
@@ -9132,6 +9137,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
       __clearRequestContext();
     },
     consumeDynamicUsage,
+    consumeInvalidDynamicUsageError,
     createRscOnErrorHandler(pathname, routePath) {
       return createRscOnErrorHandler(request, pathname, routePath);
     },
