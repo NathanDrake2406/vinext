@@ -43,6 +43,10 @@ import {
   type NextRewrite,
   type NextHeader,
 } from "./config/next-config.js";
+import {
+  collectServerActionWarmupEntries,
+  mergeServerActionWarmupEntries,
+} from "./config/server-action-warmup.js";
 
 import { findMiddlewareFile, runMiddleware } from "./server/middleware.js";
 import { logRequest, now } from "./server/request-log.js";
@@ -1298,6 +1302,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             instrumentationClientPath,
           ].flatMap((entry) => (entry ? [toRelativeFileEntry(root, entry)] : []));
           const optimizeEntries = [...new Set([...appEntries, ...explicitInstrumentationEntries])];
+          const actionWarmupEntries =
+            env?.command === "build"
+              ? []
+              : await collectServerActionWarmupEntries({
+                  root,
+                  pageExtensions: nextConfig?.pageExtensions,
+                });
+          const rscDevWarmup = mergeServerActionWarmupEntries(
+            config.environments?.rsc?.dev?.warmup,
+            actionWarmupEntries,
+          );
 
           viteConfig.environments = {
             rsc: {
@@ -1328,6 +1343,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 exclude: [...new Set([...incomingExclude, "vinext", "@vercel/og"])],
                 entries: optimizeEntries,
               },
+              ...(rscDevWarmup.length > 0
+                ? {
+                    dev: {
+                      warmup: rscDevWarmup,
+                    },
+                  }
+                : {}),
               build: {
                 outDir: options.rscOutDir ?? "dist/server",
                 ...withBuildBundlerOptions(viteMajorVersion, {
