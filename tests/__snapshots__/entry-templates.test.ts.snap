@@ -409,6 +409,8 @@ import * as mod_7 from "/tmp/test/app/dashboard/template.tsx";
 import * as mod_8 from "/tmp/test/app/dashboard/loading.tsx";
 import * as mod_9 from "/tmp/test/app/dashboard/error.tsx";
 import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
+import * as mod_11 from "/tmp/test/app/dashboard/forbidden.tsx";
+import * as mod_12 from "/tmp/test/app/dashboard/unauthorized.tsx";
 
 
 
@@ -455,9 +457,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
@@ -483,9 +485,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
@@ -511,9 +513,9 @@ const routes = [
     notFound: null,
     notFounds: [null, null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null, null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null, null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
@@ -538,10 +540,10 @@ const routes = [
     error: mod_9,
     notFound: mod_10,
     notFounds: [null, mod_10],
-    forbidden: null,
-    forbiddens: [],
-    unauthorized: null,
-    unauthorizeds: [],
+    forbidden: mod_11,
+    forbiddens: [null, mod_11],
+    unauthorized: mod_12,
+    unauthorizeds: [null, mod_12],
   }
 ];
 const __routeMatcher = __createAppRscRouteMatcher(routes);
@@ -750,6 +752,8 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     interceptionContext: opts?.interceptionContext ?? null,
     routePath,
     rootNotFoundModule: null,
+    rootForbiddenModule: null,
+    rootUnauthorizedModule: null,
     route,
     slotOverrides:
       opts && opts.interceptSlotKey && opts.interceptPage
@@ -2263,6 +2267,8 @@ import * as mod_7 from "/tmp/test/app/dashboard/template.tsx";
 import * as mod_8 from "/tmp/test/app/dashboard/loading.tsx";
 import * as mod_9 from "/tmp/test/app/dashboard/error.tsx";
 import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
+import * as mod_11 from "/tmp/test/app/dashboard/forbidden.tsx";
+import * as mod_12 from "/tmp/test/app/dashboard/unauthorized.tsx";
 
 
 
@@ -2309,9 +2315,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
@@ -2337,9 +2343,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
@@ -2365,9 +2371,9 @@ const routes = [
     notFound: null,
     notFounds: [null, null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null, null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null, null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
@@ -2392,10 +2398,10 @@ const routes = [
     error: mod_9,
     notFound: mod_10,
     notFounds: [null, mod_10],
-    forbidden: null,
-    forbiddens: [],
-    unauthorized: null,
-    unauthorizeds: [],
+    forbidden: mod_11,
+    forbiddens: [null, mod_11],
+    unauthorized: mod_12,
+    unauthorizeds: [null, mod_12],
   }
 ];
 const __routeMatcher = __createAppRscRouteMatcher(routes);
@@ -2604,6 +2610,8 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     interceptionContext: opts?.interceptionContext ?? null,
     routePath,
     rootNotFoundModule: null,
+    rootForbiddenModule: null,
+    rootUnauthorizedModule: null,
     route,
     slotOverrides:
       opts && opts.interceptSlotKey && opts.interceptPage
@@ -4123,7 +4131,9 @@ import * as mod_7 from "/tmp/test/app/dashboard/template.tsx";
 import * as mod_8 from "/tmp/test/app/dashboard/loading.tsx";
 import * as mod_9 from "/tmp/test/app/dashboard/error.tsx";
 import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
-import * as mod_11 from "/tmp/test/app/global-error.tsx";
+import * as mod_11 from "/tmp/test/app/dashboard/forbidden.tsx";
+import * as mod_12 from "/tmp/test/app/dashboard/unauthorized.tsx";
+import * as mod_13 from "/tmp/test/app/global-error.tsx";
 
 
 
@@ -4170,9 +4180,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
@@ -4198,9 +4208,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
@@ -4226,9 +4236,9 @@ const routes = [
     notFound: null,
     notFounds: [null, null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null, null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null, null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
@@ -4253,10 +4263,10 @@ const routes = [
     error: mod_9,
     notFound: mod_10,
     notFounds: [null, mod_10],
-    forbidden: null,
-    forbiddens: [],
-    unauthorized: null,
-    unauthorizeds: [],
+    forbidden: mod_11,
+    forbiddens: [null, mod_11],
+    unauthorized: mod_12,
+    unauthorizeds: [null, mod_12],
   }
 ];
 const __routeMatcher = __createAppRscRouteMatcher(routes);
@@ -4292,7 +4302,7 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
     getFontPreloads: _getSSRFontPreloads,
     getFontStyles: _getSSRFontStyles,
     getNavigationContext: _getNavigationContext,
-    globalErrorModule: mod_11,
+    globalErrorModule: mod_13,
     isRscRequest,
     layoutModules: opts?.layouts ?? null,
     loadSsrHandler() {
@@ -4340,7 +4350,7 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request, matc
     getFontPreloads: _getSSRFontPreloads,
     getFontStyles: _getSSRFontStyles,
     getNavigationContext: _getNavigationContext,
-    globalErrorModule: mod_11,
+    globalErrorModule: mod_13,
     isRscRequest,
     loadSsrHandler() {
       return import.meta.viteRsc.loadModule("ssr", "index");
@@ -4455,7 +4465,7 @@ async function buildPageElements(route, params, routePath, pageRequest) {
 
   return __buildAppPageElements({
     element: PageComponent ? createElement(PageComponent, pageProps) : null,
-    globalErrorModule: mod_11,
+    globalErrorModule: mod_13,
     isRscRequest,
     mountedSlotIds,
     makeThenableParams,
@@ -4465,6 +4475,8 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     interceptionContext: opts?.interceptionContext ?? null,
     routePath,
     rootNotFoundModule: null,
+    rootForbiddenModule: null,
+    rootUnauthorizedModule: null,
     route,
     slotOverrides:
       opts && opts.interceptSlotKey && opts.interceptPage
@@ -5978,6 +5990,8 @@ import * as mod_7 from "/tmp/test/app/dashboard/template.tsx";
 import * as mod_8 from "/tmp/test/app/dashboard/loading.tsx";
 import * as mod_9 from "/tmp/test/app/dashboard/error.tsx";
 import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
+import * as mod_11 from "/tmp/test/app/dashboard/forbidden.tsx";
+import * as mod_12 from "/tmp/test/app/dashboard/unauthorized.tsx";
 
 // Run instrumentation register() exactly once, lazily on the first request.
 // Previously this was a top-level await, which blocked the entire module graph
@@ -6054,9 +6068,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
@@ -6082,9 +6096,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
@@ -6110,9 +6124,9 @@ const routes = [
     notFound: null,
     notFounds: [null, null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null, null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null, null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
@@ -6137,10 +6151,10 @@ const routes = [
     error: mod_9,
     notFound: mod_10,
     notFounds: [null, mod_10],
-    forbidden: null,
-    forbiddens: [],
-    unauthorized: null,
-    unauthorizeds: [],
+    forbidden: mod_11,
+    forbiddens: [null, mod_11],
+    unauthorized: mod_12,
+    unauthorizeds: [null, mod_12],
   }
 ];
 const __routeMatcher = __createAppRscRouteMatcher(routes);
@@ -6349,6 +6363,8 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     interceptionContext: opts?.interceptionContext ?? null,
     routePath,
     rootNotFoundModule: null,
+    rootForbiddenModule: null,
+    rootUnauthorizedModule: null,
     route,
     slotOverrides:
       opts && opts.interceptSlotKey && opts.interceptPage
@@ -7865,7 +7881,9 @@ import * as mod_7 from "/tmp/test/app/dashboard/template.tsx";
 import * as mod_8 from "/tmp/test/app/dashboard/loading.tsx";
 import * as mod_9 from "/tmp/test/app/dashboard/error.tsx";
 import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
-import * as mod_11 from "/tmp/test/app/sitemap.ts";
+import * as mod_11 from "/tmp/test/app/dashboard/forbidden.tsx";
+import * as mod_12 from "/tmp/test/app/dashboard/unauthorized.tsx";
+import * as mod_13 from "/tmp/test/app/sitemap.ts";
 
 
 
@@ -7912,9 +7930,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
@@ -7940,9 +7958,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
@@ -7968,9 +7986,9 @@ const routes = [
     notFound: null,
     notFounds: [null, null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null, null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null, null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
@@ -7995,10 +8013,10 @@ const routes = [
     error: mod_9,
     notFound: mod_10,
     notFounds: [null, mod_10],
-    forbidden: null,
-    forbiddens: [],
-    unauthorized: null,
-    unauthorizeds: [],
+    forbidden: mod_11,
+    forbiddens: [null, mod_11],
+    unauthorized: mod_12,
+    unauthorizeds: [null, mod_12],
   }
 ];
 const __routeMatcher = __createAppRscRouteMatcher(routes);
@@ -8009,7 +8027,7 @@ const metadataRoutes = [
     isDynamic: true,
     servedUrl: "/sitemap.xml",
     contentType: "application/xml",
-    module: mod_11,
+    module: mod_13,
   }
 ];
 
@@ -8213,6 +8231,8 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     interceptionContext: opts?.interceptionContext ?? null,
     routePath,
     rootNotFoundModule: null,
+    rootForbiddenModule: null,
+    rootUnauthorizedModule: null,
     route,
     slotOverrides:
       opts && opts.interceptSlotKey && opts.interceptPage
@@ -9726,6 +9746,8 @@ import * as mod_7 from "/tmp/test/app/dashboard/template.tsx";
 import * as mod_8 from "/tmp/test/app/dashboard/loading.tsx";
 import * as mod_9 from "/tmp/test/app/dashboard/error.tsx";
 import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
+import * as mod_11 from "/tmp/test/app/dashboard/forbidden.tsx";
+import * as mod_12 from "/tmp/test/app/dashboard/unauthorized.tsx";
 
 
 
@@ -9772,9 +9794,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
@@ -9800,9 +9822,9 @@ const routes = [
     notFound: null,
     notFounds: [null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
@@ -9828,9 +9850,9 @@ const routes = [
     notFound: null,
     notFounds: [null, null],
     forbidden: null,
-    forbiddens: [],
+    forbiddens: [null, null],
     unauthorized: null,
-    unauthorizeds: [],
+    unauthorizeds: [null, null],
   },
   {
     __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
@@ -9855,10 +9877,10 @@ const routes = [
     error: mod_9,
     notFound: mod_10,
     notFounds: [null, mod_10],
-    forbidden: null,
-    forbiddens: [],
-    unauthorized: null,
-    unauthorizeds: [],
+    forbidden: mod_11,
+    forbiddens: [null, mod_11],
+    unauthorized: mod_12,
+    unauthorizeds: [null, mod_12],
   }
 ];
 const __routeMatcher = __createAppRscRouteMatcher(routes);
@@ -10067,6 +10089,8 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     interceptionContext: opts?.interceptionContext ?? null,
     routePath,
     rootNotFoundModule: null,
+    rootForbiddenModule: null,
+    rootUnauthorizedModule: null,
     route,
     slotOverrides:
       opts && opts.interceptSlotKey && opts.interceptPage

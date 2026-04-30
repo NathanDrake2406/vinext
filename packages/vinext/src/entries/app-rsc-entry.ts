@@ -823,6 +823,8 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     interceptionContext: opts?.interceptionContext ?? null,
     routePath,
     rootNotFoundModule: ${rootNotFoundVar ? rootNotFoundVar : "null"},
+    rootForbiddenModule: ${rootForbiddenVar ? rootForbiddenVar : "null"},
+    rootUnauthorizedModule: ${rootUnauthorizedVar ? rootUnauthorizedVar : "null"},
     route,
     slotOverrides:
       opts && opts.interceptSlotKey && opts.interceptPage

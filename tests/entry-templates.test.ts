@@ -48,7 +48,9 @@ const minimalAppRoutes: AppRoute[] = [
     layoutErrorPaths: [null],
     notFoundPath: null,
     notFoundPaths: [null],
+    forbiddenPaths: [null],
     forbiddenPath: null,
+    unauthorizedPaths: [null],
     unauthorizedPath: null,
     routeSegments: [],
     templateTreePositions: [],
@@ -69,7 +71,9 @@ const minimalAppRoutes: AppRoute[] = [
     layoutErrorPaths: [null],
     notFoundPath: null,
     notFoundPaths: [null],
+    forbiddenPaths: [null],
     forbiddenPath: null,
+    unauthorizedPaths: [null],
     unauthorizedPath: null,
     routeSegments: ["about"],
     templateTreePositions: [],
@@ -90,7 +94,9 @@ const minimalAppRoutes: AppRoute[] = [
     layoutErrorPaths: [null, null],
     notFoundPath: null,
     notFoundPaths: [null, null],
+    forbiddenPaths: [null, null],
     forbiddenPath: null,
+    unauthorizedPaths: [null, null],
     unauthorizedPath: null,
     routeSegments: ["blog", ":slug"],
     templateTreePositions: [],
@@ -111,8 +117,10 @@ const minimalAppRoutes: AppRoute[] = [
     layoutErrorPaths: [null, "/tmp/test/app/dashboard/error.tsx"],
     notFoundPath: "/tmp/test/app/dashboard/not-found.tsx",
     notFoundPaths: [null, "/tmp/test/app/dashboard/not-found.tsx"],
-    forbiddenPath: null,
-    unauthorizedPath: null,
+    forbiddenPaths: [null, "/tmp/test/app/dashboard/forbidden.tsx"],
+    forbiddenPath: "/tmp/test/app/dashboard/forbidden.tsx",
+    unauthorizedPaths: [null, "/tmp/test/app/dashboard/unauthorized.tsx"],
+    unauthorizedPath: "/tmp/test/app/dashboard/unauthorized.tsx",
     routeSegments: ["dashboard"],
     templateTreePositions: [1],
     layoutTreePositions: [0, 1],
@@ -267,10 +275,9 @@ describe("App Router generated manifest construction", () => {
       expect(entries).toContain(
         `fileDataBase64: ${JSON.stringify(Buffer.from('{"name":"Vinext"}').toString("base64"))}`,
       );
-      expect(entries).toContain("module: mod_11");
-      expect(manifest.imports).toContain(
-        'import * as mod_11 from "/tmp/test/app/blog/[slug]/opengraph-image.tsx";',
-      );
+      // Dynamic metadata modules get imported and referenced with a generated name
+      expect(entries).toMatch(/module: mod_\d+/);
+      expect(manifest.imports.some((imp) => imp.includes("opengraph-image.tsx"))).toBe(true);
       expect(entries).toContain('patternParts: ["blog",":slug","opengraph-image"]');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
