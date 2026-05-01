@@ -186,6 +186,12 @@ export type NextConfig = {
    * Replaces the removed experimental.ppr and experimental.dynamicIO flags.
    */
   cacheComponents?: boolean;
+  /**
+   * Enables source maps while generating static pages.
+   * Helps with errors during the prerender phase in `vinext build`.
+   * Defaults to `true`. Set to `false` to disable.
+   */
+  enablePrerenderSourceMaps?: boolean;
   /** Transpile packages (Vite handles this natively) */
   transpilePackages?: string[];
   /**
@@ -261,6 +267,8 @@ export type ResolvedNextConfig = {
    * `experimental.serverComponentsExternalPackages` in next.config.
    */
   serverExternalPackages: string[];
+  /** Enable sourcemaps for prerender error stack traces. Defaults to true. */
+  enablePrerenderSourceMaps: boolean;
   /** Resolved build ID (from generateBuildId, or a random UUID if not provided). */
   buildId: string;
   /**
@@ -509,6 +517,7 @@ export async function resolveNextConfig(
       serverExternalPackages: [],
       cacheHandler: undefined,
       cacheMaxMemorySize: undefined,
+      enablePrerenderSourceMaps: true,
       hashSalt: process.env.NEXT_HASH_SALT ?? "",
       buildId,
     };
@@ -687,6 +696,7 @@ export async function resolveNextConfig(
     serverExternalPackages,
     cacheHandler,
     cacheMaxMemorySize,
+    enablePrerenderSourceMaps: config.enablePrerenderSourceMaps ?? true,
     hashSalt,
     buildId,
   };

@@ -1348,6 +1348,10 @@ export async function deploy(options: DeployOptions): Promise<void> {
           ? "Pre-rendering all routes (output: 'export')..."
           : "Pre-rendering all routes...";
       console.log(`\n  ${label}`);
+      if (nextConfig.enablePrerenderSourceMaps) {
+        process.setSourceMapsEnabled(true);
+        Error.stackTraceLimit = Math.max(Error.stackTraceLimit, 50);
+      }
       await runPrerender({ root: info.root });
     }
   }

@@ -505,6 +505,13 @@ async function buildApp() {
   const shouldPrerender = parsed.prerenderAll || resolvedNextConfig.output === "export";
 
   if (shouldPrerender) {
+    // Enable Node.js built-in sourcemap support so prerender error stack
+    // traces resolve through the server bundle's sourcemaps to show original
+    // source files. Matches Next.js's enablePrerenderSourceMaps default.
+    if (resolvedNextConfig.enablePrerenderSourceMaps) {
+      process.setSourceMapsEnabled(true);
+      Error.stackTraceLimit = Math.max(Error.stackTraceLimit, 50);
+    }
     const label = parsed.prerenderAll
       ? "Pre-rendering all routes..."
       : "Pre-rendering all routes (output: 'export')...";

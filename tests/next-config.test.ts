@@ -479,6 +479,7 @@ describe("detectNextIntlConfig", () => {
       cacheHandler: undefined,
       cacheMaxMemorySize: undefined,
       hashSalt: "",
+      enablePrerenderSourceMaps: true,
       buildId: "test-build-id",
       ...overrides,
     };
@@ -881,5 +882,19 @@ describe("resolveNextConfig cacheHandler", () => {
   it("defaults cacheMaxMemorySize to undefined when not configured", async () => {
     const resolved = await resolveNextConfig({});
     expect(resolved.cacheMaxMemorySize).toBeUndefined();
+  });
+});
+
+describe("resolveNextConfig enablePrerenderSourceMaps", () => {
+  it("defaults enablePrerenderSourceMaps to true when not configured", async () => {
+    const resolved = await resolveNextConfig({});
+    expect(resolved.enablePrerenderSourceMaps).toBe(true);
+  });
+
+  it("respects explicit enablePrerenderSourceMaps: false", async () => {
+    const resolved = await resolveNextConfig({
+      enablePrerenderSourceMaps: false,
+    });
+    expect(resolved.enablePrerenderSourceMaps).toBe(false);
   });
 });
