@@ -1916,6 +1916,128 @@ describe("next/cache shim", () => {
     expect(r1).toBe(r2);
   });
 
+  // Ported from Next.js: packages/next/src/server/request/io.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/io.ts
+  it("unstable_io returns a hanging promise during prerender", async () => {
+    const { unstable_io } = await import("../packages/vinext/src/shims/cache.js");
+    const { workUnitAsyncStorage } =
+      await import("../packages/vinext/src/shims/internal/work-unit-async-storage.js");
+
+    const controller = new AbortController();
+
+    // run() returns whatever the callback returns — a hanging promise.
+    const hanging = workUnitAsyncStorage.run(
+      { type: "prerender", renderSignal: controller.signal },
+      unstable_io,
+    );
+
+    // The promise should not be resolved or rejected (it's "hanging")
+    expect(hanging).toBeInstanceOf(Promise);
+
+    // Verify it's still hanging using Promise.race (more portable than V8 internals)
+    const result = await Promise.race([
+      hanging.then(() => "resolved"),
+      new Promise((r) => setTimeout(() => r("still-hanging"), 50)),
+    ]);
+    expect(result).toBe("still-hanging");
+
+    // Clean up by aborting the signal
+    controller.abort();
+  });
+
+  it("unstable_io resolves immediately with request store", async () => {
+    const { unstable_io } = await import("../packages/vinext/src/shims/cache.js");
+    const { workUnitAsyncStorage } =
+      await import("../packages/vinext/src/shims/internal/work-unit-async-storage.js");
+
+    const promise = workUnitAsyncStorage.run({ type: "request" }, unstable_io);
+
+    expect(promise).toBeInstanceOf(Promise);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("unstable_io resolves immediately with cache store", async () => {
+    const { unstable_io } = await import("../packages/vinext/src/shims/cache.js");
+    const { workUnitAsyncStorage } =
+      await import("../packages/vinext/src/shims/internal/work-unit-async-storage.js");
+
+    const promise = workUnitAsyncStorage.run({ type: "cache" }, unstable_io);
+
+    expect(promise).toBeInstanceOf(Promise);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("unstable_io rejects hanging promise on abort when prerendering", async () => {
+    const { unstable_io } = await import("../packages/vinext/src/shims/cache.js");
+    const { workUnitAsyncStorage } =
+      await import("../packages/vinext/src/shims/internal/work-unit-async-storage.js");
+
+    const controller = new AbortController();
+
+    const hanging = workUnitAsyncStorage.run(
+      { type: "prerender", renderSignal: controller.signal },
+      unstable_io,
+    );
+
+    expect(hanging).toBeInstanceOf(Promise);
+
+    // Abort the signal — the hanging promise should reject
+    controller.abort();
+    await expect(hanging).rejects.toThrow(/unstable_io/i);
+  });
+
+  it("unstable_io returns rejected promise when signal already aborted", async () => {
+    const { unstable_io } = await import("../packages/vinext/src/shims/cache.js");
+    const { workUnitAsyncStorage } =
+      await import("../packages/vinext/src/shims/internal/work-unit-async-storage.js");
+
+    const controller = new AbortController();
+    controller.abort(); // already aborted
+
+    const promise = workUnitAsyncStorage.run(
+      { type: "prerender", renderSignal: controller.signal },
+      unstable_io,
+    );
+
+    await expect(promise).rejects.toThrow(/prerendering/i);
+  });
+
+  it("unstable_io does not emit unhandled rejection when signal already aborted", async () => {
+    const { unstable_io } = await import("../packages/vinext/src/shims/cache.js");
+    const { workUnitAsyncStorage } =
+      await import("../packages/vinext/src/shims/internal/work-unit-async-storage.js");
+
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const controller = new AbortController();
+      controller.abort(); // already aborted
+
+      const promise = workUnitAsyncStorage.run(
+        { type: "prerender", renderSignal: controller.signal, route: "/test" },
+        unstable_io,
+      );
+
+      // Wait a tick for potential unhandled rejection to be detected
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Await the promise to handle the rejection
+      try {
+        await promise;
+      } catch {
+        // expected
+      }
+
+      expect(unhandledRejections.length).toBe(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   it("setCacheHandler swaps the active handler", async () => {
     const { setCacheHandler, getCacheHandler, unstable_cache } =
       await import("../packages/vinext/src/shims/cache.js");

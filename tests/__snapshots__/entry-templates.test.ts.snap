@@ -119,6 +119,7 @@ import {
 } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
+import { runWithPrerenderWorkUnit as __runWithPrerenderWorkUnit } from "<ROOT>/packages/vinext/src/server/prerender-work-unit-setup.js";
 import { runWithRequestContext as _runWithUnifiedCtx, createRequestContext as _createUnifiedCtx } from "vinext/unified-request-context";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { flattenErrorCauses as __flattenErrorCauses } from "<ROOT>/packages/vinext/src/utils/error-cause.js";
@@ -703,7 +704,8 @@ export default async function handler(request, ctx) {
     executionContext: ctx ?? _getRequestExecutionContext() ?? null,
     unstableCacheRevalidation: "background",
   });
-  return _runWithUnifiedCtx(__uCtx, async () => {
+  return _runWithUnifiedCtx(__uCtx, () =>
+    __runWithPrerenderWorkUnit(async () => {
     _ensureFetchPatch();
     const __reqCtx = requestContextFromRequest(request);
     // Per-request container for middleware state. Passed into
@@ -744,7 +746,8 @@ export default async function handler(request, ctx) {
       }
     }
     return response;
-  });
+    }, { route: () => new URL(request.url).pathname })
+  );
 }
 
 async function _handleRequest(request, __reqCtx, _mwCtx) {
@@ -1662,6 +1665,7 @@ import {
 } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
+import { runWithPrerenderWorkUnit as __runWithPrerenderWorkUnit } from "<ROOT>/packages/vinext/src/server/prerender-work-unit-setup.js";
 import { runWithRequestContext as _runWithUnifiedCtx, createRequestContext as _createUnifiedCtx } from "vinext/unified-request-context";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { flattenErrorCauses as __flattenErrorCauses } from "<ROOT>/packages/vinext/src/utils/error-cause.js";
@@ -2246,7 +2250,8 @@ export default async function handler(request, ctx) {
     executionContext: ctx ?? _getRequestExecutionContext() ?? null,
     unstableCacheRevalidation: "background",
   });
-  return _runWithUnifiedCtx(__uCtx, async () => {
+  return _runWithUnifiedCtx(__uCtx, () =>
+    __runWithPrerenderWorkUnit(async () => {
     _ensureFetchPatch();
     const __reqCtx = requestContextFromRequest(request);
     // Per-request container for middleware state. Passed into
@@ -2287,7 +2292,8 @@ export default async function handler(request, ctx) {
       }
     }
     return response;
-  });
+    }, { route: () => new URL(request.url).pathname })
+  );
 }
 
 async function _handleRequest(request, __reqCtx, _mwCtx) {
@@ -3211,6 +3217,7 @@ import {
 } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
+import { runWithPrerenderWorkUnit as __runWithPrerenderWorkUnit } from "<ROOT>/packages/vinext/src/server/prerender-work-unit-setup.js";
 import { runWithRequestContext as _runWithUnifiedCtx, createRequestContext as _createUnifiedCtx } from "vinext/unified-request-context";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { flattenErrorCauses as __flattenErrorCauses } from "<ROOT>/packages/vinext/src/utils/error-cause.js";
@@ -3796,7 +3803,8 @@ export default async function handler(request, ctx) {
     executionContext: ctx ?? _getRequestExecutionContext() ?? null,
     unstableCacheRevalidation: "background",
   });
-  return _runWithUnifiedCtx(__uCtx, async () => {
+  return _runWithUnifiedCtx(__uCtx, () =>
+    __runWithPrerenderWorkUnit(async () => {
     _ensureFetchPatch();
     const __reqCtx = requestContextFromRequest(request);
     // Per-request container for middleware state. Passed into
@@ -3837,7 +3845,8 @@ export default async function handler(request, ctx) {
       }
     }
     return response;
-  });
+    }, { route: () => new URL(request.url).pathname })
+  );
 }
 
 async function _handleRequest(request, __reqCtx, _mwCtx) {
@@ -4755,6 +4764,7 @@ import {
 } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
+import { runWithPrerenderWorkUnit as __runWithPrerenderWorkUnit } from "<ROOT>/packages/vinext/src/server/prerender-work-unit-setup.js";
 import { runWithRequestContext as _runWithUnifiedCtx, createRequestContext as _createUnifiedCtx } from "vinext/unified-request-context";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { flattenErrorCauses as __flattenErrorCauses } from "<ROOT>/packages/vinext/src/utils/error-cause.js";
@@ -5372,7 +5382,8 @@ export default async function handler(request, ctx) {
     executionContext: ctx ?? _getRequestExecutionContext() ?? null,
     unstableCacheRevalidation: "background",
   });
-  return _runWithUnifiedCtx(__uCtx, async () => {
+  return _runWithUnifiedCtx(__uCtx, () =>
+    __runWithPrerenderWorkUnit(async () => {
     _ensureFetchPatch();
     const __reqCtx = requestContextFromRequest(request);
     // Per-request container for middleware state. Passed into
@@ -5413,7 +5424,8 @@ export default async function handler(request, ctx) {
       }
     }
     return response;
-  });
+    }, { route: () => new URL(request.url).pathname })
+  );
 }
 
 async function _handleRequest(request, __reqCtx, _mwCtx) {
@@ -6331,6 +6343,7 @@ import {
 } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
+import { runWithPrerenderWorkUnit as __runWithPrerenderWorkUnit } from "<ROOT>/packages/vinext/src/server/prerender-work-unit-setup.js";
 import { runWithRequestContext as _runWithUnifiedCtx, createRequestContext as _createUnifiedCtx } from "vinext/unified-request-context";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { flattenErrorCauses as __flattenErrorCauses } from "<ROOT>/packages/vinext/src/utils/error-cause.js";
@@ -6925,7 +6938,8 @@ export default async function handler(request, ctx) {
     executionContext: ctx ?? _getRequestExecutionContext() ?? null,
     unstableCacheRevalidation: "background",
   });
-  return _runWithUnifiedCtx(__uCtx, async () => {
+  return _runWithUnifiedCtx(__uCtx, () =>
+    __runWithPrerenderWorkUnit(async () => {
     _ensureFetchPatch();
     const __reqCtx = requestContextFromRequest(request);
     // Per-request container for middleware state. Passed into
@@ -6966,7 +6980,8 @@ export default async function handler(request, ctx) {
       }
     }
     return response;
-  });
+    }, { route: () => new URL(request.url).pathname })
+  );
 }
 
 async function _handleRequest(request, __reqCtx, _mwCtx) {
@@ -7884,6 +7899,7 @@ import {
 } from "<ROOT>/packages/vinext/src/server/isr-cache.js";
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
+import { runWithPrerenderWorkUnit as __runWithPrerenderWorkUnit } from "<ROOT>/packages/vinext/src/server/prerender-work-unit-setup.js";
 import { runWithRequestContext as _runWithUnifiedCtx, createRequestContext as _createUnifiedCtx } from "vinext/unified-request-context";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { flattenErrorCauses as __flattenErrorCauses } from "<ROOT>/packages/vinext/src/utils/error-cause.js";
@@ -8468,7 +8484,8 @@ export default async function handler(request, ctx) {
     executionContext: ctx ?? _getRequestExecutionContext() ?? null,
     unstableCacheRevalidation: "background",
   });
-  return _runWithUnifiedCtx(__uCtx, async () => {
+  return _runWithUnifiedCtx(__uCtx, () =>
+    __runWithPrerenderWorkUnit(async () => {
     _ensureFetchPatch();
     const __reqCtx = requestContextFromRequest(request);
     // Per-request container for middleware state. Passed into
@@ -8509,7 +8526,8 @@ export default async function handler(request, ctx) {
       }
     }
     return response;
-  });
+    }, { route: () => new URL(request.url).pathname })
+  );
 }
 
 async function _handleRequest(request, __reqCtx, _mwCtx) {

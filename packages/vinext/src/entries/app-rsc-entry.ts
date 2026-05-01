@@ -74,6 +74,10 @@ const appPrerenderEndpointsPath = resolveEntryPath(
   "../server/app-prerender-endpoints.js",
   import.meta.url,
 );
+const prerenderWorkUnitSetupPath = resolveEntryPath(
+  "../server/prerender-work-unit-setup.js",
+  import.meta.url,
+);
 const rscStreamHintsPath = resolveEntryPath("../server/rsc-stream-hints.js", import.meta.url);
 const isrCachePath = resolveEntryPath("../server/isr-cache.js", import.meta.url);
 const rootParamsShimPath = resolveEntryPath("../shims/root-params.js", import.meta.url);
@@ -285,6 +289,7 @@ import {
 } from ${JSON.stringify(isrCachePath)};
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
+import { runWithPrerenderWorkUnit as __runWithPrerenderWorkUnit } from ${JSON.stringify(prerenderWorkUnitSetupPath)};
 import { runWithRequestContext as _runWithUnifiedCtx, createRequestContext as _createUnifiedCtx } from "vinext/unified-request-context";
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { flattenErrorCauses as __flattenErrorCauses } from ${JSON.stringify(errorCausePath)};
@@ -734,7 +739,8 @@ export default async function handler(request, ctx) {
     executionContext: ctx ?? _getRequestExecutionContext() ?? null,
     unstableCacheRevalidation: "background",
   });
-  return _runWithUnifiedCtx(__uCtx, async () => {
+  return _runWithUnifiedCtx(__uCtx, () =>
+    __runWithPrerenderWorkUnit(async () => {
     _ensureFetchPatch();
     const __reqCtx = requestContextFromRequest(request);
     // Per-request container for middleware state. Passed into
@@ -775,7 +781,8 @@ export default async function handler(request, ctx) {
       }
     }
     return response;
-  });
+    }, { route: () => new URL(request.url).pathname })
+  );
 }
 
 async function _handleRequest(request, __reqCtx, _mwCtx) {

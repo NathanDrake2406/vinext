@@ -57,6 +57,12 @@ export default {
         "src/shims/internal/api-utils.ts",
         "src/shims/internal/app-router-context.ts",
         "src/shims/internal/utils.ts",
+        // Typed WorkUnitStore exports consumed by cache.ts via AsyncLocalStorage
+        // generic — knip cannot trace type-only dependencies through ALS.
+        "src/shims/internal/work-unit-async-storage.ts",
+        // Imported via template string in app-rsc-entry.ts (generated code),
+        // so knip cannot trace the import statically.
+        "src/server/prerender-work-unit-setup.ts",
       ],
       project: ["src/**/*.{ts,tsx}"],
     },
