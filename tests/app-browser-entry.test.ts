@@ -1,9 +1,10 @@
 import React from "react";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createOnUncaughtError,
   devOnCaughtError,
 } from "../packages/vinext/src/server/app-browser-error.js";
+import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
   APP_INTERCEPTION_CONTEXT_KEY,
   APP_ROOT_LAYOUT_KEY,
@@ -15,6 +16,7 @@ import {
   type AppElements,
 } from "../packages/vinext/src/server/app-elements.js";
 import { createClientNavigationRenderSnapshot } from "../packages/vinext/src/shims/navigation.js";
+import * as navigationShim from "../packages/vinext/src/shims/navigation.js";
 import {
   createHistoryStateWithPreviousNextUrl,
   createPendingNavigationCommit,
@@ -55,6 +57,44 @@ function createState(overrides: Partial<AppRouterState> = {}): AppRouterState {
     ...overrides,
   };
 }
+
+function createControllerHarness(initialState: AppRouterState = createState()) {
+  const controller = createAppBrowserNavigationController();
+  const stateRef: { current: AppRouterState } = { current: initialState };
+  const setBrowserRouterState = vi.fn((value: AppRouterState | Promise<AppRouterState>) => {
+    if (!(value instanceof Promise)) {
+      stateRef.current = value;
+    }
+  });
+  const detach = controller.attachBrowserRouterState(setBrowserRouterState, stateRef);
+
+  return {
+    controller,
+    detach,
+    setBrowserRouterState,
+    stateRef,
+  };
+}
+
+function stubWindow(href: string) {
+  const assign = vi.fn();
+
+  vi.stubGlobal("window", {
+    history: { state: null },
+    location: {
+      assign,
+      href,
+      origin: new URL(href).origin,
+    },
+  });
+
+  return { assign };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("app browser entry state helpers", () => {
   it("requires renderId when creating pending commits", () => {
@@ -326,6 +366,289 @@ describe("app browser entry state helpers", () => {
 
     expect(nextState.interceptionContext).toBe("/feed");
     expect(nextState.previousNextUrl).toBe("/feed");
+  });
+});
+
+describe("app browser navigation controller", () => {
+  it("tracks active navigation ids and clears the pending pathname only for the current navigation", () => {
+    const { controller, detach } = createControllerHarness();
+    const clearSpy = vi.spyOn(navigationShim, "clearPendingPathname").mockImplementation(() => {});
+
+    try {
+      const firstNavId = controller.beginNavigation();
+      const secondNavId = controller.beginNavigation();
+
+      expect(controller.isCurrentNavigation(firstNavId)).toBe(false);
+      expect(controller.isCurrentNavigation(secondNavId)).toBe(true);
+
+      controller.finalizeNavigation(firstNavId, null);
+      expect(clearSpy).not.toHaveBeenCalled();
+
+      controller.finalizeNavigation(secondNavId, null);
+      expect(clearSpy).toHaveBeenCalledTimes(1);
+      expect(clearSpy).toHaveBeenCalledWith(secondNavId);
+    } finally {
+      detach();
+    }
+  });
+
+  it("uses render ids independent from navigation ids", async () => {
+    const { controller, detach, stateRef } = createControllerHarness();
+    const clearSpy = vi.spyOn(navigationShim, "clearPendingPathname").mockImplementation(() => {});
+
+    try {
+      // Navigation counter advances independently from render-id counter.
+      controller.beginNavigation(); // 1
+      controller.beginNavigation(); // 2
+      const navId = controller.beginNavigation(); // 3
+
+      const nextElements = Promise.resolve(
+        createResolvedElements("route:/dashboard", "/", null, {
+          "page:/dashboard": React.createElement("main", null, "dashboard"),
+        }),
+      );
+
+      void controller.renderNavigationPayload({
+        actionType: "navigate",
+        createNavigationCommitEffect: () => vi.fn(),
+        historyUpdateMode: "push",
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements,
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/dashboard",
+        navId,
+        useTransition: false,
+      });
+
+      // Yield microticks so the async function reaches dispatch and sets state.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // renderId is 1 (first render allocation), independent from navId = 3.
+      expect(stateRef.current.renderId).toBe(1);
+      expect(stateRef.current.routeId).toBe("route:/dashboard");
+    } finally {
+      clearSpy.mockRestore();
+      detach();
+    }
+  });
+
+  it("settles the previous pending browser-router promise when a newer pending state begins", async () => {
+    const { controller, detach, stateRef } = createControllerHarness();
+    const clearSpy = vi.spyOn(navigationShim, "clearPendingPathname").mockImplementation(() => {});
+
+    try {
+      const firstPending = controller.beginPendingBrowserRouterState();
+      expect(firstPending.settled).toBe(false);
+
+      const secondPending = controller.beginPendingBrowserRouterState();
+
+      await expect(firstPending.promise).resolves.toBe(stateRef.current);
+      expect(firstPending.settled).toBe(true);
+
+      controller.finalizeNavigation(controller.beginNavigation(), secondPending);
+      await expect(secondPending.promise).resolves.toBe(stateRef.current);
+      expect(secondPending.settled).toBe(true);
+    } finally {
+      clearSpy.mockRestore();
+      detach();
+    }
+  });
+
+  it("queues pre-paint commit effects and resolves the pending browser-router state on dispatch", async () => {
+    const { controller, detach, setBrowserRouterState, stateRef } = createControllerHarness();
+    const pendingRouterState = controller.beginPendingBrowserRouterState();
+    const commitEffect = vi.fn();
+    const createNavigationCommitEffect = vi.fn(() => commitEffect);
+    const nextElements = Promise.resolve(
+      createResolvedElements("route:/dashboard", "/", null, {
+        "page:/dashboard": React.createElement("main", null, "dashboard"),
+      }),
+    );
+
+    try {
+      void controller.renderNavigationPayload({
+        actionType: "navigate",
+        createNavigationCommitEffect,
+        historyUpdateMode: "push",
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements,
+        params: {},
+        pendingRouterState,
+        previousNextUrl: null,
+        targetHref: "https://example.com/dashboard",
+        navId: controller.beginNavigation(),
+        useTransition: false,
+      });
+
+      await expect(pendingRouterState.promise).resolves.toMatchObject({
+        renderId: 1,
+        routeId: "route:/dashboard",
+      });
+      expect(createNavigationCommitEffect).toHaveBeenCalledTimes(1);
+      expect(commitEffect).not.toHaveBeenCalled();
+      expect(setBrowserRouterState).toHaveBeenCalledTimes(1);
+    } finally {
+      detach();
+    }
+  });
+
+  it("skips stale browser navigations before committing their payload", async () => {
+    const { controller, detach } = createControllerHarness();
+    const { assign } = stubWindow("https://example.com/initial");
+    const createNavigationCommitEffect = vi.fn(() => vi.fn());
+    let resolveNextElements: ((value: AppElements) => void) | undefined;
+    const nextElements = new Promise<AppElements>((resolve) => {
+      resolveNextElements = resolve;
+    });
+
+    try {
+      const navId = controller.beginNavigation();
+      const renderPromise = controller.renderNavigationPayload({
+        actionType: "navigate",
+        createNavigationCommitEffect,
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/initial", {}),
+        nextElements,
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/dashboard",
+        navId,
+        useTransition: false,
+      });
+
+      controller.beginNavigation();
+
+      if (!resolveNextElements) {
+        throw new Error("Expected deferred navigation payload resolver");
+      }
+      resolveNextElements(
+        createResolvedElements("route:/dashboard", "/", null, {
+          "page:/dashboard": React.createElement("main", null, "dashboard"),
+        }),
+      );
+
+      await expect(renderPromise).resolves.toBeUndefined();
+      expect(createNavigationCommitEffect).not.toHaveBeenCalled();
+      expect(assign).not.toHaveBeenCalled();
+    } finally {
+      detach();
+    }
+  });
+
+  it("renderNavigationPayload stays pending until NavigationCommitSignal settles the commit", async () => {
+    const { controller, detach, stateRef } = createControllerHarness();
+    const commitEffect = vi.fn();
+    const nextElements = Promise.resolve(
+      createResolvedElements("route:/dashboard", "/", null, {
+        "page:/dashboard": React.createElement("main", null, "dashboard"),
+      }),
+    );
+
+    try {
+      const navId = controller.beginNavigation();
+      const renderPromise = controller.renderNavigationPayload({
+        actionType: "navigate",
+        createNavigationCommitEffect: () => commitEffect,
+        historyUpdateMode: "push",
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements,
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/dashboard",
+        navId,
+        useTransition: false,
+      });
+
+      // Yield enough microticks for the async function to reach dispatch
+      // and return the committed promise.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Pre-paint effect is queued but not yet run (drainPrePaintEffects
+      // only fires inside NavigationCommitSignal's useLayoutEffect).
+      expect(commitEffect).not.toHaveBeenCalled();
+
+      // The promise must not resolve — NavigationCommitSignal has not
+      // mounted, so resolveCommittedNavigations has no way to fire.
+      const settled = await Promise.race([
+        renderPromise.then(() => true),
+        Promise.resolve().then(() => false),
+      ]);
+      expect(settled).toBe(false);
+    } finally {
+      detach();
+    }
+  });
+
+  it("dispatches same-URL server action payloads into the browser router state", async () => {
+    const initialState = createState({
+      rootLayoutTreePath: "/",
+      routeId: "route:/settings",
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/settings", {
+        tab: "profile",
+      }),
+    });
+    const { controller, detach, stateRef } = createControllerHarness(initialState);
+    const { assign } = stubWindow("https://example.com/settings");
+    const nextElements = Promise.resolve(
+      createResolvedElements("route:/settings/account", "/", null, {
+        "page:/settings/account": React.createElement("main", null, "account"),
+      }),
+    );
+
+    try {
+      const result = await controller.commitSameUrlNavigatePayload(
+        nextElements,
+        stateRef.current.navigationSnapshot,
+        {
+          data: "server-action-result",
+          ok: true,
+        },
+      );
+
+      expect(result).toBe("server-action-result");
+      expect(assign).not.toHaveBeenCalled();
+      expect(stateRef.current.routeId).toBe("route:/settings/account");
+      expect(stateRef.current.previousNextUrl).toBeNull();
+    } finally {
+      detach();
+    }
+  });
+
+  it("hard-navigates same-URL server action payloads when the root layout changes", async () => {
+    const initialState = createState({
+      rootLayoutTreePath: "/(marketing)",
+      routeId: "route:/marketing",
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/marketing", {}),
+    });
+    const { controller, detach, stateRef } = createControllerHarness(initialState);
+    const { assign } = stubWindow("https://example.com/marketing");
+    const nextElements = Promise.resolve(
+      createResolvedElements("route:/dashboard", "/(dashboard)", null, {
+        "page:/dashboard": React.createElement("main", null, "dashboard"),
+      }),
+    );
+
+    try {
+      const result = await controller.commitSameUrlNavigatePayload(
+        nextElements,
+        stateRef.current.navigationSnapshot,
+      );
+
+      expect(result).toBeUndefined();
+      expect(assign).toHaveBeenCalledTimes(1);
+      expect(assign).toHaveBeenCalledWith("https://example.com/marketing");
+      expect(stateRef.current.routeId).toBe("route:/marketing");
+    } finally {
+      detach();
+    }
   });
 });
 
