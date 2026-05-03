@@ -4,6 +4,8 @@ import { guardProtocolRelativeUrl } from "./request-pipeline.js";
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 
+export { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
+
 export type NormalizedRscRequest = {
   /** Parsed URL. Callers may mutate `url.search` after middleware runs. */
   url: URL;
