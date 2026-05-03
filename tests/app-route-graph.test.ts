@@ -141,6 +141,132 @@ describe("App Router route graph builder", () => {
     });
   });
 
+  it("links inherited parallel slot to a mirrored sub-page (literal segments)", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "about/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/about/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const about = findRoute(graph.routes, "/about");
+      expect(about.parallelSlots).toHaveLength(1);
+      expect(about.parallelSlots[0]).toMatchObject({
+        name: "breadcrumbs",
+        pagePath: path.join(appDir, "@breadcrumbs/about/page.tsx"),
+        defaultPath: path.join(appDir, "@breadcrumbs/default.tsx"),
+        routeSegments: ["about"],
+      });
+    });
+  });
+
+  it("links inherited parallel slot to a mirrored sub-page (catch-all segments)", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "[...slug]/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/[...slug]/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const slug = findRoute(graph.routes, "/:slug+");
+      expect(slug.parallelSlots[0]).toMatchObject({
+        name: "breadcrumbs",
+        pagePath: path.join(appDir, "@breadcrumbs/[...slug]/page.tsx"),
+        routeSegments: ["[...slug]"],
+      });
+    });
+  });
+
+  it("falls back to default when no mirrored sub-page exists in the inherited slot", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "about/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/default.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const about = findRoute(graph.routes, "/about");
+      expect(about.parallelSlots[0]).toMatchObject({
+        name: "breadcrumbs",
+        pagePath: null,
+        defaultPath: path.join(appDir, "@breadcrumbs/default.tsx"),
+        routeSegments: null,
+      });
+    });
+  });
+
+  it("links inherited parallel slot to a mirror across a route group", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "(marketing)/about/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/about/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const about = findRoute(graph.routes, "/about");
+      expect(about.parallelSlots[0]).toMatchObject({
+        name: "breadcrumbs",
+        pagePath: path.join(appDir, "@breadcrumbs/about/page.tsx"),
+        defaultPath: path.join(appDir, "@breadcrumbs/default.tsx"),
+        routeSegments: ["about"],
+      });
+    });
+  });
+
+  it("mirrors across multiple inherited segments", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "shop/items/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/shop/items/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const items = findRoute(graph.routes, "/shop/items");
+      expect(items.parallelSlots[0]).toMatchObject({
+        pagePath: path.join(appDir, "@breadcrumbs/shop/items/page.tsx"),
+        routeSegments: ["shop", "items"],
+      });
+    });
+  });
+
+  it("captures distinct slotPatternParts/slotParamNames when slot and route use different param names", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "shop/[id]/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@breadcrumbs/shop/[name]/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const route = findRoute(graph.routes, "/shop/:id");
+      expect(route.parallelSlots[0]).toMatchObject({
+        name: "breadcrumbs",
+        pagePath: path.join(appDir, "@breadcrumbs/shop/[name]/page.tsx"),
+        routeSegments: ["shop", "[name]"],
+        slotPatternParts: ["shop", ":name"],
+        slotParamNames: ["name"],
+      });
+    });
+  });
+
+  it("mirrors when the slot is owned at an intermediate ancestor (not appDir)", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "shop/layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "shop/items/detail/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/@sidebar/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/@sidebar/items/detail/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const detail = findRoute(graph.routes, "/shop/items/detail");
+      expect(detail.parallelSlots[0]).toMatchObject({
+        name: "sidebar",
+        pagePath: path.join(appDir, "shop/@sidebar/items/detail/page.tsx"),
+        defaultPath: path.join(appDir, "shop/@sidebar/default.tsx"),
+        routeSegments: ["items", "detail"],
+        slotPatternParts: ["shop", "items", "detail"],
+      });
+    });
+  });
+
   it("rejects page and route handlers that materialize to the same URL", async () => {
     await withTempApp(async (appDir) => {
       await writeAppFile(appDir, "dashboard/page.tsx", EMPTY_PAGE);

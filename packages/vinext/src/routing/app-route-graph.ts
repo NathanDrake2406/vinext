@@ -56,6 +56,19 @@ export type ParallelSlot = {
    * null when the slot has no active page (showing default.tsx fallback).
    */
   routeSegments: string[] | null;
+  /**
+   * Full URL pattern parts for the slot's active page (owner prefix +
+   * slot-relative pattern). Set when an inherited slot mirrors a sub-page
+   * whose param names may differ from the route's. The runtime matches the
+   * request URL against these parts to extract slot-specific params.
+   */
+  slotPatternParts?: string[];
+  /**
+   * Param names captured by `slotPatternParts`, in order of appearance.
+   * Used at runtime to decide whether to extract slot-specific params or
+   * reuse the route's matched params.
+   */
+  slotParamNames?: string[];
 };
 
 export type AppRoute = {
@@ -749,22 +762,25 @@ function discoverInheritedParallelSlots(
   // Walk from appDir through each segment, tracking layout indices.
   // layoutIndex tracks which position in the route's layouts[] array corresponds
   // to a given directory. Only directories with a layout.tsx file increment.
+  // segmentIndex aligns each entry with `segments`: dirsToCheck[i] is reached
+  // after consuming segments[0..i-1], so segments.slice(i) are the segments
+  // below this directory (used to mirror inherited slot sub-pages).
   let currentDir = appDir;
-  const dirsToCheck: { dir: string; layoutIdx: number }[] = [];
+  const dirsToCheck: { dir: string; layoutIdx: number; segmentIndex: number }[] = [];
   let layoutIdx = findFile(appDir, "layout", matcher) ? 0 : -1;
-  dirsToCheck.push({ dir: appDir, layoutIdx });
+  dirsToCheck.push({ dir: appDir, layoutIdx, segmentIndex: 0 });
 
-  for (const segment of segments) {
-    currentDir = path.join(currentDir, segment);
+  for (let i = 0; i < segments.length; i++) {
+    currentDir = path.join(currentDir, segments[i]);
     if (findFile(currentDir, "layout", matcher)) {
       layoutIdx++;
     }
-    dirsToCheck.push({ dir: currentDir, layoutIdx });
+    dirsToCheck.push({ dir: currentDir, layoutIdx, segmentIndex: i + 1 });
   }
 
   const routeHasLayout = layoutIdx >= 0;
 
-  for (const { dir, layoutIdx: lvlLayoutIdx } of dirsToCheck) {
+  for (const { dir, layoutIdx: lvlLayoutIdx, segmentIndex } of dirsToCheck) {
     // Once a route has a root layout below app/, slots discovered before that
     // layout are above the root and cannot be owned by any layout in this route.
     // Layout-less routes keep their legacy slot metadata here; validation is separate.
@@ -773,6 +789,7 @@ function discoverInheritedParallelSlots(
     const isOwnDir = dir === routeDir;
     const slotLayoutIdx = Math.max(lvlLayoutIdx, 0);
     const slotsAtLevel = discoverParallelSlots(dir, appDir, matcher);
+    const segmentsBelow = segments.slice(segmentIndex);
 
     for (const slot of slotsAtLevel) {
       if (isOwnDir) {
@@ -780,13 +797,28 @@ function discoverInheritedParallelSlots(
         slot.layoutIndex = slotLayoutIdx;
         slotMap.set(slot.key, slot);
       } else {
-        // At an ancestor directory: use default.tsx as the page, not page.tsx
-        // (the slot's page.tsx is for the parent route, not this child route)
+        // At an ancestor directory: the slot's own page.tsx belongs to the
+        // parent route. Look for a mirrored sub-page at @slot/<segments-below>
+        // (e.g. @breadcrumbs/about/page.tsx for /about), falling back to
+        // default.tsx when no mirror exists. The mirror search also accepts
+        // pattern-compatible matches (e.g. slot's [name] for route's [id]) so
+        // the runtime can extract slot-specific params via slotPatternParts.
+        const mirror = findMirroredSlotPage(slot.ownerDir, segmentsBelow, matcher);
+        let slotPatternParts: string[] | undefined;
+        let slotParamNames: string[] | undefined;
+        if (mirror) {
+          const ownerSegments = segments.slice(0, segmentIndex);
+          const ownerUrl = convertSegmentsToRouteParts([...ownerSegments]);
+          slotPatternParts = [...(ownerUrl?.urlSegments ?? []), ...mirror.slotUrlSegments];
+          slotParamNames = [...(ownerUrl?.params ?? []), ...mirror.slotParamNames];
+        }
         const inheritedSlot: ParallelSlot = {
           ...slot,
-          pagePath: null, // Don't use ancestor's page.tsx
+          pagePath: mirror?.pagePath ?? null,
           layoutIndex: slotLayoutIdx,
-          routeSegments: null,
+          routeSegments: mirror?.segments ?? null,
+          slotPatternParts,
+          slotParamNames,
           // defaultPath, loadingPath, errorPath, interceptingRoutes remain
         };
         slotMap.set(slot.key, inheritedSlot);
@@ -795,6 +827,137 @@ function discoverInheritedParallelSlots(
   }
 
   return Array.from(slotMap.values());
+}
+
+/**
+ * Look for a page file inside a parallel slot directory that mirrors the
+ * route's path below the slot's owner. The match falls through two tiers:
+ *   1. Literal filesystem path — fast path when route and slot share shape.
+ *   2. Scored pattern compatibility — enumerate sub-pages, accept those
+ *      whose URL pattern can match the route's URL space (slot dynamic
+ *      markers may have different names than the route's, and slot
+ *      catch-alls may subsume the route), and pick the most-specific via
+ *      `scoreSlotPattern`. Exact URL-parts equality (e.g. through route
+ *      groups appearing on only one side, like `(marketing)/about` ↔
+ *      `@breadcrumbs/about`) naturally wins because all literal segments
+ *      score highest.
+ *
+ * Returns the slot sub-page's absolute path, its raw filesystem segments
+ * (for `routeSegments`), and its URL parts / param names (for
+ * `slotPatternParts` / `slotParamNames`). Returns null when no mirror matches.
+ */
+function findMirroredSlotPage(
+  slotDir: string,
+  segmentsBelow: readonly string[],
+  matcher: ValidFileMatcher,
+): {
+  pagePath: string;
+  segments: string[];
+  slotUrlSegments: string[];
+  slotParamNames: string[];
+} | null {
+  if (segmentsBelow.length === 0) return null;
+
+  // Tier 1: literal filesystem match.
+  const literalDir = path.join(slotDir, ...segmentsBelow);
+  const literalPage = findFile(literalDir, "page", matcher);
+  if (literalPage) {
+    const converted = convertSegmentsToRouteParts([...segmentsBelow]);
+    return {
+      pagePath: literalPage,
+      segments: [...segmentsBelow],
+      slotUrlSegments: converted?.urlSegments ?? [],
+      slotParamNames: converted?.params ?? [],
+    };
+  }
+
+  const routeUrl = convertSegmentsToRouteParts([...segmentsBelow]);
+  if (!routeUrl || routeUrl.urlSegments.length === 0) return null;
+
+  // Tier 2: enumerate slot sub-pages and pick the most-specific compatible
+  // pattern. Exact URL-parts matches naturally win the score.
+  type Candidate = {
+    pagePath: string;
+    segments: string[];
+    slotUrlSegments: string[];
+    slotParamNames: string[];
+    score: number;
+  };
+  let best: Candidate | null = null;
+  for (const { relativePath, pagePath } of findSlotSubPages(slotDir, matcher)) {
+    const slotSegments = relativePath.split(path.sep);
+    const slotUrl = convertSegmentsToRouteParts(slotSegments);
+    if (!slotUrl) continue;
+    if (!patternsCompatible(slotUrl.urlSegments, routeUrl.urlSegments)) continue;
+    const score = scoreSlotPattern(slotUrl.urlSegments);
+    if (!best || score > best.score) {
+      best = {
+        pagePath,
+        segments: slotSegments,
+        slotUrlSegments: slotUrl.urlSegments,
+        slotParamNames: slotUrl.params,
+        score,
+      };
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Whether a slot pattern can match the same URL space as the route's URL
+ * parts (where the route's parts are themselves a pattern, since a route
+ * file like `[id]/page.tsx` produces `:id`).
+ *
+ * - `:name+` (catch-all) consumes one-or-more remaining segments.
+ * - `:name*` (optional catch-all) consumes zero-or-more.
+ * - `:name` (single dynamic) consumes exactly one segment, matching any
+ *   route segment (literal or dynamic).
+ * - Literal slot segments must equal the route's segment exactly; a literal
+ *   slot segment paired with a dynamic route segment is rejected because we
+ *   can't know statically whether the runtime value will equal the literal.
+ *   This also means a literal slot sub-page never matches a catch-all route
+ *   (e.g. slot `about/page.tsx` is not bound to a route `[...slug]`) — the
+ *   catch-all might or might not resolve to "about" at request time.
+ */
+function patternsCompatible(slotParts: readonly string[], routeParts: readonly string[]): boolean {
+  let i = 0;
+  let j = 0;
+  while (i < slotParts.length) {
+    const sp = slotParts[i];
+    if (sp.endsWith("+")) return j < routeParts.length;
+    if (sp.endsWith("*")) return true;
+    if (j >= routeParts.length) return false;
+    const rp = routeParts[j];
+    if (sp.startsWith(":")) {
+      i++;
+      j++;
+      continue;
+    }
+    if (rp.startsWith(":")) return false;
+    if (sp !== rp) return false;
+    i++;
+    j++;
+  }
+  return j === routeParts.length;
+}
+
+/**
+ * Score a slot pattern by specificity so the most-specific match wins:
+ *   literal > single dynamic > catch-all > optional catch-all.
+ *
+ * Required catch-all (`:name+`, ≥1 segment) is more constrained than the
+ * optional variant (`:name*`, ≥0 segments), so it scores higher.
+ */
+function scoreSlotPattern(urlSegments: readonly string[]): number {
+  let score = 0;
+  for (const seg of urlSegments) {
+    if (seg.endsWith("*")) score += 1;
+    else if (seg.endsWith("+")) score += 2;
+    else if (seg.startsWith(":")) score += 3;
+    else score += 4;
+  }
+  return score;
 }
 
 /**
