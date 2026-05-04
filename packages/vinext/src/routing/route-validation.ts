@@ -148,10 +148,12 @@ class UrlNode {
 export function patternToNextFormat(pattern: string): string {
   if (pattern === "/") return "/";
 
+  // Match any non-/ param name, letting the regex engine backtrack over
+  // the + / * suffixes so dotted/colon param names work correctly.
   return pattern
-    .replace(/:([\w-]+)\+/g, "[...$1]")
-    .replace(/:([\w-]+)\*/g, "[[...$1]]")
-    .replace(/:([\w-]+)/g, "[$1]");
+    .replace(/:([^/]+)\+/g, "[...$1]")
+    .replace(/:([^/]+)\*/g, "[[...$1]]")
+    .replace(/:([^/]+)/g, "[$1]");
 }
 
 function normalizeRoutePattern(pattern: string): string {
