@@ -2,6 +2,7 @@ import React from "react";
 import { describe, expect, it } from "vite-plus/test";
 import { UNMATCHED_SLOT } from "../packages/vinext/src/shims/slot.js";
 import {
+  APP_ARTIFACT_COMPATIBILITY_KEY,
   APP_INTERCEPTION_CONTEXT_KEY,
   APP_LAYOUT_FLAGS_KEY,
   APP_ROOT_LAYOUT_KEY,
@@ -16,6 +17,12 @@ import {
   resolveVisitedResponseInterceptionContext,
   withLayoutFlags,
 } from "../packages/vinext/src/server/app-elements.js";
+import {
+  APP_ELEMENTS_SCHEMA_VERSION,
+  ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+  createArtifactCompatibilityEnvelope,
+  RSC_PAYLOAD_SCHEMA_VERSION,
+} from "../packages/vinext/src/server/artifact-compatibility.js";
 
 describe("app elements payload helpers", () => {
   it("normalizes the unmatched-slot wire marker to UNMATCHED_SLOT for slot entries", () => {
@@ -151,6 +158,64 @@ describe("app elements payload helpers", () => {
 
     expect(metadata.layoutFlags).toEqual({});
   });
+
+  it("reads artifact compatibility envelope metadata", () => {
+    const envelope = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+    });
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+        "route:/dashboard": React.createElement("div", null, "route"),
+      }),
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: envelope,
+    });
+
+    expect(metadata.artifactCompatibility).toEqual(envelope);
+  });
+
+  it("defaults missing artifact compatibility to unknown proof for legacy payloads", () => {
+    const metadata = readAppElementsMetadata(
+      normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+        "route:/dashboard": React.createElement("div", null, "route"),
+      }),
+    );
+
+    expect(metadata.artifactCompatibility).toEqual({
+      schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+      graphVersion: null,
+      deploymentVersion: null,
+      appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+      rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+      rootBoundaryId: null,
+      renderEpoch: null,
+    });
+  });
+
+  it("rejects malformed artifact compatibility metadata", () => {
+    expect(() =>
+      readAppElementsMetadata({
+        ...normalizeAppElements({
+          [APP_ROOT_LAYOUT_KEY]: "/",
+          [APP_ROUTE_KEY]: "route:/dashboard",
+        }),
+        [APP_ARTIFACT_COMPATIBILITY_KEY]: {
+          schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+          graphVersion: 123,
+          deploymentVersion: null,
+          appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+          rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+          rootBoundaryId: null,
+          renderEpoch: null,
+        },
+      }),
+    ).toThrow("[vinext] Invalid __artifactCompatibility in App Router payload");
+  });
 });
 
 describe("isAppElementsRecord", () => {
@@ -244,6 +309,7 @@ describe("buildOutgoingAppPayload", () => {
     expect(element).toEqual(snapshot);
     expect(Object.keys(element)).toEqual(Object.keys(snapshot));
     expect(APP_LAYOUT_FLAGS_KEY in element).toBe(false);
+    expect(APP_ARTIFACT_COMPATIBILITY_KEY in element).toBe(false);
   });
 
   it("attaches __layoutFlags on the returned record", () => {
@@ -254,6 +320,30 @@ describe("buildOutgoingAppPayload", () => {
     expect(isAppElementsRecord(result)).toBe(true);
     if (isAppElementsRecord(result)) {
       expect(result[APP_LAYOUT_FLAGS_KEY]).toEqual({ "layout:/": "s" });
+    }
+  });
+
+  it("attaches __artifactCompatibility on the returned record", () => {
+    const result = buildOutgoingAppPayload({
+      element: { "page:/": "page" },
+      layoutFlags: { "layout:/": "s" },
+      artifactCompatibility: createArtifactCompatibilityEnvelope({
+        graphVersion: "graph-a",
+        deploymentVersion: "deploy-a",
+        rootBoundaryId: "root-a",
+      }),
+    });
+    expect(isAppElementsRecord(result)).toBe(true);
+    if (isAppElementsRecord(result)) {
+      expect(result[APP_ARTIFACT_COMPATIBILITY_KEY]).toEqual({
+        schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+        graphVersion: "graph-a",
+        deploymentVersion: "deploy-a",
+        appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+        rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+        rootBoundaryId: "root-a",
+        renderEpoch: null,
+      });
     }
   });
 

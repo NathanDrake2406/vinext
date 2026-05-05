@@ -1,8 +1,14 @@
 import { isValidElement, type ReactNode } from "react";
+import {
+  createArtifactCompatibilityEnvelope,
+  parseArtifactCompatibilityEnvelope,
+  type ArtifactCompatibilityEnvelope,
+} from "./artifact-compatibility.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 
 const APP_INTERCEPTION_SEPARATOR = "\0";
 
+export const APP_ARTIFACT_COMPATIBILITY_KEY = "__artifactCompatibility";
 export const APP_INTERCEPTION_CONTEXT_KEY = "__interceptionContext";
 export const APP_LAYOUT_FLAGS_KEY = "__layoutFlags";
 export const APP_ROUTE_KEY = "__route";
@@ -37,6 +43,7 @@ export type AppWireElements = Readonly<Record<string, AppWireElementValue>>;
 export type LayoutFlags = Readonly<Record<string, "s" | "d">>;
 
 type AppElementsMetadata = {
+  artifactCompatibility: ArtifactCompatibilityEnvelope;
   interceptionContext: string | null;
   layoutFlags: LayoutFlags;
   routeId: string;
@@ -157,27 +164,40 @@ export function withLayoutFlags<T extends Record<string, unknown>>(
   return { ...elements, [APP_LAYOUT_FLAGS_KEY]: layoutFlags };
 }
 
+function withArtifactCompatibilityEnvelope<T extends Record<string, unknown>>(
+  elements: T,
+  artifactCompatibility: ArtifactCompatibilityEnvelope,
+): T & { [APP_ARTIFACT_COMPATIBILITY_KEY]: ArtifactCompatibilityEnvelope } {
+  return { ...elements, [APP_ARTIFACT_COMPATIBILITY_KEY]: artifactCompatibility };
+}
+
 /**
  * The outgoing wire payload shape. Includes ReactNode values for the
  * rendered tree plus metadata values like LayoutFlags attached under
  * known keys (e.g. __layoutFlags). Distinct from AppElements / AppWireElements
  * which only carry render-time values.
  */
-export type AppOutgoingElements = Readonly<Record<string, ReactNode | LayoutFlags>>;
+export type AppOutgoingElements = Readonly<
+  Record<string, ReactNode | LayoutFlags | ArtifactCompatibilityEnvelope>
+>;
 
 /**
  * Pure: builds the outgoing payload for the wire. Non-record inputs (e.g. a
  * bare React element) are returned unchanged. Record inputs get a fresh copy
- * with `__layoutFlags` attached. Never mutates `input.element`.
+ * with payload metadata attached. Never mutates `input.element`.
  */
 export function buildOutgoingAppPayload(input: {
   element: ReactNode | Readonly<Record<string, ReactNode>>;
   layoutFlags: LayoutFlags;
+  artifactCompatibility?: ArtifactCompatibilityEnvelope;
 }): ReactNode | AppOutgoingElements {
   if (!isAppElementsRecord(input.element)) {
     return input.element;
   }
-  return withLayoutFlags(input.element, input.layoutFlags);
+  return withArtifactCompatibilityEnvelope(
+    withLayoutFlags(input.element, input.layoutFlags),
+    input.artifactCompatibility ?? createArtifactCompatibilityEnvelope(),
+  );
 }
 
 /**
@@ -213,8 +233,17 @@ export function readAppElementsMetadata(
   }
 
   const layoutFlags = parseLayoutFlags(elements[APP_LAYOUT_FLAGS_KEY]);
+  const artifactCompatibilityValue = elements[APP_ARTIFACT_COMPATIBILITY_KEY];
+  const artifactCompatibility =
+    artifactCompatibilityValue === undefined
+      ? createArtifactCompatibilityEnvelope()
+      : parseArtifactCompatibilityEnvelope(artifactCompatibilityValue);
+  if (!artifactCompatibility) {
+    throw new Error("[vinext] Invalid __artifactCompatibility in App Router payload");
+  }
 
   return {
+    artifactCompatibility,
     interceptionContext: interceptionContext ?? null,
     layoutFlags,
     routeId,
