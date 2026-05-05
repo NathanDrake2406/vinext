@@ -8,6 +8,7 @@ import {
 import {
   consumeDynamicUsage,
   consumeInvalidDynamicUsageError,
+  getAndClearPendingCookies,
   getDraftModeCookieHeader,
   markDynamicUsage,
   setHeadersContext,
@@ -118,6 +119,8 @@ type AppPageDispatchRoute = {
 };
 
 type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
+  /** Configured basePath (e.g. "/blog"). Used to prefix redirect Locations. */
+  basePath?: string;
   buildPageElement: (
     route: TRoute,
     params: AppPageParams,
@@ -617,7 +620,9 @@ async function renderLayoutSpecialError<TRoute extends AppPageDispatchRoute>(
   layoutIndex: number,
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
+    basePath: options.basePath,
     clearRequestContext: options.clearRequestContext,
+    getAndClearPendingCookies,
     isRscRequest: options.isRscRequest,
     middlewareContext: options.middlewareContext,
     renderFallbackPage(statusCode) {
@@ -651,7 +656,9 @@ async function renderPageSpecialError<TRoute extends AppPageDispatchRoute>(
   specialError: AppPageSpecialError,
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
+    basePath: options.basePath,
     clearRequestContext: options.clearRequestContext,
+    getAndClearPendingCookies,
     isRscRequest: options.isRscRequest,
     middlewareContext: options.middlewareContext,
     renderFallbackPage(statusCode) {
