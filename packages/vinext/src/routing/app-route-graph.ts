@@ -301,9 +301,19 @@ function discoverSlotSubRoutes(routes: AppRoute[], matcher: ValidFileMatcher): A
 
   for (const parentRoute of routes) {
     if (parentRoute.parallelSlots.length === 0) continue;
-    if (!parentRoute.pagePath) continue;
 
-    const parentPageDir = path.dirname(parentRoute.pagePath);
+    // Only page-bearing routes or layout-only UI routes (not route handlers)
+    // can own nested parallel-slot sub-routes.
+    const isLayoutOnlyUiRoute =
+      !parentRoute.pagePath && !parentRoute.routePath && parentRoute.layouts.length > 0;
+    if (!parentRoute.pagePath && !isLayoutOnlyUiRoute) continue;
+
+    // For page-bearing routes, the route directory is the page's directory.
+    // For layout-only routes (no page.tsx), proxy the route directory through
+    // the innermost layout — it lives at the same filesystem level as the route.
+    const parentPageDir = parentRoute.pagePath
+      ? path.dirname(parentRoute.pagePath)
+      : path.dirname(parentRoute.layouts[parentRoute.layouts.length - 1]);
 
     // Collect sub-paths from all slots.
     // Map: normalized visible sub-path -> slot pages, raw filesystem segments (for routeSegments),
@@ -362,9 +372,13 @@ function discoverSlotSubRoutes(routes: AppRoute[], matcher: ValidFileMatcher): A
 
     if (subPathMap.size === 0) continue;
 
-    // Find the default.tsx for the children slot at the parent directory
+    // Find the default.tsx for the children slot at the parent directory.
+    // When the parent route has a children page, a default.tsx is required so
+    // the synthetic sub-route has a fallback for the children slot. Layout-only
+    // parent routes (no page.tsx) do not need a default — the children slot was
+    // never occupied at the parent level, so the sub-route simply renders null.
     const childrenDefault = findFile(parentPageDir, "default", matcher);
-    if (!childrenDefault) continue;
+    if (parentRoute.pagePath && !childrenDefault) continue;
 
     for (const { rawSegments, converted: convertedSubRoute, slotPages } of subPathMap.values()) {
       const {
@@ -386,6 +400,17 @@ function discoverSlotSubRoutes(routes: AppRoute[], matcher: ValidFileMatcher): A
         applySlotSubPages(existingRoute, slotPages, rawSegments);
         continue;
       }
+
+      // Skip synthetic routes that would structurally conflict with an existing
+      // route (same shape, different param names). The slot content is handled
+      // by findMirroredSlotPage for the existing route instead.
+      // Scan routesByPattern (not just the original routes array) so synthetic
+      // routes created earlier in this loop are also visible.
+      const syntheticParts = [...parentRoute.patternParts, ...urlParts];
+      const hasStructuralConflict = Array.from(routesByPattern.values()).some((r) =>
+        patternsStructurallyEquivalent(r.patternParts, syntheticParts),
+      );
+      if (hasStructuralConflict) continue;
 
       // Build parallel slots for this sub-route: matching slots get the sub-page,
       // non-matching slots get null pagePath (rendering falls back to defaultPath)
@@ -978,6 +1003,26 @@ function scoreSlotPattern(urlSegments: readonly string[]): number {
     else score += 4;
   }
   return score;
+}
+
+/**
+ * Map a pattern segment to the tree-node type used by Next.js' route
+ * validator. Two segments are structurally equivalent iff they share the
+ * same tree-node type.
+ */
+function segmentTreeNodeType(seg: string): string {
+  if (!seg.startsWith(":")) return `literal:${seg}`;
+  if (seg.endsWith("*")) return "optionalCatchAll";
+  if (seg.endsWith("+")) return "catchAll";
+  return "dynamic";
+}
+
+function patternsStructurallyEquivalent(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (segmentTreeNodeType(a[i]) !== segmentTreeNodeType(b[i])) return false;
+  }
+  return true;
 }
 
 /**

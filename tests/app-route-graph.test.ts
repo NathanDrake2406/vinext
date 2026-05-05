@@ -123,6 +123,82 @@ describe("App Router route graph builder", () => {
     });
   });
 
+  it("skips synthetic routes that structurally conflict with existing page routes", async () => {
+    // A slot sub-page like @feed/[name]/page.tsx under /shop would create /shop/:name,
+    // but if /shop/[id]/page.tsx already exists (route /shop/:id), the synthetic route
+    // must be skipped — validateRoutePatterns rejects different slug names at the same
+    // dynamic path. The slot content is resolved at render time by findMirroredSlotPage.
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "shop/layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "shop/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/[id]/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/@feed/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/@feed/[name]/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const patterns = graph.routes.map((r) => r.pattern).sort();
+
+      // /shop/:id from shop/[id]/page.tsx must exist
+      expect(patterns).toContain("/shop/:id");
+      // /shop/:name from the slot sub-page must NOT be materialized
+      expect(patterns).not.toContain("/shop/:name");
+      // The non-conflicting parent route /shop should still exist
+      expect(patterns).toContain("/shop");
+    });
+  });
+
+  it("does not create synthetic routes under route-handler-only parents", async () => {
+    // Route handlers have pagePath: null but are NOT layout-only UI routes.
+    // They must not enter discoverSlotSubRoutes, or an ancestor slot like
+    // @feed/foo/page.tsx could materialise a nonsense synthetic route under
+    // /api/foo.
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "@feed/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "@feed/foo/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "api/route.ts", EMPTY_ROUTE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const patterns = graph.routes.map((r) => r.pattern).sort();
+
+      // /api from the route handler must exist
+      expect(patterns).toContain("/api");
+      // /api/foo must NOT be materialised from the route handler entry
+      expect(patterns).not.toContain("/api/foo");
+      // /foo from the ancestor slot must still be discovered normally
+      expect(patterns).toContain("/foo");
+    });
+  });
+
+  it("skips structural conflicts against synthetic routes created earlier in the same pass", async () => {
+    // Two slot sub-pages with different param names under the same parent
+    // should not both be materialised. The first synthetic route (/shop/:id)
+    // must block the second (/shop/:name), or validateRoutePatterns will
+    // reject the build with "different slug names".
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "shop/layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "shop/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/@a/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/@a/[id]/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/@b/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "shop/@b/[name]/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const patterns = graph.routes.map((r) => r.pattern).sort();
+
+      // Only one of /shop/:id or /shop/:name should be materialised
+      const conflictingSyntheticPatterns = patterns.filter(
+        (pattern) => pattern === "/shop/:id" || pattern === "/shop/:name",
+      );
+      expect(conflictingSyntheticPatterns).toHaveLength(1);
+      expect(patterns).toContain("/shop");
+    });
+  });
+
   it("keeps route groups transparent in materialized URL patterns", async () => {
     await withTempApp(async (appDir) => {
       await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
