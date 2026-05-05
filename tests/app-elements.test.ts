@@ -216,6 +216,26 @@ describe("app elements payload helpers", () => {
       }),
     ).toThrow("[vinext] Invalid __artifactCompatibility in App Router payload");
   });
+
+  it("rejects artifact compatibility with an unrecognized schema version", () => {
+    expect(() =>
+      readAppElementsMetadata({
+        ...normalizeAppElements({
+          [APP_ROOT_LAYOUT_KEY]: "/",
+          [APP_ROUTE_KEY]: "route:/dashboard",
+        }),
+        [APP_ARTIFACT_COMPATIBILITY_KEY]: {
+          schemaVersion: 99,
+          graphVersion: null,
+          deploymentVersion: null,
+          appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+          rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+          rootBoundaryId: null,
+          renderEpoch: null,
+        },
+      }),
+    ).toThrow("[vinext] Invalid __artifactCompatibility in App Router payload");
+  });
 });
 
 describe("isAppElementsRecord", () => {

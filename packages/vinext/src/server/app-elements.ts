@@ -194,6 +194,8 @@ export function buildOutgoingAppPayload(input: {
   if (!isAppElementsRecord(input.element)) {
     return input.element;
   }
+  // Emit an unknown-proof envelope even before concrete graph/deployment facts
+  // exist so every App Router artifact has a stable compatibility slot.
   return withArtifactCompatibilityEnvelope(
     withLayoutFlags(input.element, input.layoutFlags),
     input.artifactCompatibility ?? createArtifactCompatibilityEnvelope(),

@@ -1,4 +1,8 @@
 export const ARTIFACT_COMPATIBILITY_SCHEMA_VERSION = 1;
+
+// These versions describe separate protocol layers. They start in lockstep,
+// but future rolling deploy work can bump the envelope shape independently
+// from the flat AppElements record or the serialized RSC payload.
 export const APP_ELEMENTS_SCHEMA_VERSION = 1;
 export const RSC_PAYLOAD_SCHEMA_VERSION = 1;
 
@@ -53,6 +57,9 @@ export function parseArtifactCompatibilityEnvelope(
   value: unknown,
 ): ArtifactCompatibilityEnvelope | null {
   if (!isRecord(value)) return null;
+  // The Wave01 skeleton intentionally collapses version mismatch and malformed
+  // metadata into "not current". Cache/skip callers must split those cases
+  // before treating unknown compatibility as anything other than a miss/reject.
   if (!hasCurrentSchemaVersions(value)) return null;
   if (!isStringOrNull(value.graphVersion)) return null;
   if (!isStringOrNull(value.deploymentVersion)) return null;
