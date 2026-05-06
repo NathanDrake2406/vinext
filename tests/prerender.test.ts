@@ -157,6 +157,14 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
       reason: "no recognized Vinext RSC embed markers found in HTML",
     });
   });
+
+  it("rejects empty streamed RSC protocol markers with a specific error", () => {
+    const html = "<html><body><script>self.__VINEXT_RSC_DONE__=true</script></body></html>";
+
+    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(
+      "[vinext] Malformed prerender RSC embed: RSC protocol markers present but no data chunks found",
+    );
+  });
 });
 
 describe("prerenderApp — RSC extraction", () => {

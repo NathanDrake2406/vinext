@@ -293,6 +293,8 @@ export function extractRscPayloadFromPrerenderedHtml(html: string): ExtractRscPa
       continue;
     }
 
+    // Legacy embeds are parsed once for compatibility; modern chunk scripts take
+    // priority below if both protocols are present in the same HTML.
     if (legacyPayload === null) {
       legacyPayload = extractLegacyRscPayload(script);
       if (legacyPayload !== null) {
@@ -335,7 +337,9 @@ export function extractRscPayloadFromPrerenderedHtml(html: string): ExtractRscPa
   }
 
   if (sawRscMarker) {
-    throw new Error("[vinext] Malformed prerender RSC embed: no RSC chunks were found");
+    throw new Error(
+      "[vinext] Malformed prerender RSC embed: RSC protocol markers present but no data chunks found",
+    );
   }
 
   return {
@@ -1241,6 +1245,9 @@ export async function prerenderApp({
         }
         const html = htmlRender.html;
 
+        // Embedded chunks include fixFlightHints transforms from createRscEmbedTransform.
+        // The RSC entry applies the same fix at the source, so extracted and
+        // separately requested .rsc output stay equivalent.
         const extractedRsc = extractRscPayloadFromPrerenderedHtml(html);
         let rscData: string | null;
         if (extractedRsc.status === "ok") {
