@@ -43,6 +43,7 @@ import {
 import {
   createAppBrowserNavigationController,
   type HistoryUpdateMode,
+  type NavigationPayloadOutcome,
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
 import {
@@ -263,7 +264,7 @@ async function renderNavigationPayload(
   useTransition = true,
   actionType: "navigate" | "replace" | "traverse" = "navigate",
   operationLane: OperationLane = "navigation",
-): Promise<void> {
+): Promise<NavigationPayloadOutcome> {
   try {
     return await browserNavigationController.renderNavigationPayload({
       actionType,
@@ -1141,7 +1142,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
-        await renderNavigationPayload(
+        const renderOutcome = await renderNavigationPayload(
           rscPayload,
           navigationSnapshot,
           currentHref,
@@ -1154,6 +1155,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           toActionType(navigationKind),
           toOperationLane(navigationKind),
         );
+        if (renderOutcome !== "committed") return;
         // Don't cache the response if this navigation was superseded during
         // renderNavigationPayload's await — the elements were never dispatched.
         if (!browserNavigationController.isCurrentNavigation(navId)) return;

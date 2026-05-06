@@ -300,9 +300,11 @@ describe("app browser entry state helpers", () => {
     expect(
       resolvePendingNavigationCommitDisposition({
         activeNavigationId: 3,
+        currentVisibleCommitVersion: currentState.visibleCommitVersion,
         currentRootLayoutTreePath: currentState.rootLayoutTreePath,
         nextRootLayoutTreePath: pending.rootLayoutTreePath,
         startedNavigationId: 3,
+        startedVisibleCommitVersion: pending.action.operation.startedVisibleCommitVersion,
       }),
     ).toBe("hard-navigate");
   });
@@ -391,19 +393,98 @@ describe("app browser entry state helpers", () => {
     expect(
       resolvePendingNavigationCommitDisposition({
         activeNavigationId: 5,
+        currentVisibleCommitVersion: currentState.visibleCommitVersion,
         currentRootLayoutTreePath: currentState.rootLayoutTreePath,
         nextRootLayoutTreePath: pending.rootLayoutTreePath,
         startedNavigationId: 4,
+        startedVisibleCommitVersion: pending.action.operation.startedVisibleCommitVersion,
       }),
     ).toBe("skip");
+  });
+
+  it("skips a refresh commit when visible state changed after the refresh started", async () => {
+    const refreshStartState = createState({ visibleCommitVersion: 4 });
+    const latestState = createState({
+      routeId: "route:/hmr",
+      visibleCommitVersion: 5,
+    });
+    const pending = await createPendingNavigationCommit({
+      currentState: refreshStartState,
+      nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
+      navigationSnapshot: refreshStartState.navigationSnapshot,
+      operationLane: "refresh",
+      renderId: 22,
+      type: "navigate",
+    });
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 7,
+      currentState: latestState,
+      pending,
+      startedNavigationId: 7,
+    });
+
+    expect(approval.decision.disposition).toBe("no-commit");
+    expect(approval.decision.trace.entries[0]).toEqual({
+      code: NavigationTraceReasonCodes.staleOperation,
+      fields: {
+        activeNavigationId: 7,
+        currentRootLayoutTreePath: "/",
+        currentVisibleCommitVersion: 5,
+        nextRootLayoutTreePath: "/",
+        startedNavigationId: 7,
+        startedVisibleCommitVersion: 4,
+      },
+    });
+    expect(approval.approvedCommit).toBeNull();
+  });
+
+  it("skips a traverse commit when visible state changed after traversal started", async () => {
+    const traverseStartState = createState({ visibleCommitVersion: 2 });
+    const latestState = createState({
+      routeId: "route:/newer",
+      visibleCommitVersion: 3,
+    });
+    const pending = await createPendingNavigationCommit({
+      currentState: traverseStartState,
+      nextElements: Promise.resolve(createResolvedElements("route:/previous", "/")),
+      navigationSnapshot: traverseStartState.navigationSnapshot,
+      operationLane: "traverse",
+      previousNextUrl: null,
+      renderId: 23,
+      type: "traverse",
+    });
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 8,
+      currentState: latestState,
+      pending,
+      startedNavigationId: 8,
+    });
+
+    expect(approval.decision.disposition).toBe("no-commit");
+    expect(approval.decision.trace.entries[0]).toEqual({
+      code: NavigationTraceReasonCodes.staleOperation,
+      fields: {
+        activeNavigationId: 8,
+        currentRootLayoutTreePath: "/",
+        currentVisibleCommitVersion: 3,
+        nextRootLayoutTreePath: "/",
+        startedNavigationId: 8,
+        startedVisibleCommitVersion: 2,
+      },
+    });
+    expect(approval.approvedCommit).toBeNull();
   });
 
   it("traces stale pending commits with compact reason codes and structured fields", () => {
     const decision = resolvePendingNavigationCommitDispositionDecision({
       activeNavigationId: 5,
+      currentVisibleCommitVersion: 0,
       currentRootLayoutTreePath: "/",
       nextRootLayoutTreePath: "/(dashboard)",
       startedNavigationId: 4,
+      startedVisibleCommitVersion: 0,
     });
 
     expect(decision.disposition).toBe("skip");
@@ -415,8 +496,10 @@ describe("app browser entry state helpers", () => {
           fields: {
             activeNavigationId: 5,
             currentRootLayoutTreePath: "/",
+            currentVisibleCommitVersion: 0,
             nextRootLayoutTreePath: "/(dashboard)",
             startedNavigationId: 4,
+            startedVisibleCommitVersion: 0,
           },
         },
       ],
@@ -426,9 +509,11 @@ describe("app browser entry state helpers", () => {
   it("traces root-boundary hard navigation decisions", () => {
     const decision = resolvePendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
+      currentVisibleCommitVersion: 1,
       currentRootLayoutTreePath: "/(marketing)",
       nextRootLayoutTreePath: "/(dashboard)",
       startedNavigationId: 2,
+      startedVisibleCommitVersion: 1,
     });
 
     expect(decision.disposition).toBe("hard-navigate");
@@ -438,8 +523,10 @@ describe("app browser entry state helpers", () => {
         fields: {
           activeNavigationId: 2,
           currentRootLayoutTreePath: "/(marketing)",
+          currentVisibleCommitVersion: 1,
           nextRootLayoutTreePath: "/(dashboard)",
           startedNavigationId: 2,
+          startedVisibleCommitVersion: 1,
         },
       },
     ]);
@@ -448,9 +535,11 @@ describe("app browser entry state helpers", () => {
   it("traces unknown root-layout identity as a legacy soft-commit fallback", () => {
     const decision = resolvePendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
+      currentVisibleCommitVersion: 1,
       currentRootLayoutTreePath: "/",
       nextRootLayoutTreePath: null,
       startedNavigationId: 2,
+      startedVisibleCommitVersion: 1,
     });
 
     expect(decision.disposition).toBe("dispatch");
@@ -460,9 +549,11 @@ describe("app browser entry state helpers", () => {
   it("traces matching root-layout dispatches as current commits", () => {
     const decision = resolvePendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
+      currentVisibleCommitVersion: 1,
       currentRootLayoutTreePath: "/",
       nextRootLayoutTreePath: "/",
       startedNavigationId: 2,
+      startedVisibleCommitVersion: 1,
     });
 
     expect(decision.disposition).toBe("dispatch");
@@ -472,8 +563,10 @@ describe("app browser entry state helpers", () => {
         fields: {
           activeNavigationId: 2,
           currentRootLayoutTreePath: "/",
+          currentVisibleCommitVersion: 1,
           nextRootLayoutTreePath: "/",
           startedNavigationId: 2,
+          startedVisibleCommitVersion: 1,
         },
       },
     ]);
@@ -922,7 +1015,7 @@ describe("app browser navigation controller", () => {
         }),
       );
 
-      await expect(renderPromise).resolves.toBeUndefined();
+      await expect(renderPromise).resolves.toBe("no-commit");
       expect(createNavigationCommitEffect).not.toHaveBeenCalled();
       expect(assign).not.toHaveBeenCalled();
     } finally {
@@ -1248,6 +1341,114 @@ describe("app browser navigation lifecycle settlement", () => {
     }
   });
 
+  it("keeps a newer visible commit when an older refresh resolves late", async () => {
+    const { controller, detach, stateRef } = createControllerHarness();
+    let resolveRefresh!: (elements: AppElements) => void;
+    const refreshPayload = new Promise<AppElements>((resolve) => {
+      resolveRefresh = resolve;
+    });
+
+    try {
+      const refreshNav = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: undefined,
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements: refreshPayload,
+        operationLane: "refresh",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/initial",
+        navId: refreshNav,
+        useTransition: false,
+      });
+
+      await controller.hmrReplaceTree(
+        Promise.resolve(
+          createResolvedElements("route:/hmr", "/", null, {
+            "page:/hmr": React.createElement("main", null, "hmr"),
+          }),
+        ),
+        stateRef.current.navigationSnapshot,
+      );
+      expect(stateRef.current.routeId).toBe("route:/hmr");
+
+      resolveRefresh(
+        createResolvedElements("route:/initial-refreshed", "/", null, {
+          "page:/initial": React.createElement("main", null, "refreshed"),
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(stateRef.current.routeId).toBe("route:/hmr");
+      expect(stateRef.current.activeOperation).toMatchObject({
+        lane: "hmr",
+        state: "committed",
+        visibleCommitVersion: 1,
+      });
+    } finally {
+      detach();
+    }
+  });
+
+  it("settles pending state without patching visible UI when an older traverse resolves late", async () => {
+    const { controller, detach, stateRef } = createControllerHarness();
+    let resolveTraverse!: (elements: AppElements) => void;
+    const traversePayload = new Promise<AppElements>((resolve) => {
+      resolveTraverse = resolve;
+    });
+
+    try {
+      const traversePendingState = controller.beginPendingBrowserRouterState();
+      const traverseNav = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        actionType: "traverse",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: undefined,
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements: traversePayload,
+        operationLane: "traverse",
+        params: {},
+        pendingRouterState: traversePendingState,
+        previousNextUrl: null,
+        targetHref: "https://example.com/previous",
+        navId: traverseNav,
+        useTransition: false,
+      });
+
+      await controller.hmrReplaceTree(
+        Promise.resolve(
+          createResolvedElements("route:/hmr", "/", null, {
+            "page:/hmr": React.createElement("main", null, "hmr"),
+          }),
+        ),
+        stateRef.current.navigationSnapshot,
+      );
+
+      resolveTraverse(
+        createResolvedElements("route:/previous", "/", null, {
+          "page:/previous": React.createElement("main", null, "previous"),
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await expect(traversePendingState.promise).resolves.toBe(stateRef.current);
+      expect(traversePendingState.settled).toBe(true);
+      expect(stateRef.current.routeId).toBe("route:/hmr");
+      expect(stateRef.current.activeOperation).toMatchObject({
+        lane: "hmr",
+        state: "committed",
+        visibleCommitVersion: 1,
+      });
+    } finally {
+      detach();
+    }
+  });
+
   it("resolveAndClassifyNavigationCommit classifies skip when IDs have diverged", async () => {
     const result = await resolveAndClassifyNavigationCommit({
       activeNavigationId: 9,
@@ -1330,7 +1531,7 @@ describe("app browser root-layout hard navigation", () => {
         useTransition: false,
       });
 
-      await expect(renderPromise).resolves.toBeUndefined();
+      await expect(renderPromise).resolves.toBe("hard-navigate");
       expect(assign).toHaveBeenCalledTimes(1);
       expect(assign).toHaveBeenCalledWith("https://example.com/dashboard");
       expect(createNavigationCommitEffect).not.toHaveBeenCalled();

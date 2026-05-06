@@ -75,6 +75,7 @@ function fillCache(count: number, timestamp: number, keyPrefix = "/page-"): void
         paramsHeader: null,
         url: key,
       },
+      outcome: "cache-seeded",
       timestamp,
     });
     prefetched.add(key);
@@ -133,7 +134,7 @@ describe("prefetch cache eviction", () => {
       url: rscUrl,
     };
 
-    cache.set(rscUrl, { snapshot, timestamp: Date.now() });
+    cache.set(rscUrl, { outcome: "cache-seeded", snapshot, timestamp: Date.now() });
     prefetched.add(rscUrl);
 
     expect(consumePrefetchResponse(rscUrl, null, "slot:auth:/")).toEqual(snapshot);
@@ -147,6 +148,7 @@ describe("prefetch cache eviction", () => {
     const rscUrl = "/dashboard.rsc";
 
     cache.set(rscUrl, {
+      outcome: "cache-seeded",
       snapshot: {
         buffer: new TextEncoder().encode("flight").buffer,
         contentType: "text/x-component",
@@ -194,6 +196,55 @@ describe("prefetch cache eviction", () => {
     expect(restored.headers.get("content-type")).toBe("text/x-component; charset=utf-8");
     expect(restored.headers.get("x-vinext-params")).toBe(encodeURIComponent('{"id":"2"}'));
     await expect(restored.text()).resolves.toBe("flight");
+  });
+
+  it("settles router.prefetch as a consumable cache-seeded response without visible navigation", async () => {
+    let resolveResponse!: (response: Response) => void;
+    const fetchPromise = new Promise<Response>((resolve) => {
+      resolveResponse = resolve;
+    });
+    let fetchedUrl: RequestInfo | URL | undefined;
+    const fetch = vi.fn((input: RequestInfo | URL) => {
+      fetchedUrl = input;
+      return fetchPromise;
+    });
+    const navigate = vi.fn();
+    (globalThis as any).fetch = fetch;
+    (globalThis as any).window.__VINEXT_RSC_NAVIGATE__ = navigate;
+
+    useRouter().prefetch("/dashboard");
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+
+    if (fetchedUrl === undefined) {
+      throw new Error("Expected router.prefetch to fetch an RSC URL");
+    }
+
+    const rscUrl =
+      typeof fetchedUrl === "string"
+        ? fetchedUrl
+        : fetchedUrl instanceof URL
+          ? fetchedUrl.href
+          : fetchedUrl.url;
+    const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, "/");
+
+    expect(getPrefetchCache().get(cacheKey)?.outcome).toBe("pending");
+
+    resolveResponse(new Response("flight", { headers: { "content-type": "text/x-component" } }));
+    await waitForPrefetchSetup(
+      () =>
+        getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded" &&
+        getPrefetchCache().get(cacheKey)?.pending === undefined,
+    );
+
+    const entry = getPrefetchCache().get(cacheKey);
+    expect(entry?.outcome).toBe("cache-seeded");
+    expect(entry?.pending).toBeUndefined();
+
+    const consumed = consumePrefetchResponse(rscUrl, "/", null);
+    expect(consumed?.mountedSlotsHeader).toBeNull();
+    expect(getPrefetchCache().has(cacheKey)).toBe(false);
+    expect(getPrefetchedUrls().has(cacheKey)).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("sweeps all expired entries before FIFO", () => {

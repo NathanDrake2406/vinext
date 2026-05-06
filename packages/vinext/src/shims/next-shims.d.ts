@@ -112,8 +112,17 @@ declare module "next/navigation" {
   export function getLayoutSegmentContext(): import("react").Context<string[]> | null;
 
   // RSC prefetch cache utilities (shared between link.tsx and browser entry)
+  export type CachedRscResponse = {
+    buffer: ArrayBuffer;
+    contentType: string;
+    mountedSlotsHeader?: string | null;
+    paramsHeader: string | null;
+    url: string;
+  };
   export type PrefetchCacheEntry = {
-    response: Response;
+    outcome: "pending" | "cache-seeded";
+    snapshot?: CachedRscResponse;
+    pending?: Promise<void>;
     timestamp: number;
   };
   export const MAX_PREFETCH_CACHE_SIZE: number;
@@ -125,6 +134,19 @@ declare module "next/navigation" {
     response: Response,
     interceptionContext?: string | null,
   ): void;
+  export function snapshotRscResponse(response: Response): Promise<CachedRscResponse>;
+  export function restoreRscResponse(cached: CachedRscResponse, copy?: boolean): Response;
+  export function prefetchRscResponse(
+    rscUrl: string,
+    fetchPromise: Promise<Response>,
+    interceptionContext?: string | null,
+    mountedSlotsHeader?: string | null,
+  ): void;
+  export function consumePrefetchResponse(
+    rscUrl: string,
+    interceptionContext?: string | null,
+    mountedSlotsHeader?: string | null,
+  ): CachedRscResponse | null;
 }
 
 declare module "next/image" {

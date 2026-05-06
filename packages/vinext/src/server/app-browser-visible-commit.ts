@@ -63,9 +63,11 @@ export function applyApprovedVisibleCommit(
 
 function resolvePendingNavigationCommitDecision(options: {
   activeNavigationId: number;
+  currentVisibleCommitVersion: number;
   currentRootLayoutTreePath: string | null;
   nextRootLayoutTreePath: string | null;
   startedNavigationId: number;
+  startedVisibleCommitVersion: number;
 }): CommitDecision {
   const { disposition, trace } = resolvePendingNavigationCommitDispositionDecision(options);
 
@@ -123,9 +125,11 @@ export function approvePendingNavigationCommit(options: {
 }): CommitApproval {
   const decision = resolvePendingNavigationCommitDecision({
     activeNavigationId: options.activeNavigationId,
+    currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
     currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
     nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
     startedNavigationId: options.startedNavigationId,
+    startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
   });
 
   switch (decision.disposition) {
@@ -153,6 +157,8 @@ export function approvePendingNavigationCommit(options: {
 export async function resolveAndClassifyNavigationCommit(options: {
   activeNavigationId: number;
   currentState: AppRouterState;
+  getActiveNavigationId?: () => number;
+  getCurrentState?: () => AppRouterState;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   nextElements: Promise<AppElements>;
   operationLane: OperationLane;
@@ -171,9 +177,10 @@ export async function resolveAndClassifyNavigationCommit(options: {
     type: options.type,
   });
 
+  const currentState = options.getCurrentState?.() ?? options.currentState;
   const approval = approvePendingNavigationCommit({
-    activeNavigationId: options.activeNavigationId,
-    currentState: options.currentState,
+    activeNavigationId: options.getActiveNavigationId?.() ?? options.activeNavigationId,
+    currentState,
     pending,
     startedNavigationId: options.startedNavigationId,
   });

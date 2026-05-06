@@ -26,6 +26,7 @@ export type PendingBrowserRouterState = {
   resolve: (state: AppRouterState) => void;
   settled: boolean;
 };
+export type NavigationPayloadOutcome = "committed" | "no-commit" | "hard-navigate";
 
 type BrowserNavigationCommitEffectFactory = (options: {
   href: string;
@@ -68,7 +69,7 @@ type BrowserNavigationController = {
     targetHref: string;
     navId: number;
     useTransition?: boolean;
-  }): Promise<void>;
+  }): Promise<NavigationPayloadOutcome>;
   commitSameUrlNavigatePayload(
     nextElements: Promise<AppElements>,
     navigationSnapshot: ClientNavigationRenderSnapshot,
@@ -394,7 +395,7 @@ export function createAppBrowserNavigationController(
     targetHref: string;
     navId: number;
     useTransition?: boolean;
-  }): Promise<void> {
+  }): Promise<NavigationPayloadOutcome> {
     const renderId = allocateRenderId();
     let resolveCommitted: (() => void) | undefined;
     const committed = new Promise<void>((resolve) => {
@@ -404,9 +405,9 @@ export function createAppBrowserNavigationController(
 
     let snapshotActivated = false;
     try {
-      const currentState = getBrowserRouterState();
+      const startedState = getBrowserRouterState();
       const pending = await createPendingNavigationCommit({
-        currentState,
+        currentState: startedState,
         nextElements: options.nextElements,
         navigationSnapshot: options.navigationSnapshot,
         operationLane: options.operationLane,
@@ -417,7 +418,7 @@ export function createAppBrowserNavigationController(
 
       const approval = approvePendingNavigationCommit({
         activeNavigationId,
-        currentState,
+        currentState: getBrowserRouterState(),
         pending,
         startedNavigationId: options.navId,
       });
@@ -426,14 +427,14 @@ export function createAppBrowserNavigationController(
         settlePendingBrowserRouterState(options.pendingRouterState);
         pendingNavigationCommits.delete(renderId);
         resolveCommitted?.();
-        return;
+        return "no-commit";
       }
 
       if (approval.decision.disposition === "hard-navigate") {
         settlePendingBrowserRouterState(options.pendingRouterState);
         pendingNavigationCommits.delete(renderId);
         window.location.assign(options.targetHref);
-        return;
+        return "hard-navigate";
       }
 
       const approvedCommit = approval.approvedCommit;
@@ -469,7 +470,7 @@ export function createAppBrowserNavigationController(
       throw error;
     }
 
-    return committed;
+    return committed.then(() => "committed");
   }
 
   async function commitSameUrlNavigatePayload(
@@ -479,11 +480,6 @@ export function createAppBrowserNavigationController(
   ): Promise<unknown> {
     const currentState = getBrowserRouterState();
     const startedNavigationId = activeNavigationId;
-    // Known limitation: if a same-URL navigation fully commits while this
-    // server action is awaiting resolveAndClassifyNavigationCommit(), the action
-    // can still dispatch its older payload afterward. The old pre-2c code had
-    // the same race, and Next.js has similar behavior. Tightening this would
-    // need a stronger commit-version gate than activeNavigationId alone.
     const {
       approvedCommit,
       decision,
@@ -494,6 +490,8 @@ export function createAppBrowserNavigationController(
     } = await resolveAndClassifyNavigationCommit({
       activeNavigationId,
       currentState,
+      getActiveNavigationId: () => activeNavigationId,
+      getCurrentState: getBrowserRouterState,
       navigationSnapshot,
       nextElements,
       renderId: allocateRenderId(),
