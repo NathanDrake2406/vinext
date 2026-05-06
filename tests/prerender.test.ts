@@ -132,17 +132,20 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
     );
   });
 
-  it("throws when no chunk scripts are present", () => {
-    expect(() => extractRscPayloadFromPrerenderedHtml("<html><body>legacy</body></html>")).toThrow(
-      "[vinext] Malformed prerender RSC embed: no chunk scripts found in HTML",
-    );
+  it("returns null when no chunk scripts and no done marker are present (middleware short-circuit)", () => {
+    // Middleware that returns a custom 200 HTML body bypasses the App Router
+    // pipeline entirely — no chunks, no done marker. The driver detects this
+    // null and falls back to a second invocation with `RSC: 1`.
+    expect(extractRscPayloadFromPrerenderedHtml("<html><body>legacy</body></html>")).toBeNull();
   });
 
   it("throws when only the done marker is present without any chunks", () => {
+    // Half-emitted embed (done marker but no chunks) is a real bug — partial
+    // emission shouldn't fall back silently.
     const html = "<html><body><script>self.__VINEXT_RSC_DONE__=true</script></body></html>";
 
     expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(
-      "[vinext] Malformed prerender RSC embed: no chunk scripts found in HTML",
+      "[vinext] Malformed prerender RSC embed: done marker present without chunk scripts",
     );
   });
 });
@@ -207,6 +210,84 @@ describe("prerenderApp — RSC extraction", () => {
       });
       expect(fs.readFileSync(path.join(outDir, "index.rsc"), "utf-8")).toBe(rscPayload);
       expect(rscRequestCount).toBe(0);
+    } finally {
+      await closeServer(server);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a second RSC: 1 invocation when middleware short-circuits with custom HTML", async () => {
+    // Middleware that returns a 200 HTML body bypasses the App Router
+    // pipeline — the response contains no embed chunks. The driver must
+    // recover by issuing a second invocation with `RSC: 1` and use whatever
+    // that returns as the .rsc file.
+    const root = tmpDir("vinext-prerender-rsc-fallback-");
+    const outDir = path.join(root, "out");
+    const appDir = path.join(root, "app");
+    const pagePath = path.join(appDir, "page.tsx");
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(
+      pagePath,
+      "export const dynamic = 'force-static';\nexport default function Page() { return null; }\n",
+    );
+
+    const middlewareHtml = "<html><body>middleware short-circuit</body></html>";
+    const fallbackRscPayload = '0:["$","div",null,{"children":"from fallback"}]\n';
+    let pageRequestCount = 0;
+    let rscRequestCount = 0;
+    const server = createServer((req, res) => {
+      const isRsc = req.headers.rsc === "1" || req.headers.accept === "text/x-component";
+
+      if (req.url === "/__vinext_nonexistent_for_404__") {
+        res.statusCode = 404;
+        res.end("<html><body>not found</body></html>");
+        return;
+      }
+
+      if (isRsc) {
+        rscRequestCount++;
+        res.setHeader("content-type", "text/x-component");
+        res.end(fallbackRscPayload);
+        return;
+      }
+
+      // Page request: middleware short-circuits with plain HTML and no
+      // RSC embed chunks — exercising the fallback path.
+      pageRequestCount++;
+      res.setHeader("content-type", "text/html");
+      res.end(middlewareHtml);
+    });
+
+    const port = await listen(server);
+    try {
+      const { prerenderApp } = await import("../packages/vinext/src/build/prerender.js");
+      const { appRouter } = await import("../packages/vinext/src/routing/app-router.js");
+      const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
+      const routes = await appRouter(appDir);
+      const config = await resolveNextConfig({});
+
+      const prerenderResult = await prerenderApp({
+        mode: "default",
+        rscBundlePath: path.join(root, "dist", "server", "index.js"),
+        routes,
+        outDir,
+        config,
+        _prodServer: { server, port },
+      });
+
+      expect(findRoute(prerenderResult.routes, "/")).toMatchObject({
+        route: "/",
+        status: "rendered",
+      });
+
+      // HTML on disk is the middleware response.
+      expect(fs.readFileSync(path.join(outDir, "index.html"), "utf-8")).toBe(middlewareHtml);
+      // .rsc on disk is the fallback RSC: 1 response.
+      expect(fs.readFileSync(path.join(outDir, "index.rsc"), "utf-8")).toBe(fallbackRscPayload);
+
+      // Exactly one page request and one RSC fallback request per route.
+      expect(pageRequestCount).toBe(1);
+      expect(rscRequestCount).toBe(1);
     } finally {
       await closeServer(server);
       fs.rmSync(root, { recursive: true, force: true });

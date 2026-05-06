@@ -189,14 +189,18 @@ const RSC_CHUNK_FULL_PREFIX = `${RSC_CHUNK_SCRIPT_PREFIX}self.__VINEXT_RSC_CHUNK
  * Reconstruct the RSC payload from a prerender HTML response by parsing the
  * inline bootstrap chunk scripts emitted by createRscEmbedTransform.
  *
- * Always throws on malformed or missing markers — the writer is in-tree, so
- * any anomaly is a vinext-internal regression we want to surface loudly
- * rather than silently double-rendering via a fallback request.
+ * Returns null when the HTML contains no chunk scripts at all — the caller
+ * should fall back to a second handler invocation. This is reachable when
+ * middleware short-circuits the App Router pipeline with a custom 200 HTML
+ * response that never went through createRscEmbedTransform.
+ *
+ * Throws on partial or malformed embeds (chunks present but no done marker,
+ * tampered chunk JSON, etc.) — those are real vinext-internal regressions.
  *
  * Safe regex usage: safeJsonStringify (used by createRscEmbedTransform) escapes
  * all '<' and '>' in the embedded JSON, preventing false </script> matches.
  */
-export function extractRscPayloadFromPrerenderedHtml(html: string): string {
+export function extractRscPayloadFromPrerenderedHtml(html: string): string | null {
   const scriptPattern = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi;
   const chunks: string[] = [];
   let sawDone = false;
@@ -215,8 +219,15 @@ export function extractRscPayloadFromPrerenderedHtml(html: string): string {
     }
   }
 
+  // No chunks AND no done marker → middleware/early-return path. Caller falls
+  // back to a second invocation with `RSC: 1`.
+  if (chunks.length === 0 && !sawDone) {
+    return null;
+  }
   if (chunks.length === 0) {
-    throw new Error("[vinext] Malformed prerender RSC embed: no chunk scripts found in HTML");
+    throw new Error(
+      "[vinext] Malformed prerender RSC embed: done marker present without chunk scripts",
+    );
   }
   if (!sawDone) {
     throw new Error("[vinext] Malformed prerender RSC embed: missing __VINEXT_RSC_DONE__ marker");
@@ -1151,7 +1162,21 @@ export async function prerenderApp({
         // (createRscEmbedTransform applies it before pushing each chunk into
         // the embed scripts), so the resulting `.rsc` file contains the
         // rewritten Flight form rather than raw Flight bytes.
-        const rscData = extractRscPayloadFromPrerenderedHtml(html);
+        //
+        // Falls back to a second invocation with `RSC: 1` when the HTML has
+        // no chunk scripts at all — covers cases where middleware
+        // short-circuits the App Router pipeline with a custom 200 HTML
+        // response that never went through createRscEmbedTransform.
+        let rscData = extractRscPayloadFromPrerenderedHtml(html);
+        if (rscData === null) {
+          const rscRequest = new Request(`http://localhost${urlPath}`, {
+            headers: { Accept: "text/x-component", RSC: "1" },
+          });
+          const rscRes = await runWithHeadersContext(headersContextFromRequest(rscRequest), () =>
+            rscHandler(rscRequest),
+          );
+          rscData = rscRes.ok ? await rscRes.text() : "";
+        }
 
         const outputFiles: string[] = [];
 
