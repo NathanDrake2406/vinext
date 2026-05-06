@@ -74,7 +74,7 @@ export type PendingNavigationCommit = {
   routeId: string;
 };
 
-export type PendingNavigationCommitDisposition = "dispatch" | "hard-navigate" | "skip";
+type PendingNavigationCommitDisposition = "dispatch" | "hard-navigate" | "skip";
 type PendingNavigationCommitDispositionDecision = {
   disposition: PendingNavigationCommitDisposition;
   trace: NavigationTrace;

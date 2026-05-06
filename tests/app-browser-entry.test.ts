@@ -676,6 +676,9 @@ describe("app browser entry state helpers", () => {
       startedNavigationId: 7,
     });
     expect(staleApproval.decision.disposition).toBe("no-commit");
+    expect(staleApproval.decision.trace.entries[0]?.code).toBe(
+      NavigationTraceReasonCodes.staleOperation,
+    );
     expect(staleApproval.approvedCommit).toBeNull();
 
     const hardNavigateApproval = approvePendingNavigationCommit({
@@ -685,6 +688,9 @@ describe("app browser entry state helpers", () => {
       startedNavigationId: 8,
     });
     expect(hardNavigateApproval.decision.disposition).toBe("hard-navigate");
+    expect(hardNavigateApproval.decision.trace.entries[0]?.code).toBe(
+      NavigationTraceReasonCodes.rootBoundaryChanged,
+    );
     expect(hardNavigateApproval.approvedCommit).toBeNull();
   });
 
@@ -1254,7 +1260,7 @@ describe("app browser navigation lifecycle settlement", () => {
       type: "navigate",
     });
 
-    expect(result.disposition).toBe("skip");
+    expect(result.decision.disposition).toBe("no-commit");
     expect(result.pending.routeId).toBe("route:/dashboard");
   });
 
@@ -1442,7 +1448,7 @@ describe("app browser entry previousNextUrl helpers", () => {
       type: "navigate",
     });
 
-    expect(result.disposition).toBe("hard-navigate");
+    expect(result.decision.disposition).toBe("hard-navigate");
     expect(result.pending.routeId).toBe("route:/dashboard");
     expect(result.pending.action.renderId).toBe(3);
     expect(result.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryChanged);

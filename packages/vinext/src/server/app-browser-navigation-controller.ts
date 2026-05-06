@@ -485,12 +485,11 @@ export function createAppBrowserNavigationController(
     // the same race, and Next.js has similar behavior. Tightening this would
     // need a stronger commit-version gate than activeNavigationId alone.
     const {
-      disposition,
       approvedCommit,
+      decision,
       // Intentionally retained as #726-OPS-01 trace-shell scaffolding. The
-      // same-URL action path still exposes the legacy disposition for caller
-      // compatibility; later lifecycle gates can consume this trace without
-      // changing the classifier contract again.
+      // same-URL action path can consume this trace once later lifecycle gates
+      // need an observable commit explanation.
       trace: _navigationTrace,
     } = await resolveAndClassifyNavigationCommit({
       activeNavigationId,
@@ -503,7 +502,7 @@ export function createAppBrowserNavigationController(
       type: "navigate",
     });
 
-    if (disposition === "hard-navigate") {
+    if (decision.disposition === "hard-navigate") {
       window.location.assign(window.location.href);
       return undefined;
     }

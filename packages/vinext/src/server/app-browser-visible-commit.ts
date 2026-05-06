@@ -8,7 +8,6 @@ import {
   type AppRouterState,
   type OperationLane,
   type PendingNavigationCommit,
-  type PendingNavigationCommitDisposition,
 } from "./app-browser-state.js";
 import {
   NavigationTraceReasonCodes,
@@ -51,7 +50,6 @@ type CommitApproval = VisibleCommitApproval | NonVisibleCommitApproval;
 type ClassifiedPendingNavigationCommit = {
   approvedCommit: ApprovedVisibleCommit | null;
   decision: CommitDecision;
-  disposition: PendingNavigationCommitDisposition;
   pending: PendingNavigationCommit;
   trace: NavigationTrace;
 };
@@ -183,25 +181,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
   return {
     approvedCommit: approval.approvedCommit,
     decision: approval.decision,
-    disposition: commitDecisionToPendingNavigationCommitDisposition(approval.decision),
     pending,
     trace: approval.decision.trace,
   };
-}
-
-function commitDecisionToPendingNavigationCommitDisposition(
-  decision: CommitDecision,
-): PendingNavigationCommitDisposition {
-  switch (decision.disposition) {
-    case "commit":
-      return "dispatch";
-    case "hard-navigate":
-      return "hard-navigate";
-    case "no-commit":
-      return "skip";
-    default: {
-      const _exhaustive: never = decision;
-      throw new Error("[vinext] Unknown commit decision: " + String(_exhaustive));
-    }
-  }
 }
