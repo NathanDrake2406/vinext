@@ -6,15 +6,17 @@ import {
 } from "vinext/shims/navigation";
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
 import {
+  createPendingNavigationCommit,
+  type AppRouterState,
+  type OperationLane,
+} from "./app-browser-state.js";
+import {
   applyApprovedVisibleCommit,
   approveHmrVisibleCommit,
   approvePendingNavigationCommit,
-  createPendingNavigationCommit,
   resolveAndClassifyNavigationCommit,
-  type AppRouterState,
   type ApprovedVisibleCommit,
-  type OperationLane,
-} from "./app-browser-state.js";
+} from "./app-browser-visible-commit.js";
 import type { AppElements } from "./app-elements.js";
 
 export type HistoryUpdateMode = "push" | "replace";

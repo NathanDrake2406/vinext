@@ -19,11 +19,7 @@ import {
   createHistoryStateWithPreviousNextUrl,
   createOperationRecord,
   createPendingNavigationCommit,
-  applyApprovedVisibleCommit,
-  approveHmrVisibleCommit,
-  approvePendingNavigationCommit,
   readHistoryStatePreviousNextUrl,
-  resolveAndClassifyNavigationCommit,
   resolveInterceptionContextFromPreviousNextUrl,
   resolveServerActionRequestState,
   routerReducer,
@@ -32,6 +28,12 @@ import {
   shouldHardNavigate,
   type AppRouterState,
 } from "../packages/vinext/src/server/app-browser-state.js";
+import {
+  applyApprovedVisibleCommit,
+  approveHmrVisibleCommit,
+  approvePendingNavigationCommit,
+  resolveAndClassifyNavigationCommit,
+} from "../packages/vinext/src/server/app-browser-visible-commit.js";
 import {
   NAVIGATION_TRACE_SCHEMA_VERSION,
   NavigationTraceReasonCodes,
