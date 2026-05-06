@@ -412,6 +412,11 @@ export function generateWranglerConfig(info: ProjectInfo): string {
     images: {
       binding: "IMAGES",
     },
+    // Exposes the Cloudflare Worker version ID at runtime. vinext uses it as
+    // the deployment seed for shared "use cache" entries when available.
+    version_metadata: {
+      binding: "CF_VERSION_METADATA",
+    },
   };
 
   if (info.hasISR) {
@@ -457,6 +462,10 @@ import handler from "vinext/server/app-router-entry";
 ${isrImports}
 interface Env {
   ASSETS: Fetcher;${isrEnvField}
+  NEXT_DEPLOYMENT_ID?: string;
+  CF_VERSION_METADATA?: {
+    id?: string;
+  };
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {

@@ -2491,6 +2491,90 @@ describe('"use cache" runtime', () => {
     }
   });
 
+  it("scopes shared cache entries by deployment ID when available", async () => {
+    // Ported from Next.js: test/production/app-dir/use-cache-cross-deployment/use-cache-cross-deployment.test.ts
+    // https://github.com/vercel/next.js/blob/07f76411b07de9417d4a6b816f3137cafe1045fc/test/production/app-dir/use-cache-cross-deployment/use-cache-cross-deployment.test.ts
+    const { registerCachedFunction, setUseCacheDeploymentId } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    const previousBuildId = process.env.__VINEXT_BUILD_ID;
+    const previousDeploymentId = process.env.__VINEXT_DEPLOYMENT_ID;
+    try {
+      process.env.__VINEXT_BUILD_ID = "stable-build";
+      delete process.env.__VINEXT_DEPLOYMENT_ID;
+
+      let callCount = 0;
+      const cached = registerCachedFunction(async () => {
+        callCount++;
+        return { count: callCount };
+      }, "test:deployment-id");
+
+      setUseCacheDeploymentId("deployment-one");
+      expect(await cached()).toEqual({ count: 1 });
+      expect(await cached()).toEqual({ count: 1 });
+
+      setUseCacheDeploymentId("deployment-two");
+      expect(await cached()).toEqual({ count: 2 });
+      expect(await cached()).toEqual({ count: 2 });
+
+      setUseCacheDeploymentId(undefined);
+      expect(await cached()).toEqual({ count: 3 });
+      expect(await cached()).toEqual({ count: 3 });
+    } finally {
+      setUseCacheDeploymentId(undefined);
+      if (previousBuildId === undefined) {
+        delete process.env.__VINEXT_BUILD_ID;
+      } else {
+        process.env.__VINEXT_BUILD_ID = previousBuildId;
+      }
+      if (previousDeploymentId === undefined) {
+        delete process.env.__VINEXT_DEPLOYMENT_ID;
+      } else {
+        process.env.__VINEXT_DEPLOYMENT_ID = previousDeploymentId;
+      }
+    }
+  });
+
+  it("keeps concurrent request deployment IDs isolated", async () => {
+    const { registerCachedFunction, runWithUseCacheDeploymentId } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    const previousBuildId = process.env.__VINEXT_BUILD_ID;
+    try {
+      process.env.__VINEXT_BUILD_ID = "stable-build";
+
+      let callCount = 0;
+      const cached = registerCachedFunction(async () => {
+        callCount++;
+        return { count: callCount };
+      }, "test:concurrent-deployment-id");
+
+      const [first, second] = await Promise.all([
+        runWithUseCacheDeploymentId("deployment-one", () => cached()),
+        runWithUseCacheDeploymentId("deployment-two", () => cached()),
+      ]);
+
+      expect(new Set([first.count, second.count])).toEqual(new Set([1, 2]));
+      expect(callCount).toBe(2);
+
+      expect(await runWithUseCacheDeploymentId("deployment-one", () => cached())).toEqual(first);
+      expect(await runWithUseCacheDeploymentId("deployment-two", () => cached())).toEqual(second);
+      expect(callCount).toBe(2);
+    } finally {
+      if (previousBuildId === undefined) {
+        delete process.env.__VINEXT_BUILD_ID;
+      } else {
+        process.env.__VINEXT_BUILD_ID = previousBuildId;
+      }
+    }
+  });
+
   it("registerCachedFunction respects cacheLife inside cached function", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
