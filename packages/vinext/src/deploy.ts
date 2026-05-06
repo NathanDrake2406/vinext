@@ -31,6 +31,7 @@ import { runTPR } from "./cloudflare/tpr.js";
 import { runPrerender } from "./build/run-prerender.js";
 import { loadDotenv } from "./config/dotenv.js";
 import { loadNextConfig, resolveNextConfig } from "./config/next-config.js";
+import { parsePositiveIntegerArg } from "./cli-args.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,8 @@ type DeployOptions = {
   dryRun?: boolean;
   /** Pre-render all discovered routes into the dist output after building */
   prerenderAll?: boolean;
+  /** Maximum number of routes to prerender in parallel */
+  prerenderConcurrency?: number;
   /** Enable experimental TPR (Traffic-aware Pre-Rendering) */
   experimentalTPR?: boolean;
   /** TPR: traffic coverage percentage target (0–100, default: 90) */
@@ -70,6 +73,7 @@ const deployArgOptions = {
   "skip-build": { type: "boolean", default: false },
   "dry-run": { type: "boolean", default: false },
   "prerender-all": { type: "boolean", default: false },
+  "prerender-concurrency": { type: "string" },
   "experimental-tpr": { type: "boolean", default: false },
   "tpr-coverage": { type: "string" },
   "tpr-limit": { type: "string" },
@@ -97,6 +101,10 @@ export function parseDeployArgs(args: string[]) {
     skipBuild: values["skip-build"],
     dryRun: values["dry-run"],
     prerenderAll: values["prerender-all"],
+    prerenderConcurrency:
+      values["prerender-concurrency"] === undefined
+        ? undefined
+        : parsePositiveIntegerArg(values["prerender-concurrency"], "--prerender-concurrency"),
     experimentalTPR: values["experimental-tpr"],
     tprCoverage: parseIntArg("tpr-coverage", values["tpr-coverage"]),
     tprLimit: parseIntArg("tpr-limit", values["tpr-limit"]),
@@ -1364,7 +1372,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
         process.setSourceMapsEnabled(true);
         Error.stackTraceLimit = Math.max(Error.stackTraceLimit, 50);
       }
-      await runPrerender({ root: info.root });
+      await runPrerender({ root: info.root, concurrency: options.prerenderConcurrency });
     }
   }
 

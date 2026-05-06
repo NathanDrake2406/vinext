@@ -14,6 +14,7 @@ type ParsedArgs = {
   turbopack?: boolean;
   experimental?: boolean;
   prerenderAll?: boolean;
+  prerenderConcurrency?: number;
   precompress?: boolean;
 };
 
@@ -69,6 +70,17 @@ function parsePort(raw: string, flag: string): number {
   return parsed;
 }
 
+export function parsePositiveIntegerArg(raw: string, flag: string): number {
+  if (raw === "") {
+    throw new Error(`${flag} requires a value, but none was provided.`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} expects a positive integer, but got "${raw}".`);
+  }
+  return parsed;
+}
+
 /**
  * Parse CLI arguments into a structured object.
  *
@@ -105,6 +117,13 @@ export function parseArgs(args: string[]): ParsedArgs {
         result.prerenderAll = true;
         break;
 
+      case "--prerender-concurrency": {
+        const raw = takeValue(arg, args, i);
+        i++;
+        result.prerenderConcurrency = parsePositiveIntegerArg(raw, arg);
+        break;
+      }
+
       case "--precompress":
         result.precompress = true;
         break;
@@ -137,6 +156,14 @@ export function parseArgs(args: string[]): ParsedArgs {
             throw new Error(`--hostname requires a value, but none was provided.`);
           }
           result.hostname = hostRaw;
+          break;
+        }
+        const prerenderConcurrencyRaw = tryEqualsForm(arg, "prerender-concurrency");
+        if (prerenderConcurrencyRaw !== null) {
+          result.prerenderConcurrency = parsePositiveIntegerArg(
+            prerenderConcurrencyRaw,
+            "--prerender-concurrency",
+          );
           break;
         }
         break;

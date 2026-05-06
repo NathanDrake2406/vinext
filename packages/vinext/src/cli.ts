@@ -481,7 +481,10 @@ async function buildApp() {
       : "Pre-rendering all routes (output: 'export')...";
     process.stdout.write("\x1b[0m");
     console.log(`  ${label}`);
-    prerenderResult = await runPrerender({ root: process.cwd() });
+    prerenderResult = await runPrerender({
+      root: process.cwd(),
+      concurrency: parsed.prerenderConcurrency,
+    });
   }
 
   // Precompression runs as a Vite plugin writeBundle hook (vinext:precompress).
@@ -586,6 +589,7 @@ async function deployCommand() {
     dryRun: parsed.dryRun,
     name: parsed.name,
     prerenderAll: parsed.prerenderAll,
+    prerenderConcurrency: parsed.prerenderConcurrency,
     experimentalTPR: parsed.experimentalTPR,
     tprCoverage: parsed.tprCoverage,
     tprLimit: parsed.tprLimit,
@@ -656,6 +660,8 @@ function printHelp(cmd?: string) {
     --verbose            Show full Vite/Rollup build output (suppressed by default)
     --prerender-all      Pre-render discovered routes after building (future releases
                          will serve these files in vinext start)
+    --prerender-concurrency <count>
+                         Maximum number of routes to pre-render in parallel
     --precompress        Precompress static assets at build time (.br, .gz, .zst)
     -h, --help           Show this help
 `);
@@ -701,6 +707,8 @@ function printHelp(cmd?: string) {
     --dry-run                Generate config files without building or deploying
     --prerender-all          Pre-render discovered routes after building (future
                              releases will auto-populate the remote cache)
+    --prerender-concurrency <count>
+                             Maximum number of routes to pre-render in parallel
     -h, --help               Show this help
 
   Experimental:

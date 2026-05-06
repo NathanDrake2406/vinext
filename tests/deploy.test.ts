@@ -146,6 +146,30 @@ describe("parseDeployArgs", () => {
     expect(parsed.tprWindow).toBe(48);
   });
 
+  it("parses --prerender-concurrency with space-separated value", () => {
+    expect(parseDeployArgs(["--prerender-concurrency", "4"]).prerenderConcurrency).toBe(4);
+  });
+
+  it("parses --prerender-concurrency=value form", () => {
+    expect(parseDeployArgs(["--prerender-concurrency=4"]).prerenderConcurrency).toBe(4);
+  });
+
+  it("throws for missing --prerender-concurrency value", () => {
+    expect(() => parseDeployArgs(["--prerender-concurrency"])).toThrow();
+  });
+
+  it("throws for invalid --prerender-concurrency value", () => {
+    expect(() => parseDeployArgs(["--prerender-concurrency", "abc"])).toThrow(
+      '--prerender-concurrency expects a positive integer, but got "abc".',
+    );
+  });
+
+  it("throws for zero --prerender-concurrency value", () => {
+    expect(() => parseDeployArgs(["--prerender-concurrency=0"])).toThrow(
+      '--prerender-concurrency expects a positive integer, but got "0".',
+    );
+  });
+
   it("trims whitespace from --env value", () => {
     expect(parseDeployArgs(["--env", "  staging  "]).env).toBe("staging");
   });

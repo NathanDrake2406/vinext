@@ -194,6 +194,58 @@ describe("--hostname / -H", () => {
   });
 });
 
+// ─── --prerender-concurrency flag ──────────────────────────────────────────
+
+describe("--prerender-concurrency", () => {
+  it("parses a positive integer value", () => {
+    expect(parseArgs(["--prerender-concurrency", "4"])).toMatchObject({
+      prerenderConcurrency: 4,
+    });
+  });
+
+  it("parses --prerender-concurrency=value form", () => {
+    expect(parseArgs(["--prerender-concurrency=4"])).toMatchObject({
+      prerenderConcurrency: 4,
+    });
+  });
+
+  it("throws when --prerender-concurrency has no value", () => {
+    expect(() => parseArgs(["--prerender-concurrency"])).toThrow(
+      "--prerender-concurrency requires a value, but none was provided.",
+    );
+  });
+
+  it("throws when --prerender-concurrency value is another flag", () => {
+    expect(() => parseArgs(["--prerender-concurrency", "--prerender-all"])).toThrow(
+      '--prerender-concurrency requires a value, but got "--prerender-all" which looks like another flag.',
+    );
+  });
+
+  it("throws for empty --prerender-concurrency value", () => {
+    expect(() => parseArgs(["--prerender-concurrency="])).toThrow(
+      "--prerender-concurrency requires a value, but none was provided.",
+    );
+  });
+
+  it("throws for non-integer --prerender-concurrency value", () => {
+    expect(() => parseArgs(["--prerender-concurrency", "4.5"])).toThrow(
+      '--prerender-concurrency expects a positive integer, but got "4.5".',
+    );
+  });
+
+  it("throws for zero --prerender-concurrency value", () => {
+    expect(() => parseArgs(["--prerender-concurrency", "0"])).toThrow(
+      '--prerender-concurrency expects a positive integer, but got "0".',
+    );
+  });
+
+  it("throws for negative --prerender-concurrency value", () => {
+    expect(() => parseArgs(["--prerender-concurrency=-1"])).toThrow(
+      '--prerender-concurrency expects a positive integer, but got "-1".',
+    );
+  });
+});
+
 // ─── Combined flags ─────────────────────────────────────────────────────────
 
 describe("combined flags", () => {
