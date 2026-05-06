@@ -79,7 +79,7 @@ type PendingNavigationCommitDispositionDecision = {
   disposition: PendingNavigationCommitDisposition;
   trace: NavigationTrace;
 };
-export type VisibleCommitDecision = {
+type VisibleCommitDecision = {
   disposition: "commit";
   trace: NavigationTrace;
 };
@@ -360,7 +360,7 @@ function resolvePendingNavigationCommitDecision(options: {
   }
 }
 
-export function createVisibleCommitDecision(
+function createVisibleCommitDecision(
   trace: NavigationTrace = createNavigationTrace(NavigationTraceReasonCodes.commitCurrent),
 ): VisibleCommitDecision {
   return { disposition: "commit", trace };
@@ -393,7 +393,7 @@ export function resolvePendingNavigationCommitDispositionDecision(options: {
   };
 }
 
-export function createApprovedVisibleCommit(options: {
+function createApprovedVisibleCommit(options: {
   decision: VisibleCommitDecision;
   pending: PendingNavigationCommit;
 }): ApprovedVisibleCommit {
@@ -406,6 +406,17 @@ export function createApprovedVisibleCommit(options: {
     rootLayoutTreePath: options.pending.rootLayoutTreePath,
     routeId: options.pending.routeId,
   };
+}
+
+export function approveHmrVisibleCommit(pending: PendingNavigationCommit): ApprovedVisibleCommit {
+  if (pending.action.operation.lane !== "hmr") {
+    throw new Error("[vinext] HMR visible commit approval requires an HMR pending operation");
+  }
+
+  return createApprovedVisibleCommit({
+    decision: createVisibleCommitDecision(),
+    pending,
+  });
 }
 
 export function approvePendingNavigationCommit(options: {

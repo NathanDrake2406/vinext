@@ -7,10 +7,9 @@ import {
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
 import {
   applyApprovedVisibleCommit,
+  approveHmrVisibleCommit,
   approvePendingNavigationCommit,
-  createApprovedVisibleCommit,
   createPendingNavigationCommit,
-  createVisibleCommitDecision,
   resolveAndClassifyNavigationCommit,
   type AppRouterState,
   type ApprovedVisibleCommit,
@@ -323,14 +322,7 @@ export function createAppBrowserNavigationController(
     // initialized-setter error.
     if (!hasBrowserRouterState()) return;
 
-    dispatchApprovedVisibleCommit(
-      createApprovedVisibleCommit({
-        decision: createVisibleCommitDecision(),
-        pending,
-      }),
-      null,
-      false,
-    );
+    dispatchApprovedVisibleCommit(approveHmrVisibleCommit(pending), null, false);
   }
 
   function NavigationCommitSignal(

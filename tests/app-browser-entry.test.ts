@@ -20,6 +20,7 @@ import {
   createOperationRecord,
   createPendingNavigationCommit,
   applyApprovedVisibleCommit,
+  approveHmrVisibleCommit,
   approvePendingNavigationCommit,
   readHistoryStatePreviousNextUrl,
   resolveAndClassifyNavigationCommit,
@@ -533,6 +534,48 @@ describe("app browser entry state helpers", () => {
       state: "committed",
       visibleCommitVersion: 1,
     });
+  });
+
+  it("approves HMR visible commits through a named trusted recovery path", async () => {
+    const currentState = createState();
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements("route:/hmr", "/", null, {
+          "page:/hmr": React.createElement("main", null, "hmr"),
+        }),
+      ),
+      navigationSnapshot: currentState.navigationSnapshot,
+      operationLane: "hmr",
+      renderId: 14,
+      type: "replace",
+    });
+
+    const approvedCommit = approveHmrVisibleCommit(pending);
+    const nextState = applyApprovedVisibleCommit(currentState, approvedCommit);
+
+    expect(nextState.routeId).toBe("route:/hmr");
+    expect(nextState.activeOperation).toMatchObject({
+      id: 14,
+      lane: "hmr",
+      state: "committed",
+    });
+  });
+
+  it("rejects non-HMR commits on the HMR approval path", async () => {
+    const currentState = createState();
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
+      navigationSnapshot: currentState.navigationSnapshot,
+      operationLane: "navigation",
+      renderId: 15,
+      type: "replace",
+    });
+
+    expect(() => approveHmrVisibleCommit(pending)).toThrow(
+      "[vinext] HMR visible commit approval requires an HMR pending operation",
+    );
   });
 
   it("applies approved replace commits without preserving old elements", async () => {
