@@ -2,9 +2,9 @@ import { fnv1a64 } from "../utils/hash.js";
 
 export const ARTIFACT_COMPATIBILITY_SCHEMA_VERSION = 1;
 
-// These versions describe separate protocol layers. They start in lockstep,
-// but future rolling deploy work can bump the envelope shape independently
-// from the flat AppElements record or the serialized RSC payload.
+// These versions describe separate protocol layers. For example, a future
+// rolling deploy can bump the flat AppElements row shape while keeping the
+// envelope object and serialized RSC transport version stable.
 export const APP_ELEMENTS_SCHEMA_VERSION = 1;
 export const RSC_PAYLOAD_SCHEMA_VERSION = 1;
 
@@ -111,6 +111,9 @@ export function parseArtifactCompatibilityEnvelope(
   if (!isStringOrNull(value.rootBoundaryId)) return null;
   if (!isStringOrNull(value.renderEpoch)) return null;
 
+  // This parser intentionally returns a normalized current-version proof. A
+  // future-compatible reader should introduce a separate parsed type instead of
+  // widening this Wave01 envelope after the current-version checks above.
   return {
     schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
     graphVersion: value.graphVersion,
@@ -151,6 +154,8 @@ export function evaluateArtifactCompatibility(
   current: ArtifactCompatibilityEnvelope,
   candidate: ArtifactCompatibilityEnvelope,
 ): ArtifactCompatibilityDecision {
+  // Pre-positioned for #726-COMPAT-04/05, where cache and visited-response
+  // reuse paths will compare the current render proof with a candidate payload.
   if (current.schemaVersion !== candidate.schemaVersion) {
     return incompatible("schemaVersionMismatch");
   }

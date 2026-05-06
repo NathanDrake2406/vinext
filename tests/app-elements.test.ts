@@ -260,44 +260,56 @@ describe("app elements payload helpers", () => {
     });
   });
 
-  it("rejects malformed artifact compatibility metadata", () => {
-    expect(() =>
-      readAppElementsMetadata({
-        ...normalizeAppElements({
-          [APP_ROOT_LAYOUT_KEY]: "/",
-          [APP_ROUTE_KEY]: "route:/dashboard",
-        }),
-        [APP_ARTIFACT_COMPATIBILITY_KEY]: {
-          schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
-          graphVersion: 123,
-          deploymentVersion: null,
-          appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
-          rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
-          rootBoundaryId: null,
-          renderEpoch: null,
-        },
+  it("defaults malformed artifact compatibility metadata to unknown proof", () => {
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
       }),
-    ).toThrow("[vinext] Invalid __artifactCompatibility in App Router payload");
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: {
+        schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+        graphVersion: 123,
+        deploymentVersion: null,
+        appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+        rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+        rootBoundaryId: null,
+        renderEpoch: null,
+      },
+    });
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
   });
 
-  it("rejects artifact compatibility with an unrecognized schema version", () => {
-    expect(() =>
-      readAppElementsMetadata({
-        ...normalizeAppElements({
-          [APP_ROOT_LAYOUT_KEY]: "/",
-          [APP_ROUTE_KEY]: "route:/dashboard",
-        }),
-        [APP_ARTIFACT_COMPATIBILITY_KEY]: {
-          schemaVersion: 99,
-          graphVersion: null,
-          deploymentVersion: null,
-          appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
-          rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
-          rootBoundaryId: null,
-          renderEpoch: null,
-        },
+  it("defaults artifact compatibility with an unrecognized schema version to unknown proof", () => {
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
       }),
-    ).toThrow("[vinext] Invalid __artifactCompatibility in App Router payload");
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: {
+        schemaVersion: 99,
+        graphVersion: null,
+        deploymentVersion: null,
+        appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+        rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+        rootBoundaryId: null,
+        renderEpoch: null,
+      },
+    });
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
+  });
+
+  it("defaults non-object artifact compatibility metadata to unknown proof", () => {
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+      }),
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: "garbage",
+    });
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
   });
 });
 

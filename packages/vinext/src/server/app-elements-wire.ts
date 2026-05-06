@@ -191,13 +191,6 @@ export function withLayoutFlags<T extends Record<string, unknown>>(
   return { ...elements, [APP_LAYOUT_FLAGS_KEY]: layoutFlags };
 }
 
-function withArtifactCompatibilityEnvelope<T extends Record<string, unknown>>(
-  elements: T,
-  artifactCompatibility: ArtifactCompatibilityEnvelope,
-): T & { [APP_ARTIFACT_COMPATIBILITY_KEY]: ArtifactCompatibilityEnvelope } {
-  return { ...elements, [APP_ARTIFACT_COMPATIBILITY_KEY]: artifactCompatibility };
-}
-
 export function buildOutgoingAppPayload(input: {
   element: ReactNode | Readonly<Record<string, ReactNode>>;
   artifactCompatibility?: ArtifactCompatibilityEnvelope;
@@ -206,10 +199,23 @@ export function buildOutgoingAppPayload(input: {
   if (!isAppElementsRecord(input.element)) {
     return input.element;
   }
-  return withArtifactCompatibilityEnvelope(
-    withLayoutFlags(input.element, input.layoutFlags),
-    input.artifactCompatibility ?? createArtifactCompatibilityEnvelope(),
-  );
+  return {
+    ...input.element,
+    [APP_LAYOUT_FLAGS_KEY]: input.layoutFlags,
+    [APP_ARTIFACT_COMPATIBILITY_KEY]:
+      input.artifactCompatibility ?? createArtifactCompatibilityEnvelope(),
+  };
+}
+
+function readArtifactCompatibilityMetadata(value: unknown): ArtifactCompatibilityEnvelope {
+  if (value === undefined) return createArtifactCompatibilityEnvelope();
+
+  const artifactCompatibility = parseArtifactCompatibilityEnvelope(value);
+  // TODO(#726-COMPAT-04): hard-fail malformed compatibility metadata once
+  // cache/skip consumers depend on this proof. During Wave01 the field is
+  // emitted as scaffolding, so bad or future-version values degrade like
+  // missing __layoutFlags instead of crashing render paths that do not read it.
+  return artifactCompatibility ?? createArtifactCompatibilityEnvelope();
 }
 
 export function readAppElementsMetadata(
@@ -238,14 +244,9 @@ export function readAppElementsMetadata(
   }
 
   const layoutFlags = parseLayoutFlags(elements[APP_LAYOUT_FLAGS_KEY]);
-  const artifactCompatibilityValue = elements[APP_ARTIFACT_COMPATIBILITY_KEY];
-  const artifactCompatibility =
-    artifactCompatibilityValue === undefined
-      ? createArtifactCompatibilityEnvelope()
-      : parseArtifactCompatibilityEnvelope(artifactCompatibilityValue);
-  if (!artifactCompatibility) {
-    throw new Error("[vinext] Invalid __artifactCompatibility in App Router payload");
-  }
+  const artifactCompatibility = readArtifactCompatibilityMetadata(
+    elements[APP_ARTIFACT_COMPATIBILITY_KEY],
+  );
 
   return {
     artifactCompatibility,
