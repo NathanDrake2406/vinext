@@ -33,6 +33,10 @@ export type RouteSnapshotV0 = {
 };
 
 export type NavigationPlannerStateV0 = {
+  // V0 keeps a single state shape so intent events and result events can move
+  // through one planner surface. flightResponseArrived uses event.token; later
+  // #726 slices can split this by event kind once more result paths are routed
+  // through the planner.
   nextOperationToken: OperationToken;
   // Callers that have lifecycle authority should pass the complete trace
   // context. When absent, the planner emits the stable root-boundary facts it
@@ -140,6 +144,9 @@ function createRootBoundaryTraceFields(options: {
   event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
   state: NavigationPlannerStateV0;
 }): NavigationTraceFields {
+  // Browser commit approval supplies lifecycle trace context before calling
+  // the planner. This fallback exists for pure planner callers and tests; it
+  // intentionally cannot invent lifecycle-only fields such as active nav id.
   return (
     options.state.traceFields ??
     createNavigationLifecycleTraceFields({
