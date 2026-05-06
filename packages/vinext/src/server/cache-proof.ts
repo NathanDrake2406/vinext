@@ -13,6 +13,7 @@ export type CacheProofRejectionCode =
   | "CP_DIMENSION_VALUE_TOO_LONG"
   | "CP_DIMENSION_VALUES_MISSING"
   | "CP_ENCODED_VARIANT_TOO_LONG"
+  | "CP_INVALID_VARIANT_BUDGET"
   | "CP_ROUTE_VARIANT_CEILING_EXCEEDED"
   | "CP_UNSAFE_PUBLIC_DIMENSION"
   | "CP_BOUNDARY_OUTCOME_MISMATCH"
@@ -358,7 +359,7 @@ function encodeOutputScope(output: CacheProofOutputScope): string {
 
 function validateBudgetNumber(name: string, value: number): CacheProofBreakerFallback | null {
   if (Number.isInteger(value) && value >= 0) return null;
-  return buildBreakerFallback("CP_ROUTE_VARIANT_CEILING_EXCEEDED", {
+  return buildBreakerFallback("CP_INVALID_VARIANT_BUDGET", {
     budgetField: name,
   });
 }

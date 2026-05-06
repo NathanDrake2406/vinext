@@ -199,6 +199,29 @@ describe("disabled cache proof model", () => {
       }),
       "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
     );
+
+    const invalidBudget = buildCacheVariant({
+      budget: {
+        ...DEFAULT_CACHE_VARIANT_BUDGET,
+        maxEncodedLength: -1,
+      },
+      dimensions: [],
+      existingVariantCount: 0,
+      output: {
+        kind: "layout",
+        layoutId: "layout:/[tenant]",
+        rootBoundaryId: "layout:/",
+        routeId: "route:/:tenant",
+      },
+    });
+    expect(invalidBudget.kind).toBe("breakerFallback");
+    if (invalidBudget.kind !== "breakerFallback") {
+      throw new Error("Expected invalid cache variant budget to return a breaker fallback");
+    }
+    expect(invalidBudget.fallback).toMatchObject({
+      code: "CP_INVALID_VARIANT_BUDGET",
+      fields: { budgetField: "maxEncodedLength" },
+    });
   });
 
   it("requires complete negative request-api observations before absence is proof", () => {
