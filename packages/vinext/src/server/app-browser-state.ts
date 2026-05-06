@@ -1,4 +1,3 @@
-import { mergeElements } from "vinext/shims/slot";
 import { stripBasePath } from "../utils/base-path.js";
 import {
   AppElementsWire,
@@ -112,7 +111,7 @@ export function readHistoryStatePreviousNextUrl(state: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-export function createOperationRecord(options: {
+function createOperationRecord(options: {
   id: number;
   lane: OperationLane;
   startedVisibleCommitVersion: number;
@@ -122,19 +121,6 @@ export function createOperationRecord(options: {
     lane: options.lane,
     startedVisibleCommitVersion: options.startedVisibleCommitVersion,
     state: "pending",
-  };
-}
-
-function commitOperationRecord(
-  operation: PendingOperationRecord,
-  visibleCommitVersion: number,
-): CommittedOperationRecord {
-  return {
-    id: operation.id,
-    lane: operation.lane,
-    startedVisibleCommitVersion: operation.startedVisibleCommitVersion,
-    state: "committed",
-    visibleCommitVersion,
   };
 }
 
@@ -192,73 +178,6 @@ export function resolveServerActionRequestState(
   }
 
   return { headers };
-}
-
-type AppRouterStateWithoutCommitMetadata = {
-  elements: AppElements;
-  interceptionContext: string | null;
-  layoutFlags: LayoutFlags;
-  navigationSnapshot: ClientNavigationRenderSnapshot;
-  previousNextUrl: string | null;
-  renderId: number;
-  rootLayoutTreePath: string | null;
-  routeId: string;
-};
-
-function commitVisibleRouterState(
-  state: AppRouterState,
-  nextState: AppRouterStateWithoutCommitMetadata,
-  operation: PendingOperationRecord,
-): AppRouterState {
-  // Advances when the browser router accepts a new visible router-state commit.
-  // This is the lifecycle baseline used to reject stale async results; it is
-  // not a React DOM paint signal.
-  const visibleCommitVersion = state.visibleCommitVersion + 1;
-  return {
-    ...nextState,
-    activeOperation: commitOperationRecord(operation, visibleCommitVersion),
-    visibleCommitVersion,
-  };
-}
-
-export function routerReducer(state: AppRouterState, action: AppRouterAction): AppRouterState {
-  switch (action.type) {
-    case "traverse":
-    case "navigate":
-      return commitVisibleRouterState(
-        state,
-        {
-          elements: mergeElements(state.elements, action.elements, action.type === "traverse"),
-          interceptionContext: action.interceptionContext,
-          layoutFlags: { ...state.layoutFlags, ...action.layoutFlags },
-          navigationSnapshot: action.navigationSnapshot,
-          previousNextUrl: action.previousNextUrl,
-          renderId: action.renderId,
-          rootLayoutTreePath: action.rootLayoutTreePath,
-          routeId: action.routeId,
-        },
-        action.operation,
-      );
-    case "replace":
-      return commitVisibleRouterState(
-        state,
-        {
-          elements: action.elements,
-          interceptionContext: action.interceptionContext,
-          layoutFlags: action.layoutFlags,
-          navigationSnapshot: action.navigationSnapshot,
-          previousNextUrl: action.previousNextUrl,
-          renderId: action.renderId,
-          rootLayoutTreePath: action.rootLayoutTreePath,
-          routeId: action.routeId,
-        },
-        action.operation,
-      );
-    default: {
-      const _exhaustive: never = action.type;
-      throw new Error("[vinext] Unknown router action: " + String(_exhaustive));
-    }
-  }
 }
 
 export function shouldHardNavigate(

@@ -5,6 +5,7 @@ import { createAppBrowserNavigationController } from "../packages/vinext/src/ser
 import { devOnCaughtError } from "../packages/vinext/src/server/dev-error-overlay.js";
 import {
   APP_INTERCEPTION_CONTEXT_KEY,
+  APP_LAYOUT_FLAGS_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
   UNMATCHED_SLOT,
@@ -17,16 +18,15 @@ import { createClientNavigationRenderSnapshot } from "../packages/vinext/src/shi
 import * as navigationShim from "../packages/vinext/src/shims/navigation.js";
 import {
   createHistoryStateWithPreviousNextUrl,
-  createOperationRecord,
   createPendingNavigationCommit,
   readHistoryStatePreviousNextUrl,
   resolveInterceptionContextFromPreviousNextUrl,
   resolveServerActionRequestState,
-  routerReducer,
   resolvePendingNavigationCommitDisposition,
   resolvePendingNavigationCommitDispositionDecision,
   shouldHardNavigate,
   type AppRouterState,
+  type OperationLane,
 } from "../packages/vinext/src/server/app-browser-state.js";
 import {
   applyApprovedVisibleCommit,
@@ -37,6 +37,7 @@ import {
 import {
   NAVIGATION_TRACE_SCHEMA_VERSION,
   NavigationTraceReasonCodes,
+  NavigationTraceTransactionCodes,
   createNavigationTrace,
 } from "../packages/vinext/src/server/navigation-trace.js";
 
@@ -70,17 +71,6 @@ function createState(overrides: Partial<AppRouterState> = {}): AppRouterState {
   };
 }
 
-function createTestOperation(
-  state: AppRouterState,
-  id = 1,
-): ReturnType<typeof createOperationRecord> {
-  return createOperationRecord({
-    id,
-    lane: "navigation",
-    startedVisibleCommitVersion: state.visibleCommitVersion,
-  });
-}
-
 function createControllerHarness(initialState: AppRouterState = createState()) {
   const controller = createAppBrowserNavigationController();
   const stateRef: { current: AppRouterState } = { current: initialState };
@@ -97,6 +87,59 @@ function createControllerHarness(initialState: AppRouterState = createState()) {
     setBrowserRouterState,
     stateRef,
   };
+}
+
+type ApprovedTestCommitOptions = {
+  activeNavigationId?: number;
+  extraEntries?: Record<string, unknown>;
+  interceptionContext?: string | null;
+  layoutFlags?: AppRouterState["layoutFlags"];
+  navigationSnapshot?: AppRouterState["navigationSnapshot"];
+  operationLane?: OperationLane;
+  previousNextUrl?: string | null;
+  renderId?: number;
+  rootLayoutTreePath: string | null;
+  routeId: string;
+  startedNavigationId?: number;
+  type?: "navigate" | "replace" | "traverse";
+};
+
+async function applyApprovedTestCommit(
+  state: AppRouterState,
+  options: ApprovedTestCommitOptions,
+): Promise<AppRouterState> {
+  const pending = await createPendingNavigationCommit({
+    currentState: state,
+    nextElements: Promise.resolve(
+      createResolvedElements(
+        options.routeId,
+        options.rootLayoutTreePath,
+        options.interceptionContext ?? null,
+        {
+          [APP_LAYOUT_FLAGS_KEY]: options.layoutFlags ?? {},
+          ...options.extraEntries,
+        },
+      ),
+    ),
+    navigationSnapshot: options.navigationSnapshot ?? state.navigationSnapshot,
+    operationLane: options.operationLane ?? "navigation",
+    previousNextUrl: options.previousNextUrl,
+    renderId: options.renderId ?? 1,
+    type: options.type ?? "navigate",
+  });
+  const activeNavigationId = options.activeNavigationId ?? 1;
+  const approval = approvePendingNavigationCommit({
+    activeNavigationId,
+    currentState: state,
+    pending,
+    startedNavigationId: options.startedNavigationId ?? activeNavigationId,
+  });
+
+  if (approval.approvedCommit === null) {
+    throw new Error("Expected approved visible commit");
+  }
+
+  return applyApprovedVisibleCommit(state, approval.approvedCommit);
 }
 
 function stubWindow(href: string) {
@@ -131,28 +174,20 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("merges elements on navigate", async () => {
+  it("merges elements on approved navigate commits", async () => {
     const previousElements = createResolvedElements("route:/initial", "/", null, {
       "layout:/": React.createElement("div", null, "layout"),
-    });
-    const nextElements = createResolvedElements("route:/next", "/", null, {
-      "page:/next": React.createElement("main", null, "next"),
     });
     const state = createState({
       elements: previousElements,
     });
 
-    const nextState = routerReducer(state, {
-      elements: nextElements,
-      interceptionContext: null,
-      layoutFlags: {},
-      navigationSnapshot: createState().navigationSnapshot,
-      operation: createTestOperation(state),
-      previousNextUrl: null,
-      renderId: 1,
+    const nextState = await applyApprovedTestCommit(state, {
+      extraEntries: {
+        "page:/next": React.createElement("main", null, "next"),
+      },
       rootLayoutTreePath: "/",
       routeId: "route:/next",
-      type: "navigate",
     });
 
     expect(nextState.routeId).toBe("route:/next");
@@ -173,24 +208,31 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("replaces elements on replace", () => {
+  it("replaces elements on approved replace commits", async () => {
     const nextElements = createResolvedElements("route:/next", "/", null, {
       "page:/next": React.createElement("main", null, "next"),
     });
 
     const state = createState();
-    const nextState = routerReducer(state, {
-      elements: nextElements,
-      interceptionContext: null,
-      layoutFlags: {},
-      navigationSnapshot: createState().navigationSnapshot,
-      operation: createTestOperation(state),
-      previousNextUrl: null,
+    const pending = await createPendingNavigationCommit({
+      currentState: state,
+      nextElements: Promise.resolve(nextElements),
+      navigationSnapshot: state.navigationSnapshot,
+      operationLane: "navigation",
       renderId: 1,
-      rootLayoutTreePath: "/",
-      routeId: "route:/next",
       type: "replace",
     });
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 1,
+      currentState: state,
+      pending,
+      startedNavigationId: 1,
+    });
+    if (approval.approvedCommit === null) {
+      throw new Error("Expected approved visible commit");
+    }
+
+    const nextState = applyApprovedVisibleCommit(state, approval.approvedCommit);
 
     expect(nextState.elements).toBe(nextElements);
     expect(nextState.interceptionContext).toBeNull();
@@ -200,31 +242,17 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("increments the visible commit version once per visible reducer commit", () => {
+  it("increments the visible commit version once per approved visible commit", async () => {
     const initialState = createState();
-    const firstState = routerReducer(initialState, {
-      elements: createResolvedElements("route:/one", "/"),
-      interceptionContext: null,
-      layoutFlags: {},
-      navigationSnapshot: initialState.navigationSnapshot,
-      operation: createTestOperation(initialState, 101),
-      previousNextUrl: null,
-      renderId: 1,
+    const firstState = await applyApprovedTestCommit(initialState, {
+      renderId: 101,
       rootLayoutTreePath: "/",
       routeId: "route:/one",
-      type: "navigate",
     });
-    const secondState = routerReducer(firstState, {
-      elements: createResolvedElements("route:/two", "/"),
-      interceptionContext: null,
-      layoutFlags: {},
-      navigationSnapshot: firstState.navigationSnapshot,
-      operation: createTestOperation(firstState, 102),
-      previousNextUrl: null,
-      renderId: 2,
+    const secondState = await applyApprovedTestCommit(firstState, {
+      renderId: 102,
       rootLayoutTreePath: "/",
       routeId: "route:/two",
-      type: "navigate",
     });
 
     expect(firstState.visibleCommitVersion).toBe(1);
@@ -235,6 +263,12 @@ describe("app browser entry state helpers", () => {
       state: "committed",
       visibleCommitVersion: 2,
     });
+  });
+
+  it("does not export a raw visible state reducer outside the approved commit boundary", async () => {
+    const stateModule = await import("../packages/vinext/src/server/app-browser-state.js");
+
+    expect(Object.hasOwn(stateModule, "routerReducer")).toBe(false);
   });
 
   it("carries interception context through pending navigation commits", async () => {
@@ -368,7 +402,17 @@ describe("app browser entry state helpers", () => {
       state: "pending",
     });
 
-    const committedState = routerReducer(currentState, pending.action);
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 1,
+      currentState,
+      pending,
+      startedNavigationId: 1,
+    });
+    if (approval.approvedCommit === null) {
+      throw new Error("Expected approved visible commit");
+    }
+
+    const committedState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
     expect(committedState.visibleCommitVersion).toBe(5);
     expect(committedState.activeOperation).toEqual({
       id: 9,
@@ -557,6 +601,27 @@ describe("app browser entry state helpers", () => {
     if (approval.approvedCommit === null) {
       throw new Error("Expected approved visible commit");
     }
+    expect(approval.decision.trace.entries).toEqual([
+      {
+        code: NavigationTraceTransactionCodes.visibleCommit,
+        fields: {
+          operationLane: "navigation",
+          pendingOperationId: 11,
+          startedVisibleCommitVersion: 0,
+        },
+      },
+      {
+        code: NavigationTraceReasonCodes.commitCurrent,
+        fields: {
+          activeNavigationId: 4,
+          currentRootLayoutTreePath: "/",
+          currentVisibleCommitVersion: 0,
+          nextRootLayoutTreePath: "/",
+          startedNavigationId: 4,
+          startedVisibleCommitVersion: 0,
+        },
+      },
+    ]);
 
     const nextState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
     expect(nextState.routeId).toBe("route:/dashboard");
@@ -568,6 +633,34 @@ describe("app browser entry state helpers", () => {
       state: "committed",
       visibleCommitVersion: 1,
     });
+  });
+
+  it("traces unknown root-layout approval as a visible commit with an uncertainty reason", async () => {
+    const currentState = createState();
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(createResolvedElements("route:/legacy-payload", null)),
+      navigationSnapshot: currentState.navigationSnapshot,
+      operationLane: "navigation",
+      renderId: 16,
+      type: "navigate",
+    });
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 6,
+      currentState,
+      pending,
+      startedNavigationId: 6,
+    });
+
+    expect(approval.decision.disposition).toBe("commit");
+    expect(approval.decision.trace.entries[0]?.code).toBe(
+      NavigationTraceTransactionCodes.visibleCommit,
+    );
+    expect(approval.decision.trace.entries[1]?.code).toBe(
+      NavigationTraceReasonCodes.rootBoundaryUnknown,
+    );
+    expect(approval.approvedCommit).not.toBeNull();
   });
 
   it("approves HMR visible commits through a named trusted recovery path", async () => {
@@ -586,6 +679,14 @@ describe("app browser entry state helpers", () => {
     });
 
     const approvedCommit = approveHmrVisibleCommit(pending);
+    expect(approvedCommit.decision.trace.entries[0]).toEqual({
+      code: NavigationTraceTransactionCodes.visibleCommit,
+      fields: {
+        operationLane: "hmr",
+        pendingOperationId: 14,
+        startedVisibleCommitVersion: 0,
+      },
+    });
     const nextState = applyApprovedVisibleCommit(currentState, approvedCommit);
 
     expect(nextState.routeId).toBe("route:/hmr");
@@ -709,6 +810,9 @@ describe("app browser entry state helpers", () => {
     });
     expect(staleApproval.decision.disposition).toBe("no-commit");
     expect(staleApproval.decision.trace.entries[0]?.code).toBe(
+      NavigationTraceTransactionCodes.noCommit,
+    );
+    expect(staleApproval.decision.trace.entries[1]?.code).toBe(
       NavigationTraceReasonCodes.staleOperation,
     );
     expect(staleApproval.approvedCommit).toBeNull();
@@ -721,24 +825,20 @@ describe("app browser entry state helpers", () => {
     });
     expect(hardNavigateApproval.decision.disposition).toBe("hard-navigate");
     expect(hardNavigateApproval.decision.trace.entries[0]?.code).toBe(
+      NavigationTraceTransactionCodes.hardNavigate,
+    );
+    expect(hardNavigateApproval.decision.trace.entries[1]?.code).toBe(
       NavigationTraceReasonCodes.rootBoundaryChanged,
     );
     expect(hardNavigateApproval.approvedCommit).toBeNull();
   });
 
-  it("merges layoutFlags on navigate", () => {
+  it("merges layoutFlags on approved navigate commits", async () => {
     const state = createState({ layoutFlags: { "layout:/": "s", "layout:/old": "d" } });
-    const nextState = routerReducer(state, {
-      elements: createResolvedElements("route:/next", "/"),
-      interceptionContext: null,
+    const nextState = await applyApprovedTestCommit(state, {
       layoutFlags: { "layout:/": "s", "layout:/blog": "d" },
-      navigationSnapshot: createState().navigationSnapshot,
-      operation: createTestOperation(state),
-      previousNextUrl: null,
-      renderId: 1,
       rootLayoutTreePath: "/",
       routeId: "route:/next",
-      type: "navigate",
     });
 
     // Navigate merges: old flags preserved, new flags override
@@ -749,16 +849,10 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("replaces layoutFlags on replace", () => {
+  it("replaces layoutFlags on approved replace commits", async () => {
     const state = createState({ layoutFlags: { "layout:/": "s", "layout:/old": "d" } });
-    const nextState = routerReducer(state, {
-      elements: createResolvedElements("route:/next", "/"),
-      interceptionContext: null,
+    const nextState = await applyApprovedTestCommit(state, {
       layoutFlags: { "layout:/": "d" },
-      navigationSnapshot: createState().navigationSnapshot,
-      operation: createTestOperation(state),
-      previousNextUrl: null,
-      renderId: 1,
       rootLayoutTreePath: "/",
       routeId: "route:/next",
       type: "replace",
@@ -768,19 +862,13 @@ describe("app browser entry state helpers", () => {
     expect(nextState.layoutFlags).toEqual({ "layout:/": "d" });
   });
 
-  it("stores previousNextUrl on navigate actions", () => {
+  it("stores previousNextUrl on approved navigate commits", async () => {
     const state = createState();
-    const nextState = routerReducer(state, {
-      elements: createResolvedElements("route:/photos/42\0/feed", "/", "/feed"),
+    const nextState = await applyApprovedTestCommit(state, {
       interceptionContext: "/feed",
-      layoutFlags: {},
-      navigationSnapshot: createState().navigationSnapshot,
-      operation: createTestOperation(state),
       previousNextUrl: "/feed",
-      renderId: 1,
       rootLayoutTreePath: "/",
       routeId: "route:/photos/42\0/feed",
-      type: "navigate",
     });
 
     expect(nextState.interceptionContext).toBe("/feed");
@@ -1599,7 +1687,8 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(result.decision.disposition).toBe("hard-navigate");
     expect(result.pending.routeId).toBe("route:/dashboard");
     expect(result.pending.action.renderId).toBe(3);
-    expect(result.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryChanged);
+    expect(result.trace.entries[0]?.code).toBe(NavigationTraceTransactionCodes.hardNavigate);
+    expect(result.trace.entries[1]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryChanged);
   });
 
   it("creates navigation trace entries without retaining field ownership", () => {
@@ -1622,22 +1711,15 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(shouldHardNavigate("/", null)).toBe(false);
   });
 
-  it("clears stale parallel slots on traverse", () => {
+  it("clears stale parallel slots on approved traverse commits", async () => {
     const state = createState({
       elements: createResolvedElements("route:/feed", "/", null, {
         "slot:modal:/feed": React.createElement("div", null, "modal"),
       }),
     });
-    const nextElements = createResolvedElements("route:/feed", "/");
 
-    const nextState = routerReducer(state, {
-      elements: nextElements,
-      interceptionContext: null,
-      layoutFlags: {},
-      navigationSnapshot: createState().navigationSnapshot,
-      operation: createTestOperation(state),
+    const nextState = await applyApprovedTestCommit(state, {
       previousNextUrl: null,
-      renderId: 1,
       rootLayoutTreePath: "/",
       routeId: "route:/feed",
       type: "traverse",
@@ -1646,25 +1728,16 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(false);
   });
 
-  it("preserves absent parallel slots on navigate", () => {
+  it("preserves absent parallel slots on approved navigate commits", async () => {
     const state = createState({
       elements: createResolvedElements("route:/feed", "/", null, {
         "slot:modal:/feed": React.createElement("div", null, "modal"),
       }),
     });
-    const nextElements = createResolvedElements("route:/feed/comments", "/");
 
-    const nextState = routerReducer(state, {
-      elements: nextElements,
-      interceptionContext: null,
-      layoutFlags: {},
-      navigationSnapshot: createState().navigationSnapshot,
-      operation: createTestOperation(state),
-      previousNextUrl: null,
-      renderId: 1,
+    const nextState = await applyApprovedTestCommit(state, {
       rootLayoutTreePath: "/",
       routeId: "route:/feed/comments",
-      type: "navigate",
     });
 
     expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(true);
