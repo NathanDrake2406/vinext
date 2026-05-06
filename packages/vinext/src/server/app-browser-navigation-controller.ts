@@ -27,6 +27,7 @@ export type PendingBrowserRouterState = {
   settled: boolean;
 };
 export type NavigationPayloadOutcome = "committed" | "no-commit" | "hard-navigate";
+type HardNavigationMode = "assign" | "replace";
 
 type BrowserNavigationCommitEffectFactory = (options: {
   href: string;
@@ -42,6 +43,7 @@ type BrowserRouterStateRef = {
 
 type BrowserNavigationControllerDeps = {
   commitClientNavigationState?: typeof commitClientNavigationState;
+  performHardNavigation?: (href: string, mode?: HardNavigationMode) => boolean;
 };
 
 type BrowserNavigationController = {
@@ -101,11 +103,78 @@ type BrowserNavigationController = {
   ): ReactNode;
 };
 
+const HARD_NAVIGATION_LOOP_GUARD_KEY = "__vinext_hard_navigation_target__";
+
+function normalizeBrowserHref(href: string): string {
+  try {
+    return new URL(href, window.location.href).href;
+  } catch {
+    return href;
+  }
+}
+
+function readHardNavigationLoopGuard(): string | null {
+  try {
+    return window.sessionStorage.getItem(HARD_NAVIGATION_LOOP_GUARD_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeHardNavigationLoopGuard(targetHref: string): boolean {
+  try {
+    window.sessionStorage.setItem(HARD_NAVIGATION_LOOP_GUARD_KEY, targetHref);
+    return window.sessionStorage.getItem(HARD_NAVIGATION_LOOP_GUARD_KEY) === targetHref;
+  } catch {
+    return false;
+  }
+}
+
+export function clearHardNavigationLoopGuard(): void {
+  try {
+    window.sessionStorage.removeItem(HARD_NAVIGATION_LOOP_GUARD_KEY);
+  } catch {}
+}
+
+function performHardNavigationWithLoopGuard(
+  href: string,
+  mode: HardNavigationMode = "assign",
+): boolean {
+  const targetHref = normalizeBrowserHref(href);
+  const currentHref = normalizeBrowserHref(window.location.href);
+
+  if (readHardNavigationLoopGuard() === targetHref && currentHref === targetHref) {
+    clearHardNavigationLoopGuard();
+    console.error(
+      `[vinext] Prevented repeated hard navigation to ${targetHref}; ` +
+        "leaving the current document in place to avoid a reload loop.",
+    );
+    return false;
+  }
+
+  const guardPersisted = writeHardNavigationLoopGuard(targetHref);
+  if (!guardPersisted && currentHref === targetHref) {
+    console.error(
+      `[vinext] Hard navigation to ${targetHref} requires a reload-loop guard, ` +
+        "but sessionStorage is unavailable; leaving the current document in place.",
+    );
+    return false;
+  }
+
+  if (mode === "replace") {
+    window.location.replace(href);
+  } else {
+    window.location.assign(href);
+  }
+  return true;
+}
+
 export function createAppBrowserNavigationController(
   deps: BrowserNavigationControllerDeps = {},
 ): BrowserNavigationController {
   const commitClientNavigationStateImpl =
     deps.commitClientNavigationState ?? commitClientNavigationState;
+  const performHardNavigation = deps.performHardNavigation ?? performHardNavigationWithLoopGuard;
 
   // These are plain module-level variables (inside the controller closure),
   // unlike ClientNavigationState which uses Symbol.for to survive multiple
@@ -434,8 +503,7 @@ export function createAppBrowserNavigationController(
       if (approval.decision.disposition === "hard-navigate") {
         settlePendingBrowserRouterState(options.pendingRouterState);
         pendingNavigationCommits.delete(renderId);
-        window.location.assign(options.targetHref);
-        return "hard-navigate";
+        return performHardNavigation(options.targetHref) ? "hard-navigate" : "no-commit";
       }
 
       const approvedCommit = approval.approvedCommit;
@@ -504,7 +572,7 @@ export function createAppBrowserNavigationController(
     });
 
     if (decision.disposition === "hard-navigate") {
-      window.location.assign(window.location.href);
+      performHardNavigation(window.location.href);
       return undefined;
     }
 
@@ -519,7 +587,7 @@ export function createAppBrowserNavigationController(
       });
 
       if (latestApproval.decision.disposition === "hard-navigate") {
-        window.location.assign(window.location.href);
+        performHardNavigation(window.location.href);
         return undefined;
       }
 

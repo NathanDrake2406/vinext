@@ -42,6 +42,7 @@ import {
 } from "./app-browser-stream.js";
 import {
   createAppBrowserNavigationController,
+  clearHardNavigationLoopGuard,
   type HistoryUpdateMode,
   type NavigationPayloadOutcome,
   type PendingBrowserRouterState,
@@ -694,6 +695,7 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
     // the page — any prior reload flag for this path is stale and must be
     // cleared so a future failure gets its own fresh recovery attempt.
     clearReloadFlag();
+    clearHardNavigationLoopGuard();
 
     if (vinext.__VINEXT_RSC__) {
       const embedData = vinext.__VINEXT_RSC__;
@@ -757,6 +759,7 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
   // Successful RSC response clears the guard so a subsequent reload of the
   // same path after a transient failure still gets one recovery attempt.
   clearReloadFlag();
+  clearHardNavigationLoopGuard();
 
   // Ignore malformed param headers and continue with hydration. The original
   // try/catch also swallowed errors from applyClientParams; preserve that.

@@ -722,4 +722,36 @@ describe("artifact compatibility proof evaluation", () => {
       reason: "deploymentVersionMismatch",
     });
   });
+
+  it("treats old-client/new-server future compatibility metadata as unknown proof", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-current",
+      deploymentVersion: "deploy-current",
+      rootBoundaryId: "root-current",
+      renderEpoch: "epoch-current",
+    });
+    const payload = {
+      [APP_ROUTE_KEY]: "route:/dashboard",
+      [APP_INTERCEPTION_CONTEXT_KEY]: null,
+      [APP_ROOT_LAYOUT_KEY]: "/",
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: {
+        schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION + 1,
+        graphVersion: "graph-next",
+        deploymentVersion: "deploy-next",
+        appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+        rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+        rootBoundaryId: "root-next",
+        renderEpoch: "epoch-next",
+      },
+    } satisfies Readonly<Record<string, unknown>>;
+
+    const metadata = AppElementsWire.readMetadata(payload);
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
+    expect(evaluateArtifactCompatibility(current, metadata.artifactCompatibility)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "graphVersionUnknown",
+    });
+  });
 });
