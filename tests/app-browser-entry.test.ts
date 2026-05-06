@@ -19,6 +19,8 @@ import {
   createHistoryStateWithPreviousNextUrl,
   createOperationRecord,
   createPendingNavigationCommit,
+  applyApprovedVisibleCommit,
+  approvePendingNavigationCommit,
   readHistoryStatePreviousNextUrl,
   resolveAndClassifyNavigationCommit,
   resolveInterceptionContextFromPreviousNextUrl,
@@ -491,6 +493,156 @@ describe("app browser entry state helpers", () => {
     expect(refreshCommit.previousNextUrl).toBe("/feed");
   });
 
+  it("creates an approved visible commit only after the current operation decision allows mutation", async () => {
+    const currentState = createState();
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements("route:/dashboard", "/", null, {
+          "page:/dashboard": React.createElement("main", null, "dashboard"),
+        }),
+      ),
+      navigationSnapshot: currentState.navigationSnapshot,
+      operationLane: "navigation",
+      renderId: 11,
+      type: "navigate",
+    });
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 4,
+      currentState,
+      pending,
+      startedNavigationId: 4,
+    });
+
+    expect(approval.decision.disposition).toBe("commit");
+    if (approval.decision.disposition !== "commit") {
+      throw new Error("Expected visible commit approval");
+    }
+    if (approval.approvedCommit === null) {
+      throw new Error("Expected approved visible commit");
+    }
+
+    const nextState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
+    expect(nextState.routeId).toBe("route:/dashboard");
+    expect(nextState.visibleCommitVersion).toBe(1);
+    expect(nextState.activeOperation).toMatchObject({
+      id: 11,
+      lane: "navigation",
+      startedVisibleCommitVersion: 0,
+      state: "committed",
+      visibleCommitVersion: 1,
+    });
+  });
+
+  it("applies approved replace commits without preserving old elements", async () => {
+    const currentState = createState({
+      elements: createResolvedElements("route:/initial", "/", null, {
+        "layout:/old": React.createElement("div", null, "old"),
+      }),
+    });
+    const nextElements = createResolvedElements("route:/next", "/", null, {
+      "page:/next": React.createElement("main", null, "next"),
+    });
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(nextElements),
+      navigationSnapshot: currentState.navigationSnapshot,
+      operationLane: "navigation",
+      renderId: 12,
+      type: "replace",
+    });
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 4,
+      currentState,
+      pending,
+      startedNavigationId: 4,
+    });
+
+    if (approval.approvedCommit === null) {
+      throw new Error("Expected approved visible commit");
+    }
+
+    const nextState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
+    expect(nextState.elements).toBe(nextElements);
+    expect(Object.hasOwn(nextState.elements, "layout:/old")).toBe(false);
+    expect(nextState.activeOperation).toMatchObject({
+      id: 12,
+      lane: "navigation",
+      state: "committed",
+    });
+  });
+
+  it("applies approved traverse commits with stale slot cleanup", async () => {
+    const currentState = createState({
+      elements: createResolvedElements("route:/feed/comments", "/", null, {
+        "slot:modal:/feed": React.createElement("div", null, "modal"),
+      }),
+    });
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(createResolvedElements("route:/feed", "/")),
+      navigationSnapshot: currentState.navigationSnapshot,
+      operationLane: "traverse",
+      previousNextUrl: null,
+      renderId: 13,
+      type: "traverse",
+    });
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 4,
+      currentState,
+      pending,
+      startedNavigationId: 4,
+    });
+
+    if (approval.approvedCommit === null) {
+      throw new Error("Expected approved visible commit");
+    }
+
+    const nextState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
+    expect(nextState.routeId).toBe("route:/feed");
+    expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(false);
+    expect(nextState.activeOperation).toMatchObject({
+      id: 13,
+      lane: "traverse",
+      state: "committed",
+    });
+  });
+
+  it("does not create approved visible commits for stale or hard-navigation decisions", async () => {
+    const currentState = createState({
+      rootLayoutTreePath: "/(marketing)",
+    });
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/(dashboard)")),
+      navigationSnapshot: currentState.navigationSnapshot,
+      operationLane: "navigation",
+      renderId: 12,
+      type: "navigate",
+    });
+
+    const staleApproval = approvePendingNavigationCommit({
+      activeNavigationId: 8,
+      currentState,
+      pending,
+      startedNavigationId: 7,
+    });
+    expect(staleApproval.decision.disposition).toBe("no-commit");
+    expect(staleApproval.approvedCommit).toBeNull();
+
+    const hardNavigateApproval = approvePendingNavigationCommit({
+      activeNavigationId: 8,
+      currentState,
+      pending,
+      startedNavigationId: 8,
+    });
+    expect(hardNavigateApproval.decision.disposition).toBe("hard-navigate");
+    expect(hardNavigateApproval.approvedCommit).toBeNull();
+  });
+
   it("merges layoutFlags on navigate", () => {
     const state = createState({ layoutFlags: { "layout:/": "s", "layout:/old": "d" } });
     const nextState = routerReducer(state, {
@@ -929,7 +1081,7 @@ describe("app browser navigation lifecycle settlement", () => {
       // Yield so C's async payload resolves and state is committed.
       // renderNavigationPayload returns a promise that settles only when
       // NavigationCommitSignal fires (a React component not mounted in
-      // unit tests). The state mutation through dispatchBrowserTree is
+      // unit tests). The state mutation through dispatchApprovedVisibleCommit is
       // synchronous when useTransition=false, so we verify via stateRef.
       await Promise.resolve();
       await Promise.resolve();
