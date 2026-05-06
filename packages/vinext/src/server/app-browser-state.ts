@@ -346,7 +346,9 @@ function mapNavigationDecisionToPendingDisposition(
     case "noCommit":
       return { disposition: "skip", trace: decision.trace };
     case "requestWork":
-      throw new Error("[vinext] Root-boundary commit planning returned requestWork");
+      throw new Error(
+        "[vinext] Root-boundary commit planning returned requestWork; flightResponseArrived should never request work",
+      );
     default: {
       const _exhaustive: never = decision;
       throw new Error("[vinext] Unknown navigation decision: " + String(_exhaustive));

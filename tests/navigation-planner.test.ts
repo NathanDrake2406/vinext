@@ -70,6 +70,38 @@ function planFlightResponse(rootBoundaryId: string | null): NavigationDecisionV0
   return navigationPlanner.plan(input);
 }
 
+function planFlightResponseFromRootBoundaries(options: {
+  currentRootBoundaryId: string | null;
+  nextRootBoundaryId: string | null;
+}): NavigationDecisionV0 {
+  const token = createOperationToken({
+    targetSnapshotFingerprint: `route:/dashboard|root:${options.nextRootBoundaryId ?? "unknown"}`,
+  });
+
+  return navigationPlanner.plan({
+    event: {
+      kind: "flightResponseArrived",
+      result: {
+        href: "https://example.com/dashboard",
+        targetSnapshot: createRouteSnapshot(options.nextRootBoundaryId),
+      },
+      token,
+    },
+    routeManifest: null,
+    state: {
+      nextOperationToken: token,
+      traceFields: {
+        currentRootLayoutTreePath: options.currentRootBoundaryId,
+        currentVisibleCommitVersion: 2,
+        nextRootLayoutTreePath: options.nextRootBoundaryId,
+        startedVisibleCommitVersion: 2,
+      },
+      visibleCommitVersion: 2,
+      visibleSnapshot: createRouteSnapshot(options.currentRootBoundaryId),
+    },
+  });
+}
+
 describe("navigationPlanner root-boundary decisions", () => {
   // Root-layout MPA semantics match Next.js coverage:
   // .nextjs-ref/test/e2e/app-dir/root-layout/root-layout.test.ts
@@ -128,6 +160,22 @@ describe("navigationPlanner root-boundary decisions", () => {
   it("uses the current soft fallback when the target root identity is unknown", () => {
     const decision = planFlightResponse(null);
 
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
+    expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
+  });
+
+  it("uses the current soft fallback when the visible root identity is unknown", () => {
+    const transition = navigationPlanner.classifyRootBoundaryTransition(null, "/");
+    const decision = planFlightResponseFromRootBoundaries({
+      currentRootBoundaryId: null,
+      nextRootBoundaryId: "/",
+    });
+
+    expect(transition).toBe("rootBoundaryUnknownFallback");
     expect(decision.kind).toBe("proposeCommit");
     if (decision.kind !== "proposeCommit") {
       throw new Error("Expected proposeCommit decision");
