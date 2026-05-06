@@ -10,9 +10,11 @@
  */
 
 import { encodeMiddlewareRequestHeaders } from "../server/middleware-request-headers.js";
+import { serializeSetCookie, validateCookieName } from "./internal/cookie-serialize.js";
 import { parseCookieHeader } from "./internal/parse-cookie-header.js";
 import { getRequestExecutionContext } from "./request-context.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
+import { stripBasePath } from "../utils/base-path.js";
 
 // ---------------------------------------------------------------------------
 // Inlined cache-scope guard for after()
@@ -310,10 +312,7 @@ export class NextURL {
   /** Strip basePath prefix from the internal pathname. */
   private _stripBasePath(): void {
     if (!this._basePath) return;
-    const { pathname } = this._url;
-    if (pathname === this._basePath || pathname.startsWith(this._basePath + "/")) {
-      this._url.pathname = pathname.slice(this._basePath.length) || "/";
-    }
+    this._url.pathname = stripBasePath(this._url.pathname, this._basePath);
   }
 
   /** Extract locale from pathname, stripping it from the internal URL. */
@@ -645,28 +644,6 @@ export function sealRequestCookies(cookies: RequestCookies): RequestCookies {
   });
 }
 
-/**
- * RFC 6265 §4.1.1: cookie-name is a token (RFC 2616 §2.2).
- * Allowed: any visible ASCII (0x21-0x7E) except separators: ()<>@,;:\"/[]?={}
- */
-const VALID_COOKIE_NAME_RE =
-  /^[\x21\x23-\x27\x2A\x2B\x2D\x2E\x30-\x39\x41-\x5A\x5E-\x7A\x7C\x7E]+$/;
-
-function validateCookieName(name: string): void {
-  if (!name || !VALID_COOKIE_NAME_RE.test(name)) {
-    throw new Error(`Invalid cookie name: ${JSON.stringify(name)}`);
-  }
-}
-
-function validateCookieAttributeValue(value: string, attributeName: string): void {
-  for (let i = 0; i < value.length; i++) {
-    const code = value.charCodeAt(i);
-    if (code <= 0x1f || code === 0x7f || value[i] === ";") {
-      throw new Error(`Invalid cookie ${attributeName} value: ${JSON.stringify(value)}`);
-    }
-  }
-}
-
 export class ResponseCookies {
   private _headers: Headers;
   /** Internal map keyed by cookie name — single source of truth. */
@@ -700,21 +677,8 @@ export class ResponseCookies {
     const [name, value, opts] = parseCookieSetArgs(args);
     validateCookieName(name);
 
-    const parts = [`${name}=${encodeURIComponent(value)}`];
-    const path = opts?.path ?? "/";
-    validateCookieAttributeValue(path, "Path");
-    parts.push(`Path=${path}`);
-    if (opts?.domain) {
-      validateCookieAttributeValue(opts.domain, "Domain");
-      parts.push(`Domain=${opts.domain}`);
-    }
-    if (opts?.maxAge !== undefined) parts.push(`Max-Age=${opts.maxAge}`);
-    if (opts?.expires) parts.push(`Expires=${opts.expires.toUTCString()}`);
-    if (opts?.httpOnly) parts.push("HttpOnly");
-    if (opts?.secure) parts.push("Secure");
-    if (opts?.sameSite) parts.push(`SameSite=${opts.sameSite}`);
-
-    this._parsed.set(name, { serialized: parts.join("; "), entry: { name, value } });
+    const serialized = serializeSetCookie(name, value, opts);
+    this._parsed.set(name, { serialized, entry: { name, value } });
     this._syncHeaders();
     return this;
   }

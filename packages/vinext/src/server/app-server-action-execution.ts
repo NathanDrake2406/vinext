@@ -3,12 +3,19 @@ import { type FetchCacheMode, setCurrentFetchCacheMode } from "vinext/shims/fetc
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
+import {
+  getNextErrorDigest,
+  parseNextHttpErrorDigest,
+  parseNextRedirectDigest,
+} from "./next-error-digest.js";
 import { validateCsrfOrigin, validateServerActionPayload } from "./request-pipeline.js";
+import { readStreamAsTextWithLimit } from "../utils/text-stream.js";
 import {
   createServerActionNotFoundResponse,
   getServerActionNotFoundMessage,
   isServerActionNotFoundError,
 } from "./server-action-not-found.js";
+import { internalServerErrorResponse, payloadTooLargeResponse } from "./http-error-responses.js";
 
 type AppPageParams = Record<string, string | string[]>;
 
@@ -187,26 +194,9 @@ function getServerActionFailureMessage(error: unknown): string {
 
 export async function readActionBodyWithLimit(request: Request, maxBytes: number): Promise<string> {
   if (!request.body) return "";
-
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalSize = 0;
-
-  for (;;) {
-    const result = await reader.read();
-    if (result.done) break;
-
-    totalSize += result.value.byteLength;
-    if (totalSize > maxBytes) {
-      await reader.cancel();
-      throw new Error("Request body too large");
-    }
-    chunks.push(decoder.decode(result.value, { stream: true }));
-  }
-
-  chunks.push(decoder.decode());
-  return chunks.join("");
+  return readStreamAsTextWithLimit(request.body, maxBytes, () => {
+    throw new Error("Request body too large");
+  });
 }
 
 export async function readActionFormDataWithLimit(
@@ -243,40 +233,27 @@ export async function readActionFormDataWithLimit(
   }).formData();
 }
 
-function getErrorDigest(error: unknown): string | null {
-  if (!error || typeof error !== "object" || !("digest" in error)) {
-    return null;
-  }
-
-  return String(error.digest);
-}
-
 function getActionControlResponse(error: unknown): ActionControlResponse | null {
-  const digest = getErrorDigest(error);
+  const digest = getNextErrorDigest(error);
   if (!digest) return null;
 
-  if (digest.startsWith("NEXT_REDIRECT;")) {
-    const parts = digest.split(";");
-    const encodedUrl = parts[2];
-    if (!encodedUrl) {
-      return null;
-    }
-
+  const redirect = parseNextRedirectDigest(digest);
+  if (redirect) {
     return {
       kind: "redirect",
-      url: decodeURIComponent(encodedUrl),
+      url: redirect.url,
     };
   }
 
-  if (digest === "NEXT_NOT_FOUND" || digest.startsWith("NEXT_HTTP_ERROR_FALLBACK;")) {
-    const statusCode = digest === "NEXT_NOT_FOUND" ? 404 : parseInt(digest.split(";")[1], 10);
-    if (!Number.isInteger(statusCode)) {
+  const httpError = parseNextHttpErrorDigest(digest);
+  if (httpError) {
+    if (!Number.isInteger(httpError.status)) {
       return null;
     }
 
     return {
       kind: "status",
-      statusCode,
+      statusCode: httpError.status,
     };
   }
 
@@ -284,27 +261,22 @@ function getActionControlResponse(error: unknown): ActionControlResponse | null 
 }
 
 function getActionRedirect(error: unknown): AppServerActionRedirect | null {
-  const digest = getErrorDigest(error);
-  if (!digest?.startsWith("NEXT_REDIRECT;")) {
-    return null;
-  }
+  const digest = getNextErrorDigest(error);
+  if (!digest) return null;
 
-  const parts = digest.split(";");
-  const encodedUrl = parts[2];
-  if (!encodedUrl) {
-    return null;
-  }
+  const redirect = parseNextRedirectDigest(digest);
+  if (!redirect) return null;
 
   return {
-    status: parts[3] ? parseInt(parts[3], 10) : 307,
-    type: parts[1] || "push",
-    url: decodeURIComponent(encodedUrl),
+    status: redirect.status,
+    type: redirect.type,
+    url: redirect.url,
   };
 }
 
 function isActionHttpFallback(error: unknown): boolean {
-  const digest = getErrorDigest(error);
-  return digest === "NEXT_NOT_FOUND" || digest?.startsWith("NEXT_HTTP_ERROR_FALLBACK;") === true;
+  const digest = getNextErrorDigest(error);
+  return digest !== null && parseNextHttpErrorDigest(digest) !== null;
 }
 
 function createServerActionErrorResponse(
@@ -329,11 +301,10 @@ function createServerActionErrorResponse(
     { routerKind: "App Router", routePath: options.cleanPathname, routeType: "action" },
   );
   options.clearRequestContext();
-  return new Response(
+  return internalServerErrorResponse(
     process.env.NODE_ENV === "production"
-      ? "Internal Server Error"
+      ? undefined
       : "Server action failed: " + getServerActionFailureMessage(error),
-    { status: 500 },
   );
 }
 
@@ -377,7 +348,7 @@ export async function handleProgressiveServerActionRequest(
   const contentLength = parseInt(options.request.headers.get("content-length") || "0", 10);
   if (contentLength > options.maxActionBodySize) {
     options.clearRequestContext();
-    return new Response("Payload Too Large", { status: 413 });
+    return payloadTooLargeResponse();
   }
 
   try {
@@ -393,7 +364,7 @@ export async function handleProgressiveServerActionRequest(
     } catch (error) {
       if (isRequestBodyTooLarge(error)) {
         options.clearRequestContext();
-        return new Response("Payload Too Large", { status: 413 });
+        return payloadTooLargeResponse();
       }
       throw error;
     }
@@ -472,11 +443,10 @@ export async function handleProgressiveServerActionRequest(
       { routerKind: "App Router", routePath: options.cleanPathname, routeType: "action" },
     );
     options.clearRequestContext();
-    return new Response(
+    return internalServerErrorResponse(
       process.env.NODE_ENV === "production"
-        ? "Internal Server Error"
+        ? undefined
         : "Server action failed: " + getServerActionFailureMessage(error),
-      { status: 500 },
     );
   }
 }
@@ -506,7 +476,7 @@ export async function handleServerActionRscRequest<
   const contentLength = parseInt(options.request.headers.get("content-length") || "0", 10);
   if (contentLength > options.maxActionBodySize) {
     options.clearRequestContext();
-    return new Response("Payload Too Large", { status: 413 });
+    return payloadTooLargeResponse();
   }
 
   try {
@@ -518,7 +488,7 @@ export async function handleServerActionRscRequest<
     } catch (error) {
       if (isRequestBodyTooLarge(error)) {
         options.clearRequestContext();
-        return new Response("Payload Too Large", { status: 413 });
+        return payloadTooLargeResponse();
       }
       throw error;
     }

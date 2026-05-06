@@ -29,9 +29,11 @@ import {
   createRscRedirectLocation,
   resolveInvalidRscCacheBustingRequest,
   stripRscCacheBustingSearchParam,
+  stripRscSuffix,
 } from "./app-rsc-cache-busting.js";
 import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
+import { notFoundResponse } from "./http-error-responses.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
 import { buildPageCacheTags } from "./implicit-tags.js";
 import { handleMetadataRouteRequest } from "./metadata-route-response.js";
@@ -39,6 +41,8 @@ import type { MiddlewareModule } from "./middleware-runtime.js";
 import { runWithPrerenderWorkUnit } from "./prerender-work-unit-setup.js";
 import { buildPostMwRequestContext } from "./app-post-middleware-context.js";
 import {
+  cloneRequestWithHeaders,
+  filterInternalHeaders,
   normalizeTrailingSlash,
   resolvePublicFileRoute,
   validateImageUrl,
@@ -249,7 +253,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   );
   if (trailingSlashRedirect) return trailingSlashRedirect;
 
-  const redirectPathname = pathname.endsWith(".rsc") ? pathname.slice(0, -4) : pathname;
+  const redirectPathname = stripRscSuffix(pathname);
   const redirect = matchRedirect(
     redirectPathname,
     options.configRedirects,
@@ -416,19 +420,19 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       return pagesFallbackResponse;
     }
 
-    const notFoundResponse = await options.renderNotFound({
+    const renderedNotFoundResponse = await options.renderNotFound({
       isRscRequest,
       middlewareContext,
       request,
       route: null,
       scriptNonce,
     });
-    if (notFoundResponse) return notFoundResponse;
+    if (renderedNotFoundResponse) return renderedNotFoundResponse;
 
     options.clearRequestContext();
     const headers = new Headers();
     mergeMiddlewareResponseHeaders(headers, middlewareContext.headers);
-    return new Response("Not Found", { status: 404, headers });
+    return notFoundResponse({ headers });
   }
 
   const { route, params } = match;
@@ -471,8 +475,27 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
 export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
   options: CreateAppRscHandlerOptions<TRoute>,
 ): (request: Request, ctx: unknown) => Promise<Response> {
-  return async function appRscHandler(request, ctx) {
+  return async function appRscHandler(rawRequest, ctx) {
     await options.ensureInstrumentation?.();
+
+    // Strip forged internal headers at the App Router request boundary.
+    // Must happen BEFORE headersContextFromRequest() and
+    // requestContextFromRequest() so the captured context never contains
+    // attacker-controlled internal headers. This is the correct boundary
+    // for pure App Router requests; in hybrid app+pages mode the connect
+    // handler already filtered headers upstream and x-vinext-mw-ctx
+    // (not in INTERNAL_HEADERS) carries the forwarded middleware context.
+    // srvx's NodeRequestHeaders reads from rawHeaders for iteration but falls
+    // back to req.headers for .get() / .has(). In the dev server we add
+    // x-vinext-mw-ctx to req.headers after the Request is built, so it is
+    // visible to .get() but lost when filterInternalHeaders iterates. Read it
+    // BEFORE iterating so applyForwardedMiddlewareContext can skip middleware.
+    const mwCtx = rawRequest.headers.get("x-vinext-mw-ctx");
+    const filteredHeaders = filterInternalHeaders(rawRequest.headers);
+    if (mwCtx !== null) {
+      filteredHeaders.set("x-vinext-mw-ctx", mwCtx);
+    }
+    const request = cloneRequestWithHeaders(rawRequest, filteredHeaders);
 
     const executionContext = isExecutionContextLike(ctx)
       ? ctx

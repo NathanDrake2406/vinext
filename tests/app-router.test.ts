@@ -409,6 +409,21 @@ describe("App Router integration", () => {
     expect(html).toContain('data-testid="team-members-page"');
   });
 
+  it("renders nested parallel route from layout-only parent", async () => {
+    // Ported from Next.js: test/e2e/app-dir/parallel-routes-and-interception/parallel-routes-and-interception.test.ts (line 510)
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/parallel-routes-and-interception/parallel-routes-and-interception.test.ts
+    // Fixture: home/layout.tsx + @parallelB/default.tsx + @parallelB/nested/page.tsx (no home/page.tsx)
+    const res = await fetch(`${baseUrl}/parallel-nested/home/nested`);
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    // Parent layout should be present
+    expect(html).toContain('data-testid="home-layout"');
+    // @parallelB slot should show the nested sub-page
+    expect(html).toContain('data-testid="parallelB-nested-page"');
+    expect(html).toContain("Hello from nested parallel page!");
+  });
+
   // --- useSelectedLayoutSegment(s) ---
 
   it("useSelectedLayoutSegments returns segments relative to dashboard layout", async () => {
@@ -817,6 +832,41 @@ describe("App Router integration", () => {
     expect(html).toContain('content="noindex"');
   });
 
+  it("notFound() from async page with loading.tsx returns 404 (NEXT_NOT_FOUND digest)", async () => {
+    // Same regression path as redirect-with-loading.tsx, but for notFound().
+    // Distinct from forbidden/unauthorized: notFound() throws the bare
+    // "NEXT_NOT_FOUND" digest (not "NEXT_HTTP_ERROR_FALLBACK;404"), which
+    // takes a separate branch in resolveAppPageSpecialError. This is the
+    // most common loading-boundary special-error case in real apps —
+    // a dynamic detail page with a loading state that calls notFound()
+    // when the record is missing.
+    const res = await fetch(`${baseUrl}/notfound-loading`);
+    expect(res.status).toBe(404);
+    const html = await res.text();
+    expect(html).toContain("404 - Page Not Found");
+  });
+
+  it("forbidden() from async page with loading.tsx returns 403 (digest status preserved)", async () => {
+    // Same regression path as the redirect()-with-loading.tsx tests, but
+    // for forbidden() — verifies the post-shell digest swap reads the
+    // status code from NEXT_HTTP_ERROR_FALLBACK;403 rather than coercing
+    // to 404, and renders the root forbidden.tsx boundary.
+    const res = await fetch(`${baseUrl}/forbidden-loading`);
+    expect(res.status).toBe(403);
+    const html = await res.text();
+    expect(html).toContain("403 - Forbidden");
+  });
+
+  it("unauthorized() from async page with loading.tsx returns 401 (digest status preserved)", async () => {
+    // Same regression path as forbidden-loading but for unauthorized() —
+    // verifies the post-shell digest swap honors NEXT_HTTP_ERROR_FALLBACK;401
+    // and renders the root unauthorized.tsx boundary.
+    const res = await fetch(`${baseUrl}/unauthorized-loading`);
+    expect(res.status).toBe(401);
+    const html = await res.text();
+    expect(html).toContain("401 - Unauthorized");
+  });
+
   it("forbidden() thrown from a layout uses the forbidden boundary", async () => {
     // Ported from Next.js: test/e2e/app-dir/forbidden/basic/forbidden-basic.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/forbidden/basic/forbidden-basic.test.ts
@@ -917,6 +967,35 @@ describe("App Router integration", () => {
     const { res, html } = await fetchHtml(baseUrl, "/probe-async-search");
     expect(res.status).toBe(200);
     expect(html).toContain("probe-async-search-page");
+  });
+
+  it("redirect() from async page with loading.tsx returns 307 (digest captured during shell render)", async () => {
+    // Regression: when a page has a loading.tsx sibling and the page
+    // function is async, the probe used to fire-and-forget the page
+    // promise (to preserve loading.tsx streaming for non-redirecting
+    // pages). The route-level Suspense boundary would absorb the
+    // redirect throw, and React would serialize a "Switched to client
+    // rendering" error into a 200 body instead of returning a clean 307.
+    //
+    // Fix: the probe is skipped entirely for hasLoadingBoundary routes;
+    // the rscErrorTracker captures the NEXT_REDIRECT digest from React's
+    // onError during shell render; the lifecycle inspects the tracker
+    // after the shell promise resolves and swaps the response to a 307.
+    const res = await fetch(`${baseUrl}/protected-loading`, { redirect: "manual" });
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toMatch(/\/$/);
+  });
+
+  it("permanentRedirect() from async page with loading.tsx returns 308 (digest status preserved)", async () => {
+    // Same regression path as the redirect()-with-loading.tsx test above,
+    // but verifies the post-shell digest swap honors the status code from
+    // the NEXT_REDIRECT digest (308) rather than coercing to the 307
+    // default.
+    const res = await fetch(`${baseUrl}/permanent-protected-loading`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toMatch(/\/$/);
   });
 
   it("permanentRedirect() returns 308 status code", async () => {

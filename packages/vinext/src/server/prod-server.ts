@@ -45,8 +45,13 @@ import {
   type ImageConfig,
 } from "./image-optimization.js";
 import { normalizePath } from "./normalize-path.js";
-import { applyConfigHeadersToHeaderRecord, isOpenRedirectShaped } from "./request-pipeline.js";
-import { hasBasePath, stripBasePath } from "../utils/base-path.js";
+import {
+  applyConfigHeadersToHeaderRecord,
+  filterInternalHeaders,
+  isOpenRedirectShaped,
+} from "./request-pipeline.js";
+import { notFoundResponse } from "./http-error-responses.js";
+import { hasBasePath, stripBasePath, removeTrailingSlash } from "../utils/base-path.js";
 import { computeLazyChunks } from "../utils/lazy-chunks.js";
 import { manifestFileWithBase } from "../utils/manifest-paths.js";
 import { normalizePathnameForRouteMatchStrict } from "../routing/utils.js";
@@ -687,15 +692,17 @@ function nodeToWebRequest(req: IncomingMessage, urlOverride?: string): Request {
   const origin = `${proto}://${host}`;
   const url = new URL(urlOverride ?? req.url ?? "/", origin);
 
-  const headers = new Headers();
+  const rawHeaders = new Headers();
   for (const [key, value] of Object.entries(req.headers)) {
     if (value === undefined) continue;
     if (Array.isArray(value)) {
-      for (const v of value) headers.append(key, v);
+      for (const v of value) rawHeaders.append(key, v);
     } else {
-      headers.set(key, value);
+      rawHeaders.set(key, value);
     }
   }
+  // Strip internal headers that should not be honored from external requests.
+  const headers = filterInternalHeaders(rawHeaders);
 
   const method = req.method ?? "GET";
   const hasBody = method !== "GET" && method !== "HEAD";
@@ -1098,10 +1105,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
           return;
         }
         await sendWebResponse(
-          new Response("Not Found", {
-            status: 404,
-            headers: toWebHeaders(staticResponseHeaders),
-          }),
+          notFoundResponse({ headers: toWebHeaders(staticResponseHeaders) }),
           req,
           res,
           compress,
@@ -1371,7 +1375,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
           return;
         } else if (!trailingSlash && hasTrailing) {
           const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-          res.writeHead(308, { Location: basePath + pathname.replace(/\/+$/, "") + qs });
+          res.writeHead(308, { Location: basePath + removeTrailingSlash(pathname) + qs });
           res.end();
           return;
         }
@@ -1383,10 +1387,13 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         : undefined;
       const protocol = rawProtocol === "https" || rawProtocol === "http" ? rawProtocol : "http";
       const hostHeader = resolveHost(req, `${host}:${port}`);
-      const reqHeaders = Object.entries(req.headers).reduce((h, [k, v]) => {
+      const rawReqHeaders = Object.entries(req.headers).reduce((h, [k, v]) => {
         if (v) h.set(k, Array.isArray(v) ? v.join(", ") : v);
         return h;
       }, new Headers());
+      // Strip internal headers from inbound requests before any handler or
+      // middleware sees them.
+      const reqHeaders = filterInternalHeaders(rawReqHeaders);
       const method = req.method ?? "GET";
       const hasBody = method !== "GET" && method !== "HEAD";
       let webRequest = new Request(`${protocol}://${hostHeader}${url}`, {

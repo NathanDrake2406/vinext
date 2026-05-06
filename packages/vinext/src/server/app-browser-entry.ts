@@ -46,10 +46,8 @@ import {
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
 import {
-  createAppPayloadCacheKey,
+  AppElementsWire,
   getMountedSlotIdsHeader,
-  normalizeAppElements,
-  readAppElementsMetadata,
   resolveVisitedResponseInterceptionContext,
   type AppElements,
   type AppWireElements,
@@ -60,6 +58,7 @@ import {
   resolveInterceptionContextFromPreviousNextUrl,
   resolveServerActionRequestState,
   type AppRouterState,
+  type OperationLane,
 } from "./app-browser-state.js";
 import { DevRecoveryBoundary } from "vinext/shims/error-boundary";
 import { ElementsContext, Slot } from "vinext/shims/slot";
@@ -79,6 +78,7 @@ import {
   createRscRequestHeaders,
   createRscRequestUrl,
   stripRscCacheBustingSearchParam,
+  stripRscSuffix,
   VINEXT_RSC_CONTENT_TYPE,
   VINEXT_RSC_MOUNTED_SLOTS_HEADER,
 } from "./app-rsc-cache-busting.js";
@@ -102,6 +102,21 @@ function toActionType(kind: NavigationKind): "navigate" | "traverse" {
   return kind === "traverse" ? "traverse" : "navigate";
 }
 
+function toOperationLane(kind: NavigationKind): OperationLane {
+  switch (kind) {
+    case "navigate":
+      return "navigation";
+    case "refresh":
+      return "refresh";
+    case "traverse":
+      return "traverse";
+    default: {
+      const _exhaustive: never = kind;
+      throw new Error("[vinext] Unknown navigation kind: " + String(_exhaustive));
+    }
+  }
+}
+
 type VisitedResponseCacheEntry = {
   params: Record<string, string | string[]>;
   expiresAt: number;
@@ -113,6 +128,19 @@ const VISITED_RESPONSE_CACHE_TTL = 5 * 60_000;
 const MAX_TRAVERSAL_CACHE_TTL = 30 * 60_000;
 const browserNavigationController = createAppBrowserNavigationController();
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
+
+// Parses a URI-encoded JSON value carried in a response header (e.g.
+// `X-Vinext-Params`). Returns `null` on missing or malformed input so callers
+// can fall back to their own defaults. Silent by design — these headers are
+// best-effort hydration data and a parse failure should not break navigation.
+function parseEncodedJsonHeader<T>(value: string | null): T | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(decodeURIComponent(value)) as T;
+  } catch {
+    return null;
+  }
+}
 
 function isRouterStatePromise(
   value: AppRouterState | Promise<AppRouterState>,
@@ -234,6 +262,7 @@ async function renderNavigationPayload(
   pendingRouterState: PendingBrowserRouterState | null,
   useTransition = true,
   actionType: "navigate" | "replace" | "traverse" = "navigate",
+  operationLane: OperationLane = "navigation",
 ): Promise<void> {
   try {
     return await browserNavigationController.renderNavigationPayload({
@@ -245,6 +274,7 @@ async function renderNavigationPayload(
       historyUpdateMode,
       navigationSnapshot,
       nextElements: payload,
+      operationLane,
       params,
       pendingRouterState,
       previousNextUrl,
@@ -289,7 +319,7 @@ function getVisitedResponse(
   mountedSlotsHeader: string | null,
   navigationKind: NavigationKind,
 ): VisitedResponseCacheEntry | null {
-  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
+  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cached = visitedResponseCache.get(cacheKey);
   if (!cached) {
     return null;
@@ -333,7 +363,7 @@ function storeVisitedResponseSnapshot(
   snapshot: CachedRscResponse,
   params: Record<string, string | string[]>,
 ): void {
-  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
+  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   visitedResponseCache.delete(cacheKey);
   evictVisitedResponseCacheIfNeeded();
   const now = Date.now();
@@ -409,11 +439,11 @@ function handleDevRecoveryBoundaryCatch(resetKey: number): void {
   browserNavigationController.drainPrePaintEffects(resetKey);
 }
 
-function normalizeAppElementsPromise(payload: Promise<AppWireElements>): Promise<AppElements> {
+function decodeAppElementsPromise(payload: Promise<AppWireElements>): Promise<AppElements> {
   // Wrap in Promise.resolve() because createFromReadableStream() returns a
   // React Flight thenable whose .then() returns undefined (not a new Promise).
   // Without the wrap, chaining .then() produces undefined → use() crashes.
-  return Promise.resolve(payload).then((elements) => normalizeAppElements(elements));
+  return Promise.resolve(payload).then((elements) => AppElementsWire.decode(elements));
 }
 
 function BrowserRoot({
@@ -424,8 +454,9 @@ function BrowserRoot({
   initialNavigationSnapshot: ClientNavigationRenderSnapshot;
 }) {
   const resolvedElements = use(initialElements);
-  const initialMetadata = readAppElementsMetadata(resolvedElements);
+  const initialMetadata = AppElementsWire.readMetadata(resolvedElements);
   const [treeStateValue, setTreeStateValue] = useState<AppRouterState | Promise<AppRouterState>>({
+    activeOperation: null,
     elements: resolvedElements,
     interceptionContext: initialMetadata.interceptionContext,
     layoutFlags: initialMetadata.layoutFlags,
@@ -434,6 +465,7 @@ function BrowserRoot({
     renderId: 0,
     rootLayoutTreePath: initialMetadata.rootLayoutTreePath,
     routeId: initialMetadata.routeId,
+    visibleCommitVersion: 0,
   });
   const treeState = isRouterStatePromise(treeStateValue) ? use(treeStateValue) : treeStateValue;
 
@@ -723,14 +755,17 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
   // same path after a transient failure still gets one recovery attempt.
   clearReloadFlag();
 
-  let params: Record<string, string | string[]> = {};
-  const paramsHeader = rscResponse.headers.get("X-Vinext-Params");
-  if (paramsHeader) {
+  // Ignore malformed param headers and continue with hydration. The original
+  // try/catch also swallowed errors from applyClientParams; preserve that.
+  const parsedParams = parseEncodedJsonHeader<Record<string, string | string[]>>(
+    rscResponse.headers.get("X-Vinext-Params"),
+  );
+  const params: Record<string, string | string[]> = parsedParams ?? {};
+  if (parsedParams) {
     try {
-      params = JSON.parse(decodeURIComponent(paramsHeader)) as Record<string, string | string[]>;
-      applyClientParams(params);
+      applyClientParams(parsedParams);
     } catch {
-      // Ignore malformed param headers and continue with hydration.
+      // Ignore — matches the previous combined try/catch behavior.
     }
   }
 
@@ -816,12 +851,12 @@ function registerServerActionCallback(): void {
     // redirects), this would need renderNavigationPayload().
     if (isServerActionResult(result)) {
       return commitSameUrlNavigatePayload(
-        Promise.resolve(normalizeAppElements(result.root)),
+        Promise.resolve(AppElementsWire.decode(result.root)),
         result.returnValue,
       );
     }
 
-    return commitSameUrlNavigatePayload(Promise.resolve(normalizeAppElements(result)));
+    return commitSameUrlNavigatePayload(Promise.resolve(AppElementsWire.decode(result)));
   });
 }
 
@@ -843,7 +878,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     installDevErrorOverlay();
   }
 
-  const root = normalizeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
+  const root = decodeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
   const initialNavigationSnapshot = createClientNavigationRenderSnapshot(
     window.location.href,
     latestClientParams,
@@ -967,7 +1002,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             currentHref,
             cachedParams,
           );
-          const cachedPayload = normalizeAppElementsPromise(
+          const cachedPayload = decodeAppElementsPromise(
             createFromFetch<AppWireElements>(
               Promise.resolve(restoreRscResponse(cachedRoute.response)),
             ),
@@ -984,6 +1019,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             pendingRouterState,
             isSameRoute,
             toActionType(navigationKind),
+            toOperationLane(navigationKind),
           );
           return;
         }
@@ -1042,10 +1078,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             const parsed = new URL(responseUrl, window.location.origin);
             stripRscCacheBustingSearchParam(parsed);
             const origUrl = new URL(currentHref, window.location.origin);
-            let pathname = parsed.pathname.replace(/\.rsc$/, "");
-            // toRscUrl strips trailing slash before appending .rsc, so the
-            // response URL loses it on the round-trip. Restore it when the
-            // original href had one so sites with trailingSlash:true don't
+            let pathname = stripRscSuffix(parsed.pathname);
+            // createRscRequestUrl strips trailing slash before appending .rsc,
+            // so the response URL loses it on the round-trip. Restore it when
+            // the original href had one so sites with trailingSlash:true don't
             // incur an extra 308 to the canonical form on the error path.
             if (
               origUrl.pathname.length > 1 &&
@@ -1072,7 +1108,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           // Server-side redirect: update the URL in history and loop to fetch
           // the destination without settling pendingRouterState. This keeps
           // isPending true across all redirect hops instead of flashing false.
-          const destinationPath = finalUrl.pathname.replace(/\.rsc$/, "") + finalUrl.search;
+          const destinationPath = stripRscSuffix(finalUrl.pathname) + finalUrl.search;
           replaceHistoryStateWithoutNotify(
             createHistoryStateWithPreviousNextUrl(null, requestPreviousNextUrl),
             "",
@@ -1087,18 +1123,11 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           continue;
         }
 
-        let navParams: Record<string, string | string[]> = {};
-        const paramsHeader = navResponse.headers.get("X-Vinext-Params");
-        if (paramsHeader) {
-          try {
-            navParams = JSON.parse(decodeURIComponent(paramsHeader)) as Record<
-              string,
-              string | string[]
-            >;
-          } catch {
-            // navParams stays as {}
-          }
-        }
+        // navParams falls back to {} on a missing or malformed header.
+        const navParams: Record<string, string | string[]> =
+          parseEncodedJsonHeader<Record<string, string | string[]>>(
+            navResponse.headers.get("X-Vinext-Params"),
+          ) ?? {};
         // Build snapshot from local params, not latestClientParams
         const navigationSnapshot = createClientNavigationRenderSnapshot(currentHref, navParams);
 
@@ -1106,7 +1135,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
-        const rscPayload = normalizeAppElementsPromise(
+        const rscPayload = decodeAppElementsPromise(
           createFromFetch<AppWireElements>(Promise.resolve(restoreRscResponse(responseSnapshot))),
         );
 
@@ -1123,6 +1152,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           pendingRouterState,
           isSameRoute,
           toActionType(navigationKind),
+          toOperationLane(navigationKind),
         );
         // Don't cache the response if this navigation was superseded during
         // renderNavigationPayload's await — the elements were never dispatched.
@@ -1132,7 +1162,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         // back/forward navigation could replay a snapshot from a navigation that
         // never actually rendered successfully.
         const resolvedElements = await rscPayload;
-        const metadata = readAppElementsMetadata(resolvedElements);
+        const metadata = AppElementsWire.readMetadata(resolvedElements);
         storeVisitedResponseSnapshot(
           rscUrl,
           resolveVisitedResponseInterceptionContext(
@@ -1229,7 +1259,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         // for the previousNextUrl mechanism.
         const hmrHeaders = createRscRequestHeaders();
         await browserNavigationController.hmrReplaceTree(
-          normalizeAppElementsPromise(
+          decodeAppElementsPromise(
             createFromFetch<AppWireElements>(
               fetch(
                 await createRscRequestUrl(

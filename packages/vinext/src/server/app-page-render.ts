@@ -1,11 +1,6 @@
 import type { ReactNode } from "react";
 import type { CachedAppPageValue } from "vinext/shims/cache";
-import {
-  APP_ROOT_LAYOUT_KEY,
-  buildOutgoingAppPayload,
-  isAppElementsRecord,
-  type AppOutgoingElements,
-} from "./app-elements.js";
+import { AppElementsWire, isAppElementsRecord, type AppOutgoingElements } from "./app-elements.js";
 import {
   finalizeAppPageHtmlCacheResponse,
   finalizeAppPageRscCacheResponse,
@@ -170,7 +165,7 @@ function applyRequestCacheLife(options: {
 }
 
 function readRootBoundaryId(element: Readonly<Record<string, unknown>>): string | null {
-  const rootLayoutTreePath = element[APP_ROOT_LAYOUT_KEY];
+  const rootLayoutTreePath = element[AppElementsWire.keys.rootLayout];
   return typeof rootLayoutTreePath === "string" ? rootLayoutTreePath : null;
 }
 
@@ -292,7 +287,7 @@ export async function renderAppPageLifecycle(
     options.element,
     options.routePattern,
   );
-  const outgoingElement = buildOutgoingAppPayload({
+  const outgoingElement = AppElementsWire.encodeOutgoingPayload({
     element: options.element,
     layoutFlags,
     ...(artifactCompatibility ? { artifactCompatibility } : {}),
@@ -439,6 +434,29 @@ export async function renderAppPageLifecycle(
   const htmlStream = htmlRender.htmlStream;
   if (!htmlStream) {
     throw new Error("[vinext] Expected an HTML stream when no fallback response was returned");
+  }
+
+  // Routes with a route-level Suspense boundary (loading.tsx) skip the page
+  // probe — the page render happens once, inside the RSC stream. Mirror
+  // Next.js's `app-render.tsx:4293` catch shape: by the time the SSR shell
+  // promise has resolved, any redirect()/notFound() throw whose async work
+  // settles in microtasks during shell rendering has already fired through
+  // React's onError and been captured by the tracker. Convert that to a
+  // 307/404 before any bytes are flushed.
+  //
+  // Late rejections — ones that settle after macrotask boundaries (real
+  // I/O, setTimeout, etc.) — fall through to the streamed body, exactly
+  // as Next.js does. The digest survives in the Flight payload for the
+  // client router to consume.
+  if (options.hasLoadingBoundary) {
+    const captured = rscErrorTracker.getCapturedSpecialError();
+    if (captured) {
+      const specialError = resolveAppPageSpecialError(captured);
+      if (specialError) {
+        void htmlStream.cancel().catch(() => {});
+        return options.renderPageSpecialError(specialError);
+      }
+    }
   }
 
   if (

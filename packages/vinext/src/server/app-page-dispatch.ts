@@ -8,6 +8,7 @@ import {
 import {
   consumeDynamicUsage,
   consumeInvalidDynamicUsageError,
+  getAndClearPendingCookies,
   getDraftModeCookieHeader,
   markDynamicUsage,
   setHeadersContext,
@@ -24,9 +25,9 @@ import {
 import type { AppOutgoingElements } from "./app-elements.js";
 import { readAppPageCacheResponse } from "./app-page-cache.js";
 import { resolveAppPageParentHttpAccessBoundaryModule } from "./app-page-boundary.js";
+import { readStreamAsText } from "../utils/text-stream.js";
 import {
   buildAppPageSpecialErrorResponse,
-  readAppPageTextStream,
   resolveAppPageSpecialError,
   teeAppPageRscStreamForCapture,
   type AppPageFontPreload,
@@ -118,6 +119,8 @@ type AppPageDispatchRoute = {
 };
 
 type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
+  /** Configured basePath (e.g. "/blog"). Used to prefix redirect Locations. */
+  basePath?: string;
   buildPageElement: (
     route: TRoute,
     params: AppPageParams,
@@ -396,7 +399,7 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
                   }
                 : undefined,
             );
-            const html = await readAppPageTextStream(revalidatedHtmlStream);
+            const html = await readStreamAsText(revalidatedHtmlStream);
             const rscData = await getCapturedRscDataPromise(revalidatedCapturedRscRef.value);
             const cacheLife = _consumeRequestScopedCacheLife();
             options.clearRequestContext();
@@ -617,7 +620,9 @@ async function renderLayoutSpecialError<TRoute extends AppPageDispatchRoute>(
   layoutIndex: number,
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
+    basePath: options.basePath,
     clearRequestContext: options.clearRequestContext,
+    getAndClearPendingCookies,
     isRscRequest: options.isRscRequest,
     middlewareContext: options.middlewareContext,
     renderFallbackPage(statusCode) {
@@ -651,7 +656,9 @@ async function renderPageSpecialError<TRoute extends AppPageDispatchRoute>(
   specialError: AppPageSpecialError,
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
+    basePath: options.basePath,
     clearRequestContext: options.clearRequestContext,
+    getAndClearPendingCookies,
     isRscRequest: options.isRscRequest,
     middlewareContext: options.middlewareContext,
     renderFallbackPage(statusCode) {

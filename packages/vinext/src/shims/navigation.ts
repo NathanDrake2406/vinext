@@ -12,7 +12,7 @@
 // bindings are just `undefined` on the namespace object and we can guard at runtime.
 import * as React from "react";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
-import { createAppPayloadCacheKey } from "../server/app-elements.js";
+import { AppElementsWire } from "../server/app-elements.js";
 import {
   createRscRequestHeaders,
   createRscRequestUrl,
@@ -295,25 +295,6 @@ export type PrefetchCacheEntry = {
   timestamp: number;
 };
 
-/**
- * Convert a pathname (with optional query/hash) to its .rsc URL.
- * Strips trailing slashes before appending `.rsc` so that cache keys
- * are consistent regardless of the `trailingSlash` config setting.
- *
- * @deprecated Use `createRscRequestUrl` so RSC requests include cache-busting
- * params for variant headers.
- */
-export function toRscUrl(href: string): string {
-  const [beforeHash] = href.split("#");
-  const qIdx = beforeHash.indexOf("?");
-  const pathname = qIdx === -1 ? beforeHash : beforeHash.slice(0, qIdx);
-  const query = qIdx === -1 ? "" : beforeHash.slice(qIdx);
-  // Strip trailing slash (but preserve "/" root) for consistent cache keys
-  const normalizedPath =
-    pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-  return normalizedPath + ".rsc" + query;
-}
-
 export function getCurrentInterceptionContext(): string | null {
   if (isServer) {
     return null;
@@ -401,7 +382,7 @@ export function storePrefetchResponse(
   response: Response,
   interceptionContext: string | null = null,
 ): void {
-  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
+  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   evictPrefetchCacheIfNeeded();
   const entry: PrefetchCacheEntry = { timestamp: Date.now() };
   entry.pending = snapshotRscResponse(response)
@@ -475,7 +456,7 @@ export function prefetchRscResponse(
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
 ): void {
-  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
+  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
   const prefetched = getPrefetchedUrls();
   const now = Date.now();
@@ -521,7 +502,7 @@ export function consumePrefetchResponse(
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
 ): CachedRscResponse | null {
-  const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
+  const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cache = getPrefetchCache();
   const entry = cache.get(cacheKey);
   if (!entry) return null;
@@ -1315,7 +1296,7 @@ const _appRouter = {
         headers.set(VINEXT_RSC_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
       }
       const rscUrl = await createRscRequestUrl(fullHref, headers);
-      const cacheKey = createAppPayloadCacheKey(rscUrl, interceptionContext);
+      const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
       const prefetched = getPrefetchedUrls();
       if (prefetched.has(cacheKey)) return;
       prefetched.add(cacheKey);

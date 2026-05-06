@@ -44,7 +44,11 @@ import {
 import { findMiddlewareFile, runMiddleware } from "./server/middleware.js";
 import { logRequest, now } from "./server/request-log.js";
 import { normalizePath } from "./server/normalize-path.js";
-import { isOpenRedirectShaped } from "./server/request-pipeline.js";
+import {
+  filterInternalHeaders,
+  INTERNAL_HEADERS,
+  isOpenRedirectShaped,
+} from "./server/request-pipeline.js";
 import {
   findInstrumentationClientFile,
   findInstrumentationFile,
@@ -67,7 +71,7 @@ import { scanMetadataFiles } from "./server/metadata-routes.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "./server/middleware-request-headers.js";
 import { detectPackageManager } from "./utils/project.js";
 import { manifestFileWithBase, manifestFilesWithBase } from "./utils/manifest-paths.js";
-import { hasBasePath } from "./utils/base-path.js";
+import { hasBasePath, removeTrailingSlash } from "./utils/base-path.js";
 import { asyncHooksStubPlugin } from "./plugins/async-hooks-stub.js";
 import { clientReferenceDedupPlugin } from "./plugins/client-reference-dedup.js";
 import { createInstrumentationClientTransformPlugin } from "./plugins/instrumentation-client.js";
@@ -2343,7 +2347,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 } else if (!nextConfig.trailingSlash && hasTrailing) {
                   // trailingSlash: false (default) — redirect /about/ → /about
                   const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-                  const dest = bp + pathname.replace(/\/+$/, "") + qs;
+                  const dest = bp + removeTrailingSlash(pathname) + qs;
                   res.writeHead(308, { Location: dest });
                   res.end();
                   return;
@@ -2361,13 +2365,21 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // preMiddlewareReqCtx and the middleware Request itself. Intentionally
               // captured once here — applyRequestHeadersToNodeRequest() mutates
               // req.headers later, but by then this Headers object is no longer read.
-              const nodeRequestHeaders = new Headers(
+              const rawHeaders = new Headers(
                 Object.fromEntries(
                   Object.entries(req.headers)
                     .filter(([, v]) => v !== undefined)
                     .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)]),
                 ),
               );
+              // Strip internal headers from inbound requests so they cannot be
+              // forged to influence routing or impersonate internal state.
+              // Both the middleware Request (built below) and the SSR handler
+              // (which reads req.headers directly) must see clean headers.
+              const nodeRequestHeaders = filterInternalHeaders(rawHeaders);
+              for (const header of INTERNAL_HEADERS) {
+                delete req.headers[header];
+              }
 
               const requestOrigin = `http://${req.headers.host || "localhost"}`;
               const preMiddlewareReqUrl = new URL(url, requestOrigin);

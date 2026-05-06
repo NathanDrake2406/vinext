@@ -16,7 +16,12 @@
 import rscHandler from "virtual:vinext-rsc-entry";
 import { runWithExecutionContext, type ExecutionContextLike } from "vinext/shims/request-context";
 import { resolveStaticAssetSignal } from "./worker-utils.js";
-import { isOpenRedirectShaped } from "./request-pipeline.js";
+import {
+  cloneRequestWithHeaders,
+  filterInternalHeaders,
+  isOpenRedirectShaped,
+} from "./request-pipeline.js";
+import { badRequestResponse, notFoundResponse } from "./http-error-responses.js";
 
 type WorkerAssetEnv = {
   ASSETS?: {
@@ -37,7 +42,7 @@ export default {
     // percent-encoded variants are caught — encoded forms survive segment-wise
     // decoding and would otherwise reach trailing-slash redirect emitters.
     if (isOpenRedirectShaped(url.pathname)) {
-      return new Response("404 Not Found", { status: 404 });
+      return notFoundResponse();
     }
 
     // Validate that percent-encoding is well-formed. The RSC handler performs
@@ -47,7 +52,15 @@ export default {
       decodeURIComponent(url.pathname);
     } catch {
       // Malformed percent-encoding (e.g. /%E0%A4%A) — return 400 instead of throwing.
-      return new Response("Bad Request", { status: 400 });
+      return badRequestResponse();
+    }
+
+    // Strip internal headers from inbound requests before any handler or
+    // middleware sees them. Must happen before the RSC handler runs.
+    // Builds a new Headers — Request.headers is immutable in Workers.
+    {
+      const filteredHeaders = filterInternalHeaders(request.headers);
+      request = cloneRequestWithHeaders(request, filteredHeaders);
     }
 
     // Do NOT decode/normalize the pathname here. The RSC handler
@@ -74,7 +87,7 @@ export default {
     }
 
     if (result === null || result === undefined) {
-      return new Response("Not Found", { status: 404 });
+      return notFoundResponse();
     }
 
     return new Response(String(result), { status: 200 });
