@@ -413,6 +413,7 @@ export async function prerenderPages({
             // either _prodServer or pagesBundlePath is provided.
             outDir: path.dirname(path.dirname(pagesBundlePath!)),
             noCompression: true,
+            purpose: "prerender",
           });
           ownedProdServerHandle = srv;
           return srv;
@@ -746,6 +747,7 @@ export async function prerenderApp({
             host: "127.0.0.1",
             outDir: path.dirname(serverDir),
             noCompression: true,
+            purpose: "prerender",
           });
           ownedProdServerHandle = srv;
           return srv;
