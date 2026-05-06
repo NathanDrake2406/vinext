@@ -178,6 +178,153 @@ const NOT_FOUND_SENTINEL_PATH = "/__vinext_nonexistent_for_404__";
 
 const DEFAULT_CONCURRENCY = Math.min(os.availableParallelism(), 8);
 
+type ExtractRscPayloadResult =
+  | { status: "ok"; payload: string }
+  | { status: "fallback"; reason: string };
+
+const RSC_CHUNK_PUSH_MARKER = "__VINEXT_RSC_CHUNKS__.push(";
+const RSC_CHUNK_SCRIPT_PREFIX = "self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];";
+const RSC_DONE_MARKER = "__VINEXT_RSC_DONE__=true";
+const LEGACY_RSC_MARKER = "__VINEXT_RSC__=";
+
+function parseEmbeddedJsonString(script: string, start: number): { value: string; next: number } {
+  let index = start;
+  while (/\s/.test(script[index] ?? "")) index++;
+
+  if (script[index] !== '"') {
+    throw new Error("[vinext] Malformed prerender RSC embed: chunk payload is not a JSON string");
+  }
+
+  let escaped = false;
+  for (let cursor = index + 1; cursor < script.length; cursor++) {
+    const char = script[cursor];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      const jsonSource = script.slice(index, cursor + 1);
+      const parsed: unknown = JSON.parse(jsonSource);
+      if (typeof parsed !== "string") {
+        throw new Error("[vinext] Malformed prerender RSC embed: chunk payload is not a string");
+      }
+
+      let next = cursor + 1;
+      while (/\s/.test(script[next] ?? "")) next++;
+      if (script[next] !== ")") {
+        throw new Error("[vinext] Malformed prerender RSC embed: chunk push is unterminated");
+      }
+
+      return { value: parsed, next: next + 1 };
+    }
+  }
+
+  throw new Error("[vinext] Malformed prerender RSC embed: chunk JSON string is unterminated");
+}
+
+function assertOnlyTrailingSemicolon(script: string, start: number, message: string): void {
+  let index = start;
+  while (/\s/.test(script[index] ?? "")) index++;
+  if (script[index] === ";") index++;
+  while (/\s/.test(script[index] ?? "")) index++;
+  if (index !== script.length) {
+    throw new Error(message);
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function extractLegacyRscPayload(script: string): string | null {
+  const trimmedScript = script.trim().replace(/;$/, "");
+  if (!trimmedScript.startsWith(`self.${LEGACY_RSC_MARKER}`)) return null;
+
+  const jsonSource = trimmedScript.slice(`self.${LEGACY_RSC_MARKER}`.length).trim();
+  const parsed: unknown = JSON.parse(jsonSource);
+
+  if (typeof parsed !== "object" || parsed === null || !("rsc" in parsed)) {
+    throw new Error("[vinext] Malformed legacy prerender RSC embed: missing rsc array");
+  }
+
+  const rsc = parsed.rsc;
+  if (!isStringArray(rsc)) {
+    throw new Error("[vinext] Malformed legacy prerender RSC embed: rsc is not a string array");
+  }
+
+  return rsc.join("");
+}
+
+export function extractRscPayloadFromPrerenderedHtml(html: string): ExtractRscPayloadResult {
+  const scriptPattern = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi;
+  const chunks: string[] = [];
+  let sawRscMarker = false;
+  let sawDone = false;
+  let legacyPayload: string | null = null;
+  let match: RegExpExecArray | null;
+
+  while ((match = scriptPattern.exec(html)) !== null) {
+    const script = match[1] ?? "";
+    const trimmedScript = script.trim().replace(/;$/, "");
+
+    if (trimmedScript === `self.${RSC_DONE_MARKER}`) {
+      sawRscMarker = true;
+      sawDone = true;
+      continue;
+    }
+
+    if (legacyPayload === null) {
+      legacyPayload = extractLegacyRscPayload(script);
+      if (legacyPayload !== null) {
+        sawRscMarker = true;
+        continue;
+      }
+    }
+
+    if (trimmedScript.startsWith(RSC_CHUNK_SCRIPT_PREFIX)) {
+      sawRscMarker = true;
+      const markerIndex = trimmedScript.indexOf(RSC_CHUNK_PUSH_MARKER);
+      if (markerIndex === -1) {
+        throw new Error("[vinext] Malformed prerender RSC embed: chunk push is missing");
+      }
+      const parsed = parseEmbeddedJsonString(
+        trimmedScript,
+        markerIndex + RSC_CHUNK_PUSH_MARKER.length,
+      );
+      assertOnlyTrailingSemicolon(
+        trimmedScript,
+        parsed.next,
+        "[vinext] Malformed prerender RSC embed: unexpected trailing code after chunk push",
+      );
+      chunks.push(parsed.value);
+    }
+  }
+
+  if (chunks.length > 0) {
+    if (!sawDone) {
+      throw new Error("[vinext] Malformed prerender RSC embed: missing __VINEXT_RSC_DONE__ marker");
+    }
+    return { status: "ok", payload: chunks.join("") };
+  }
+
+  if (legacyPayload !== null) {
+    return { status: "ok", payload: legacyPayload };
+  }
+
+  if (sawRscMarker) {
+    throw new Error("[vinext] Malformed prerender RSC embed: no RSC chunks were found");
+  }
+
+  return {
+    status: "fallback",
+    reason: "no recognized Vinext RSC embed markers found in HTML",
+  };
+}
+
 /**
  * Run an array of async tasks with bounded concurrency.
  * Results are returned in the same order as `items`.
@@ -1074,15 +1221,22 @@ export async function prerenderApp({
         }
         const html = htmlRender.html;
 
-        // Fetch RSC payload via a second invocation with RSC headers
-        // TODO: Extract RSC payload from the first response instead of invoking the handler twice.
-        const rscRequest = new Request(`http://localhost${urlPath}`, {
-          headers: { Accept: "text/x-component", RSC: "1" },
-        });
-        const rscRes = await runWithHeadersContext(headersContextFromRequest(rscRequest), () =>
-          rscHandler(rscRequest),
-        );
-        const rscData = rscRes.ok ? await rscRes.text() : null;
+        const extractedRsc = extractRscPayloadFromPrerenderedHtml(html);
+        let rscData: string | null;
+        if (extractedRsc.status === "ok") {
+          rscData = extractedRsc.payload;
+        } else {
+          console.warn(
+            `[vinext] Warning: ${extractedRsc.reason}. Falling back to a separate RSC prerender request for ${urlPath}.`,
+          );
+          const rscRequest = new Request(`http://localhost${urlPath}`, {
+            headers: { Accept: "text/x-component", RSC: "1" },
+          });
+          const rscRes = await runWithHeadersContext(headersContextFromRequest(rscRequest), () =>
+            rscHandler(rscRequest),
+          );
+          rscData = rscRes.ok ? await rscRes.text() : null;
+        }
 
         const outputFiles: string[] = [];
 
