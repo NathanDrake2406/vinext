@@ -160,6 +160,9 @@ function performHardNavigationWithLoopGuard(
     );
     return false;
   }
+  // If storage is unavailable but the target is a different URL, the browser
+  // can still make forward progress. Only same-target reloads need a persisted
+  // guard because they can re-enter this exact recovery path indefinitely.
 
   if (mode === "replace") {
     window.location.replace(href);
@@ -572,6 +575,9 @@ export function createAppBrowserNavigationController(
     });
 
     if (decision.disposition === "hard-navigate") {
+      // Same-URL action hard navigations do not expose a navigation outcome to
+      // callers. If the loop guard blocks, the degraded state is still the
+      // existing return contract: no visible commit and no action value.
       performHardNavigation(window.location.href);
       return undefined;
     }
@@ -587,6 +593,8 @@ export function createAppBrowserNavigationController(
       });
 
       if (latestApproval.decision.disposition === "hard-navigate") {
+        // See the same-URL hard-navigation note above. The guard result is
+        // deliberately not surfaced through the server-action return channel.
         performHardNavigation(window.location.href);
         return undefined;
       }

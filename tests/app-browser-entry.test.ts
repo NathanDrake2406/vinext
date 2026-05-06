@@ -2036,6 +2036,72 @@ describe("app browser root-layout hard navigation", () => {
       detach();
     }
   });
+
+  it("allows cross-page hard navigation when the stored guard target is not the current URL", async () => {
+    const { controller, detach } = createControllerHarness(
+      createState({ rootLayoutTreePath: "/(marketing)" }),
+    );
+    const { assign } = stubWindow("https://example.com/marketing");
+
+    try {
+      const firstNavId = controller.beginNavigation();
+      await expect(
+        controller.renderNavigationPayload({
+          actionType: "navigate",
+          createNavigationCommitEffect: () => () => {},
+          historyUpdateMode: "push",
+          navigationSnapshot: createClientNavigationRenderSnapshot(
+            "https://example.com/marketing",
+            {},
+          ),
+          nextElements: Promise.resolve(
+            createResolvedElements("route:/dashboard", "/(dashboard)", null, {
+              "page:/dashboard": React.createElement("main", null, "dashboard"),
+            }),
+          ),
+          operationLane: "navigation",
+          params: {},
+          pendingRouterState: null,
+          previousNextUrl: null,
+          targetHref: "https://example.com/dashboard",
+          navId: firstNavId,
+          useTransition: false,
+        }),
+      ).resolves.toBe("hard-navigate");
+      expect(assign).toHaveBeenCalledTimes(1);
+
+      assign.mockClear();
+      window.location.href = "https://example.com/settings";
+      const secondNavId = controller.beginNavigation();
+      await expect(
+        controller.renderNavigationPayload({
+          actionType: "navigate",
+          createNavigationCommitEffect: () => () => {},
+          historyUpdateMode: "push",
+          navigationSnapshot: createClientNavigationRenderSnapshot(
+            "https://example.com/settings",
+            {},
+          ),
+          nextElements: Promise.resolve(
+            createResolvedElements("route:/dashboard", "/(dashboard)", null, {
+              "page:/dashboard": React.createElement("main", null, "dashboard"),
+            }),
+          ),
+          operationLane: "navigation",
+          params: {},
+          pendingRouterState: null,
+          previousNextUrl: null,
+          targetHref: "https://example.com/dashboard",
+          navId: secondNavId,
+          useTransition: false,
+        }),
+      ).resolves.toBe("hard-navigate");
+      expect(assign).toHaveBeenCalledTimes(1);
+      expect(assign).toHaveBeenCalledWith("https://example.com/dashboard");
+    } finally {
+      detach();
+    }
+  });
 });
 
 describe("app browser entry previousNextUrl helpers", () => {
