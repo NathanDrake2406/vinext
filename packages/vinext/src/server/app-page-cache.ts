@@ -52,6 +52,7 @@ type ReadAppPageCacheResponseOptions = {
 };
 
 type FinalizeAppPageHtmlCacheResponseOptions = {
+  capturedDynamicUsageBeforeContextCleanup?: () => boolean;
   capturedRscDataPromise: Promise<ArrayBuffer> | null;
   cleanPathname: string;
   consumeDynamicUsage: () => boolean;
@@ -229,13 +230,14 @@ export async function readAppPageCacheResponse(
     }
 
     if (cached?.isStale && cachedValue) {
+      const regenerationKey = options.isRscRequest
+        ? options.isrRscKey(options.cleanPathname, options.mountedSlotsHeader)
+        : options.isrHtmlKey(options.cleanPathname);
+
       // Preserve the legacy behavior from the inline generator: stale entries
       // still trigger background regeneration even if this request cannot use
       // the stale payload and will fall through to a fresh render.
-      // Dedup key is pathname-only: if multiple slot variants are stale
-      // concurrently, only one regen runs. Other variants refresh on
-      // their next STALE read.
-      options.scheduleBackgroundRegeneration(options.cleanPathname, async () => {
+      options.scheduleBackgroundRegeneration(regenerationKey, async () => {
         const revalidatedPage = await options.renderFreshPageForCache();
         const revalidateSeconds =
           revalidatedPage.cacheControl?.revalidate ?? options.revalidateSeconds;
@@ -325,7 +327,10 @@ export function finalizeAppPageHtmlCacheResponse(
     try {
       const cachedHtml = await readStreamAsText(streamForCache);
 
-      if (options.consumeDynamicUsage()) {
+      if (
+        options.capturedDynamicUsageBeforeContextCleanup?.() === true ||
+        options.consumeDynamicUsage()
+      ) {
         options.isrDebug?.("HTML cache write skipped (dynamic usage during render)", htmlKey);
         return;
       }

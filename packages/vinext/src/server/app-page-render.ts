@@ -484,6 +484,7 @@ export async function renderAppPageLifecycle(
   }
   const draftCookie = options.getDraftModeCookieHeader();
   const dynamicUsedDuringRender = options.consumeDynamicUsage();
+  let dynamicUsedBeforeContextCleanup = dynamicUsedDuringRender;
 
   // Defer clearRequestContext() until the HTML stream is fully consumed by the
   // HTTP layer. The RSC/SSR pipeline is lazy — Server Components execute while
@@ -492,6 +493,8 @@ export async function renderAppPageLifecycle(
   // headers()/cookies() to see a null context on warm (module-cached) requests.
   // See: https://github.com/cloudflare/vinext/issues/660
   const safeHtmlStream = deferUntilStreamConsumed(htmlStream, () => {
+    dynamicUsedBeforeContextCleanup =
+      dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
     options.clearRequestContext();
   });
 
@@ -536,6 +539,9 @@ export async function renderAppPageLifecycle(
     }
 
     return finalizeAppPageHtmlCacheResponse(isrResponse, {
+      capturedDynamicUsageBeforeContextCleanup() {
+        return dynamicUsedBeforeContextCleanup;
+      },
       capturedRscDataPromise: capturedRscDataRef.value,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
