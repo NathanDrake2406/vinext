@@ -3809,6 +3809,111 @@ describe("double-encoded path handling in middleware", () => {
     expect(mwPathname).not.toBe("/%2564ashboard");
   });
 
+  it("App Router middleware does not see internal Flight headers", async () => {
+    // Next.js strips FLIGHT_HEADERS before creating the middleware request:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/adapter.ts
+    const { applyAppMiddleware } = await import("../packages/vinext/src/server/app-middleware.js");
+    let capturedHeaders: Headers | undefined;
+    const module = {
+      default: (req: Request) => {
+        capturedHeaders = new Headers(req.headers);
+        return new Response(null, {
+          headers: { "x-middleware-next": "1" },
+        });
+      },
+    };
+
+    const result = await applyAppMiddleware({
+      cleanPathname: "/dashboard",
+      context: { headers: null, requestHeaders: null, status: null },
+      isProxy: false,
+      module,
+      request: new Request("http://localhost:3000/dashboard", {
+        headers: {
+          rsc: "1",
+          "next-router-state-tree": "%5B%5D",
+          "next-router-prefetch": "1",
+          "next-router-segment-prefetch": "/dashboard",
+          "next-hmr-refresh": "1",
+          "x-user-visible": "keep",
+        },
+      }),
+    });
+
+    expect(result.kind).toBe("continue");
+    expect(capturedHeaders?.get("rsc")).toBeNull();
+    expect(capturedHeaders?.get("next-router-state-tree")).toBeNull();
+    expect(capturedHeaders?.get("next-router-prefetch")).toBeNull();
+    expect(capturedHeaders?.get("next-router-segment-prefetch")).toBeNull();
+    expect(capturedHeaders?.get("next-hmr-refresh")).toBeNull();
+    expect(capturedHeaders?.get("x-user-visible")).toBe("keep");
+  });
+
+  it("App Router Flight header stripping does not lock the original request body", async () => {
+    const { applyAppMiddleware } = await import("../packages/vinext/src/server/app-middleware.js");
+    const request = new Request("http://localhost:3000/actions", {
+      body: "action-payload",
+      headers: {
+        rsc: "1",
+        "next-router-state-tree": "%5B%5D",
+      },
+      method: "POST",
+    });
+    const module = {
+      default: () =>
+        new Response(null, {
+          headers: { "x-middleware-next": "1" },
+        }),
+    };
+
+    const result = await applyAppMiddleware({
+      cleanPathname: "/actions",
+      context: { headers: null, requestHeaders: null, status: null },
+      isProxy: false,
+      module,
+      request,
+    });
+
+    expect(result.kind).toBe("continue");
+    expect(request.body?.locked).toBe(false);
+    expect(await request.text()).toBe("action-payload");
+  });
+
+  it("external middleware rewrite proxy strips upstream x-middleware headers without middleware context", async () => {
+    const { proxyExternalMiddlewareRewrite } =
+      await import("../packages/vinext/src/server/app-middleware.js");
+    const http = await import("node:http");
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, {
+        "content-type": "text/plain",
+        "x-middleware-rewrite": "/internal",
+        "x-middleware-next": "1",
+        "x-visible": "keep",
+      });
+      res.end("proxied");
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    try {
+      const address = server.address();
+      expect(address && typeof address === "object").toBe(true);
+      const port = address && typeof address === "object" ? address.port : 0;
+      const response = await proxyExternalMiddlewareRewrite(
+        new Request("http://localhost:3000/source"),
+        `http://127.0.0.1:${port}/target`,
+        { headers: null, requestHeaders: null, status: null },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("proxied");
+      expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+      expect(response.headers.get("x-middleware-next")).toBeNull();
+      expect(response.headers.get("x-visible")).toBe("keep");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("Pages Router runMiddleware passes decoded pathname to middleware function", async () => {
     const { runMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     // Create a mock Vite server that returns a middleware module
