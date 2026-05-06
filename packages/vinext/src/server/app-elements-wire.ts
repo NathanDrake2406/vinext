@@ -144,6 +144,10 @@ function parsePathWithInterception(input: string): {
   };
 }
 
+/**
+ * AppElements tree paths are absolute route-tree paths on the wire.
+ * Bare segment names are not valid layout/template/slot tree identities.
+ */
 function parseTreePath(input: string): string | null {
   return input.startsWith("/") ? input : null;
 }
@@ -184,7 +188,10 @@ function parseAppElementsWireElementKey(key: string): AppElementsWireElementKey 
 }
 
 function isAppElementsWireSlotId(key: string): boolean {
-  return parseAppElementsWireElementKey(key)?.kind === "slot";
+  if (!key.startsWith("slot:")) return false;
+  const body = key.slice("slot:".length);
+  const separatorIndex = body.indexOf(":");
+  return separatorIndex > 0 && body.charCodeAt(separatorIndex + 1) === 0x2f;
 }
 
 function createAppElementsWireMetadataEntries(

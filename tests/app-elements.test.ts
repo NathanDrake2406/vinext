@@ -179,7 +179,11 @@ describe("AppElementsWire", () => {
       path.join(sourceRoot, "server/app-elements-wire.ts"),
     ]);
     const rawWireConstruction =
-      /`(?:route|page|layout|template):\$\{|`slot:\$\{|\.startsWith\("(?:slot|layout|page|route|template):"\)/;
+      /`(?:route|page|layout|template):\$\{|`slot:\$\{|["'](?:route|page|layout|template):["']\s*\+|["']slot:["']\s*\+|\.startsWith\(["'](?:slot|layout|page|route|template):["']\)/;
+
+    expect(rawWireConstruction.test('"slot:" + name + ":" + treePath')).toBe(true);
+    expect(rawWireConstruction.test('"layout:" + treePath')).toBe(true);
+    expect(rawWireConstruction.test("key.startsWith('slot:')")).toBe(true);
 
     const violations: string[] = [];
     const visit = (dir: string): void => {
