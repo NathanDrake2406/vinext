@@ -4887,6 +4887,9 @@ export function middleware(request) {
   if (url.pathname === "/blocked") {
     return NextResponse.rewrite(new URL("/allowed", request.url), { status: 403 });
   }
+  if (url.pathname === "/next-status") {
+    return NextResponse.next({ status: 404 });
+  }
   return NextResponse.next();
 }`,
     );
@@ -4899,6 +4902,11 @@ export function middleware(request) {
     await fsp.writeFile(
       path.join(statusTmpDir, "pages", "index.tsx"),
       `export default function Home() { return <h1>Home</h1>; }`,
+    );
+
+    await fsp.writeFile(
+      path.join(statusTmpDir, "pages", "next-status.tsx"),
+      `export default function NextStatus() { return <h1>NEXT STATUS PAGE</h1>; }`,
     );
 
     const vinext = (await import("../packages/vinext/src/index.js")).default;
@@ -4938,6 +4946,13 @@ export function middleware(request) {
     expect(html).toContain("ALLOWED PAGE");
     // Status code should be 403 from the middleware rewrite
     expect(res.status).toBe(403);
+  });
+
+  it("middleware next with custom status returns that status code", async () => {
+    const res = await fetch(`${statusBaseUrl}/next-status`);
+    const html = await res.text();
+    expect(html).toContain("NEXT STATUS PAGE");
+    expect(res.status).toBe(404);
   });
 
   it("normal requests without rewrite status return 200", async () => {

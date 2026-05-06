@@ -246,6 +246,10 @@ export async function applyAppMiddleware(
       options.context.headers = new Headers(result.responseHeaders);
     }
 
+    if (result.status !== undefined) {
+      options.context.status = result.status;
+    }
+
     if (result.rewriteUrl) {
       if (result.rewriteStatus !== undefined) {
         options.context.status = result.rewriteStatus;

@@ -2608,8 +2608,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   // would be dispatched instead.
                   req.url = url;
                 }
-                if (result.rewriteStatus) {
-                  req.__vinextRewriteStatus = result.rewriteStatus;
+                const middlewareStatus = result.status ?? result.rewriteStatus;
+                if (middlewareStatus !== undefined) {
+                  req.__vinextMiddlewareStatus = middlewareStatus;
                 }
 
                 // Forward middleware context to the RSC entry so it can
@@ -2628,7 +2629,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   }
                   req.headers["x-vinext-mw-ctx"] = JSON.stringify({
                     h: mwCtxEntries,
-                    s: result.rewriteStatus ?? null,
+                    s: middlewareStatus ?? null,
                     r: result.rewriteUrl ?? null,
                   });
                 }
@@ -2733,7 +2734,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 nextConfig?.basePath ?? "",
                 nextConfig?.trailingSlash ?? false,
               );
-              const mwStatus = req.__vinextRewriteStatus;
+              const mwStatus = req.__vinextMiddlewareStatus;
 
               // Try rendering the resolved URL
               const match = matchRoute(resolvedUrl.split("?")[0], routes);

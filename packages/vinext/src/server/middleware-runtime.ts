@@ -20,6 +20,7 @@ export type MiddlewareResult = {
   redirectStatus?: number;
   rewriteUrl?: string;
   rewriteStatus?: number;
+  status?: number;
   responseHeaders?: Headers;
   response?: Response;
   waitUntilPromises?: Promise<unknown>[];
@@ -209,6 +210,7 @@ export async function executeMiddleware(
     return {
       continue: true,
       responseHeaders: collectMiddlewareHeaders(response),
+      status: response.status !== 200 ? response.status : undefined,
       waitUntilPromises,
     };
   }
@@ -251,6 +253,7 @@ export async function executeMiddleware(
       rewriteUrl: rewritePath,
       rewriteStatus: response.status !== 200 ? response.status : undefined,
       responseHeaders: collectMiddlewareHeaders(response),
+      status: response.status !== 200 ? response.status : undefined,
       waitUntilPromises,
     };
   }

@@ -2970,6 +2970,24 @@ describe("runMiddleware preserves x-middleware-request-* headers (dev mode)", ()
     expect(result.responseHeaders!.has("x-middleware-next")).toBe(false);
   });
 
+  it("preserves status from NextResponse.next()", async () => {
+    const { runMiddleware } = await import("../packages/vinext/src/server/middleware.js");
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+
+    const mockRunner = {
+      import: async () => ({
+        default: () => NextResponse.next({ status: 404 }),
+        config: { matcher: "/" },
+      }),
+    };
+
+    const request = new Request("http://localhost/");
+    const result = await runMiddleware(mockRunner as any, "/fake/middleware.ts", request);
+
+    expect(result.continue).toBe(true);
+    expect(result.status).toBe(404);
+  });
+
   it("keeps x-middleware-request-* headers on rewrite", async () => {
     const { runMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
@@ -3807,6 +3825,25 @@ describe("double-encoded path handling in middleware", () => {
     const mwPathname = new URL(capturedUrl!).pathname;
     expect(mwPathname).toBe("/%64ashboard");
     expect(mwPathname).not.toBe("/%2564ashboard");
+  });
+
+  it("App Router middleware preserves status from NextResponse.next()", async () => {
+    const { applyAppMiddleware } = await import("../packages/vinext/src/server/app-middleware.js");
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+    const context = { headers: null, requestHeaders: null, status: null };
+
+    const result = await applyAppMiddleware({
+      cleanPathname: "/",
+      context,
+      isProxy: false,
+      module: {
+        default: () => NextResponse.next({ status: 404 }),
+      },
+      request: new Request("http://localhost:3000/"),
+    });
+
+    expect(result.kind).toBe("continue");
+    expect(context.status).toBe(404);
   });
 
   it("App Router middleware does not see internal Flight headers", async () => {

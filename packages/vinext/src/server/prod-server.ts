@@ -1454,7 +1454,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       // ── 5. Run middleware ─────────────────────────────────────────
       let resolvedUrl = url;
       const middlewareHeaders: Record<string, string | string[]> = {};
-      let middlewareRewriteStatus: number | undefined;
+      let middlewareStatus: number | undefined;
       if (typeof runMiddleware === "function") {
         const result = await runMiddleware(webRequest, undefined);
 
@@ -1532,9 +1532,10 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
           resolvedUrl = result.rewriteUrl;
         }
 
-        // Apply custom status code from middleware rewrite
-        // (e.g. NextResponse.rewrite(url, { status: 403 }))
-        middlewareRewriteStatus = result.rewriteStatus;
+        // Apply custom status code from middleware continue/rewrite responses.
+        // Examples: NextResponse.next({ status: 404 }) and
+        // NextResponse.rewrite(url, { status: 403 }).
+        middlewareStatus = result.status ?? result.rewriteStatus;
       }
 
       // Unpack x-middleware-request-* headers into the actual request and strip
@@ -1621,11 +1622,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
           response = new Response("404 - API route not found", { status: 404 });
         }
 
-        const mergedResponse = mergeWebResponse(
-          middlewareHeaders,
-          response,
-          middlewareRewriteStatus,
-        );
+        const mergedResponse = mergeWebResponse(middlewareHeaders, response, middlewareStatus);
 
         if (!mergedResponse.body) {
           await sendWebResponse(mergedResponse, req, res, compress);
@@ -1711,7 +1708,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       // Capture the streaming marker before mergeWebResponse rebuilds the Response.
       const shouldStreamPagesResponse = isVinextStreamedHtmlResponse(response);
-      const mergedResponse = mergeWebResponse(middlewareHeaders, response, middlewareRewriteStatus);
+      const mergedResponse = mergeWebResponse(middlewareHeaders, response, middlewareStatus);
 
       if (shouldStreamPagesResponse || !mergedResponse.body) {
         await sendWebResponse(mergedResponse, req, res, compress);

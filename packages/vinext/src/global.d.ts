@@ -367,12 +367,12 @@ declare global {
 declare module "node:http" {
   interface IncomingMessage {
     /**
-     * The HTTP status code set by vinext middleware for Pages Router rewrite
-     * responses (e.g. 307 for a rewrite that should surface as a redirect).
-     * Written in `index.ts` when middleware emits a `rewriteStatus`, read by
-     * the downstream Pages Router handler to decide the final response status.
+     * The HTTP status code set by vinext middleware for Pages Router continue
+     * or rewrite responses. Written in `index.ts` when middleware emits a
+     * status override, read by the downstream Pages Router handler to decide
+     * the final response status.
      */
-    __vinextRewriteStatus?: number;
+    __vinextMiddlewareStatus?: number;
   }
 }
 
