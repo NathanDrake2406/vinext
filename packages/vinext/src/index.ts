@@ -905,7 +905,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // Deployment ID — mirrors Next.js' NEXT_DEPLOYMENT_ID seed for shared
         // "use cache" entries, falling back to build ID when absent.
         defines["process.env.__VINEXT_DEPLOYMENT_ID"] = JSON.stringify(
-          process.env.NEXT_DEPLOYMENT_ID ?? "",
+          nextConfig.deploymentId ?? "",
         );
 
         // Build the shim alias map. Exact `.js` variants are included for the

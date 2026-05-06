@@ -96,10 +96,10 @@ const _deploymentIdStorage = getOrCreateAls<string | undefined>(
 );
 
 /**
- * Set the runtime deployment ID used to seed shared "use cache" keys.
+ * Set the process-wide fallback deployment ID used to seed shared "use cache" keys.
  *
- * Cloudflare exposes version metadata through the Worker `env` object, so this
- * cannot be represented by a Vite compile-time define alone.
+ * This is for tests and startup-time configuration. Request handlers should use
+ * runWithUseCacheDeploymentId() so concurrent requests cannot overwrite each other.
  */
 export function setUseCacheDeploymentId(deploymentId: string | undefined): void {
   Reflect.set(globalThis, _DEPLOYMENT_ID_KEY, deploymentId || undefined);
