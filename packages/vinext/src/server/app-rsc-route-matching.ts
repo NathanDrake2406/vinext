@@ -1,5 +1,6 @@
 import { buildRouteTrie, trieMatch } from "../routing/route-trie.js";
 import { matchRoutePattern, type RoutePatternParams } from "../routing/route-pattern.js";
+import { normalizePathnameForRouteMatch } from "../routing/utils.js";
 
 type AppRscRouteParams = RoutePatternParams;
 
@@ -37,6 +38,12 @@ function createRouteParams(): AppRscRouteParams {
   return Object.create(null);
 }
 
+function appRscPathnameParts(pathname: string): string[] {
+  const pathOnly = pathname.split("?")[0];
+  const normalized = pathOnly === "/" ? "/" : pathOnly.replace(/\/$/, "");
+  return normalizePathnameForRouteMatch(normalized).split("/").filter(Boolean);
+}
+
 export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
   routes: Route[],
 ): {
@@ -48,22 +55,17 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
 
   return {
     matchRoute(url) {
-      const pathname = url.split("?")[0];
-      const normalizedUrl = pathname === "/" ? "/" : pathname.replace(/\/$/, "");
-      // The request entry point owns decoding. Matching here preserves the
-      // already-normalized segment bytes so middleware and routing stay aligned.
-      const urlParts = normalizedUrl.split("/").filter(Boolean);
-      return trieMatch(routeTrie, urlParts);
+      return trieMatch(routeTrie, appRscPathnameParts(url));
     },
     findIntercept(pathname, sourcePathname = null) {
-      const urlParts = pathname.split("/").filter(Boolean);
+      const urlParts = appRscPathnameParts(pathname);
       for (const entry of interceptLookup) {
         const params = matchAppRscRoutePattern(urlParts, entry.targetPatternParts);
         if (params !== null) {
           let sourceParams = createRouteParams();
           if (sourcePathname !== null) {
             const sourceRoute = routes[entry.sourceRouteIndex];
-            const sourceParts = sourcePathname.split("/").filter(Boolean);
+            const sourceParts = appRscPathnameParts(sourcePathname);
             const matchedSourceParams = sourceRoute
               ? matchAppRscRoutePattern(sourceParts, sourceRoute.patternParts)
               : null;

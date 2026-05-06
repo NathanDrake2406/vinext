@@ -59,6 +59,26 @@ describe("App RSC route matching", () => {
     });
   });
 
+  it("canonicalizes encoded URL parts before matching app routes", () => {
+    // Next.js canonicalizes URL pathname parts before deriving dynamic segment
+    // cache keys; vinext should apply the same decode-first discipline at the
+    // App RSC route-match boundary so encoded static segments and params use
+    // one normalized representation.
+    // https://github.com/vercel/next.js/blob/47bcfa0956679c2a5fea0b941b76bb2d69878d9c/packages/next/src/client/route-params.ts
+    const matcher = createAppRscRouteMatcher([
+      route("/_sites/:subdomain", ["_sites", ":subdomain"]),
+      route("/files/:name", ["files", ":name"]),
+    ]);
+
+    expect(matcher.matchRoute("/%5Fsites/demo")).toMatchObject({
+      route: { pattern: "/_sites/:subdomain" },
+      params: { subdomain: "demo" },
+    });
+    expect(matcher.matchRoute("/files/a%252Fb")).toMatchObject({
+      params: { name: "a%2Fb" },
+    });
+  });
+
   it("matches standalone route patterns for dynamic metadata routes", () => {
     expect(
       matchAppRscRoutePattern(["blog", "hello", "sitemap.xml"], ["blog", ":slug", "sitemap.xml"]),
@@ -99,6 +119,28 @@ describe("App RSC route matching", () => {
       targetPattern: "/photos/:id",
       page: "photo-page",
       matchedParams: { id: "target-id" },
+    });
+  });
+
+  it("canonicalizes encoded source path parts for interception params", () => {
+    const matcher = createAppRscRouteMatcher([
+      route("/_sites/:tenant", ["_sites", ":tenant"], {
+        modal: {
+          intercepts: [
+            {
+              targetPattern: "/photos/:id",
+              interceptLayouts: ["modal-layout"],
+              page: "photo-page",
+              params: ["id"],
+            },
+          ],
+        },
+      }),
+    ]);
+
+    expect(matcher.findIntercept("/photos/a%2Fb", "/%5Fsites/acme")).toMatchObject({
+      targetPattern: "/photos/:id",
+      matchedParams: { tenant: "acme", id: "a/b" },
     });
   });
 
