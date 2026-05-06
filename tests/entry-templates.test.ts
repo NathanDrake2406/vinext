@@ -164,6 +164,8 @@ describe("App Router generated manifest construction", () => {
             key: "modal:/tmp/test/app/dashboard/@modal",
             name: "modal",
             ownerDir: "/tmp/test/app/dashboard/@modal",
+            ownerTreePath: "/dashboard",
+            hasPage: true,
             pagePath: "/tmp/test/app/dashboard/@modal/page.tsx",
             defaultPath: "/tmp/test/app/dashboard/@modal/default.tsx",
             layoutPath: "/tmp/test/app/dashboard/@modal/layout.tsx",
