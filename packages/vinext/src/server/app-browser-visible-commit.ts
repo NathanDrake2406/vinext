@@ -63,9 +63,11 @@ export function applyApprovedVisibleCommit(
 
 function resolvePendingNavigationCommitDecision(options: {
   activeNavigationId: number;
+  currentVisibleCommitVersion: number;
   currentRootLayoutTreePath: string | null;
   nextRootLayoutTreePath: string | null;
   startedNavigationId: number;
+  startedVisibleCommitVersion: number;
 }): CommitDecision {
   const { disposition, trace } = resolvePendingNavigationCommitDispositionDecision(options);
 
@@ -123,9 +125,11 @@ export function approvePendingNavigationCommit(options: {
 }): CommitApproval {
   const decision = resolvePendingNavigationCommitDecision({
     activeNavigationId: options.activeNavigationId,
+    currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
     currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
     nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
     startedNavigationId: options.startedNavigationId,
+    startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
   });
 
   switch (decision.disposition) {
@@ -155,6 +159,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
   currentState: AppRouterState;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   nextElements: Promise<AppElements>;
+  getCurrentStateForApproval?: () => AppRouterState;
   operationLane: OperationLane;
   previousNextUrl?: string | null;
   renderId: number;
@@ -171,9 +176,10 @@ export async function resolveAndClassifyNavigationCommit(options: {
     type: options.type,
   });
 
+  const approvalState = options.getCurrentStateForApproval?.() ?? options.currentState;
   const approval = approvePendingNavigationCommit({
     activeNavigationId: options.activeNavigationId,
-    currentState: options.currentState,
+    currentState: approvalState,
     pending,
     startedNavigationId: options.startedNavigationId,
   });

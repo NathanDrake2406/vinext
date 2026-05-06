@@ -277,11 +277,17 @@ export function shouldHardNavigate(
 
 export function resolvePendingNavigationCommitDisposition(options: {
   activeNavigationId: number;
+  currentVisibleCommitVersion: number;
   currentRootLayoutTreePath: string | null;
   nextRootLayoutTreePath: string | null;
   startedNavigationId: number;
+  startedVisibleCommitVersion: number;
 }): PendingNavigationCommitDisposition {
   if (options.startedNavigationId !== options.activeNavigationId) {
+    return "skip";
+  }
+
+  if (options.startedVisibleCommitVersion !== options.currentVisibleCommitVersion) {
     return "skip";
   }
 
@@ -294,16 +300,20 @@ export function resolvePendingNavigationCommitDisposition(options: {
 
 export function resolvePendingNavigationCommitDispositionDecision(options: {
   activeNavigationId: number;
+  currentVisibleCommitVersion: number;
   currentRootLayoutTreePath: string | null;
   nextRootLayoutTreePath: string | null;
   startedNavigationId: number;
+  startedVisibleCommitVersion: number;
 }): PendingNavigationCommitDispositionDecision {
   const disposition = resolvePendingNavigationCommitDisposition(options);
   const traceFields = {
     activeNavigationId: options.activeNavigationId,
+    currentVisibleCommitVersion: options.currentVisibleCommitVersion,
     currentRootLayoutTreePath: options.currentRootLayoutTreePath,
     nextRootLayoutTreePath: options.nextRootLayoutTreePath,
     startedNavigationId: options.startedNavigationId,
+    startedVisibleCommitVersion: options.startedVisibleCommitVersion,
   };
 
   return {

@@ -417,7 +417,7 @@ export function createAppBrowserNavigationController(
 
       const approval = approvePendingNavigationCommit({
         activeNavigationId,
-        currentState,
+        currentState: getBrowserRouterState(),
         pending,
         startedNavigationId: options.navId,
       });
@@ -479,11 +479,6 @@ export function createAppBrowserNavigationController(
   ): Promise<unknown> {
     const currentState = getBrowserRouterState();
     const startedNavigationId = activeNavigationId;
-    // Known limitation: if a same-URL navigation fully commits while this
-    // server action is awaiting resolveAndClassifyNavigationCommit(), the action
-    // can still dispatch its older payload afterward. The old pre-2c code had
-    // the same race, and Next.js has similar behavior. Tightening this would
-    // need a stronger commit-version gate than activeNavigationId alone.
     const {
       approvedCommit,
       decision,
@@ -496,6 +491,7 @@ export function createAppBrowserNavigationController(
       currentState,
       navigationSnapshot,
       nextElements,
+      getCurrentStateForApproval: getBrowserRouterState,
       renderId: allocateRenderId(),
       operationLane: "server-action",
       startedNavigationId,
