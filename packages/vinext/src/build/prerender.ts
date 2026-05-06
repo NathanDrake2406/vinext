@@ -178,174 +178,75 @@ const NOT_FOUND_SENTINEL_PATH = "/__vinext_nonexistent_for_404__";
 
 const DEFAULT_CONCURRENCY = Math.min(os.availableParallelism(), 8);
 
-type ExtractRscPayloadResult =
-  | { status: "ok"; payload: string }
-  | { status: "fallback"; reason: string };
-
-const RSC_CHUNK_PUSH_MARKER = "__VINEXT_RSC_CHUNKS__.push(";
 const RSC_CHUNK_SCRIPT_PREFIX = "self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];";
 const RSC_DONE_MARKER = "__VINEXT_RSC_DONE__=true";
-const LEGACY_RSC_MARKER = "__VINEXT_RSC__=";
+// Full literal that createRscEmbedTransform concatenates before the
+// safeJsonStringify(chunk) argument. Keep this in sync with the writer at
+// packages/vinext/src/server/app-ssr-stream.ts:73.
+const RSC_CHUNK_FULL_PREFIX = `${RSC_CHUNK_SCRIPT_PREFIX}self.__VINEXT_RSC_CHUNKS__.push(`;
 
-function isWhitespace(char: string): boolean {
-  return char === " " || char === "\t" || char === "\n" || char === "\r";
-}
-
-function parseEmbeddedJsonString(script: string, start: number): { value: string; next: number } {
-  let index = start;
-  while (isWhitespace(script[index] ?? "")) index++;
-
-  if (script[index] !== '"') {
-    throw new Error("[vinext] Malformed prerender RSC embed: chunk payload is not a JSON string");
-  }
-
-  let escaped = false;
-  for (let cursor = index + 1; cursor < script.length; cursor++) {
-    const char = script[cursor];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === '"') {
-      const jsonSource = script.slice(index, cursor + 1);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(jsonSource);
-      } catch {
-        throw new Error("[vinext] Malformed prerender RSC embed: invalid chunk JSON");
-      }
-      if (typeof parsed !== "string") {
-        throw new Error("[vinext] Malformed prerender RSC embed: chunk payload is not a string");
-      }
-
-      let next = cursor + 1;
-      while (isWhitespace(script[next] ?? "")) next++;
-      if (script[next] !== ")") {
-        throw new Error("[vinext] Malformed prerender RSC embed: chunk push is unterminated");
-      }
-
-      return { value: parsed, next: next + 1 };
-    }
-  }
-
-  throw new Error("[vinext] Malformed prerender RSC embed: chunk JSON string is unterminated");
-}
-
-function assertOnlyTrailingSemicolon(script: string, start: number, message: string): void {
-  let index = start;
-  while (isWhitespace(script[index] ?? "")) index++;
-  if (script[index] === ";") index++;
-  while (isWhitespace(script[index] ?? "")) index++;
-  if (index !== script.length) {
-    throw new Error(message);
-  }
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function extractLegacyRscPayload(script: string): string | null {
-  const trimmedScript = script.trim().replace(/;$/, "");
-  if (!trimmedScript.startsWith(`self.${LEGACY_RSC_MARKER}`)) return null;
-
-  const jsonSource = trimmedScript.slice(`self.${LEGACY_RSC_MARKER}`.length).trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonSource);
-  } catch {
-    throw new Error("[vinext] Malformed legacy prerender RSC embed: invalid JSON");
-  }
-
-  if (typeof parsed !== "object" || parsed === null || !("rsc" in parsed)) {
-    throw new Error("[vinext] Malformed legacy prerender RSC embed: missing rsc array");
-  }
-
-  const rsc = parsed.rsc;
-  if (!isStringArray(rsc)) {
-    throw new Error("[vinext] Malformed legacy prerender RSC embed: rsc is not a string array");
-  }
-
-  return rsc.join("");
-}
-
-export function extractRscPayloadFromPrerenderedHtml(html: string): ExtractRscPayloadResult {
-  // Safe because safeJsonStringify (used by createRscEmbedTransform) escapes
-  // all '<' and '>' in embedded JSON, preventing false </script> matches.
+/**
+ * Reconstruct the RSC payload from a prerender HTML response by parsing the
+ * inline bootstrap chunk scripts emitted by createRscEmbedTransform.
+ *
+ * Always throws on malformed or missing markers — the writer is in-tree, so
+ * any anomaly is a vinext-internal regression we want to surface loudly
+ * rather than silently double-rendering via a fallback request.
+ *
+ * Safe regex usage: safeJsonStringify (used by createRscEmbedTransform) escapes
+ * all '<' and '>' in the embedded JSON, preventing false </script> matches.
+ */
+export function extractRscPayloadFromPrerenderedHtml(html: string): string {
   const scriptPattern = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi;
   const chunks: string[] = [];
-  let sawRscMarker = false;
   let sawDone = false;
-  let legacyPayload: string | null = null;
   let match: RegExpExecArray | null;
 
   while ((match = scriptPattern.exec(html)) !== null) {
-    const script = match[1] ?? "";
-    const trimmedScript = script.trim().replace(/;$/, "");
+    const script = (match[1] ?? "").trim().replace(/;$/, "");
 
-    if (trimmedScript === `self.${RSC_DONE_MARKER}`) {
-      sawRscMarker = true;
+    if (script === `self.${RSC_DONE_MARKER}`) {
       sawDone = true;
       continue;
     }
 
-    // Legacy embeds are parsed once for compatibility; modern chunk scripts take
-    // priority below if both protocols are present in the same HTML.
-    if (legacyPayload === null) {
-      legacyPayload = extractLegacyRscPayload(script);
-      if (legacyPayload !== null) {
-        sawRscMarker = true;
-        continue;
-      }
-    }
-
-    if (trimmedScript.startsWith(RSC_CHUNK_SCRIPT_PREFIX)) {
-      sawRscMarker = true;
-      const markerIndex = trimmedScript.indexOf(
-        RSC_CHUNK_PUSH_MARKER,
-        RSC_CHUNK_SCRIPT_PREFIX.length,
-      );
-      if (markerIndex === -1) {
-        throw new Error("[vinext] Malformed prerender RSC embed: chunk push is missing");
-      }
-      const parsed = parseEmbeddedJsonString(
-        trimmedScript,
-        markerIndex + RSC_CHUNK_PUSH_MARKER.length,
-      );
-      assertOnlyTrailingSemicolon(
-        trimmedScript,
-        parsed.next,
-        "[vinext] Malformed prerender RSC embed: unexpected trailing code after chunk push",
-      );
-      chunks.push(parsed.value);
+    if (script.startsWith(RSC_CHUNK_SCRIPT_PREFIX)) {
+      chunks.push(parseRscChunkPushArgument(script));
     }
   }
 
-  if (chunks.length > 0) {
-    if (!sawDone) {
-      throw new Error("[vinext] Malformed prerender RSC embed: missing __VINEXT_RSC_DONE__ marker");
-    }
-    return { status: "ok", payload: chunks.join("") };
+  if (chunks.length === 0) {
+    throw new Error("[vinext] Malformed prerender RSC embed: no chunk scripts found in HTML");
+  }
+  if (!sawDone) {
+    throw new Error("[vinext] Malformed prerender RSC embed: missing __VINEXT_RSC_DONE__ marker");
   }
 
-  if (legacyPayload !== null) {
-    return { status: "ok", payload: legacyPayload };
-  }
+  return chunks.join("");
+}
 
-  if (sawRscMarker) {
-    throw new Error(
-      "[vinext] Malformed prerender RSC embed: RSC protocol markers present but no data chunks found",
-    );
+/**
+ * Parse the JSON-string argument of a single chunk-push script. The script
+ * shape is exactly `<prefix>(<safeJsonStringify(chunk)>)` because the writer
+ * concatenates those literals — so the body always starts with the full
+ * prefix and ends with `)`. JSON.parse on the slice catches any tampering or
+ * trailing code.
+ */
+function parseRscChunkPushArgument(script: string): string {
+  if (!script.startsWith(RSC_CHUNK_FULL_PREFIX) || !script.endsWith(")")) {
+    throw new Error("[vinext] Malformed prerender RSC embed: unexpected chunk script shape");
   }
-
-  return {
-    status: "fallback",
-    reason: "no recognized Vinext RSC embed markers found in HTML",
-  };
+  const jsonSource = script.slice(RSC_CHUNK_FULL_PREFIX.length, -1);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonSource);
+  } catch {
+    throw new Error("[vinext] Malformed prerender RSC embed: invalid chunk JSON");
+  }
+  if (typeof parsed !== "string") {
+    throw new Error("[vinext] Malformed prerender RSC embed: chunk payload is not a string");
+  }
+  return parsed;
 }
 
 /**
@@ -1245,25 +1146,12 @@ export async function prerenderApp({
         }
         const html = htmlRender.html;
 
-        // Embedded chunks include fixFlightHints transforms from createRscEmbedTransform.
-        // The RSC entry applies the same fix at the source, so extracted and
-        // separately requested .rsc output stay equivalent.
-        const extractedRsc = extractRscPayloadFromPrerenderedHtml(html);
-        let rscData: string | null;
-        if (extractedRsc.status === "ok") {
-          rscData = extractedRsc.payload;
-        } else {
-          console.warn(
-            `[vinext] Warning: ${extractedRsc.reason}. Falling back to a separate RSC prerender request for ${urlPath}.`,
-          );
-          const rscRequest = new Request(`http://localhost${urlPath}`, {
-            headers: { Accept: "text/x-component", RSC: "1" },
-          });
-          const rscRes = await runWithHeadersContext(headersContextFromRequest(rscRequest), () =>
-            rscHandler(rscRequest),
-          );
-          rscData = rscRes.ok ? await rscRes.text() : null;
-        }
+        // Reconstruct the RSC payload from the inline bootstrap chunks already
+        // streamed into the HTML body. The chunks went through fixFlightHints
+        // (createRscEmbedTransform applies it before pushing each chunk into
+        // the embed scripts), so the resulting `.rsc` file contains the
+        // rewritten Flight form rather than raw Flight bytes.
+        const rscData = extractRscPayloadFromPrerenderedHtml(html);
 
         const outputFiles: string[] = [];
 
@@ -1275,13 +1163,11 @@ export async function prerenderApp({
         outputFiles.push(htmlOutputPath);
 
         // Write RSC payload (.rsc file)
-        if (rscData !== null) {
-          const rscOutputPath = getRscOutputPath(urlPath);
-          const rscFullPath = path.join(outDir, rscOutputPath);
-          fs.mkdirSync(path.dirname(rscFullPath), { recursive: true });
-          fs.writeFileSync(rscFullPath, rscData, "utf-8");
-          outputFiles.push(rscOutputPath);
-        }
+        const rscOutputPath = getRscOutputPath(urlPath);
+        const rscFullPath = path.join(outDir, rscOutputPath);
+        fs.mkdirSync(path.dirname(rscFullPath), { recursive: true });
+        fs.writeFileSync(rscFullPath, rscData, "utf-8");
+        outputFiles.push(rscOutputPath);
 
         const renderedCacheControl = resolveRenderedCacheControl(
           htmlRender.requestCacheLife ?? {},
