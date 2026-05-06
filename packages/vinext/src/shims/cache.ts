@@ -17,7 +17,7 @@
  *   setCacheHandler(new MyCacheHandler());
  */
 
-import { markDynamicUsage as _markDynamic } from "./headers.js";
+import { getHeadersAccessPhase, markDynamicUsage as _markDynamic } from "./headers.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import { fnv1a64 } from "../utils/hash.js";
 import {
@@ -378,6 +378,7 @@ export async function revalidateTag(
   tag: string,
   profile?: string | { expire?: number },
 ): Promise<void> {
+  markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
   // Resolve the profile to durations for the handler
   let durations: { expire?: number } | undefined;
   if (typeof profile === "string") {
@@ -407,6 +408,7 @@ export async function revalidateTag(
  * layout/page hierarchy tags, so only no-type invalidation applies there.
  */
 export async function revalidatePath(path: string, type?: "page" | "layout"): Promise<void> {
+  markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
   // Strip trailing slash so root "/" becomes "" — avoids double-slash in _N_T_//layout
   const stem = path.endsWith("/") ? path.slice(0, -1) : path;
   const tag = type ? `_N_T_${stem}/${type}` : `_N_T_${stem || "/"}`;
@@ -418,10 +420,12 @@ export async function revalidatePath(path: string, type?: "page" | "layout"): Pr
  *
  * In Next.js, calling `refresh()` inside a Server Action triggers a
  * client-side router refresh so the user immediately sees updated data.
- * vinext does not yet implement the Server Actions refresh protocol,
- * so this function has no effect.
+ * vinext reports the dynamic-only invalidation through the Server Action
+ * response header that the client router already understands.
  */
-export function refresh(): void {}
+export function refresh(): void {
+  markActionRevalidation(ACTION_DID_REVALIDATE_DYNAMIC_ONLY);
+}
 
 /**
  * Expire a cache tag immediately (Next.js 16).
@@ -431,6 +435,7 @@ export function refresh(): void {}
  * `updateTag` invalidates synchronously within the same request context.
  */
 export async function updateTag(tag: string): Promise<void> {
+  markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
   // Expire the tag immediately (same as revalidateTag without SWR)
   await _getActiveHandler().revalidateTag(tag);
 }
@@ -527,8 +532,10 @@ export function unstable_io(): Promise<void> {
 // Uses AsyncLocalStorage for request isolation on concurrent workers.
 // ---------------------------------------------------------------------------
 export type UnstableCacheRevalidationMode = "foreground" | "background";
+export type ActionRevalidationKind = 0 | 1 | 2;
 
 export type CacheState = {
+  actionRevalidationKind: ActionRevalidationKind;
   requestScopedCacheLife: CacheLifeConfig | null;
   unstableCacheRevalidation: UnstableCacheRevalidationMode;
 };
@@ -538,9 +545,14 @@ const _g = globalThis as unknown as Record<PropertyKey, unknown>;
 const _cacheAls = getOrCreateAls<CacheState>("vinext.cache.als");
 
 const _cacheFallbackState = (_g[_FALLBACK_KEY] ??= {
+  actionRevalidationKind: 0,
   requestScopedCacheLife: null,
   unstableCacheRevalidation: "foreground",
 } satisfies CacheState) as CacheState;
+
+const ACTION_DID_NOT_REVALIDATE = 0 satisfies ActionRevalidationKind;
+const ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC = 1 satisfies ActionRevalidationKind;
+const ACTION_DID_REVALIDATE_DYNAMIC_ONLY = 2 satisfies ActionRevalidationKind;
 
 function _getCacheState(): CacheState {
   if (isInsideUnifiedScope()) {
@@ -560,11 +572,13 @@ export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T>;
 export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T> {
   if (isInsideUnifiedScope()) {
     return runWithUnifiedStateMutation((uCtx) => {
+      uCtx.actionRevalidationKind = ACTION_DID_NOT_REVALIDATE;
       uCtx.requestScopedCacheLife = null;
       uCtx.unstableCacheRevalidation = "foreground";
     }, fn);
   }
   const state: CacheState = {
+    actionRevalidationKind: ACTION_DID_NOT_REVALIDATE,
     requestScopedCacheLife: null,
     unstableCacheRevalidation: "foreground",
   };
@@ -577,7 +591,25 @@ export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T> 
  * @internal
  */
 export function _initRequestScopedCacheState(): void {
+  _getCacheState().actionRevalidationKind = ACTION_DID_NOT_REVALIDATE;
   _getCacheState().requestScopedCacheLife = null;
+}
+
+function markActionRevalidation(kind: ActionRevalidationKind): void {
+  if (getHeadersAccessPhase() !== "action") return;
+
+  const state = _getCacheState();
+  state.actionRevalidationKind =
+    state.actionRevalidationKind === ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC
+      ? ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC
+      : kind;
+}
+
+export function getAndClearActionRevalidationKind(): ActionRevalidationKind {
+  const state = _getCacheState();
+  const kind = state.actionRevalidationKind;
+  state.actionRevalidationKind = ACTION_DID_NOT_REVALIDATE;
+  return kind;
 }
 
 /**
