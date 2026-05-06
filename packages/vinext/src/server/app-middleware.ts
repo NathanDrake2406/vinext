@@ -5,7 +5,7 @@ import { setNavigationContext } from "vinext/shims/navigation";
 import { buildRequestHeadersFromMiddlewareResponse } from "./middleware-request-headers.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import { executeMiddleware, type MiddlewareModule } from "./middleware-runtime.js";
-import { processMiddlewareHeaders } from "./request-pipeline.js";
+import { cloneRequestWithHeaders, processMiddlewareHeaders } from "./request-pipeline.js";
 import { internalServerErrorResponse } from "./http-error-responses.js";
 
 export type AppMiddlewareContext = {
@@ -41,8 +41,35 @@ type ForwardedMiddlewareContext = {
   s?: unknown;
 };
 
+export const FLIGHT_HEADERS: readonly string[] = [
+  "rsc",
+  "next-router-state-tree",
+  "next-router-prefetch",
+  "next-hmr-refresh",
+  "next-router-segment-prefetch",
+];
+
+const FLIGHT_HEADER_SET = new Set(FLIGHT_HEADERS);
+
 function isForwardedMiddlewareContext(value: unknown): value is ForwardedMiddlewareContext {
   return !!value && typeof value === "object";
+}
+
+function requestWithoutFlightHeaders(request: Request): Request {
+  let hasFlightHeader = false;
+  const headers = new Headers();
+
+  for (const [key, value] of request.headers) {
+    if (FLIGHT_HEADER_SET.has(key.toLowerCase())) {
+      hasFlightHeader = true;
+    } else {
+      headers.append(key, value);
+    }
+  }
+
+  if (!hasFlightHeader) return request;
+  const source = request.body ? request.clone() : request;
+  return cloneRequestWithHeaders(source, headers);
 }
 
 function appendForwardedHeader(headers: Headers, value: unknown): void {
@@ -111,11 +138,19 @@ export async function proxyExternalMiddlewareRewrite(
   setNavigationContext(null);
 
   const proxyResponse = await proxyExternalRequest(proxyRequest, rewriteUrl);
-  if (!context.headers) return proxyResponse;
+  const headers = new Headers(proxyResponse.headers);
+  processMiddlewareHeaders(headers);
+
+  if (!context.headers) {
+    return new Response(proxyResponse.body, {
+      status: proxyResponse.status,
+      statusText: proxyResponse.statusText,
+      headers,
+    });
+  }
 
   const middlewareHeaders = new Headers(context.headers);
   processMiddlewareHeaders(middlewareHeaders);
-  const headers = new Headers(proxyResponse.headers);
   mergeMiddlewareResponseHeaders(headers, middlewareHeaders);
   return new Response(proxyResponse.body, {
     status: proxyResponse.status,
@@ -162,22 +197,23 @@ export async function applyAppMiddleware(
   options: ApplyAppMiddlewareOptions,
 ): Promise<ApplyAppMiddlewareResult> {
   const forwarded = applyForwardedMiddlewareContext(options.request, options.context);
+  const middlewareRequest = requestWithoutFlightHeaders(options.request);
   let cleanPathname = options.cleanPathname;
   let search: string | null = null;
 
   if (forwarded.rewriteUrl) {
     try {
-      if (isExternalMiddlewareRewrite(forwarded.rewriteUrl, options.request)) {
+      if (isExternalMiddlewareRewrite(forwarded.rewriteUrl, middlewareRequest)) {
         return {
           kind: "response",
           response: await proxyExternalMiddlewareRewrite(
-            options.request,
+            middlewareRequest,
             forwarded.rewriteUrl,
             options.context,
           ),
         };
       }
-      const rewriteParsed = new URL(forwarded.rewriteUrl, options.request.url);
+      const rewriteParsed = new URL(forwarded.rewriteUrl, middlewareRequest.url);
       cleanPathname = rewriteParsed.pathname;
       search = rewriteParsed.search;
     } catch (e) {
@@ -193,7 +229,7 @@ export async function applyAppMiddleware(
       isProxy: options.isProxy,
       module: options.module,
       normalizedPathname: cleanPathname,
-      request: options.request,
+      request: middlewareRequest,
     });
 
     if (!result.continue) {
@@ -218,13 +254,13 @@ export async function applyAppMiddleware(
         return {
           kind: "response",
           response: await proxyExternalMiddlewareRewrite(
-            options.request,
+            middlewareRequest,
             result.rewriteUrl,
             options.context,
           ),
         };
       }
-      const rewriteParsed = new URL(result.rewriteUrl, options.request.url);
+      const rewriteParsed = new URL(result.rewriteUrl, middlewareRequest.url);
       cleanPathname = rewriteParsed.pathname;
       search = rewriteParsed.search;
     }
