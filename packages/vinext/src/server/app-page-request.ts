@@ -23,7 +23,6 @@ export type ValidateAppPageDynamicParamsOptions = {
     | readonly (GenerateStaticParams | GenerateStaticParamsSource | null | undefined)[]
     | null;
   isDynamicRoute: boolean;
-  logGenerateStaticParamsError?: (error: unknown) => void;
   params: AppPageParams;
 };
 
@@ -259,16 +258,12 @@ export async function validateAppPageDynamicParams(
   }
 
   for (const source of generateStaticParamsSources) {
-    try {
-      const staticParams = await source.generateStaticParams({
-        params: pickRouteParams(options.params, source.parentParamNames),
-      });
-      if (Array.isArray(staticParams) && !areStaticParamsAllowed(options.params, staticParams)) {
-        options.clearRequestContext();
-        return notFoundResponse();
-      }
-    } catch (error) {
-      options.logGenerateStaticParamsError?.(error);
+    const staticParams = await source.generateStaticParams({
+      params: pickRouteParams(options.params, source.parentParamNames),
+    });
+    if (Array.isArray(staticParams) && !areStaticParamsAllowed(options.params, staticParams)) {
+      options.clearRequestContext();
+      return notFoundResponse();
     }
   }
 

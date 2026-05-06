@@ -437,9 +437,6 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
     enforceStaticParamsOnly: options.dynamicParamsConfig === false,
     generateStaticParams: options.generateStaticParams,
     isDynamicRoute: route.isDynamic,
-    logGenerateStaticParamsError(error) {
-      console.error("[vinext] generateStaticParams error:", error);
-    },
     params: options.params,
   });
   if (dynamicParamsResponse) {

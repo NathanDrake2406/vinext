@@ -109,47 +109,79 @@ describe("app page request helpers", () => {
     expect(itemGenerateStaticParams).toHaveBeenCalledWith({ params: { category: "docs" } });
   });
 
-  it("logs and falls through when generateStaticParams throws", async () => {
-    const logGenerateStaticParamsError = vi.fn();
+  // Ported from Next.js: packages/next/src/build/static-paths/app.test.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/build/static-paths/app.test.ts
+  it("throws when generateStaticParams throws", async () => {
+    const error = new Error("boom");
 
-    const response = await validateAppPageDynamicParams({
-      clearRequestContext() {},
-      enforceStaticParamsOnly: true,
-      async generateStaticParams() {
-        throw new Error("boom");
-      },
-      isDynamicRoute: true,
-      logGenerateStaticParamsError,
-      params: { slug: "post" },
-    });
-
-    expect(response).toBeNull();
-    expect(logGenerateStaticParamsError).toHaveBeenCalledTimes(1);
+    await expect(
+      validateAppPageDynamicParams({
+        clearRequestContext() {},
+        enforceStaticParamsOnly: true,
+        async generateStaticParams() {
+          throw error;
+        },
+        isDynamicRoute: true,
+        params: { slug: "post" },
+      }),
+    ).rejects.toThrow(error);
   });
 
-  it("checks remaining sources when an earlier generateStaticParams source throws", async () => {
+  // Ported from Next.js: packages/next/src/build/static-paths/app.test.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/build/static-paths/app.test.ts
+  it("throws when generateStaticParams rejects", async () => {
+    const error = new Error("async boom");
+
+    await expect(
+      validateAppPageDynamicParams({
+        clearRequestContext() {},
+        enforceStaticParamsOnly: true,
+        async generateStaticParams() {
+          return Promise.reject(error);
+        },
+        isDynamicRoute: true,
+        params: { slug: "post" },
+      }),
+    ).rejects.toThrow(error);
+  });
+
+  // Ported from Next.js: packages/next/src/build/static-paths/app.test.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/build/static-paths/app.test.ts
+  it("does not check remaining sources when an earlier generateStaticParams source throws", async () => {
     const clearRequestContext = vi.fn();
-    const logGenerateStaticParamsError = vi.fn();
     const throwsSource = vi.fn(() => {
       throw new Error("source 1 failed");
     });
     const rejectsSource = vi.fn(async () => [{ slug: "other" }]);
 
+    await expect(
+      validateAppPageDynamicParams({
+        clearRequestContext,
+        enforceStaticParamsOnly: true,
+        generateStaticParams: [throwsSource, rejectsSource],
+        isDynamicRoute: true,
+        params: { slug: "target" },
+      }),
+    ).rejects.toThrow("source 1 failed");
+
+    expect(clearRequestContext).not.toHaveBeenCalled();
+    expect(throwsSource).toHaveBeenCalledTimes(1);
+    expect(rejectsSource).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when generateStaticParams excludes the requested params", async () => {
+    const clearRequestContext = vi.fn();
+
     const response = await validateAppPageDynamicParams({
       clearRequestContext,
       enforceStaticParamsOnly: true,
-      generateStaticParams: [throwsSource, rejectsSource],
+      generateStaticParams: async () => [{ slug: "other" }],
       isDynamicRoute: true,
-      logGenerateStaticParamsError,
       params: { slug: "target" },
     });
 
-    // First source threw → logged, then second source checked → rejected → 404.
     expect(response?.status).toBe(404);
     expect(clearRequestContext).toHaveBeenCalledTimes(1);
-    expect(logGenerateStaticParamsError).toHaveBeenCalledTimes(1);
-    expect(throwsSource).toHaveBeenCalledTimes(1);
-    expect(rejectsSource).toHaveBeenCalledTimes(1);
   });
 
   it("renders intercepted source routes on RSC navigations", async () => {
