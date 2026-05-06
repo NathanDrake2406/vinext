@@ -127,6 +127,39 @@ describe("disabled cache proof model", () => {
     expect(serializedVariant).not.toContain("asc");
   });
 
+  it("keeps null and empty-string output scope dimensions distinct", () => {
+    const absentEpoch = buildCacheVariant({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [],
+      existingVariantCount: 0,
+      output: {
+        kind: "app-html",
+        renderEpoch: null,
+        rootBoundaryId: null,
+        routeId: "route:/",
+      },
+    });
+    const emptyEpoch = buildCacheVariant({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [],
+      existingVariantCount: 0,
+      output: {
+        kind: "app-html",
+        renderEpoch: "",
+        rootBoundaryId: "",
+        routeId: "route:/",
+      },
+    });
+
+    expect(absentEpoch.kind).toBe("variant");
+    expect(emptyEpoch.kind).toBe("variant");
+    if (absentEpoch.kind !== "variant" || emptyEpoch.kind !== "variant") {
+      throw new Error("Expected both output scopes to produce cache variants");
+    }
+
+    expect(absentEpoch.variant.cacheKey).not.toBe(emptyEpoch.variant.cacheKey);
+  });
+
   it("returns breaker fallbacks for unsafe or over-budget variants", () => {
     const unsafePublicCookie = buildCacheVariant({
       budget: DEFAULT_CACHE_VARIANT_BUDGET,
@@ -254,10 +287,15 @@ describe("disabled cache proof model", () => {
         { kind: "cookies", status: "notObserved" },
       ],
     });
+    const missingApiKind = buildRenderObservation({
+      ...complete,
+      requestApis: [{ kind: "cookies", status: "notObserved" }],
+    });
 
     expect(hasCompleteNegativeRequestApiProof(complete, ["headers", "cookies"])).toBe(true);
     expect(hasCompleteNegativeRequestApiProof(partial, ["headers", "cookies"])).toBe(false);
     expect(hasCompleteNegativeRequestApiProof(observed, ["headers", "cookies"])).toBe(false);
+    expect(hasCompleteNegativeRequestApiProof(missingApiKind, ["headers", "cookies"])).toBe(false);
     expect(complete.cacheTags).toEqual(["posts"]);
     expect(JSON.stringify(complete.dynamicFetches)).not.toContain("secret");
   });

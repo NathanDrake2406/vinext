@@ -297,8 +297,8 @@ function compareDimensions(a: CacheVariantDimension, b: CacheVariantDimension): 
   );
 }
 
-function encodeNullable(value: string | null): string {
-  return value ?? "";
+function encodeNullable(value: string | null): string | null {
+  return value;
 }
 
 function assertNever(value: never): never {
@@ -445,7 +445,7 @@ function buildDimension(
 function isCacheProofBreakerFallback(
   value: CacheVariantDimension | CacheProofBreakerFallback,
 ): value is CacheProofBreakerFallback {
-  return "kind" in value;
+  return "code" in value;
 }
 
 function getDimensionBucket(
@@ -610,7 +610,7 @@ function boundaryOutcomesMatch(expected: BoundaryOutcome, candidate: BoundaryOut
     case "unauthorized":
       return candidate.kind === "unauthorized";
     case "unknown":
-      return candidate.kind === "unknown";
+      return false;
     default:
       return assertNever(expected);
   }
