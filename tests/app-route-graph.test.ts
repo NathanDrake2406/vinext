@@ -48,6 +48,8 @@ function snapshotRouteManifest(manifest: RouteManifest) {
     routeHandlers: Array.from(manifest.segmentGraph.routeHandlers.entries()),
     templates: Array.from(manifest.segmentGraph.templates.entries()),
     slots: Array.from(manifest.segmentGraph.slots.entries()),
+    slotBindings: Array.from(manifest.segmentGraph.slotBindings.entries()),
+    boundaries: Array.from(manifest.segmentGraph.boundaries.entries()),
     rootBoundaries: Array.from(manifest.segmentGraph.rootBoundaries.entries()),
   };
 }
@@ -348,11 +350,21 @@ describe("App Router route graph builder", () => {
         id: "template:/(marketing)/blog/[slug]",
         treePath: "/(marketing)/blog/[slug]",
         rootBoundaryId: "root-boundary:/",
+        ownerLayoutId: "layout:/(marketing)/blog/[slug]",
+        reset: {
+          kind: "remountSubtree",
+          treePath: "/(marketing)/blog/[slug]",
+        },
       });
       expect(segmentGraph.slots.get("slot:modal:/(marketing)/blog/[slug]")).toEqual({
         id: "slot:modal:/(marketing)/blog/[slug]",
         key: "modal@(marketing)/blog/[slug]/@modal",
         name: "modal",
+        ownerTreePath: "/(marketing)/blog/[slug]",
+        ownerLayoutId: "layout:/(marketing)/blog/[slug]",
+        rootBoundaryId: "root-boundary:/",
+        hasDefault: true,
+        hasPage: false,
       });
       expect(segmentGraph.rootBoundaries.get("root-boundary:/")).toEqual({
         id: "root-boundary:/",
@@ -402,6 +414,129 @@ describe("App Router route graph builder", () => {
         layoutIds: [],
       });
       expect(graph.routeManifest.segmentGraph.rootBoundaries.size).toBe(0);
+    });
+  });
+
+  it("exposes RouteManifest facts for route groups, slots, templates, and boundaries", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "(marketing)/layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "(marketing)/template.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "(marketing)/error.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/not-found.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/dashboard/layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "(marketing)/dashboard/template.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "(marketing)/dashboard/forbidden.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/dashboard/unauthorized.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/dashboard/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/dashboard/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/dashboard/@analytics/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/dashboard/@modal/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/dashboard/@modal/default.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(marketing)/dashboard/@modal/settings/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const segmentGraph = graph.routeManifest.segmentGraph;
+
+      expect(segmentGraph.slots.get("slot:analytics:/(marketing)/dashboard")).toEqual({
+        id: "slot:analytics:/(marketing)/dashboard",
+        key: "analytics@(marketing)/dashboard/@analytics",
+        name: "analytics",
+        ownerTreePath: "/(marketing)/dashboard",
+        ownerLayoutId: "layout:/(marketing)/dashboard",
+        rootBoundaryId: "root-boundary:/(marketing)",
+        hasDefault: true,
+        hasPage: false,
+      });
+      expect(segmentGraph.slots.get("slot:modal:/(marketing)/dashboard")).toMatchObject({
+        ownerTreePath: "/(marketing)/dashboard",
+        ownerLayoutId: "layout:/(marketing)/dashboard",
+        rootBoundaryId: "root-boundary:/(marketing)",
+        hasDefault: true,
+        hasPage: true,
+      });
+
+      expect(
+        segmentGraph.slotBindings.get("route:/dashboard::slot:analytics:/(marketing)/dashboard"),
+      ).toEqual({
+        id: "route:/dashboard::slot:analytics:/(marketing)/dashboard",
+        routeId: "route:/dashboard",
+        slotId: "slot:analytics:/(marketing)/dashboard",
+        ownerLayoutId: "layout:/(marketing)/dashboard",
+        state: "default",
+        routeSegments: null,
+      });
+      expect(
+        segmentGraph.slotBindings.get("route:/dashboard::slot:modal:/(marketing)/dashboard"),
+      ).toEqual({
+        id: "route:/dashboard::slot:modal:/(marketing)/dashboard",
+        routeId: "route:/dashboard",
+        slotId: "slot:modal:/(marketing)/dashboard",
+        ownerLayoutId: "layout:/(marketing)/dashboard",
+        state: "active",
+        routeSegments: [],
+      });
+      expect(
+        segmentGraph.slotBindings.get(
+          "route:/dashboard/settings::slot:modal:/(marketing)/dashboard",
+        ),
+      ).toEqual({
+        id: "route:/dashboard/settings::slot:modal:/(marketing)/dashboard",
+        routeId: "route:/dashboard/settings",
+        slotId: "slot:modal:/(marketing)/dashboard",
+        ownerLayoutId: "layout:/(marketing)/dashboard",
+        state: "active",
+        routeSegments: ["settings"],
+      });
+
+      expect(segmentGraph.templates.get("template:/(marketing)")).toEqual({
+        id: "template:/(marketing)",
+        treePath: "/(marketing)",
+        rootBoundaryId: "root-boundary:/(marketing)",
+        ownerLayoutId: "layout:/(marketing)",
+        reset: {
+          kind: "remountSubtree",
+          treePath: "/(marketing)",
+        },
+      });
+      expect(segmentGraph.templates.get("template:/(marketing)/dashboard")).toEqual({
+        id: "template:/(marketing)/dashboard",
+        treePath: "/(marketing)/dashboard",
+        rootBoundaryId: "root-boundary:/(marketing)",
+        ownerLayoutId: "layout:/(marketing)/dashboard",
+        reset: {
+          kind: "remountSubtree",
+          treePath: "/(marketing)/dashboard",
+        },
+      });
+
+      expect(segmentGraph.boundaries.get("boundary:error:/(marketing)")).toEqual({
+        id: "boundary:error:/(marketing)",
+        outcome: "error",
+        treePath: "/(marketing)",
+        ownerLayoutId: "layout:/(marketing)",
+        rootBoundaryId: "root-boundary:/(marketing)",
+      });
+      expect(segmentGraph.boundaries.get("boundary:notFound:/(marketing)")).toEqual({
+        id: "boundary:notFound:/(marketing)",
+        outcome: "notFound",
+        treePath: "/(marketing)",
+        ownerLayoutId: "layout:/(marketing)",
+        rootBoundaryId: "root-boundary:/(marketing)",
+      });
+      expect(segmentGraph.boundaries.get("boundary:forbidden:/(marketing)/dashboard")).toEqual({
+        id: "boundary:forbidden:/(marketing)/dashboard",
+        outcome: "forbidden",
+        treePath: "/(marketing)/dashboard",
+        ownerLayoutId: "layout:/(marketing)/dashboard",
+        rootBoundaryId: "root-boundary:/(marketing)",
+      });
+      expect(segmentGraph.boundaries.get("boundary:unauthorized:/(marketing)/dashboard")).toEqual({
+        id: "boundary:unauthorized:/(marketing)/dashboard",
+        outcome: "unauthorized",
+        treePath: "/(marketing)/dashboard",
+        ownerLayoutId: "layout:/(marketing)/dashboard",
+        rootBoundaryId: "root-boundary:/(marketing)",
+      });
     });
   });
 
