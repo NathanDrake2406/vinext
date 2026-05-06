@@ -85,6 +85,7 @@ function _getInheritedExecutionContext(): ExecutionContextLike | null {
 export function createRequestContext(opts?: Partial<UnifiedRequestContext>): UnifiedRequestContext {
   return {
     headersContext: null,
+    actionRevalidationKind: 0,
     dynamicUsageDetected: false,
     invalidDynamicUsageError: null,
     pendingSetCookies: [],

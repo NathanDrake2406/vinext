@@ -1,3 +1,4 @@
+import { getAndClearActionRevalidationKind, type ActionRevalidationKind } from "vinext/shims/cache";
 import type { HeadersAccessPhase } from "vinext/shims/headers";
 import { type FetchCacheMode, setCurrentFetchCacheMode } from "vinext/shims/fetch-cache";
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
@@ -181,6 +182,19 @@ type ActionControlResponse =
  * Function.prototype.apply when decoding hostile action payloads.
  */
 const SERVER_ACTION_ARGS_LIMIT = 1000;
+const ACTION_DID_NOT_REVALIDATE = 0 satisfies ActionRevalidationKind;
+const ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC = 1 satisfies ActionRevalidationKind;
+
+function setActionRevalidatedHeader(headers: Headers, kind: ActionRevalidationKind): void {
+  if (kind === ACTION_DID_NOT_REVALIDATE) return;
+  headers.set("x-action-revalidated", JSON.stringify(kind));
+}
+
+function resolveActionRevalidationKind(hasModifiedCookies: boolean): ActionRevalidationKind {
+  const revalidationKind = getAndClearActionRevalidationKind();
+  if (hasModifiedCookies) return ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC;
+  return revalidationKind;
+}
 
 function isRequestBodyTooLarge(error: unknown): boolean {
   return error instanceof Error && error.message === "Request body too large";
@@ -416,11 +430,15 @@ export async function handleProgressiveServerActionRequest(
       // Next.js decodes form state and re-renders after a successful MPA action.
       // vinext currently supports the redirect/error status cases; successful
       // non-redirect actions intentionally fall through to the page render.
+      getAndClearActionRevalidationKind();
       return null;
     }
 
     const actionPendingCookies = options.getAndClearPendingCookies();
     const actionDraftCookie = options.getDraftModeCookieHeader();
+    const actionRevalidationKind = resolveActionRevalidationKind(
+      actionPendingCookies.length > 0 || Boolean(actionDraftCookie),
+    );
     options.clearRequestContext();
 
     const headers = new Headers();
@@ -434,6 +452,7 @@ export async function handleProgressiveServerActionRequest(
     if (actionDraftCookie) {
       headers.append("Set-Cookie", actionDraftCookie);
     }
+    setActionRevalidatedHeader(headers, actionRevalidationKind);
 
     return new Response(null, {
       status: actionControlResponse.kind === "redirect" ? 303 : actionControlResponse.statusCode,
@@ -572,6 +591,9 @@ export async function handleServerActionRscRequest<
     if (actionRedirect) {
       const actionPendingCookies = options.getAndClearPendingCookies();
       const actionDraftCookie = options.getDraftModeCookieHeader();
+      const actionRevalidationKind = resolveActionRevalidationKind(
+        actionPendingCookies.length > 0 || Boolean(actionDraftCookie),
+      );
       options.clearRequestContext();
       const redirectHeaders = new Headers({
         "Content-Type": "text/x-component; charset=utf-8",
@@ -585,6 +607,7 @@ export async function handleServerActionRscRequest<
         redirectHeaders.append("Set-Cookie", cookie);
       }
       if (actionDraftCookie) redirectHeaders.append("Set-Cookie", actionDraftCookie);
+      setActionRevalidatedHeader(redirectHeaders, actionRevalidationKind);
       return new Response("", { status: 200, headers: redirectHeaders });
     }
 
@@ -640,12 +663,16 @@ export async function handleServerActionRscRequest<
 
     const actionPendingCookies = options.getAndClearPendingCookies();
     const actionDraftCookie = options.getDraftModeCookieHeader();
+    const actionRevalidationKind = resolveActionRevalidationKind(
+      actionPendingCookies.length > 0 || Boolean(actionDraftCookie),
+    );
 
     const actionHeaders = new Headers({
       "Content-Type": "text/x-component; charset=utf-8",
       Vary: VINEXT_RSC_VARY_HEADER,
     });
     mergeMiddlewareResponseHeaders(actionHeaders, options.middlewareHeaders);
+    setActionRevalidatedHeader(actionHeaders, actionRevalidationKind);
     const actionResponse = new Response(rscStream, {
       status: options.middlewareStatus ?? actionStatus,
       headers: actionHeaders,
