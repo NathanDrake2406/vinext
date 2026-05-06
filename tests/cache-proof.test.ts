@@ -1,0 +1,311 @@
+import { describe, expect, it } from "vite-plus/test";
+import {
+  buildBoundaryOutcomeCompatibility,
+  buildCacheVariant,
+  buildRenderObservation,
+  createAppRouteCacheProofGraphScope,
+  createDisabledCacheProofDecision,
+  DEFAULT_CACHE_VARIANT_BUDGET,
+  hasCompleteNegativeRequestApiProof,
+  type AppRouteCacheProofGraphScopeInput,
+  type CacheProofBreakerFallback,
+} from "../packages/vinext/src/server/cache-proof.js";
+
+function expectBreakerReason(
+  result: ReturnType<typeof buildCacheVariant>,
+  code: CacheProofBreakerFallback["code"],
+): CacheProofBreakerFallback {
+  expect(result.kind).toBe("breakerFallback");
+  if (result.kind !== "breakerFallback") {
+    throw new Error("Expected cache variant construction to return a breaker fallback");
+  }
+  expect(result.fallback.code).toBe(code);
+  return result.fallback;
+}
+
+describe("disabled cache proof model", () => {
+  it("normalizes route graph semantic ids for cache proof scopes", () => {
+    const route = {
+      ids: {
+        route: "route:/shop/:id",
+        page: "page:/shop/:id",
+        routeHandler: null,
+        layouts: ["layout:/", "layout:/shop/[id]"],
+        templates: [],
+        slots: {
+          "zebra@shop/[id]/@zebra": "slot:zebra:/shop/[id]",
+          "modal@shop/[id]/@modal": "slot:modal:/shop/[id]",
+          "modal-copy@shop/[id]/@modal": "slot:modal:/shop/[id]",
+        },
+      },
+    } satisfies AppRouteCacheProofGraphScopeInput;
+
+    const scope = createAppRouteCacheProofGraphScope(route);
+
+    expect(scope).toEqual({
+      routeId: "route:/shop/:id",
+      pageId: "page:/shop/:id",
+      routeHandlerId: null,
+      layoutIds: ["layout:/", "layout:/shop/[id]"],
+      templateIds: [],
+      slotIds: ["slot:modal:/shop/[id]", "slot:zebra:/shop/[id]"],
+    });
+  });
+
+  it("canonicalizes dimensions while keeping cache keys and traces redacted", () => {
+    const first = buildCacheVariant({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [
+        {
+          name: "sort",
+          privacy: "public",
+          source: "search",
+          values: ["desc"],
+        },
+        {
+          name: "SORT",
+          privacy: "public",
+          source: "search",
+          values: ["asc", "asc"],
+        },
+        {
+          name: "id",
+          privacy: "public",
+          source: "params",
+          values: ["super-secret-token"],
+        },
+      ],
+      existingVariantCount: 0,
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: "slots:main",
+        renderEpoch: null,
+        rootBoundaryId: "layout:/",
+        routeId: "route:/shop/:id",
+      },
+    });
+    const second = buildCacheVariant({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [
+        {
+          name: "id",
+          privacy: "public",
+          source: "params",
+          values: ["super-secret-token"],
+        },
+        {
+          name: "sort",
+          privacy: "public",
+          source: "search",
+          values: ["asc", "desc"],
+        },
+      ],
+      existingVariantCount: 0,
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: "slots:main",
+        renderEpoch: null,
+        rootBoundaryId: "layout:/",
+        routeId: "route:/shop/:id",
+      },
+    });
+
+    expect(first.kind).toBe("variant");
+    expect(second.kind).toBe("variant");
+    if (first.kind !== "variant" || second.kind !== "variant") {
+      throw new Error("Expected both inputs to produce cache variants");
+    }
+
+    expect(first.variant.cacheKey).toBe(second.variant.cacheKey);
+    expect(first.variant.dimensions.map((dimension) => dimension.name)).toEqual(["id", "sort"]);
+    expect(first.variant.dimensions[0].valueHashes).toHaveLength(1);
+    expect(first.variant.dimensions[1].valueHashes).toHaveLength(2);
+
+    const serializedVariant = JSON.stringify(first.variant);
+    expect(serializedVariant).not.toContain("super-secret-token");
+    expect(serializedVariant).not.toContain("desc");
+    expect(serializedVariant).not.toContain("asc");
+  });
+
+  it("returns breaker fallbacks for unsafe or over-budget variants", () => {
+    const unsafePublicCookie = buildCacheVariant({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [
+        {
+          name: "session",
+          privacy: "public",
+          source: "cookie",
+          values: ["abc"],
+        },
+      ],
+      existingVariantCount: 0,
+      output: {
+        kind: "layout",
+        layoutId: "layout:/account",
+        rootBoundaryId: "layout:/",
+        routeId: "route:/account",
+      },
+    });
+
+    const fallback = expectBreakerReason(unsafePublicCookie, "CP_UNSAFE_PUBLIC_DIMENSION");
+    expect(JSON.stringify(fallback.fields)).not.toContain("abc");
+
+    expectBreakerReason(
+      buildCacheVariant({
+        budget: {
+          ...DEFAULT_CACHE_VARIANT_BUDGET,
+          maxDimensionValueLength: 4,
+        },
+        dimensions: [
+          {
+            name: "tenant",
+            privacy: "public",
+            source: "params",
+            values: ["customer-a"],
+          },
+        ],
+        existingVariantCount: 0,
+        output: {
+          kind: "layout",
+          layoutId: "layout:/[tenant]",
+          rootBoundaryId: "layout:/",
+          routeId: "route:/:tenant",
+        },
+      }),
+      "CP_DIMENSION_VALUE_TOO_LONG",
+    );
+
+    expectBreakerReason(
+      buildCacheVariant({
+        budget: {
+          ...DEFAULT_CACHE_VARIANT_BUDGET,
+          maxVariantsPerRoute: 2,
+        },
+        dimensions: [
+          {
+            name: "tenant",
+            privacy: "public",
+            source: "params",
+            values: ["a"],
+          },
+        ],
+        existingVariantCount: 2,
+        output: {
+          kind: "layout",
+          layoutId: "layout:/[tenant]",
+          rootBoundaryId: "layout:/",
+          routeId: "route:/:tenant",
+        },
+      }),
+      "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
+    );
+  });
+
+  it("requires complete negative request-api observations before absence is proof", () => {
+    const complete = buildRenderObservation({
+      boundaryOutcome: { kind: "success" },
+      cacheability: "public",
+      cacheTags: ["posts", "posts"],
+      completeness: "complete",
+      dynamicFetches: ["https://api.example.test/posts?token=secret"],
+      output: {
+        kind: "layout",
+        layoutId: "layout:/blog",
+        rootBoundaryId: "layout:/",
+        routeId: "route:/blog",
+      },
+      pathTags: ["/blog"],
+      requestApis: [
+        { kind: "headers", status: "notObserved" },
+        { kind: "cookies", status: "notObserved" },
+      ],
+    });
+    const partial = buildRenderObservation({
+      ...complete,
+      completeness: "partial",
+    });
+    const observed = buildRenderObservation({
+      ...complete,
+      requestApis: [
+        { kind: "headers", status: "observed" },
+        { kind: "cookies", status: "notObserved" },
+      ],
+    });
+
+    expect(hasCompleteNegativeRequestApiProof(complete, ["headers", "cookies"])).toBe(true);
+    expect(hasCompleteNegativeRequestApiProof(partial, ["headers", "cookies"])).toBe(false);
+    expect(hasCompleteNegativeRequestApiProof(observed, ["headers", "cookies"])).toBe(false);
+    expect(complete.cacheTags).toEqual(["posts"]);
+    expect(JSON.stringify(complete.dynamicFetches)).not.toContain("secret");
+  });
+
+  it("treats boundary outcome compatibility as exact-match only", () => {
+    expect(
+      buildBoundaryOutcomeCompatibility({
+        candidate: { kind: "success" },
+        expected: { kind: "success" },
+      }).kind,
+    ).toBe("compatible");
+
+    const mismatch = buildBoundaryOutcomeCompatibility({
+      candidate: { kind: "notFound" },
+      expected: { kind: "success" },
+    });
+    expect(mismatch.kind).toBe("incompatible");
+    if (mismatch.kind === "incompatible") {
+      expect(mismatch.fallback.code).toBe("CP_BOUNDARY_OUTCOME_MISMATCH");
+    }
+
+    const unknown = buildBoundaryOutcomeCompatibility({
+      candidate: { kind: "unknown" },
+      expected: { kind: "success" },
+    });
+    expect(unknown.kind).toBe("incompatible");
+    if (unknown.kind === "incompatible") {
+      expect(unknown.fallback.code).toBe("CP_BOUNDARY_OUTCOME_UNKNOWN");
+    }
+  });
+
+  it("never authorizes runtime reuse while the proof model is disabled", () => {
+    const variant = buildCacheVariant({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [],
+      existingVariantCount: 0,
+      output: {
+        kind: "app-html",
+        renderEpoch: null,
+        rootBoundaryId: "layout:/",
+        routeId: "route:/",
+      },
+    });
+
+    expect(variant.kind).toBe("variant");
+    if (variant.kind !== "variant") {
+      throw new Error("Expected cache variant construction to succeed");
+    }
+
+    const decision = createDisabledCacheProofDecision({
+      variant: variant.variant,
+      observation: buildRenderObservation({
+        boundaryOutcome: { kind: "success" },
+        cacheability: "public",
+        cacheTags: [],
+        completeness: "complete",
+        dynamicFetches: [],
+        output: variant.variant.output,
+        pathTags: [],
+        requestApis: [],
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      canReuse: false,
+      kind: "disabled",
+      fallback: {
+        code: "CP_MODEL_DISABLED",
+        mode: "renderFresh",
+        scope: "affectedOutput",
+      },
+    });
+  });
+});
