@@ -30,6 +30,7 @@ describe("disabled cache proof model", () => {
         route: "route:/shop/:id",
         page: "page:/shop/:id",
         routeHandler: null,
+        rootBoundary: "root-boundary:/",
         layouts: ["layout:/", "layout:/shop/[id]"],
         templates: [],
         slots: {
