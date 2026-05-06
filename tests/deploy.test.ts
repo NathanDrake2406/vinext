@@ -369,15 +369,6 @@ describe("generateWranglerConfig", () => {
     expect(parsed.images).toBeDefined();
     expect(parsed.images.binding).toBe("IMAGES");
   });
-
-  it("includes Cloudflare version metadata binding for deployment-scoped cache keys", () => {
-    mkdir(tmpDir, "app");
-    const info = detectProject(tmpDir);
-    const config = generateWranglerConfig(info);
-    const parsed = JSON.parse(config);
-
-    expect(parsed.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
-  });
 });
 
 // ─── Worker Entry Generation ─────────────────────────────────────────────────
@@ -401,8 +392,6 @@ describe("generateAppRouterWorkerEntry", () => {
     expect(content).toContain("interface Env");
     expect(content).toContain("IMAGES");
     expect(content).toContain("ASSETS");
-    expect(content).toContain("NEXT_DEPLOYMENT_ID?: string");
-    expect(content).toContain("CF_VERSION_METADATA?:");
   });
 
   it("declares ExecutionContext interface", () => {

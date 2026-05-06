@@ -40,7 +40,6 @@ import { getOrCreateAls } from "./internal/als-registry.js";
 import {
   isInsideUnifiedScope,
   getRequestContext,
-  getRequestDeploymentId,
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
 
@@ -95,7 +94,7 @@ function getUseCacheDeploymentIdDefine(): string | undefined {
   try {
     // Keep this direct reference so Vite's define transform can inline it for
     // Worker bundles where the process global might not exist at runtime.
-    return process.env.__VINEXT_DEPLOYMENT_ID;
+    return process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
   } catch (error) {
     if (error instanceof ReferenceError) return undefined;
     throw error;
@@ -114,7 +113,7 @@ function getUseCacheBuildIdDefine(): string | undefined {
 }
 
 function getUseCacheKeySeed(): string | undefined {
-  return getRequestDeploymentId() || getUseCacheDeploymentIdDefine() || getUseCacheBuildIdDefine();
+  return getUseCacheDeploymentIdDefine() || getUseCacheBuildIdDefine();
 }
 
 function buildUseCacheKey(id: string, keySeed: string | undefined, argsKey?: string): string {

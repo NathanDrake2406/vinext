@@ -27,41 +27,7 @@ type WorkerAssetEnv = {
   ASSETS?: {
     fetch(request: Request): Promise<Response> | Response;
   };
-  NEXT_DEPLOYMENT_ID?: string;
-  CF_VERSION_METADATA?: {
-    id?: string;
-  };
 };
-
-type AppRouterRuntimeContext = {
-  deploymentId?: string;
-  passThroughOnException?(): void;
-  waitUntil?(promise: Promise<unknown>): void;
-};
-
-function deploymentIdFromEnv(env: WorkerAssetEnv | undefined): string | undefined {
-  return env?.NEXT_DEPLOYMENT_ID || env?.CF_VERSION_METADATA?.id || undefined;
-}
-
-function runtimeContextForRequest(
-  ctx: ExecutionContextLike | undefined,
-  deploymentId: string | undefined,
-): AppRouterRuntimeContext | undefined {
-  if (!deploymentId) return ctx;
-  return ctx
-    ? {
-        deploymentId,
-        passThroughOnException: ctx.passThroughOnException?.bind(ctx),
-        waitUntil: (promise) => ctx.waitUntil(promise),
-      }
-    : { deploymentId };
-}
-
-function isExecutionContextLike(
-  ctx: AppRouterRuntimeContext | undefined,
-): ctx is ExecutionContextLike {
-  return typeof ctx?.waitUntil === "function";
-}
 
 export default {
   async fetch(
@@ -69,14 +35,14 @@ export default {
     env?: WorkerAssetEnv,
     ctx?: ExecutionContextLike,
   ): Promise<Response> {
-    return handleRequest(request, env, runtimeContextForRequest(ctx, deploymentIdFromEnv(env)));
+    return handleRequest(request, env, ctx);
   },
 };
 
 async function handleRequest(
   request: Request,
   env: WorkerAssetEnv | undefined,
-  ctx: AppRouterRuntimeContext | undefined,
+  ctx: ExecutionContextLike | undefined,
 ): Promise<Response> {
   const url = new URL(request.url);
 
@@ -116,9 +82,7 @@ async function handleRequest(
   // wrapping in the ExecutionContext ALS scope so downstream code can reach
   // ctx.waitUntil() without having ctx threaded through every call site.
   const handleFn = () => rscHandler(request, ctx);
-  const result = await (isExecutionContextLike(ctx)
-    ? runWithExecutionContext(ctx, handleFn)
-    : handleFn());
+  const result = await (ctx ? runWithExecutionContext(ctx, handleFn) : handleFn());
 
   if (result instanceof Response) {
     if (env?.ASSETS) {

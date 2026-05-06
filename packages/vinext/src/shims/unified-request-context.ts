@@ -40,8 +40,6 @@ export type UnifiedRequestContext = {
   // ── request-context.ts ─────────────────────────────────────────────
   /** Cloudflare Workers ExecutionContext, or null on Node.js dev. */
   executionContext: ExecutionContextLike | null;
-  /** Deployment identifier for request-scoped cache key seeding. */
-  deploymentId: string | undefined;
 
   // ── cache-for-request.ts ──────────────────────────────────────────
   /** Per-request cache for cacheForRequest(). Keyed by factory function reference. */
@@ -76,11 +74,6 @@ function _getInheritedExecutionContext(): ExecutionContextLike | null {
   return executionContextAls?.getStore() ?? null;
 }
 
-function _getInheritedDeploymentId(): string | undefined {
-  const unifiedStore = _als.getStore();
-  return unifiedStore?.deploymentId;
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -111,7 +104,6 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     ssrContext: null,
     ssrHeadChildren: [],
     rootParams: null,
-    deploymentId: _getInheritedDeploymentId(),
     ...opts,
   };
 }
@@ -134,13 +126,6 @@ export function runWithRequestContext<T>(
   fn: () => T | Promise<T>,
 ): T | Promise<T> {
   return _als.run(ctx, fn);
-}
-
-export function getRequestDeploymentId(): string | undefined {
-  if (isInsideUnifiedScope()) {
-    return getRequestContext().deploymentId;
-  }
-  return undefined;
 }
 
 /**
