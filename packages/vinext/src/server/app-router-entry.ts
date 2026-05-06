@@ -15,7 +15,6 @@
 // @ts-expect-error — virtual module resolved by vinext
 import rscHandler from "virtual:vinext-rsc-entry";
 import { runWithExecutionContext, type ExecutionContextLike } from "vinext/shims/request-context";
-import { runWithRequestRuntimeContext } from "vinext/shims/unified-request-context";
 import { resolveStaticAssetSignal } from "./worker-utils.js";
 import {
   cloneRequestWithHeaders,
@@ -34,8 +33,34 @@ type WorkerAssetEnv = {
   };
 };
 
+type AppRouterRuntimeContext = {
+  deploymentId?: string;
+  passThroughOnException?(): void;
+  waitUntil?(promise: Promise<unknown>): void;
+};
+
 function deploymentIdFromEnv(env: WorkerAssetEnv | undefined): string | undefined {
   return env?.NEXT_DEPLOYMENT_ID || env?.CF_VERSION_METADATA?.id || undefined;
+}
+
+function runtimeContextForRequest(
+  ctx: ExecutionContextLike | undefined,
+  deploymentId: string | undefined,
+): AppRouterRuntimeContext | undefined {
+  if (!deploymentId) return ctx;
+  return ctx
+    ? {
+        deploymentId,
+        passThroughOnException: ctx.passThroughOnException?.bind(ctx),
+        waitUntil: (promise) => ctx.waitUntil(promise),
+      }
+    : { deploymentId };
+}
+
+function isExecutionContextLike(
+  ctx: AppRouterRuntimeContext | undefined,
+): ctx is ExecutionContextLike {
+  return typeof ctx?.waitUntil === "function";
 }
 
 export default {
@@ -44,16 +69,14 @@ export default {
     env?: WorkerAssetEnv,
     ctx?: ExecutionContextLike,
   ): Promise<Response> {
-    return runWithRequestRuntimeContext({ deploymentId: deploymentIdFromEnv(env) }, () =>
-      handleRequest(request, env, ctx),
-    );
+    return handleRequest(request, env, runtimeContextForRequest(ctx, deploymentIdFromEnv(env)));
   },
 };
 
 async function handleRequest(
   request: Request,
   env: WorkerAssetEnv | undefined,
-  ctx: ExecutionContextLike | undefined,
+  ctx: AppRouterRuntimeContext | undefined,
 ): Promise<Response> {
   const url = new URL(request.url);
 
@@ -93,7 +116,9 @@ async function handleRequest(
   // wrapping in the ExecutionContext ALS scope so downstream code can reach
   // ctx.waitUntil() without having ctx threaded through every call site.
   const handleFn = () => rscHandler(request, ctx);
-  const result = await (ctx ? runWithExecutionContext(ctx, handleFn) : handleFn());
+  const result = await (isExecutionContextLike(ctx)
+    ? runWithExecutionContext(ctx, handleFn)
+    : handleFn());
 
   if (result instanceof Response) {
     if (env?.ASSETS) {

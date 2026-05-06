@@ -2496,7 +2496,7 @@ describe('"use cache" runtime', () => {
     // https://github.com/vercel/next.js/blob/07f76411b07de9417d4a6b816f3137cafe1045fc/test/production/app-dir/use-cache-cross-deployment/use-cache-cross-deployment.test.ts
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
-    const { runWithRequestRuntimeContext } =
+    const { createRequestContext, runWithRequestContext } =
       await import("../packages/vinext/src/shims/unified-request-context.js");
     const { setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
@@ -2515,17 +2515,25 @@ describe('"use cache" runtime', () => {
       }, "test:deployment-id");
 
       expect(
-        await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () => cached()),
+        await runWithRequestContext(createRequestContext({ deploymentId: "deployment-one" }), () =>
+          cached(),
+        ),
       ).toEqual({ count: 1 });
       expect(
-        await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () => cached()),
+        await runWithRequestContext(createRequestContext({ deploymentId: "deployment-one" }), () =>
+          cached(),
+        ),
       ).toEqual({ count: 1 });
 
       expect(
-        await runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () => cached()),
+        await runWithRequestContext(createRequestContext({ deploymentId: "deployment-two" }), () =>
+          cached(),
+        ),
       ).toEqual({ count: 2 });
       expect(
-        await runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () => cached()),
+        await runWithRequestContext(createRequestContext({ deploymentId: "deployment-two" }), () =>
+          cached(),
+        ),
       ).toEqual({ count: 2 });
 
       expect(await cached()).toEqual({ count: 3 });
@@ -2547,7 +2555,7 @@ describe('"use cache" runtime', () => {
   it("keeps concurrent request deployment IDs isolated", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
-    const { runWithRequestRuntimeContext } =
+    const { createRequestContext, runWithRequestContext } =
       await import("../packages/vinext/src/shims/unified-request-context.js");
     const { setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
@@ -2564,18 +2572,26 @@ describe('"use cache" runtime', () => {
       }, "test:concurrent-deployment-id");
 
       const [first, second] = await Promise.all([
-        runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () => cached()),
-        runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () => cached()),
+        runWithRequestContext(createRequestContext({ deploymentId: "deployment-one" }), () =>
+          cached(),
+        ),
+        runWithRequestContext(createRequestContext({ deploymentId: "deployment-two" }), () =>
+          cached(),
+        ),
       ]);
 
       expect(new Set([first.count, second.count])).toEqual(new Set([1, 2]));
       expect(callCount).toBe(2);
 
       expect(
-        await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () => cached()),
+        await runWithRequestContext(createRequestContext({ deploymentId: "deployment-one" }), () =>
+          cached(),
+        ),
       ).toEqual(first);
       expect(
-        await runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () => cached()),
+        await runWithRequestContext(createRequestContext({ deploymentId: "deployment-two" }), () =>
+          cached(),
+        ),
       ).toEqual(second);
       expect(callCount).toBe(2);
     } finally {
@@ -2587,12 +2603,12 @@ describe('"use cache" runtime', () => {
     }
   });
 
-  it("inherits request runtime deployment ID when a unified request context is created", async () => {
+  it("inherits deployment ID when a nested unified request context is created", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
     const { setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
-    const { createRequestContext, runWithRequestContext, runWithRequestRuntimeContext } =
+    const { createRequestContext, runWithRequestContext } =
       await import("../packages/vinext/src/shims/unified-request-context.js");
     setCacheHandler(new MemoryCacheHandler());
 
@@ -2606,17 +2622,19 @@ describe('"use cache" runtime', () => {
         return { count: callCount };
       }, "test:inherited-runtime-deployment-id");
 
-      const first = await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () =>
-        runWithRequestContext(createRequestContext(), () => cached()),
+      const first = await runWithRequestContext(
+        createRequestContext({ deploymentId: "deployment-one" }),
+        () => runWithRequestContext(createRequestContext(), () => cached()),
       );
-      const second = await runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () =>
-        runWithRequestContext(createRequestContext(), () => cached()),
+      const second = await runWithRequestContext(
+        createRequestContext({ deploymentId: "deployment-two" }),
+        () => runWithRequestContext(createRequestContext(), () => cached()),
       );
 
       expect(first).toEqual({ count: 1 });
       expect(second).toEqual({ count: 2 });
       expect(
-        await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () =>
+        await runWithRequestContext(createRequestContext({ deploymentId: "deployment-one" }), () =>
           runWithRequestContext(createRequestContext(), () => cached()),
         ),
       ).toEqual(first);

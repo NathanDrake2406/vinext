@@ -63,7 +63,6 @@ export type UnifiedRequestContext = {
 // ---------------------------------------------------------------------------
 
 const _REQUEST_CONTEXT_ALS_KEY = Symbol.for("vinext.requestContext.als");
-const _REQUEST_RUNTIME_CONTEXT_ALS_KEY = Symbol.for("vinext.requestRuntimeContext.als");
 const _g = globalThis as unknown as Record<PropertyKey, unknown>;
 const _als = getOrCreateAls<UnifiedRequestContext>("vinext.unifiedRequestContext.als");
 
@@ -79,21 +78,8 @@ function _getInheritedExecutionContext(): ExecutionContextLike | null {
 
 function _getInheritedDeploymentId(): string | undefined {
   const unifiedStore = _als.getStore();
-  if (unifiedStore) return unifiedStore.deploymentId;
-
-  const requestRuntimeAls = _g[_REQUEST_RUNTIME_CONTEXT_ALS_KEY] as
-    | AsyncLocalStorage<RequestRuntimeContext>
-    | undefined;
-  return requestRuntimeAls?.getStore()?.deploymentId || undefined;
+  return unifiedStore?.deploymentId;
 }
-
-export type RequestRuntimeContext = {
-  deploymentId?: string | undefined;
-};
-
-const _requestRuntimeAls = getOrCreateAls<RequestRuntimeContext>(
-  "vinext.requestRuntimeContext.als",
-);
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -150,32 +136,11 @@ export function runWithRequestContext<T>(
   return _als.run(ctx, fn);
 }
 
-export function runWithRequestRuntimeContext<T>(
-  ctx: RequestRuntimeContext,
-  fn: () => Promise<T>,
-): Promise<T>;
-export function runWithRequestRuntimeContext<T>(
-  ctx: RequestRuntimeContext,
-  fn: () => T | Promise<T>,
-): T | Promise<T>;
-export function runWithRequestRuntimeContext<T>(
-  ctx: RequestRuntimeContext,
-  fn: () => T | Promise<T>,
-): T | Promise<T> {
-  const deploymentId = ctx.deploymentId || undefined;
-  if (isInsideUnifiedScope()) {
-    return runWithUnifiedStateMutation((uCtx) => {
-      uCtx.deploymentId = deploymentId;
-    }, fn);
-  }
-  return _requestRuntimeAls.run({ deploymentId }, fn);
-}
-
 export function getRequestDeploymentId(): string | undefined {
   if (isInsideUnifiedScope()) {
     return getRequestContext().deploymentId;
   }
-  return _requestRuntimeAls.getStore()?.deploymentId || undefined;
+  return undefined;
 }
 
 /**

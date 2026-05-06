@@ -187,6 +187,15 @@ function isExecutionContextLike(value: unknown): value is ExecutionContextLike {
   return hasProperty(value, "waitUntil") && typeof value.waitUntil === "function";
 }
 
+function deploymentIdFromRuntimeContext(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !hasProperty(value, "deploymentId")) {
+    return undefined;
+  }
+  return typeof value.deploymentId === "string" && value.deploymentId !== ""
+    ? value.deploymentId
+    : undefined;
+}
+
 function redirectDestinationWithBasePath(destination: string, basePath: string): string {
   if (!basePath || isExternalUrl(destination) || hasBasePath(destination, basePath)) {
     return destination;
@@ -504,6 +513,7 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
     const requestContext = createRequestContext({
       headersContext,
       executionContext,
+      deploymentId: deploymentIdFromRuntimeContext(ctx),
       unstableCacheRevalidation: "background",
     });
 
