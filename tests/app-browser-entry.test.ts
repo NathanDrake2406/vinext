@@ -71,6 +71,45 @@ function createState(overrides: Partial<AppRouterState> = {}): AppRouterState {
   };
 }
 
+type TestPendingDispositionOptions = {
+  activeNavigationId: number;
+  currentRootLayoutTreePath: string | null;
+  currentVisibleCommitVersion: number;
+  nextRootLayoutTreePath: string | null;
+  startedNavigationId: number;
+  startedVisibleCommitVersion: number;
+};
+
+async function resolveTestPendingNavigationCommitDispositionDecision(
+  options: TestPendingDispositionOptions,
+) {
+  const startState = createState({
+    rootLayoutTreePath: options.currentRootLayoutTreePath,
+    visibleCommitVersion: options.startedVisibleCommitVersion,
+  });
+  const currentState = createState({
+    rootLayoutTreePath: options.currentRootLayoutTreePath,
+    visibleCommitVersion: options.currentVisibleCommitVersion,
+  });
+  const pending = await createPendingNavigationCommit({
+    currentState: startState,
+    nextElements: Promise.resolve(
+      createResolvedElements("route:/dashboard", options.nextRootLayoutTreePath),
+    ),
+    navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/dashboard", {}),
+    operationLane: "navigation",
+    renderId: options.startedNavigationId,
+    type: "navigate",
+  });
+
+  return resolvePendingNavigationCommitDispositionDecision({
+    activeNavigationId: options.activeNavigationId,
+    currentState,
+    pending,
+    startedNavigationId: options.startedNavigationId,
+  });
+}
+
 function createControllerHarness(initialState: AppRouterState = createState()) {
   const controller = createAppBrowserNavigationController();
   const stateRef: { current: AppRouterState } = { current: initialState };
@@ -373,11 +412,9 @@ describe("app browser entry state helpers", () => {
     expect(
       resolvePendingNavigationCommitDisposition({
         activeNavigationId: 3,
-        currentVisibleCommitVersion: currentState.visibleCommitVersion,
-        currentRootLayoutTreePath: currentState.rootLayoutTreePath,
-        nextRootLayoutTreePath: pending.rootLayoutTreePath,
+        currentState,
+        pending,
         startedNavigationId: 3,
-        startedVisibleCommitVersion: pending.action.operation.startedVisibleCommitVersion,
       }),
     ).toBe("hard-navigate");
   });
@@ -476,11 +513,9 @@ describe("app browser entry state helpers", () => {
     expect(
       resolvePendingNavigationCommitDisposition({
         activeNavigationId: 5,
-        currentVisibleCommitVersion: currentState.visibleCommitVersion,
-        currentRootLayoutTreePath: currentState.rootLayoutTreePath,
-        nextRootLayoutTreePath: pending.rootLayoutTreePath,
+        currentState,
+        pending,
         startedNavigationId: 4,
-        startedVisibleCommitVersion: pending.action.operation.startedVisibleCommitVersion,
       }),
     ).toBe("skip");
   });
@@ -580,8 +615,8 @@ describe("app browser entry state helpers", () => {
     expect(approval.approvedCommit).toBeNull();
   });
 
-  it("traces stale pending commits with compact reason codes and structured fields", () => {
-    const decision = resolvePendingNavigationCommitDispositionDecision({
+  it("traces stale pending commits with compact reason codes and structured fields", async () => {
+    const decision = await resolveTestPendingNavigationCommitDispositionDecision({
       activeNavigationId: 5,
       currentVisibleCommitVersion: 0,
       currentRootLayoutTreePath: "/",
@@ -609,8 +644,8 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("treats a visible commit version mismatch as stale before root-boundary decisions", () => {
-    const decision = resolvePendingNavigationCommitDispositionDecision({
+  it("treats a visible commit version mismatch as stale before root-boundary decisions", async () => {
+    const decision = await resolveTestPendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
       currentVisibleCommitVersion: 1,
       currentRootLayoutTreePath: "/(marketing)",
@@ -623,8 +658,8 @@ describe("app browser entry state helpers", () => {
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.staleOperation);
   });
 
-  it("traces root-boundary hard navigation decisions", () => {
-    const decision = resolvePendingNavigationCommitDispositionDecision({
+  it("traces root-boundary hard navigation decisions", async () => {
+    const decision = await resolveTestPendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
       currentVisibleCommitVersion: 0,
       currentRootLayoutTreePath: "/(marketing)",
@@ -649,8 +684,8 @@ describe("app browser entry state helpers", () => {
     ]);
   });
 
-  it("traces unknown root-layout identity as a legacy soft-commit fallback", () => {
-    const decision = resolvePendingNavigationCommitDispositionDecision({
+  it("traces unknown root-layout identity as a legacy soft-commit fallback", async () => {
+    const decision = await resolveTestPendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
       currentVisibleCommitVersion: 0,
       currentRootLayoutTreePath: "/",
@@ -663,8 +698,8 @@ describe("app browser entry state helpers", () => {
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
   });
 
-  it("traces matching root-layout dispatches as current commits", () => {
-    const decision = resolvePendingNavigationCommitDispositionDecision({
+  it("traces matching root-layout dispatches as current commits", async () => {
+    const decision = await resolveTestPendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
       currentVisibleCommitVersion: 0,
       currentRootLayoutTreePath: "/",
