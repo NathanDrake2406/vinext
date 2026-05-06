@@ -147,11 +147,9 @@ function reduceApprovedVisibleCommitState(
 
 function resolvePendingNavigationCommitDecision(options: {
   activeNavigationId: number;
-  currentVisibleCommitVersion: number;
-  currentRootLayoutTreePath: string | null;
-  nextRootLayoutTreePath: string | null;
+  currentState: AppRouterState;
+  pending: PendingNavigationCommit;
   startedNavigationId: number;
-  startedVisibleCommitVersion: number;
 }): CommitDecision {
   const { disposition, trace } = resolvePendingNavigationCommitDispositionDecision(options);
 
@@ -273,11 +271,9 @@ export function approvePendingNavigationCommit(options: {
   const decision = addCommitTransactionTrace(
     resolvePendingNavigationCommitDecision({
       activeNavigationId: options.activeNavigationId,
-      currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
-      currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
-      nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
+      currentState: options.currentState,
+      pending: options.pending,
       startedNavigationId: options.startedNavigationId,
-      startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
     }),
     options.pending,
   );
