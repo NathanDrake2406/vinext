@@ -120,6 +120,18 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
     expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/unexpected trailing code/);
   });
 
+  it("rejects streamed RSC chunk scripts with invalid JSON using a Vinext error", () => {
+    const html =
+      "<html><body>" +
+      '<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push("\\uZZZZ")</script>' +
+      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      "</body></html>";
+
+    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(
+      "[vinext] Malformed prerender RSC embed: invalid chunk JSON",
+    );
+  });
+
   it("reconstructs the legacy embedded RSC payload shape", () => {
     const html = `<script>self.__VINEXT_RSC__=${safeJsonStringify({
       rsc: ["0:legacy\n", "1:payload\n"],
@@ -129,6 +141,14 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
       status: "ok",
       payload: "0:legacy\n1:payload\n",
     });
+  });
+
+  it("rejects legacy embedded RSC payloads with invalid JSON using a Vinext error", () => {
+    const html = `<script>self.__VINEXT_RSC__={"rsc":[}</script>`;
+
+    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(
+      "[vinext] Malformed legacy prerender RSC embed: invalid JSON",
+    );
   });
 
   it("uses an explicit compatibility fallback when no Vinext RSC embed exists", () => {
@@ -199,6 +219,66 @@ describe("prerenderApp — RSC extraction", () => {
       });
       expect(fs.readFileSync(path.join(outDir, "index.rsc"), "utf-8")).toBe(rscPayload);
       expect(rscRequestCount).toBe(0);
+    } finally {
+      await closeServer(server);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a separate RSC request when rendered HTML has no RSC markers", async () => {
+    const root = tmpDir("vinext-prerender-rsc-fallback-");
+    const outDir = path.join(root, "out");
+    const appDir = path.join(root, "app");
+    const pagePath = path.join(appDir, "page.tsx");
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(
+      pagePath,
+      "export const dynamic = 'force-static';\nexport default function Page() { return null; }\n",
+    );
+
+    const rscPayload = '0:["$","div",null,{"children":"from fallback"}]\n';
+    let rscRequestCount = 0;
+    const server = createServer((req, res) => {
+      if (req.headers.rsc === "1" || req.headers.accept === "text/x-component") {
+        rscRequestCount++;
+        res.setHeader("content-type", "text/x-component");
+        res.end(rscPayload);
+        return;
+      }
+
+      if (req.url === "/__vinext_nonexistent_for_404__") {
+        res.statusCode = 404;
+        res.end("<html><body>not found</body></html>");
+        return;
+      }
+
+      res.setHeader("content-type", "text/html");
+      res.end("<html><body>plain html shell</body></html>");
+    });
+
+    const port = await listen(server);
+    try {
+      const { prerenderApp } = await import("../packages/vinext/src/build/prerender.js");
+      const { appRouter } = await import("../packages/vinext/src/routing/app-router.js");
+      const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
+      const routes = await appRouter(appDir);
+      const config = await resolveNextConfig({});
+
+      const prerenderResult = await prerenderApp({
+        mode: "default",
+        rscBundlePath: path.join(root, "dist", "server", "index.js"),
+        routes,
+        outDir,
+        config,
+        _prodServer: { server, port },
+      });
+
+      expect(findRoute(prerenderResult.routes, "/")).toMatchObject({
+        route: "/",
+        status: "rendered",
+      });
+      expect(fs.readFileSync(path.join(outDir, "index.rsc"), "utf-8")).toBe(rscPayload);
+      expect(rscRequestCount).toBe(1);
     } finally {
       await closeServer(server);
       fs.rmSync(root, { recursive: true, force: true });

@@ -187,9 +187,13 @@ const RSC_CHUNK_SCRIPT_PREFIX = "self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CH
 const RSC_DONE_MARKER = "__VINEXT_RSC_DONE__=true";
 const LEGACY_RSC_MARKER = "__VINEXT_RSC__=";
 
+function isWhitespace(char: string): boolean {
+  return char === " " || char === "\t" || char === "\n" || char === "\r";
+}
+
 function parseEmbeddedJsonString(script: string, start: number): { value: string; next: number } {
   let index = start;
-  while (/\s/.test(script[index] ?? "")) index++;
+  while (isWhitespace(script[index] ?? "")) index++;
 
   if (script[index] !== '"') {
     throw new Error("[vinext] Malformed prerender RSC embed: chunk payload is not a JSON string");
@@ -208,13 +212,18 @@ function parseEmbeddedJsonString(script: string, start: number): { value: string
     }
     if (char === '"') {
       const jsonSource = script.slice(index, cursor + 1);
-      const parsed: unknown = JSON.parse(jsonSource);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(jsonSource);
+      } catch {
+        throw new Error("[vinext] Malformed prerender RSC embed: invalid chunk JSON");
+      }
       if (typeof parsed !== "string") {
         throw new Error("[vinext] Malformed prerender RSC embed: chunk payload is not a string");
       }
 
       let next = cursor + 1;
-      while (/\s/.test(script[next] ?? "")) next++;
+      while (isWhitespace(script[next] ?? "")) next++;
       if (script[next] !== ")") {
         throw new Error("[vinext] Malformed prerender RSC embed: chunk push is unterminated");
       }
@@ -228,9 +237,9 @@ function parseEmbeddedJsonString(script: string, start: number): { value: string
 
 function assertOnlyTrailingSemicolon(script: string, start: number, message: string): void {
   let index = start;
-  while (/\s/.test(script[index] ?? "")) index++;
+  while (isWhitespace(script[index] ?? "")) index++;
   if (script[index] === ";") index++;
-  while (/\s/.test(script[index] ?? "")) index++;
+  while (isWhitespace(script[index] ?? "")) index++;
   if (index !== script.length) {
     throw new Error(message);
   }
@@ -245,7 +254,12 @@ function extractLegacyRscPayload(script: string): string | null {
   if (!trimmedScript.startsWith(`self.${LEGACY_RSC_MARKER}`)) return null;
 
   const jsonSource = trimmedScript.slice(`self.${LEGACY_RSC_MARKER}`.length).trim();
-  const parsed: unknown = JSON.parse(jsonSource);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonSource);
+  } catch {
+    throw new Error("[vinext] Malformed legacy prerender RSC embed: invalid JSON");
+  }
 
   if (typeof parsed !== "object" || parsed === null || !("rsc" in parsed)) {
     throw new Error("[vinext] Malformed legacy prerender RSC embed: missing rsc array");
@@ -260,6 +274,8 @@ function extractLegacyRscPayload(script: string): string | null {
 }
 
 export function extractRscPayloadFromPrerenderedHtml(html: string): ExtractRscPayloadResult {
+  // Safe because safeJsonStringify (used by createRscEmbedTransform) escapes
+  // all '<' and '>' in embedded JSON, preventing false </script> matches.
   const scriptPattern = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi;
   const chunks: string[] = [];
   let sawRscMarker = false;
@@ -287,7 +303,10 @@ export function extractRscPayloadFromPrerenderedHtml(html: string): ExtractRscPa
 
     if (trimmedScript.startsWith(RSC_CHUNK_SCRIPT_PREFIX)) {
       sawRscMarker = true;
-      const markerIndex = trimmedScript.indexOf(RSC_CHUNK_PUSH_MARKER);
+      const markerIndex = trimmedScript.indexOf(
+        RSC_CHUNK_PUSH_MARKER,
+        RSC_CHUNK_SCRIPT_PREFIX.length,
+      );
       if (markerIndex === -1) {
         throw new Error("[vinext] Malformed prerender RSC embed: chunk push is missing");
       }
