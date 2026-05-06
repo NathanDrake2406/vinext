@@ -1,18 +1,24 @@
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
+import { mergeElements } from "vinext/shims/slot";
 import type { AppElements } from "./app-elements.js";
 import {
   createPendingNavigationCommit,
   resolvePendingNavigationCommitDispositionDecision,
-  routerReducer,
   type AppRouterAction,
   type AppRouterState,
+  type CommittedOperationRecord,
   type OperationLane,
   type PendingNavigationCommit,
+  type PendingOperationRecord,
 } from "./app-browser-state.js";
 import {
   NavigationTraceReasonCodes,
+  NavigationTraceTransactionCodes,
   createNavigationTrace,
+  prependNavigationTraceEntry,
   type NavigationTrace,
+  type NavigationTraceFields,
+  type NavigationTraceTransactionCode,
 } from "./navigation-trace.js";
 
 type VisibleCommitDecision = {
@@ -58,7 +64,85 @@ export function applyApprovedVisibleCommit(
   state: AppRouterState,
   commit: ApprovedVisibleCommit,
 ): AppRouterState {
-  return routerReducer(state, commit.action);
+  assertApprovedVisibleCommit(commit);
+  return reduceApprovedVisibleCommitState(state, commit.action);
+}
+
+function assertApprovedVisibleCommit(commit: ApprovedVisibleCommit): void {
+  if (commit[approvedVisibleCommitBrand] !== true) {
+    throw new Error("[vinext] Visible router state mutation requires ApprovedVisibleCommit");
+  }
+}
+
+function commitOperationRecord(
+  operation: PendingOperationRecord,
+  visibleCommitVersion: number,
+): CommittedOperationRecord {
+  return {
+    id: operation.id,
+    lane: operation.lane,
+    startedVisibleCommitVersion: operation.startedVisibleCommitVersion,
+    state: "committed",
+    visibleCommitVersion,
+  };
+}
+
+function commitVisibleRouterState(
+  state: AppRouterState,
+  nextState: Omit<AppRouterState, "activeOperation" | "visibleCommitVersion">,
+  operation: PendingOperationRecord,
+): AppRouterState {
+  // Single owner for visibleCommitVersion: only an ApprovedVisibleCommit may
+  // advance it, and every accepted visible mutation advances it exactly once.
+  const visibleCommitVersion = state.visibleCommitVersion + 1;
+  return {
+    ...nextState,
+    activeOperation: commitOperationRecord(operation, visibleCommitVersion),
+    visibleCommitVersion,
+  };
+}
+
+function reduceApprovedVisibleCommitState(
+  state: AppRouterState,
+  action: AppRouterAction,
+): AppRouterState {
+  switch (action.type) {
+    case "traverse":
+    case "navigate":
+      return commitVisibleRouterState(
+        state,
+        {
+          elements: mergeElements(state.elements, action.elements, action.type === "traverse"),
+          interceptionContext: action.interceptionContext,
+          layoutFlags: { ...state.layoutFlags, ...action.layoutFlags },
+          navigationSnapshot: action.navigationSnapshot,
+          previousNextUrl: action.previousNextUrl,
+          renderId: action.renderId,
+          rootLayoutTreePath: action.rootLayoutTreePath,
+          routeId: action.routeId,
+        },
+        action.operation,
+      );
+    case "replace":
+      return commitVisibleRouterState(
+        state,
+        {
+          elements: action.elements,
+          interceptionContext: action.interceptionContext,
+          layoutFlags: action.layoutFlags,
+          navigationSnapshot: action.navigationSnapshot,
+          previousNextUrl: action.previousNextUrl,
+          renderId: action.renderId,
+          rootLayoutTreePath: action.rootLayoutTreePath,
+          routeId: action.routeId,
+        },
+        action.operation,
+      );
+    default: {
+      const _exhaustive: never = action.type;
+      throw new Error("[vinext] Unknown router action: " + String(_exhaustive));
+    }
+  }
 }
 
 function resolvePendingNavigationCommitDecision(options: {
@@ -106,13 +190,76 @@ function createApprovedVisibleCommit(options: {
   };
 }
 
+function createCommitTransactionFields(pending: PendingNavigationCommit): NavigationTraceFields {
+  return {
+    operationLane: pending.action.operation.lane,
+    pendingOperationId: pending.action.operation.id,
+    startedVisibleCommitVersion: pending.action.operation.startedVisibleCommitVersion,
+  };
+}
+
+function prependCommitTransactionTrace(
+  trace: NavigationTrace,
+  code: NavigationTraceTransactionCode,
+  pending: PendingNavigationCommit,
+): NavigationTrace {
+  return prependNavigationTraceEntry(trace, code, createCommitTransactionFields(pending));
+}
+
+function addCommitTransactionTrace(
+  decision: CommitDecision,
+  pending: PendingNavigationCommit,
+): CommitDecision {
+  switch (decision.disposition) {
+    case "commit":
+      return {
+        ...decision,
+        trace: prependCommitTransactionTrace(
+          decision.trace,
+          NavigationTraceTransactionCodes.visibleCommit,
+          pending,
+        ),
+      };
+    case "hard-navigate":
+      return {
+        ...decision,
+        trace: prependCommitTransactionTrace(
+          decision.trace,
+          NavigationTraceTransactionCodes.hardNavigate,
+          pending,
+        ),
+      };
+    case "no-commit":
+      return {
+        ...decision,
+        trace: prependCommitTransactionTrace(
+          decision.trace,
+          NavigationTraceTransactionCodes.noCommit,
+          pending,
+        ),
+      };
+    default: {
+      const _exhaustive: never = decision;
+      throw new Error("[vinext] Unknown commit decision: " + String(_exhaustive));
+    }
+  }
+}
+
 export function approveHmrVisibleCommit(pending: PendingNavigationCommit): ApprovedVisibleCommit {
   if (pending.action.operation.lane !== "hmr") {
     throw new Error("[vinext] HMR visible commit approval requires an HMR pending operation");
   }
 
+  const decision = addCommitTransactionTrace(createVisibleCommitDecision(), pending);
+  // This guard is a type narrowing assertion: createVisibleCommitDecision()
+  // structurally produces a commit decision, and addCommitTransactionTrace()
+  // must preserve that disposition while adding operator trace context.
+  if (decision.disposition !== "commit") {
+    throw new Error("[vinext] HMR visible commit approval did not produce a commit decision");
+  }
+
   return createApprovedVisibleCommit({
-    decision: createVisibleCommitDecision(),
+    decision,
     pending,
   });
 }
@@ -123,14 +270,17 @@ export function approvePendingNavigationCommit(options: {
   pending: PendingNavigationCommit;
   startedNavigationId: number;
 }): CommitApproval {
-  const decision = resolvePendingNavigationCommitDecision({
-    activeNavigationId: options.activeNavigationId,
-    currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
-    currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
-    nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
-    startedNavigationId: options.startedNavigationId,
-    startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
-  });
+  const decision = addCommitTransactionTrace(
+    resolvePendingNavigationCommitDecision({
+      activeNavigationId: options.activeNavigationId,
+      currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
+      currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
+      nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
+      startedNavigationId: options.startedNavigationId,
+      startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
+    }),
+    options.pending,
+  );
 
   switch (decision.disposition) {
     case "commit":
