@@ -299,6 +299,41 @@ describe("app page cache helpers", () => {
     ]);
   });
 
+  it("dedups stale RSC regeneration by the slot-specific cache key", async () => {
+    const scheduledKeys: string[] = [];
+    const rscData = new TextEncoder().encode("stale-flight").buffer;
+
+    await readAppPageCacheResponse({
+      cleanPathname: "/parallel",
+      clearRequestContext() {},
+      isRscRequest: true,
+      async isrGet() {
+        return buildISRCacheEntry(buildCachedAppPageValue("", rscData), true);
+      },
+      isrHtmlKey(pathname) {
+        return "html:" + pathname;
+      },
+      isrRscKey(pathname, mountedSlotsHeader) {
+        return `rsc:${pathname}:${mountedSlotsHeader ?? "none"}`;
+      },
+      async isrSet() {},
+      mountedSlotsHeader: "slot:auth:/",
+      revalidateSeconds: 60,
+      async renderFreshPageForCache() {
+        return {
+          html: "<h1>fresh</h1>",
+          rscData,
+          tags: ["/parallel", "_N_T_/parallel"],
+        };
+      },
+      scheduleBackgroundRegeneration(key) {
+        scheduledKeys.push(key);
+      },
+    });
+
+    expect(scheduledKeys).toEqual(["rsc:/parallel:slot:auth:/"]);
+  });
+
   it("serves stale HTML entries and regenerates HTML plus canonical RSC cache keys", async () => {
     const scheduledRegenerations: Array<() => Promise<void>> = [];
     const isrSetCalls: Array<{
@@ -561,6 +596,60 @@ describe("app page cache helpers", () => {
     expect(isrSet).not.toHaveBeenCalled();
     expect(debugCalls).toEqual([
       ["HTML cache write skipped (dynamic usage during render)", "html:/dynamic-html"],
+    ]);
+  });
+
+  it("skips HTML and RSC cache writes when dynamic usage was captured before context cleanup", async () => {
+    const pendingCacheWrites: Promise<void>[] = [];
+    const debugCalls: Array<[string, string]> = [];
+    const isrSet = vi.fn();
+
+    const response = finalizeAppPageHtmlCacheResponse(
+      new Response("<h1>personalized</h1>", {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "s-maxage=60, stale-while-revalidate",
+          Vary: "RSC, Accept",
+          "X-Vinext-Cache": "MISS",
+        },
+      }),
+      {
+        capturedDynamicUsageBeforeContextCleanup() {
+          return true;
+        },
+        capturedRscDataPromise: Promise.resolve(new TextEncoder().encode("flight").buffer),
+        cleanPathname: "/dynamic-html-cleanup",
+        consumeDynamicUsage() {
+          return false;
+        },
+        getPageTags() {
+          return ["/dynamic-html-cleanup", "_N_T_/dynamic-html-cleanup"];
+        },
+        isrDebug(event, detail) {
+          debugCalls.push([event, detail]);
+        },
+        isrHtmlKey(pathname) {
+          return "html:" + pathname;
+        },
+        isrRscKey(pathname) {
+          return "rsc:" + pathname;
+        },
+        isrSet,
+        revalidateSeconds: 60,
+        waitUntil(promise) {
+          pendingCacheWrites.push(promise);
+        },
+      },
+    );
+
+    await expect(response.text()).resolves.toBe("<h1>personalized</h1>");
+    expect(pendingCacheWrites).toHaveLength(1);
+
+    await pendingCacheWrites[0];
+
+    expect(isrSet).not.toHaveBeenCalled();
+    expect(debugCalls).toEqual([
+      ["HTML cache write skipped (dynamic usage during render)", "html:/dynamic-html-cleanup"],
     ]);
   });
 
