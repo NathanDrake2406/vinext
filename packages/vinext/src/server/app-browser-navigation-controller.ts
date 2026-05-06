@@ -73,6 +73,7 @@ type BrowserNavigationController = {
     nextElements: Promise<AppElements>,
     navigationSnapshot: ClientNavigationRenderSnapshot,
     returnValue?: { ok: boolean; data: unknown },
+    actionInitiationState?: AppRouterState,
   ): Promise<unknown>;
   hmrReplaceTree(
     nextElements: Promise<AppElements>,
@@ -476,8 +477,9 @@ export function createAppBrowserNavigationController(
     nextElements: Promise<AppElements>,
     navigationSnapshot: ClientNavigationRenderSnapshot,
     returnValue?: { ok: boolean; data: unknown },
+    actionInitiationState?: AppRouterState,
   ): Promise<unknown> {
-    const currentState = getBrowserRouterState();
+    const currentState = actionInitiationState ?? getBrowserRouterState();
     const startedNavigationId = activeNavigationId;
     const {
       approvedCommit,

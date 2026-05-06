@@ -1115,6 +1115,59 @@ describe("app browser navigation controller", () => {
     }
   });
 
+  it("uses the server-action initiation state when the response is processed after a newer commit", async () => {
+    const initialState = createState({
+      rootLayoutTreePath: "/",
+      routeId: "route:/settings",
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/settings", {
+        tab: "profile",
+      }),
+    });
+    const { controller, detach, stateRef } = createControllerHarness(initialState);
+    const { assign } = stubWindow("https://example.com/settings");
+    const actionInitiationState = stateRef.current;
+
+    try {
+      const newerResult = await controller.commitSameUrlNavigatePayload(
+        Promise.resolve(
+          createResolvedElements("route:/settings/newer", "/", null, {
+            "page:/settings/newer": React.createElement("main", null, "newer"),
+          }),
+        ),
+        stateRef.current.navigationSnapshot,
+        {
+          data: "newer-action-result",
+          ok: true,
+        },
+      );
+
+      expect(newerResult).toBe("newer-action-result");
+      expect(stateRef.current.routeId).toBe("route:/settings/newer");
+      expect(stateRef.current.visibleCommitVersion).toBe(1);
+
+      const olderResult = await controller.commitSameUrlNavigatePayload(
+        Promise.resolve(
+          createResolvedElements("route:/settings/older", "/", null, {
+            "page:/settings/older": React.createElement("main", null, "older"),
+          }),
+        ),
+        actionInitiationState.navigationSnapshot,
+        {
+          data: "older-action-result",
+          ok: true,
+        },
+        actionInitiationState,
+      );
+
+      expect(olderResult).toBe("older-action-result");
+      expect(assign).not.toHaveBeenCalled();
+      expect(stateRef.current.routeId).toBe("route:/settings/newer");
+      expect(stateRef.current.visibleCommitVersion).toBe(1);
+    } finally {
+      detach();
+    }
+  });
+
   it("hard-navigates same-URL server action payloads when the root layout changes", async () => {
     const initialState = createState({
       rootLayoutTreePath: "/(marketing)",
