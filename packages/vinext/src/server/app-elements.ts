@@ -3,6 +3,7 @@ import { UNMATCHED_SLOT, type AppElements } from "./app-elements-wire.js";
 
 export {
   AppElementsWire,
+  APP_ARTIFACT_COMPATIBILITY_KEY,
   APP_INTERCEPTION_CONTEXT_KEY,
   APP_LAYOUT_FLAGS_KEY,
   APP_ROOT_LAYOUT_KEY,

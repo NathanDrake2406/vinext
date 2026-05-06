@@ -1,7 +1,13 @@
 import { isValidElement, type ReactNode } from "react";
+import {
+  createArtifactCompatibilityEnvelope,
+  parseArtifactCompatibilityEnvelope,
+  type ArtifactCompatibilityEnvelope,
+} from "./artifact-compatibility.js";
 
 const APP_INTERCEPTION_SEPARATOR = "\0";
 
+export const APP_ARTIFACT_COMPATIBILITY_KEY = "__artifactCompatibility";
 export const APP_INTERCEPTION_CONTEXT_KEY = "__interceptionContext";
 export const APP_LAYOUT_FLAGS_KEY = "__layoutFlags";
 export const APP_ROUTE_KEY = "__route";
@@ -36,6 +42,7 @@ export type AppWireElements = Readonly<Record<string, AppWireElementValue>>;
 export type LayoutFlags = Readonly<Record<string, "s" | "d">>;
 
 type AppElementsMetadata = {
+  artifactCompatibility: ArtifactCompatibilityEnvelope;
   interceptionContext: string | null;
   layoutFlags: LayoutFlags;
   routeId: string;
@@ -60,9 +67,12 @@ type AppElementsWireMetadataEntries = Readonly<{
  * known keys (e.g. __layoutFlags). Distinct from AppElements / AppWireElements
  * which only carry render-time values.
  */
-export type AppOutgoingElements = Readonly<Record<string, ReactNode | LayoutFlags>>;
+export type AppOutgoingElements = Readonly<
+  Record<string, ReactNode | LayoutFlags | ArtifactCompatibilityEnvelope>
+>;
 
 type AppElementsWireKeys = {
+  readonly artifactCompatibility: typeof APP_ARTIFACT_COMPATIBILITY_KEY;
   readonly interceptionContext: typeof APP_INTERCEPTION_CONTEXT_KEY;
   readonly layoutFlags: typeof APP_LAYOUT_FLAGS_KEY;
   readonly rootLayout: typeof APP_ROOT_LAYOUT_KEY;
@@ -77,6 +87,7 @@ type AppElementsWireCodec = {
   encodeCacheKey(rscUrl: string, interceptionContext: string | null): string;
   encodeOutgoingPayload(input: {
     element: ReactNode | Readonly<Record<string, ReactNode>>;
+    artifactCompatibility?: ArtifactCompatibilityEnvelope;
     layoutFlags: LayoutFlags;
   }): ReactNode | AppOutgoingElements;
   encodePageId(routePath: string, interceptionContext: string | null): string;
@@ -182,12 +193,29 @@ export function withLayoutFlags<T extends Record<string, unknown>>(
 
 export function buildOutgoingAppPayload(input: {
   element: ReactNode | Readonly<Record<string, ReactNode>>;
+  artifactCompatibility?: ArtifactCompatibilityEnvelope;
   layoutFlags: LayoutFlags;
 }): ReactNode | AppOutgoingElements {
   if (!isAppElementsRecord(input.element)) {
     return input.element;
   }
-  return withLayoutFlags(input.element, input.layoutFlags);
+  return {
+    ...input.element,
+    [APP_LAYOUT_FLAGS_KEY]: input.layoutFlags,
+    [APP_ARTIFACT_COMPATIBILITY_KEY]:
+      input.artifactCompatibility ?? createArtifactCompatibilityEnvelope(),
+  };
+}
+
+function readArtifactCompatibilityMetadata(value: unknown): ArtifactCompatibilityEnvelope {
+  if (value === undefined) return createArtifactCompatibilityEnvelope();
+
+  const artifactCompatibility = parseArtifactCompatibilityEnvelope(value);
+  // TODO(#726-COMPAT-04): hard-fail malformed compatibility metadata once
+  // cache/skip consumers depend on this proof. During Wave01 the field is
+  // emitted as scaffolding, so bad or future-version values degrade like
+  // missing __layoutFlags instead of crashing render paths that do not read it.
+  return artifactCompatibility ?? createArtifactCompatibilityEnvelope();
 }
 
 export function readAppElementsMetadata(
@@ -216,8 +244,12 @@ export function readAppElementsMetadata(
   }
 
   const layoutFlags = parseLayoutFlags(elements[APP_LAYOUT_FLAGS_KEY]);
+  const artifactCompatibility = readArtifactCompatibilityMetadata(
+    elements[APP_ARTIFACT_COMPATIBILITY_KEY],
+  );
 
   return {
+    artifactCompatibility,
     interceptionContext: interceptionContext ?? null,
     layoutFlags,
     routeId,
@@ -229,6 +261,7 @@ export const AppElementsWire: AppElementsWireCodec = {
   // WIRE follow-ups use these stable key names when moving payload readers and writers
   // behind the codec boundary.
   keys: {
+    artifactCompatibility: APP_ARTIFACT_COMPATIBILITY_KEY,
     interceptionContext: APP_INTERCEPTION_CONTEXT_KEY,
     layoutFlags: APP_LAYOUT_FLAGS_KEY,
     rootLayout: APP_ROOT_LAYOUT_KEY,

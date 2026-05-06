@@ -2,6 +2,7 @@ import React from "react";
 import { describe, expect, it } from "vite-plus/test";
 import { UNMATCHED_SLOT } from "../packages/vinext/src/shims/slot.js";
 import {
+  APP_ARTIFACT_COMPATIBILITY_KEY,
   AppElementsWire,
   APP_INTERCEPTION_CONTEXT_KEY,
   APP_LAYOUT_FLAGS_KEY,
@@ -17,6 +18,13 @@ import {
   resolveVisitedResponseInterceptionContext,
   withLayoutFlags,
 } from "../packages/vinext/src/server/app-elements.js";
+import {
+  APP_ELEMENTS_SCHEMA_VERSION,
+  ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+  createArtifactCompatibilityEnvelope,
+  evaluateArtifactCompatibility,
+  RSC_PAYLOAD_SCHEMA_VERSION,
+} from "../packages/vinext/src/server/artifact-compatibility.js";
 
 describe("AppElementsWire", () => {
   it("encodes outgoing record payloads without mutating caller-owned records", () => {
@@ -36,6 +44,7 @@ describe("AppElementsWire", () => {
       expect(encoded).toEqual({
         "layout:/": "root-layout",
         "page:/blog": "blog-page",
+        [APP_ARTIFACT_COMPATIBILITY_KEY]: createArtifactCompatibilityEnvelope(),
         [APP_LAYOUT_FLAGS_KEY]: { "layout:/": "s" },
       });
     }
@@ -55,6 +64,7 @@ describe("AppElementsWire", () => {
 
     expect(decoded["slot:modal:/"]).toBe(UNMATCHED_SLOT);
     expect(AppElementsWire.readMetadata(decoded)).toEqual({
+      artifactCompatibility: createArtifactCompatibilityEnvelope(),
       interceptionContext: "/feed",
       layoutFlags: {},
       rootLayoutTreePath: "/",
@@ -211,6 +221,96 @@ describe("app elements payload helpers", () => {
 
     expect(metadata.layoutFlags).toEqual({});
   });
+
+  it("reads artifact compatibility envelope metadata", () => {
+    const envelope = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+    });
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+        "route:/dashboard": React.createElement("div", null, "route"),
+      }),
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: envelope,
+    });
+
+    expect(metadata.artifactCompatibility).toEqual(envelope);
+  });
+
+  it("defaults missing artifact compatibility to unknown proof for legacy payloads", () => {
+    const metadata = readAppElementsMetadata(
+      normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+        "route:/dashboard": React.createElement("div", null, "route"),
+      }),
+    );
+
+    expect(metadata.artifactCompatibility).toEqual({
+      schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+      graphVersion: null,
+      deploymentVersion: null,
+      appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+      rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+      rootBoundaryId: null,
+      renderEpoch: null,
+    });
+  });
+
+  it("defaults malformed artifact compatibility metadata to unknown proof", () => {
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+      }),
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: {
+        schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+        graphVersion: 123,
+        deploymentVersion: null,
+        appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+        rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+        rootBoundaryId: null,
+        renderEpoch: null,
+      },
+    });
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
+  });
+
+  it("defaults artifact compatibility with an unrecognized schema version to unknown proof", () => {
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+      }),
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: {
+        schemaVersion: 99,
+        graphVersion: null,
+        deploymentVersion: null,
+        appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+        rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+        rootBoundaryId: null,
+        renderEpoch: null,
+      },
+    });
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
+  });
+
+  it("defaults non-object artifact compatibility metadata to unknown proof", () => {
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+      }),
+      [APP_ARTIFACT_COMPATIBILITY_KEY]: "garbage",
+    });
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
+  });
 });
 
 describe("isAppElementsRecord", () => {
@@ -304,6 +404,7 @@ describe("buildOutgoingAppPayload", () => {
     expect(element).toEqual(snapshot);
     expect(Object.keys(element)).toEqual(Object.keys(snapshot));
     expect(APP_LAYOUT_FLAGS_KEY in element).toBe(false);
+    expect(APP_ARTIFACT_COMPATIBILITY_KEY in element).toBe(false);
   });
 
   it("attaches __layoutFlags on the returned record", () => {
@@ -314,6 +415,30 @@ describe("buildOutgoingAppPayload", () => {
     expect(isAppElementsRecord(result)).toBe(true);
     if (isAppElementsRecord(result)) {
       expect(result[APP_LAYOUT_FLAGS_KEY]).toEqual({ "layout:/": "s" });
+    }
+  });
+
+  it("attaches __artifactCompatibility on the returned record", () => {
+    const result = buildOutgoingAppPayload({
+      element: { "page:/": "page" },
+      layoutFlags: { "layout:/": "s" },
+      artifactCompatibility: createArtifactCompatibilityEnvelope({
+        graphVersion: "graph-a",
+        deploymentVersion: "deploy-a",
+        rootBoundaryId: "root-a",
+      }),
+    });
+    expect(isAppElementsRecord(result)).toBe(true);
+    if (isAppElementsRecord(result)) {
+      expect(result[APP_ARTIFACT_COMPATIBILITY_KEY]).toEqual({
+        schemaVersion: ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
+        graphVersion: "graph-a",
+        deploymentVersion: "deploy-a",
+        appElementsSchemaVersion: APP_ELEMENTS_SCHEMA_VERSION,
+        rscPayloadSchemaVersion: RSC_PAYLOAD_SCHEMA_VERSION,
+        rootBoundaryId: "root-a",
+        renderEpoch: null,
+      });
     }
   });
 
@@ -348,5 +473,120 @@ describe("buildOutgoingAppPayload", () => {
       expect(result["page:/blog"]).toBe("blog-page");
       expect(result["layout:/"]).toBe("root-layout");
     }
+  });
+});
+
+describe("artifact compatibility proof evaluation", () => {
+  it("returns compatible only when every current proof field is known and equal", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, current)).toEqual({
+      kind: "compatible",
+    });
+  });
+
+  it("falls back to renderFresh when graph compatibility is unknown", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "graphVersionUnknown",
+    });
+  });
+
+  it("falls back to renderFresh when deployment compatibility is unknown", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "deploymentVersionUnknown",
+    });
+  });
+
+  it("falls back to renderFresh when root boundary compatibility is unknown", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "rootBoundaryIdUnknown",
+    });
+  });
+
+  it("does not promote matching graph and deployment metadata to reuse proof when renderEpoch is unknown", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "renderEpochUnknown",
+    });
+  });
+
+  it("rejects a known deployment mismatch instead of using the unknown fallback", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-b",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "incompatible",
+      fallback: "renderFresh",
+      reason: "deploymentVersionMismatch",
+    });
   });
 });
