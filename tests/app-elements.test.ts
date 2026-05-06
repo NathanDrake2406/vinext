@@ -21,6 +21,7 @@ import {
   APP_ELEMENTS_SCHEMA_VERSION,
   ARTIFACT_COMPATIBILITY_SCHEMA_VERSION,
   createArtifactCompatibilityEnvelope,
+  evaluateArtifactCompatibility,
   RSC_PAYLOAD_SCHEMA_VERSION,
 } from "../packages/vinext/src/server/artifact-compatibility.js";
 
@@ -398,5 +399,120 @@ describe("buildOutgoingAppPayload", () => {
       expect(result["page:/blog"]).toBe("blog-page");
       expect(result["layout:/"]).toBe("root-layout");
     }
+  });
+});
+
+describe("artifact compatibility proof evaluation", () => {
+  it("returns compatible only when every current proof field is known and equal", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, current)).toEqual({
+      kind: "compatible",
+    });
+  });
+
+  it("falls back to renderFresh when graph compatibility is unknown", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "graphVersionUnknown",
+    });
+  });
+
+  it("falls back to renderFresh when deployment compatibility is unknown", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "deploymentVersionUnknown",
+    });
+  });
+
+  it("falls back to renderFresh when root boundary compatibility is unknown", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "rootBoundaryIdUnknown",
+    });
+  });
+
+  it("does not promote matching graph and deployment metadata to reuse proof when renderEpoch is unknown", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "renderEpochUnknown",
+    });
+  });
+
+  it("rejects a known deployment mismatch instead of using the unknown fallback", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-b",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(evaluateArtifactCompatibility(current, candidate)).toEqual({
+      kind: "incompatible",
+      fallback: "renderFresh",
+      reason: "deploymentVersionMismatch",
+    });
   });
 });

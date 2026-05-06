@@ -1,6 +1,11 @@
 import type { ReactNode } from "react";
 import type { CachedAppPageValue } from "vinext/shims/cache";
-import { buildOutgoingAppPayload, type AppOutgoingElements } from "./app-elements.js";
+import {
+  APP_ROOT_LAYOUT_KEY,
+  buildOutgoingAppPayload,
+  isAppElementsRecord,
+  type AppOutgoingElements,
+} from "./app-elements.js";
 import {
   finalizeAppPageHtmlCacheResponse,
   finalizeAppPageRscCacheResponse,
@@ -32,6 +37,11 @@ import {
   shouldRerenderAppPageWithGlobalError,
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
+import {
+  createArtifactCompatibilityEnvelope,
+  createArtifactCompatibilityGraphVersion,
+  type ArtifactCompatibilityEnvelope,
+} from "./artifact-compatibility.js";
 
 type AppPageBoundaryOnError = (
   error: unknown,
@@ -159,6 +169,30 @@ function applyRequestCacheLife(options: {
   return { expireSeconds, revalidateSeconds };
 }
 
+function readRootBoundaryId(element: Readonly<Record<string, unknown>>): string | null {
+  const rootLayoutTreePath = element[APP_ROOT_LAYOUT_KEY];
+  return typeof rootLayoutTreePath === "string" ? rootLayoutTreePath : null;
+}
+
+function createAppPageArtifactCompatibility(
+  element: ReactNode | Readonly<Record<string, ReactNode>>,
+  routePattern: string,
+): ArtifactCompatibilityEnvelope | undefined {
+  if (!isAppElementsRecord(element)) {
+    return undefined;
+  }
+
+  const rootBoundaryId = readRootBoundaryId(element);
+  return createArtifactCompatibilityEnvelope({
+    graphVersion: createArtifactCompatibilityGraphVersion({
+      routePattern,
+      rootBoundaryId,
+    }),
+    deploymentVersion: process.env.__VINEXT_BUILD_ID ?? null,
+    rootBoundaryId,
+  });
+}
+
 /**
  * Wraps an RSC response body to report invalid dynamic usage errors after the
  * stream is fully consumed. In dev mode, errors from cookies()/headers() inside
@@ -254,9 +288,14 @@ export async function renderAppPageLifecycle(
   // Render the CANONICAL element. The outgoing payload carries per-layout
   // static/dynamic flags under `__layoutFlags` so the client can later tell
   // which layouts are safe to skip on subsequent navigations.
+  const artifactCompatibility = createAppPageArtifactCompatibility(
+    options.element,
+    options.routePattern,
+  );
   const outgoingElement = buildOutgoingAppPayload({
     element: options.element,
     layoutFlags,
+    ...(artifactCompatibility ? { artifactCompatibility } : {}),
   });
 
   const compileEnd = options.isProduction ? undefined : performance.now();

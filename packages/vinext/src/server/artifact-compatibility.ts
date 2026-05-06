@@ -1,3 +1,5 @@
+import { fnv1a64 } from "../utils/hash.js";
+
 export const ARTIFACT_COMPATIBILITY_SCHEMA_VERSION = 1;
 
 // These versions describe separate protocol layers. They start in lockstep,
@@ -23,6 +25,42 @@ type ArtifactCompatibilityEnvelopeInput = Readonly<{
   renderEpoch?: string | null;
 }>;
 
+type ArtifactCompatibilityFallback = "renderFresh";
+
+type ArtifactCompatibilityUnknownReason =
+  | "graphVersionUnknown"
+  | "deploymentVersionUnknown"
+  | "rootBoundaryIdUnknown"
+  | "renderEpochUnknown";
+
+type ArtifactCompatibilityIncompatibleReason =
+  | "appElementsSchemaVersionMismatch"
+  | "deploymentVersionMismatch"
+  | "graphVersionMismatch"
+  | "renderEpochMismatch"
+  | "rootBoundaryIdMismatch"
+  | "rscPayloadSchemaVersionMismatch"
+  | "schemaVersionMismatch";
+
+type ArtifactCompatibilityDecision = Readonly<
+  | { kind: "compatible" }
+  | {
+      kind: "unknown";
+      fallback: ArtifactCompatibilityFallback;
+      reason: ArtifactCompatibilityUnknownReason;
+    }
+  | {
+      kind: "incompatible";
+      fallback: ArtifactCompatibilityFallback;
+      reason: ArtifactCompatibilityIncompatibleReason;
+    }
+>;
+
+type ArtifactCompatibilityGraphVersionInput = Readonly<{
+  routePattern: string;
+  rootBoundaryId: string | null;
+}>;
+
 export function createArtifactCompatibilityEnvelope(
   input: ArtifactCompatibilityEnvelopeInput = {},
 ): ArtifactCompatibilityEnvelope {
@@ -35,6 +73,13 @@ export function createArtifactCompatibilityEnvelope(
     rootBoundaryId: input.rootBoundaryId ?? null,
     renderEpoch: input.renderEpoch ?? null,
   };
+}
+
+export function createArtifactCompatibilityGraphVersion(
+  input: ArtifactCompatibilityGraphVersionInput,
+): string {
+  const fingerprint = fnv1a64(JSON.stringify([input.routePattern, input.rootBoundaryId]));
+  return `app-route-graph:${fingerprint}`;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -75,4 +120,78 @@ export function parseArtifactCompatibilityEnvelope(
     rootBoundaryId: value.rootBoundaryId,
     renderEpoch: value.renderEpoch,
   };
+}
+
+function incompatible(
+  reason: ArtifactCompatibilityIncompatibleReason,
+): ArtifactCompatibilityDecision {
+  return { kind: "incompatible", fallback: "renderFresh", reason };
+}
+
+function unknown(reason: ArtifactCompatibilityUnknownReason): ArtifactCompatibilityDecision {
+  return { kind: "unknown", fallback: "renderFresh", reason };
+}
+
+function compareKnownField(
+  currentValue: string | null,
+  candidateValue: string | null,
+  unknownReason: ArtifactCompatibilityUnknownReason,
+  mismatchReason: ArtifactCompatibilityIncompatibleReason,
+): ArtifactCompatibilityDecision | null {
+  if (currentValue === null || candidateValue === null) {
+    return unknown(unknownReason);
+  }
+  if (currentValue !== candidateValue) {
+    return incompatible(mismatchReason);
+  }
+  return null;
+}
+
+export function evaluateArtifactCompatibility(
+  current: ArtifactCompatibilityEnvelope,
+  candidate: ArtifactCompatibilityEnvelope,
+): ArtifactCompatibilityDecision {
+  if (current.schemaVersion !== candidate.schemaVersion) {
+    return incompatible("schemaVersionMismatch");
+  }
+  if (current.appElementsSchemaVersion !== candidate.appElementsSchemaVersion) {
+    return incompatible("appElementsSchemaVersionMismatch");
+  }
+  if (current.rscPayloadSchemaVersion !== candidate.rscPayloadSchemaVersion) {
+    return incompatible("rscPayloadSchemaVersionMismatch");
+  }
+
+  const graphDecision = compareKnownField(
+    current.graphVersion,
+    candidate.graphVersion,
+    "graphVersionUnknown",
+    "graphVersionMismatch",
+  );
+  if (graphDecision) return graphDecision;
+
+  const deploymentDecision = compareKnownField(
+    current.deploymentVersion,
+    candidate.deploymentVersion,
+    "deploymentVersionUnknown",
+    "deploymentVersionMismatch",
+  );
+  if (deploymentDecision) return deploymentDecision;
+
+  const rootBoundaryDecision = compareKnownField(
+    current.rootBoundaryId,
+    candidate.rootBoundaryId,
+    "rootBoundaryIdUnknown",
+    "rootBoundaryIdMismatch",
+  );
+  if (rootBoundaryDecision) return rootBoundaryDecision;
+
+  const renderEpochDecision = compareKnownField(
+    current.renderEpoch,
+    candidate.renderEpoch,
+    "renderEpochUnknown",
+    "renderEpochMismatch",
+  );
+  if (renderEpochDecision) return renderEpochDecision;
+
+  return { kind: "compatible" };
 }
