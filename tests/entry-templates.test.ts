@@ -145,6 +145,7 @@ describe("App Router generated manifest construction", () => {
           route: "route:/dashboard/:id",
           page: "page:/dashboard/:id",
           routeHandler: "route-handler:/dashboard/:id",
+          rootBoundary: "root-boundary:/",
           layouts: ["layout:/", "layout:/dashboard"],
           templates: ["template:/dashboard"],
           slots: {

@@ -5,8 +5,8 @@ import path from "node:path";
 import { createValidFileMatcher } from "../packages/vinext/src/routing/file-matcher.js";
 import {
   buildAppRouteGraph,
-  type AppRoute,
   type AppRouteGraphRoute,
+  type RouteManifest,
 } from "../packages/vinext/src/routing/app-route-graph.js";
 
 const EMPTY_PAGE = "export default function Page() { return null; }\n";
@@ -31,12 +31,49 @@ async function writeAppFile(appDir: string, relativePath: string, contents: stri
   await writeFile(filePath, contents);
 }
 
-function findRoute(routes: AppRoute[], pattern: string): AppRoute {
+function findRoute(routes: readonly AppRouteGraphRoute[], pattern: string): AppRouteGraphRoute {
   const route = routes.find((candidate) => candidate.pattern === pattern);
   if (!route) {
     throw new Error(`Expected route ${pattern} to be materialized`);
   }
   return route;
+}
+
+function snapshotRouteManifest(manifest: RouteManifest) {
+  return {
+    graphVersion: manifest.graphVersion,
+    routes: Array.from(manifest.segmentGraph.routes.entries()),
+    layouts: Array.from(manifest.segmentGraph.layouts.entries()),
+    pages: Array.from(manifest.segmentGraph.pages.entries()),
+    routeHandlers: Array.from(manifest.segmentGraph.routeHandlers.entries()),
+    templates: Array.from(manifest.segmentGraph.templates.entries()),
+    slots: Array.from(manifest.segmentGraph.slots.entries()),
+    rootBoundaries: Array.from(manifest.segmentGraph.rootBoundaries.entries()),
+  };
+}
+
+async function withReverseLocaleCompare<T>(run: () => Promise<T>): Promise<T> {
+  const originalLocaleCompare = Reflect.get(String.prototype, "localeCompare");
+  if (typeof originalLocaleCompare !== "function") {
+    throw new Error("Expected String.prototype.localeCompare to be a function");
+  }
+  // This proves RouteManifest graphVersion canonicalization does not depend on
+  // locale-sensitive sorting. Keep the patched window scoped to graph building.
+  Object.defineProperty(String.prototype, "localeCompare", {
+    configurable: true,
+    value(this: string, compareString: string) {
+      return Reflect.apply(originalLocaleCompare, compareString, [this]);
+    },
+  });
+
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(String.prototype, "localeCompare", {
+      configurable: true,
+      value: originalLocaleCompare,
+    });
+  }
 }
 
 async function createSemanticIdsFixture(appDir: string): Promise<void> {
@@ -240,6 +277,7 @@ describe("App Router route graph builder", () => {
         route: "route:/blog/:slug",
         page: "page:/blog/:slug",
         routeHandler: null,
+        rootBoundary: "root-boundary:/",
         layouts: ["layout:/", "layout:/(marketing)", "layout:/(marketing)/blog/[slug]"],
         templates: ["template:/(marketing)/blog/[slug]"],
         slots: {
@@ -250,6 +288,120 @@ describe("App Router route graph builder", () => {
         id: "slot:modal:/(marketing)/blog/[slug]",
         key: "modal@(marketing)/blog/[slug]/@modal",
       });
+    });
+  });
+
+  it("exposes a minimal RouteManifest read model keyed by semantic ids", async () => {
+    await withTempApp(async (appDir) => {
+      await createSemanticIdsFixture(appDir);
+      await writeAppFile(appDir, "(marketing)/api/route.ts", EMPTY_ROUTE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const manifest = graph.routeManifest;
+      const segmentGraph = manifest.segmentGraph;
+
+      expect(manifest.graphVersion).toMatch(/^graph:[a-f0-9]{64}$/);
+      expect(segmentGraph.routes.get("route:/blog/:slug")).toEqual({
+        id: "route:/blog/:slug",
+        pattern: "/blog/:slug",
+        patternParts: ["blog", ":slug"],
+        isDynamic: true,
+        paramNames: ["slug"],
+        rootParamNames: [],
+        rootBoundaryId: "root-boundary:/",
+        pageId: "page:/blog/:slug",
+        routeHandlerId: null,
+        layoutIds: ["layout:/", "layout:/(marketing)", "layout:/(marketing)/blog/[slug]"],
+        templateIds: ["template:/(marketing)/blog/[slug]"],
+        slotIds: ["slot:modal:/(marketing)/blog/[slug]"],
+      });
+      expect(segmentGraph.routes.get("route:/api")).toEqual({
+        id: "route:/api",
+        pattern: "/api",
+        patternParts: ["api"],
+        isDynamic: false,
+        paramNames: [],
+        rootParamNames: [],
+        rootBoundaryId: "root-boundary:/",
+        pageId: null,
+        routeHandlerId: "route-handler:/api",
+        layoutIds: ["layout:/", "layout:/(marketing)"],
+        templateIds: [],
+        slotIds: [],
+      });
+      expect(segmentGraph.pages.get("page:/blog/:slug")).toEqual({
+        id: "page:/blog/:slug",
+        routeId: "route:/blog/:slug",
+        pattern: "/blog/:slug",
+      });
+      expect(segmentGraph.routeHandlers.get("route-handler:/api")).toEqual({
+        id: "route-handler:/api",
+        routeId: "route:/api",
+        pattern: "/api",
+      });
+      expect(segmentGraph.layouts.get("layout:/(marketing)/blog/[slug]")).toEqual({
+        id: "layout:/(marketing)/blog/[slug]",
+        treePath: "/(marketing)/blog/[slug]",
+        rootBoundaryId: "root-boundary:/",
+      });
+      expect(segmentGraph.templates.get("template:/(marketing)/blog/[slug]")).toEqual({
+        id: "template:/(marketing)/blog/[slug]",
+        treePath: "/(marketing)/blog/[slug]",
+        rootBoundaryId: "root-boundary:/",
+      });
+      expect(segmentGraph.slots.get("slot:modal:/(marketing)/blog/[slug]")).toEqual({
+        id: "slot:modal:/(marketing)/blog/[slug]",
+        key: "modal@(marketing)/blog/[slug]/@modal",
+        name: "modal",
+      });
+      expect(segmentGraph.rootBoundaries.get("root-boundary:/")).toEqual({
+        id: "root-boundary:/",
+        layoutId: "layout:/",
+        treePath: "/",
+      });
+    });
+  });
+
+  it("mints distinct root boundary ids for route-group root layouts", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "(marketing)/layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "(marketing)/marketing/page.tsx", EMPTY_PAGE);
+      await writeAppFile(appDir, "(shop)/layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(appDir, "(shop)/shop/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const rootBoundaryIds = graph.routes
+        .map((route) => route.ids.rootBoundary)
+        .sort((left, right) => {
+          const leftKey = String(left);
+          const rightKey = String(right);
+          if (leftKey < rightKey) return -1;
+          if (leftKey > rightKey) return 1;
+          return 0;
+        });
+
+      expect(rootBoundaryIds).toEqual(["root-boundary:/(marketing)", "root-boundary:/(shop)"]);
+      expect(Array.from(graph.routeManifest.segmentGraph.rootBoundaries.keys()).sort()).toEqual([
+        "root-boundary:/(marketing)",
+        "root-boundary:/(shop)",
+      ]);
+    });
+  });
+
+  it("uses null rootBoundaryId when a route has no layout boundary", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layoutless/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const route = findRoute(graph.routes, "/layoutless");
+
+      expect(route.ids.rootBoundary).toBeNull();
+      expect(graph.routeManifest.segmentGraph.routes.get("route:/layoutless")).toMatchObject({
+        id: "route:/layoutless",
+        rootBoundaryId: null,
+        layoutIds: [],
+      });
+      expect(graph.routeManifest.segmentGraph.rootBoundaries.size).toBe(0);
     });
   });
 
@@ -268,6 +420,42 @@ describe("App Router route graph builder", () => {
 
     expect(firstIds).toBeDefined();
     expect(secondIds).toEqual(firstIds);
+  });
+
+  it("keeps RouteManifest graph output stable across different filesystem roots", async () => {
+    const firstManifest = await withTempApp(async (appDir) => {
+      await createSemanticIdsFixture(appDir);
+      await writeAppFile(appDir, "(marketing)/api/route.ts", EMPTY_ROUTE);
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      return snapshotRouteManifest(graph.routeManifest);
+    });
+
+    const secondManifest = await withTempApp(async (appDir) => {
+      await createSemanticIdsFixture(appDir);
+      await writeAppFile(appDir, "(marketing)/api/route.ts", EMPTY_ROUTE);
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      return snapshotRouteManifest(graph.routeManifest);
+    });
+
+    expect(secondManifest).toEqual(firstManifest);
+  });
+
+  it("does not let locale collation affect RouteManifest graphVersion", async () => {
+    const graphVersions = await withTempApp(async (appDir) => {
+      await createSemanticIdsFixture(appDir);
+
+      const normalGraph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const reverseLocaleGraph = await withReverseLocaleCompare(() =>
+        buildAppRouteGraph(appDir, createValidFileMatcher()),
+      );
+
+      return [
+        normalGraph.routeManifest.graphVersion,
+        reverseLocaleGraph.routeManifest.graphVersion,
+      ];
+    });
+
+    expect(graphVersions[1]).toBe(graphVersions[0]);
   });
 
   it("links inherited parallel slot to a mirrored sub-page (literal segments)", async () => {

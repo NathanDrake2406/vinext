@@ -10,6 +10,7 @@ import {
   type Route,
 } from "../packages/vinext/src/routing/pages-router.js";
 import {
+  appRouteGraph,
   appRouter,
   computeRootParamNames,
   matchAppRoute,
@@ -331,6 +332,18 @@ describe("appRouter - route discovery", () => {
     expect(apiRoutes.length).toBeGreaterThan(0);
     const apiPatterns = apiRoutes.map((r) => r.pattern);
     expect(apiPatterns).toContain("/api/hello");
+  });
+
+  it("caches the route manifest with the route list", async () => {
+    invalidateAppRouteCache();
+
+    const graph = await appRouteGraph(APP_FIXTURE_DIR);
+    const routes = await appRouter(APP_FIXTURE_DIR);
+    const cachedGraph = await appRouteGraph(APP_FIXTURE_DIR);
+
+    expect(routes).toBe(graph.routes);
+    expect(cachedGraph).toBe(graph);
+    expect(graph.routeManifest.segmentGraph.routes.size).toBeGreaterThan(0);
   });
 
   it("rejects page and route handler files at the same app route", async () => {

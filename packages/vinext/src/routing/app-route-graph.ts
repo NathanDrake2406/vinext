@@ -6,6 +6,7 @@
  */
 import path from "node:path";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { compareRoutes, decodeRouteSegment } from "./utils.js";
 import { scanWithExtensions, type ValidFileMatcher } from "./file-matcher.js";
 import { validateRoutePatterns } from "./route-validation.js";
@@ -151,6 +152,7 @@ export type AppRouteSemanticIds = {
   route: string;
   page: string | null;
   routeHandler: string | null;
+  rootBoundary: RootBoundaryId | null;
   layouts: readonly string[];
   templates: readonly string[];
   /**
@@ -164,9 +166,81 @@ export type AppRouteGraphParallelSlot = ParallelSlot & {
   id: string;
 };
 
-export type AppRouteGraphRoute = Omit<AppRoute, "ids" | "parallelSlots"> & {
+export type AppRouteGraphRoute = Omit<AppRoute, "ids" | "parallelSlots" | "rootParamNames"> & {
   ids: AppRouteSemanticIds;
   parallelSlots: AppRouteGraphParallelSlot[];
+  rootParamNames: string[];
+};
+
+type Flavor<T, Brand extends string> = T & { readonly __flavor?: Brand };
+
+export type GraphVersion = Flavor<string, "GraphVersion">;
+export type RootBoundaryId = Flavor<string, "RootBoundaryId">;
+
+export type RouteManifestRoute = {
+  id: string;
+  pattern: string;
+  patternParts: readonly string[];
+  isDynamic: boolean;
+  paramNames: readonly string[];
+  rootParamNames: readonly string[];
+  rootBoundaryId: RootBoundaryId | null;
+  pageId: string | null;
+  routeHandlerId: string | null;
+  layoutIds: readonly string[];
+  templateIds: readonly string[];
+  slotIds: readonly string[];
+};
+
+export type RouteManifestPage = {
+  id: string;
+  routeId: string;
+  pattern: string;
+};
+
+export type RouteManifestRouteHandler = {
+  id: string;
+  routeId: string;
+  pattern: string;
+};
+
+export type RouteManifestLayout = {
+  id: string;
+  treePath: string;
+  rootBoundaryId: RootBoundaryId | null;
+};
+
+export type RouteManifestTemplate = {
+  id: string;
+  treePath: string;
+  rootBoundaryId: RootBoundaryId | null;
+};
+
+export type RouteManifestSlot = {
+  id: string;
+  key: string;
+  name: string;
+};
+
+export type RouteManifestRootBoundary = {
+  id: RootBoundaryId;
+  layoutId: string;
+  treePath: string;
+};
+
+export type StaticSegmentGraph = {
+  routes: ReadonlyMap<string, RouteManifestRoute>;
+  pages: ReadonlyMap<string, RouteManifestPage>;
+  routeHandlers: ReadonlyMap<string, RouteManifestRouteHandler>;
+  layouts: ReadonlyMap<string, RouteManifestLayout>;
+  templates: ReadonlyMap<string, RouteManifestTemplate>;
+  slots: ReadonlyMap<string, RouteManifestSlot>;
+  rootBoundaries: ReadonlyMap<RootBoundaryId, RouteManifestRootBoundary>;
+};
+
+export type RouteManifest = {
+  graphVersion: GraphVersion;
+  segmentGraph: StaticSegmentGraph;
 };
 
 function createAppRouteGraphRouteId(pattern: string): string {
@@ -193,10 +267,184 @@ function createAppRouteGraphSlotId(slotName: string, ownerTreePath: string): str
   return `slot:${slotName}:${ownerTreePath}`;
 }
 
+function createAppRouteGraphRootBoundaryId(treePath: string): RootBoundaryId {
+  return `root-boundary:${treePath}`;
+}
+
+function compareStableStrings(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function sortedMapValues<T>(map: ReadonlyMap<string, T>): T[] {
+  return Array.from(map.entries())
+    .sort(([left], [right]) => compareStableStrings(left, right))
+    .map(([, value]) => value);
+}
+
+function createRouteManifest(routes: readonly AppRouteGraphRoute[]): RouteManifest {
+  const segmentGraph = createStaticSegmentGraph(routes);
+
+  return {
+    graphVersion: createRouteManifestGraphVersion(segmentGraph),
+    segmentGraph,
+  };
+}
+
+function createStaticSegmentGraph(routes: readonly AppRouteGraphRoute[]): StaticSegmentGraph {
+  const routeEntries = new Map<string, RouteManifestRoute>();
+  const pages = new Map<string, RouteManifestPage>();
+  const routeHandlers = new Map<string, RouteManifestRouteHandler>();
+  const layouts = new Map<string, RouteManifestLayout>();
+  const templates = new Map<string, RouteManifestTemplate>();
+  const slots = new Map<string, RouteManifestSlot>();
+  const rootBoundaries = new Map<RootBoundaryId, RouteManifestRootBoundary>();
+
+  for (const route of routes) {
+    routeEntries.set(route.ids.route, {
+      id: route.ids.route,
+      pattern: route.pattern,
+      patternParts: [...route.patternParts],
+      isDynamic: route.isDynamic,
+      paramNames: [...route.params],
+      rootParamNames: [...route.rootParamNames],
+      rootBoundaryId: route.ids.rootBoundary,
+      pageId: route.ids.page,
+      routeHandlerId: route.ids.routeHandler,
+      layoutIds: [...route.ids.layouts],
+      templateIds: [...route.ids.templates],
+      slotIds: route.parallelSlots.map((slot) => slot.id).sort(compareStableStrings),
+    });
+
+    if (route.ids.page) {
+      pages.set(route.ids.page, {
+        id: route.ids.page,
+        routeId: route.ids.route,
+        pattern: route.pattern,
+      });
+    }
+
+    if (route.ids.routeHandler) {
+      routeHandlers.set(route.ids.routeHandler, {
+        id: route.ids.routeHandler,
+        routeId: route.ids.route,
+        pattern: route.pattern,
+      });
+    }
+
+    for (const [index, layoutId] of route.ids.layouts.entries()) {
+      const treePosition = route.layoutTreePositions[index];
+      assertRouteManifestTreePosition("layout", route, layoutId, treePosition);
+
+      const treePath = createAppRouteGraphTreePath(route.routeSegments, treePosition);
+      const existingLayout = layouts.get(layoutId);
+      if (existingLayout) {
+        assertRouteManifestRootBoundary("layout", route, layoutId, existingLayout.rootBoundaryId);
+      }
+      layouts.set(layoutId, {
+        id: layoutId,
+        treePath,
+        rootBoundaryId: route.ids.rootBoundary,
+      });
+
+      if (index === 0 && route.ids.rootBoundary) {
+        rootBoundaries.set(route.ids.rootBoundary, {
+          id: route.ids.rootBoundary,
+          layoutId,
+          treePath,
+        });
+      }
+    }
+
+    for (const [index, templateId] of route.ids.templates.entries()) {
+      const treePosition = route.templateTreePositions?.[index];
+      assertRouteManifestTreePosition("template", route, templateId, treePosition);
+
+      const existingTemplate = templates.get(templateId);
+      if (existingTemplate) {
+        assertRouteManifestRootBoundary(
+          "template",
+          route,
+          templateId,
+          existingTemplate.rootBoundaryId,
+        );
+      }
+      templates.set(templateId, {
+        id: templateId,
+        treePath: createAppRouteGraphTreePath(route.routeSegments, treePosition),
+        rootBoundaryId: route.ids.rootBoundary,
+      });
+    }
+
+    // Slots are boundary-agnostic in this minimal read model; unlike layouts
+    // and templates, they do not carry rootBoundaryId facts to guard.
+    for (const slot of route.parallelSlots) {
+      slots.set(slot.id, {
+        id: slot.id,
+        key: slot.key,
+        name: slot.name,
+      });
+    }
+  }
+
+  return {
+    routes: routeEntries,
+    pages,
+    routeHandlers,
+    layouts,
+    templates,
+    slots,
+    rootBoundaries,
+  };
+}
+
+function assertRouteManifestTreePosition(
+  kind: "layout" | "template",
+  route: AppRouteGraphRoute,
+  id: string,
+  treePosition: number | undefined,
+): asserts treePosition is number {
+  if (treePosition !== undefined) return;
+
+  throw new Error(
+    `[vinext] App route graph invariant violated: missing ${kind} tree position for ${id} on ${route.pattern}`,
+  );
+}
+
+function assertRouteManifestRootBoundary(
+  kind: "layout" | "template",
+  route: AppRouteGraphRoute,
+  id: string,
+  existingRootBoundaryId: RootBoundaryId | null,
+): void {
+  if (existingRootBoundaryId === route.ids.rootBoundary) return;
+
+  throw new Error(
+    `[vinext] App route graph invariant violated: ${kind} ${id} is shared across root boundaries (${existingRootBoundaryId ?? "none"} and ${route.ids.rootBoundary ?? "none"}) on ${route.pattern}`,
+  );
+}
+
+function createRouteManifestGraphVersion(segmentGraph: StaticSegmentGraph): GraphVersion {
+  // The manifest hash is canonical only if top-level map keys are sorted and
+  // inner route arrays keep their own semantic order: layoutIds/templateIds in
+  // tree-position order, and slotIds in compareStableStrings order.
+  const stableShape = {
+    routes: sortedMapValues(segmentGraph.routes),
+    pages: sortedMapValues(segmentGraph.pages),
+    routeHandlers: sortedMapValues(segmentGraph.routeHandlers),
+    layouts: sortedMapValues(segmentGraph.layouts),
+    templates: sortedMapValues(segmentGraph.templates),
+    slots: sortedMapValues(segmentGraph.slots),
+    rootBoundaries: sortedMapValues(segmentGraph.rootBoundaries),
+  };
+  return `graph:${createHash("sha256").update(JSON.stringify(stableShape)).digest("hex")}`;
+}
+
 export async function buildAppRouteGraph(
   appDir: string,
   matcher: ValidFileMatcher,
-): Promise<{ routes: AppRouteGraphRoute[] }> {
+): Promise<{ routes: AppRouteGraphRoute[]; routeManifest: RouteManifest }> {
   // Find all page.tsx and route.ts files, excluding @slot directories
   // (slot pages are not standalone routes — they're rendered as props of their parent layout)
   // and _private folders (Next.js convention for colocated non-route files).
@@ -262,7 +510,7 @@ export async function buildAppRouteGraph(
   // Sort: static routes first, then dynamic, then catch-all
   routes.sort(compareRoutes);
 
-  return { routes };
+  return { routes, routeManifest: createRouteManifest(routes) };
 }
 
 function hasParallelSlotDirectory(dir: string): boolean {
@@ -705,6 +953,20 @@ export function computeRootParamNames(
   return names;
 }
 
+function resolveRootBoundaryId(
+  routeSegments: readonly string[],
+  layoutTreePositions: readonly number[],
+): RootBoundaryId | null {
+  const rootLayoutPosition = layoutTreePositions[0];
+  if (rootLayoutPosition === undefined) return null;
+
+  // Position 0 is the app root layout and still owns a real root boundary.
+  // Only a missing layout position means the route is layoutless.
+  return createAppRouteGraphRootBoundaryId(
+    createAppRouteGraphTreePath(routeSegments, rootLayoutPosition),
+  );
+}
+
 function createAppRouteSemanticIds(input: {
   pattern: string;
   pagePath: string | null;
@@ -723,6 +985,7 @@ function createAppRouteSemanticIds(input: {
     route: createAppRouteGraphRouteId(input.pattern),
     page: input.pagePath ? createAppRouteGraphPageId(input.pattern) : null,
     routeHandler: input.routePath ? createAppRouteGraphRouteHandlerId(input.pattern) : null,
+    rootBoundary: resolveRootBoundaryId(input.routeSegments, input.layoutTreePositions),
     layouts: input.layoutTreePositions.map((treePosition) =>
       createAppRouteGraphLayoutId(createAppRouteGraphTreePath(input.routeSegments, treePosition)),
     ),
