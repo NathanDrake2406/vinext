@@ -292,6 +292,7 @@ async function renderNavigationPayload(
 async function commitSameUrlNavigatePayload(
   nextElements: Promise<AppElements>,
   returnValue?: ServerActionResult["returnValue"],
+  actionInitiationState?: AppRouterState,
 ): Promise<unknown> {
   const navigationSnapshot = createClientNavigationRenderSnapshot(
     window.location.href,
@@ -301,6 +302,7 @@ async function commitSameUrlNavigatePayload(
     nextElements,
     navigationSnapshot,
     returnValue,
+    actionInitiationState,
   );
 }
 
@@ -854,10 +856,15 @@ function registerServerActionCallback(): void {
       return commitSameUrlNavigatePayload(
         Promise.resolve(AppElementsWire.decode(result.root)),
         result.returnValue,
+        currentState,
       );
     }
 
-    return commitSameUrlNavigatePayload(Promise.resolve(AppElementsWire.decode(result)));
+    return commitSameUrlNavigatePayload(
+      Promise.resolve(AppElementsWire.decode(result)),
+      undefined,
+      currentState,
+    );
   });
 }
 

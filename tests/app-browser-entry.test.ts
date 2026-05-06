@@ -506,14 +506,28 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("traces root-boundary hard navigation decisions", () => {
+  it("treats a visible commit version mismatch as stale before root-boundary decisions", () => {
     const decision = resolvePendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
       currentVisibleCommitVersion: 1,
       currentRootLayoutTreePath: "/(marketing)",
       nextRootLayoutTreePath: "/(dashboard)",
       startedNavigationId: 2,
-      startedVisibleCommitVersion: 1,
+      startedVisibleCommitVersion: 0,
+    });
+
+    expect(decision.disposition).toBe("skip");
+    expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.staleOperation);
+  });
+
+  it("traces root-boundary hard navigation decisions", () => {
+    const decision = resolvePendingNavigationCommitDispositionDecision({
+      activeNavigationId: 2,
+      currentVisibleCommitVersion: 0,
+      currentRootLayoutTreePath: "/(marketing)",
+      nextRootLayoutTreePath: "/(dashboard)",
+      startedNavigationId: 2,
+      startedVisibleCommitVersion: 0,
     });
 
     expect(decision.disposition).toBe("hard-navigate");
@@ -523,10 +537,10 @@ describe("app browser entry state helpers", () => {
         fields: {
           activeNavigationId: 2,
           currentRootLayoutTreePath: "/(marketing)",
-          currentVisibleCommitVersion: 1,
+          currentVisibleCommitVersion: 0,
           nextRootLayoutTreePath: "/(dashboard)",
           startedNavigationId: 2,
-          startedVisibleCommitVersion: 1,
+          startedVisibleCommitVersion: 0,
         },
       },
     ]);
@@ -535,11 +549,11 @@ describe("app browser entry state helpers", () => {
   it("traces unknown root-layout identity as a legacy soft-commit fallback", () => {
     const decision = resolvePendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
-      currentVisibleCommitVersion: 1,
+      currentVisibleCommitVersion: 0,
       currentRootLayoutTreePath: "/",
       nextRootLayoutTreePath: null,
       startedNavigationId: 2,
-      startedVisibleCommitVersion: 1,
+      startedVisibleCommitVersion: 0,
     });
 
     expect(decision.disposition).toBe("dispatch");
@@ -549,11 +563,11 @@ describe("app browser entry state helpers", () => {
   it("traces matching root-layout dispatches as current commits", () => {
     const decision = resolvePendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
-      currentVisibleCommitVersion: 1,
+      currentVisibleCommitVersion: 0,
       currentRootLayoutTreePath: "/",
       nextRootLayoutTreePath: "/",
       startedNavigationId: 2,
-      startedVisibleCommitVersion: 1,
+      startedVisibleCommitVersion: 0,
     });
 
     expect(decision.disposition).toBe("dispatch");
@@ -563,10 +577,10 @@ describe("app browser entry state helpers", () => {
         fields: {
           activeNavigationId: 2,
           currentRootLayoutTreePath: "/",
-          currentVisibleCommitVersion: 1,
+          currentVisibleCommitVersion: 0,
           nextRootLayoutTreePath: "/",
           startedNavigationId: 2,
-          startedVisibleCommitVersion: 1,
+          startedVisibleCommitVersion: 0,
         },
       },
     ]);
@@ -1113,6 +1127,189 @@ describe("app browser navigation controller", () => {
     }
   });
 
+  it("does not let older same-URL server action payloads overwrite newer visible commits", async () => {
+    const initialState = createState({
+      rootLayoutTreePath: "/",
+      routeId: "route:/settings",
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/settings", {
+        tab: "profile",
+      }),
+    });
+    const { controller, detach, stateRef } = createControllerHarness(initialState);
+    const { assign } = stubWindow("https://example.com/settings");
+    let resolveOlderPayload!: (elements: AppElements) => void;
+    const olderPayload = new Promise<AppElements>((resolve) => {
+      resolveOlderPayload = resolve;
+    });
+
+    try {
+      const olderResult = controller.commitSameUrlNavigatePayload(
+        olderPayload,
+        stateRef.current.navigationSnapshot,
+        {
+          data: "older-action-result",
+          ok: true,
+        },
+      );
+
+      const newerResult = await controller.commitSameUrlNavigatePayload(
+        Promise.resolve(
+          createResolvedElements("route:/settings/newer", "/", null, {
+            "page:/settings/newer": React.createElement("main", null, "newer"),
+          }),
+        ),
+        stateRef.current.navigationSnapshot,
+        {
+          data: "newer-action-result",
+          ok: true,
+        },
+      );
+
+      expect(newerResult).toBe("newer-action-result");
+      expect(stateRef.current.routeId).toBe("route:/settings/newer");
+      expect(stateRef.current.visibleCommitVersion).toBe(1);
+
+      resolveOlderPayload(
+        createResolvedElements("route:/settings/older", "/", null, {
+          "page:/settings/older": React.createElement("main", null, "older"),
+        }),
+      );
+
+      await expect(olderResult).resolves.toBe("older-action-result");
+      expect(assign).not.toHaveBeenCalled();
+      expect(stateRef.current.routeId).toBe("route:/settings/newer");
+      expect(stateRef.current.visibleCommitVersion).toBe(1);
+      expect(stateRef.current.activeOperation).toMatchObject({
+        lane: "server-action",
+        startedVisibleCommitVersion: 0,
+        state: "committed",
+        visibleCommitVersion: 1,
+      });
+    } finally {
+      detach();
+    }
+  });
+
+  it("revalidates same-URL server action commits immediately before dispatch", async () => {
+    const controller = createAppBrowserNavigationController();
+    const initialState = createState({
+      rootLayoutTreePath: "/",
+      routeId: "route:/settings",
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/settings", {
+        tab: "profile",
+      }),
+    });
+    let currentState = initialState;
+    let staleBeforeDispatch = false;
+    const stateRef = {
+      get current(): AppRouterState {
+        if (staleBeforeDispatch) {
+          staleBeforeDispatch = false;
+          queueMicrotask(() => {
+            currentState = createState({
+              routeId: "route:/settings/newer",
+              visibleCommitVersion: 1,
+            });
+          });
+        }
+
+        return currentState;
+      },
+      set current(value: AppRouterState) {
+        currentState = value;
+      },
+    };
+    const setBrowserRouterState = vi.fn((value: AppRouterState | Promise<AppRouterState>) => {
+      if (!(value instanceof Promise)) {
+        stateRef.current = value;
+      }
+    });
+    const detach = controller.attachBrowserRouterState(setBrowserRouterState, stateRef);
+    const { assign } = stubWindow("https://example.com/settings");
+    let resolvePayload!: (elements: AppElements) => void;
+    const payload = new Promise<AppElements>((resolve) => {
+      resolvePayload = resolve;
+    });
+
+    try {
+      const result = controller.commitSameUrlNavigatePayload(
+        payload,
+        stateRef.current.navigationSnapshot,
+        {
+          data: "older-action-result",
+          ok: true,
+        },
+      );
+
+      staleBeforeDispatch = true;
+      resolvePayload(
+        createResolvedElements("route:/settings/older", "/", null, {
+          "page:/settings/older": React.createElement("main", null, "older"),
+        }),
+      );
+
+      await expect(result).resolves.toBe("older-action-result");
+      expect(assign).not.toHaveBeenCalled();
+      expect(currentState.routeId).toBe("route:/settings/newer");
+      expect(currentState.visibleCommitVersion).toBe(1);
+    } finally {
+      detach();
+    }
+  });
+
+  it("uses the server-action initiation state when the response is processed after a newer commit", async () => {
+    const initialState = createState({
+      rootLayoutTreePath: "/",
+      routeId: "route:/settings",
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/settings", {
+        tab: "profile",
+      }),
+    });
+    const { controller, detach, stateRef } = createControllerHarness(initialState);
+    const { assign } = stubWindow("https://example.com/settings");
+    const actionInitiationState = stateRef.current;
+
+    try {
+      const newerResult = await controller.commitSameUrlNavigatePayload(
+        Promise.resolve(
+          createResolvedElements("route:/settings/newer", "/", null, {
+            "page:/settings/newer": React.createElement("main", null, "newer"),
+          }),
+        ),
+        stateRef.current.navigationSnapshot,
+        {
+          data: "newer-action-result",
+          ok: true,
+        },
+      );
+
+      expect(newerResult).toBe("newer-action-result");
+      expect(stateRef.current.routeId).toBe("route:/settings/newer");
+      expect(stateRef.current.visibleCommitVersion).toBe(1);
+
+      const olderResult = await controller.commitSameUrlNavigatePayload(
+        Promise.resolve(
+          createResolvedElements("route:/settings/older", "/", null, {
+            "page:/settings/older": React.createElement("main", null, "older"),
+          }),
+        ),
+        actionInitiationState.navigationSnapshot,
+        {
+          data: "older-action-result",
+          ok: true,
+        },
+        actionInitiationState,
+      );
+
+      expect(olderResult).toBe("older-action-result");
+      expect(assign).not.toHaveBeenCalled();
+      expect(stateRef.current.routeId).toBe("route:/settings/newer");
+      expect(stateRef.current.visibleCommitVersion).toBe(1);
+    } finally {
+      detach();
+    }
+  });
+
   it("hard-navigates same-URL server action payloads when the root layout changes", async () => {
     const initialState = createState({
       rootLayoutTreePath: "/(marketing)",
@@ -1463,6 +1660,87 @@ describe("app browser navigation lifecycle settlement", () => {
 
     expect(result.decision.disposition).toBe("no-commit");
     expect(result.pending.routeId).toBe("route:/dashboard");
+  });
+
+  it("uses the active navigation getter after the payload resolves", async () => {
+    const currentState = createState();
+    let activeNavigationId = 5;
+    let resolvePayload!: (elements: AppElements) => void;
+    const payload = new Promise<AppElements>((resolve) => {
+      resolvePayload = resolve;
+    });
+
+    const resultPromise = resolveAndClassifyNavigationCommit({
+      activeNavigationId,
+      currentState,
+      getActiveNavigationId: () => activeNavigationId,
+      navigationSnapshot: currentState.navigationSnapshot,
+      nextElements: payload,
+      operationLane: "server-action",
+      renderId: 24,
+      startedNavigationId: 5,
+      type: "navigate",
+    });
+
+    activeNavigationId = 9;
+    resolvePayload(createResolvedElements("route:/dashboard", "/"));
+
+    const result = await resultPromise;
+    expect(result.decision.disposition).toBe("no-commit");
+    expect(result.approvedCommit).toBeNull();
+    expect(result.trace.entries[0]).toEqual({
+      code: NavigationTraceReasonCodes.staleOperation,
+      fields: {
+        activeNavigationId: 9,
+        currentRootLayoutTreePath: "/",
+        currentVisibleCommitVersion: 0,
+        nextRootLayoutTreePath: "/",
+        startedNavigationId: 5,
+        startedVisibleCommitVersion: 0,
+      },
+    });
+  });
+
+  it("uses the approval state getter after the payload resolves", async () => {
+    const startedState = createState({ visibleCommitVersion: 0 });
+    let approvalState = startedState;
+    let resolvePayload!: (elements: AppElements) => void;
+    const payload = new Promise<AppElements>((resolve) => {
+      resolvePayload = resolve;
+    });
+
+    const resultPromise = resolveAndClassifyNavigationCommit({
+      activeNavigationId: 8,
+      currentState: startedState,
+      getCurrentStateForApproval: () => approvalState,
+      navigationSnapshot: startedState.navigationSnapshot,
+      nextElements: payload,
+      operationLane: "server-action",
+      renderId: 25,
+      startedNavigationId: 8,
+      type: "navigate",
+    });
+
+    approvalState = createState({
+      routeId: "route:/newer",
+      visibleCommitVersion: 1,
+    });
+    resolvePayload(createResolvedElements("route:/dashboard", "/"));
+
+    const result = await resultPromise;
+    expect(result.decision.disposition).toBe("no-commit");
+    expect(result.approvedCommit).toBeNull();
+    expect(result.trace.entries[0]).toEqual({
+      code: NavigationTraceReasonCodes.staleOperation,
+      fields: {
+        activeNavigationId: 8,
+        currentRootLayoutTreePath: "/",
+        currentVisibleCommitVersion: 1,
+        nextRootLayoutTreePath: "/",
+        startedNavigationId: 8,
+        startedVisibleCommitVersion: 0,
+      },
+    });
   });
 
   it("failed payload cleanly settles the pending router state without leaving it hanging", async () => {

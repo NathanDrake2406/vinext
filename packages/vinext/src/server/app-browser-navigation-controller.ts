@@ -74,6 +74,7 @@ type BrowserNavigationController = {
     nextElements: Promise<AppElements>,
     navigationSnapshot: ClientNavigationRenderSnapshot,
     returnValue?: { ok: boolean; data: unknown },
+    actionInitiationState?: AppRouterState,
   ): Promise<unknown>;
   hmrReplaceTree(
     nextElements: Promise<AppElements>,
@@ -477,12 +478,14 @@ export function createAppBrowserNavigationController(
     nextElements: Promise<AppElements>,
     navigationSnapshot: ClientNavigationRenderSnapshot,
     returnValue?: { ok: boolean; data: unknown },
+    actionInitiationState?: AppRouterState,
   ): Promise<unknown> {
-    const currentState = getBrowserRouterState();
+    const currentState = actionInitiationState ?? getBrowserRouterState();
     const startedNavigationId = activeNavigationId;
     const {
       approvedCommit,
       decision,
+      pending,
       // Intentionally retained as #726-OPS-01 trace-shell scaffolding. The
       // same-URL action path can consume this trace once later lifecycle gates
       // need an observable commit explanation.
@@ -491,7 +494,7 @@ export function createAppBrowserNavigationController(
       activeNavigationId,
       currentState,
       getActiveNavigationId: () => activeNavigationId,
-      getCurrentState: getBrowserRouterState,
+      getCurrentStateForApproval: getBrowserRouterState,
       navigationSnapshot,
       nextElements,
       renderId: allocateRenderId(),
@@ -506,7 +509,23 @@ export function createAppBrowserNavigationController(
     }
 
     if (approvedCommit) {
-      dispatchApprovedVisibleCommit(approvedCommit, null, false);
+      // The helper approval and this continuation are separated by a microtask
+      // boundary, so re-check lifecycle authority before mutating visible UI.
+      const latestApproval = approvePendingNavigationCommit({
+        activeNavigationId,
+        currentState: getBrowserRouterState(),
+        pending,
+        startedNavigationId,
+      });
+
+      if (latestApproval.decision.disposition === "hard-navigate") {
+        window.location.assign(window.location.href);
+        return undefined;
+      }
+
+      if (latestApproval.approvedCommit) {
+        dispatchApprovedVisibleCommit(latestApproval.approvedCommit, null, false);
+      }
     }
 
     // Same-URL server actions still return their action value even if the UI

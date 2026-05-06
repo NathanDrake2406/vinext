@@ -514,7 +514,8 @@ export function consumePrefetchResponse(
   const entry = cache.get(cacheKey);
   if (!entry) return null;
 
-  // Don't consume pending entries — let the navigation fetch independently.
+  // Skip in-flight snapshots and error-path residue where pending cleared
+  // without a successful transition to a cache-seeded entry.
   if (entry.pending || entry.outcome !== "cache-seeded") return null;
 
   cache.delete(cacheKey);
