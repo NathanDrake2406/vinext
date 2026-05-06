@@ -2494,8 +2494,10 @@ describe('"use cache" runtime', () => {
   it("scopes shared cache entries by deployment ID when available", async () => {
     // Ported from Next.js: test/production/app-dir/use-cache-cross-deployment/use-cache-cross-deployment.test.ts
     // https://github.com/vercel/next.js/blob/07f76411b07de9417d4a6b816f3137cafe1045fc/test/production/app-dir/use-cache-cross-deployment/use-cache-cross-deployment.test.ts
-    const { registerCachedFunction, setUseCacheDeploymentId } =
+    const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { runWithRequestRuntimeContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
     const { setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
     setCacheHandler(new MemoryCacheHandler());
@@ -2512,19 +2514,23 @@ describe('"use cache" runtime', () => {
         return { count: callCount };
       }, "test:deployment-id");
 
-      setUseCacheDeploymentId("deployment-one");
-      expect(await cached()).toEqual({ count: 1 });
-      expect(await cached()).toEqual({ count: 1 });
+      expect(
+        await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () => cached()),
+      ).toEqual({ count: 1 });
+      expect(
+        await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () => cached()),
+      ).toEqual({ count: 1 });
 
-      setUseCacheDeploymentId("deployment-two");
-      expect(await cached()).toEqual({ count: 2 });
-      expect(await cached()).toEqual({ count: 2 });
+      expect(
+        await runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () => cached()),
+      ).toEqual({ count: 2 });
+      expect(
+        await runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () => cached()),
+      ).toEqual({ count: 2 });
 
-      setUseCacheDeploymentId(undefined);
       expect(await cached()).toEqual({ count: 3 });
       expect(await cached()).toEqual({ count: 3 });
     } finally {
-      setUseCacheDeploymentId(undefined);
       if (previousBuildId === undefined) {
         delete process.env.__VINEXT_BUILD_ID;
       } else {
@@ -2539,8 +2545,10 @@ describe('"use cache" runtime', () => {
   });
 
   it("keeps concurrent request deployment IDs isolated", async () => {
-    const { registerCachedFunction, runWithUseCacheDeploymentId } =
+    const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { runWithRequestRuntimeContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
     const { setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
     setCacheHandler(new MemoryCacheHandler());
@@ -2556,15 +2564,62 @@ describe('"use cache" runtime', () => {
       }, "test:concurrent-deployment-id");
 
       const [first, second] = await Promise.all([
-        runWithUseCacheDeploymentId("deployment-one", () => cached()),
-        runWithUseCacheDeploymentId("deployment-two", () => cached()),
+        runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () => cached()),
+        runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () => cached()),
       ]);
 
       expect(new Set([first.count, second.count])).toEqual(new Set([1, 2]));
       expect(callCount).toBe(2);
 
-      expect(await runWithUseCacheDeploymentId("deployment-one", () => cached())).toEqual(first);
-      expect(await runWithUseCacheDeploymentId("deployment-two", () => cached())).toEqual(second);
+      expect(
+        await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () => cached()),
+      ).toEqual(first);
+      expect(
+        await runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () => cached()),
+      ).toEqual(second);
+      expect(callCount).toBe(2);
+    } finally {
+      if (previousBuildId === undefined) {
+        delete process.env.__VINEXT_BUILD_ID;
+      } else {
+        process.env.__VINEXT_BUILD_ID = previousBuildId;
+      }
+    }
+  });
+
+  it("inherits request runtime deployment ID when a unified request context is created", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext, runWithRequestRuntimeContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    const previousBuildId = process.env.__VINEXT_BUILD_ID;
+    try {
+      process.env.__VINEXT_BUILD_ID = "stable-build";
+
+      let callCount = 0;
+      const cached = registerCachedFunction(async () => {
+        callCount++;
+        return { count: callCount };
+      }, "test:inherited-runtime-deployment-id");
+
+      const first = await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () =>
+        runWithRequestContext(createRequestContext(), () => cached()),
+      );
+      const second = await runWithRequestRuntimeContext({ deploymentId: "deployment-two" }, () =>
+        runWithRequestContext(createRequestContext(), () => cached()),
+      );
+
+      expect(first).toEqual({ count: 1 });
+      expect(second).toEqual({ count: 2 });
+      expect(
+        await runWithRequestRuntimeContext({ deploymentId: "deployment-one" }, () =>
+          runWithRequestContext(createRequestContext(), () => cached()),
+        ),
+      ).toEqual(first);
       expect(callCount).toBe(2);
     } finally {
       if (previousBuildId === undefined) {

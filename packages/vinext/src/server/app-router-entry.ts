@@ -14,8 +14,8 @@
 
 // @ts-expect-error — virtual module resolved by vinext
 import rscHandler from "virtual:vinext-rsc-entry";
-import { runWithUseCacheDeploymentId } from "vinext/shims/cache-runtime";
 import { runWithExecutionContext, type ExecutionContextLike } from "vinext/shims/request-context";
+import { runWithRequestRuntimeContext } from "vinext/shims/unified-request-context";
 import { resolveStaticAssetSignal } from "./worker-utils.js";
 import {
   cloneRequestWithHeaders,
@@ -44,7 +44,7 @@ export default {
     env?: WorkerAssetEnv,
     ctx?: ExecutionContextLike,
   ): Promise<Response> {
-    return runWithUseCacheDeploymentId(deploymentIdFromEnv(env), () =>
+    return runWithRequestRuntimeContext({ deploymentId: deploymentIdFromEnv(env) }, () =>
       handleRequest(request, env, ctx),
     );
   },

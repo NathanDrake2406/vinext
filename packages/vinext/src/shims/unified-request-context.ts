@@ -40,6 +40,8 @@ export type UnifiedRequestContext = {
   // ── request-context.ts ─────────────────────────────────────────────
   /** Cloudflare Workers ExecutionContext, or null on Node.js dev. */
   executionContext: ExecutionContextLike | null;
+  /** Deployment identifier for request-scoped cache key seeding. */
+  deploymentId: string | undefined;
 
   // ── cache-for-request.ts ──────────────────────────────────────────
   /** Per-request cache for cacheForRequest(). Keyed by factory function reference. */
@@ -61,6 +63,7 @@ export type UnifiedRequestContext = {
 // ---------------------------------------------------------------------------
 
 const _REQUEST_CONTEXT_ALS_KEY = Symbol.for("vinext.requestContext.als");
+const _REQUEST_RUNTIME_CONTEXT_ALS_KEY = Symbol.for("vinext.requestRuntimeContext.als");
 const _g = globalThis as unknown as Record<PropertyKey, unknown>;
 const _als = getOrCreateAls<UnifiedRequestContext>("vinext.unifiedRequestContext.als");
 
@@ -73,6 +76,24 @@ function _getInheritedExecutionContext(): ExecutionContextLike | null {
     | undefined;
   return executionContextAls?.getStore() ?? null;
 }
+
+function _getInheritedDeploymentId(): string | undefined {
+  const unifiedStore = _als.getStore();
+  if (unifiedStore) return unifiedStore.deploymentId;
+
+  const requestRuntimeAls = _g[_REQUEST_RUNTIME_CONTEXT_ALS_KEY] as
+    | AsyncLocalStorage<RequestRuntimeContext>
+    | undefined;
+  return requestRuntimeAls?.getStore()?.deploymentId || undefined;
+}
+
+export type RequestRuntimeContext = {
+  deploymentId?: string | undefined;
+};
+
+const _requestRuntimeAls = getOrCreateAls<RequestRuntimeContext>(
+  "vinext.requestRuntimeContext.als",
+);
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -104,6 +125,7 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     ssrContext: null,
     ssrHeadChildren: [],
     rootParams: null,
+    deploymentId: _getInheritedDeploymentId(),
     ...opts,
   };
 }
@@ -126,6 +148,34 @@ export function runWithRequestContext<T>(
   fn: () => T | Promise<T>,
 ): T | Promise<T> {
   return _als.run(ctx, fn);
+}
+
+export function runWithRequestRuntimeContext<T>(
+  ctx: RequestRuntimeContext,
+  fn: () => Promise<T>,
+): Promise<T>;
+export function runWithRequestRuntimeContext<T>(
+  ctx: RequestRuntimeContext,
+  fn: () => T | Promise<T>,
+): T | Promise<T>;
+export function runWithRequestRuntimeContext<T>(
+  ctx: RequestRuntimeContext,
+  fn: () => T | Promise<T>,
+): T | Promise<T> {
+  const deploymentId = ctx.deploymentId || undefined;
+  if (isInsideUnifiedScope()) {
+    return runWithUnifiedStateMutation((uCtx) => {
+      uCtx.deploymentId = deploymentId;
+    }, fn);
+  }
+  return _requestRuntimeAls.run({ deploymentId }, fn);
+}
+
+export function getRequestDeploymentId(): string | undefined {
+  if (isInsideUnifiedScope()) {
+    return getRequestContext().deploymentId;
+  }
+  return _requestRuntimeAls.getStore()?.deploymentId || undefined;
 }
 
 /**

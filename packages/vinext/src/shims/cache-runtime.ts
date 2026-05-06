@@ -40,6 +40,7 @@ import { getOrCreateAls } from "./internal/als-registry.js";
 import {
   isInsideUnifiedScope,
   getRequestContext,
+  getRequestDeploymentId,
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
 
@@ -90,28 +91,6 @@ type RscModule = {
   decodeReply: (body: string | FormData, options?: unknown) => Promise<unknown[]>;
 };
 
-const _DEPLOYMENT_ID_KEY = Symbol.for("vinext.cacheRuntime.deploymentId");
-const _deploymentIdStorage = getOrCreateAls<string | undefined>(
-  "vinext.cacheRuntime.deploymentIdAls",
-);
-
-/**
- * Set the process-wide fallback deployment ID used to seed shared "use cache" keys.
- *
- * This is for tests and startup-time configuration. Request handlers should use
- * runWithUseCacheDeploymentId() so concurrent requests cannot overwrite each other.
- */
-export function setUseCacheDeploymentId(deploymentId: string | undefined): void {
-  Reflect.set(globalThis, _DEPLOYMENT_ID_KEY, deploymentId || undefined);
-}
-
-export function runWithUseCacheDeploymentId<T>(
-  deploymentId: string | undefined,
-  fn: () => T | Promise<T>,
-): T | Promise<T> {
-  return _deploymentIdStorage.run(deploymentId || undefined, fn);
-}
-
 function getUseCacheDeploymentIdDefine(): string | undefined {
   try {
     // Keep this direct reference so Vite's define transform can inline it for
@@ -135,15 +114,7 @@ function getUseCacheBuildIdDefine(): string | undefined {
 }
 
 function getUseCacheKeySeed(): string | undefined {
-  const runtimeDeploymentId = Reflect.get(globalThis, _DEPLOYMENT_ID_KEY);
-  return (
-    _deploymentIdStorage.getStore() ||
-    (typeof runtimeDeploymentId === "string" && runtimeDeploymentId !== ""
-      ? runtimeDeploymentId
-      : undefined) ||
-    getUseCacheDeploymentIdDefine() ||
-    getUseCacheBuildIdDefine()
-  );
+  return getRequestDeploymentId() || getUseCacheDeploymentIdDefine() || getUseCacheBuildIdDefine();
 }
 
 function buildUseCacheKey(id: string, keySeed: string | undefined, argsKey?: string): string {
