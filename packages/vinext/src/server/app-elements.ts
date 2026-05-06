@@ -1,5 +1,5 @@
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
-import { UNMATCHED_SLOT, type AppElements } from "./app-elements-wire.js";
+import { AppElementsWire, UNMATCHED_SLOT, type AppElements } from "./app-elements-wire.js";
 
 export {
   AppElementsWire,
@@ -10,8 +10,6 @@ export {
   APP_UNMATCHED_SLOT_WIRE_VALUE,
   UNMATCHED_SLOT,
   buildOutgoingAppPayload,
-  createAppPayloadCacheKey,
-  createAppPayloadRouteId,
   isAppElementsRecord,
   normalizeAppElements,
   readAppElementsMetadata,
@@ -30,7 +28,10 @@ export function getMountedSlotIds(elements: AppElements): string[] {
     .filter((key) => {
       const value = elements[key];
       return (
-        key.startsWith("slot:") && value !== null && value !== undefined && value !== UNMATCHED_SLOT
+        AppElementsWire.isSlotId(key) &&
+        value !== null &&
+        value !== undefined &&
+        value !== UNMATCHED_SLOT
       );
     })
     .sort();

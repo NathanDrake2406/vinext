@@ -1,4 +1,6 @@
 import React from "react";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import { UNMATCHED_SLOT } from "../packages/vinext/src/shims/slot.js";
 import {
@@ -9,8 +11,6 @@ import {
   APP_ROUTE_KEY,
   APP_UNMATCHED_SLOT_WIRE_VALUE,
   buildOutgoingAppPayload,
-  createAppPayloadCacheKey,
-  createAppPayloadRouteId,
   isAppElementsRecord,
   normalizeAppElements,
   readAppElementsMetadata,
@@ -75,6 +75,134 @@ describe("AppElementsWire", () => {
       [APP_ROUTE_KEY]: "route:/dashboard",
     });
   });
+
+  it("constructs and parses canonical element wire keys through the codec", () => {
+    const keys = [
+      AppElementsWire.encodeRouteId("/blog/[slug]", null),
+      AppElementsWire.encodeRouteId("/photos/42", "/feed"),
+      AppElementsWire.encodePageId("/blog/[slug]", null),
+      AppElementsWire.encodeLayoutId("/(marketing)/blog/[slug]"),
+      AppElementsWire.encodeTemplateId("/(marketing)/blog/[slug]"),
+      AppElementsWire.encodeSlotId("modal", "/feed"),
+    ];
+
+    expect(keys).toEqual([
+      "route:/blog/[slug]",
+      "route:/photos/42\0/feed",
+      "page:/blog/[slug]",
+      "layout:/(marketing)/blog/[slug]",
+      "template:/(marketing)/blog/[slug]",
+      "slot:modal:/feed",
+    ]);
+
+    expect(AppElementsWire.parseElementKey(keys[0])).toEqual({
+      interceptionContext: null,
+      kind: "route",
+      path: "/blog/[slug]",
+    });
+    expect(AppElementsWire.parseElementKey(keys[1])).toEqual({
+      interceptionContext: "/feed",
+      kind: "route",
+      path: "/photos/42",
+    });
+    expect(AppElementsWire.parseElementKey(keys[2])).toEqual({
+      interceptionContext: null,
+      kind: "page",
+      path: "/blog/[slug]",
+    });
+    expect(AppElementsWire.parseElementKey(keys[3])).toEqual({
+      kind: "layout",
+      treePath: "/(marketing)/blog/[slug]",
+    });
+    expect(AppElementsWire.parseElementKey(keys[4])).toEqual({
+      kind: "template",
+      treePath: "/(marketing)/blog/[slug]",
+    });
+    expect(AppElementsWire.parseElementKey(keys[5])).toEqual({
+      kind: "slot",
+      name: "modal",
+      treePath: "/feed",
+    });
+    expect(AppElementsWire.isSlotId(keys[5])).toBe(true);
+    expect(AppElementsWire.parseElementKey("__route")).toBeNull();
+    expect(AppElementsWire.parseElementKey("slot:modal")).toBeNull();
+  });
+
+  it("round-trips legacy-compatible payload metadata through the codec", () => {
+    const payload = AppElementsWire.encodeOutgoingPayload({
+      element: {
+        ...AppElementsWire.createMetadataEntries({
+          interceptionContext: null,
+          rootLayoutTreePath: "/",
+          routeId: AppElementsWire.encodeRouteId("/dashboard", null),
+        }),
+        [AppElementsWire.encodeLayoutId("/")]: "layout",
+        [AppElementsWire.encodePageId("/dashboard", null)]: "page",
+      },
+      layoutFlags: {
+        [AppElementsWire.encodeLayoutId("/")]: "s",
+      },
+    });
+
+    expect(isAppElementsRecord(payload)).toBe(true);
+    if (!isAppElementsRecord(payload)) return;
+
+    expect(AppElementsWire.readMetadata(payload)).toEqual({
+      interceptionContext: null,
+      layoutFlags: { [AppElementsWire.encodeLayoutId("/")]: "s" },
+      rootLayoutTreePath: "/",
+      routeId: "route:/dashboard",
+    });
+  });
+
+  it("keeps legacy unmatched-slot markers compatible while parsing slot keys", () => {
+    const slotId = AppElementsWire.encodeSlotId("modal", "/");
+    const decoded = AppElementsWire.decode({
+      [APP_ROOT_LAYOUT_KEY]: "/",
+      [APP_ROUTE_KEY]: AppElementsWire.encodeRouteId("/dashboard", null),
+      [slotId]: AppElementsWire.unmatchedSlotValue,
+    });
+
+    expect(decoded[slotId]).toBe(UNMATCHED_SLOT);
+    expect(AppElementsWire.parseElementKey(slotId)).toEqual({
+      kind: "slot",
+      name: "modal",
+      treePath: "/",
+    });
+  });
+
+  it("keeps raw AppElements wire-key construction inside the codec boundary", () => {
+    const root = path.resolve(import.meta.dirname, "..");
+    const sourceRoot = path.join(root, "packages/vinext/src");
+    const allowed = new Set([
+      path.join(sourceRoot, "routing/app-route-graph.ts"),
+      path.join(sourceRoot, "server/app-elements-wire.ts"),
+    ]);
+    const rawWireConstruction =
+      /`(?:route|page|layout|template):\$\{|`slot:\$\{|\.startsWith\("(?:slot|layout|page|route|template):"\)/;
+
+    const violations: string[] = [];
+    const visit = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          visit(fullPath);
+          continue;
+        }
+        if (!entry.isFile() || !/\.(?:ts|tsx)$/.test(entry.name)) continue;
+        if (allowed.has(fullPath)) continue;
+
+        const source = fs.readFileSync(fullPath, "utf8");
+        if (rawWireConstruction.test(source)) {
+          violations.push(path.relative(root, fullPath));
+        }
+      }
+    };
+
+    visit(sourceRoot);
+
+    expect(violations).toEqual([]);
+  });
 });
 
 describe("app elements payload helpers", () => {
@@ -128,10 +256,10 @@ describe("app elements payload helpers", () => {
   });
 
   it("encodes intercepted route ids and cache keys with a NUL separator", () => {
-    expect(createAppPayloadRouteId("/photos/42", null)).toBe("route:/photos/42");
-    expect(createAppPayloadRouteId("/photos/42", "/feed")).toBe("route:/photos/42\0/feed");
-    expect(createAppPayloadCacheKey("/photos/42.rsc", null)).toBe("/photos/42.rsc");
-    expect(createAppPayloadCacheKey("/photos/42.rsc", "/feed")).toBe("/photos/42.rsc\0/feed");
+    expect(AppElementsWire.encodeRouteId("/photos/42", null)).toBe("route:/photos/42");
+    expect(AppElementsWire.encodeRouteId("/photos/42", "/feed")).toBe("route:/photos/42\0/feed");
+    expect(AppElementsWire.encodeCacheKey("/photos/42.rsc", null)).toBe("/photos/42.rsc");
+    expect(AppElementsWire.encodeCacheKey("/photos/42.rsc", "/feed")).toBe("/photos/42.rsc\0/feed");
   });
 
   it("preserves the request cache context when a direct-route payload omits it", () => {
