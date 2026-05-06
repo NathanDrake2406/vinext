@@ -601,6 +601,47 @@ describe("app server action execution helpers", () => {
     expect(navigationContexts).toEqual([{ params: {}, pathname: "/dashboard" }]);
   });
 
+  // Ported from Next.js: test/e2e/app-dir/actions/app-action.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions/app-action.test.ts
+  it("rejects fetch actions with too many decoded arguments before invoking the action", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const action = vi.fn();
+      let renderedModel: TestActionModel | null = null;
+
+      const response = await handleServerActionRscRequest(
+        createRscOptions({
+          decodeReply() {
+            return Array.from({ length: 1001 }, (_, index) => index);
+          },
+          loadServerAction() {
+            return Promise.resolve(action);
+          },
+          renderToReadableStream(model) {
+            renderedModel = model;
+            return new Response("too-many-args-flight").body;
+          },
+          sanitizeErrorForClient(error) {
+            return error instanceof Error ? error.message : String(error);
+          },
+        }),
+      );
+
+      expect(response?.status).toBe(200);
+      expect(await response?.text()).toBe("too-many-args-flight");
+      expect(action).not.toHaveBeenCalled();
+      expect(renderedModel).toEqual({
+        root: "dashboard:{}:none",
+        returnValue: {
+          ok: false,
+          data: "Server Action arguments list is too long (1001). Maximum allowed is 1000.",
+        },
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("rejects malformed fetch-action payloads before decodeReply", async () => {
     const decodeReply = vi.fn();
 

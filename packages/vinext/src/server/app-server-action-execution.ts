@@ -176,6 +176,12 @@ type ActionControlResponse =
       statusCode: number;
     };
 
+/**
+ * Matches Next.js' server action argument cap to prevent stack overflow in
+ * Function.prototype.apply when decoding hostile action payloads.
+ */
+const SERVER_ACTION_ARGS_LIMIT = 1000;
+
 function isRequestBodyTooLarge(error: unknown): boolean {
   return error instanceof Error && error.message === "Request body too large";
 }
@@ -190,6 +196,14 @@ function normalizeError(error: unknown): Error {
 
 function getServerActionFailureMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
+}
+
+function validateServerActionArgs(args: readonly unknown[]): void {
+  if (args.length > SERVER_ACTION_ARGS_LIMIT) {
+    throw new Error(
+      `Server Action arguments list is too long (${args.length}). Maximum allowed is ${SERVER_ACTION_ARGS_LIMIT}.`,
+    );
+  }
 }
 
 export async function readActionBodyWithLimit(request: Request, maxBytes: number): Promise<string> {
@@ -527,6 +541,7 @@ export async function handleServerActionRscRequest<
     const previousHeadersPhase = options.setHeadersAccessPhase("action");
     try {
       try {
+        validateServerActionArgs(args);
         const data = await action.apply(null, args);
         returnValue = { ok: true, data };
       } catch (error) {
