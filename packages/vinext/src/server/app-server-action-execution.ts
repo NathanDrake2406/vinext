@@ -675,6 +675,7 @@ export async function handleServerActionRscRequest<
     }
     return actionResponse;
   } catch (error) {
+    getAndClearActionRevalidationKind();
     return createServerActionErrorResponse(error, {
       cleanPathname: options.cleanPathname,
       clearRequestContext: options.clearRequestContext,

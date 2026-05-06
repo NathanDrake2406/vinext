@@ -618,6 +618,22 @@ describe("app server action execution helpers", () => {
     expect(response?.headers.get("x-action-revalidated")).toBe("1");
   });
 
+  it("does not emit x-action-revalidated when a fetch action revalidates a tag with a profile", async () => {
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        loadServerAction() {
+          return Promise.resolve(async () => {
+            await revalidateTag("dashboard", "hours");
+            return "revalidated";
+          });
+        },
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("x-action-revalidated")).toBeNull();
+  });
+
   it("emits dynamic-only x-action-revalidated when a fetch action refreshes", async () => {
     const response = await handleServerActionRscRequest(
       createRscOptions({
