@@ -378,7 +378,9 @@ export async function revalidateTag(
   tag: string,
   profile?: string | { expire?: number },
 ): Promise<void> {
-  markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
+  if (!profile) {
+    markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
+  }
   // Resolve the profile to durations for the handler
   let durations: { expire?: number } | undefined;
   if (typeof profile === "string") {
@@ -591,14 +593,17 @@ export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T> 
  * @internal
  */
 export function _initRequestScopedCacheState(): void {
-  _getCacheState().actionRevalidationKind = ACTION_DID_NOT_REVALIDATE;
-  _getCacheState().requestScopedCacheLife = null;
+  const state = _getCacheState();
+  state.actionRevalidationKind = ACTION_DID_NOT_REVALIDATE;
+  state.requestScopedCacheLife = null;
 }
 
 function markActionRevalidation(kind: ActionRevalidationKind): void {
   if (getHeadersAccessPhase() !== "action") return;
 
   const state = _getCacheState();
+  // Static/data invalidation includes the dynamic refresh case, so never
+  // downgrade from kind 1 to kind 2 if both APIs run in one action.
   state.actionRevalidationKind =
     state.actionRevalidationKind === ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC
       ? ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC
