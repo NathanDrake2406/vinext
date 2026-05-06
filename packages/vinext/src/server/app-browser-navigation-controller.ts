@@ -26,6 +26,7 @@ export type PendingBrowserRouterState = {
   resolve: (state: AppRouterState) => void;
   settled: boolean;
 };
+export type NavigationPayloadOutcome = "committed" | "no-commit" | "hard-navigate";
 
 type BrowserNavigationCommitEffectFactory = (options: {
   href: string;
@@ -68,7 +69,7 @@ type BrowserNavigationController = {
     targetHref: string;
     navId: number;
     useTransition?: boolean;
-  }): Promise<void>;
+  }): Promise<NavigationPayloadOutcome>;
   commitSameUrlNavigatePayload(
     nextElements: Promise<AppElements>,
     navigationSnapshot: ClientNavigationRenderSnapshot,
@@ -395,7 +396,7 @@ export function createAppBrowserNavigationController(
     targetHref: string;
     navId: number;
     useTransition?: boolean;
-  }): Promise<void> {
+  }): Promise<NavigationPayloadOutcome> {
     const renderId = allocateRenderId();
     let resolveCommitted: (() => void) | undefined;
     const committed = new Promise<void>((resolve) => {
@@ -405,9 +406,9 @@ export function createAppBrowserNavigationController(
 
     let snapshotActivated = false;
     try {
-      const currentState = getBrowserRouterState();
+      const startedState = getBrowserRouterState();
       const pending = await createPendingNavigationCommit({
-        currentState,
+        currentState: startedState,
         nextElements: options.nextElements,
         navigationSnapshot: options.navigationSnapshot,
         operationLane: options.operationLane,
@@ -427,14 +428,14 @@ export function createAppBrowserNavigationController(
         settlePendingBrowserRouterState(options.pendingRouterState);
         pendingNavigationCommits.delete(renderId);
         resolveCommitted?.();
-        return;
+        return "no-commit";
       }
 
       if (approval.decision.disposition === "hard-navigate") {
         settlePendingBrowserRouterState(options.pendingRouterState);
         pendingNavigationCommits.delete(renderId);
         window.location.assign(options.targetHref);
-        return;
+        return "hard-navigate";
       }
 
       const approvedCommit = approval.approvedCommit;
@@ -470,7 +471,7 @@ export function createAppBrowserNavigationController(
       throw error;
     }
 
-    return committed;
+    return committed.then(() => "committed");
   }
 
   async function commitSameUrlNavigatePayload(
@@ -484,6 +485,7 @@ export function createAppBrowserNavigationController(
     const {
       approvedCommit,
       decision,
+      pending,
       // Intentionally retained as #726-OPS-01 trace-shell scaffolding. The
       // same-URL action path can consume this trace once later lifecycle gates
       // need an observable commit explanation.
@@ -491,9 +493,10 @@ export function createAppBrowserNavigationController(
     } = await resolveAndClassifyNavigationCommit({
       activeNavigationId,
       currentState,
+      getActiveNavigationId: () => activeNavigationId,
+      getCurrentStateForApproval: getBrowserRouterState,
       navigationSnapshot,
       nextElements,
-      getCurrentStateForApproval: getBrowserRouterState,
       renderId: allocateRenderId(),
       operationLane: "server-action",
       startedNavigationId,
@@ -506,7 +509,23 @@ export function createAppBrowserNavigationController(
     }
 
     if (approvedCommit) {
-      dispatchApprovedVisibleCommit(approvedCommit, null, false);
+      // The helper approval and this continuation are separated by a microtask
+      // boundary, so re-check lifecycle authority before mutating visible UI.
+      const latestApproval = approvePendingNavigationCommit({
+        activeNavigationId,
+        currentState: getBrowserRouterState(),
+        pending,
+        startedNavigationId,
+      });
+
+      if (latestApproval.decision.disposition === "hard-navigate") {
+        window.location.assign(window.location.href);
+        return undefined;
+      }
+
+      if (latestApproval.approvedCommit) {
+        dispatchApprovedVisibleCommit(latestApproval.approvedCommit, null, false);
+      }
     }
 
     // Same-URL server actions still return their action value even if the UI

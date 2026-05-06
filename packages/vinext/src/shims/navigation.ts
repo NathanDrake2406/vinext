@@ -290,6 +290,7 @@ export type CachedRscResponse = {
 };
 
 export type PrefetchCacheEntry = {
+  outcome: "pending" | "cache-seeded";
   snapshot?: CachedRscResponse;
   pending?: Promise<void>;
   timestamp: number;
@@ -384,7 +385,7 @@ export function storePrefetchResponse(
 ): void {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   evictPrefetchCacheIfNeeded();
-  const entry: PrefetchCacheEntry = { timestamp: Date.now() };
+  const entry: PrefetchCacheEntry = { outcome: "pending", timestamp: Date.now() };
   entry.pending = snapshotRscResponse(response)
     .then((snapshot) => {
       entry.snapshot = snapshot;
@@ -394,6 +395,9 @@ export function storePrefetchResponse(
     })
     .finally(() => {
       entry.pending = undefined;
+      if (entry.snapshot) {
+        entry.outcome = "cache-seeded";
+      }
     });
   getPrefetchCache().set(cacheKey, entry);
 }
@@ -461,7 +465,7 @@ export function prefetchRscResponse(
   const prefetched = getPrefetchedUrls();
   const now = Date.now();
 
-  const entry: PrefetchCacheEntry = { timestamp: now };
+  const entry: PrefetchCacheEntry = { outcome: "pending", timestamp: now };
 
   entry.pending = fetchPromise
     .then(async (response) => {
@@ -483,6 +487,9 @@ export function prefetchRscResponse(
     })
     .finally(() => {
       entry.pending = undefined;
+      if (entry.snapshot) {
+        entry.outcome = "cache-seeded";
+      }
     });
 
   // Insert the new entry before evicting. FIFO evicts from the front of the
@@ -507,8 +514,9 @@ export function consumePrefetchResponse(
   const entry = cache.get(cacheKey);
   if (!entry) return null;
 
-  // Don't consume pending entries — let the navigation fetch independently.
-  if (entry.pending) return null;
+  // Skip in-flight snapshots and error-path residue where pending cleared
+  // without a successful transition to a cache-seeded entry.
+  if (entry.pending || entry.outcome !== "cache-seeded") return null;
 
   cache.delete(cacheKey);
   getPrefetchedUrls().delete(cacheKey);

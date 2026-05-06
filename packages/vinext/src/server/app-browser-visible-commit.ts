@@ -157,9 +157,12 @@ export function approvePendingNavigationCommit(options: {
 export async function resolveAndClassifyNavigationCommit(options: {
   activeNavigationId: number;
   currentState: AppRouterState;
+  // When provided, these getters are called after awaiting nextElements so
+  // approval uses the latest lifecycle authority instead of the call snapshot.
+  getActiveNavigationId?: () => number;
+  getCurrentStateForApproval?: () => AppRouterState;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   nextElements: Promise<AppElements>;
-  getCurrentStateForApproval?: () => AppRouterState;
   operationLane: OperationLane;
   previousNextUrl?: string | null;
   renderId: number;
@@ -178,7 +181,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
 
   const approvalState = options.getCurrentStateForApproval?.() ?? options.currentState;
   const approval = approvePendingNavigationCommit({
-    activeNavigationId: options.activeNavigationId,
+    activeNavigationId: options.getActiveNavigationId?.() ?? options.activeNavigationId,
     currentState: approvalState,
     pending,
     startedNavigationId: options.startedNavigationId,

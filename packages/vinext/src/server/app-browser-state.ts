@@ -309,8 +309,8 @@ export function resolvePendingNavigationCommitDispositionDecision(options: {
   const disposition = resolvePendingNavigationCommitDisposition(options);
   const traceFields = {
     activeNavigationId: options.activeNavigationId,
-    currentVisibleCommitVersion: options.currentVisibleCommitVersion,
     currentRootLayoutTreePath: options.currentRootLayoutTreePath,
+    currentVisibleCommitVersion: options.currentVisibleCommitVersion,
     nextRootLayoutTreePath: options.nextRootLayoutTreePath,
     startedNavigationId: options.startedNavigationId,
     startedVisibleCommitVersion: options.startedVisibleCommitVersion,
