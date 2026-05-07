@@ -761,29 +761,37 @@ describe("app server action execution helpers", () => {
     expect(renderToReadableStream).not.toHaveBeenCalled();
   });
 
-  it("packages access fallback digests into the action return payload", async () => {
-    let renderedModel: TestActionModel | null = null;
-    const notFoundError = { digest: "NEXT_NOT_FOUND" };
+  // Ported from Next.js: packages/next/src/server/app-render/action-handler.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/action-handler.ts
+  it("sets the HTTP fallback status while packaging fallback digests into fetch-action Flight", async () => {
+    for (const [digest, statusCode] of [
+      ["NEXT_NOT_FOUND", 404],
+      ["NEXT_HTTP_ERROR_FALLBACK;404", 404],
+      ["NEXT_HTTP_ERROR_FALLBACK;403", 403],
+    ]) {
+      let renderedModel: TestActionModel | null = null;
+      const fallbackError = { digest };
 
-    const response = await handleServerActionRscRequest(
-      createRscOptions({
-        loadServerAction() {
-          return Promise.resolve(() => {
-            throw notFoundError;
-          });
-        },
-        renderToReadableStream(model) {
-          renderedModel = model;
-          return new Response("fallback-flight").body;
-        },
-      }),
-    );
+      const response = await handleServerActionRscRequest(
+        createRscOptions({
+          loadServerAction() {
+            return Promise.resolve(() => {
+              throw fallbackError;
+            });
+          },
+          renderToReadableStream(model) {
+            renderedModel = model;
+            return new Response("fallback-flight").body;
+          },
+        }),
+      );
 
-    expect(response?.status).toBe(200);
-    expect(await response?.text()).toBe("fallback-flight");
-    expect(renderedModel).toEqual({
-      root: "dashboard:{}:none",
-      returnValue: { ok: false, data: notFoundError },
-    });
+      expect(response?.status).toBe(statusCode);
+      expect(await response?.text()).toBe("fallback-flight");
+      expect(renderedModel).toEqual({
+        root: "dashboard:{}:none",
+        returnValue: { ok: false, data: fallbackError },
+      });
+    }
   });
 });

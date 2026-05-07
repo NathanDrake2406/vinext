@@ -288,9 +288,14 @@ function getActionRedirect(error: unknown): AppServerActionRedirect | null {
   };
 }
 
-function isActionHttpFallback(error: unknown): boolean {
+function getActionHttpFallbackStatus(error: unknown): number | null {
   const digest = getNextErrorDigest(error);
-  return digest !== null && parseNextHttpErrorDigest(digest) !== null;
+  if (!digest) return null;
+
+  const httpError = parseNextHttpErrorDigest(digest);
+  if (!httpError || !Number.isInteger(httpError.status)) return null;
+
+  return httpError.status;
 }
 
 function createServerActionErrorResponse(
@@ -538,6 +543,7 @@ export async function handleServerActionRscRequest<
     const args = await options.decodeReply(body, { temporaryReferences });
     let returnValue: AppServerActionReturnValue;
     let actionRedirect: AppServerActionRedirect | null = null;
+    let actionStatus = 200;
     const previousHeadersPhase = options.setHeadersAccessPhase("action");
     try {
       try {
@@ -548,11 +554,15 @@ export async function handleServerActionRscRequest<
         actionRedirect = getActionRedirect(error);
         if (actionRedirect) {
           returnValue = { ok: true, data: undefined };
-        } else if (isActionHttpFallback(error)) {
-          returnValue = { ok: false, data: error };
         } else {
-          console.error("[vinext] Server action error:", error);
-          returnValue = { ok: false, data: options.sanitizeErrorForClient(error) };
+          const httpFallbackStatus = getActionHttpFallbackStatus(error);
+          if (httpFallbackStatus !== null) {
+            actionStatus = httpFallbackStatus;
+            returnValue = { ok: false, data: error };
+          } else {
+            console.error("[vinext] Server action error:", error);
+            returnValue = { ok: false, data: options.sanitizeErrorForClient(error) };
+          }
         }
       }
     } finally {
@@ -637,7 +647,7 @@ export async function handleServerActionRscRequest<
     });
     mergeMiddlewareResponseHeaders(actionHeaders, options.middlewareHeaders);
     const actionResponse = new Response(rscStream, {
-      status: options.middlewareStatus ?? 200,
+      status: options.middlewareStatus ?? actionStatus,
       headers: actionHeaders,
     });
     if (actionPendingCookies.length > 0 || actionDraftCookie) {
