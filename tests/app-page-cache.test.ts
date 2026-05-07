@@ -106,6 +106,18 @@ describe("app page cache helpers", () => {
     expect(response?.headers.get("cache-control")).toBe("s-maxage=60, stale-while-revalidate=240");
   });
 
+  it("emits static cache-control for cached indefinite app pages", async () => {
+    const response = buildAppPageCachedResponse(buildCachedAppPageValue("<h1>cached</h1>"), {
+      cacheState: "HIT",
+      isRscRequest: false,
+      revalidateSeconds: Infinity,
+    });
+
+    expect(response?.headers.get("cache-control")).toBe(
+      "s-maxage=31536000, stale-while-revalidate",
+    );
+  });
+
   it("preserves legacy STALE headers when cached entries lack cache-control metadata", async () => {
     const cachedValue = buildCachedAppPageValue("<h1>cached</h1>");
 

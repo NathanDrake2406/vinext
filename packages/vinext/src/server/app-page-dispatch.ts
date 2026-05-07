@@ -206,8 +206,7 @@ function shouldReadAppPageCache(options: {
     !options.isDraftMode &&
     !options.isForceDynamic &&
     (options.isRscRequest || !options.scriptNonce) &&
-    (options.revalidateSeconds === null ||
-      (options.revalidateSeconds > 0 && options.revalidateSeconds !== Infinity))
+    (options.revalidateSeconds === null || options.revalidateSeconds > 0)
   );
 }
 
