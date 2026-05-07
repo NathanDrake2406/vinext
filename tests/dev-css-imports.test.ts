@@ -68,4 +68,86 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
+
+  it("walks static source imports to discover transitive CSS imports", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-dev-css-"));
+    try {
+      const appDir = path.join(root, "src", "app");
+      await fs.mkdir(appDir, { recursive: true });
+      const layoutPath = path.join(appDir, "layout.tsx");
+      const shellPath = path.join(appDir, "Shell.tsx");
+      await fs.writeFile(layoutPath, `import Shell from "./Shell";\nexport default Shell;`);
+      await fs.writeFile(shellPath, `import "./shell.css";\nexport default function Shell() {}`);
+      await fs.writeFile(path.join(appDir, "shell.css"), `.shell { color: red; }`);
+
+      const hrefs = await collectDevCssHrefsForFiles([layoutPath], {
+        projectRoot: root,
+        aliases: {},
+      });
+
+      expect(hrefs).toEqual(["/src/app/shell.css"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("does not walk special raw/url/inline source imports", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-dev-css-"));
+    try {
+      const appDir = path.join(root, "src", "app");
+      await fs.mkdir(appDir, { recursive: true });
+      const pagePath = path.join(appDir, "page.tsx");
+      await fs.writeFile(
+        pagePath,
+        `import source from "./source.ts?raw";\nexport default function Page() { return source; }`,
+      );
+      await fs.writeFile(path.join(appDir, "source.ts"), `import "./leaked.css";`);
+      await fs.writeFile(path.join(appDir, "leaked.css"), `.leaked { color: red; }`);
+
+      const hrefs = await collectDevCssHrefsForFiles([pagePath], {
+        projectRoot: root,
+        aliases: {},
+      });
+
+      expect(hrefs).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("emits /@fs hrefs for resolved CSS outside the project root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-dev-css-"));
+    const workspacePackageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-ui-package-"));
+    try {
+      const appDir = path.join(root, "app");
+      await fs.mkdir(appDir, { recursive: true });
+      const pagePath = path.join(appDir, "page.tsx");
+      const cssPath = path.join(workspacePackageRoot, "styles.css");
+      await fs.writeFile(
+        pagePath,
+        `import "@acme/ui/styles.css";\nexport default function Page() {}`,
+      );
+      await fs.writeFile(cssPath, `.ui { color: red; }`);
+
+      const hrefs = await collectDevCssHrefsForFiles([pagePath], {
+        projectRoot: root,
+        aliases: {},
+        async resolve(specifier) {
+          return specifier === "@acme/ui/styles.css" ? cssPath : null;
+        },
+      });
+
+      expect(hrefs).toEqual([`/@fs/${cssPath}`]);
+    } finally {
+      await Promise.all([
+        fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+        fs.rm(workspacePackageRoot, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 100,
+        }),
+      ]);
+    }
+  });
 });

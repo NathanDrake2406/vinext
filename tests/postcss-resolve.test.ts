@@ -6,12 +6,14 @@ describe("resolvePostcssStringPlugins", () => {
   let resolvePostcssStringPlugins: (typeof import("../packages/vinext/src/plugins/postcss.js"))["resolvePostcssStringPlugins"];
   let inspectPostcssConfig: (typeof import("../packages/vinext/src/plugins/postcss.js"))["inspectPostcssConfig"];
   let resolvePostcssPlugin: (typeof import("../packages/vinext/src/plugins/postcss.js"))["resolvePostcssPlugin"];
+  let isTailwindPostcssPluginValue: (typeof import("../packages/vinext/src/plugins/postcss.js"))["isTailwindPostcssPluginValue"];
 
   beforeAll(async () => {
     const mod = await import("../packages/vinext/src/plugins/postcss.js");
     resolvePostcssStringPlugins = mod.resolvePostcssStringPlugins;
     inspectPostcssConfig = mod.inspectPostcssConfig;
     resolvePostcssPlugin = mod.resolvePostcssPlugin;
+    isTailwindPostcssPluginValue = mod.isTailwindPostcssPluginValue;
   });
 
   /**
@@ -254,6 +256,28 @@ module.exports.postcss = true;
     } finally {
       await cleanupDir(dir);
     }
+  });
+
+  it("ignores disabled Tailwind PostCSS plugin entries", async () => {
+    const dir = await createTmpProject(
+      "postcss.config.json",
+      JSON.stringify({ plugins: { "@tailwindcss/postcss": false, "mock-postcss-plugin": {} } }),
+    );
+    try {
+      const info = await inspectPostcssConfig(dir);
+      expect(info?.hasTailwindPlugin).toBe(false);
+      const result = await info?.postcss;
+      expect(result?.plugins).toHaveLength(1);
+      expect(result?.plugins[0]).toHaveProperty("postcssPlugin", "mock-postcss-plugin");
+    } finally {
+      await cleanupDir(dir);
+    }
+  });
+
+  it("does not identify disabled Tailwind PostCSS tuples as active plugins", () => {
+    expect(isTailwindPostcssPluginValue(["@tailwindcss/postcss", false])).toBe(false);
+    expect(isTailwindPostcssPluginValue(["tailwindcss", false])).toBe(false);
+    expect(isTailwindPostcssPluginValue(["@tailwindcss/postcss", {}])).toBe(true);
   });
 
   it("throws when resolving a disabled PostCSS plugin directly", async () => {

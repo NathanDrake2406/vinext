@@ -90,7 +90,7 @@ export function isTailwindPostcssPluginValue(plugin: unknown): boolean {
   if (typeof plugin === "string") {
     return TAILWIND_POSTCSS_PLUGINS.has(plugin);
   }
-  if (Array.isArray(plugin) && typeof plugin[0] === "string") {
+  if (Array.isArray(plugin) && typeof plugin[0] === "string" && plugin[1] !== false) {
     return TAILWIND_POSTCSS_PLUGINS.has(plugin[0]);
   }
   if (!isRecord(plugin)) return false;
@@ -186,6 +186,7 @@ function normalizePostcssPlugins(plugins: unknown): {
   let hasTailwindPlugin = false;
 
   function addPlugin(name: string, options: unknown, fromArrayString: boolean): void {
+    if (options === false) return;
     if (TAILWIND_POSTCSS_PLUGINS.has(name)) {
       hasTailwindPlugin = true;
     }

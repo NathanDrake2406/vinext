@@ -10,8 +10,13 @@ type DevCssResolutionContext = {
   resolve?: (specifier: string, importerPath: string) => Promise<string | null | undefined>;
 };
 
+type DevCssFileScan = {
+  cssHrefs: string[];
+  sourceImports: string[];
+};
+
 type DevCssImportsCacheEntry = {
-  hrefs: Promise<string[]>;
+  scan: Promise<DevCssFileScan>;
   mtimeMs: number;
   size: number;
 };
@@ -29,6 +34,12 @@ const CSS_EXTENSIONS = new Set([
   ".postcss",
   ".sss",
 ]);
+
+const SOURCE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mts", ".mjs", ".cts", ".cjs"];
+
+function isSourceFilePath(filePath: string): boolean {
+  return SOURCE_EXTENSIONS.includes(path.extname(filePath));
+}
 
 function isSpecialCssRequest(specifier: string): boolean {
   return /[?&](?:raw|url|inline)(?:\b|=|&|$)/.test(specifier);
@@ -77,6 +88,68 @@ function resolveAliasSpecifier(pathname: string, aliases: Record<string, string>
 
   const suffix = pathname.slice(bestMatch.find.length);
   return `${bestMatch.replacement}${suffix}`;
+}
+
+async function existingFilePath(filePath: string): Promise<string | null> {
+  try {
+    const stats = await fs.stat(filePath);
+    return stats.isFile() ? filePath : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSourceCandidate(candidatePath: string): Promise<string | null> {
+  if (path.extname(candidatePath)) {
+    return existingFilePath(candidatePath);
+  }
+
+  for (const extension of SOURCE_EXTENSIONS) {
+    const filePath = await existingFilePath(`${candidatePath}${extension}`);
+    if (filePath) return filePath;
+  }
+
+  for (const extension of SOURCE_EXTENSIONS) {
+    const filePath = await existingFilePath(path.join(candidatePath, `index${extension}`));
+    if (filePath) return filePath;
+  }
+
+  return null;
+}
+
+async function resolveSourceImportPath(
+  specifier: string,
+  importerPath: string,
+  context: DevCssResolutionContext,
+): Promise<string | null> {
+  const { pathname } = splitCssSpecifier(specifier);
+  if (isSpecialCssRequest(specifier)) return null;
+  if (!pathname || isCssSpecifier(pathname)) return null;
+
+  let sourcePath: string | null = null;
+  if (pathname.startsWith(".")) {
+    sourcePath = await resolveSourceCandidate(path.resolve(path.dirname(importerPath), pathname));
+  } else if (pathname.startsWith("/")) {
+    sourcePath = await resolveSourceCandidate(pathname);
+  } else {
+    const resolvedAlias = resolveAliasSpecifier(pathname, context.aliases);
+    if (resolvedAlias) {
+      sourcePath = await resolveSourceCandidate(
+        path.isAbsolute(resolvedAlias)
+          ? resolvedAlias
+          : path.resolve(context.projectRoot, resolvedAlias),
+      );
+    }
+  }
+
+  if (!sourcePath && context.resolve) {
+    const resolvedPath = await context.resolve(pathname, importerPath);
+    if (resolvedPath) {
+      sourcePath = await resolveSourceCandidate(resolvedPath);
+    }
+  }
+
+  return sourcePath;
 }
 
 async function resolveCssImportHref(
@@ -140,35 +213,46 @@ async function collectStaticImportSpecifiers(
   return specifiers;
 }
 
-async function collectCssImports(
+async function scanDevCssImports(
   filePath: string,
   context: DevCssResolutionContext,
-): Promise<string[]> {
+): Promise<DevCssFileScan> {
+  if (!isSourceFilePath(filePath)) {
+    return { cssHrefs: [], sourceImports: [] };
+  }
+
   let source: string;
   try {
     source = await fs.readFile(filePath, "utf-8");
   } catch {
-    return [];
+    return { cssHrefs: [], sourceImports: [] };
   }
 
-  const hrefs: string[] = [];
+  const cssHrefs: string[] = [];
+  const sourceImports: string[] = [];
   for (const specifier of await collectStaticImportSpecifiers(
     filePath,
     source,
     context.onParseError,
   )) {
     const href = await resolveCssImportHref(specifier, filePath, context);
-    if (href) hrefs.push(href);
+    if (href) {
+      cssHrefs.push(href);
+      continue;
+    }
+
+    const sourceImport = await resolveSourceImportPath(specifier, filePath, context);
+    if (sourceImport) sourceImports.push(sourceImport);
   }
 
-  return hrefs;
+  return { cssHrefs, sourceImports };
 }
 
-async function getCachedCssImports(
+async function getCachedCssImportScan(
   filePath: string,
   context: DevCssResolutionContext,
   cache: DevCssImportsCache,
-): Promise<string[] | undefined> {
+): Promise<DevCssFileScan | undefined> {
   let stats: Awaited<ReturnType<typeof fs.stat>>;
   try {
     stats = await fs.stat(filePath);
@@ -179,12 +263,12 @@ async function getCachedCssImports(
 
   const cached = cache.get(filePath);
   if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
-    return cached.hrefs;
+    return cached.scan;
   }
 
-  const hrefs = collectCssImports(filePath, context);
-  cache.set(filePath, { hrefs, mtimeMs: stats.mtimeMs, size: stats.size });
-  return hrefs;
+  const scan = scanDevCssImports(filePath, context);
+  cache.set(filePath, { scan, mtimeMs: stats.mtimeMs, size: stats.size });
+  return scan;
 }
 
 export async function collectDevCssHrefsForFiles(
@@ -192,8 +276,27 @@ export async function collectDevCssHrefsForFiles(
   context: DevCssResolutionContext,
   cache: DevCssImportsCache = new Map(),
 ): Promise<string[]> {
-  const hrefsByFile = await Promise.all(
-    filePaths.map(async (filePath) => (await getCachedCssImports(filePath, context, cache)) ?? []),
-  );
-  return [...new Set(hrefsByFile.flat())];
+  const hrefs = new Set<string>();
+  const visited = new Set<string>();
+
+  async function visit(filePath: string): Promise<void> {
+    if (visited.has(filePath)) return;
+    visited.add(filePath);
+
+    const scan = await getCachedCssImportScan(filePath, context, cache);
+    if (!scan) return;
+
+    for (const href of scan.cssHrefs) {
+      hrefs.add(href);
+    }
+    for (const sourceImport of scan.sourceImports) {
+      await visit(sourceImport);
+    }
+  }
+
+  for (const filePath of filePaths) {
+    await visit(filePath);
+  }
+
+  return [...hrefs];
 }
