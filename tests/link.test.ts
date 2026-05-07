@@ -10,6 +10,8 @@
  * pure helper functions work correctly.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import React from "react";
 import ReactDOMServer from "react-dom/server";
 
@@ -116,6 +118,20 @@ describe("Link rendering", () => {
     );
     expect(html).toContain("<span>Nested child</span>");
     expect(html).toContain('href="/nested"');
+  });
+});
+
+describe("Link App Router navigation scheduling", () => {
+  it("starts RSC link navigations as React transitions", () => {
+    const linkPath = fileURLToPath(
+      new URL("../packages/vinext/src/shims/link.tsx", import.meta.url),
+    );
+    const source = readFileSync(linkPath, "utf8");
+
+    expect(source).toContain("React.startTransition");
+    expect(source).toContain(
+      'navigateClientSide(navigateHref, replace ? "replace" : "push", scroll, true)',
+    );
   });
 });
 
