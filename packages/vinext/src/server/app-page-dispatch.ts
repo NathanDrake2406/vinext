@@ -10,6 +10,7 @@ import {
   consumeInvalidDynamicUsageError,
   getAndClearPendingCookies,
   getDraftModeCookieHeader,
+  isDraftModeRequest,
   markDynamicUsage,
   setHeadersContext,
 } from "vinext/shims/headers";
@@ -193,6 +194,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
 };
 
 function shouldReadAppPageCache(options: {
+  isDraftMode: boolean;
   isForceDynamic: boolean;
   isProduction: boolean;
   isRscRequest: boolean;
@@ -201,6 +203,7 @@ function shouldReadAppPageCache(options: {
 }): boolean {
   return (
     options.isProduction &&
+    !options.isDraftMode &&
     !options.isForceDynamic &&
     (options.isRscRequest || !options.scriptNonce) &&
     (options.revalidateSeconds === null ||
@@ -294,6 +297,7 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
   const isForceStatic = dynamicConfig === "force-static";
   const isDynamicError = dynamicConfig === "error";
   const isForceDynamic = dynamicConfig === "force-dynamic";
+  const isDraftMode = isDraftModeRequest(options.request);
 
   setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], route.routeSegments));
   setCurrentFetchCacheMode(options.fetchCache ?? null);
@@ -333,6 +337,7 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
 
   if (
     shouldReadAppPageCache({
+      isDraftMode,
       isForceDynamic,
       isProduction: options.isProduction,
       isRscRequest: options.isRscRequest,
@@ -545,6 +550,7 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
     handlerStart: options.handlerStart,
     hasLoadingBoundary: Boolean(route.loading?.default),
     isDynamicError,
+    isDraftMode,
     isForceDynamic,
     isForceStatic,
     isPrerender: process.env.VINEXT_PRERENDER === "1",

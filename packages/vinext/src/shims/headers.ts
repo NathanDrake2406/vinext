@@ -760,6 +760,12 @@ export function getDraftModeCookieHeader(): string | null {
   return header;
 }
 
+export function isDraftModeRequest(request: Request): boolean {
+  const cookieHeader = request.headers.get("cookie");
+  if (!cookieHeader) return false;
+  return parseCookieHeader(cookieHeader).get(DRAFT_MODE_COOKIE) === getDraftSecret();
+}
+
 type DraftModeResult = {
   isEnabled: boolean;
   enable(): void;

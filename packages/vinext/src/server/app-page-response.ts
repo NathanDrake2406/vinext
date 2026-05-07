@@ -24,6 +24,7 @@ type AppPageResponsePolicy = {
 };
 
 type ResolveAppPageResponsePolicyBaseOptions = {
+  isDraftMode: boolean;
   isDynamicError: boolean;
   isForceDynamic: boolean;
   isForceStatic: boolean;
@@ -82,6 +83,10 @@ function applyTimingHeader(headers: Headers, timing?: AppPageResponseTiming): vo
 export function resolveAppPageRscResponsePolicy(
   options: ResolveAppPageRscResponsePolicyOptions,
 ): AppPageResponsePolicy {
+  if (options.isDraftMode) {
+    return { cacheControl: NO_STORE_CACHE_CONTROL };
+  }
+
   if (options.isForceDynamic || options.dynamicUsedDuringBuild) {
     return { cacheControl: NO_STORE_CACHE_CONTROL };
   }
@@ -121,6 +126,13 @@ export function resolveAppPageRscResponsePolicy(
 export function resolveAppPageHtmlResponsePolicy(
   options: ResolveAppPageHtmlResponsePolicyOptions,
 ): AppPageHtmlResponsePolicy {
+  if (options.isDraftMode) {
+    return {
+      cacheControl: NO_STORE_CACHE_CONTROL,
+      shouldWriteToCache: false,
+    };
+  }
+
   if (options.isForceDynamic) {
     return {
       cacheControl: NO_STORE_CACHE_CONTROL,

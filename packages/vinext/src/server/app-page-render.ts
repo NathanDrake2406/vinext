@@ -75,6 +75,7 @@ type RenderAppPageLifecycleOptions = {
   handlerStart: number;
   hasLoadingBoundary: boolean;
   isDynamicError: boolean;
+  isDraftMode: boolean;
   isForceDynamic: boolean;
   isForceStatic: boolean;
   isPrerender?: boolean;
@@ -305,6 +306,7 @@ export async function renderAppPageLifecycle(
   const shouldCaptureRscForCacheMetadata =
     (options.isProduction || options.isPrerender === true) &&
     (revalidateSeconds === null || (revalidateSeconds > 0 && revalidateSeconds !== Infinity)) &&
+    !options.isDraftMode &&
     !options.isForceDynamic;
   const rscCapture = teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscForCacheMetadata);
   const rscForResponse = rscCapture.ssrStream;
@@ -332,6 +334,7 @@ export async function renderAppPageLifecycle(
     const dynamicUsedDuringBuild = options.consumeDynamicUsage();
     const rscResponsePolicy = resolveAppPageRscResponsePolicy({
       dynamicUsedDuringBuild,
+      isDraftMode: options.isDraftMode,
       isDynamicError: options.isDynamicError,
       isForceDynamic: options.isForceDynamic,
       isForceStatic: options.isForceStatic,
@@ -501,6 +504,7 @@ export async function renderAppPageLifecycle(
   const htmlResponsePolicy = resolveAppPageHtmlResponsePolicy({
     dynamicUsedDuringRender,
     hasScriptNonce: Boolean(options.scriptNonce),
+    isDraftMode: options.isDraftMode,
     isDynamicError: options.isDynamicError,
     isForceDynamic: options.isForceDynamic,
     isForceStatic: options.isForceStatic,

@@ -1,5 +1,5 @@
 import React from "react";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { dispatchAppPage } from "../packages/vinext/src/server/app-page-dispatch.js";
 import type { AppPageMiddlewareContext } from "../packages/vinext/src/server/app-page-response.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
@@ -177,6 +177,10 @@ function createDispatchOptions(
 }
 
 describe("app page dispatch", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("serves cached production HTML instead of revalidating params or rendering", async () => {
     const { options } = createDispatchOptions({
       async buildPageElement() {
@@ -194,6 +198,55 @@ describe("app page dispatch", () => {
     const response = await dispatchAppPage(options);
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("x-vinext-cache")).toBe("HIT");
+    await expect(response.text()).resolves.toBe("<html>cached</html>");
+  });
+
+  it("bypasses cached production HTML when draft mode is enabled", async () => {
+    vi.stubEnv("__VINEXT_DRAFT_SECRET", "draft-secret");
+    const isrGet = vi.fn(async () =>
+      buildISRCacheEntry(buildCachedAppPageValue("<html>stale</html>")),
+    );
+    const { options } = createDispatchOptions({
+      buildPageElement: vi.fn(async () => React.createElement("main", null, "draft page")),
+      isProduction: true,
+      isrGet,
+      request: new Request("https://example.test/posts/hello", {
+        headers: { Cookie: "__prerender_bypass=draft-secret" },
+      }),
+      revalidateSeconds: 60,
+      renderToReadableStream() {
+        return createStream(["flight"]);
+      },
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet).not.toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBeNull();
+    await expect(response.text()).resolves.toBe("<html>page</html>");
+  });
+
+  it("does not bypass cached production HTML for arbitrary draft cookie values", async () => {
+    vi.stubEnv("__VINEXT_DRAFT_SECRET", "draft-secret");
+    const isrGet = vi.fn(async () =>
+      buildISRCacheEntry(buildCachedAppPageValue("<html>cached</html>")),
+    );
+    const { options } = createDispatchOptions({
+      async buildPageElement() {
+        throw new Error("invalid draft cookie should still use the page cache");
+      },
+      isProduction: true,
+      isrGet,
+      request: new Request("https://example.test/posts/hello", {
+        headers: { Cookie: "__prerender_bypass=wrong-secret" },
+      }),
+      revalidateSeconds: 60,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet).toHaveBeenCalledOnce();
     expect(response.headers.get("x-vinext-cache")).toBe("HIT");
     await expect(response.text()).resolves.toBe("<html>cached</html>");
   });
