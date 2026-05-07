@@ -293,6 +293,74 @@ describe("prerenderApp — RSC extraction", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("errors without writing .rsc when the middleware short-circuit fallback RSC request fails", async () => {
+    const root = tmpDir("vinext-prerender-rsc-fallback-failure-");
+    const outDir = path.join(root, "out");
+    const appDir = path.join(root, "app");
+    const pagePath = path.join(appDir, "page.tsx");
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(
+      pagePath,
+      "export const dynamic = 'force-static';\nexport default function Page() { return null; }\n",
+    );
+
+    const middlewareHtml = "<html><body>middleware short-circuit</body></html>";
+    let pageRequestCount = 0;
+    let rscRequestCount = 0;
+    const server = createServer((req, res) => {
+      const isRsc = req.headers.rsc === "1" || req.headers.accept === "text/x-component";
+
+      if (req.url === "/__vinext_nonexistent_for_404__") {
+        res.statusCode = 404;
+        res.end("<html><body>not found</body></html>");
+        return;
+      }
+
+      if (isRsc) {
+        rscRequestCount++;
+        res.statusCode = 500;
+        res.end("fallback failed");
+        return;
+      }
+
+      pageRequestCount++;
+      res.setHeader("content-type", "text/html");
+      res.end(middlewareHtml);
+    });
+
+    const port = await listen(server);
+    try {
+      const { prerenderApp } = await import("../packages/vinext/src/build/prerender.js");
+      const { appRouter } = await import("../packages/vinext/src/routing/app-router.js");
+      const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
+      const routes = await appRouter(appDir);
+      const config = await resolveNextConfig({});
+
+      const prerenderResult = await prerenderApp({
+        mode: "default",
+        rscBundlePath: path.join(root, "dist", "server", "index.js"),
+        routes,
+        outDir,
+        config,
+        _prodServer: { server, port },
+      });
+
+      const route = findRoute(prerenderResult.routes, "/");
+      expect(route).toMatchObject({
+        route: "/",
+        status: "error",
+      });
+      if (route?.status !== "error") throw new Error("expected route to fail prerender");
+      expect(route.error).toContain("[vinext] prerenderApp: RSC fallback returned 500 for /");
+      expect(fs.existsSync(path.join(outDir, "index.rsc"))).toBe(false);
+      expect(pageRequestCount).toBe(1);
+      expect(rscRequestCount).toBe(1);
+    } finally {
+      await closeServer(server);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── Pages Router ─────────────────────────────────────────────────────────────

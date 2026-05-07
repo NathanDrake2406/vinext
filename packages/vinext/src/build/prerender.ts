@@ -1175,7 +1175,13 @@ export async function prerenderApp({
           const rscRes = await runWithHeadersContext(headersContextFromRequest(rscRequest), () =>
             rscHandler(rscRequest),
           );
-          rscData = rscRes.ok ? await rscRes.text() : "";
+          if (!rscRes.ok) {
+            await rscRes.body?.cancel();
+            throw new Error(
+              `[vinext] prerenderApp: RSC fallback returned ${rscRes.status} for ${urlPath}`,
+            );
+          }
+          rscData = await rscRes.text();
         }
 
         const outputFiles: string[] = [];
