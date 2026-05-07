@@ -466,6 +466,7 @@ export async function handleProgressiveServerActionRequest(
       });
     }
 
+    getAndClearActionRevalidationKind();
     options.getAndClearPendingCookies();
     // Next.js rethrows generic MPA action errors into its page render path.
     // vinext does not yet implement that form-state render path, so unexpected

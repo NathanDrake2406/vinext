@@ -634,6 +634,22 @@ describe("app server action execution helpers", () => {
     expect(response?.headers.get("x-action-revalidated")).toBeNull();
   });
 
+  it("emits x-action-revalidated when a fetch action revalidates a tag with expire zero", async () => {
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        loadServerAction() {
+          return Promise.resolve(async () => {
+            await revalidateTag("dashboard", { expire: 0 });
+            return "revalidated";
+          });
+        },
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("x-action-revalidated")).toBe("1");
+  });
+
   it("emits dynamic-only x-action-revalidated when a fetch action refreshes", async () => {
     const response = await handleServerActionRscRequest(
       createRscOptions({

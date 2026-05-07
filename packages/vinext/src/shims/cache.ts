@@ -378,9 +378,6 @@ export async function revalidateTag(
   tag: string,
   profile?: string | { expire?: number },
 ): Promise<void> {
-  if (!profile) {
-    markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
-  }
   // Resolve the profile to durations for the handler
   let durations: { expire?: number } | undefined;
   if (typeof profile === "string") {
@@ -390,6 +387,9 @@ export async function revalidateTag(
     }
   } else if (profile && typeof profile === "object") {
     durations = profile;
+  }
+  if (!profile || durations?.expire === 0) {
+    markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
   }
   await _getActiveHandler().revalidateTag(tag, durations);
 }
