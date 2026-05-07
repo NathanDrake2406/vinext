@@ -48,4 +48,4 @@ jobs:
           permissions: write
           opencode_dev: false
           opencode_version: 1.14.40
-          agent: viguy
+          agent: reviewer
