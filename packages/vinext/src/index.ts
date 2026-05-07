@@ -2570,6 +2570,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   middlewareRequestHeaders = buildRequestHeadersFromMiddlewareResponse(
                     currentRequestHeaders,
                     result.responseHeaders,
+                    {
+                      preserveCredentialHeaders: Boolean(
+                        result.rewriteUrl && isExternalUrl(result.rewriteUrl),
+                      ),
+                    },
                   );
 
                   if (middlewareRequestHeaders && !hasAppDir) {

@@ -1545,6 +1545,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       const { postMwReqCtx, request: postMwReq } = applyMiddlewareRequestHeaders(
         middlewareHeaders,
         webRequest,
+        { preserveCredentialHeaders: isExternalUrl(resolvedUrl) },
       );
       webRequest = postMwReq;
 

@@ -502,8 +502,13 @@ export function normalizeHost(hostHeader: string | null, fallbackHostname: strin
 export function applyMiddlewareRequestHeaders(
   middlewareHeaders: Record<string, string | string[]>,
   request: Request,
+  options: { preserveCredentialHeaders?: boolean } = {},
 ): { request: Request; postMwReqCtx: RequestContext } {
-  const nextHeaders = buildRequestHeadersFromMiddlewareResponse(request.headers, middlewareHeaders);
+  const nextHeaders = buildRequestHeadersFromMiddlewareResponse(
+    request.headers,
+    middlewareHeaders,
+    options,
+  );
 
   for (const key of Object.keys(middlewareHeaders)) {
     if (key.startsWith("x-middleware-")) {

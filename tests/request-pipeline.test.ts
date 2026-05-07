@@ -17,6 +17,7 @@ import {
   validateImageUrl,
   processMiddlewareHeaders,
 } from "../packages/vinext/src/server/request-pipeline.js";
+import { buildRequestHeadersFromMiddlewareResponse } from "../packages/vinext/src/server/middleware-request-headers.js";
 
 // ── guardProtocolRelativeUrl ────────────────────────────────────────────
 
@@ -749,6 +750,49 @@ describe("filterInternalHeaders", () => {
     const headers = new Headers();
     const result = filterInternalHeaders(headers);
     expect([...result.keys()]).toEqual([]);
+  });
+});
+
+describe("buildRequestHeadersFromMiddlewareResponse", () => {
+  it("preserves credential headers when applying partial middleware override headers", () => {
+    const baseHeaders = new Headers({
+      authorization: "Bearer token",
+      cookie: "session=abc",
+      "x-keep": "original",
+    });
+    const middlewareHeaders = new Headers({
+      "x-middleware-override-headers": "x-added",
+      "x-middleware-request-x-added": "1",
+    });
+
+    const result = buildRequestHeadersFromMiddlewareResponse(baseHeaders, middlewareHeaders, {
+      preserveCredentialHeaders: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.get("authorization")).toBe("Bearer token");
+    expect(result!.get("cookie")).toBe("session=abc");
+    expect(result!.get("x-added")).toBe("1");
+    expect(result!.get("x-keep")).toBeNull();
+  });
+
+  it("deletes credential headers when middleware explicitly omits their forwarded values", () => {
+    const baseHeaders = new Headers({
+      authorization: "Bearer token",
+      cookie: "session=abc",
+      "x-keep": "original",
+    });
+    const middlewareHeaders = new Headers({
+      "x-middleware-override-headers": "authorization,cookie,x-keep",
+      "x-middleware-request-x-keep": "updated",
+    });
+
+    const result = buildRequestHeadersFromMiddlewareResponse(baseHeaders, middlewareHeaders);
+
+    expect(result).not.toBeNull();
+    expect(result!.get("authorization")).toBeNull();
+    expect(result!.get("cookie")).toBeNull();
+    expect(result!.get("x-keep")).toBe("updated");
   });
 });
 

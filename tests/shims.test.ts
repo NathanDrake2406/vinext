@@ -3951,6 +3951,51 @@ describe("double-encoded path handling in middleware", () => {
     }
   });
 
+  it("external middleware rewrite proxy preserves credentials when applying partial request overrides", async () => {
+    const { proxyExternalMiddlewareRewrite } =
+      await import("../packages/vinext/src/server/app-middleware.js");
+    const http = await import("node:http");
+    let capturedHeaders: Record<string, string | string[] | undefined> = {};
+    const server = http.createServer((req, res) => {
+      capturedHeaders = req.headers;
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("proxied");
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    try {
+      const address = server.address();
+      expect(address && typeof address === "object").toBe(true);
+      const port = address && typeof address === "object" ? address.port : 0;
+      const response = await proxyExternalMiddlewareRewrite(
+        new Request("http://localhost:3000/source", {
+          headers: {
+            authorization: "Bearer secret",
+            cookie: "session=abc",
+            "x-keep": "original",
+          },
+        }),
+        `http://127.0.0.1:${port}/target`,
+        {
+          headers: null,
+          requestHeaders: new Headers({
+            "x-middleware-override-headers": "x-added",
+            "x-middleware-request-x-added": "1",
+          }),
+          status: null,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(capturedHeaders.authorization).toBe("Bearer secret");
+      expect(capturedHeaders.cookie).toBe("session=abc");
+      expect(capturedHeaders["x-added"]).toBe("1");
+      expect(capturedHeaders["x-keep"]).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("Pages Router runMiddleware passes decoded pathname to middleware function", async () => {
     const { runMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     // Create a mock Vite server that returns a middleware module
