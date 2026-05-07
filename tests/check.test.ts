@@ -309,6 +309,26 @@ describe("analyzeConfig", () => {
     expect(webpackItem?.detail).toContain("Vite replaces webpack");
   });
 
+  it("detects Tailwind configured through Turbopack CSS loader rules", () => {
+    writeFile(
+      "next.config.ts",
+      `export default {
+        turbopack: {
+          rules: {
+            "*.css": {
+              loaders: ["@tailwindcss/webpack"],
+            },
+          },
+        },
+      };`,
+    );
+
+    const items = analyzeConfig(tmpDir);
+    const tailwindItem = items.find((i) => i.name === "Tailwind Turbopack CSS loader");
+    expect(tailwindItem?.status).toBe("partial");
+    expect(tailwindItem?.detail).toContain("@tailwindcss/postcss");
+  });
+
   it("detects partial image config", () => {
     writeFile(
       "next.config.mjs",
@@ -774,6 +794,36 @@ describe("checkConventions", () => {
     expect(postcss).toBeDefined();
     expect(postcss?.status).toBe("partial");
     expect(postcss?.detail).toContain("string-form");
+  });
+
+  it("detects PostCSS string-form plugins in TypeScript configs", () => {
+    writeFile("app/page.tsx", `export default function Home() { return <div/>; }`);
+    writeFile("postcss.config.ts", `export default {\n  plugins: ["@tailwindcss/postcss"]\n};`);
+
+    const items = checkConventions(tmpDir);
+    const postcss = items.find((i) => i.name.includes("PostCSS"));
+    expect(postcss).toBeDefined();
+    expect(postcss?.status).toBe("partial");
+  });
+
+  it("detects Next.js-supported postcss.config.json files", () => {
+    writeFile("app/page.tsx", `export default function Home() { return <div/>; }`);
+    writeFile("postcss.config.json", JSON.stringify({ plugins: { "@tailwindcss/postcss": {} } }));
+
+    const items = checkConventions(tmpDir);
+    const postcss = items.find((i) => i.name.includes("PostCSS"));
+    expect(postcss).toBeDefined();
+    expect(postcss?.detail).toContain("postcss.config.json");
+  });
+
+  it("reports string-form postcss.config.json files as supported", () => {
+    writeFile("app/page.tsx", `export default function Home() { return <div/>; }`);
+    writeFile("postcss.config.json", JSON.stringify({ plugins: ["@tailwindcss/postcss"] }));
+
+    const items = checkConventions(tmpDir);
+    const postcss = items.find((i) => i.name.includes("PostCSS"));
+    expect(postcss).toBeDefined();
+    expect(postcss?.status).toBe("supported");
   });
 
   it("does not flag PostCSS when no config exists", () => {

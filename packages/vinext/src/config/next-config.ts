@@ -204,6 +204,11 @@ export type NextConfig = {
   serverExternalPackages?: string[];
   /** Webpack config (ignored — we use Vite) */
   webpack?: unknown;
+  /** Turbopack config. vinext translates a small set of compatibility cases. */
+  turbopack?: {
+    rules?: Record<string, unknown>;
+    resolveAlias?: Record<string, unknown>;
+  };
   /**
    * Path to a custom cache handler module (e.g., KV, Redis, DynamoDB).
    * Accepts relative paths, absolute paths, or file:// URLs from import.meta.resolve().
@@ -292,6 +297,8 @@ export type ResolvedNextConfig = {
    * change without modifying source — useful for cache-busting after CDN poisoning.
    */
   hashSalt: string;
+  /** True when next.config uses the known Tailwind Turbopack CSS webpack loader shape. */
+  tailwindTurbopackCssLoader: boolean;
 };
 
 const CONFIG_FILES = ["next.config.ts", "next.config.mjs", "next.config.js", "next.config.cjs"];
@@ -312,6 +319,10 @@ function isCjsError(e: unknown): boolean {
     msg.includes("__dirname is not defined") ||
     msg.includes("__filename is not defined")
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 // Dev-server phase is the safe default for config loading: it enables all
@@ -526,6 +537,7 @@ export async function resolveNextConfig(
       enablePrerenderSourceMaps: true,
       hashSalt: process.env.NEXT_HASH_SALT ?? "",
       buildId,
+      tailwindTurbopackCssLoader: false,
     };
     detectNextIntlConfig(root, resolved);
     return resolved;
@@ -591,6 +603,8 @@ export async function resolveNextConfig(
     ...extractTurboAliases(config, root),
     ...webpackProbe.aliases,
   };
+  const hasTurbopackRules = hasConfiguredTurbopackRules(config);
+  const tailwindTurbopackCssLoader = hasTailwindTurbopackCssLoader(config);
 
   const allowedDevOrigins = Array.isArray(config.allowedDevOrigins) ? config.allowedDevOrigins : [];
 
@@ -647,6 +661,13 @@ export async function resolveNextConfig(
         '[vinext] next.config option "webpack" is not yet supported and will be ignored',
       );
     }
+  }
+
+  if (hasTurbopackRules && !tailwindTurbopackCssLoader) {
+    console.warn(
+      '[vinext] next.config option "turbopack.rules" is not generally supported and will be ignored. ' +
+        "The known Tailwind CSS loader shape is translated automatically.",
+    );
   }
 
   const output = config.output ?? "";
@@ -706,6 +727,7 @@ export async function resolveNextConfig(
     enablePrerenderSourceMaps: config.enablePrerenderSourceMaps ?? true,
     hashSalt,
     buildId,
+    tailwindTurbopackCssLoader,
   };
 
   // Auto-detect next-intl (lowest priority — explicit aliases from
@@ -732,7 +754,7 @@ function normalizeAliasEntries(
 function extractTurboAliases(config: NextConfig, root: string): Record<string, string> {
   const experimental = config.experimental as Record<string, unknown> | undefined;
   const experimentalTurbo = experimental?.turbo as Record<string, unknown> | undefined;
-  const topLevelTurbopack = config.turbopack as Record<string, unknown> | undefined;
+  const topLevelTurbopack = config.turbopack;
 
   return {
     ...normalizeAliasEntries(
@@ -744,6 +766,56 @@ function extractTurboAliases(config: NextConfig, root: string): Record<string, s
       root,
     ),
   };
+}
+
+function getTurbopackRuleRecords(config: NextConfig): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  const experimental = config.experimental as Record<string, unknown> | undefined;
+  const experimentalTurbo = experimental?.turbo;
+  if (isRecord(experimentalTurbo) && isRecord(experimentalTurbo.rules)) {
+    records.push(experimentalTurbo.rules);
+  }
+  if (isRecord(config.turbopack?.rules)) {
+    records.push(config.turbopack.rules);
+  }
+  return records;
+}
+
+function hasConfiguredTurbopackRules(config: NextConfig): boolean {
+  return getTurbopackRuleRecords(config).some((rules) => Object.keys(rules).length > 0);
+}
+
+function isTailwindWebpackLoader(loader: unknown): boolean {
+  if (typeof loader === "string") {
+    return loader === "@tailwindcss/webpack";
+  }
+  if (isRecord(loader) && typeof loader.loader === "string") {
+    return loader.loader === "@tailwindcss/webpack";
+  }
+  return false;
+}
+
+function turbopackRuleHasTailwindLoader(rule: unknown): boolean {
+  if (Array.isArray(rule)) {
+    return rule.some((item) => {
+      if (isTailwindWebpackLoader(item)) return true;
+      return isRecord(item) && turbopackRuleHasTailwindLoader(item);
+    });
+  }
+
+  if (!isRecord(rule)) return false;
+
+  if (Array.isArray(rule.loaders)) {
+    return rule.loaders.some(isTailwindWebpackLoader);
+  }
+
+  return false;
+}
+
+function hasTailwindTurbopackCssLoader(config: NextConfig): boolean {
+  return getTurbopackRuleRecords(config).some((rules) =>
+    Object.values(rules).some((rule) => turbopackRuleHasTailwindLoader(rule)),
+  );
 }
 
 async function probeWebpackConfig(

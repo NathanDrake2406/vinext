@@ -491,6 +491,7 @@ describe("detectNextIntlConfig", () => {
       cacheHandler: undefined,
       cacheMaxMemorySize: undefined,
       hashSalt: "",
+      tailwindTurbopackCssLoader: false,
       enablePrerenderSourceMaps: true,
       expireTime: 31_536_000,
       buildId: "test-build-id",

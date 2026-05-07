@@ -235,6 +235,7 @@ describe("App Router generated manifest construction", () => {
     expect(dynamicRouteEntry).toContain("interceptLayouts: [mod_18]");
     expect(dynamicRouteEntry).toContain("page: mod_17");
     expect(dynamicRouteEntry).toContain('params: ["photoId"]');
+    expect(dynamicRouteEntry).not.toContain("styles:");
     expect(manifest.generateStaticParamsEntries).toEqual([
       '  "/dashboard/:id": mod_5?.generateStaticParams ?? null,',
     ]);

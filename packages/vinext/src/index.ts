@@ -93,7 +93,9 @@ import {
 } from "./plugins/fonts.js";
 import { hasWranglerConfig, formatMissingCloudflarePluginError } from "./deploy.js";
 import { computeLazyChunks } from "./utils/lazy-chunks.js";
-import { resolvePostcssStringPlugins } from "./plugins/postcss.js";
+import { resolveCssConfigCompatibility } from "./plugins/css-config-compat.js";
+import { collectAppRouteModuleFiles } from "./server/app-route-module-files.js";
+import { collectDevCssHrefsForFiles, type DevCssImportsCache } from "./server/dev-css-imports.js";
 import {
   createClientManualChunks,
   createClientOutputConfig,
@@ -539,6 +541,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let hasCloudflarePlugin = false;
   let warnedInlineNextConfigOverride = false;
   let hasNitroPlugin = false;
+  let viteCommand: "build" | "serve" = "serve";
+  let devCssAliases: Record<string, string> = {};
+  const devCssImportsCache: DevCssImportsCache = new Map();
 
   // Build-time layout classification manifest, captured in the RSC virtual
   // module's load hook and consumed in generateBundle to patch the generated
@@ -761,6 +766,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       enforce: "pre",
 
       async config(config, env) {
+        viteCommand = env?.command ?? "serve";
         root = config.root ?? process.cwd();
         const userResolve = config.resolve as UserResolveConfigWithTsconfigPaths | undefined;
         const shouldEnableNativeTsconfigPaths =
@@ -851,6 +857,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           nextConfig = await resolveNextConfig(rawConfig, root);
         }
+        devCssAliases = {
+          ...tsconfigPathAliases,
+          ...nextConfig.aliases,
+        };
         fileMatcher = createValidFileMatcher(nextConfig.pageExtensions);
         instrumentationPath = findInstrumentationFile(root, fileMatcher);
         instrumentationClientPath = findInstrumentationClientFile(root, fileMatcher);
@@ -1050,18 +1060,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             (p.name === "nitro" || p.name.startsWith("nitro:")),
         );
 
-        // Resolve PostCSS string plugin names that Vite can't handle.
-        // Next.js projects commonly use array-form plugins like
-        // `plugins: ["@tailwindcss/postcss"]` which postcss-load-config
-        // doesn't resolve (only object-form keys are resolved). We detect
-        // this and resolve the strings to actual plugin functions, then
-        // inject via css.postcss so Vite uses the resolved plugins.
-        // Only do this if the user hasn't already set css.postcss inline.
-        // oxlint-disable-next-line typescript/no-explicit-any
-        let postcssOverride: { plugins: any[] } | undefined;
-        if (!config.css?.postcss || typeof config.css.postcss === "string") {
-          postcssOverride = await resolvePostcssStringPlugins(root);
-        }
+        const cssCompatConfig = await resolveCssConfigCompatibility({
+          projectRoot: root,
+          viteConfig: config,
+          nextConfig,
+          configuredPlugins: pluginsFlat,
+        });
 
         // Auto-inject @mdx-js/rollup when MDX files exist and no MDX plugin is
         // already configured. Applies remark/rehype plugins from next.config.
@@ -1240,8 +1244,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           define: defines,
           // Set base path if configured
           ...(nextConfig.basePath ? { base: nextConfig.basePath + "/" } : {}),
-          // Inject resolved PostCSS plugins if string names were found
-          ...(postcssOverride ? { css: { postcss: postcssOverride } } : {}),
+          // Inject CSS config shapes that Next.js supports but Vite does not
+          // discover or normalize on its own.
+          ...cssCompatConfig,
         };
 
         // Collect user-provided ssr.external so we can propagate it into
@@ -1723,7 +1728,33 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         }
         // App Router virtual modules
         if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
+          const resolveDevCssImport = async (specifier: string, importerPath: string) => {
+            const resolved = await this.resolve(specifier, importerPath, { skipSelf: true });
+            return resolved?.id.split("?", 1)[0] ?? null;
+          };
           const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
+          const devCssStylesByRoute =
+            viteCommand === "build"
+              ? undefined
+              : await Promise.all(
+                  routes.map((route) =>
+                    collectDevCssHrefsForFiles(
+                      collectAppRouteModuleFiles(route),
+                      {
+                        projectRoot: root,
+                        aliases: devCssAliases,
+                        onParseError(filePath, error) {
+                          const message = error instanceof Error ? error.message : String(error);
+                          console.warn(
+                            `[vinext] Failed to scan CSS imports in ${filePath}: ${message}`,
+                          );
+                        },
+                        resolve: resolveDevCssImport,
+                      },
+                      devCssImportsCache,
+                    ),
+                  ),
+                );
           const metaRoutes = scanMetadataFiles(appDir);
           // Check for global-error.tsx at app root
           const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
@@ -1753,6 +1784,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               expireTime: nextConfig?.expireTime,
               i18n: nextConfig?.i18n,
               hasPagesDir,
+              devCssStylesByRoute,
               publicFiles: scanPublicFileRoutes(root),
             },
             instrumentationPath,

@@ -79,6 +79,7 @@ export type AppPageRouteWiringRoute<
   notFounds?: readonly (TModule | null | undefined)[] | null;
   forbidden?: TModule | null;
   forbiddens?: readonly (TModule | null | undefined)[] | null;
+  styles?: readonly string[] | null;
   unauthorized?: TModule | null;
   unauthorizeds?: readonly (TModule | null | undefined)[] | null;
   routeSegments?: readonly string[];
@@ -771,8 +772,13 @@ export function buildAppPageElements<
     routeChildren = <ErrorBoundary fallback={globalErrorComponent}>{routeChildren}</ErrorBoundary>;
   }
 
+  // Source CSS links are dev-only route metadata. Production CSS comes from the
+  // built client manifest, so these links intentionally stay optional.
   elements[routeId] = (
     <>
+      {options.route.styles?.map((href) => (
+        <link key={href} rel="stylesheet" href={href} />
+      ))}
       {createAppPageRouteHead(options.resolvedMetadata, options.resolvedViewport)}
       {routeChildren}
     </>
