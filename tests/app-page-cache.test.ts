@@ -8,6 +8,7 @@ import {
   scheduleAppPageRscCacheWrite,
 } from "../packages/vinext/src/server/app-page-cache.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
+import { VINEXT_RSC_VARY_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 
 function buildISRCacheEntry(
@@ -78,6 +79,50 @@ describe("app page cache helpers", () => {
     expect(rscResponse?.headers.get("content-type")).toBe("text/x-component; charset=utf-8");
     expect(rscResponse?.headers.get("cache-control")).toBe("s-maxage=0, stale-while-revalidate");
     expect(await rscResponse?.arrayBuffer()).toEqual(rscData);
+  });
+
+  it("merges middleware response headers into cached HTML responses", async () => {
+    const middlewareHeaders = new Headers({
+      "Cache-Control": "private, no-store",
+      "Content-Security-Policy": "frame-ancestors 'none'",
+      Vary: "Accept-Encoding",
+      "X-Frame-Options": "DENY",
+    });
+    middlewareHeaders.append("Set-Cookie", "session=abc; Path=/; HttpOnly");
+
+    const response = buildAppPageCachedResponse(buildCachedAppPageValue("<h1>cached</h1>"), {
+      cacheState: "HIT",
+      isRscRequest: false,
+      middlewareHeaders,
+      revalidateSeconds: 60,
+    });
+
+    expect(response?.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response?.headers.get("Content-Security-Policy")).toBe("frame-ancestors 'none'");
+    expect(response?.headers.get("Set-Cookie")).toBe("session=abc; Path=/; HttpOnly");
+    expect(response?.headers.get("Vary")).toBe(`${VINEXT_RSC_VARY_HEADER}, Accept-Encoding`);
+    expect(response?.headers.get("X-Frame-Options")).toBe("DENY");
+    expect(response?.headers.get("X-Vinext-Cache")).toBe("HIT");
+  });
+
+  it("merges middleware response headers into cached RSC responses", async () => {
+    const rscData = new TextEncoder().encode("flight").buffer;
+    const middlewareHeaders = new Headers({
+      "Access-Control-Allow-Origin": "https://example.com",
+      Vary: "Origin",
+    });
+
+    const response = buildAppPageCachedResponse(buildCachedAppPageValue("", rscData), {
+      cacheState: "STALE",
+      isRscRequest: true,
+      middlewareHeaders,
+      revalidateSeconds: 60,
+    });
+
+    expect(response?.headers.get("Access-Control-Allow-Origin")).toBe("https://example.com");
+    expect(response?.headers.get("Vary")).toBe(`${VINEXT_RSC_VARY_HEADER}, Origin`);
+    expect(response?.headers.get("X-Vinext-Cache")).toBe("STALE");
+    await expect(response?.arrayBuffer()).resolves.toEqual(rscData);
   });
 
   it("uses stored cache-control metadata instead of global config for cached HIT responses", async () => {
@@ -169,6 +214,7 @@ describe("app page cache helpers", () => {
 
   it("returns cached HIT responses and clears request state", async () => {
     let didClearRequestContext = false;
+    const middlewareHeaders = new Headers({ "X-From-Middleware": "hit" });
 
     const response = await readAppPageCacheResponse({
       cleanPathname: "/cached",
@@ -186,6 +232,7 @@ describe("app page cache helpers", () => {
         return "rsc:" + pathname;
       },
       async isrSet() {},
+      middlewareHeaders,
       revalidateSeconds: 60,
       async renderFreshPageForCache() {
         throw new Error("should not render");
@@ -196,6 +243,7 @@ describe("app page cache helpers", () => {
     });
 
     expect(response?.headers.get("x-vinext-cache")).toBe("HIT");
+    expect(response?.headers.get("x-from-middleware")).toBe("hit");
     await expect(response?.text()).resolves.toBe("<h1>cached</h1>");
     expect(didClearRequestContext).toBe(true);
   });

@@ -2,6 +2,7 @@ import type { CachedAppPageValue, CacheControlMetadata } from "vinext/shims/cach
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { buildCachedRevalidateCacheControl } from "./cache-control.js";
 import { buildAppPageCacheValue, type ISRCacheEntry } from "./isr-cache.js";
+import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
@@ -31,6 +32,7 @@ type BuildAppPageCachedResponseOptions = {
   cacheState: "HIT" | "STALE";
   expireSeconds?: number;
   isRscRequest: boolean;
+  middlewareHeaders?: Headers | null;
   mountedSlotsHeader?: string | null;
   revalidateSeconds: number;
 };
@@ -44,6 +46,7 @@ type ReadAppPageCacheResponseOptions = {
   isrHtmlKey: (pathname: string) => string;
   isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
   isrSet: AppPageCacheSetter;
+  middlewareHeaders?: Headers | null;
   mountedSlotsHeader?: string | null;
   expireSeconds?: number;
   revalidateSeconds: number;
@@ -116,6 +119,28 @@ function buildAppPageCacheControl(
   return buildCachedRevalidateCacheControl(cacheState, revalidateSeconds, expireSeconds);
 }
 
+function buildAppPageCachedHeaders(options: {
+  cacheControl: string;
+  cacheState: BuildAppPageCachedResponseOptions["cacheState"];
+  contentType: string;
+  middlewareHeaders?: Headers | null;
+  mountedSlotsHeader?: string | null;
+}): Headers {
+  const headers = new Headers({
+    "Cache-Control": options.cacheControl,
+    "Content-Type": options.contentType,
+    Vary: VINEXT_RSC_VARY_HEADER,
+    "X-Vinext-Cache": options.cacheState,
+  });
+
+  if (options.mountedSlotsHeader) {
+    headers.set("X-Vinext-Mounted-Slots", options.mountedSlotsHeader);
+  }
+
+  mergeMiddlewareResponseHeaders(headers, options.middlewareHeaders ?? null);
+  return headers;
+}
+
 function getCachedAppPageValue(entry: ISRCacheEntry | null): CachedAppPageValue | null {
   return entry?.value.value && entry.value.value.kind === "APP_PAGE" ? entry.value.value : null;
 }
@@ -158,24 +183,23 @@ export function buildAppPageCachedResponse(
     options.cacheControl === undefined
       ? undefined
       : (options.cacheControl.expire ?? options.expireSeconds);
-  const headers = {
-    "Cache-Control": buildAppPageCacheControl(options.cacheState, revalidateSeconds, expireSeconds),
-    Vary: VINEXT_RSC_VARY_HEADER,
-    "X-Vinext-Cache": options.cacheState,
-  };
-
+  const cacheControl = buildAppPageCacheControl(
+    options.cacheState,
+    revalidateSeconds,
+    expireSeconds,
+  );
   if (options.isRscRequest) {
     if (!cachedValue.rscData) {
       return null;
     }
 
-    const rscHeaders: Record<string, string> = {
-      "Content-Type": "text/x-component; charset=utf-8",
-      ...headers,
-    };
-    if (options.mountedSlotsHeader) {
-      rscHeaders["X-Vinext-Mounted-Slots"] = options.mountedSlotsHeader;
-    }
+    const rscHeaders = buildAppPageCachedHeaders({
+      cacheControl,
+      cacheState: options.cacheState,
+      contentType: "text/x-component; charset=utf-8",
+      middlewareHeaders: options.middlewareHeaders,
+      mountedSlotsHeader: options.mountedSlotsHeader,
+    });
 
     return new Response(cachedValue.rscData, {
       status,
@@ -187,12 +211,16 @@ export function buildAppPageCachedResponse(
     return null;
   }
 
+  const htmlHeaders = buildAppPageCachedHeaders({
+    cacheControl,
+    cacheState: options.cacheState,
+    contentType: "text/html; charset=utf-8",
+    middlewareHeaders: options.middlewareHeaders,
+  });
+
   return new Response(cachedValue.html, {
     status,
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      ...headers,
-    },
+    headers: htmlHeaders,
   });
 }
 
@@ -213,6 +241,7 @@ export async function readAppPageCacheResponse(
         cacheControl: cached?.value.cacheControl,
         expireSeconds: options.expireSeconds,
         isRscRequest: options.isRscRequest,
+        middlewareHeaders: options.middlewareHeaders,
         mountedSlotsHeader: options.mountedSlotsHeader,
         revalidateSeconds: options.revalidateSeconds,
       });
@@ -277,6 +306,7 @@ export async function readAppPageCacheResponse(
         cacheControl: cached.value.cacheControl,
         expireSeconds: options.expireSeconds,
         isRscRequest: options.isRscRequest,
+        middlewareHeaders: options.middlewareHeaders,
         mountedSlotsHeader: options.mountedSlotsHeader,
         revalidateSeconds: options.revalidateSeconds,
       });
