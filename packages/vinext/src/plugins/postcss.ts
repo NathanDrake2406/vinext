@@ -21,6 +21,7 @@ type PostcssPluginEntry = PostcssPluginSpec | { value: unknown };
 type PostcssConfigInfo = {
   configPath: string;
   hasTailwindPlugin: boolean;
+  isOpaqueConfig: boolean;
   postcss: Promise<{ plugins: PostcssAcceptedPlugin[] } | undefined> | undefined;
   shouldInjectIntoVite: boolean;
 };
@@ -277,6 +278,7 @@ async function inspectPostcssConfigUncached(
     return {
       configPath: found.configPath,
       hasTailwindPlugin: false,
+      isOpaqueConfig: true,
       postcss: undefined,
       shouldInjectIntoVite: false,
     };
@@ -287,6 +289,7 @@ async function inspectPostcssConfigUncached(
     return {
       configPath: found.configPath,
       hasTailwindPlugin: false,
+      isOpaqueConfig: true,
       postcss: undefined,
       shouldInjectIntoVite: false,
     };
@@ -301,6 +304,7 @@ async function inspectPostcssConfigUncached(
   return {
     configPath: found.configPath,
     hasTailwindPlugin: normalized.hasTailwindPlugin,
+    isOpaqueConfig: false,
     get postcss() {
       postcssPromise ??= resolvePostcssPlugins(projectRoot, normalized.entries).then((plugins) => ({
         plugins,

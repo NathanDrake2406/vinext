@@ -88,6 +88,11 @@ export async function resolveCssConfigCompatibility({
         '[vinext] next.config turbopack.rules uses "@tailwindcss/webpack", but vite.config already defines css.postcss. ' +
           'vinext will leave the explicit Vite PostCSS config unchanged; add "@tailwindcss/postcss" there or register "@tailwindcss/vite" manually.',
       );
+    } else if (projectPostcssConfig?.isOpaqueConfig) {
+      console.warn(
+        '[vinext] next.config turbopack.rules uses "@tailwindcss/webpack", but an existing PostCSS config could not be safely merged. ' +
+          'vinext will leave the PostCSS config unchanged; add "@tailwindcss/postcss" there or register "@tailwindcss/vite" manually.',
+      );
     } else {
       let tailwindPostcssPlugin: PostcssAcceptedPlugin;
       try {

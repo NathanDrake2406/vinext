@@ -217,6 +217,19 @@ module.exports.postcss = true;
     }
   });
 
+  it("marks YAML PostCSS configs as opaque", async () => {
+    const fsp = await import("node:fs/promises");
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-postcss-yaml-"));
+    await fsp.writeFile(path.join(dir, ".postcssrc.yml"), "plugins:\n  autoprefixer: {}\n");
+    try {
+      const info = await inspectPostcssConfig(dir);
+      expect(info?.isOpaqueConfig).toBe(true);
+      expect(info?.postcss).toBeUndefined();
+    } finally {
+      await cleanupDir(dir);
+    }
+  });
+
   it("throws for malformed PostCSS JSON configs", async () => {
     const fsp = await import("node:fs/promises");
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-postcss-json-"));

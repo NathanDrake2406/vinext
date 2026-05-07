@@ -225,4 +225,37 @@ describe("Tailwind config compatibility", () => {
 
     expect(server.config.css.postcss).toBe("custom-postcss.config.cjs");
   });
+
+  it("does not override opaque PostCSS configs when translating Tailwind Turbopack loaders", async () => {
+    const root = await createProject();
+    await fs.writeFile(
+      path.join(root, "next.config.mjs"),
+      `export default {
+  turbopack: {
+    rules: {
+      "*.css": {
+        loaders: ["@tailwindcss/webpack"],
+      },
+    },
+  },
+};`,
+    );
+    await fs.writeFile(
+      path.join(root, ".postcssrc.yml"),
+      `plugins:
+  autoprefixer: {}
+`,
+    );
+
+    const server = await createServer({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vinext()],
+      server: { port: 0 },
+    });
+    servers.push(server);
+
+    expect(server.config.css.postcss).toBeUndefined();
+  });
 });
