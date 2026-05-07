@@ -1,7 +1,7 @@
 ---
 description: Thorough code reviewer focused on correctness, edge cases, and dev/prod parity. Posts reviews directly on GitHub PRs.
 mode: subagent
-model: cloudflare-ai-gateway/openai/gpt-5.5
+model: openai/gpt-5.5
 temperature: 0.2
 tools:
   write: false
