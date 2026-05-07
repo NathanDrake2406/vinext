@@ -163,6 +163,10 @@ function classifyRootBoundaryTransition(
   nextRootBoundaryId: string | null,
 ): RootBoundaryTransition {
   if (currentRootBoundaryId === null || nextRootBoundaryId === null) {
+    // Both null directions intentionally share the v0 fallback because this
+    // slice only knows boundary identity from the current flight payload.
+    // #726-CORE-09 can split "unknown current" from "unknown target" once the
+    // planner consumes graph-owned root boundary facts for both sides.
     return "rootBoundaryUnknownFallback";
   }
 

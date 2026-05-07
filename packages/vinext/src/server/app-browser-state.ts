@@ -216,6 +216,8 @@ export function resolvePendingNavigationCommitDispositionDecision(options: {
   startedNavigationId: number;
   targetHref?: string;
 }): PendingNavigationCommitDispositionDecision {
+  const traceFields = createPendingNavigationTraceFields(options);
+
   if (
     options.startedNavigationId !== options.activeNavigationId ||
     options.pending.action.operation.startedVisibleCommitVersion !==
@@ -223,14 +225,9 @@ export function resolvePendingNavigationCommitDispositionDecision(options: {
   ) {
     return {
       disposition: "skip",
-      trace: createNavigationTrace(
-        NavigationTraceReasonCodes.staleOperation,
-        createPendingNavigationTraceFields(options),
-      ),
+      trace: createNavigationTrace(NavigationTraceReasonCodes.staleOperation, traceFields),
     };
   }
-
-  const traceFields = createPendingNavigationTraceFields(options);
 
   return mapNavigationDecisionToPendingDisposition(
     planPendingRootBoundaryFlightResponse({
@@ -293,10 +290,12 @@ function createPendingNavigationOperationToken(options: {
     graphVersion: null,
     lane: options.pending.action.operation.lane,
     operationId: options.pending.action.operation.id,
-    targetSnapshotFingerprint: `${options.targetSnapshot.routeId}|root:${
-      options.targetSnapshot.rootBoundaryId ?? "unknown"
-    }`,
+    targetSnapshotFingerprint: createRootBoundarySnapshotFingerprint(options.targetSnapshot),
   };
+}
+
+function createRootBoundarySnapshotFingerprint(snapshot: RouteSnapshotV0): string {
+  return `${snapshot.routeId}|root:${snapshot.rootBoundaryId ?? "unknown"}`;
 }
 
 function planPendingRootBoundaryFlightResponse(options: {
@@ -347,7 +346,7 @@ function mapNavigationDecisionToPendingDisposition(
       return { disposition: "skip", trace: decision.trace };
     case "requestWork":
       throw new Error(
-        "[vinext] Root-boundary commit planning returned requestWork; flightResponseArrived should never request work",
+        `[vinext] Root-boundary commit planning returned requestWork (${decision.work.kind}); flightResponseArrived should never request work`,
       );
     default: {
       const _exhaustive: never = decision;

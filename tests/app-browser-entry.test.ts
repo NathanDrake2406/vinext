@@ -648,14 +648,45 @@ describe("app browser entry state helpers", () => {
     const decision = await resolveTestPendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
       currentVisibleCommitVersion: 1,
-      currentRootLayoutTreePath: "/(marketing)",
-      nextRootLayoutTreePath: "/(dashboard)",
+      currentRootLayoutTreePath: "/",
+      nextRootLayoutTreePath: "/",
       startedNavigationId: 2,
       startedVisibleCommitVersion: 0,
     });
 
     expect(decision.disposition).toBe("skip");
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.staleOperation);
+  });
+
+  it("treats stale state as authoritative even when the root boundary changed", async () => {
+    const decision = await resolveTestPendingNavigationCommitDispositionDecision({
+      activeNavigationId: 2,
+      currentVisibleCommitVersion: 1,
+      currentRootLayoutTreePath: "/(marketing)",
+      nextRootLayoutTreePath: "/(dashboard)",
+      startedNavigationId: 2,
+      startedVisibleCommitVersion: 0,
+    });
+
+    expect(decision).toEqual({
+      disposition: "skip",
+      trace: {
+        schemaVersion: NAVIGATION_TRACE_SCHEMA_VERSION,
+        entries: [
+          {
+            code: NavigationTraceReasonCodes.staleOperation,
+            fields: {
+              activeNavigationId: 2,
+              currentRootLayoutTreePath: "/(marketing)",
+              currentVisibleCommitVersion: 1,
+              nextRootLayoutTreePath: "/(dashboard)",
+              startedNavigationId: 2,
+              startedVisibleCommitVersion: 0,
+            },
+          },
+        ],
+      },
+    });
   });
 
   it("traces root-boundary hard navigation decisions", async () => {
