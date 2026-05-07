@@ -101,10 +101,12 @@ export type AppRoute = {
    * Per-layout error boundary paths, aligned with the layouts array.
    * Each entry is the error.tsx at the same directory level as the
    * corresponding layout (or null if that level has no error.tsx).
-   * Used to interleave ErrorBoundary components with layouts so that
-   * ancestor error boundaries catch errors from descendant segments.
    */
   layoutErrorPaths: (string | null)[];
+  /** Per-segment error boundary paths, aligned with errorTreePositions. */
+  errorPaths?: string[];
+  /** Tree position (directory depth from app/ root) for each error boundary. */
+  errorTreePositions?: number[];
   /** Not-found component path (nearest, walking up from page dir) */
   notFoundPath: string | null;
   /**
@@ -1021,10 +1023,14 @@ function directoryToAppRoute(
   // Compute the tree position (directory depth) for each layout.
   const layoutTreePositions = computeLayoutTreePositions(appDir, layouts);
 
-  // Discover per-layout error boundaries (aligned with layouts array).
+  // Discover per-segment error boundaries. Next.js loader trees carry an
+  // error convention for a segment even when that segment has no layout.
   // In Next.js, each segment independently wraps its children with an ErrorBoundary.
   // This array enables interleaving error boundaries with layouts in the rendering.
   const layoutErrorPaths = discoverLayoutAlignedErrors(segments, appDir, matcher);
+  const errorEntries = discoverSegmentErrors(segments, appDir, matcher);
+  const errorPaths = errorEntries.map((entry) => entry.path);
+  const errorTreePositions = errorEntries.map((entry) => entry.treePosition);
 
   // Discover loading, error in the route's directory
   const routeDir = dir === "." ? appDir : path.join(appDir, dir);
@@ -1067,6 +1073,8 @@ function directoryToAppRoute(
     loadingPath,
     errorPath,
     layoutErrorPaths,
+    errorPaths,
+    errorTreePositions,
     notFoundPath,
     notFoundPaths,
     forbiddenPaths,
@@ -1223,15 +1231,46 @@ function discoverTemplates(
 }
 
 /**
- * Discover error.tsx files aligned with the layouts array.
- * Walks the same directory levels as discoverLayouts and, for each level
- * that contributes a layout entry, checks whether error.tsx also exists.
- * Returns an array of the same length as discoverLayouts() would return,
- * with the error path (or null) at each corresponding layout level.
+ * Discover error.tsx files by segment tree position.
  *
- * This enables interleaving ErrorBoundary components with layouts in the
- * rendering tree, matching Next.js behavior where each segment independently
- * wraps its children with an error boundary.
+ * Next.js stores conventions on every loader-tree segment; a route-group
+ * directory with error.tsx but no sibling layout.tsx must still wrap its
+ * descendants. Keeping positions explicit avoids conflating segment boundaries
+ * with layout component ownership.
+ */
+function discoverSegmentErrors(
+  segments: string[],
+  appDir: string,
+  matcher: ValidFileMatcher,
+): { path: string; treePosition: number }[] {
+  const errors: { path: string; treePosition: number }[] = [];
+
+  const rootError = findFile(appDir, "error", matcher);
+  if (rootError) {
+    errors.push({ path: rootError, treePosition: 0 });
+  }
+
+  // Check each directory level
+  let currentDir = appDir;
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
+    currentDir = path.join(currentDir, segment);
+    const error = findFile(currentDir, "error", matcher);
+    if (error) {
+      errors.push({ path: error, treePosition: index + 1 });
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Discover error.tsx files aligned with the layouts array.
+ *
+ * Route manifests still model layout-owned boundary facts by layout index.
+ * Keep this layout-aligned compatibility shape separate from segment-owned
+ * error boundaries so route-group errors without layouts do not get attributed
+ * to unrelated layouts.
  */
 function discoverLayoutAlignedErrors(
   segments: string[],
@@ -1240,13 +1279,11 @@ function discoverLayoutAlignedErrors(
 ): (string | null)[] {
   const errors: (string | null)[] = [];
 
-  // Root level (only if root has a layout — matching discoverLayouts logic)
   const rootLayout = findFile(appDir, "layout", matcher);
   if (rootLayout) {
     errors.push(findFile(appDir, "error", matcher));
   }
 
-  // Check each directory level
   let currentDir = appDir;
   for (const segment of segments) {
     currentDir = path.join(currentDir, segment);

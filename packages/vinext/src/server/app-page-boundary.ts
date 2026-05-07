@@ -29,6 +29,7 @@ type ResolveAppPageParentHttpAccessBoundaryModuleOptions<TModule> = {
 type ResolveAppPageErrorBoundaryOptions<TModule, TComponent> = {
   getDefaultExport: (module: TModule | null | undefined) => TComponent | null | undefined;
   globalErrorModule?: TModule | null;
+  errorModules?: readonly (TModule | null | undefined)[] | null;
   layoutErrorModules?: readonly (TModule | null | undefined)[] | null;
   pageErrorModule?: TModule | null;
 };
@@ -143,12 +144,13 @@ export function resolveAppPageErrorBoundary<TModule, TComponent>(
     };
   }
 
-  if (options.layoutErrorModules) {
-    for (let index = options.layoutErrorModules.length - 1; index >= 0; index--) {
-      const layoutErrorComponent = options.getDefaultExport(options.layoutErrorModules[index]);
-      if (layoutErrorComponent) {
+  const segmentErrorModules = options.errorModules ?? options.layoutErrorModules;
+  if (segmentErrorModules) {
+    for (let index = segmentErrorModules.length - 1; index >= 0; index--) {
+      const segmentErrorComponent = options.getDefaultExport(segmentErrorModules[index]);
+      if (segmentErrorComponent) {
         return {
-          component: layoutErrorComponent,
+          component: segmentErrorComponent,
           isGlobalError: false,
         };
       }

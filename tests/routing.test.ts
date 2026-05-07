@@ -46,6 +46,8 @@ function makeTestAppRoute(
     loadingPath: null,
     errorPath: null,
     layoutErrorPaths: [],
+    errorPaths: [],
+    errorTreePositions: [],
     notFoundPath: null,
     notFoundPaths: [],
     forbiddenPaths: [],

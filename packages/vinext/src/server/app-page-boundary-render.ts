@@ -41,6 +41,7 @@ type AppPageBoundaryRscPayloadOptions<TModule extends AppPageModule = AppPageMod
 
 export type AppPageBoundaryRoute<TModule extends AppPageModule = AppPageModule> = {
   error?: TModule | null;
+  errorPaths?: readonly TModule[] | null;
   errors?: readonly (TModule | null | undefined)[] | null;
   forbidden?: TModule | null;
   layoutTreePositions?: readonly number[] | null;
@@ -342,6 +343,7 @@ export async function renderAppPageErrorBoundary<TModule extends AppPageModule>(
 ): Promise<Response | null> {
   const errorBoundary = resolveAppPageErrorBoundary({
     getDefaultExport,
+    errorModules: options.route?.errorPaths,
     globalErrorModule: options.globalErrorModule,
     layoutErrorModules: options.route?.errors,
     pageErrorModule: options.route?.error,

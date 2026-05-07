@@ -266,6 +266,26 @@ describe("App Router route graph builder", () => {
     });
   });
 
+  it("discovers error boundaries in route groups without sibling layouts", async () => {
+    await withTempApp(async (appDir) => {
+      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
+      await writeAppFile(
+        appDir,
+        "docs/(group)/error.tsx",
+        "export default function Error() { return null; }\n",
+      );
+      await writeAppFile(appDir, "docs/(group)/child/page.tsx", EMPTY_PAGE);
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher(["tsx"]));
+      const route = findRoute(graph.routes, "/docs/child");
+
+      expect(route.layoutTreePositions).toEqual([0]);
+      expect(route.layoutErrorPaths).toEqual([null]);
+      expect(route.errorPaths).toEqual([path.join(appDir, "docs/(group)/error.tsx")]);
+      expect(route.errorTreePositions).toEqual([2]);
+    });
+  });
+
   it("mints semantic ids for routes, entries, layouts, templates, and slots", async () => {
     await withTempApp(async (appDir) => {
       await createSemanticIdsFixture(appDir);

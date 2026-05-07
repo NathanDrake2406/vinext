@@ -69,7 +69,9 @@ export type AppPageRouteWiringRoute<
 > = {
   ids?: AppRouteSemanticIds | null;
   error?: TErrorModule | null;
+  errorPaths?: readonly TErrorModule[] | null;
   errors?: readonly (TErrorModule | null | undefined)[] | null;
+  errorTreePositions?: readonly number[] | null;
   layoutTreePositions?: readonly number[] | null;
   layouts: readonly (TModule | null | undefined)[];
   loading?: TModule | null;
@@ -148,6 +150,11 @@ type AppPageTemplateEntry<TModule extends AppPageModule = AppPageModule> = {
   treePosition: number;
 };
 
+type AppPageErrorEntry<TErrorModule extends AppPageErrorModule = AppPageErrorModule> = {
+  errorModule?: TErrorModule | null | undefined;
+  treePosition: number;
+};
+
 function getDefaultExport<TModule extends AppPageModule>(
   module: TModule | null | undefined,
 ): AppPageComponent | null {
@@ -177,7 +184,12 @@ export function createAppPageLayoutEntries<
 >(
   route: Pick<
     AppPageRouteWiringRoute<TModule, TErrorModule>,
-    "errors" | "layoutTreePositions" | "layouts" | "notFounds" | "routeSegments"
+    | "errors"
+    | "errorTreePositions"
+    | "layoutTreePositions"
+    | "layouts"
+    | "notFounds"
+    | "routeSegments"
   > & {
     forbiddens?: readonly (TModule | null | undefined)[] | null;
     unauthorizeds?: readonly (TModule | null | undefined)[] | null;
@@ -187,7 +199,7 @@ export function createAppPageLayoutEntries<
     const treePosition = route.layoutTreePositions?.[index] ?? 0;
     const treePath = createAppPageTreePath(route.routeSegments, treePosition);
     return {
-      errorModule: route.errors?.[index] ?? null,
+      errorModule: route.errorTreePositions ? null : (route.errors?.[index] ?? null),
       forbiddenModule: route.forbiddens?.[index] ?? null,
       id: AppElementsWire.encodeLayoutId(treePath),
       layoutModule,
@@ -214,6 +226,20 @@ function createAppPageTemplateEntries<TModule extends AppPageModule>(
       treePath,
       treePosition,
     };
+  });
+}
+
+function createAppPageErrorEntries<TErrorModule extends AppPageErrorModule>(
+  route: Pick<
+    AppPageRouteWiringRoute<AppPageModule, TErrorModule>,
+    "errorPaths" | "errors" | "errorTreePositions"
+  >,
+): AppPageErrorEntry<TErrorModule>[] {
+  return (route.errorPaths ?? route.errors ?? []).flatMap((errorModule, index) => {
+    if (!errorModule) return [];
+    const treePosition = route.errorTreePositions?.[index];
+    if (treePosition === undefined) return [];
+    return [{ errorModule, treePosition }];
   });
 }
 
@@ -339,13 +365,18 @@ export function buildAppPageElements<
   const pageId = AppElementsWire.encodePageId(options.routePath, interceptionContext);
   const layoutEntries = createAppPageLayoutEntries(options.route);
   const templateEntries = createAppPageTemplateEntries(options.route);
+  const errorEntries = createAppPageErrorEntries(options.route);
   const layoutEntriesByTreePosition = new Map<number, AppPageLayoutEntry<TModule, TErrorModule>>();
   const templateEntriesByTreePosition = new Map<number, AppPageTemplateEntry<TModule>>();
+  const errorEntriesByTreePosition = new Map<number, AppPageErrorEntry<TErrorModule>>();
   for (const layoutEntry of layoutEntries) {
     layoutEntriesByTreePosition.set(layoutEntry.treePosition, layoutEntry);
   }
   for (const templateEntry of templateEntries) {
     templateEntriesByTreePosition.set(templateEntry.treePosition, templateEntry);
+  }
+  for (const errorEntry of errorEntries) {
+    errorEntriesByTreePosition.set(errorEntry.treePosition, errorEntry);
   }
   const layoutIndicesByTreePosition = new Map<number, number>();
   for (let index = 0; index < layoutEntries.length; index++) {
@@ -374,6 +405,7 @@ export function buildAppPageElements<
     new Set<number>([
       ...layoutEntries.map((entry) => entry.treePosition),
       ...templateEntries.map((entry) => entry.treePosition),
+      ...errorEntries.map((entry) => entry.treePosition),
     ]),
   ).sort((left, right) => left - right);
   const resolveSlotOverride = (slotKey: string, slotName: string) => {
@@ -584,9 +616,7 @@ export function buildAppPageElements<
   }
 
   const lastLayoutErrorModule =
-    options.route.errors && options.route.errors.length > 0
-      ? options.route.errors[options.route.errors.length - 1]
-      : null;
+    errorEntries.length > 0 ? errorEntries[errorEntries.length - 1].errorModule : null;
   // Next.js nesting (outer to inner): Error > Unauthorized > Forbidden > NotFound > children.
   // Building bottom-up means NotFoundBoundary must wrap first, then Forbidden, Unauthorized, Error.
   const notFoundComponent =
@@ -629,6 +659,7 @@ export function buildAppPageElements<
     let segmentChildren: ReactNode = routeChildren;
     const layoutEntry = layoutEntriesByTreePosition.get(treePosition);
     const templateEntry = templateEntriesByTreePosition.get(treePosition);
+    const errorEntry = errorEntriesByTreePosition.get(treePosition);
 
     // Next.js nesting per segment (outer to inner): Layout > Template > Error > Unauthorized > Forbidden > NotFound > children.
     // Building bottom-up means NotFoundBoundary must wrap the leaf subtree first,
@@ -663,13 +694,15 @@ export function buildAppPageElements<
           </UnauthorizedBoundary>
         );
       }
+    }
 
-      const layoutErrorComponent = getErrorBoundaryExport(layoutEntry.errorModule);
-      if (layoutErrorComponent) {
-        segmentChildren = (
-          <ErrorBoundary fallback={layoutErrorComponent}>{segmentChildren}</ErrorBoundary>
-        );
-      }
+    const segmentErrorComponent = getErrorBoundaryExport(
+      errorEntry?.errorModule ?? layoutEntry?.errorModule,
+    );
+    if (segmentErrorComponent) {
+      segmentChildren = (
+        <ErrorBoundary fallback={segmentErrorComponent}>{segmentChildren}</ErrorBoundary>
+      );
     }
 
     if (templateEntry && getDefaultExport(templateEntry.templateModule)) {

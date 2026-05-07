@@ -61,6 +61,11 @@ function registerRouteModules(routes: AppRoute[], imports: ImportAllocator): voi
         if (ep) imports.getImportVar(ep);
       }
     }
+    if (route.errorPaths) {
+      for (const ep of route.errorPaths) {
+        imports.getImportVar(ep);
+      }
+    }
     if (route.notFoundPath) imports.getImportVar(route.notFoundPath);
     if (route.notFoundPaths) {
       for (const nfp of route.notFoundPaths) {
@@ -138,6 +143,7 @@ ${interceptEntries.join(",\n")}
     const layoutErrorVars = (route.layoutErrorPaths || []).map((ep) =>
       ep ? imports.getImportVar(ep) : "null",
     );
+    const errorVars = (route.errorPaths ?? []).map((ep) => imports.getImportVar(ep));
     return `  {
     __buildTimeClassifications: __VINEXT_CLASS(${routeIdx}), // evaluated once at module load
     __buildTimeReasons: __classDebug ? __VINEXT_CLASS_REASONS(${routeIdx}) : null,
@@ -155,6 +161,8 @@ ${interceptEntries.join(",\n")}
     layoutTreePositions: ${JSON.stringify(route.layoutTreePositions)},
     templates: [${templateVars.join(", ")}],
     errors: [${layoutErrorVars.join(", ")}],
+    errorPaths: [${errorVars.join(", ")}],
+    errorTreePositions: ${JSON.stringify(route.errorTreePositions ?? null)},
     slots: {
 ${slotEntries.join(",\n")}
     },
