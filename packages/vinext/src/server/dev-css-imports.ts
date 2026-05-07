@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizePathSeparators } from "../entries/runtime-entry-module.js";
 
-type DevCssResolutionContext = {
+export type DevCssResolutionContext = {
   projectRoot: string;
   aliases: Record<string, string>;
   onParseError?: (filePath: string, error: unknown) => void;

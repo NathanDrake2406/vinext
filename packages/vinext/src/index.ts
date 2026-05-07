@@ -94,8 +94,11 @@ import {
 import { hasWranglerConfig, formatMissingCloudflarePluginError } from "./deploy.js";
 import { computeLazyChunks } from "./utils/lazy-chunks.js";
 import { resolveCssConfigCompatibility } from "./plugins/css-config-compat.js";
-import { collectAppRouteModuleFiles } from "./server/app-route-module-files.js";
-import { collectDevCssHrefsForFiles, type DevCssImportsCache } from "./server/dev-css-imports.js";
+import type { DevCssImportsCache } from "./server/dev-css-imports.js";
+import {
+  buildDevRouteAssetManifest,
+  getRouteCssHrefsInRouteOrder,
+} from "./server/route-asset-manifest.js";
 import {
   createClientManualChunks,
   createClientOutputConfig,
@@ -1736,24 +1739,23 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           const devCssStylesByRoute =
             viteCommand === "build"
               ? undefined
-              : await Promise.all(
-                  routes.map((route) =>
-                    collectDevCssHrefsForFiles(
-                      collectAppRouteModuleFiles(route),
-                      {
-                        projectRoot: root,
-                        aliases: devCssAliases,
-                        onParseError(filePath, error) {
-                          const message = error instanceof Error ? error.message : String(error);
-                          console.warn(
-                            `[vinext] Failed to scan CSS imports in ${filePath}: ${message}`,
-                          );
-                        },
-                        resolve: resolveDevCssImport,
+              : getRouteCssHrefsInRouteOrder(
+                  await buildDevRouteAssetManifest(
+                    routes,
+                    {
+                      projectRoot: root,
+                      aliases: devCssAliases,
+                      onParseError(filePath, error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        console.warn(
+                          `[vinext] Failed to scan CSS imports in ${filePath}: ${message}`,
+                        );
                       },
-                      devCssImportsCache,
-                    ),
+                      resolve: resolveDevCssImport,
+                    },
+                    devCssImportsCache,
                   ),
+                  routes,
                 );
           const metaRoutes = scanMetadataFiles(appDir);
           // Check for global-error.tsx at app root
