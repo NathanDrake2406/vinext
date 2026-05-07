@@ -20,6 +20,7 @@ import {
   ensureFetchPatch,
   type FetchCacheMode,
   getCollectedFetchTags,
+  runWithFetchDedupe,
   setCurrentFetchCacheMode,
   setCurrentFetchSoftTags,
 } from "vinext/shims/fetch-cache";
@@ -258,7 +259,7 @@ async function runAppPageRevalidationContext(
       searchParams: new URLSearchParams(),
       params: options.params,
     });
-    return renderFn();
+    return await runWithFetchDedupe(renderFn);
   });
 }
 
@@ -288,6 +289,12 @@ function toInterceptOptions(
 }
 
 export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
+  options: DispatchAppPageOptions<TRoute>,
+): Promise<Response> {
+  return await runWithFetchDedupe(() => dispatchAppPageWithDedupe(options));
+}
+
+async function dispatchAppPageWithDedupe<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
 ): Promise<Response> {
   const route = options.route;
@@ -380,9 +387,11 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
               options.cleanPathname,
               route.pattern,
             );
-            const revalidatedRscStream = options.renderToReadableStream(revalidatedElement, {
-              onError: revalidatedOnError,
-            });
+            const revalidatedRscStream = runWithFetchDedupe(() =>
+              options.renderToReadableStream(revalidatedElement, {
+                onError: revalidatedOnError,
+              }),
+            );
             const revalidatedRscCapture = teeAppPageRscStreamForCapture(revalidatedRscStream, true);
             const revalidatedSsrEntry = await options.loadSsrHandler();
             const revalidatedCapturedRscRef: { value: Promise<ArrayBuffer> | null } = {
@@ -479,9 +488,11 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
         options.cleanPathname,
         sourceRoute.pattern,
       );
-      const interceptStream = options.renderToReadableStream(interceptElement, {
-        onError: interceptOnError,
-      });
+      const interceptStream = runWithFetchDedupe(() =>
+        options.renderToReadableStream(interceptElement, {
+          onError: interceptOnError,
+        }),
+      );
       const interceptHeaders = new Headers({
         "Content-Type": "text/x-component; charset=utf-8",
         Vary: VINEXT_RSC_VARY_HEADER,

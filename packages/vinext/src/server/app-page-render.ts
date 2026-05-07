@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { CachedAppPageValue } from "vinext/shims/cache";
+import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
 import { AppElementsWire, isAppElementsRecord, type AppOutgoingElements } from "./app-elements.js";
 import {
   finalizeAppPageHtmlCacheResponse,
@@ -297,9 +298,11 @@ export async function renderAppPageLifecycle(
   const compileEnd = options.isProduction ? undefined : performance.now();
   const baseOnError = options.createRscOnErrorHandler(options.cleanPathname, options.routePattern);
   const rscErrorTracker = createAppPageRscErrorTracker(baseOnError);
-  const rscStream = options.renderToReadableStream(outgoingElement, {
-    onError: rscErrorTracker.onRenderError,
-  });
+  const rscStream = runWithFetchDedupe(() =>
+    options.renderToReadableStream(outgoingElement, {
+      onError: rscErrorTracker.onRenderError,
+    }),
+  );
 
   let revalidateSeconds = options.revalidateSeconds;
   let expireSeconds = options.expireSeconds;
