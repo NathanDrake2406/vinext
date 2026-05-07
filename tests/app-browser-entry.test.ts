@@ -1,7 +1,5 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { createOnUncaughtError } from "../packages/vinext/src/server/app-browser-error.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import { devOnCaughtError } from "../packages/vinext/src/server/dev-error-overlay.js";
@@ -179,16 +177,27 @@ afterEach(() => {
 });
 
 describe("app browser entry navigation scheduling", () => {
-  it("does not derive visible commit scheduling from same-route path equality", () => {
-    const entryPath = fileURLToPath(
-      new URL("../packages/vinext/src/server/app-browser-entry.ts", import.meta.url),
-    );
-    const source = readFileSync(entryPath, "utf8");
-
-    const renderPayloadCalls = source.matchAll(/renderNavigationPayload\(([\s\S]*?)\);/g);
-    for (const call of renderPayloadCalls) {
-      expect(call[1]).not.toContain("isSameRoute");
+  it("does not expose a per-navigation transition override at the controller boundary", () => {
+    type Controller = ReturnType<typeof createAppBrowserNavigationController>;
+    function assertNoTransitionOverride(controller: Controller) {
+      void controller.renderNavigationPayload({
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/initial", {}),
+        nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/dashboard",
+        navId: 1,
+        // @ts-expect-error ordinary navigations must not choose their own scheduling lane.
+        useTransition: false,
+      });
     }
+
+    expect(assertNoTransitionOverride).toBeTypeOf("function");
   });
 });
 
