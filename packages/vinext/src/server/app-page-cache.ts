@@ -33,6 +33,7 @@ type BuildAppPageCachedResponseOptions = {
   expireSeconds?: number;
   isRscRequest: boolean;
   middlewareHeaders?: Headers | null;
+  middlewareStatus?: number | null;
   mountedSlotsHeader?: string | null;
   revalidateSeconds: number;
 };
@@ -47,6 +48,7 @@ type ReadAppPageCacheResponseOptions = {
   isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
   isrSet: AppPageCacheSetter;
   middlewareHeaders?: Headers | null;
+  middlewareStatus?: number | null;
   mountedSlotsHeader?: string | null;
   expireSeconds?: number;
   revalidateSeconds: number;
@@ -177,7 +179,7 @@ export function buildAppPageCachedResponse(
 ): Response | null {
   // Preserve the legacy fallback semantics from the generated entry: invalid
   // falsy statuses still fall back to 200 rather than being forwarded through.
-  const status = cachedValue.status || 200;
+  const status = options.middlewareStatus ?? (cachedValue.status || 200);
   const revalidateSeconds = options.cacheControl?.revalidate ?? options.revalidateSeconds;
   const expireSeconds =
     options.cacheControl === undefined
@@ -242,6 +244,7 @@ export async function readAppPageCacheResponse(
         expireSeconds: options.expireSeconds,
         isRscRequest: options.isRscRequest,
         middlewareHeaders: options.middlewareHeaders,
+        middlewareStatus: options.middlewareStatus,
         mountedSlotsHeader: options.mountedSlotsHeader,
         revalidateSeconds: options.revalidateSeconds,
       });
@@ -307,6 +310,7 @@ export async function readAppPageCacheResponse(
         expireSeconds: options.expireSeconds,
         isRscRequest: options.isRscRequest,
         middlewareHeaders: options.middlewareHeaders,
+        middlewareStatus: options.middlewareStatus,
         mountedSlotsHeader: options.mountedSlotsHeader,
         revalidateSeconds: options.revalidateSeconds,
       });

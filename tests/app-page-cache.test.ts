@@ -192,6 +192,20 @@ describe("app page cache helpers", () => {
     expect(response?.status).toBe(200);
   });
 
+  it("uses middleware status for cached responses when middleware continues", () => {
+    const response = buildAppPageCachedResponse(
+      buildCachedAppPageValue("<h1>cached</h1>", undefined, 201),
+      {
+        cacheState: "HIT",
+        isRscRequest: false,
+        middlewareStatus: 202,
+        revalidateSeconds: 60,
+      },
+    );
+
+    expect(response?.status).toBe(202);
+  });
+
   it("returns null when a cached entry lacks the requested HTML or RSC payload", () => {
     const htmlOnly = buildCachedAppPageValue("<h1>cached</h1>");
     const rscOnly = buildCachedAppPageValue("", new TextEncoder().encode("flight").buffer);
@@ -233,6 +247,7 @@ describe("app page cache helpers", () => {
       },
       async isrSet() {},
       middlewareHeaders,
+      middlewareStatus: 203,
       revalidateSeconds: 60,
       async renderFreshPageForCache() {
         throw new Error("should not render");
@@ -244,6 +259,7 @@ describe("app page cache helpers", () => {
 
     expect(response?.headers.get("x-vinext-cache")).toBe("HIT");
     expect(response?.headers.get("x-from-middleware")).toBe("hit");
+    expect(response?.status).toBe(203);
     await expect(response?.text()).resolves.toBe("<h1>cached</h1>");
     expect(didClearRequestContext).toBe(true);
   });
