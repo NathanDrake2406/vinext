@@ -88,12 +88,12 @@ describe("route asset manifest", () => {
 
       expect(manifest.routes["route:/"]?.cssHrefs).toEqual(["/src/app/globals.css"]);
       expect(manifest.routes["route:/dashboard"]?.cssHrefs).toEqual([
-        "/src/app/dashboard/dashboard.css",
         "/src/app/globals.css",
+        "/src/app/dashboard/dashboard.css",
       ]);
       expect(getRouteCssHrefsInRouteOrder(manifest, routes)).toEqual([
         ["/src/app/globals.css"],
-        ["/src/app/dashboard/dashboard.css", "/src/app/globals.css"],
+        ["/src/app/globals.css", "/src/app/dashboard/dashboard.css"],
       ]);
     } finally {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

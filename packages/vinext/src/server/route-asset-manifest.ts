@@ -1,5 +1,5 @@
 import type { AppRoute } from "../routing/app-router.js";
-import { collectAppRouteModuleFiles } from "./app-route-module-files.js";
+import { collectAppRouteAssetModuleFiles } from "./app-route-module-files.js";
 import {
   collectDevCssHrefsForFiles,
   type DevCssImportsCache,
@@ -28,7 +28,7 @@ export async function buildDevRouteAssetManifest(
     routes.map(async (route) => {
       const routeId = getRouteAssetId(route);
       const cssHrefs = await collectDevCssHrefsForFiles(
-        collectAppRouteModuleFiles(route),
+        collectAppRouteAssetModuleFiles(route),
         context,
         cache,
       );

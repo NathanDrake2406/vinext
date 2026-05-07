@@ -38,3 +38,34 @@ export function collectAppRouteModuleFiles(
 
   return files.filter((filePath): filePath is string => typeof filePath === "string");
 }
+
+export function collectAppRouteAssetModuleFiles(route: AppRoute): string[] {
+  const files = [
+    ...route.layouts,
+    ...route.templates,
+    route.loadingPath,
+    route.errorPath,
+    ...route.layoutErrorPaths,
+    ...(route.errorPaths ?? []),
+    route.notFoundPath,
+    ...route.notFoundPaths,
+    route.forbiddenPath,
+    ...route.forbiddenPaths,
+    route.unauthorizedPath,
+    ...route.unauthorizedPaths,
+    route.pagePath,
+    ...route.parallelSlots.flatMap((slot) => [
+      slot.layoutPath,
+      slot.loadingPath,
+      slot.errorPath,
+      slot.defaultPath,
+      slot.pagePath,
+      ...slot.interceptingRoutes.flatMap((intercept) => [
+        ...intercept.layoutPaths,
+        intercept.pagePath,
+      ]),
+    ]),
+  ];
+
+  return files.filter((filePath): filePath is string => typeof filePath === "string");
+}
