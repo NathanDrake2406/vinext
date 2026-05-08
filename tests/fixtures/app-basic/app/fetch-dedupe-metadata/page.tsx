@@ -4,6 +4,18 @@ type CountBody = {
   count: number;
 };
 
+function assertCountBody(value: unknown): CountBody {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "count" in value &&
+    typeof value.count === "number"
+  ) {
+    return value;
+  }
+  throw new Error("Expected fetch target to return { count: number }");
+}
+
 async function fetchProduct(): Promise<CountBody> {
   const target = process.env.TEST_FETCH_DEDUPE_TARGET;
   if (!target) {
@@ -11,7 +23,7 @@ async function fetchProduct(): Promise<CountBody> {
   }
 
   const response = await fetch(target, { cache: "no-store" });
-  return (await response.json()) as CountBody;
+  return assertCountBody(await response.json());
 }
 
 export async function generateMetadata(): Promise<Metadata> {

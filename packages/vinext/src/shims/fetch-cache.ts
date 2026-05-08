@@ -759,15 +759,26 @@ function dedupeFetch(
   };
   entries.push(entry);
 
-  return promise.then((response) => {
-    // entry.response holds an unconsumed tee'd branch for the duration of the
-    // render scope. The dedupe map is owned by the per-render context and is
-    // dropped when runWithFetchDedupe exits, at which point the
-    // FinalizationRegistry cancels any still-unconsumed branch.
-    const [responseForCaller, responseForFutureCaller] = cloneDedupeResponse(response);
-    entry.response = responseForFutureCaller;
-    return responseForCaller;
-  });
+  return promise.then(
+    (response) => {
+      // entry.response holds an unconsumed tee'd branch for the duration of the
+      // render scope. The dedupe map is owned by the per-render context and is
+      // dropped when runWithFetchDedupe exits, at which point the
+      // FinalizationRegistry cancels any still-unconsumed branch.
+      const [responseForCaller, responseForFutureCaller] = cloneDedupeResponse(response);
+      entry.response = responseForFutureCaller;
+      return responseForCaller;
+    },
+    (err) => {
+      // Drop the failed entry so a later fetch to the same URL within this
+      // render scope can retry instead of chaining on the rejected promise.
+      // Mirrors React.cache() retry-on-error semantics in Next.js, where a
+      // new call site naturally creates a fresh cache entry.
+      const idx = entries.indexOf(entry);
+      if (idx !== -1) entries.splice(idx, 1);
+      throw err;
+    },
+  );
 }
 
 /**

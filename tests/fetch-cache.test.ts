@@ -419,6 +419,23 @@ describe("fetch cache shim", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("removes failed dedupe entries so a later fetch in the same scope can retry", async () => {
+    fetchMock.mockReset();
+    fetchMock
+      .mockImplementationOnce(async () => {
+        throw new Error("network down");
+      })
+      .mockImplementation(defaultFetchMockImplementation);
+
+    await expect(fetch("https://api.example.com/retry-after-failure")).rejects.toThrow(
+      "network down",
+    );
+
+    const res = await fetch("https://api.example.com/retry-after-failure");
+    expect((await res.json()).url).toBe("https://api.example.com/retry-after-failure");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not dedupe Request inputs that differ in non-trace headers", async () => {
     const [res1, res2] = await Promise.all([
       fetch(
