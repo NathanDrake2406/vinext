@@ -683,41 +683,38 @@ function createFetchDedupeCandidate(
   };
 }
 
+function buildDedupeClone(body: ReadableStream<Uint8Array> | null, source: Response): Response {
+  const cloned = new Response(body, {
+    status: source.status,
+    statusText: source.statusText,
+    headers: new Headers(source.headers),
+  });
+  Object.defineProperty(cloned, "url", {
+    value: source.url,
+    configurable: true,
+    enumerable: true,
+    writable: false,
+  });
+  if (_responseBodyRegistry && cloned.body) {
+    _responseBodyRegistry.register(cloned, new WeakRef(cloned.body));
+  }
+  return cloned;
+}
+
 function cloneDedupeResponse(response: Response): [Response, Response] {
   // Mirrors Next.js' cloneResponse helper. Native Response.clone() has had
   // undici stream-lifetime bugs in Node, so tee explicitly and register the
   // branches for cleanup if the caller drops a body without consuming it.
+  // Always construct fresh Response objects (even for bodyless responses) so
+  // the dedupe entry's stored response and the caller's response are distinct
+  // — mirrors Next.js, and avoids any "disturbed response" surprise if a
+  // runtime tracks consumption state on shared references.
   if (!response.body) {
-    return [response, response];
+    return [buildDedupeClone(null, response), buildDedupeClone(null, response)];
   }
 
   const [body1, body2] = response.body.tee();
-
-  const cloned1 = new Response(body1, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: new Headers(response.headers),
-  });
-  const cloned2 = new Response(body2, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: new Headers(response.headers),
-  });
-
-  for (const cloned of [cloned1, cloned2]) {
-    Object.defineProperty(cloned, "url", {
-      value: response.url,
-      configurable: true,
-      enumerable: true,
-      writable: false,
-    });
-
-    if (_responseBodyRegistry && cloned.body) {
-      _responseBodyRegistry.register(cloned, new WeakRef(cloned.body));
-    }
-  }
-
-  return [cloned1, cloned2];
+  return [buildDedupeClone(body1, response), buildDedupeClone(body2, response)];
 }
 
 function dedupeFetch(
@@ -763,6 +760,10 @@ function dedupeFetch(
   entries.push(entry);
 
   return promise.then((response) => {
+    // entry.response holds an unconsumed tee'd branch for the duration of the
+    // render scope. The dedupe map is owned by the per-render context and is
+    // dropped when runWithFetchDedupe exits, at which point the
+    // FinalizationRegistry cancels any still-unconsumed branch.
     const [responseForCaller, responseForFutureCaller] = cloneDedupeResponse(response);
     entry.response = responseForFutureCaller;
     return responseForCaller;

@@ -408,6 +408,36 @@ describe("fetch cache shim", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("dedupes identical Request object inputs as the dedupe key source", async () => {
+    const [res1, res2] = await Promise.all([
+      fetch(new Request("https://api.example.com/req-input-dedupe")),
+      fetch(new Request("https://api.example.com/req-input-dedupe")),
+    ]);
+
+    expect((await res1.json()).count).toBe(1);
+    expect((await res2.json()).count).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dedupe Request inputs that differ in non-trace headers", async () => {
+    const [res1, res2] = await Promise.all([
+      fetch(
+        new Request("https://api.example.com/req-input-headers", {
+          headers: { "x-variant": "a" },
+        }),
+      ),
+      fetch(
+        new Request("https://api.example.com/req-input-headers", {
+          headers: { "x-variant": "b" },
+        }),
+      ),
+    ]);
+
+    expect((await res1.json()).count).toBe(1);
+    expect((await res2.json()).count).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   // ── Tag-based invalidation ──────────────────────────────────────────
 
   it("next.tags caches and revalidateTag invalidates", async () => {
