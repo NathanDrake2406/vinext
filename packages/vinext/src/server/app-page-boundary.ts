@@ -220,6 +220,10 @@ export function wrapAppPageBoundaryElement<
 export async function renderAppPageBoundaryResponse<TElement>(
   options: RenderAppPageBoundaryResponseOptions<TElement>,
 ): Promise<Response> {
+  // Defensive wrap for standalone callers; idempotent under dispatchAppPage.
+  // The async stream consumption that follows relies on the surrounding
+  // runWithRequestContext to keep ALS state alive after this synchronous call
+  // returns. See app-page-render.ts for the same pattern.
   const rscStream = runWithFetchDedupe(() =>
     options.renderToReadableStream(options.element, {
       onError: options.createRscOnErrorHandler(),

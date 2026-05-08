@@ -2436,9 +2436,21 @@ describe("App Router Production server (startProdServer)", () => {
           intervalMs: 100,
           timeoutMs: 3000,
         });
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        // Poll for count stabilization rather than assuming a fixed window —
+        // a stray third fetch would betray dedupe leaking across the
+        // metadata + page boundary in background regeneration.
+        let stableCount = getRequestCount();
+        let stableSince = Date.now();
+        while (Date.now() - stableSince < 500) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const current = getRequestCount();
+          if (current !== stableCount) {
+            stableCount = current;
+            stableSince = Date.now();
+          }
+        }
 
-        expect(getRequestCount()).toBe(2);
+        expect(stableCount).toBe(2);
       } finally {
         delete process.env.TEST_FETCH_DEDUPE_TARGET;
       }

@@ -1139,6 +1139,13 @@ export async function runWithFetchCache<T>(fn: () => Promise<T>): Promise<T> {
  * Activate per-render fetch memoization without resetting request fetch tags.
  * Next.js request memoization is scoped to React render work, not the whole
  * request pipeline, so route handlers and middleware stay observable.
+ *
+ * ALS scope lifetime: when `fn` returns synchronously (e.g. wrapping a
+ * `renderToReadableStream` call), the ALS scope established here only covers
+ * the synchronous portion. Any fetch work that happens later during async
+ * stream consumption falls back to the parent ALS store, which is fine when
+ * the parent already activated dedupe (the common dispatch case) but means
+ * standalone callers must keep the dedupe scope alive across consumption.
  */
 export function runWithFetchDedupe<T>(fn: () => T): T;
 export function runWithFetchDedupe<T>(fn: () => Promise<T>): Promise<T>;

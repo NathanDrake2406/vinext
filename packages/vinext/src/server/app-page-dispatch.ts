@@ -291,10 +291,10 @@ function toInterceptOptions(
 export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
 ): Promise<Response> {
-  return await runWithFetchDedupe(() => dispatchAppPageWithDedupe(options));
+  return await runWithFetchDedupe(() => dispatchAppPageInner(options));
 }
 
-async function dispatchAppPageWithDedupe<TRoute extends AppPageDispatchRoute>(
+async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
 ): Promise<Response> {
   const route = options.route;
@@ -387,6 +387,8 @@ async function dispatchAppPageWithDedupe<TRoute extends AppPageDispatchRoute>(
               options.cleanPathname,
               route.pattern,
             );
+            // No inner runWithFetchDedupe here: this renderFn is already
+            // wrapped in runWithFetchDedupe by runAppPageRevalidationContext.
             const revalidatedRscStream = options.renderToReadableStream(revalidatedElement, {
               onError: revalidatedOnError,
             });
@@ -486,6 +488,8 @@ async function dispatchAppPageWithDedupe<TRoute extends AppPageDispatchRoute>(
         options.cleanPathname,
         sourceRoute.pattern,
       );
+      // No inner runWithFetchDedupe here: dispatchAppPage already activated
+      // dedupe at line 294, and this callback runs inside dispatchAppPageInner.
       const interceptStream = options.renderToReadableStream(interceptElement, {
         onError: interceptOnError,
       });
