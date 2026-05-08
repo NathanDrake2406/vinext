@@ -192,6 +192,11 @@ function setActionRevalidatedHeader(headers: Headers, kind: ActionRevalidationKi
 
 function resolveActionRevalidationKind(hasModifiedCookies: boolean): ActionRevalidationKind {
   const revalidationKind = getAndClearActionRevalidationKind();
+  // Cookie mutations are a hard override to STATIC_AND_DYNAMIC: any cookie
+  // change can invalidate downstream cached payloads regardless of what
+  // (if anything) the action explicitly revalidated, so we always emit the
+  // strongest kind. STATIC_AND_DYNAMIC is also the lowest numeric value, so
+  // this matches the max-precedence semantics in markActionRevalidation.
   if (hasModifiedCookies) return ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC;
   return revalidationKind;
 }

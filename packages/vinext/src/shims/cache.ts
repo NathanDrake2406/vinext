@@ -388,7 +388,11 @@ export async function revalidateTag(
   } else if (profile && typeof profile === "object") {
     durations = profile;
   }
-  if (!profile || durations?.expire === 0) {
+  // Notify the client router whenever the server-side cache is fully
+  // invalidated (no SWR window). An unknown profile name resolves to no
+  // durations, in which case the handler treats it as a full invalidation —
+  // so we mark here too, matching what actually happens server-side.
+  if (!profile || !durations || durations.expire === 0) {
     markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
   }
   await _getActiveHandler().revalidateTag(tag, durations);
