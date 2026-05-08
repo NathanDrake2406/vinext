@@ -4,7 +4,7 @@ vinext was born from an experiment in pushing AI to its limits. Almost every lin
 
 ## Recommended setup
 
-We use [OpenCode](https://opencode.ai) with GPT-5.5 set to xhigh reasoning effort for BigBonk reviews, and Claude Opus 4.7 for regular Bonk review passes. This is the same setup that built the project.
+We use [OpenCode](https://opencode.ai) with Claude Opus 4.6 set to max reasoning effort for BigBonk reviews, and GPT-5.5 at xhigh for regular Bonk review passes. This is the same setup that built the project.
 
 ## Before you open a PR
 
