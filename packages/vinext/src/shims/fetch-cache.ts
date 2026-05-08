@@ -692,14 +692,17 @@ function cloneDedupeResponse(response: Response): [Response, Response] {
   }
 
   const [body1, body2] = response.body.tee();
-  const responseInit = {
+
+  const cloned1 = new Response(body1, {
     status: response.status,
     statusText: response.statusText,
-    headers: response.headers,
-  };
-
-  const cloned1 = new Response(body1, responseInit);
-  const cloned2 = new Response(body2, responseInit);
+    headers: new Headers(response.headers),
+  });
+  const cloned2 = new Response(body2, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  });
 
   for (const cloned of [cloned1, cloned2]) {
     Object.defineProperty(cloned, "url", {

@@ -387,11 +387,9 @@ async function dispatchAppPageWithDedupe<TRoute extends AppPageDispatchRoute>(
               options.cleanPathname,
               route.pattern,
             );
-            const revalidatedRscStream = runWithFetchDedupe(() =>
-              options.renderToReadableStream(revalidatedElement, {
-                onError: revalidatedOnError,
-              }),
-            );
+            const revalidatedRscStream = options.renderToReadableStream(revalidatedElement, {
+              onError: revalidatedOnError,
+            });
             const revalidatedRscCapture = teeAppPageRscStreamForCapture(revalidatedRscStream, true);
             const revalidatedSsrEntry = await options.loadSsrHandler();
             const revalidatedCapturedRscRef: { value: Promise<ArrayBuffer> | null } = {
@@ -488,11 +486,9 @@ async function dispatchAppPageWithDedupe<TRoute extends AppPageDispatchRoute>(
         options.cleanPathname,
         sourceRoute.pattern,
       );
-      const interceptStream = runWithFetchDedupe(() =>
-        options.renderToReadableStream(interceptElement, {
-          onError: interceptOnError,
-        }),
-      );
+      const interceptStream = options.renderToReadableStream(interceptElement, {
+        onError: interceptOnError,
+      });
       const interceptHeaders = new Headers({
         "Content-Type": "text/x-component; charset=utf-8",
         Vary: VINEXT_RSC_VARY_HEADER,
