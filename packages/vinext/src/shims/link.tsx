@@ -476,7 +476,14 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
 
   return (
     <LinkStatusContext.Provider value={linkStatusValue}>
-      <a ref={setRefs} href={fullHref} onClick={handleClick} {...anchorProps}>
+      <a
+        ref={setRefs}
+        href={fullHref}
+        onClick={(event) => {
+          void handleClick(event);
+        }}
+        {...anchorProps}
+      >
         {children}
       </a>
     </LinkStatusContext.Provider>

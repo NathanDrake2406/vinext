@@ -2255,7 +2255,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             });
           }
 
-          server.middlewares.use(async (req, res, next) => {
+          const handlePagesMiddleware = async (
+            req: import("node:http").IncomingMessage,
+            res: import("node:http").ServerResponse,
+            next: (err?: unknown) => void,
+          ): Promise<void> => {
             try {
               let url: string = req.url ?? "/";
 
@@ -2793,6 +2797,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             } catch (e) {
               next(e);
             }
+          };
+
+          server.middlewares.use((req, res, next) => {
+            void handlePagesMiddleware(req, res, next);
           });
         };
       },

@@ -1212,7 +1212,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   });
 
   if (import.meta.hot) {
-    import.meta.hot.on("rsc:update", async () => {
+    const handleRscUpdate = async (): Promise<void> => {
       try {
         // If BrowserRoot has been mounted before but isn't now, a render
         // error tore down the tree (e.g. a server route threw). HMR can't
@@ -1270,6 +1270,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       } catch (error) {
         console.error("[vinext] RSC HMR error:", error);
       }
+    };
+
+    import.meta.hot.on("rsc:update", () => {
+      void handleRscUpdate();
     });
   }
 }

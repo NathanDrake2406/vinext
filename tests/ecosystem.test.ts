@@ -83,7 +83,9 @@ async function startFixture(
         cleanup();
         resolve();
       } catch {
-        setTimeout(checkReady, READY_POLL_INTERVAL_MS);
+        setTimeout(() => {
+          void checkReady();
+        }, READY_POLL_INTERVAL_MS);
       }
     };
 

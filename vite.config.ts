@@ -59,6 +59,21 @@ export default defineConfig({
         rules: {
           "@typescript-eslint/no-explicit-any": "off",
           "@typescript-eslint/no-unsafe-function-type": "off",
+          "typescript/no-misused-promises": "error",
+          "import/no-self-import": "error",
+          "unicorn/throw-new-error": "error",
+          "unicorn/error-message": "error",
+        },
+      },
+      {
+        files: ["packages/vinext/src/**/*.{ts,tsx}"],
+        rules: {
+          "typescript/no-misused-promises": "error",
+          "typescript/switch-exhaustiveness-check": "error",
+          "typescript/restrict-template-expressions": "error",
+          "import/no-self-import": "error",
+          "unicorn/throw-new-error": "error",
+          "unicorn/error-message": "error",
         },
       },
       {

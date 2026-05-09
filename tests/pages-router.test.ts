@@ -163,7 +163,7 @@ async function captureStreamedResponse(
         decoder.on("error", reject);
       }
 
-      res.on("end", async () => {
+      const finishResponse = async () => {
         try {
           if (decoder) {
             decoder.end();
@@ -187,6 +187,10 @@ async function captureStreamedResponse(
         } catch (error) {
           reject(error);
         }
+      };
+
+      res.on("end", () => {
+        void finishResponse();
       });
     });
 
@@ -1198,6 +1202,7 @@ describe("Pages Router allowedDevOrigins config", () => {
     const res = await fetch(`${baseUrl}/`, {
       headers: { Origin: "http://allowed.example.com" },
     });
+    await res.body?.cancel();
     expect(res.status).toBe(200);
   });
 
@@ -1205,6 +1210,7 @@ describe("Pages Router allowedDevOrigins config", () => {
     const res = await fetch(`${baseUrl}/`, {
       headers: { Origin: "http://actions.example.com" },
     });
+    await res.body?.cancel();
     expect(res.status).toBe(403);
   });
 });
@@ -2218,42 +2224,46 @@ export default function CounterPage() {
     // The server entry uses Web-standard Request/Response, so we bridge
     // from Node.js HTTP objects.
     const { createServer: createHttpServer } = await import("node:http");
-    const httpServer = createHttpServer(async (req, res) => {
-      const url = req.url ?? "/";
-      const pathname = url.split("?")[0];
+    const httpServer = createHttpServer((req, res) => {
+      void (async () => {
+        const url = req.url ?? "/";
+        const pathname = url.split("?")[0];
 
-      // Convert Node.js req to Web Request
-      const headers = new Headers();
-      for (const [k, v] of Object.entries(req.headers)) {
-        if (v) headers.set(k, Array.isArray(v) ? v.join(", ") : v);
-      }
-      const host = req.headers.host ?? "localhost";
-      const method = req.method ?? "GET";
-      const init: RequestInit & { duplex?: "half" } = {
-        method,
-        headers,
-      };
-      if (method !== "GET" && method !== "HEAD") {
-        init.body = Readable.toWeb(req) as ReadableStream;
-        init.duplex = "half";
-      }
-      const webRequest = new Request(`http://${host}${url}`, init);
+        // Convert Node.js req to Web Request
+        const headers = new Headers();
+        for (const [k, v] of Object.entries(req.headers)) {
+          if (v) headers.set(k, Array.isArray(v) ? v.join(", ") : v);
+        }
+        const host = req.headers.host ?? "localhost";
+        const method = req.method ?? "GET";
+        const init: RequestInit & { duplex?: "half" } = {
+          method,
+          headers,
+        };
+        if (method !== "GET" && method !== "HEAD") {
+          init.body = Readable.toWeb(req) as ReadableStream;
+          init.duplex = "half";
+        }
+        const webRequest = new Request(`http://${host}${url}`, init);
 
-      let response: Response;
-      if (pathname.startsWith("/api/") || pathname === "/api") {
-        response = await serverEntry.handleApiRoute(webRequest, url);
-      } else {
-        response = await serverEntry.renderPage(webRequest, url, manifest);
-      }
+        let response: Response;
+        if (pathname.startsWith("/api/") || pathname === "/api") {
+          response = await serverEntry.handleApiRoute(webRequest, url);
+        } else {
+          response = await serverEntry.renderPage(webRequest, url, manifest);
+        }
 
-      // Pipe Web Response back to Node.js res
-      const body = await response.text();
-      const resHeaders: Record<string, string> = {};
-      response.headers.forEach((v: string, k: string) => {
-        resHeaders[k] = v;
+        // Pipe Web Response back to Node.js res
+        const body = await response.text();
+        const resHeaders: Record<string, string> = {};
+        response.headers.forEach((v: string, k: string) => {
+          resHeaders[k] = v;
+        });
+        res.writeHead(response.status, response.statusText || undefined, resHeaders);
+        res.end(body);
+      })().catch((error: unknown) => {
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
       });
-      res.writeHead(response.status, response.statusText || undefined, resHeaders);
-      res.end(body);
     });
 
     // Start on a random port
