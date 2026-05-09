@@ -629,8 +629,8 @@ export async function resolveNextConfig(
     ...extractTurboAliases(config, root),
     ...webpackProbe.aliases,
   };
-  const hasTurbopackRules = hasConfiguredTurbopackRules(config);
   const tailwindTurbopackCssLoader = hasTailwindTurbopackCssLoader(config);
+  const hasUnsupportedTurbopackRules = hasUnsupportedConfiguredTurbopackRules(config);
 
   const allowedDevOrigins = Array.isArray(config.allowedDevOrigins) ? config.allowedDevOrigins : [];
 
@@ -689,7 +689,7 @@ export async function resolveNextConfig(
     }
   }
 
-  if (hasTurbopackRules && !tailwindTurbopackCssLoader) {
+  if (hasUnsupportedTurbopackRules) {
     console.warn(
       '[vinext] next.config option "turbopack.rules" is not generally supported and will be ignored. ' +
         "The known Tailwind CSS loader shape is translated automatically.",
@@ -809,10 +809,6 @@ function getTurbopackRuleRecords(config: NextConfig): Record<string, unknown>[] 
   return records;
 }
 
-function hasConfiguredTurbopackRules(config: NextConfig): boolean {
-  return getTurbopackRuleRecords(config).some((rules) => Object.keys(rules).length > 0);
-}
-
 function isTailwindWebpackLoader(loader: unknown): boolean {
   if (typeof loader === "string") {
     return loader === "@tailwindcss/webpack";
@@ -840,9 +836,33 @@ function turbopackRuleHasTailwindLoader(rule: unknown): boolean {
   return false;
 }
 
+function isSupportedTailwindTurbopackCssRule(rule: unknown): boolean {
+  if (Array.isArray(rule)) {
+    return (
+      rule.length > 0 &&
+      rule.every((item) => {
+        if (isTailwindWebpackLoader(item)) return true;
+        return isRecord(item) && isSupportedTailwindTurbopackCssRule(item);
+      })
+    );
+  }
+
+  if (!isRecord(rule) || !Array.isArray(rule.loaders)) {
+    return false;
+  }
+
+  return rule.loaders.length > 0 && rule.loaders.every(isTailwindWebpackLoader);
+}
+
 function hasTailwindTurbopackCssLoader(config: NextConfig): boolean {
   return getTurbopackRuleRecords(config).some((rules) =>
     Object.values(rules).some((rule) => turbopackRuleHasTailwindLoader(rule)),
+  );
+}
+
+function hasUnsupportedConfiguredTurbopackRules(config: NextConfig): boolean {
+  return getTurbopackRuleRecords(config).some((rules) =>
+    Object.values(rules).some((rule) => !isSupportedTailwindTurbopackCssRule(rule)),
   );
 }
 

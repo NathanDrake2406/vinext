@@ -402,6 +402,7 @@ async function buildPageElements(route, params, routePath, pageRequest) {
     rootForbiddenModule: ${rootForbiddenVar ? rootForbiddenVar : "null"},
     rootUnauthorizedModule: ${rootUnauthorizedVar ? rootUnauthorizedVar : "null"},
     metadataRoutes,
+    basePath: __basePath,
   });
 }
 

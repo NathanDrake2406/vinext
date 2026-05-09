@@ -121,6 +121,7 @@ type BuildAppPageRouteElementOptions<
   TModule extends AppPageModule = AppPageModule,
   TErrorModule extends AppPageErrorModule = AppPageErrorModule,
 > = {
+  basePath?: string;
   element: ReactNode;
   globalErrorModule?: TErrorModule | null;
   makeThenableParams: (params: AppPageParams) => unknown;
@@ -355,6 +356,16 @@ function createAppPageRouteHead(metadata: Metadata | null, viewport: Viewport): 
       <ViewportHead viewport={viewport} />
     </>
   );
+}
+
+function prefixRouteAssetHref(href: string, basePath: string | undefined): string {
+  if (!basePath || !href.startsWith("/") || href.startsWith("//")) {
+    return href;
+  }
+  if (href === basePath || href.startsWith(`${basePath}/`)) {
+    return href;
+  }
+  return `${basePath}${href}`;
 }
 
 export function buildAppPageElements<
@@ -778,9 +789,10 @@ export function buildAppPageElements<
   // graph. Production CSS comes from the built client manifest.
   elements[routeId] = (
     <>
-      {options.route.styles?.map((href) => (
-        <link key={href} rel="stylesheet" href={href} />
-      ))}
+      {options.route.styles?.map((href) => {
+        const assetHref = prefixRouteAssetHref(href, options.basePath);
+        return <link key={assetHref} rel="stylesheet" href={assetHref} />;
+      })}
       {createAppPageRouteHead(options.resolvedMetadata, options.resolvedViewport)}
       {routeChildren}
     </>

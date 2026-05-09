@@ -57,6 +57,7 @@ export type BuildPageElementsOptions<
   TModule extends AppPageModule = AppPageModule,
   TErrorModule extends AppPageErrorModule = AppPageErrorModule,
 > = {
+  basePath?: string;
   route: AppPageBuildRoute<TModule, TErrorModule>;
   params: AppPageParams;
   routePath: string;
@@ -173,6 +174,7 @@ export async function buildPageElements<
     resolvedMetadata,
     resolvedViewport,
     interceptionContext: opts?.interceptionContext ?? null,
+    basePath: options.basePath,
     routePath,
     rootNotFoundModule: rootNotFoundModule ?? null,
     rootForbiddenModule: rootForbiddenModule ?? null,
