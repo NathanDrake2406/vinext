@@ -226,6 +226,8 @@ export type NextConfig = {
    * Must return a non-empty string, or null to use the default random ID.
    */
   generateBuildId?: () => string | null | Promise<string | null>;
+  /** Identifier for deployment-aware cache keys and version skew protection. */
+  deploymentId?: string;
   /** Any other options */
   [key: string]: unknown;
 };
@@ -280,6 +282,8 @@ export type ResolvedNextConfig = {
   enablePrerenderSourceMaps: boolean;
   /** Resolved build ID (from generateBuildId, or a random UUID if not provided). */
   buildId: string;
+  /** Resolved deployment ID from next.config.js or NEXT_DEPLOYMENT_ID. */
+  deploymentId: string | undefined;
   /**
    * Path to a custom cache handler module. file:// URLs are resolved to
    * filesystem paths via fileURLToPath() during config resolution.
@@ -488,6 +492,26 @@ async function resolveBuildId(
   return trimmed;
 }
 
+function resolveDeploymentId(configDeploymentId: unknown): string | undefined {
+  const deploymentId =
+    configDeploymentId !== undefined ? configDeploymentId : process.env.NEXT_DEPLOYMENT_ID;
+  if (deploymentId === undefined || deploymentId === "") return undefined;
+
+  if (typeof deploymentId !== "string") {
+    throw new Error(
+      "Invalid `deploymentId` configuration: must be a string. https://nextjs.org/docs/messages/deploymentid-not-a-string",
+    );
+  }
+
+  if (!/^[a-zA-Z0-9_-]+$/.test(deploymentId)) {
+    throw new Error(
+      "Invalid `deploymentId` configuration: contains invalid characters. Only alphanumeric characters, hyphens, and underscores are allowed. https://nextjs.org/docs/messages/deploymentid-invalid-characters",
+    );
+  }
+
+  return deploymentId;
+}
+
 /**
  * Converts a cache handler path to a filesystem path.
  * ESM's import.meta.resolve() returns file:// URLs which break when concatenated
@@ -512,6 +536,7 @@ export async function resolveNextConfig(
 ): Promise<ResolvedNextConfig> {
   if (!config) {
     const buildId = await resolveBuildId(undefined);
+    const deploymentId = resolveDeploymentId(undefined);
     const resolved: ResolvedNextConfig = {
       env: {},
       basePath: "",
@@ -538,6 +563,7 @@ export async function resolveNextConfig(
       hashSalt: process.env.NEXT_HASH_SALT ?? "",
       buildId,
       tailwindTurbopackCssLoader: false,
+      deploymentId,
     };
     detectNextIntlConfig(root, resolved);
     return resolved;
@@ -691,6 +717,7 @@ export async function resolveNextConfig(
   const buildId = await resolveBuildId(
     config.generateBuildId as (() => string | null | Promise<string | null>) | undefined,
   );
+  const deploymentId = resolveDeploymentId(config.deploymentId);
 
   // Resolve cacheHandler path — handle file:// URLs from import.meta.resolve()
   const cacheHandler: string | undefined =
@@ -728,6 +755,7 @@ export async function resolveNextConfig(
     hashSalt,
     buildId,
     tailwindTurbopackCssLoader,
+    deploymentId,
   };
 
   // Auto-detect next-intl (lowest priority — explicit aliases from

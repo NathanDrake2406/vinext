@@ -251,6 +251,26 @@ describe("app page dispatch", () => {
     await expect(response.text()).resolves.toBe("<html>cached</html>");
   });
 
+  it("serves cached production HTML for indefinite revalidate=false pages", async () => {
+    const { options } = createDispatchOptions({
+      async buildPageElement() {
+        throw new Error("revalidate=false cache hit should not render the page");
+      },
+      isProduction: true,
+      isrGet: vi.fn(async () =>
+        buildISRCacheEntry(buildCachedAppPageValue("<html>static cached</html>")),
+      ),
+      revalidateSeconds: Infinity,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("s-maxage=31536000, stale-while-revalidate");
+    expect(response.headers.get("x-vinext-cache")).toBe("HIT");
+    await expect(response.text()).resolves.toBe("<html>static cached</html>");
+  });
+
   it("returns method policy responses instead of rendering unsupported methods", async () => {
     const { options } = createDispatchOptions({
       async buildPageElement() {

@@ -20,6 +20,7 @@ import {
   ensureFetchPatch,
   type FetchCacheMode,
   getCollectedFetchTags,
+  runWithFetchDedupe,
   setCurrentFetchCacheMode,
   setCurrentFetchSoftTags,
 } from "vinext/shims/fetch-cache";
@@ -206,8 +207,7 @@ function shouldReadAppPageCache(options: {
     !options.isDraftMode &&
     !options.isForceDynamic &&
     (options.isRscRequest || !options.scriptNonce) &&
-    (options.revalidateSeconds === null ||
-      (options.revalidateSeconds > 0 && options.revalidateSeconds !== Infinity))
+    (options.revalidateSeconds === null || options.revalidateSeconds > 0)
   );
 }
 
@@ -259,7 +259,7 @@ async function runAppPageRevalidationContext(
       searchParams: new URLSearchParams(),
       params: options.params,
     });
-    return renderFn();
+    return await runWithFetchDedupe(renderFn);
   });
 }
 
@@ -289,6 +289,12 @@ function toInterceptOptions(
 }
 
 export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
+  options: DispatchAppPageOptions<TRoute>,
+): Promise<Response> {
+  return await runWithFetchDedupe(() => dispatchAppPageInner(options));
+}
+
+async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
 ): Promise<Response> {
   const route = options.route;
@@ -354,6 +360,8 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
       isrHtmlKey: options.isrHtmlKey,
       isrRscKey: options.isrRscKey,
       isrSet: options.isrSet,
+      middlewareHeaders: options.middlewareContext.headers,
+      middlewareStatus: options.middlewareContext.status,
       mountedSlotsHeader: options.mountedSlotsHeader,
       expireSeconds: options.expireSeconds,
       // cacheLife-only routes discover their actual revalidate during the
@@ -381,6 +389,8 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
               options.cleanPathname,
               route.pattern,
             );
+            // No inner runWithFetchDedupe here: this renderFn is already
+            // wrapped in runWithFetchDedupe by runAppPageRevalidationContext.
             const revalidatedRscStream = options.renderToReadableStream(revalidatedElement, {
               onError: revalidatedOnError,
             });
@@ -480,6 +490,8 @@ export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
         options.cleanPathname,
         sourceRoute.pattern,
       );
+      // No inner runWithFetchDedupe here: dispatchAppPage already activated
+      // dedupe at line 294, and this callback runs inside dispatchAppPageInner.
       const interceptStream = options.renderToReadableStream(interceptElement, {
         onError: interceptOnError,
       });
