@@ -56,7 +56,7 @@ type ReadAppPageCacheResponseOptions = {
   middlewareHeaders?: Headers | null;
   middlewareStatus?: number | null;
   mountedSlotsHeader?: string | null;
-  renderMode: AppRscRenderMode;
+  renderMode?: AppRscRenderMode;
   expireSeconds?: number;
   revalidateSeconds: number;
   renderFreshPageForCache: () => Promise<AppPageCacheRenderResult>;
@@ -99,7 +99,7 @@ type ScheduleAppPageRscCacheWriteOptions = {
   ) => string;
   isrSet: AppPageCacheSetter;
   mountedSlotsHeader?: string | null;
-  renderMode: AppRscRenderMode;
+  renderMode?: AppRscRenderMode;
   preserveClientResponseHeaders?: boolean;
   expireSeconds?: number;
   revalidateSeconds: number | null;

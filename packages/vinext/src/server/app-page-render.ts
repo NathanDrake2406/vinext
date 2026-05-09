@@ -114,7 +114,7 @@ type RenderAppPageLifecycleOptions = {
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
   scriptNonce?: string;
   mountedSlotsHeader?: string | null;
-  renderMode: AppRscRenderMode;
+  renderMode?: AppRscRenderMode;
   waitUntil?: (promise: Promise<void>) => void;
   element: ReactNode | Readonly<Record<string, ReactNode>>;
   classification?: LayoutClassificationOptions | null;

@@ -201,7 +201,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     pathname: string;
     searchParams: URLSearchParams;
   }) => void;
-  renderMode: AppRscRenderMode;
+  renderMode?: AppRscRenderMode;
 };
 
 function shouldReadAppPageCache(options: {
@@ -571,7 +571,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       return _peekRequestScopedCacheLife();
     },
     handlerStart: options.handlerStart,
-    hasLoadingBoundary: shouldSuppressLoadingBoundaries(options.renderMode)
+    hasLoadingBoundary: shouldSuppressLoadingBoundaries(
+      options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION,
+    )
       ? false
       : Boolean(route.loading?.default),
     isDynamicError,
