@@ -17,6 +17,7 @@ import React, {
   useState,
   type AnchorHTMLAttributes,
   type MouseEvent,
+  type TouchEvent,
 } from "react";
 // Import shared RSC prefetch utilities from navigation shim (relative path
 // so this resolves both via the Vite plugin and in direct vitest imports)
@@ -52,6 +53,8 @@ type NavigateEvent = {
   /** Whether preventDefault() has been called. */
   defaultPrevented: boolean;
 };
+
+type PrefetchPriority = "low" | "high";
 
 type LinkProps = {
   href: string | { pathname?: string; query?: UrlQuery };
@@ -118,16 +121,11 @@ function resolveHref(href: LinkProps["href"]): string {
  * Uses `requestIdleCallback` (or `setTimeout` fallback) to avoid blocking
  * the main thread during initial page load.
  */
-function prefetchUrl(href: string): void {
+function prefetchUrl(href: string, priority: PrefetchPriority = "low"): void {
   if (typeof window === "undefined") return;
 
-  // Normalize same-origin absolute URLs to local paths before prefetching
-  let prefetchHref = href;
-  if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//")) {
-    const localPath = toSameOriginAppPath(href, __basePath);
-    if (localPath == null) return; // truly external — don't prefetch
-    prefetchHref = localPath;
-  }
+  const prefetchHref = getPrefetchHref(href);
+  if (prefetchHref == null) return;
 
   const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
 
@@ -154,7 +152,7 @@ function prefetchUrl(href: string): void {
           fetch(rscUrl, {
             headers,
             credentials: "include",
-            priority: "low" as const,
+            priority,
             // @ts-expect-error — purpose is a valid fetch option in some browsers
             purpose: "prefetch",
           }),
@@ -176,6 +174,14 @@ function prefetchUrl(href: string): void {
       console.error("[vinext] RSC prefetch setup error:", error);
     });
   });
+}
+
+function getPrefetchHref(href: string): string | null {
+  if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//")) {
+    return toSameOriginAppPath(href, __basePath);
+  }
+
+  return href;
 }
 
 /**
@@ -282,6 +288,8 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     scroll = true,
     children,
     onClick,
+    onMouseEnter,
+    onTouchStart,
     onNavigate,
     ...rest
   },
@@ -315,7 +323,8 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   // Prefetching: observe the element when it enters the viewport.
   // prefetch={false} disables, prefetch={true} or undefined/null (default) enables.
   const internalRef = useRef<HTMLAnchorElement | null>(null);
-  const shouldPrefetch = prefetchProp !== false && !isDangerous;
+  const shouldPrefetch =
+    process.env.NODE_ENV === "production" && prefetchProp !== false && !isDangerous;
 
   const setRefs = useCallback(
     (node: HTMLAnchorElement | null) => {
@@ -332,17 +341,8 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     const node = internalRef.current;
     if (!node) return;
 
-    // Normalize same-origin absolute URLs; skip truly external ones
-    let hrefToPrefetch = localizedHref;
-    if (
-      localizedHref.startsWith("http://") ||
-      localizedHref.startsWith("https://") ||
-      localizedHref.startsWith("//")
-    ) {
-      const localPath = toSameOriginAppPath(localizedHref, __basePath);
-      if (localPath == null) return; // truly external
-      hrefToPrefetch = localPath;
-    }
+    const hrefToPrefetch = getPrefetchHref(localizedHref);
+    if (hrefToPrefetch == null) return;
 
     const observer = getSharedObserver();
     if (!observer) return;
@@ -355,6 +355,27 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       observerCallbacks.delete(node);
     };
   }, [shouldPrefetch, localizedHref]);
+
+  const prefetchOnIntent = useCallback(() => {
+    if (!shouldPrefetch) return;
+    prefetchUrl(localizedHref, "high");
+  }, [shouldPrefetch, localizedHref]);
+
+  const handleMouseEnter = useCallback(
+    (e: MouseEvent<HTMLAnchorElement>) => {
+      onMouseEnter?.(e);
+      prefetchOnIntent();
+    },
+    [onMouseEnter, prefetchOnIntent],
+  );
+
+  const handleTouchStart = useCallback(
+    (e: TouchEvent<HTMLAnchorElement>) => {
+      onTouchStart?.(e);
+      prefetchOnIntent();
+    },
+    [onTouchStart, prefetchOnIntent],
+  );
 
   const handleClick = async (e: MouseEvent<HTMLAnchorElement>) => {
     if (onClick) onClick(e);
@@ -471,7 +492,11 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     if (process.env.NODE_ENV !== "production") {
       console.warn(`<Link> blocked dangerous href: ${resolvedHref}`);
     }
-    return <a {...anchorProps}>{children}</a>;
+    return (
+      <a {...anchorProps} onMouseEnter={onMouseEnter} onTouchStart={onTouchStart}>
+        {children}
+      </a>
+    );
   }
 
   return (
@@ -482,6 +507,8 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
         onClick={(event) => {
           void handleClick(event);
         }}
+        onMouseEnter={handleMouseEnter}
+        onTouchStart={handleTouchStart}
         {...anchorProps}
       >
         {children}

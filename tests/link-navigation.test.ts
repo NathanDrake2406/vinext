@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import ReactDOMServer from "react-dom/server";
 import type { ElementType, ReactNode } from "react";
 
+type CapturedEffect = () => void | (() => void);
+
 type CapturedClickEvent = {
   altKey?: boolean;
   button: number;
@@ -15,6 +17,9 @@ type CapturedClickEvent = {
 
 type CapturedAnchorProps = {
   onClick?: (event: CapturedClickEvent) => void | Promise<void>;
+  onMouseEnter?: (event: { currentTarget: HTMLAnchorElement }) => void;
+  onTouchStart?: (event: { currentTarget: HTMLAnchorElement }) => void;
+  ref?: (node: HTMLAnchorElement | null) => void;
 };
 
 afterEach(() => {
@@ -23,6 +28,7 @@ afterEach(() => {
   vi.doUnmock("react/jsx-dev-runtime");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.resetModules();
 });
 
 describe("Link App Router navigation scheduling", () => {
@@ -145,5 +151,301 @@ describe("Link App Router navigation scheduling", () => {
     expect(startTransition).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith("/target", 0, "navigate", "push", undefined, true);
     expect(transitionStates).toEqual([true]);
+  });
+});
+
+async function renderIsolatedLink(options: {
+  href: string;
+  nodeEnv: string;
+  props?: Record<string, unknown>;
+  requireRef?: boolean;
+  windowOverrides?: Record<string, unknown>;
+}) {
+  vi.resetModules();
+
+  const previousNodeEnv = process.env.NODE_ENV;
+  const restoreNodeEnv = () => {
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  };
+  process.env.NODE_ENV = options.nodeEnv;
+
+  const effects: CapturedEffect[] = [];
+  let capturedAnchorProps: CapturedAnchorProps | undefined;
+
+  const captureAnchor = (type: unknown, props: unknown) => {
+    if (type === "a" && props !== null && typeof props === "object") {
+      capturedAnchorProps = props;
+    }
+  };
+
+  vi.doMock("react", async () => {
+    const actual = await vi.importActual<typeof import("react")>("react");
+    const createElement = ((
+      type: ElementType,
+      props: Record<string, unknown> | null,
+      ...children: ReactNode[]
+    ) => {
+      captureAnchor(type, props);
+      return actual.createElement(type, props, ...children);
+    }) as typeof actual.createElement;
+
+    const useEffect = (effect: CapturedEffect) => {
+      effects.push(effect);
+    };
+
+    return {
+      ...actual,
+      createElement,
+      useEffect,
+      default: { ...actual, createElement, useEffect },
+    };
+  });
+
+  vi.doMock("react/jsx-runtime", async () => {
+    const actual = await vi.importActual<typeof import("react/jsx-runtime")>("react/jsx-runtime");
+    return {
+      ...actual,
+      jsx(type: ElementType, props: Record<string, unknown>, key?: string) {
+        captureAnchor(type, props);
+        return actual.jsx(type, props, key);
+      },
+      jsxs(type: ElementType, props: Record<string, unknown>, key?: string) {
+        captureAnchor(type, props);
+        return actual.jsxs(type, props, key);
+      },
+    };
+  });
+
+  vi.doMock("react/jsx-dev-runtime", async () => {
+    const actual =
+      await vi.importActual<typeof import("react/jsx-dev-runtime")>("react/jsx-dev-runtime");
+    return {
+      ...actual,
+      jsxDEV(
+        type: ElementType,
+        props: Record<string, unknown>,
+        key?: string,
+        isStaticChildren?: boolean,
+        source?: Parameters<typeof actual.jsxDEV>[4],
+        self?: Parameters<typeof actual.jsxDEV>[5],
+      ) {
+        captureAnchor(type, props);
+        return actual.jsxDEV(type, props, key, isStaticChildren ?? false, source, self);
+      },
+    };
+  });
+
+  const fetch = vi.fn(() => Promise.resolve(new Response("")));
+  const location = {
+    href: "https://example.com/current",
+    origin: "https://example.com",
+  };
+
+  vi.stubGlobal("fetch", fetch);
+  vi.stubGlobal("window", {
+    __VINEXT_RSC_NAVIGATE__: vi.fn(),
+    addEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+    history: {
+      pushState: vi.fn(),
+      replaceState: vi.fn(),
+    },
+    location,
+    requestIdleCallback: vi.fn((callback: () => void) => {
+      callback();
+      return 1;
+    }),
+    scrollTo: vi.fn(),
+    ...options.windowOverrides,
+  });
+
+  const { default: IsolatedLink } = await import("../packages/vinext/src/shims/link.js");
+  const React = await vi.importActual<typeof import("react")>("react");
+
+  try {
+    ReactDOMServer.renderToString(
+      React.createElement(IsolatedLink, { href: options.href, ...options.props }, "target"),
+    );
+
+    if (capturedAnchorProps === undefined) {
+      throw new Error("Expected rendered Link to expose anchor props");
+    }
+
+    if (options.requireRef !== false && capturedAnchorProps.ref === undefined) {
+      throw new Error("Expected rendered Link anchor to expose a ref");
+    }
+
+    const anchor = { href: options.href } as HTMLAnchorElement;
+    capturedAnchorProps.ref?.(anchor);
+
+    for (const effect of effects) {
+      effect();
+    }
+
+    return {
+      anchor,
+      capturedAnchorProps,
+      fetch,
+      restoreNodeEnv,
+    };
+  } catch (error) {
+    restoreNodeEnv();
+    throw error;
+  }
+}
+
+describe("Link App Router prefetch scheduling", () => {
+  it("does not prefetch visible links in development", async () => {
+    // Next.js disables App Router viewport prefetching in development:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/links.ts
+    const observe = vi.fn();
+    const unobserve = vi.fn();
+    class FakeIntersectionObserver {
+      observe = observe;
+      unobserve = unobserve;
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+
+    const result = await renderIsolatedLink({
+      href: "/dev-prefetch-target",
+      nodeEnv: "development",
+    });
+
+    try {
+      expect(observe).not.toHaveBeenCalled();
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("prefetches on mouse intent in production while preserving the user handler", async () => {
+    // Next.js triggers intent prefetch from Link onMouseEnter:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/app-dir/link.tsx
+    const userOnMouseEnter = vi.fn();
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+      props: { onMouseEnter: userOnMouseEnter },
+    });
+
+    try {
+      expect(result.capturedAnchorProps.onMouseEnter).toBeTypeOf("function");
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(userOnMouseEnter).toHaveBeenCalledTimes(1);
+      expect(result.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/intent-prefetch-target.rsc"),
+        expect.objectContaining({
+          credentials: "include",
+          priority: "high",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("prefetches on touch intent in production while preserving the user handler", async () => {
+    const userOnTouchStart = vi.fn();
+    const result = await renderIsolatedLink({
+      href: "/touch-prefetch-target",
+      nodeEnv: "production",
+      props: { onTouchStart: userOnTouchStart },
+    });
+
+    try {
+      expect(result.capturedAnchorProps.onTouchStart).toBeTypeOf("function");
+      result.capturedAnchorProps.onTouchStart?.({ currentTarget: result.anchor });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(userOnTouchStart).toHaveBeenCalledTimes(1);
+      expect(result.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/touch-prefetch-target.rsc"),
+        expect.objectContaining({
+          credentials: "include",
+          priority: "high",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not prefetch on intent when prefetch is false", async () => {
+    const userOnMouseEnter = vi.fn();
+    const result = await renderIsolatedLink({
+      href: "/disabled-intent-prefetch-target",
+      nodeEnv: "production",
+      props: { onMouseEnter: userOnMouseEnter, prefetch: false },
+    });
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(userOnMouseEnter).toHaveBeenCalledTimes(1);
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not observe visible links when prefetch is false", async () => {
+    const observe = vi.fn();
+    const unobserve = vi.fn();
+    class FakeIntersectionObserver {
+      observe = observe;
+      unobserve = unobserve;
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+
+    const result = await renderIsolatedLink({
+      href: "/disabled-viewport-prefetch-target",
+      nodeEnv: "production",
+      props: { prefetch: false },
+    });
+
+    try {
+      expect(observe).not.toHaveBeenCalled();
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("preserves user intent handlers on dangerous inert links", async () => {
+    const userOnMouseEnter = vi.fn();
+    const userOnTouchStart = vi.fn();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await renderIsolatedLink({
+      href: "javascript:alert(1)",
+      nodeEnv: "development",
+      props: {
+        onMouseEnter: userOnMouseEnter,
+        onTouchStart: userOnTouchStart,
+      },
+      requireRef: false,
+    });
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      result.capturedAnchorProps.onTouchStart?.({ currentTarget: result.anchor });
+
+      expect(userOnMouseEnter).toHaveBeenCalledTimes(1);
+      expect(userOnTouchStart).toHaveBeenCalledTimes(1);
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      consoleWarn.mockRestore();
+      result.restoreNodeEnv();
+    }
   });
 });
