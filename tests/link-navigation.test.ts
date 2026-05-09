@@ -15,10 +15,12 @@ type CapturedClickEvent = {
   shiftKey?: boolean;
 };
 
+type CapturedIntentEvent = Pick<MouseEvent, "currentTarget">;
+
 type CapturedAnchorProps = {
   onClick?: (event: CapturedClickEvent) => void | Promise<void>;
-  onMouseEnter?: (event: { currentTarget: HTMLAnchorElement }) => void;
-  onTouchStart?: (event: { currentTarget: HTMLAnchorElement }) => void;
+  onMouseEnter?: (event: CapturedIntentEvent) => void;
+  onTouchStart?: (event: CapturedIntentEvent) => void;
   ref?: (node: HTMLAnchorElement | null) => void;
 };
 
@@ -28,6 +30,9 @@ type MockReactAnchorCaptureOptions = {
   startTransition?: (callback: () => void) => void;
 };
 
+// This is a narrow Link shim test harness. It captures rendered anchor props
+// because app-router production prefetch is not covered by dev E2E. Do not
+// expand this pattern for general component testing.
 function mockReactAnchorCapture(options: MockReactAnchorCaptureOptions): void {
   vi.doMock("react", async () => {
     const actual = await vi.importActual<typeof import("react")>("react");
