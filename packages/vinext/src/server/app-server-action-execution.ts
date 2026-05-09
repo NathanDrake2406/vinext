@@ -5,6 +5,10 @@ import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import {
+  APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
+import {
   getNextErrorDigest,
   parseNextHttpErrorDigest,
   parseNextRedirectDigest,
@@ -75,7 +79,7 @@ type BuildServerActionPageElementOptions<TRoute extends AppServerActionRoute, TI
   request: Request;
   route: TRoute;
   searchParams: URLSearchParams;
-  suppressLoadingBoundaries?: boolean;
+  renderMode: AppRscRenderMode;
 };
 
 type AppServerActionRscModel<TElement> = {
@@ -688,7 +692,7 @@ export async function handleServerActionRscRequest<
         request: options.request,
         route: actionRerenderTarget.route,
         searchParams: options.searchParams,
-        suppressLoadingBoundaries: true,
+        renderMode: APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
       });
       errorPattern = actionRerenderTarget.route.pattern;
     } else {

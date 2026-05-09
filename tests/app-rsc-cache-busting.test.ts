@@ -7,8 +7,10 @@ import {
   setRscCacheBustingSearchParam,
   stripRscCacheBustingSearchParam,
   VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM,
+  VINEXT_RSC_RENDER_MODE_HEADER,
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import { fnv1a64 } from "../packages/vinext/src/utils/hash.js";
 
 const textEncoder = new TextEncoder();
@@ -61,14 +63,21 @@ describe("App Router RSC cache-busting", () => {
     expect(feedHash).not.toBe(galleryHash);
   });
 
-  it("varies refresh payloads that suppress loading boundaries from normal navigations", async () => {
+  it("varies preserve-current-UI refresh payloads from normal navigations", async () => {
     const navigationHash = await computeRscCacheBustingSearchParam(createRscRequestHeaders());
     const refreshHash = await computeRscCacheBustingSearchParam(
-      createRscRequestHeaders({ suppressLoadingBoundaries: true }),
+      createRscRequestHeaders({ renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI }),
     );
 
     expect(navigationHash).toBe("");
     expect(refreshHash).not.toBe("");
+  });
+
+  it("normalizes invalid render modes to normal navigation for cache-busting", async () => {
+    const headers = createRscRequestHeaders();
+    headers.set(VINEXT_RSC_RENDER_MODE_HEADER, "invalid");
+
+    await expect(computeRscCacheBustingSearchParam(headers)).resolves.toBe("");
   });
 
   it("preserves existing query params while replacing stale _rsc values", () => {
@@ -189,8 +198,10 @@ describe("App Router RSC cache-busting", () => {
     ).resolves.toBeNull();
   });
 
-  it("does not accept a bare previous hash for suppress-loading-only payloads", async () => {
-    const headers = createRscRequestHeaders({ suppressLoadingBoundaries: true });
+  it("does not accept a bare previous hash for preserve-current-UI payloads", async () => {
+    const headers = createRscRequestHeaders({
+      renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+    });
     const request = new Request("https://example.com/photos/42.rsc?_rsc", { headers });
     const hash = await computeRscCacheBustingSearchParam(headers);
 
@@ -203,10 +214,10 @@ describe("App Router RSC cache-busting", () => {
     expect(response?.headers.get("Location")).toBe(`/photos/42.rsc?_rsc=${hash}`);
   });
 
-  it("does not accept previous mounted-slot hashes for suppress-loading payloads", async () => {
+  it("does not accept previous mounted-slot hashes for preserve-current-UI payloads", async () => {
     const headers = createRscRequestHeaders({
       mountedSlotsHeader: "slot:modal:/",
-      suppressLoadingBoundaries: true,
+      renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
     });
     const previousHash = await sha256CacheBustingHash("0,0,0,0,0,slot:modal:/");
     const currentHash = await computeRscCacheBustingSearchParam(headers);
@@ -242,7 +253,7 @@ describe("App Router RSC cache-busting", () => {
 
   it("exports the full Vary value for RSC-bearing App Router responses", () => {
     expect(VINEXT_RSC_VARY_HEADER).toBe(
-      "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Suppress-Loading",
+      "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Rsc-Render-Mode",
     );
   });
 });

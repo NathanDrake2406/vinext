@@ -10,6 +10,7 @@ import {
   createAppPageLayoutEntries,
   resolveAppPageChildSegments,
 } from "../packages/vinext/src/server/app-page-route-wiring.js";
+import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 
 function readNode(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -359,7 +360,7 @@ describe("app page route wiring helpers", () => {
       },
       routePath: "/dashboard",
       rootNotFoundModule: null,
-      suppressLoadingBoundaries: true,
+      renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
     });
 
     expect(containsElementType(elements["route:/dashboard"], RouteLoadingProbe)).toBe(false);

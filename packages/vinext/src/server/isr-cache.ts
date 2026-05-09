@@ -24,6 +24,11 @@ import { fnv1a64 } from "../utils/hash.js";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { reportRequestError, type OnRequestErrorContext } from "./instrumentation.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
+import {
+  APP_RSC_RENDER_MODE_NAVIGATION,
+  shouldUsePreserveUiCacheVariant,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
 export { normalizeMountedSlotsHeader };
 
 export type ISRCacheEntry = {
@@ -224,12 +229,12 @@ export function appIsrHtmlKey(pathname: string): string {
 export function appIsrRscKey(
   pathname: string,
   mountedSlotsHeader?: string | null,
-  suppressLoadingBoundaries = false,
+  renderMode: AppRscRenderMode = APP_RSC_RENDER_MODE_NAVIGATION,
 ): string {
   const normalizedMountedSlotsHeader = normalizeMountedSlotsHeader(mountedSlotsHeader);
   const variant = [
     normalizedMountedSlotsHeader ? `slots:${fnv1a64(normalizedMountedSlotsHeader)}` : null,
-    suppressLoadingBoundaries ? "suppress-loading" : null,
+    shouldUsePreserveUiCacheVariant(renderMode) ? "preserve-ui" : null,
   ]
     .filter((part) => part !== null)
     .join(":");

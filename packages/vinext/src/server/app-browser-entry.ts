@@ -46,6 +46,11 @@ import {
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
 import {
+  isServerActionResult,
+  shouldClearClientNavigationCachesForServerActionResult,
+  type AppBrowserServerActionResult,
+} from "./app-browser-action-result.js";
+import {
   AppElementsWire,
   getMountedSlotIdsHeader,
   resolveVisitedResponseInterceptionContext,
@@ -82,16 +87,11 @@ import {
   VINEXT_RSC_CONTENT_TYPE,
   VINEXT_RSC_MOUNTED_SLOTS_HEADER,
 } from "./app-rsc-cache-busting.js";
+import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "./app-rsc-render-mode.js";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 
-type ServerActionResult = {
-  root?: AppWireElements;
-  returnValue?: {
-    ok: boolean;
-    data: unknown;
-  };
-};
+type ServerActionResult = AppBrowserServerActionResult<AppWireElements>;
 
 type NavigationKind = "navigate" | "traverse" | "refresh";
 
@@ -160,10 +160,6 @@ let browserRouterStateHasEverCommitted = false;
 // of stranding them on the previous URL with a blank page. Cleared once the
 // commit effect runs (URL update succeeded) or the navigation is superseded.
 let pendingNavigationRecoveryHref: string | null = null;
-
-function isServerActionResult(value: unknown): value is ServerActionResult {
-  return !!value && typeof value === "object" && ("returnValue" in value || "root" in value);
-}
 
 function getBrowserRouterState(): AppRouterState {
   return browserNavigationController.getBrowserRouterState();
@@ -829,6 +825,7 @@ function registerServerActionCallback(): void {
       // currently returns an empty body for redirect responses. RSC navigation
       // requires a valid RSC payload. This is a known parity gap with Next.js,
       // which pre-renders the redirect target's RSC payload.
+      clearClientNavigationCaches();
       const redirectType = fetchResponse.headers.get("x-action-redirect-type") ?? "replace";
       if (redirectType === "push") {
         window.location.assign(actionRedirect);
@@ -838,12 +835,13 @@ function registerServerActionCallback(): void {
       return undefined;
     }
 
-    clearClientNavigationCaches();
-
     const result = await createFromFetch<ServerActionResult | AppWireElements>(
       Promise.resolve(fetchResponse),
       { temporaryReferences },
     );
+    if (shouldClearClientNavigationCachesForServerActionResult(result)) {
+      clearClientNavigationCaches();
+    }
 
     // Server actions stay on the same URL and use commitSameUrlNavigatePayload()
     // for merge-based dispatch. This path does not call
@@ -852,7 +850,7 @@ function registerServerActionCallback(): void {
     // actions ever trigger URL changes via RSC payload (instead of hard
     // redirects), this would need renderNavigationPayload().
     if (isServerActionResult(result)) {
-      if (result.root) {
+      if (result.root !== undefined) {
         return commitSameUrlNavigatePayload(
           Promise.resolve(AppElementsWire.decode(result.root)),
           result.returnValue,
@@ -981,7 +979,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         const mountedSlotsHeader = getMountedSlotIdsHeader(elementsAtNavStart);
         const requestHeaders = createRscRequestHeaders({
           interceptionContext: requestInterceptionContext,
-          suppressLoadingBoundaries: navigationKind === "refresh",
+          renderMode:
+            navigationKind === "refresh" ? APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI : undefined,
         });
         if (mountedSlotsHeader) {
           requestHeaders.set(VINEXT_RSC_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);

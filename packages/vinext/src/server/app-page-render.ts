@@ -33,6 +33,7 @@ import {
   shouldRerenderAppPageWithGlobalError,
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
+import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
 import {
   createArtifactCompatibilityEnvelope,
   createArtifactCompatibilityGraphVersion,
@@ -87,7 +88,7 @@ type RenderAppPageLifecycleOptions = {
   isrRscKey: (
     pathname: string,
     mountedSlotsHeader?: string | null,
-    suppressLoadingBoundaries?: boolean,
+    renderMode?: AppRscRenderMode,
   ) => string;
   isrSet: AppPageCacheSetter;
   layoutCount: number;
@@ -113,7 +114,7 @@ type RenderAppPageLifecycleOptions = {
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
   scriptNonce?: string;
   mountedSlotsHeader?: string | null;
-  suppressLoadingBoundaries?: boolean;
+  renderMode: AppRscRenderMode;
   waitUntil?: (promise: Promise<void>) => void;
   element: ReactNode | Readonly<Record<string, ReactNode>>;
   classification?: LayoutClassificationOptions | null;
@@ -403,7 +404,7 @@ export async function renderAppPageLifecycle(
       isrRscKey: options.isrRscKey,
       isrSet: options.isrSet,
       mountedSlotsHeader: options.mountedSlotsHeader,
-      suppressLoadingBoundaries: options.suppressLoadingBoundaries,
+      renderMode: options.renderMode,
       preserveClientResponseHeaders: rscResponsePolicy.cacheState !== "MISS",
       expireSeconds,
       revalidateSeconds,

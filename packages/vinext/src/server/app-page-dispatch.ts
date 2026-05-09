@@ -49,6 +49,11 @@ import {
   type AppPageMiddlewareContext,
 } from "./app-page-response.js";
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
+import {
+  APP_RSC_RENDER_MODE_NAVIGATION,
+  shouldSuppressLoadingBoundaries,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
 import { createAppPageTreePath } from "./app-page-route-wiring.js";
 import type { AppPageSsrHandler } from "./app-page-stream.js";
 import { createStaticGenerationHeadersContext } from "./app-static-generation.js";
@@ -156,7 +161,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   isrRscKey: (
     pathname: string,
     mountedSlotsHeader?: string | null,
-    suppressLoadingBoundaries?: boolean,
+    renderMode?: AppRscRenderMode,
   ) => string;
   isrSet: AppPageCacheSetter;
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
@@ -196,7 +201,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     pathname: string;
     searchParams: URLSearchParams;
   }) => void;
-  suppressLoadingBoundaries?: boolean;
+  renderMode: AppRscRenderMode;
 };
 
 function shouldReadAppPageCache(options: {
@@ -368,7 +373,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       middlewareHeaders: options.middlewareContext.headers,
       middlewareStatus: options.middlewareContext.status,
       mountedSlotsHeader: options.mountedSlotsHeader,
-      suppressLoadingBoundaries: options.suppressLoadingBoundaries,
+      renderMode: options.renderMode,
       expireSeconds: options.expireSeconds,
       // cacheLife-only routes discover their actual revalidate during the
       // fresh render; this seed only gets them into the cache read path.
@@ -566,8 +571,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       return _peekRequestScopedCacheLife();
     },
     handlerStart: options.handlerStart,
-    hasLoadingBoundary:
-      options.suppressLoadingBoundaries === true ? false : Boolean(route.loading?.default),
+    hasLoadingBoundary: shouldSuppressLoadingBoundaries(options.renderMode)
+      ? false
+      : Boolean(route.loading?.default),
     isDynamicError,
     isDraftMode,
     isForceDynamic,
@@ -614,7 +620,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     },
     revalidateSeconds: currentRevalidateSeconds,
     mountedSlotsHeader: options.mountedSlotsHeader,
-    suppressLoadingBoundaries: options.suppressLoadingBoundaries,
+    renderMode: options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION,
     renderErrorBoundaryResponse(renderError) {
       return options.renderErrorBoundaryPage(renderError);
     },

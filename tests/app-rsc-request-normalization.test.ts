@@ -17,7 +17,11 @@ import {
   normalizeMountedSlotsHeader,
   type NormalizedRscRequest,
 } from "../packages/vinext/src/server/app-rsc-request-normalization.js";
-import { VINEXT_RSC_SUPPRESS_LOADING_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import { VINEXT_RSC_RENDER_MODE_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import {
+  APP_RSC_RENDER_MODE_NAVIGATION,
+  APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+} from "../packages/vinext/src/server/app-rsc-render-mode.js";
 
 function req(path: string, headers: Record<string, string> = {}): Request {
   return new Request(`http://localhost${path}`, { headers });
@@ -306,20 +310,28 @@ describe("normalizeRscRequest — mounted slots normalization", () => {
     expect(result.mountedSlotsHeader).toBeNull();
   });
 
-  it("normalizes the loading-boundary suppression marker", () => {
-    const suppressed = normalized(
-      normalizeRscRequest(req("/page.rsc", { [VINEXT_RSC_SUPPRESS_LOADING_HEADER]: "1" }), ""),
+  it("normalizes the semantic render mode marker", () => {
+    const refresh = normalized(
+      normalizeRscRequest(
+        req("/page.rsc", {
+          [VINEXT_RSC_RENDER_MODE_HEADER]: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+        }),
+        "",
+      ),
     );
     const normal = normalized(
-      normalizeRscRequest(req("/page.rsc", { [VINEXT_RSC_SUPPRESS_LOADING_HEADER]: "true" }), ""),
+      normalizeRscRequest(req("/page.rsc", { [VINEXT_RSC_RENDER_MODE_HEADER]: "true" }), ""),
     );
     const html = normalized(
-      normalizeRscRequest(req("/page", { [VINEXT_RSC_SUPPRESS_LOADING_HEADER]: "1" }), ""),
+      normalizeRscRequest(
+        req("/page", { [VINEXT_RSC_RENDER_MODE_HEADER]: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI }),
+        "",
+      ),
     );
 
-    expect(suppressed.suppressLoadingBoundaries).toBe(true);
-    expect(normal.suppressLoadingBoundaries).toBe(false);
-    expect(html.suppressLoadingBoundaries).toBe(false);
+    expect(refresh.renderMode).toBe(APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI);
+    expect(normal.renderMode).toBe(APP_RSC_RENDER_MODE_NAVIGATION);
+    expect(html.renderMode).toBe(APP_RSC_RENDER_MODE_NAVIGATION);
   });
 });
 
