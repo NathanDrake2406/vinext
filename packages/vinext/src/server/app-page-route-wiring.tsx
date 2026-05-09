@@ -772,8 +772,10 @@ export function buildAppPageElements<
     routeChildren = <ErrorBoundary fallback={globalErrorComponent}>{routeChildren}</ErrorBoundary>;
   }
 
-  // Source CSS links are dev-only route metadata. Production CSS comes from the
-  // built client manifest, so these links intentionally stay optional.
+  // Source CSS links are dev-only route metadata. They make CSS available in
+  // the initial SSR HTML before Vite's client-side CSS injection runs; the
+  // trade-off is that dev may fetch a stylesheet Vite also sees in the module
+  // graph. Production CSS comes from the built client manifest.
   elements[routeId] = (
     <>
       {options.route.styles?.map((href) => (

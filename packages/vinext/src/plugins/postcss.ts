@@ -234,6 +234,8 @@ async function resolvePostcssPlugins(
         return toAcceptedPostcssPlugin(entry.value, "inline");
       }
 
+      // Keep the boundary defensive for direct callers such as resolvePostcssPlugin();
+      // normalizePostcssPlugins() filters disabled entries before this point.
       if (entry.options === false) return undefined;
 
       const resolvedPath = req.resolve(entry.name);

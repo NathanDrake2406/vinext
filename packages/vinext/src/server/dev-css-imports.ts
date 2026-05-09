@@ -276,27 +276,21 @@ export async function collectDevCssHrefsForFiles(
   context: DevCssResolutionContext,
   cache: DevCssImportsCache = new Map(),
 ): Promise<string[]> {
-  const hrefs = new Set<string>();
-  const visited = new Set<string>();
-
-  async function visit(filePath: string): Promise<void> {
-    if (visited.has(filePath)) return;
-    visited.add(filePath);
+  async function collect(filePath: string, ancestors: ReadonlySet<string>): Promise<string[]> {
+    if (ancestors.has(filePath)) return [];
 
     const scan = await getCachedCssImportScan(filePath, context, cache);
-    if (!scan) return;
+    if (!scan) return [];
 
-    for (const href of scan.cssHrefs) {
-      hrefs.add(href);
-    }
-    for (const sourceImport of scan.sourceImports) {
-      await visit(sourceImport);
-    }
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(filePath);
+    const childHrefs = await Promise.all(
+      scan.sourceImports.map((sourceImport) => collect(sourceImport, nextAncestors)),
+    );
+    return [...scan.cssHrefs, ...childHrefs.flat()];
   }
 
-  for (const filePath of filePaths) {
-    await visit(filePath);
-  }
+  const hrefsByFile = await Promise.all(filePaths.map((filePath) => collect(filePath, new Set())));
 
-  return [...hrefs];
+  return [...new Set(hrefsByFile.flat())];
 }

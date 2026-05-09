@@ -39,6 +39,11 @@ export function collectAppRouteModuleFiles(
   return files.filter((filePath): filePath is string => typeof filePath === "string");
 }
 
+/**
+ * Collect modules that can contribute client-visible route assets. Route
+ * handlers are excluded because they do not render UI, and layouts are listed
+ * before pages so CSS follows the route tree's cascade order.
+ */
 export function collectAppRouteAssetModuleFiles(route: AppRoute): string[] {
   const files = [
     ...route.layouts,

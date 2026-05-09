@@ -1737,6 +1737,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // App Router virtual modules
         if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
           const resolveDevCssImport = async (specifier: string, importerPath: string) => {
+            // CSS file resolution is expected to be environment-neutral; the
+            // browser fetches the returned source href even though this resolve
+            // runs while generating the RSC entry.
             const resolved = await this.resolve(specifier, importerPath, { skipSelf: true });
             return resolved?.id.split("?", 1)[0] ?? null;
           };
