@@ -150,6 +150,7 @@ function resolvePendingNavigationCommitDecision(options: {
   currentState: AppRouterState;
   pending: PendingNavigationCommit;
   startedNavigationId: number;
+  targetHref: string;
 }): CommitDecision {
   const { disposition, trace } = resolvePendingNavigationCommitDispositionDecision(options);
 
@@ -267,6 +268,7 @@ export function approvePendingNavigationCommit(options: {
   currentState: AppRouterState;
   pending: PendingNavigationCommit;
   startedNavigationId: number;
+  targetHref: string;
 }): CommitApproval {
   const decision = addCommitTransactionTrace(
     resolvePendingNavigationCommitDecision({
@@ -274,6 +276,7 @@ export function approvePendingNavigationCommit(options: {
       currentState: options.currentState,
       pending: options.pending,
       startedNavigationId: options.startedNavigationId,
+      targetHref: options.targetHref,
     }),
     options.pending,
   );
@@ -313,6 +316,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
   previousNextUrl?: string | null;
   renderId: number;
   startedNavigationId: number;
+  targetHref: string;
   type: "navigate" | "replace" | "traverse";
 }): Promise<ClassifiedPendingNavigationCommit> {
   const pending = await createPendingNavigationCommit({
@@ -331,6 +335,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
     currentState: approvalState,
     pending,
     startedNavigationId: options.startedNavigationId,
+    targetHref: options.targetHref,
   });
 
   return {

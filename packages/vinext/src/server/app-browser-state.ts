@@ -244,15 +244,19 @@ function createPendingNavigationTraceFields(options: {
   currentState: AppRouterState;
   pending: PendingNavigationCommit;
   startedNavigationId: number;
+  targetHref?: string;
 }): NavigationTraceFields {
-  return createNavigationLifecycleTraceFields({
-    activeNavigationId: options.activeNavigationId,
-    currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
-    currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
-    nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
-    startedNavigationId: options.startedNavigationId,
-    startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
-  });
+  return {
+    ...createNavigationLifecycleTraceFields({
+      activeNavigationId: options.activeNavigationId,
+      currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
+      currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
+      nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
+      startedNavigationId: options.startedNavigationId,
+      startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
+    }),
+    ...(options.targetHref !== undefined ? { targetHref: options.targetHref } : {}),
+  };
 }
 
 function createNavigationSnapshotUrl(snapshot: ClientNavigationRenderSnapshot): string {
@@ -264,6 +268,9 @@ function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
   const displayUrl = createNavigationSnapshotUrl(state.navigationSnapshot);
   return {
     displayUrl,
+    // `displayUrl` preserves the browser-visible query string for decisions and
+    // traces. `matchedUrl` stays path-only because route matching has already
+    // consumed query params before AppElements metadata reaches this boundary.
     matchedUrl: state.navigationSnapshot.pathname,
     rootBoundaryId: state.rootLayoutTreePath,
     routeId: state.routeId,
@@ -274,6 +281,8 @@ function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnap
   const displayUrl = createNavigationSnapshotUrl(pending.action.navigationSnapshot);
   return {
     displayUrl,
+    // See createVisibleRouteSnapshot: matchedUrl intentionally models the route
+    // identity, not the address bar URL.
     matchedUrl: pending.action.navigationSnapshot.pathname,
     rootBoundaryId: pending.rootLayoutTreePath,
     routeId: pending.routeId,
@@ -326,6 +335,10 @@ function planPendingRootBoundaryFlightResponse(options: {
     event: {
       kind: "flightResponseArrived",
       result: {
+        // Approval call sites must pass the executor's targetHref so the
+        // planner trace and future hard-nav executor agree with the browser
+        // URL. The fallback remains for lower-level tests and direct disposition
+        // callers that exercise only snapshot-derived planner semantics.
         href: options.targetHref ?? targetSnapshot.displayUrl,
         targetSnapshot,
       },

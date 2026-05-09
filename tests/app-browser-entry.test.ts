@@ -140,6 +140,7 @@ type ApprovedTestCommitOptions = {
   rootLayoutTreePath: string | null;
   routeId: string;
   startedNavigationId?: number;
+  targetHref?: string;
   type?: "navigate" | "replace" | "traverse";
 };
 
@@ -172,6 +173,7 @@ async function applyApprovedTestCommit(
     currentState: state,
     pending,
     startedNavigationId: options.startedNavigationId ?? activeNavigationId,
+    targetHref: options.targetHref ?? "https://example.com/initial",
   });
 
   if (approval.approvedCommit === null) {
@@ -305,6 +307,7 @@ describe("app browser entry state helpers", () => {
       currentState: state,
       pending,
       startedNavigationId: 1,
+      targetHref: "https://example.com/next",
     });
     if (approval.approvedCommit === null) {
       throw new Error("Expected approved visible commit");
@@ -483,6 +486,7 @@ describe("app browser entry state helpers", () => {
       currentState,
       pending,
       startedNavigationId: 1,
+      targetHref: "https://example.com/dashboard",
     });
     if (approval.approvedCommit === null) {
       throw new Error("Expected approved visible commit");
@@ -540,6 +544,7 @@ describe("app browser entry state helpers", () => {
       currentState: latestState,
       pending,
       startedNavigationId: 7,
+      targetHref: "https://example.com/dashboard",
     });
 
     expect(approval.decision.disposition).toBe("no-commit");
@@ -561,6 +566,7 @@ describe("app browser entry state helpers", () => {
           nextRootLayoutTreePath: "/",
           startedNavigationId: 7,
           startedVisibleCommitVersion: 4,
+          targetHref: "https://example.com/dashboard",
         },
       },
     ]);
@@ -588,6 +594,7 @@ describe("app browser entry state helpers", () => {
       currentState: latestState,
       pending,
       startedNavigationId: 8,
+      targetHref: "https://example.com/previous",
     });
 
     expect(approval.decision.disposition).toBe("no-commit");
@@ -609,6 +616,7 @@ describe("app browser entry state helpers", () => {
           nextRootLayoutTreePath: "/",
           startedNavigationId: 8,
           startedVisibleCommitVersion: 2,
+          targetHref: "https://example.com/previous",
         },
       },
     ]);
@@ -792,6 +800,7 @@ describe("app browser entry state helpers", () => {
       currentState,
       pending,
       startedNavigationId: 4,
+      targetHref: "https://example.com/dashboard",
     });
 
     expect(approval.decision.disposition).toBe("commit");
@@ -819,6 +828,7 @@ describe("app browser entry state helpers", () => {
           nextRootLayoutTreePath: "/",
           startedNavigationId: 4,
           startedVisibleCommitVersion: 0,
+          targetHref: "https://example.com/dashboard",
         },
       },
     ]);
@@ -851,6 +861,7 @@ describe("app browser entry state helpers", () => {
       currentState,
       pending,
       startedNavigationId: 6,
+      targetHref: "https://example.com/legacy-payload",
     });
 
     expect(approval.decision.disposition).toBe("commit");
@@ -936,6 +947,7 @@ describe("app browser entry state helpers", () => {
       currentState,
       pending,
       startedNavigationId: 4,
+      targetHref: "https://example.com/next",
     });
 
     if (approval.approvedCommit === null) {
@@ -973,6 +985,7 @@ describe("app browser entry state helpers", () => {
       currentState,
       pending,
       startedNavigationId: 4,
+      targetHref: "https://example.com/feed",
     });
 
     if (approval.approvedCommit === null) {
@@ -1007,6 +1020,7 @@ describe("app browser entry state helpers", () => {
       currentState,
       pending,
       startedNavigationId: 7,
+      targetHref: "https://example.com/dashboard",
     });
     expect(staleApproval.decision.disposition).toBe("no-commit");
     expect(staleApproval.decision.trace.entries[0]?.code).toBe(
@@ -1022,6 +1036,7 @@ describe("app browser entry state helpers", () => {
       currentState,
       pending,
       startedNavigationId: 8,
+      targetHref: "https://example.com/dashboard?from=planner",
     });
     expect(hardNavigateApproval.decision.disposition).toBe("hard-navigate");
     expect(hardNavigateApproval.decision.trace.entries[0]?.code).toBe(
@@ -1029,6 +1044,9 @@ describe("app browser entry state helpers", () => {
     );
     expect(hardNavigateApproval.decision.trace.entries[1]?.code).toBe(
       NavigationTraceReasonCodes.rootBoundaryChanged,
+    );
+    expect(hardNavigateApproval.decision.trace.entries[1]?.fields.targetHref).toBe(
+      "https://example.com/dashboard?from=planner",
     );
     expect(hardNavigateApproval.approvedCommit).toBeNull();
   });
@@ -1857,6 +1875,7 @@ describe("app browser navigation lifecycle settlement", () => {
       operationLane: "navigation",
       renderId: 3,
       startedNavigationId: 5,
+      targetHref: "https://example.com/dashboard",
       type: "navigate",
     });
 
@@ -1881,6 +1900,7 @@ describe("app browser navigation lifecycle settlement", () => {
       operationLane: "server-action",
       renderId: 24,
       startedNavigationId: 5,
+      targetHref: "https://example.com/dashboard",
       type: "navigate",
     });
 
@@ -1908,6 +1928,7 @@ describe("app browser navigation lifecycle settlement", () => {
           nextRootLayoutTreePath: "/",
           startedNavigationId: 5,
           startedVisibleCommitVersion: 0,
+          targetHref: "https://example.com/dashboard",
         },
       },
     ]);
@@ -1930,6 +1951,7 @@ describe("app browser navigation lifecycle settlement", () => {
       operationLane: "server-action",
       renderId: 25,
       startedNavigationId: 8,
+      targetHref: "https://example.com/dashboard",
       type: "navigate",
     });
 
@@ -1960,6 +1982,7 @@ describe("app browser navigation lifecycle settlement", () => {
           nextRootLayoutTreePath: "/",
           startedNavigationId: 8,
           startedVisibleCommitVersion: 0,
+          targetHref: "https://example.com/dashboard",
         },
       },
     ]);
@@ -2272,6 +2295,7 @@ describe("app browser entry previousNextUrl helpers", () => {
       operationLane: "server-action",
       renderId: 3,
       startedNavigationId: 7,
+      targetHref: "https://example.com/dashboard?action=same-url",
       type: "navigate",
     });
 
@@ -2280,6 +2304,9 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(result.pending.action.renderId).toBe(3);
     expect(result.trace.entries[0]?.code).toBe(NavigationTraceTransactionCodes.hardNavigate);
     expect(result.trace.entries[1]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryChanged);
+    expect(result.trace.entries[1]?.fields.targetHref).toBe(
+      "https://example.com/dashboard?action=same-url",
+    );
   });
 
   it("creates navigation trace entries without retaining field ownership", () => {
