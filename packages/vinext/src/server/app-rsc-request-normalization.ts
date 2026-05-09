@@ -3,7 +3,7 @@ import { normalizePathnameForRouteMatchStrict } from "../routing/utils.js";
 import { guardProtocolRelativeUrl } from "./request-pipeline.js";
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
-import { stripRscSuffix } from "./app-rsc-cache-busting.js";
+import { stripRscSuffix, VINEXT_RSC_SUPPRESS_LOADING_HEADER } from "./app-rsc-cache-busting.js";
 import { badRequestResponse, notFoundResponse } from "./http-error-responses.js";
 
 export { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
@@ -21,6 +21,8 @@ export type NormalizedRscRequest = {
   interceptionContextHeader: string | null;
   /** Normalized x-vinext-mounted-slots header (deduplicated, sorted). null when absent or blank. */
   mountedSlotsHeader: string | null;
+  /** True for RSC refresh/action payloads that should preserve the current loading boundary UI. */
+  suppressLoadingBoundaries: boolean;
 };
 
 /**
@@ -46,6 +48,7 @@ export type NormalizedRscRequest = {
  *   7. cleanPathname — pathname with `.rsc` suffix stripped
  *   8. Sanitize X-Vinext-Interception-Context — strip null bytes (header injection)
  *   9. Normalize x-vinext-mounted-slots — dedup and sort for canonical cache keys
+ *   10. Read loading-boundary suppression marker for refresh/action payload rendering
  *
  * @returns A 400 or 404 Response for invalid or out-of-scope inputs,
  *          or a NormalizedRscRequest for valid requests.
@@ -99,6 +102,8 @@ export function normalizeRscRequest(
   const mountedSlotsHeader = normalizeMountedSlotsHeader(
     request.headers.get("x-vinext-mounted-slots"),
   );
+  const suppressLoadingBoundaries =
+    isRscRequest && request.headers.get(VINEXT_RSC_SUPPRESS_LOADING_HEADER) === "1";
 
   return {
     url,
@@ -107,5 +112,6 @@ export function normalizeRscRequest(
     isRscRequest,
     interceptionContextHeader,
     mountedSlotsHeader,
+    suppressLoadingBoundaries,
   };
 }

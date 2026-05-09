@@ -11,6 +11,22 @@ import {
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { fnv1a64 } from "../packages/vinext/src/utils/hash.js";
 
+const textEncoder = new TextEncoder();
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+async function sha256CacheBustingHash(input: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", textEncoder.encode(input));
+  return encodeBase64Url(new Uint8Array(digest).subarray(0, 12));
+}
+
 describe("App Router RSC cache-busting", () => {
   it("adds a bare _rsc search param when no variant headers are present", async () => {
     const headers = createRscRequestHeaders();
@@ -43,6 +59,16 @@ describe("App Router RSC cache-busting", () => {
     );
 
     expect(feedHash).not.toBe(galleryHash);
+  });
+
+  it("varies refresh payloads that suppress loading boundaries from normal navigations", async () => {
+    const navigationHash = await computeRscCacheBustingSearchParam(createRscRequestHeaders());
+    const refreshHash = await computeRscCacheBustingSearchParam(
+      createRscRequestHeaders({ suppressLoadingBoundaries: true }),
+    );
+
+    expect(navigationHash).toBe("");
+    expect(refreshHash).not.toBe("");
   });
 
   it("preserves existing query params while replacing stale _rsc values", () => {
@@ -151,6 +177,52 @@ describe("App Router RSC cache-busting", () => {
     ).resolves.toBeNull();
   });
 
+  it("accepts previous SHA cache-busting params after adding a varying header", async () => {
+    const headers = createRscRequestHeaders({ mountedSlotsHeader: "slot:modal:/" });
+    const previousHash = await sha256CacheBustingHash("0,0,0,0,0,slot:modal:/");
+    const request = new Request(`https://example.com/photos/42.rsc?_rsc=${previousHash}`, {
+      headers,
+    });
+
+    await expect(
+      resolveInvalidRscCacheBustingRequest({ isRscRequest: true, request }),
+    ).resolves.toBeNull();
+  });
+
+  it("does not accept a bare previous hash for suppress-loading-only payloads", async () => {
+    const headers = createRscRequestHeaders({ suppressLoadingBoundaries: true });
+    const request = new Request("https://example.com/photos/42.rsc?_rsc", { headers });
+    const hash = await computeRscCacheBustingSearchParam(headers);
+
+    const response = await resolveInvalidRscCacheBustingRequest({
+      isRscRequest: true,
+      request,
+    });
+
+    expect(response?.status).toBe(307);
+    expect(response?.headers.get("Location")).toBe(`/photos/42.rsc?_rsc=${hash}`);
+  });
+
+  it("does not accept previous mounted-slot hashes for suppress-loading payloads", async () => {
+    const headers = createRscRequestHeaders({
+      mountedSlotsHeader: "slot:modal:/",
+      suppressLoadingBoundaries: true,
+    });
+    const previousHash = await sha256CacheBustingHash("0,0,0,0,0,slot:modal:/");
+    const currentHash = await computeRscCacheBustingSearchParam(headers);
+    const request = new Request(`https://example.com/photos/42.rsc?_rsc=${previousHash}`, {
+      headers,
+    });
+
+    const response = await resolveInvalidRscCacheBustingRequest({
+      isRscRequest: true,
+      request,
+    });
+
+    expect(response?.status).toBe(307);
+    expect(response?.headers.get("Location")).toBe(`/photos/42.rsc?_rsc=${currentHash}`);
+  });
+
   it("ignores non-RSC and mutating requests", async () => {
     const headers = createRscRequestHeaders({ interceptionContext: "/feed" });
 
@@ -170,7 +242,7 @@ describe("App Router RSC cache-busting", () => {
 
   it("exports the full Vary value for RSC-bearing App Router responses", () => {
     expect(VINEXT_RSC_VARY_HEADER).toBe(
-      "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots",
+      "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Suppress-Loading",
     );
   });
 });

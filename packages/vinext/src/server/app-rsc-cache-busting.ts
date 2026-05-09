@@ -9,6 +9,7 @@ import { fnv1a64 } from "../utils/hash.js";
 export const VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM = "_rsc";
 export const VINEXT_RSC_CONTENT_TYPE = "text/x-component";
 export const VINEXT_RSC_MOUNTED_SLOTS_HEADER = "X-Vinext-Mounted-Slots";
+export const VINEXT_RSC_SUPPRESS_LOADING_HEADER = "X-Vinext-Suppress-Loading";
 
 const VINEXT_RSC_HEADER = "RSC";
 const VINEXT_RSC_INTERCEPTION_CONTEXT_HEADER = "X-Vinext-Interception-Context";
@@ -26,6 +27,7 @@ export const VINEXT_RSC_VARY_HEADER = [
   NEXT_URL_HEADER,
   VINEXT_RSC_INTERCEPTION_CONTEXT_HEADER,
   VINEXT_RSC_MOUNTED_SLOTS_HEADER,
+  VINEXT_RSC_SUPPRESS_LOADING_HEADER,
 ].join(", ");
 
 const CACHE_BUSTING_DIGEST_BYTES = 12;
@@ -34,6 +36,7 @@ const textEncoder = new TextEncoder();
 type CreateRscRequestHeadersOptions = {
   interceptionContext?: string | null;
   mountedSlotsHeader?: string | null;
+  suppressLoadingBoundaries?: boolean;
 };
 
 type ResolveInvalidRscCacheBustingRequestOptions = {
@@ -54,7 +57,14 @@ function normalizeHeaderValue(value: string | null): string {
   return value ?? "0";
 }
 
-function createCacheBustingInput(headers: Headers): string | null {
+type CreateCacheBustingInputOptions = {
+  includeSuppressLoadingHeader?: boolean;
+};
+
+function createCacheBustingInput(
+  headers: Headers,
+  options: CreateCacheBustingInputOptions = {},
+): string | null {
   // The order of these values determines the hash. Changing it is a breaking
   // cache-key change and requires accepting the previous hash during rollout.
   const values = [
@@ -64,6 +74,9 @@ function createCacheBustingInput(headers: Headers): string | null {
     headers.get(NEXT_URL_HEADER),
     headers.get(VINEXT_RSC_INTERCEPTION_CONTEXT_HEADER),
     headers.get(VINEXT_RSC_MOUNTED_SLOTS_HEADER),
+    ...(options.includeSuppressLoadingHeader === false
+      ? []
+      : [headers.get(VINEXT_RSC_SUPPRESS_LOADING_HEADER)]),
   ];
 
   if (values.every((value) => value === null)) {
@@ -81,6 +94,20 @@ async function sha256CacheBustingHash(input: string): Promise<string> {
 function computeLegacyRscCacheBustingSearchParam(headers: Headers): string {
   const input = createCacheBustingInput(headers);
   return input === null ? "" : fnv1a64(input);
+}
+
+async function computePreviousRscCacheBustingSearchParam(headers: Headers): Promise<string | null> {
+  const input = createCacheBustingInput(headers, { includeSuppressLoadingHeader: false });
+  if (input === null) {
+    return null;
+  }
+
+  return sha256CacheBustingHash(input);
+}
+
+function computePreviousLegacyRscCacheBustingSearchParam(headers: Headers): string | null {
+  const input = createCacheBustingInput(headers, { includeSuppressLoadingHeader: false });
+  return input === null ? null : fnv1a64(input);
 }
 
 function getSearchPairsWithoutRscCacheBusting(url: URL): string[] {
@@ -150,6 +177,10 @@ export function createRscRequestHeaders(options: CreateRscRequestHeadersOptions 
     headers.set(VINEXT_RSC_MOUNTED_SLOTS_HEADER, options.mountedSlotsHeader);
   }
 
+  if (options.suppressLoadingBoundaries === true) {
+    headers.set(VINEXT_RSC_SUPPRESS_LOADING_HEADER, "1");
+  }
+
   return headers;
 }
 
@@ -207,12 +238,20 @@ export async function resolveInvalidRscCacheBustingRequest(
     return null;
   }
 
-  const legacyHash =
-    actualHash !== null && actualHash !== expectedHash
-      ? computeLegacyRscCacheBustingSearchParam(options.request.headers)
-      : null;
+  const acceptedHashes = new Set<string>([expectedHash]);
+  if (actualHash !== null && actualHash !== expectedHash) {
+    acceptedHashes.add(computeLegacyRscCacheBustingSearchParam(options.request.headers));
+    if (options.request.headers.get(VINEXT_RSC_SUPPRESS_LOADING_HEADER) !== "1") {
+      const previousHash = await computePreviousRscCacheBustingSearchParam(options.request.headers);
+      const previousLegacyHash = computePreviousLegacyRscCacheBustingSearchParam(
+        options.request.headers,
+      );
+      if (previousHash !== null) acceptedHashes.add(previousHash);
+      if (previousLegacyHash !== null) acceptedHashes.add(previousLegacyHash);
+    }
+  }
 
-  if (actualHash === expectedHash || (legacyHash !== null && actualHash === legacyHash)) {
+  if (actualHash !== null && acceptedHashes.has(actualHash)) {
     return null;
   }
 

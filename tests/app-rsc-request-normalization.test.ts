@@ -17,6 +17,7 @@ import {
   normalizeMountedSlotsHeader,
   type NormalizedRscRequest,
 } from "../packages/vinext/src/server/app-rsc-request-normalization.js";
+import { VINEXT_RSC_SUPPRESS_LOADING_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 
 function req(path: string, headers: Record<string, string> = {}): Request {
   return new Request(`http://localhost${path}`, { headers });
@@ -303,6 +304,22 @@ describe("normalizeRscRequest — mounted slots normalization", () => {
       normalizeRscRequest(req("/page", { "x-vinext-mounted-slots": "   \t  " }), ""),
     );
     expect(result.mountedSlotsHeader).toBeNull();
+  });
+
+  it("normalizes the loading-boundary suppression marker", () => {
+    const suppressed = normalized(
+      normalizeRscRequest(req("/page.rsc", { [VINEXT_RSC_SUPPRESS_LOADING_HEADER]: "1" }), ""),
+    );
+    const normal = normalized(
+      normalizeRscRequest(req("/page.rsc", { [VINEXT_RSC_SUPPRESS_LOADING_HEADER]: "true" }), ""),
+    );
+    const html = normalized(
+      normalizeRscRequest(req("/page", { [VINEXT_RSC_SUPPRESS_LOADING_HEADER]: "1" }), ""),
+    );
+
+    expect(suppressed.suppressLoadingBoundaries).toBe(true);
+    expect(normal.suppressLoadingBoundaries).toBe(false);
+    expect(html.suppressLoadingBoundaries).toBe(false);
   });
 });
 

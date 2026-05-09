@@ -86,7 +86,7 @@ import {
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 
 type ServerActionResult = {
-  root: AppWireElements;
+  root?: AppWireElements;
   returnValue?: {
     ok: boolean;
     data: unknown;
@@ -162,7 +162,7 @@ let browserRouterStateHasEverCommitted = false;
 let pendingNavigationRecoveryHref: string | null = null;
 
 function isServerActionResult(value: unknown): value is ServerActionResult {
-  return !!value && typeof value === "object" && "root" in value;
+  return !!value && typeof value === "object" && ("returnValue" in value || "root" in value);
 }
 
 function getBrowserRouterState(): AppRouterState {
@@ -852,11 +852,22 @@ function registerServerActionCallback(): void {
     // actions ever trigger URL changes via RSC payload (instead of hard
     // redirects), this would need renderNavigationPayload().
     if (isServerActionResult(result)) {
-      return commitSameUrlNavigatePayload(
-        Promise.resolve(AppElementsWire.decode(result.root)),
-        result.returnValue,
-        currentState,
-      );
+      if (result.root) {
+        return commitSameUrlNavigatePayload(
+          Promise.resolve(AppElementsWire.decode(result.root)),
+          result.returnValue,
+          currentState,
+        );
+      }
+
+      if (result.returnValue) {
+        if (!result.returnValue.ok) {
+          throw result.returnValue.data;
+        }
+        return result.returnValue.data;
+      }
+
+      return undefined;
     }
 
     return commitSameUrlNavigatePayload(
@@ -936,13 +947,14 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     let redirectCount = redirectDepth;
 
     try {
-      if (programmaticTransition && hasBrowserRouterState()) {
+      const shouldUsePendingRouterState = programmaticTransition && navigationKind !== "refresh";
+      if (shouldUsePendingRouterState && hasBrowserRouterState()) {
         pendingRouterState = beginPendingBrowserRouterState();
       } else {
         await waitForBrowserRouterStateReady();
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
-        if (programmaticTransition) {
+        if (shouldUsePendingRouterState) {
           pendingRouterState = beginPendingBrowserRouterState();
         }
       }
@@ -969,6 +981,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         const mountedSlotsHeader = getMountedSlotIdsHeader(elementsAtNavStart);
         const requestHeaders = createRscRequestHeaders({
           interceptionContext: requestInterceptionContext,
+          suppressLoadingBoundaries: navigationKind === "refresh",
         });
         if (mountedSlotsHeader) {
           requestHeaders.set(VINEXT_RSC_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);

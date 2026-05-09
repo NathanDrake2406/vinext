@@ -156,7 +156,16 @@ describe("App Router ISR cache key primitives", () => {
     const second = appIsrRscKey("/feed", "sidebar modal");
 
     expect(first).toBe(second);
-    expect(first).toMatch(/^app:\/feed:rsc:[a-z0-9]+$/);
+    expect(first).toMatch(/^app:\/feed:rsc:slots:[a-z0-9]+$/);
+  });
+
+  it("keys RSC refresh variants separately from normal navigation variants", () => {
+    delete process.env.__VINEXT_BUILD_ID;
+
+    expect(appIsrRscKey("/feed", null, true)).toBe("app:/feed:rsc:suppress-loading");
+    expect(appIsrRscKey("/feed", "modal", true)).toMatch(
+      /^app:\/feed:rsc:slots:[a-z0-9]+:suppress-loading$/,
+    );
   });
 });
 

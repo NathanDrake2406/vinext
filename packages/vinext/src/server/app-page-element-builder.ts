@@ -51,6 +51,8 @@ export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = 
   request: Request;
   /** Normalized x-vinext-mounted-slots header value. */
   mountedSlotsHeader: string | null;
+  /** Skip route and slot loading fallbacks for same-route refresh/action payloads. */
+  suppressLoadingBoundaries?: boolean;
 };
 
 export type BuildPageElementsOptions<
@@ -104,7 +106,8 @@ export async function buildPageElements<
     rootUnauthorizedModule,
     metadataRoutes,
   } = options;
-  const { opts, searchParams, isRscRequest, mountedSlotsHeader } = pageRequest;
+  const { opts, searchParams, isRscRequest, mountedSlotsHeader, suppressLoadingBoundaries } =
+    pageRequest;
 
   const pageModule: AppPageModule | null | undefined = route.page;
   const PageComponent = pageModule?.default;
@@ -179,6 +182,7 @@ export async function buildPageElements<
     rootUnauthorizedModule: rootUnauthorizedModule ?? null,
     route,
     slotOverrides,
+    suppressLoadingBoundaries,
   });
 }
 

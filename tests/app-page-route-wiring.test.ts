@@ -37,6 +37,22 @@ function readChildren(value: unknown): ReactNode {
   return null;
 }
 
+function containsElementType(node: unknown, type: unknown): boolean {
+  if (Array.isArray(node)) {
+    return node.some((child) => containsElementType(child, type));
+  }
+
+  if (!isValidElement<{ children?: unknown; fallback?: unknown }>(node)) {
+    return false;
+  }
+
+  return (
+    node.type === type ||
+    containsElementType(node.props.children, type) ||
+    containsElementType(node.props.fallback, type)
+  );
+}
+
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -166,6 +182,14 @@ function GroupTemplate(props: Record<string, unknown>) {
 function PageProbe() {
   const segments = useSelectedLayoutSegments();
   return createElement("main", { "data-page-segments": segments.join("|") }, "Page");
+}
+
+function RouteLoadingProbe() {
+  return createElement("p", null, "Route loading");
+}
+
+function SlotLoadingProbe() {
+  return createElement("p", null, "Slot loading");
 }
 
 function LayoutWithoutChildren() {
@@ -298,6 +322,48 @@ describe("app page route wiring helpers", () => {
     expect(html).toContain('data-page-segments=""');
     expect(html).toContain('data-segments="(marketing)|blog|post"');
     expect(html).toContain('data-segments="blog|post"');
+  });
+
+  it("suppresses route and slot loading boundaries for refresh payloads", () => {
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: RootLayout }],
+        loading: { default: RouteLoadingProbe },
+        notFound: null,
+        notFounds: [null],
+        routeSegments: ["dashboard"],
+        slots: {
+          sidebar: {
+            default: null,
+            error: null,
+            layout: null,
+            layoutIndex: 0,
+            loading: { default: SlotLoadingProbe },
+            name: "sidebar",
+            page: { default: SlotPage },
+            routeSegments: [],
+          },
+        },
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/dashboard",
+      rootNotFoundModule: null,
+      suppressLoadingBoundaries: true,
+    });
+
+    expect(containsElementType(elements["route:/dashboard"], RouteLoadingProbe)).toBe(false);
+    expect(containsElementType(elements["slot:sidebar:/"], SlotLoadingProbe)).toBe(false);
   });
 
   it("uses override params for slot segment maps when an override page is active", async () => {

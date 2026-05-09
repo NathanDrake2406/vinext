@@ -221,10 +221,19 @@ export function appIsrHtmlKey(pathname: string): string {
   return appIsrCacheKey(pathname, "html");
 }
 
-export function appIsrRscKey(pathname: string, mountedSlotsHeader?: string | null): string {
+export function appIsrRscKey(
+  pathname: string,
+  mountedSlotsHeader?: string | null,
+  suppressLoadingBoundaries = false,
+): string {
   const normalizedMountedSlotsHeader = normalizeMountedSlotsHeader(mountedSlotsHeader);
-  if (!normalizedMountedSlotsHeader) return appIsrCacheKey(pathname, "rsc");
-  return appIsrCacheKey(pathname, `rsc:${fnv1a64(normalizedMountedSlotsHeader)}`);
+  const variant = [
+    normalizedMountedSlotsHeader ? `slots:${fnv1a64(normalizedMountedSlotsHeader)}` : null,
+    suppressLoadingBoundaries ? "suppress-loading" : null,
+  ]
+    .filter((part) => part !== null)
+    .join(":");
+  return appIsrCacheKey(pathname, variant ? `rsc:${variant}` : "rsc");
 }
 
 export function appIsrRouteKey(pathname: string): string {

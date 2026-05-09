@@ -84,7 +84,11 @@ type RenderAppPageLifecycleOptions = {
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
   isrHtmlKey: (pathname: string) => string;
-  isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
+  isrRscKey: (
+    pathname: string,
+    mountedSlotsHeader?: string | null,
+    suppressLoadingBoundaries?: boolean,
+  ) => string;
   isrSet: AppPageCacheSetter;
   layoutCount: number;
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
@@ -109,6 +113,7 @@ type RenderAppPageLifecycleOptions = {
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
   scriptNonce?: string;
   mountedSlotsHeader?: string | null;
+  suppressLoadingBoundaries?: boolean;
   waitUntil?: (promise: Promise<void>) => void;
   element: ReactNode | Readonly<Record<string, ReactNode>>;
   classification?: LayoutClassificationOptions | null;
@@ -398,6 +403,7 @@ export async function renderAppPageLifecycle(
       isrRscKey: options.isrRscKey,
       isrSet: options.isrSet,
       mountedSlotsHeader: options.mountedSlotsHeader,
+      suppressLoadingBoundaries: options.suppressLoadingBoundaries,
       preserveClientResponseHeaders: rscResponsePolicy.cacheState !== "MISS",
       expireSeconds,
       revalidateSeconds,

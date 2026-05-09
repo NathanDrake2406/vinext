@@ -153,7 +153,11 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   isrDebug?: AppPageDebugLogger;
   isrGet: AppPageCacheGetter;
   isrHtmlKey: (pathname: string) => string;
-  isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
+  isrRscKey: (
+    pathname: string,
+    mountedSlotsHeader?: string | null,
+    suppressLoadingBoundaries?: boolean,
+  ) => string;
   isrSet: AppPageCacheSetter;
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
   middlewareContext: AppPageMiddlewareContext;
@@ -192,6 +196,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     pathname: string;
     searchParams: URLSearchParams;
   }) => void;
+  suppressLoadingBoundaries?: boolean;
 };
 
 function shouldReadAppPageCache(options: {
@@ -363,6 +368,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       middlewareHeaders: options.middlewareContext.headers,
       middlewareStatus: options.middlewareContext.status,
       mountedSlotsHeader: options.mountedSlotsHeader,
+      suppressLoadingBoundaries: options.suppressLoadingBoundaries,
       expireSeconds: options.expireSeconds,
       // cacheLife-only routes discover their actual revalidate during the
       // fresh render; this seed only gets them into the cache read path.
@@ -560,7 +566,8 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       return _peekRequestScopedCacheLife();
     },
     handlerStart: options.handlerStart,
-    hasLoadingBoundary: Boolean(route.loading?.default),
+    hasLoadingBoundary:
+      options.suppressLoadingBoundaries === true ? false : Boolean(route.loading?.default),
     isDynamicError,
     isDraftMode,
     isForceDynamic,
@@ -607,6 +614,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     },
     revalidateSeconds: currentRevalidateSeconds,
     mountedSlotsHeader: options.mountedSlotsHeader,
+    suppressLoadingBoundaries: options.suppressLoadingBoundaries,
     renderErrorBoundaryResponse(renderError) {
       return options.renderErrorBoundaryPage(renderError);
     },

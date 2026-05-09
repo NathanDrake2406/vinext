@@ -46,11 +46,16 @@ type ReadAppPageCacheResponseOptions = {
   isrDebug?: AppPageDebugLogger;
   isrGet: AppPageCacheGetter;
   isrHtmlKey: (pathname: string) => string;
-  isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
+  isrRscKey: (
+    pathname: string,
+    mountedSlotsHeader?: string | null,
+    suppressLoadingBoundaries?: boolean,
+  ) => string;
   isrSet: AppPageCacheSetter;
   middlewareHeaders?: Headers | null;
   middlewareStatus?: number | null;
   mountedSlotsHeader?: string | null;
+  suppressLoadingBoundaries?: boolean;
   expireSeconds?: number;
   revalidateSeconds: number;
   renderFreshPageForCache: () => Promise<AppPageCacheRenderResult>;
@@ -66,7 +71,11 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   getRequestCacheLife?: () => AppPageRequestCacheLife | null;
   isrDebug?: AppPageDebugLogger;
   isrHtmlKey: (pathname: string) => string;
-  isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
+  isrRscKey: (
+    pathname: string,
+    mountedSlotsHeader?: string | null,
+    suppressLoadingBoundaries?: boolean,
+  ) => string;
   isrSet: AppPageCacheSetter;
   preserveClientResponseHeaders?: boolean;
   expireSeconds?: number;
@@ -82,9 +91,14 @@ type ScheduleAppPageRscCacheWriteOptions = {
   getPageTags: () => string[];
   getRequestCacheLife?: () => AppPageRequestCacheLife | null;
   isrDebug?: AppPageDebugLogger;
-  isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
+  isrRscKey: (
+    pathname: string,
+    mountedSlotsHeader?: string | null,
+    suppressLoadingBoundaries?: boolean,
+  ) => string;
   isrSet: AppPageCacheSetter;
   mountedSlotsHeader?: string | null;
+  suppressLoadingBoundaries?: boolean;
   preserveClientResponseHeaders?: boolean;
   expireSeconds?: number;
   revalidateSeconds: number | null;
@@ -234,7 +248,11 @@ export async function readAppPageCacheResponse(
   options: ReadAppPageCacheResponseOptions,
 ): Promise<Response | null> {
   const isrKey = options.isRscRequest
-    ? options.isrRscKey(options.cleanPathname, options.mountedSlotsHeader)
+    ? options.isrRscKey(
+        options.cleanPathname,
+        options.mountedSlotsHeader,
+        options.suppressLoadingBoundaries,
+      )
     : options.isrHtmlKey(options.cleanPathname);
 
   try {
@@ -267,7 +285,11 @@ export async function readAppPageCacheResponse(
 
     if (cached?.isStale && cachedValue) {
       const regenerationKey = options.isRscRequest
-        ? options.isrRscKey(options.cleanPathname, options.mountedSlotsHeader)
+        ? options.isrRscKey(
+            options.cleanPathname,
+            options.mountedSlotsHeader,
+            options.suppressLoadingBoundaries,
+          )
         : options.isrHtmlKey(options.cleanPathname);
 
       // Preserve the legacy behavior from the inline generator: stale entries
@@ -280,7 +302,11 @@ export async function readAppPageCacheResponse(
         const expireSeconds = revalidatedPage.cacheControl?.expire ?? options.expireSeconds;
         const writes = [
           options.isrSet(
-            options.isrRscKey(options.cleanPathname, options.mountedSlotsHeader),
+            options.isrRscKey(
+              options.cleanPathname,
+              options.mountedSlotsHeader,
+              options.suppressLoadingBoundaries,
+            ),
             buildAppPageCacheValue("", revalidatedPage.rscData, 200),
             revalidateSeconds,
             revalidatedPage.tags,
@@ -459,7 +485,11 @@ export function scheduleAppPageRscCacheWrite(
     return false;
   }
 
-  const rscKey = options.isrRscKey(options.cleanPathname, options.mountedSlotsHeader);
+  const rscKey = options.isrRscKey(
+    options.cleanPathname,
+    options.mountedSlotsHeader,
+    options.suppressLoadingBoundaries,
+  );
   const cachePromise = (async () => {
     try {
       const rscData = await capturedRscDataPromise;

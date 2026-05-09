@@ -141,6 +141,7 @@ type BuildAppPageElementsOptions<
   isRscRequest?: boolean;
   mountedSlotIds?: ReadonlySet<string> | null;
   routePath: string;
+  suppressLoadingBoundaries?: boolean;
 };
 
 type AppPageTemplateEntry<TModule extends AppPageModule = AppPageModule> = {
@@ -587,7 +588,7 @@ export function buildAppPageElements<
     }
 
     const slotLoadingComponent = getDefaultExport(slot.loading);
-    if (slotLoadingComponent) {
+    if (slotLoadingComponent && options.suppressLoadingBoundaries !== true) {
       const SlotLoadingComponent = slotLoadingComponent;
       slotElement = <Suspense fallback={<SlotLoadingComponent />}>{slotElement}</Suspense>;
     }
@@ -610,7 +611,7 @@ export function buildAppPageElements<
   );
 
   const routeLoadingComponent = getDefaultExport(options.route.loading);
-  if (routeLoadingComponent) {
+  if (routeLoadingComponent && options.suppressLoadingBoundaries !== true) {
     const RouteLoadingComponent = routeLoadingComponent;
     routeChildren = <Suspense fallback={<RouteLoadingComponent />}>{routeChildren}</Suspense>;
   }
