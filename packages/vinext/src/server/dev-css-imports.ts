@@ -209,7 +209,14 @@ async function collectStaticImportSpecifiers(
     return [];
   }
 
-  const ast = parseAst(code);
+  let ast: ReturnType<typeof parseAst>;
+  try {
+    ast = parseAst(code);
+  } catch (error) {
+    onParseError?.(filePath, error);
+    return [];
+  }
+
   const specifiers: string[] = [];
   for (const node of ast.body) {
     if (

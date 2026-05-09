@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { collectDevCssHrefsForFiles } from "../packages/vinext/src/server/dev-css-imports.js";
 
 describe("dev CSS import discovery", () => {
@@ -137,6 +137,28 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       });
 
       expect(hrefs).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("skips files that cannot be parsed", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-dev-css-"));
+    try {
+      const appDir = path.join(root, "app");
+      await fs.mkdir(appDir, { recursive: true });
+      const pagePath = path.join(appDir, "page.tsx");
+      const onParseError = vi.fn();
+      await fs.writeFile(pagePath, `import "./page.css";\nconst broken = ;`);
+
+      const hrefs = await collectDevCssHrefsForFiles([pagePath], {
+        projectRoot: root,
+        aliases: {},
+        onParseError,
+      });
+
+      expect(hrefs).toEqual([]);
+      expect(onParseError).toHaveBeenCalledWith(pagePath, expect.anything());
     } finally {
       await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
