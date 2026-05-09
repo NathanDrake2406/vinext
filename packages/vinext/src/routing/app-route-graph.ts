@@ -569,12 +569,15 @@ function addRouteManifestSegmentErrorBoundaryFacts(input: {
   for (const [index, boundaryPath] of (input.route.errorPaths ?? []).entries()) {
     const treePosition = input.route.errorTreePositions?.[index];
     assertRouteManifestBoundaryTreePosition(input.route, boundaryPath, treePosition);
+    const ownerLayoutId = findRouteManifestOwnerLayoutId(input.route, treePosition);
+    if (ownerLayoutId !== null) continue;
+
     const treePath = createAppRouteGraphTreePath(input.route.routeSegments, treePosition);
     addRouteManifestBoundaryFact(
       {
         boundaries: input.boundaries,
         route: input.route,
-        layoutId: findRouteManifestOwnerLayoutId(input.route, treePosition),
+        layoutId: ownerLayoutId,
         treePath,
       },
       "error",

@@ -599,6 +599,7 @@ describe("App Router route graph builder", () => {
         ownerLayoutId: null,
         rootBoundaryId: "root-boundary:/",
       });
+      expect(graph.routeManifest.segmentGraph.boundaries.has("boundary:error:/docs")).toBe(false);
     });
   });
 
