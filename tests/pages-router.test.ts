@@ -101,6 +101,8 @@ function createResponseDecoder(
 ): zlib.BrotliDecompress | zlib.Gunzip | zlib.Inflate | null {
   const encoding = Array.isArray(contentEncoding) ? contentEncoding[0] : contentEncoding;
   switch (encoding) {
+    case undefined:
+      return null;
     case "br":
       return zlib.createBrotliDecompress();
     case "gzip":
@@ -1194,7 +1196,18 @@ describe("Pages Router allowedDevOrigins config", () => {
   }, 30000);
 
   afterAll(async () => {
-    await server?.close();
+    try {
+      (
+        server?.httpServer as
+          | {
+              closeAllConnections?: () => void;
+            }
+          | undefined
+      )?.closeAllConnections?.();
+      await Promise.race([server?.close(), new Promise((resolve) => setTimeout(resolve, 5000))]);
+    } catch {
+      // Best-effort cleanup: the temp directory removal below is the durable assertion.
+    }
     await fsp.rm(tmpDir, { recursive: true, force: true });
   }, 30000);
 
@@ -1202,7 +1215,7 @@ describe("Pages Router allowedDevOrigins config", () => {
     const res = await fetch(`${baseUrl}/`, {
       headers: { Origin: "http://allowed.example.com" },
     });
-    await res.body?.cancel();
+    await res.text();
     expect(res.status).toBe(200);
   });
 
@@ -1210,7 +1223,7 @@ describe("Pages Router allowedDevOrigins config", () => {
     const res = await fetch(`${baseUrl}/`, {
       headers: { Origin: "http://actions.example.com" },
     });
-    await res.body?.cancel();
+    await res.text();
     expect(res.status).toBe(403);
   });
 });

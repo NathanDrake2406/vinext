@@ -60,6 +60,7 @@ export default defineConfig({
           "@typescript-eslint/no-explicit-any": "off",
           "@typescript-eslint/no-unsafe-function-type": "off",
           "typescript/no-misused-promises": "error",
+          "typescript/switch-exhaustiveness-check": "error",
           "import/no-self-import": "error",
           "unicorn/throw-new-error": "error",
           "unicorn/error-message": "error",
