@@ -22,6 +22,94 @@ type CapturedAnchorProps = {
   ref?: (node: HTMLAnchorElement | null) => void;
 };
 
+type MockReactAnchorCaptureOptions = {
+  captureAnchor(type: unknown, props: unknown): void;
+  captureEffect?: (effect: CapturedEffect) => void;
+  startTransition?: (callback: () => void) => void;
+};
+
+function mockReactAnchorCapture(options: MockReactAnchorCaptureOptions): void {
+  vi.doMock("react", async () => {
+    const actual = await vi.importActual<typeof import("react")>("react");
+    const createElement = ((
+      type: ElementType,
+      props: Record<string, unknown> | null,
+      ...children: ReactNode[]
+    ) => {
+      options.captureAnchor(type, props);
+      return actual.createElement(type, props, ...children);
+    }) as typeof actual.createElement;
+
+    const mockDefault = { ...actual, createElement };
+    if (options.captureEffect !== undefined) {
+      const useEffect = (effect: CapturedEffect) => {
+        options.captureEffect?.(effect);
+      };
+      return {
+        ...actual,
+        createElement,
+        useEffect,
+        default: { ...mockDefault, useEffect },
+      };
+    }
+
+    if (options.startTransition !== undefined) {
+      return {
+        ...actual,
+        createElement,
+        startTransition: options.startTransition,
+        default: { ...mockDefault, startTransition: options.startTransition },
+      };
+    }
+
+    return {
+      ...actual,
+      createElement,
+      default: mockDefault,
+    };
+  });
+
+  vi.doMock("react/jsx-runtime", async () => {
+    const actual = await vi.importActual<typeof import("react/jsx-runtime")>("react/jsx-runtime");
+    return {
+      ...actual,
+      jsx(type: ElementType, props: Record<string, unknown>, key?: string) {
+        options.captureAnchor(type, props);
+        return actual.jsx(type, props, key);
+      },
+      jsxs(type: ElementType, props: Record<string, unknown>, key?: string) {
+        options.captureAnchor(type, props);
+        return actual.jsxs(type, props, key);
+      },
+    };
+  });
+
+  vi.doMock("react/jsx-dev-runtime", async () => {
+    const actual =
+      await vi.importActual<typeof import("react/jsx-dev-runtime")>("react/jsx-dev-runtime");
+    return {
+      ...actual,
+      jsxDEV(
+        type: ElementType,
+        props: Record<string, unknown>,
+        key?: string,
+        isStaticChildren?: boolean,
+        source?: Parameters<typeof actual.jsxDEV>[4],
+        self?: Parameters<typeof actual.jsxDEV>[5],
+      ) {
+        options.captureAnchor(type, props);
+        return actual.jsxDEV(type, props, key, isStaticChildren ?? false, source, self);
+      },
+    };
+  });
+}
+
+async function flushPrefetchTasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 afterEach(() => {
   vi.doUnmock("react");
   vi.doUnmock("react/jsx-runtime");
@@ -53,58 +141,7 @@ describe("Link App Router navigation scheduling", () => {
       }
     };
 
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      const createElement = ((
-        type: ElementType,
-        props: Record<string, unknown> | null,
-        ...children: ReactNode[]
-      ) => {
-        captureAnchor(type, props);
-        return actual.createElement(type, props, ...children);
-      }) as typeof actual.createElement;
-
-      return {
-        ...actual,
-        createElement,
-        default: { ...actual, createElement, startTransition },
-        startTransition,
-      };
-    });
-
-    vi.doMock("react/jsx-runtime", async () => {
-      const actual = await vi.importActual<typeof import("react/jsx-runtime")>("react/jsx-runtime");
-      return {
-        ...actual,
-        jsx(type: ElementType, props: Record<string, unknown>, key?: string) {
-          captureAnchor(type, props);
-          return actual.jsx(type, props, key);
-        },
-        jsxs(type: ElementType, props: Record<string, unknown>, key?: string) {
-          captureAnchor(type, props);
-          return actual.jsxs(type, props, key);
-        },
-      };
-    });
-
-    vi.doMock("react/jsx-dev-runtime", async () => {
-      const actual =
-        await vi.importActual<typeof import("react/jsx-dev-runtime")>("react/jsx-dev-runtime");
-      return {
-        ...actual,
-        jsxDEV(
-          type: ElementType,
-          props: Record<string, unknown>,
-          key?: string,
-          isStaticChildren?: boolean,
-          source?: Parameters<typeof actual.jsxDEV>[4],
-          self?: Parameters<typeof actual.jsxDEV>[5],
-        ) {
-          captureAnchor(type, props);
-          return actual.jsxDEV(type, props, key, isStaticChildren ?? false, source, self);
-        },
-      };
-    });
+    mockReactAnchorCapture({ captureAnchor, startTransition });
 
     const navigate = vi.fn(async () => {
       transitionStates.push(transitionActive);
@@ -182,61 +219,11 @@ async function renderIsolatedLink(options: {
     }
   };
 
-  vi.doMock("react", async () => {
-    const actual = await vi.importActual<typeof import("react")>("react");
-    const createElement = ((
-      type: ElementType,
-      props: Record<string, unknown> | null,
-      ...children: ReactNode[]
-    ) => {
-      captureAnchor(type, props);
-      return actual.createElement(type, props, ...children);
-    }) as typeof actual.createElement;
-
-    const useEffect = (effect: CapturedEffect) => {
+  mockReactAnchorCapture({
+    captureAnchor,
+    captureEffect(effect) {
       effects.push(effect);
-    };
-
-    return {
-      ...actual,
-      createElement,
-      useEffect,
-      default: { ...actual, createElement, useEffect },
-    };
-  });
-
-  vi.doMock("react/jsx-runtime", async () => {
-    const actual = await vi.importActual<typeof import("react/jsx-runtime")>("react/jsx-runtime");
-    return {
-      ...actual,
-      jsx(type: ElementType, props: Record<string, unknown>, key?: string) {
-        captureAnchor(type, props);
-        return actual.jsx(type, props, key);
-      },
-      jsxs(type: ElementType, props: Record<string, unknown>, key?: string) {
-        captureAnchor(type, props);
-        return actual.jsxs(type, props, key);
-      },
-    };
-  });
-
-  vi.doMock("react/jsx-dev-runtime", async () => {
-    const actual =
-      await vi.importActual<typeof import("react/jsx-dev-runtime")>("react/jsx-dev-runtime");
-    return {
-      ...actual,
-      jsxDEV(
-        type: ElementType,
-        props: Record<string, unknown>,
-        key?: string,
-        isStaticChildren?: boolean,
-        source?: Parameters<typeof actual.jsxDEV>[4],
-        self?: Parameters<typeof actual.jsxDEV>[5],
-      ) {
-        captureAnchor(type, props);
-        return actual.jsxDEV(type, props, key, isStaticChildren ?? false, source, self);
-      },
-    };
+    },
   });
 
   const fetch = vi.fn(() => Promise.resolve(new Response("")));
@@ -299,6 +286,74 @@ async function renderIsolatedLink(options: {
 }
 
 describe("Link App Router prefetch scheduling", () => {
+  it("prefetches visible links in production with low priority", async () => {
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    const observe = vi.fn();
+    const unobserve = vi.fn();
+    class FakeIntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "250px";
+      readonly thresholds = [0];
+
+      constructor(callback: IntersectionObserverCallback) {
+        intersectionCallback = callback;
+      }
+
+      observe = observe;
+      unobserve = unobserve;
+      disconnect = vi.fn();
+      takeRecords = vi.fn(() => []);
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    try {
+      expect(observe).toHaveBeenCalledWith(result.anchor);
+      expect(intersectionCallback).toBeTypeOf("function");
+      const rect = {
+        bottom: 0,
+        height: 0,
+        left: 0,
+        right: 0,
+        top: 0,
+        width: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      };
+      intersectionCallback?.(
+        [
+          {
+            boundingClientRect: rect,
+            intersectionRatio: 1,
+            intersectionRect: rect,
+            isIntersecting: true,
+            rootBounds: null,
+            target: result.anchor,
+            time: 0,
+          },
+        ],
+        {} as IntersectionObserver,
+      );
+      await flushPrefetchTasks();
+
+      expect(unobserve).toHaveBeenCalledWith(result.anchor);
+      expect(result.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/viewport-prefetch-target.rsc"),
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("does not prefetch visible links in development", async () => {
     // Next.js disables App Router viewport prefetching in development:
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/links.ts
@@ -336,8 +391,7 @@ describe("Link App Router prefetch scheduling", () => {
     try {
       expect(result.capturedAnchorProps.onMouseEnter).toBeTypeOf("function");
       result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPrefetchTasks();
 
       expect(userOnMouseEnter).toHaveBeenCalledTimes(1);
       expect(result.fetch).toHaveBeenCalledWith(
@@ -363,8 +417,7 @@ describe("Link App Router prefetch scheduling", () => {
     try {
       expect(result.capturedAnchorProps.onTouchStart).toBeTypeOf("function");
       result.capturedAnchorProps.onTouchStart?.({ currentTarget: result.anchor });
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPrefetchTasks();
 
       expect(userOnTouchStart).toHaveBeenCalledTimes(1);
       expect(result.fetch).toHaveBeenCalledWith(
@@ -389,8 +442,7 @@ describe("Link App Router prefetch scheduling", () => {
 
     try {
       result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPrefetchTasks();
 
       expect(userOnMouseEnter).toHaveBeenCalledTimes(1);
       expect(result.fetch).not.toHaveBeenCalled();
