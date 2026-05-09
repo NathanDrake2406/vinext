@@ -41,6 +41,19 @@ function isSourceFilePath(filePath: string): boolean {
   return SOURCE_EXTENSIONS.includes(path.extname(filePath));
 }
 
+function isNodeModulesPath(filePath: string): boolean {
+  return filePath.split(path.sep).includes("node_modules");
+}
+
+function isInProjectRoot(filePath: string, projectRoot: string): boolean {
+  const relative = path.relative(projectRoot, filePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isScannableSourceImport(filePath: string, projectRoot: string): boolean {
+  return isInProjectRoot(filePath, projectRoot) && !isNodeModulesPath(filePath);
+}
+
 function isSpecialCssRequest(specifier: string): boolean {
   return /[?&](?:raw|url|inline)(?:\b|=|&|$)/.test(specifier);
 }
@@ -149,7 +162,7 @@ async function resolveSourceImportPath(
     }
   }
 
-  return sourcePath;
+  return sourcePath && isScannableSourceImport(sourcePath, context.projectRoot) ? sourcePath : null;
 }
 
 async function resolveCssImportHref(
