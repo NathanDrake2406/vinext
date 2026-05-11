@@ -93,8 +93,15 @@ declare module "next/image" {
 
 declare module "next/dynamic" {
   import { ComponentType } from "react";
+  type DynamicOptionsLoadingProps = {
+    error?: Error | null;
+    isLoading?: boolean;
+    pastDelay?: boolean;
+    retry?: () => void;
+    timedOut?: boolean;
+  };
   interface DynamicOptions {
-    loading?: ComponentType<{ error?: Error | null; isLoading?: boolean; pastDelay?: boolean }>;
+    loading?: ComponentType<DynamicOptionsLoadingProps>;
     ssr?: boolean;
   }
   function dynamic<P extends object = object>(

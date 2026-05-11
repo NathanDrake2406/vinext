@@ -30,9 +30,16 @@ declare module "next/head" {
 
 declare module "next/dynamic" {
   import { ComponentType } from "react";
+  type DynamicOptionsLoadingProps = {
+    error?: Error | null;
+    isLoading?: boolean;
+    pastDelay?: boolean;
+    retry?: () => void;
+    timedOut?: boolean;
+  };
   function dynamic<P extends object = object>(
     loader: () => Promise<{ default: ComponentType<P> } | ComponentType<P>>,
-    options?: { loading?: ComponentType<any>; ssr?: boolean },
+    options?: { loading?: ComponentType<DynamicOptionsLoadingProps>; ssr?: boolean },
   ): ComponentType<P>;
   export default dynamic;
   export function flushPreloads(): Promise<void[]>;

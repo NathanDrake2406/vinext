@@ -78,7 +78,7 @@ describe("next/dynamic ssr: false", () => {
 // ─── Loading component ──────────────────────────────────────────────────
 
 describe("next/dynamic loading component", () => {
-  it("passes isLoading and pastDelay to loading component on SSR", () => {
+  it("passes the full Next.js loading props shape to loading component on SSR", () => {
     let receivedProps: any = null;
     function TrackingLoader(props: any) {
       receivedProps = props;
@@ -96,6 +96,8 @@ describe("next/dynamic loading component", () => {
       isLoading: true,
       pastDelay: true,
       error: null,
+      timedOut: false,
+      retry: expect.any(Function),
     });
   });
 });
