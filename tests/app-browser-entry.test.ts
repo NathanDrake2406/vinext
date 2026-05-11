@@ -76,6 +76,7 @@ type TestPendingDispositionOptions = {
   currentRootLayoutTreePath: string | null;
   currentVisibleCommitVersion: number;
   nextRootLayoutTreePath: string | null;
+  renderId?: number;
   startedNavigationId: number;
   startedVisibleCommitVersion: number;
 };
@@ -98,7 +99,7 @@ async function resolveTestPendingNavigationCommitDispositionDecision(
     ),
     navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/dashboard", {}),
     operationLane: "navigation",
-    renderId: options.startedNavigationId,
+    renderId: options.renderId ?? options.startedNavigationId,
     type: "navigate",
   });
 

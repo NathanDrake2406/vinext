@@ -105,6 +105,9 @@ export type FlightResultV0 = {
 };
 
 export type NavigationPlannerInput = {
+  // Reserved for #726-CORE-09 route-graph-aware planning. CORE-07/08 only
+  // routes the existing root-boundary decision through the planner, so browser
+  // callers pass null until route topology becomes part of the decision input.
   routeManifest: RouteManifest | null;
   state: NavigationPlannerStateV0;
   event: NavigationEvent;
