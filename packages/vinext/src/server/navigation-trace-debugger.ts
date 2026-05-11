@@ -2,8 +2,10 @@ import {
   NAVIGATION_TRACE_SCHEMA_VERSION,
   NavigationTraceReasonCodes,
   NavigationTraceTransactionCodes,
+  type NavigationTraceReasonCode,
   type NavigationTraceFieldName,
   type NavigationTraceFieldValue,
+  type NavigationTraceTransactionCode,
 } from "./navigation-trace.js";
 import type { NavigationDecisionV0, NavigationEvent, OperationLane } from "./navigation-planner.js";
 
@@ -76,19 +78,30 @@ export type NavigationTraceCommitApprovalDebugInput = Readonly<{
 type NavigationTraceDebugSpec = Readonly<{
   expectedReasonCodes: readonly string[];
   expectedTransactionCode: string | null;
+  disposition: NavigationTraceCommitApprovalDebugInput["decision"]["disposition"] | null;
   outcome: NavigationTraceDebugOutcome;
   source: NavigationTraceDebugSource;
   subject: NavigationTraceDebugSubject;
 }>;
 
-const reasonTraceCodes: ReadonlySet<string> = new Set(Object.values(NavigationTraceReasonCodes));
-const transactionTraceCodes: ReadonlySet<string> = new Set(
-  Object.values(NavigationTraceTransactionCodes),
-);
-const knownTraceCodes: ReadonlySet<string> = new Set([
-  ...reasonTraceCodes,
-  ...transactionTraceCodes,
-]);
+type NavigationTraceReasonInvariant = "staleMismatch";
+type NavigationTraceReasonThinTraceRule = Readonly<{
+  lane: OperationLane;
+  outcome: NavigationTraceDebugOutcome;
+  requiredFields: readonly NavigationTraceFieldName[];
+  subject: NavigationTraceDebugSubject;
+}>;
+type NavigationTraceReasonSpec = Readonly<{
+  invariant?: NavigationTraceReasonInvariant;
+  owner: NavigationTraceDebugSource;
+  requiredFields: readonly NavigationTraceFieldName[];
+  thinTraceWhen?: readonly NavigationTraceReasonThinTraceRule[];
+}>;
+type NavigationTraceTransactionSpec = Readonly<{
+  allowedDispositions: readonly NavigationTraceCommitApprovalDebugInput["decision"]["disposition"][];
+  owner: "commitTransaction";
+  requiredFields: readonly NavigationTraceFieldName[];
+}>;
 
 const navigationTraceFieldRegistry = {
   activeNavigationId: true,
@@ -145,6 +158,73 @@ const transactionFields = [
   "pendingOperationId",
   "startedVisibleCommitVersion",
 ] satisfies readonly NavigationTraceFieldName[];
+
+const reasonSpecs = {
+  [NavigationTraceReasonCodes.requestWork]: {
+    owner: "planner",
+    requiredFields: requestWorkFields,
+  },
+  [NavigationTraceReasonCodes.commitCurrent]: {
+    owner: "planner",
+    requiredFields: rootBoundaryFields,
+    thinTraceWhen: [
+      {
+        lane: "hmr",
+        outcome: "visibleCommit",
+        requiredFields: [],
+        subject: "commitApproval",
+      },
+    ],
+  },
+  [NavigationTraceReasonCodes.rootBoundaryChanged]: {
+    owner: "planner",
+    requiredFields: rootBoundaryFields,
+  },
+  [NavigationTraceReasonCodes.rootBoundaryUnknown]: {
+    owner: "planner",
+    requiredFields: rootBoundaryFields,
+  },
+  [NavigationTraceReasonCodes.prefetchOnly]: {
+    owner: "planner",
+    requiredFields: rootBoundaryFields,
+  },
+  [NavigationTraceReasonCodes.staleOperation]: {
+    invariant: "staleMismatch",
+    owner: "lifecycleGate",
+    requiredFields: staleLifecycleFields,
+  },
+} satisfies Readonly<Record<NavigationTraceReasonCode, NavigationTraceReasonSpec>>;
+
+const transactionSpecs = {
+  [NavigationTraceTransactionCodes.visibleCommit]: {
+    allowedDispositions: ["commit"],
+    owner: "commitTransaction",
+    requiredFields: transactionFields,
+  },
+  [NavigationTraceTransactionCodes.noCommit]: {
+    allowedDispositions: ["no-commit"],
+    owner: "commitTransaction",
+    requiredFields: transactionFields,
+  },
+  [NavigationTraceTransactionCodes.hardNavigate]: {
+    allowedDispositions: ["hard-navigate"],
+    owner: "commitTransaction",
+    requiredFields: transactionFields,
+  },
+} satisfies Readonly<Record<NavigationTraceTransactionCode, NavigationTraceTransactionSpec>>;
+
+const reasonSpecsByCode: ReadonlyMap<string, NavigationTraceReasonSpec> = new Map(
+  Object.entries(reasonSpecs),
+);
+const transactionSpecsByCode: ReadonlyMap<string, NavigationTraceTransactionSpec> = new Map(
+  Object.entries(transactionSpecs),
+);
+const reasonTraceCodes: ReadonlySet<string> = new Set(reasonSpecsByCode.keys());
+const transactionTraceCodes: ReadonlySet<string> = new Set(transactionSpecsByCode.keys());
+const knownTraceCodes: ReadonlySet<string> = new Set([
+  ...reasonTraceCodes,
+  ...transactionTraceCodes,
+]);
 
 export function inspectNavigationDecisionTrace(
   decision: NavigationDecisionV0,
@@ -208,6 +288,7 @@ function createDecisionDebugSpec(decision: NavigationDecisionV0): NavigationTrac
   switch (decision.kind) {
     case "requestWork":
       return {
+        disposition: null,
         expectedReasonCodes: [NavigationTraceReasonCodes.requestWork],
         expectedTransactionCode: null,
         outcome: "requestWork",
@@ -216,6 +297,7 @@ function createDecisionDebugSpec(decision: NavigationDecisionV0): NavigationTrac
       };
     case "proposeCommit":
       return {
+        disposition: null,
         expectedReasonCodes: [
           decision.proposal.reason === "rootBoundaryUnknownFallback"
             ? NavigationTraceReasonCodes.rootBoundaryUnknown
@@ -228,6 +310,7 @@ function createDecisionDebugSpec(decision: NavigationDecisionV0): NavigationTrac
       };
     case "noCommit":
       return {
+        disposition: null,
         expectedReasonCodes: [NavigationTraceReasonCodes.prefetchOnly],
         expectedTransactionCode: null,
         outcome: "noCommit",
@@ -236,6 +319,7 @@ function createDecisionDebugSpec(decision: NavigationDecisionV0): NavigationTrac
       };
     case "hardNavigate":
       return {
+        disposition: null,
         expectedReasonCodes: [NavigationTraceReasonCodes.rootBoundaryChanged],
         expectedTransactionCode: null,
         outcome: "hardNavigate",
@@ -255,6 +339,7 @@ function createCommitApprovalDebugSpec(
   switch (approval.decision.disposition) {
     case "commit":
       return {
+        disposition: "commit",
         expectedReasonCodes: [
           NavigationTraceReasonCodes.commitCurrent,
           NavigationTraceReasonCodes.rootBoundaryUnknown,
@@ -266,6 +351,7 @@ function createCommitApprovalDebugSpec(
       };
     case "hard-navigate":
       return {
+        disposition: "hard-navigate",
         expectedReasonCodes: [NavigationTraceReasonCodes.rootBoundaryChanged],
         expectedTransactionCode: NavigationTraceTransactionCodes.hardNavigate,
         outcome: "hardNavigate",
@@ -275,6 +361,7 @@ function createCommitApprovalDebugSpec(
     case "no-commit": {
       const reasonCode = findFirstReasonCode(approval.decision.trace);
       return {
+        disposition: "no-commit",
         expectedReasonCodes: [
           NavigationTraceReasonCodes.prefetchOnly,
           NavigationTraceReasonCodes.staleOperation,
@@ -538,6 +625,21 @@ function addExpectedTransactionIssues(
       message: `commit approval expected first trace code ${spec.expectedTransactionCode}`,
       source: "commitTransaction",
     });
+    return;
+  }
+
+  const transactionSpec = getTransactionSpec(firstEntry.code);
+  if (
+    spec.disposition !== null &&
+    transactionSpec !== null &&
+    !allowsTransactionDisposition(transactionSpec, spec.disposition)
+  ) {
+    issues.push({
+      code: "unexpected-code",
+      entryIndex: 0,
+      message: `${firstEntry.code} is not allowed for ${spec.disposition} approval`,
+      source: transactionSpec.owner,
+    });
   }
 }
 
@@ -575,13 +677,16 @@ function addRequiredFieldIssues(
 ): void {
   const transactionEntry = findExpectedTransactionEntry(trace, spec.expectedTransactionCode);
   if (transactionEntry !== null) {
-    requireFields({
-      entry: transactionEntry.entry,
-      entryIndex: transactionEntry.index,
-      fields: transactionFields,
-      issues,
-      source: "commitTransaction",
-    });
+    const transactionSpec = getTransactionSpec(transactionEntry.entry.code);
+    if (transactionSpec !== null) {
+      requireFields({
+        entry: transactionEntry.entry,
+        entryIndex: transactionEntry.index,
+        fields: transactionSpec.requiredFields,
+        issues,
+        source: transactionSpec.owner,
+      });
+    }
   }
 
   const reasonEntry = findFirstReasonEntry(trace);
@@ -589,19 +694,20 @@ function addRequiredFieldIssues(
     return;
   }
 
-  if (isHmrVisibleCommitTrace(spec, transactionEntry)) {
+  const reasonSpec = getReasonSpec(reasonEntry.entry.code);
+  if (reasonSpec === null) {
     return;
   }
 
-  const fields = getRequiredReasonFields(reasonEntry.entry.code);
+  const fields = resolveReasonRequiredFields(reasonSpec, spec, transactionEntry);
   requireFields({
     entry: reasonEntry.entry,
     entryIndex: reasonEntry.index,
     fields,
     issues,
-    source: reasonEntrySource(reasonEntry.entry.code, spec),
+    source: reasonSpec.owner,
   });
-  addReasonInvariantIssues(reasonEntry.entry, reasonEntry.index, spec, issues);
+  addReasonInvariantIssues(reasonEntry.entry, reasonEntry.index, reasonSpec, issues);
 }
 
 function requireFields(options: {
@@ -624,20 +730,30 @@ function requireFields(options: {
   }
 }
 
-function getRequiredReasonFields(code: string): readonly NavigationTraceFieldName[] {
-  switch (code) {
-    case NavigationTraceReasonCodes.requestWork:
-      return requestWorkFields;
-    case NavigationTraceReasonCodes.staleOperation:
-      return staleLifecycleFields;
-    case NavigationTraceReasonCodes.commitCurrent:
-    case NavigationTraceReasonCodes.prefetchOnly:
-    case NavigationTraceReasonCodes.rootBoundaryChanged:
-    case NavigationTraceReasonCodes.rootBoundaryUnknown:
-      return rootBoundaryFields;
-    default:
-      return [];
+function resolveReasonRequiredFields(
+  reasonSpec: NavigationTraceReasonSpec,
+  spec: NavigationTraceDebugSpec,
+  transactionEntry: { entry: NavigationTraceDebugEntry; index: number } | null,
+): readonly NavigationTraceFieldName[] {
+  for (const rule of reasonSpec.thinTraceWhen ?? []) {
+    if (matchesReasonThinTraceRule(rule, spec, transactionEntry)) {
+      return rule.requiredFields;
+    }
   }
+
+  return reasonSpec.requiredFields;
+}
+
+function matchesReasonThinTraceRule(
+  rule: NavigationTraceReasonThinTraceRule,
+  spec: NavigationTraceDebugSpec,
+  transactionEntry: { entry: NavigationTraceDebugEntry; index: number } | null,
+): boolean {
+  return (
+    spec.subject === rule.subject &&
+    spec.outcome === rule.outcome &&
+    transactionEntry?.entry.fields.operationLane === rule.lane
+  );
 }
 
 function addApprovalShapeIssues(
@@ -664,11 +780,18 @@ function addApprovalShapeIssues(
 function addReasonInvariantIssues(
   entry: NavigationTraceDebugEntry,
   entryIndex: number,
-  spec: NavigationTraceDebugSpec,
+  reasonSpec: NavigationTraceReasonSpec,
   issues: NavigationTraceInvariantIssue[],
 ): void {
-  if (entry.code !== NavigationTraceReasonCodes.staleOperation) {
-    return;
+  switch (reasonSpec.invariant) {
+    case undefined:
+      return;
+    case "staleMismatch":
+      break;
+    default: {
+      const _exhaustive: never = reasonSpec.invariant;
+      throw new Error("[vinext] Unknown NavigationTrace reason invariant: " + String(_exhaustive));
+    }
   }
 
   const fields = entry.fields;
@@ -682,7 +805,7 @@ function addReasonInvariantIssues(
       entryIndex,
       message:
         "NC_STALE requires activeNavigationId/startNavigationId or visibleCommitVersion mismatch",
-      source: reasonEntrySource(entry.code, spec),
+      source: reasonSpec.owner,
     });
   }
 }
@@ -741,8 +864,9 @@ function reasonEntrySource(
   code: string,
   spec: NavigationTraceDebugSpec,
 ): NavigationTraceDebugSource {
-  if (code === NavigationTraceReasonCodes.staleOperation) {
-    return "lifecycleGate";
+  const reasonSpec = getReasonSpec(code);
+  if (reasonSpec !== null) {
+    return reasonSpec.owner;
   }
 
   return expectedReasonSource(spec);
@@ -756,15 +880,19 @@ function expectedReasonSource(spec: NavigationTraceDebugSpec): NavigationTraceDe
   return "planner";
 }
 
-function isHmrVisibleCommitTrace(
-  spec: NavigationTraceDebugSpec,
-  transactionEntry: { entry: NavigationTraceDebugEntry; index: number } | null,
+function getReasonSpec(code: string): NavigationTraceReasonSpec | null {
+  return reasonSpecsByCode.get(code) ?? null;
+}
+
+function getTransactionSpec(code: string): NavigationTraceTransactionSpec | null {
+  return transactionSpecsByCode.get(code) ?? null;
+}
+
+function allowsTransactionDisposition(
+  transactionSpec: NavigationTraceTransactionSpec,
+  disposition: NavigationTraceCommitApprovalDebugInput["decision"]["disposition"],
 ): boolean {
-  return (
-    spec.subject === "commitApproval" &&
-    spec.outcome === "visibleCommit" &&
-    transactionEntry?.entry.fields.operationLane === "hmr"
-  );
+  return transactionSpec.allowedDispositions.some((allowed) => allowed === disposition);
 }
 
 function assertDebuggerRuntime(options: NavigationTraceDebuggerOptions): void {

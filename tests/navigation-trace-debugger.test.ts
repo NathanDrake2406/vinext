@@ -526,6 +526,7 @@ describe("NavigationTrace invariant debugger", () => {
     const invalidShapeCases = [
       {
         expectedCode: "invalid-schema",
+        expectedMessage: "NavigationTrace schemaVersion must be 0",
         trace: {
           ...validCommitTrace,
           schemaVersion: 999,
@@ -533,6 +534,7 @@ describe("NavigationTrace invariant debugger", () => {
       },
       {
         expectedCode: "empty-trace",
+        expectedMessage: "NavigationTrace must include at least one entry",
         trace: {
           schemaVersion: 0,
           entries: [],
@@ -540,6 +542,7 @@ describe("NavigationTrace invariant debugger", () => {
       },
       {
         expectedCode: "unknown-code",
+        expectedMessage: "unknown NavigationTrace code NC_UNKNOWN",
         trace: {
           ...validCommitTrace,
           entries: [
@@ -553,6 +556,7 @@ describe("NavigationTrace invariant debugger", () => {
       },
       {
         expectedCode: "unknown-field",
+        expectedMessage: "NC_COMMIT includes unknown field unexpectedField",
         trace: {
           ...validCommitTrace,
           entries: [
@@ -569,6 +573,41 @@ describe("NavigationTrace invariant debugger", () => {
       },
       {
         expectedCode: "invalid-field",
+        expectedMessage: "NC_COMMIT field targetHref must be string, number, boolean, or null",
+        trace: {
+          ...validCommitTrace,
+          entries: [
+            validCommitTrace.entries[0],
+            {
+              ...validCommitTrace.entries[1],
+              fields: {
+                ...validCommitTrace.entries[1].fields,
+                targetHref: { href: "https://example.com/dashboard" },
+              },
+            },
+          ],
+        },
+      },
+      {
+        expectedCode: "invalid-field",
+        expectedMessage: "NC_COMMIT field eventKind must be navigation event kind",
+        trace: {
+          ...validCommitTrace,
+          entries: [
+            validCommitTrace.entries[0],
+            {
+              ...validCommitTrace.entries[1],
+              fields: {
+                ...validCommitTrace.entries[1].fields,
+                eventKind: "replaceState",
+              },
+            },
+          ],
+        },
+      },
+      {
+        expectedCode: "invalid-field",
+        expectedMessage: "NT_VISIBLE_COMMIT field operationLane must be operation lane",
         trace: {
           ...validCommitTrace,
           entries: [
@@ -576,7 +615,7 @@ describe("NavigationTrace invariant debugger", () => {
               ...validCommitTrace.entries[0],
               fields: {
                 ...validCommitTrace.entries[0].fields,
-                pendingOperationId: "11",
+                operationLane: "background",
               },
             },
             validCommitTrace.entries[1],
@@ -585,6 +624,7 @@ describe("NavigationTrace invariant debugger", () => {
       },
     ] satisfies readonly {
       expectedCode: string;
+      expectedMessage: string;
       trace: NavigationTraceCommitApprovalDebugInput["decision"]["trace"];
     }[];
 
@@ -597,6 +637,7 @@ describe("NavigationTrace invariant debugger", () => {
       expect(report.issues).toContainEqual(
         expect.objectContaining({
           code: testCase.expectedCode,
+          message: testCase.expectedMessage,
         }),
       );
     }
