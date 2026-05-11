@@ -80,6 +80,7 @@ type RenderAppPageLifecycleOptions = {
   isDraftMode: boolean;
   isForceDynamic: boolean;
   isForceStatic: boolean;
+  isProgressiveActionRender?: boolean;
   isPrerender?: boolean;
   isProduction: boolean;
   isRscRequest: boolean;
@@ -316,7 +317,7 @@ export async function renderAppPageLifecycle(
   let revalidateSeconds = options.revalidateSeconds;
   let expireSeconds = options.expireSeconds;
   const shouldCaptureRscForCacheMetadata =
-    options.formState == null &&
+    options.isProgressiveActionRender !== true &&
     (options.isProduction || options.isPrerender === true) &&
     (revalidateSeconds === null || (revalidateSeconds > 0 && revalidateSeconds !== Infinity)) &&
     !options.isDraftMode &&
@@ -518,7 +519,7 @@ export async function renderAppPageLifecycle(
 
   const htmlResponsePolicy = resolveAppPageHtmlResponsePolicy({
     dynamicUsedDuringRender,
-    hasFormState: options.formState != null,
+    isProgressiveActionRender: options.isProgressiveActionRender === true,
     hasScriptNonce: Boolean(options.scriptNonce),
     isDraftMode: options.isDraftMode,
     isDynamicError: options.isDynamicError,
@@ -543,7 +544,7 @@ export async function renderAppPageLifecycle(
     !options.isDynamicError &&
     !options.isForceStatic &&
     !options.scriptNonce &&
-    options.formState == null &&
+    options.isProgressiveActionRender !== true &&
     !dynamicUsedDuringRender;
 
   if (htmlResponsePolicy.shouldWriteToCache || shouldSpeculativelyWriteCache) {

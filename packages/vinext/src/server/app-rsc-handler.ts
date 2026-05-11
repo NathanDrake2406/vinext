@@ -78,6 +78,7 @@ type DispatchMatchedPageOptions<TRoute> = {
   formState: ReactFormState | null;
   handlerStart: number;
   interceptionContext: string | null;
+  isProgressiveActionRender: boolean;
   isRscRequest: boolean;
   middlewareContext: AppRscMiddlewareContext;
   mountedSlotsHeader: string | null;
@@ -366,7 +367,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     request,
   });
   if (progressiveActionResult instanceof Response) return progressiveActionResult;
-  const formState = progressiveActionResult?.formState ?? null;
+  const isProgressiveActionRender = progressiveActionResult?.kind === "form-state";
+  const formState = isProgressiveActionRender ? progressiveActionResult.formState : null;
 
   const serverActionResponse = await options.handleServerActionRequest({
     actionId,
@@ -465,6 +467,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     formState,
     handlerStart,
     interceptionContext: interceptionContextHeader,
+    isProgressiveActionRender,
     isRscRequest,
     middlewareContext,
     mountedSlotsHeader,

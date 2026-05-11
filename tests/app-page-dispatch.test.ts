@@ -74,6 +74,7 @@ function createDispatchOptions(
     clearRequestContext?: DispatchOptions["clearRequestContext"];
     generateStaticParams?: DispatchOptions["generateStaticParams"];
     formState?: DispatchOptions["formState"];
+    isProgressiveActionRender?: DispatchOptions["isProgressiveActionRender"];
     isProduction?: boolean;
     isRscRequest?: boolean;
     isrGet?: DispatchOptions["isrGet"];
@@ -126,6 +127,7 @@ function createDispatchOptions(
     handlerStart: 10,
     formState: overrides.formState,
     interceptionContext: null,
+    isProgressiveActionRender: overrides.isProgressiveActionRender,
     isProduction: overrides.isProduction ?? false,
     isRscRequest: overrides.isRscRequest ?? false,
     isrGet,
@@ -236,6 +238,7 @@ describe("app page dispatch", () => {
     );
     const { options } = createDispatchOptions({
       formState,
+      isProgressiveActionRender: true,
       isProduction: true,
       isrGet,
       revalidateSeconds: 60,
@@ -244,6 +247,26 @@ describe("app page dispatch", () => {
     const response = await dispatchAppPage(options);
 
     expect(isrGet).not.toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    await expect(response.text()).resolves.toBe("<html>page</html>");
+  });
+
+  it("bypasses cached production HTML when a progressive action returns no form state", async () => {
+    const isrGet = vi.fn(async () =>
+      buildISRCacheEntry(buildCachedAppPageValue("<html>cached initial state</html>")),
+    );
+    const { options } = createDispatchOptions({
+      isProgressiveActionRender: true,
+      isProduction: true,
+      isrGet,
+      revalidateSeconds: 60,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet).not.toHaveBeenCalled();
+    expect(options.isrSet).not.toHaveBeenCalled();
     expect(response.headers.get("x-vinext-cache")).toBeNull();
     expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
     await expect(response.text()).resolves.toBe("<html>page</html>");

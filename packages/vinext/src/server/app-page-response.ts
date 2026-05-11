@@ -39,7 +39,7 @@ type ResolveAppPageRscResponsePolicyOptions = {
 
 type ResolveAppPageHtmlResponsePolicyOptions = {
   dynamicUsedDuringRender: boolean;
-  hasFormState?: boolean;
+  isProgressiveActionRender?: boolean;
   hasScriptNonce: boolean;
 } & ResolveAppPageResponsePolicyBaseOptions;
 
@@ -148,7 +148,7 @@ export function resolveAppPageHtmlResponsePolicy(
     };
   }
 
-  if (options.hasFormState) {
+  if (options.isProgressiveActionRender) {
     return {
       cacheControl: NO_STORE_CACHE_CONTROL,
       shouldWriteToCache: false,

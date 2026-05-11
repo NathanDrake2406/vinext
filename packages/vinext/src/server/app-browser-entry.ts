@@ -1,7 +1,6 @@
 /// <reference types="vite/client" />
 
 import { createElement, use, useLayoutEffect, useRef, useState } from "react";
-import type { ReactFormState } from "react-dom/client";
 import {
   createFromFetch,
   createFromReadableStream,
@@ -46,6 +45,10 @@ import {
   type NavigationPayloadOutcome,
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
+import {
+  consumeInitialFormState,
+  createVinextHydrateRootOptions,
+} from "./app-browser-hydration.js";
 import {
   AppElementsWire,
   getMountedSlotIdsHeader,
@@ -95,10 +98,6 @@ type ServerActionResult = {
 };
 
 type NavigationKind = "navigate" | "traverse" | "refresh";
-
-function readInitialFormState(): ReactFormState | null {
-  return getVinextBrowserGlobal().__VINEXT_RSC_FORM_STATE__ ?? null;
-}
 
 // Maps NavigationKind to the AppRouterAction type used by the reducer.
 // "refresh" is intentionally treated as "navigate" (merge, preserve absent slots).
@@ -908,16 +907,19 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   const onUncaughtError = import.meta.env.DEV
     ? devOnUncaughtError
     : createOnUncaughtError(() => pendingNavigationRecoveryHref);
-  const formState = readInitialFormState();
+  const formState = consumeInitialFormState(getVinextBrowserGlobal());
   window.__VINEXT_RSC_ROOT__ = hydrateRoot(
     document,
     createElement(BrowserRoot, {
       initialElements: root,
       initialNavigationSnapshot,
     }),
-    import.meta.env.DEV
-      ? { formState, onCaughtError: devOnCaughtError, onUncaughtError }
-      : { formState, onUncaughtError },
+    createVinextHydrateRootOptions({
+      formState,
+      isDev: import.meta.env.DEV,
+      onCaughtError: devOnCaughtError,
+      onUncaughtError,
+    }),
   );
   window.__VINEXT_HYDRATED_AT = performance.now();
 

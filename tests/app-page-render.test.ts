@@ -136,6 +136,7 @@ function createCommonOptions() {
       isDraftMode: false,
       isForceDynamic: false,
       isForceStatic: false,
+      isProgressiveActionRender: false,
       isProduction: false,
       isRscRequest: false,
       isrHtmlKey(pathname: string) {
@@ -274,6 +275,7 @@ describe("form state rendering", () => {
     const response = await renderAppPageLifecycle({
       ...common.options,
       formState,
+      isProgressiveActionRender: true,
       isProduction: true,
       loadSsrHandler,
       revalidateSeconds: 60,

@@ -150,6 +150,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   hasPageModule: boolean;
   handlerStart: number;
   interceptionContext: string | null;
+  isProgressiveActionRender?: boolean;
   isProduction: boolean;
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
@@ -197,7 +198,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
 };
 
 function shouldReadAppPageCache(options: {
-  hasFormState: boolean;
+  isProgressiveActionRender: boolean;
   isDraftMode: boolean;
   isForceDynamic: boolean;
   isProduction: boolean;
@@ -207,7 +208,7 @@ function shouldReadAppPageCache(options: {
 }): boolean {
   return (
     options.isProduction &&
-    !options.hasFormState &&
+    !options.isProgressiveActionRender &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
     (options.isRscRequest || !options.scriptNonce) &&
@@ -349,7 +350,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     shouldReadAppPageCache({
       isDraftMode,
       isForceDynamic,
-      hasFormState: options.formState != null,
+      isProgressiveActionRender: options.isProgressiveActionRender === true,
       isProduction: options.isProduction,
       isRscRequest: options.isRscRequest,
       revalidateSeconds: currentRevalidateSeconds,
@@ -567,6 +568,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     handlerStart: options.handlerStart,
     hasLoadingBoundary: Boolean(route.loading?.default),
     formState: options.formState ?? null,
+    isProgressiveActionRender: options.isProgressiveActionRender === true,
     isDynamicError,
     isDraftMode,
     isForceDynamic,

@@ -213,11 +213,11 @@ describe("app page response helpers", () => {
     });
   });
 
-  it("treats form-state HTML responses as no-store", () => {
+  it("treats progressive action HTML responses as no-store", () => {
     expect(
       resolveAppPageHtmlResponsePolicy({
         dynamicUsedDuringRender: false,
-        hasFormState: true,
+        isProgressiveActionRender: true,
         hasScriptNonce: false,
         isDraftMode: false,
         isDynamicError: false,
