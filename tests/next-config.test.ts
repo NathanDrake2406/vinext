@@ -294,7 +294,7 @@ describe("resolveNextConfig turbopack.rules warning", () => {
     const turbopackRulesWarning = warn.mock.calls.find(
       (call) => typeof call[0] === "string" && call[0].includes("turbopack.rules"),
     );
-    expect(turbopackRulesWarning?.[0]).toContain("not generally supported");
+    expect(turbopackRulesWarning?.[0]).toContain("contains rules that are not supported");
   });
 });
 
