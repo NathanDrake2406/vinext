@@ -979,7 +979,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   // .br/.gz/.zst variants (generated at build time) are detected automatically.
   const staticCache = await StaticFileCache.create(clientDir);
 
-  const server = createServer(async (req, res) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const rawUrl = req.url ?? "/";
     const rawPathname = rawUrl.split("?")[0];
 
@@ -1140,6 +1140,10 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
         res.end("Internal Server Error");
       }
     }
+  };
+
+  const server = createServer((req, res) => {
+    void handleRequest(req, res);
   });
 
   await new Promise<void>((resolve) => {
@@ -1243,7 +1247,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   // Build the static file metadata cache at startup (same as App Router).
   const staticCache = await StaticFileCache.create(clientDir);
 
-  const server = createServer(async (req, res) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const rawUrl = req.url ?? "/";
     const rawPagesPathnameBeforeNormalize = rawUrl.split("?")[0];
 
@@ -1738,6 +1742,10 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         res.end("Internal Server Error");
       }
     }
+  };
+
+  const server = createServer((req, res) => {
+    void handleRequest(req, res);
   });
 
   await new Promise<void>((resolve) => {
