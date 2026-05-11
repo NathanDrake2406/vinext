@@ -69,6 +69,18 @@ function planSameRootNavigation(): NavigationDecisionV0 {
   });
 }
 
+function createCommitApprovalDebugInput(
+  trace: NavigationTraceCommitApprovalDebugInput["decision"]["trace"],
+): NavigationTraceCommitApprovalDebugInput {
+  return {
+    approvedCommit: {},
+    decision: {
+      disposition: "commit",
+      trace,
+    },
+  };
+}
+
 describe("NavigationTrace invariant debugger", () => {
   it("explains valid planner visible-commit proposals without approving state", () => {
     const report = inspectNavigationDecisionTrace(planSameRootNavigation(), { runtime: "test" });
@@ -410,7 +422,7 @@ describe("NavigationTrace invariant debugger", () => {
 
   it("rejects commit approvals without an approved visible commit", () => {
     const approval = {
-      approvedCommit: undefined,
+      approvedCommit: null,
       decision: {
         disposition: "commit",
         trace: {
@@ -486,6 +498,108 @@ describe("NavigationTrace invariant debugger", () => {
       message: "hard-navigate approval must not carry an approved visible commit",
       source: "commitTransaction",
     });
+  });
+
+  it("reports compact trace shape validation failures", () => {
+    const validCommitTrace = {
+      schemaVersion: 0,
+      entries: [
+        {
+          code: NavigationTraceTransactionCodes.visibleCommit,
+          fields: {
+            operationLane: "navigation",
+            pendingOperationId: 11,
+            startedVisibleCommitVersion: 0,
+          },
+        },
+        {
+          code: NavigationTraceReasonCodes.commitCurrent,
+          fields: {
+            currentRootLayoutTreePath: "/",
+            currentVisibleCommitVersion: 0,
+            nextRootLayoutTreePath: "/",
+            startedVisibleCommitVersion: 0,
+          },
+        },
+      ],
+    } satisfies NavigationTraceCommitApprovalDebugInput["decision"]["trace"];
+    const invalidShapeCases = [
+      {
+        expectedCode: "invalid-schema",
+        trace: {
+          ...validCommitTrace,
+          schemaVersion: 999,
+        },
+      },
+      {
+        expectedCode: "empty-trace",
+        trace: {
+          schemaVersion: 0,
+          entries: [],
+        },
+      },
+      {
+        expectedCode: "unknown-code",
+        trace: {
+          ...validCommitTrace,
+          entries: [
+            ...validCommitTrace.entries,
+            {
+              code: "NC_UNKNOWN",
+              fields: {},
+            },
+          ],
+        },
+      },
+      {
+        expectedCode: "unknown-field",
+        trace: {
+          ...validCommitTrace,
+          entries: [
+            validCommitTrace.entries[0],
+            {
+              ...validCommitTrace.entries[1],
+              fields: {
+                ...validCommitTrace.entries[1].fields,
+                unexpectedField: true,
+              },
+            },
+          ],
+        },
+      },
+      {
+        expectedCode: "invalid-field",
+        trace: {
+          ...validCommitTrace,
+          entries: [
+            {
+              ...validCommitTrace.entries[0],
+              fields: {
+                ...validCommitTrace.entries[0].fields,
+                pendingOperationId: "11",
+              },
+            },
+            validCommitTrace.entries[1],
+          ],
+        },
+      },
+    ] satisfies readonly {
+      expectedCode: string;
+      trace: NavigationTraceCommitApprovalDebugInput["decision"]["trace"];
+    }[];
+
+    for (const testCase of invalidShapeCases) {
+      const report = inspectNavigationCommitApprovalTrace(
+        createCommitApprovalDebugInput(testCase.trace),
+        { runtime: "test" },
+      );
+
+      expect(report.issues).toContainEqual(
+        expect.objectContaining({
+          code: testCase.expectedCode,
+        }),
+      );
+    }
   });
 
   it("points missing transaction wrappers at the commit transaction owner", () => {

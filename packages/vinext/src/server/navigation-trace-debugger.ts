@@ -66,7 +66,7 @@ type NavigationTraceDebugEntry = Readonly<{
 }>;
 
 export type NavigationTraceCommitApprovalDebugInput = Readonly<{
-  approvedCommit: object | null | undefined;
+  approvedCommit: object | null;
   decision: Readonly<{
     disposition: "commit" | "hard-navigate" | "no-commit";
     trace: NavigationTraceDebugTrace;
@@ -644,10 +644,7 @@ function addApprovalShapeIssues(
   approval: NavigationTraceCommitApprovalDebugInput,
   issues: NavigationTraceInvariantIssue[],
 ): void {
-  if (
-    approval.decision.disposition === "commit" &&
-    (approval.approvedCommit === null || approval.approvedCommit === undefined)
-  ) {
+  if (approval.decision.disposition === "commit" && approval.approvedCommit === null) {
     issues.push({
       code: "approval-mismatch",
       message: "commit approval has commit disposition but no approved visible commit",
