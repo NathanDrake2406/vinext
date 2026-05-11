@@ -1171,6 +1171,28 @@ type PagesRouterServerOptions = {
   purpose?: ProdServerOptions["purpose"];
 };
 
+type PagesServerEntryPageRoute = {
+  pattern: string;
+  module?: {
+    getStaticPaths?: (opts: { locales: string[]; defaultLocale: string }) => Promise<unknown>;
+  };
+};
+
+function isPagesServerEntryPageRoute(value: unknown): value is PagesServerEntryPageRoute {
+  if (!value || typeof value !== "object" || !("pattern" in value)) return false;
+  if (typeof value.pattern !== "string") return false;
+
+  if (!("module" in value) || value.module === undefined) return true;
+  const pageModule = value.module;
+  if (!pageModule || typeof pageModule !== "object") return false;
+
+  return !("getStaticPaths" in pageModule) || typeof pageModule.getStaticPaths === "function";
+}
+
+function readPagesServerEntryPageRoutes(value: unknown): PagesServerEntryPageRoute[] | undefined {
+  return Array.isArray(value) && value.every(isPagesServerEntryPageRoute) ? value : undefined;
+}
+
 /**
  * Start the Pages Router production server.
  *
@@ -1191,14 +1213,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   const { renderPage, handleApiRoute: handleApi, runMiddleware, vinextConfig } = serverEntry;
   const matchPageRoute =
     typeof serverEntry.matchPageRoute === "function" ? serverEntry.matchPageRoute : undefined;
-  const pageRoutes = serverEntry.pageRoutes as
-    | Array<{
-        pattern: string;
-        module?: {
-          getStaticPaths?: (opts: { locales: string[]; defaultLocale: string }) => Promise<unknown>;
-        };
-      }>
-    | undefined;
+  const pageRoutes = readPagesServerEntryPageRoutes(serverEntry.pageRoutes);
 
   // Load prerender secret written at build time by vinext:server-manifest plugin.
   // Used to authenticate internal /__vinext/prerender/* HTTP endpoints.

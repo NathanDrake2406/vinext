@@ -243,8 +243,9 @@ describe("createAppRscHandler", () => {
       },
       dispatchMatchedPage,
       matchRoute: (pathname: string) => {
-        const route = routes[pathname as keyof typeof routes];
-        return route ? { params: {}, route } : null;
+        if (pathname === "/about") return { params: {}, route: routes["/about"] };
+        if (pathname === "/nav") return { params: {}, route: routes["/nav"] };
+        return null;
       },
     });
 

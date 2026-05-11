@@ -4771,8 +4771,8 @@ describe("chained middleware → config rewrites", () => {
     await fsp.symlink(rootNodeModules, path.join(chainTmpDir, "node_modules"), "junction");
 
     // Config with afterFiles rewrites:
-    // - /rewrite-source has no page file, so afterFiles may rewrite it to /final.
-    // - /intermediate has a page file, so it must win before afterFiles.
+    // - /rewrite-source lacks a page file, so afterFiles can rewrite it to /final.
+    // - /intermediate owns a page file, so it wins before afterFiles.
     await fsp.writeFile(
       path.join(chainTmpDir, "next.config.mjs"),
       `export default {
