@@ -149,6 +149,28 @@ test.describe("useActionState", () => {
     await expect(page.locator("#count")).toHaveText("Count: 0");
   });
 
+  // Ported from Next.js' progressive action form-state path:
+  // packages/next/src/server/app-render/action-handler.ts decodes form state
+  // and packages/next/src/server/app-render/use-flight-response.tsx serializes
+  // it for hydrateRoot().
+  test("useActionState preserves returned state for progressive form submissions", async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const page = await context.newPage();
+
+    try {
+      await page.goto(`${BASE}/action-state-test`);
+      await page.click('button:has-text("Increment")');
+
+      await expect(page.locator("#count")).toHaveText("Count: 1");
+      const html = await page.content();
+      expect(html).toContain("__VINEXT_RSC_FORM_STATE__");
+    } finally {
+      await context.close();
+    }
+  });
+
   test("useActionState counter increments via server action", async ({ page }) => {
     await page.goto(`${BASE}/action-state-test`);
     await expect(page.locator("h1")).toHaveText("useActionState Test");

@@ -169,6 +169,7 @@ async function __loadPrerenderPagesRoutes() {
 import {
   renderToReadableStream as _renderToReadableStream,
   decodeAction,
+  decodeFormState,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -447,6 +448,7 @@ export default __createAppRscHandler({
   configRewrites: __configRewrites,
   dispatchMatchedPage({
     cleanPathname,
+    formState,
     handlerStart,
     interceptionContext,
     isRscRequest,
@@ -509,6 +511,7 @@ export default __createAppRscHandler({
       handlerStart,
       interceptionContext,
       expireSeconds: __expireTime,
+      formState,
       isProduction: process.env.NODE_ENV === "production",
       isRscRequest,
       isrDebug: __isrDebug,
@@ -623,6 +626,7 @@ export default __createAppRscHandler({
       },
       contentType,
       decodeAction,
+      decodeFormState,
       getAndClearPendingCookies,
       getDraftModeCookieHeader,
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,

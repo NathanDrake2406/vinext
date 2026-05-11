@@ -14,6 +14,7 @@ import {
 } from "../config/config-matchers.js";
 import { headersContextFromRequest } from "vinext/shims/headers";
 import { ensureFetchPatch, setCurrentFetchSoftTags } from "vinext/shims/fetch-cache";
+import type { ReactFormState } from "react-dom/client";
 import {
   getRequestExecutionContext,
   type ExecutionContextLike,
@@ -74,6 +75,7 @@ type AppRscRouteMatch<TRoute> = {
 
 type DispatchMatchedPageOptions<TRoute> = {
   cleanPathname: string;
+  formState: ReactFormState | null;
   handlerStart: number;
   interceptionContext: string | null;
   isRscRequest: boolean;
@@ -154,7 +156,7 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   ensureInstrumentation?: () => Promise<void>;
   handleProgressiveActionRequest: (
     options: HandleProgressiveActionRequestOptions,
-  ) => Promise<Response | null>;
+  ) => Promise<Response | { formState: ReactFormState | null; kind: "form-state" } | null>;
   handleServerActionRequest: (
     options: HandleServerActionRequestOptions,
   ) => Promise<Response | null>;
@@ -356,14 +358,15 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
   const contentType = request.headers.get("content-type") || "";
 
-  const progressiveActionResponse = await options.handleProgressiveActionRequest({
+  const progressiveActionResult = await options.handleProgressiveActionRequest({
     actionId,
     cleanPathname,
     contentType,
     middlewareContext,
     request,
   });
-  if (progressiveActionResponse) return progressiveActionResponse;
+  if (progressiveActionResult instanceof Response) return progressiveActionResult;
+  const formState = progressiveActionResult?.formState ?? null;
 
   const serverActionResponse = await options.handleServerActionRequest({
     actionId,
@@ -459,6 +462,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
 
   return options.dispatchMatchedPage({
     cleanPathname,
+    formState,
     handlerStart,
     interceptionContext: interceptionContextHeader,
     isRscRequest,

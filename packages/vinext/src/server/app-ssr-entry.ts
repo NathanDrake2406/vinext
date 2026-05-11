@@ -1,6 +1,7 @@
 /// <reference types="@vitejs/plugin-rsc/types" />
 
 import type { ReactNode } from "react";
+import type { ReactFormState } from "react-dom/client";
 import { Fragment, createElement as createReactElement, use } from "react";
 import { createFromReadableStream } from "@vitejs/plugin-rsc/ssr";
 import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server.edge";
@@ -117,6 +118,7 @@ function extractModulePreloadHtml(bootstrapScriptContent?: string, nonce?: strin
 function buildHeadInjectionHtml(
   navContext: NavigationContext | null,
   bootstrapScriptContent: string | undefined,
+  formState: ReactFormState | null,
   insertedHTML: string,
   fontHTML: string,
   scriptNonce?: string,
@@ -133,10 +135,18 @@ function buildHeadInjectionHtml(
     "self.__VINEXT_RSC_NAV__=" + safeJsonStringify(navPayload),
     scriptNonce,
   );
+  const formStateScript =
+    formState === null
+      ? ""
+      : createInlineScriptTag(
+          "self.__VINEXT_RSC_FORM_STATE__=" + safeJsonStringify(formState),
+          scriptNonce,
+        );
 
   return (
     paramsScript +
     navScript +
+    formStateScript +
     extractModulePreloadHtml(bootstrapScriptContent, scriptNonce) +
     insertedHTML +
     fontHTML
@@ -155,6 +165,7 @@ export async function handleSsr(
     sideStream?: ReadableStream<Uint8Array>;
     /** Out-parameter: filled with accumulated raw RSC bytes when sideStream is consumed. */
     capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
+    formState?: ReactFormState | null;
     /** When true, wait for the full React tree (including Suspense boundaries)
      *  to resolve before returning the HTML stream. Used for static prerender
      *  and ISR cache writes to avoid caching fallback content. */
@@ -224,6 +235,7 @@ export async function handleSsr(
 
       const htmlStream = await renderToReadableStream(ssrRoot, {
         bootstrapScriptContent,
+        formState: options?.formState ?? null,
         nonce: options?.scriptNonce,
         onError(error) {
           if (error && typeof error === "object" && "digest" in error) {
@@ -258,6 +270,7 @@ export async function handleSsr(
         return buildHeadInjectionHtml(
           navContext,
           bootstrapScriptContent,
+          options?.formState ?? null,
           insertedHTML,
           fontHTML,
           options?.scriptNonce,

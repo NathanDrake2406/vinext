@@ -39,6 +39,7 @@ type ResolveAppPageRscResponsePolicyOptions = {
 
 type ResolveAppPageHtmlResponsePolicyOptions = {
   dynamicUsedDuringRender: boolean;
+  hasFormState?: boolean;
   hasScriptNonce: boolean;
 } & ResolveAppPageResponsePolicyBaseOptions;
 
@@ -141,6 +142,13 @@ export function resolveAppPageHtmlResponsePolicy(
   }
 
   if (options.hasScriptNonce) {
+    return {
+      cacheControl: NO_STORE_CACHE_CONTROL,
+      shouldWriteToCache: false,
+    };
+  }
+
+  if (options.hasFormState) {
     return {
       cacheControl: NO_STORE_CACHE_CONTROL,
       shouldWriteToCache: false,

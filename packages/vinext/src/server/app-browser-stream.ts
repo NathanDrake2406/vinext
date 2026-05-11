@@ -1,3 +1,5 @@
+import type { ReactFormState } from "react-dom/client";
+
 type NavigationSnapshot = {
   pathname: string;
   searchParams: [string, string][];
@@ -13,6 +15,7 @@ type VinextBrowserGlobals = {
   __VINEXT_RSC__?: LegacyRscEmbedData;
   __VINEXT_RSC_CHUNKS__?: string[];
   __VINEXT_RSC_DONE__?: boolean;
+  __VINEXT_RSC_FORM_STATE__?: ReactFormState;
   __VINEXT_RSC_PARAMS__?: Record<string, string | string[]>;
   __VINEXT_RSC_NAV__?: NavigationSnapshot;
 };

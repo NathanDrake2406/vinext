@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { ReactFormState } from "react-dom/client";
 import type { ClassificationReason } from "../build/layout-classification-types.js";
 import {
   _consumeRequestScopedCacheLife,
@@ -137,6 +138,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   dynamicParamsConfig?: boolean;
   fetchCache?: FetchCacheMode | null;
   findIntercept: (pathname: string) => AppPageDispatchIntercept | null;
+  formState?: ReactFormState | null;
   generateStaticParams?: ValidateAppPageDynamicParamsOptions["generateStaticParams"];
   getFontLinks: () => string[];
   getFontPreloads: () => AppPageFontPreload[];
@@ -195,6 +197,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
 };
 
 function shouldReadAppPageCache(options: {
+  hasFormState: boolean;
   isDraftMode: boolean;
   isForceDynamic: boolean;
   isProduction: boolean;
@@ -204,6 +207,7 @@ function shouldReadAppPageCache(options: {
 }): boolean {
   return (
     options.isProduction &&
+    !options.hasFormState &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
     (options.isRscRequest || !options.scriptNonce) &&
@@ -345,6 +349,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     shouldReadAppPageCache({
       isDraftMode,
       isForceDynamic,
+      hasFormState: options.formState != null,
       isProduction: options.isProduction,
       isRscRequest: options.isRscRequest,
       revalidateSeconds: currentRevalidateSeconds,
@@ -561,6 +566,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     },
     handlerStart: options.handlerStart,
     hasLoadingBoundary: Boolean(route.loading?.default),
+    formState: options.formState ?? null,
     isDynamicError,
     isDraftMode,
     isForceDynamic,

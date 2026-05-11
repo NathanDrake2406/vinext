@@ -73,6 +73,7 @@ function createDispatchOptions(
     buildPageElement?: DispatchOptions["buildPageElement"];
     clearRequestContext?: DispatchOptions["clearRequestContext"];
     generateStaticParams?: DispatchOptions["generateStaticParams"];
+    formState?: DispatchOptions["formState"];
     isProduction?: boolean;
     isRscRequest?: boolean;
     isrGet?: DispatchOptions["isrGet"];
@@ -123,6 +124,7 @@ function createDispatchOptions(
     hasPageDefaultExport: true,
     hasPageModule: true,
     handlerStart: 10,
+    formState: overrides.formState,
     interceptionContext: null,
     isProduction: overrides.isProduction ?? false,
     isRscRequest: overrides.isRscRequest ?? false,
@@ -224,6 +226,26 @@ describe("app page dispatch", () => {
 
     expect(isrGet).not.toHaveBeenCalled();
     expect(response.headers.get("x-vinext-cache")).toBeNull();
+    await expect(response.text()).resolves.toBe("<html>page</html>");
+  });
+
+  it("bypasses cached production HTML when rendering action form state", async () => {
+    const formState = ["action-result", "key-path", "reference-id", 1] as never;
+    const isrGet = vi.fn(async () =>
+      buildISRCacheEntry(buildCachedAppPageValue("<html>cached initial state</html>")),
+    );
+    const { options } = createDispatchOptions({
+      formState,
+      isProduction: true,
+      isrGet,
+      revalidateSeconds: 60,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet).not.toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
     await expect(response.text()).resolves.toBe("<html>page</html>");
   });
 
