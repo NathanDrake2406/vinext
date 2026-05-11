@@ -195,6 +195,9 @@ catalogs:
     vite-tsconfig-paths:
       specifier: ^6.1.1
       version: 6.1.1
+    web-vitals:
+      specifier: ^4.2.4
+      version: 4.2.4
     wrangler:
       specifier: ^4.80.0
       version: 4.80.0
@@ -800,6 +803,9 @@ importers:
       vite-tsconfig-paths:
         specifier: 'catalog:'
         version: 6.1.1(@voidzero-dev/vite-plus-core@0.1.17(@types/node@25.2.3)(esbuild@0.27.3)(jiti@2.6.1)(typescript@5.9.3)(yaml@2.8.3))(typescript@5.9.3)
+      web-vitals:
+        specifier: 'catalog:'
+        version: 4.2.4
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -5862,6 +5868,9 @@ packages:
   web-namespaces@2.0.1:
     resolution: {integrity: sha512-bKr1DkiNa2krS7qxNtdrtHAmzuYGFQLiQ13TsorsdT6ULTkPLKuu5+GsFpDlg6JFjUTwX2DyhMPG2be8uPrqsQ==}
 
+  web-vitals@4.2.4:
+    resolution: {integrity: sha512-r4DIlprAGwJ7YM11VZp4R884m0Vmgr6EAKe3P+kO0PPj3Unqyvv59rczf6UiGcb9Z8QxZVcqKNwv/g0WNdWwsw==}
+
   webpack-sources@3.3.4:
     resolution: {integrity: sha512-7tP1PdV4vF+lYPnkMR0jMY5/la2ub5Fc/8VQrrU+lXkiM6C4TjVfGw7iKfyhnTQOsD+6Q/iKw0eFciziRgD58Q==}
     engines: {node: '>=10.13.0'}
@@ -10337,6 +10346,8 @@ snapshots:
   walk-up-path@4.0.0: {}
 
   web-namespaces@2.0.1: {}
+
+  web-vitals@4.2.4: {}
 
   webpack-sources@3.3.4: {}
 

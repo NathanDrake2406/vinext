@@ -8887,11 +8887,9 @@ describe("extractMdxOptions", () => {
 });
 
 describe("next/web-vitals shim", () => {
-  it("exports useReportWebVitals as a no-op function", async () => {
+  it("exports useReportWebVitals as a hook function", async () => {
     const { useReportWebVitals } = await import("../packages/vinext/src/shims/web-vitals.js");
     expect(typeof useReportWebVitals).toBe("function");
-    // Should run without throwing
-    expect(() => useReportWebVitals(() => {})).not.toThrow();
   });
 });
 

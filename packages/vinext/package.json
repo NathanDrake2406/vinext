@@ -69,7 +69,8 @@
     "image-size": "catalog:",
     "magic-string": "catalog:",
     "vite-plugin-commonjs": "catalog:",
-    "vite-tsconfig-paths": "catalog:"
+    "vite-tsconfig-paths": "catalog:",
+    "web-vitals": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

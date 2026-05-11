@@ -550,15 +550,10 @@ declare module "next/form" {
 }
 
 declare module "next/web-vitals" {
-  type WebVitalsMetric = {
-    id: string;
-    name: string;
-    value: number;
-    rating?: "good" | "needs-improvement" | "poor";
-    delta: number;
-    navigationType?: "navigate" | "reload" | "back-forward" | "prerender";
-  };
-  type ReportWebVitalsCallback = (metric: WebVitalsMetric) => void;
+  import type { MetricType } from "web-vitals";
+
+  export type WebVitalsMetric = MetricType;
+  export type ReportWebVitalsCallback = (metric: WebVitalsMetric) => void;
   export function useReportWebVitals(callback: ReportWebVitalsCallback): void;
 }
 

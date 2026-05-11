@@ -79,6 +79,7 @@ catalog:
   vite-plus: 0.1.17
   vite-tsconfig-paths: ^6.1.1
   vitest: npm:@voidzero-dev/vite-plus-test@0.1.17
+  web-vitals: ^4.2.4
   wrangler: ^4.80.0
   zod: 3.24.3
   knip: ^6.6.2
