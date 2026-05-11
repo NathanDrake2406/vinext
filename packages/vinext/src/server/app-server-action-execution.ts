@@ -59,7 +59,7 @@ type AppServerActionRoute = {
   pattern: string;
 };
 
-export type ProgressiveServerActionResult = {
+type ProgressiveServerActionResult = {
   formState: ReactFormState | null;
   kind: "form-state";
 };
