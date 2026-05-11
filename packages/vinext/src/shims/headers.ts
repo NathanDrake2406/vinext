@@ -477,6 +477,26 @@ function _decorateRequestApiPromise<T extends object>(
   });
 }
 
+// React.use() tracks thenables by identity, so request APIs must reuse the
+// same decorated promise for the same underlying request view.
+const _decoratedHeadersPromises = new WeakMap<Headers, Promise<Headers> & Headers>();
+const _decoratedCookiesPromises = new WeakMap<
+  RequestCookies,
+  Promise<RequestCookies> & RequestCookies
+>();
+
+function _getOrCreateDecoratedRequestApiPromise<T extends object>(
+  cache: WeakMap<T, Promise<T> & T>,
+  target: T,
+): Promise<T> & T {
+  const cached = cache.get(target);
+  if (cached) return cached;
+
+  const promise = _decorateRequestApiPromise(Promise.resolve(target), target);
+  cache.set(target, promise);
+  return promise;
+}
+
 function _decorateRejectedRequestApiPromise<T extends object>(error: unknown): Promise<T> & T {
   const normalizedError = error instanceof Error ? error : new Error(String(error));
   const promise = Promise.reject(normalizedError) as Promise<T>;
@@ -679,7 +699,7 @@ export function headers(): Promise<Headers> & Headers {
 
   markDynamicUsage();
   const readonlyHeaders = _getReadonlyHeaders(state.headersContext);
-  return _decorateRequestApiPromise(Promise.resolve(readonlyHeaders), readonlyHeaders);
+  return _getOrCreateDecoratedRequestApiPromise(_decoratedHeadersPromises, readonlyHeaders);
 }
 
 /**
@@ -711,7 +731,7 @@ export function cookies(): Promise<RequestCookies> & RequestCookies {
     ? _getMutableCookies(state.headersContext)
     : _getReadonlyCookies(state.headersContext);
 
-  return _decorateRequestApiPromise(Promise.resolve(cookieStore), cookieStore);
+  return _getOrCreateDecoratedRequestApiPromise(_decoratedCookiesPromises, cookieStore);
 }
 
 // ---------------------------------------------------------------------------

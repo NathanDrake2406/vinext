@@ -619,6 +619,43 @@ describe("next/headers shim", () => {
     setHeadersContext(null);
   });
 
+  it("headers() and cookies() reuse request API promise identity within a request context", async () => {
+    // Next.js caches request API promises by the underlying request object:
+    // packages/next/src/server/request/headers.ts
+    // packages/next/src/server/request/cookies.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/headers.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/cookies.ts
+    const { setHeadersAccessPhase, setHeadersContext, headers, cookies } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    setHeadersContext({
+      headers: new Headers({ "x-custom": "test-value" }),
+      cookies: new Map([["session", "abc123"]]),
+    });
+
+    try {
+      const firstHeaders = headers();
+      const secondHeaders = headers();
+      expect(secondHeaders).toBe(firstHeaders);
+      expect(await secondHeaders).toBe(await firstHeaders);
+
+      const firstReadonlyCookies = cookies();
+      const secondReadonlyCookies = cookies();
+      expect(secondReadonlyCookies).toBe(firstReadonlyCookies);
+      expect(await secondReadonlyCookies).toBe(await firstReadonlyCookies);
+
+      setHeadersAccessPhase("route-handler");
+
+      const firstMutableCookies = cookies();
+      const secondMutableCookies = cookies();
+      expect(secondMutableCookies).toBe(firstMutableCookies);
+      expect(await secondMutableCookies).toBe(await firstMutableCookies);
+      expect(firstMutableCookies).not.toBe(firstReadonlyCookies);
+    } finally {
+      setHeadersContext(null);
+    }
+  });
+
   it("headers() is read-only for both sync and awaited access", async () => {
     // Ported from Next.js:
     // packages/next/src/server/web/spec-extension/adapters/headers.test.ts
@@ -5893,8 +5930,10 @@ describe("middleware request header overrides", () => {
     await runWithHeadersContext(headersContextFromRequest(request), async () => {
       // 1. Prime the sealed snapshot — this is exactly what
       //    `clerkMiddleware()` does internally via `buildRequestLike()`.
-      const preHeaders = await headers();
-      const preCookies = await cookies();
+      const preHeadersPromise = headers();
+      const preCookiesPromise = cookies();
+      const preHeaders = await preHeadersPromise;
+      const preCookies = await preCookiesPromise;
       expect(preHeaders.get("authorization")).toBe("Bearer secret");
       expect(preHeaders.get("x-keep")).toBe("original");
       expect(preCookies.getAll()).toEqual([
@@ -5915,9 +5954,13 @@ describe("middleware request header overrides", () => {
       // 3. A subsequent `headers()` call — for example from the Server
       //    Component's render — must observe the override, not the snapshot
       //    captured in step 1.
-      const postHeaders = await headers();
-      const postCookies = await cookies();
+      const postHeadersPromise = headers();
+      const postCookiesPromise = cookies();
+      const postHeaders = await postHeadersPromise;
+      const postCookies = await postCookiesPromise;
 
+      expect(postHeadersPromise).not.toBe(preHeadersPromise);
+      expect(postCookiesPromise).not.toBe(preCookiesPromise);
       expect(postHeaders.get("authorization")).toBeNull();
       expect(postHeaders.get("cookie")).toBeNull();
       expect(postHeaders.get("x-keep")).toBe("updated");
