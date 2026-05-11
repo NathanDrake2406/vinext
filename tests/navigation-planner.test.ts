@@ -15,6 +15,7 @@ import {
   type RouteSnapshotV0,
   type RootBoundaryTransition,
 } from "../packages/vinext/src/server/navigation-planner.js";
+import { assertValidNavigationDecisionTrace } from "../packages/vinext/src/server/navigation-trace-debugger.js";
 
 function createRouteSnapshot(rootBoundaryId: string | null): RouteSnapshotV0 {
   return {
@@ -108,6 +109,7 @@ describe("navigationPlanner root-boundary decisions", () => {
   // .nextjs-ref/test/e2e/app-dir/segment-cache/mpa-navigations/mpa-navigations.test.ts
   it("proposes a visible commit for same-root flight responses", () => {
     const decision = planFlightResponse("/");
+    assertValidNavigationDecisionTrace(decision);
 
     expect(decision.kind).toBe("proposeCommit");
     if (decision.kind !== "proposeCommit") {
@@ -136,6 +138,7 @@ describe("navigationPlanner root-boundary decisions", () => {
       "/(dashboard)",
     );
     const decision = planFlightResponse("/(dashboard)");
+    assertValidNavigationDecisionTrace(decision);
 
     expect(transition).toBe("rootBoundaryChanged");
     expect(decision.kind).toBe("hardNavigate");
@@ -159,6 +162,7 @@ describe("navigationPlanner root-boundary decisions", () => {
 
   it("uses the current soft fallback when the target root identity is unknown", () => {
     const decision = planFlightResponse(null);
+    assertValidNavigationDecisionTrace(decision);
 
     expect(decision.kind).toBe("proposeCommit");
     if (decision.kind !== "proposeCommit") {
@@ -174,6 +178,7 @@ describe("navigationPlanner root-boundary decisions", () => {
       currentRootBoundaryId: null,
       nextRootBoundaryId: "/",
     });
+    assertValidNavigationDecisionTrace(decision);
 
     expect(transition).toBe("rootBoundaryUnknownFallback");
     expect(decision.kind).toBe("proposeCommit");
@@ -211,6 +216,7 @@ describe("navigationPlanner root-boundary decisions", () => {
         token,
       },
     });
+    assertValidNavigationDecisionTrace(decision);
 
     expect(decision.kind).toBe("noCommit");
     if (decision.kind !== "noCommit") {
@@ -236,6 +242,7 @@ describe("navigationPlanner root-boundary decisions", () => {
       },
     };
     const decision = navigationPlanner.plan(input);
+    assertValidNavigationDecisionTrace(decision);
 
     expect(decision.kind).toBe("requestWork");
     if (decision.kind !== "requestWork") {
@@ -264,6 +271,7 @@ describe("navigationPlanner root-boundary decisions", () => {
         visibleSnapshot: createRouteSnapshot("/"),
       },
     });
+    assertValidNavigationDecisionTrace(decision);
 
     expect(decision.kind).toBe("requestWork");
     if (decision.kind !== "requestWork") {
@@ -292,6 +300,7 @@ describe("navigationPlanner root-boundary decisions", () => {
         kind: "traverse",
       },
     });
+    assertValidNavigationDecisionTrace(decision);
 
     expect(decision.kind).toBe("requestWork");
     if (decision.kind !== "requestWork") {

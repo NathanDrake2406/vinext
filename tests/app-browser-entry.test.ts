@@ -40,6 +40,7 @@ import {
   NavigationTraceTransactionCodes,
   createNavigationTrace,
 } from "../packages/vinext/src/server/navigation-trace.js";
+import { assertValidNavigationCommitApprovalTrace } from "../packages/vinext/src/server/navigation-trace-debugger.js";
 
 function createResolvedElements(
   routeId: string,
@@ -547,6 +548,7 @@ describe("app browser entry state helpers", () => {
       startedNavigationId: 7,
       targetHref: "https://example.com/dashboard",
     });
+    assertValidNavigationCommitApprovalTrace(approval);
 
     expect(approval.decision.disposition).toBe("no-commit");
     expect(approval.decision.trace.entries).toEqual([
@@ -597,6 +599,7 @@ describe("app browser entry state helpers", () => {
       startedNavigationId: 8,
       targetHref: "https://example.com/previous",
     });
+    assertValidNavigationCommitApprovalTrace(approval);
 
     expect(approval.decision.disposition).toBe("no-commit");
     expect(approval.decision.trace.entries).toEqual([
@@ -803,6 +806,7 @@ describe("app browser entry state helpers", () => {
       startedNavigationId: 4,
       targetHref: "https://example.com/dashboard",
     });
+    assertValidNavigationCommitApprovalTrace(approval);
 
     expect(approval.decision.disposition).toBe("commit");
     if (approval.decision.disposition !== "commit") {
@@ -864,6 +868,7 @@ describe("app browser entry state helpers", () => {
       startedNavigationId: 6,
       targetHref: "https://example.com/legacy-payload",
     });
+    assertValidNavigationCommitApprovalTrace(approval);
 
     expect(approval.decision.disposition).toBe("commit");
     expect(approval.decision.trace.entries[0]?.code).toBe(
@@ -891,6 +896,10 @@ describe("app browser entry state helpers", () => {
     });
 
     const approvedCommit = approveHmrVisibleCommit(pending);
+    assertValidNavigationCommitApprovalTrace({
+      approvedCommit,
+      decision: approvedCommit.decision,
+    });
     expect(approvedCommit.decision.trace.entries[0]).toEqual({
       code: NavigationTraceTransactionCodes.visibleCommit,
       fields: {
@@ -1023,6 +1032,7 @@ describe("app browser entry state helpers", () => {
       startedNavigationId: 7,
       targetHref: "https://example.com/dashboard",
     });
+    assertValidNavigationCommitApprovalTrace(staleApproval);
     expect(staleApproval.decision.disposition).toBe("no-commit");
     expect(staleApproval.decision.trace.entries[0]?.code).toBe(
       NavigationTraceTransactionCodes.noCommit,
@@ -1039,6 +1049,7 @@ describe("app browser entry state helpers", () => {
       startedNavigationId: 8,
       targetHref: "https://example.com/dashboard?from=planner",
     });
+    assertValidNavigationCommitApprovalTrace(hardNavigateApproval);
     expect(hardNavigateApproval.decision.disposition).toBe("hard-navigate");
     expect(hardNavigateApproval.decision.trace.entries[0]?.code).toBe(
       NavigationTraceTransactionCodes.hardNavigate,
@@ -2298,6 +2309,10 @@ describe("app browser entry previousNextUrl helpers", () => {
       startedNavigationId: 7,
       targetHref: "https://example.com/dashboard?action=same-url",
       type: "navigate",
+    });
+    assertValidNavigationCommitApprovalTrace({
+      approvedCommit: result.approvedCommit,
+      decision: result.decision,
     });
 
     expect(result.decision.disposition).toBe("hard-navigate");
