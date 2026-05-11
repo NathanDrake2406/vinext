@@ -3,6 +3,7 @@ import {
   computeRscCacheBustingSearchParam,
   createRscRequestHeaders,
   createRscRequestUrl,
+  VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { createAppRscHandler } from "../packages/vinext/src/server/app-rsc-handler.js";
 import { makeThenableParams } from "../packages/vinext/src/shims/thenable-params.js";
@@ -87,6 +88,7 @@ describe("createAppRscHandler", () => {
     expect(dispatchMatchedPage).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(200);
     expect(response.headers.get("x-test-header")).toBe("applied");
+    expect(response.headers.get("vary")).toBe(VINEXT_RSC_VARY_HEADER);
   });
 
   it("returns config redirects before route dispatch and skips finalization", async () => {
@@ -238,6 +240,7 @@ describe("createAppRscHandler", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-vinext-static-file")).toBe("%2Flogo.svg");
+    expect(response.headers.get("vary")).toBeNull();
     expect(clearRequestContext).toHaveBeenCalledTimes(1);
     expect(matchRoute).not.toHaveBeenCalled();
   });
@@ -322,6 +325,34 @@ describe("createAppRscHandler", () => {
         route,
       }),
     );
+  });
+
+  it("appends App Router RSC vary values to route handler responses", async () => {
+    const route = createPageRoute({
+      page: null,
+      pattern: "/api/:id",
+      routeHandler: { GET: () => new Response("route") },
+      routeSegments: ["api", "[id]"],
+    });
+    const dispatchMatchedRouteHandler = vi.fn(
+      async () => new Response("route", { status: 200, headers: { Vary: "User-Agent" } }),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedRouteHandler,
+      matchRoute: (pathname: string) =>
+        pathname === "/api/123"
+          ? {
+              params: { id: "123" },
+              route,
+            }
+          : null,
+    });
+
+    const response = await handler(new Request("https://example.test/docs/api/123"), null);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("vary")).toBe(`User-Agent, ${VINEXT_RSC_VARY_HEADER}`);
   });
 
   it("clears request context before returning the plain 404 fallback", async () => {
