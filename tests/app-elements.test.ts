@@ -384,7 +384,23 @@ describe("app elements payload helpers", () => {
         }),
         [APP_LAYOUT_IDS_KEY]: ["layout:/", 1],
       }),
-    ).toThrow("[vinext] Invalid __layoutIds in App Router payload: expected string[]");
+    ).toThrow("[vinext] Invalid __layoutIds in App Router payload: expected layout id string[]");
+  });
+
+  it.each([
+    ["page id", "page:/dashboard"],
+    ["slot id", "slot:modal:/dashboard"],
+    ["malformed layout id", "layout:dashboard"],
+  ])("rejects %s in layoutIds metadata", (_, layoutId) => {
+    expect(() =>
+      readAppElementsMetadata({
+        ...normalizeAppElements({
+          [APP_ROOT_LAYOUT_KEY]: "/",
+          [APP_ROUTE_KEY]: "route:/dashboard",
+        }),
+        [APP_LAYOUT_IDS_KEY]: ["layout:/", layoutId],
+      }),
+    ).toThrow("[vinext] Invalid __layoutIds in App Router payload: expected layout ids");
   });
 
   it("reads artifact compatibility envelope metadata", () => {

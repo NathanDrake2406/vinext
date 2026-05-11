@@ -260,10 +260,28 @@ function parseLayoutFlags(value: unknown): LayoutFlags {
 
 function parseLayoutIds(value: unknown): readonly string[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
-    throw new Error("[vinext] Invalid __layoutIds in App Router payload: expected string[]");
+  if (!Array.isArray(value)) {
+    throw new Error(
+      "[vinext] Invalid __layoutIds in App Router payload: expected layout id string[]",
+    );
   }
-  return [...value];
+
+  const layoutIds: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new Error(
+        "[vinext] Invalid __layoutIds in App Router payload: expected layout id string[]",
+      );
+    }
+
+    const parsed = parseAppElementsWireElementKey(entry);
+    if (parsed?.kind !== "layout") {
+      throw new Error("[vinext] Invalid __layoutIds in App Router payload: expected layout ids");
+    }
+
+    layoutIds.push(entry);
+  }
+  return layoutIds;
 }
 
 /**
