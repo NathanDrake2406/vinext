@@ -93,6 +93,7 @@ import {
 } from "./plugins/fonts.js";
 import { hasWranglerConfig, formatMissingCloudflarePluginError } from "./deploy.js";
 import { computeLazyChunks } from "./utils/lazy-chunks.js";
+import { isRecord } from "./utils/is-record.js";
 import { resolveCssConfigCompatibility } from "./plugins/css-config-compat.js";
 import type { DevCssImportsCache } from "./server/dev-css-imports.js";
 import {
@@ -168,10 +169,6 @@ function resolveShimModulePath(shimsDir: string, moduleName: string): string {
 
 function toRelativeFileEntry(root: string, absPath: string): string {
   return path.relative(root, absPath).split(path.sep).join("/");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 const TSCONFIG_FILES = ["tsconfig.json", "jsconfig.json"];

@@ -1,5 +1,6 @@
 import type { UserConfig } from "vite";
 import type { ResolvedNextConfig } from "../config/next-config.js";
+import { isRecord } from "../utils/is-record.js";
 import {
   inspectPostcssConfig,
   isTailwindPostcssPluginValue,
@@ -32,10 +33,6 @@ function isNamedPlugin(value: unknown, name: string): boolean {
 
 function hasUserTailwindVitePlugin(plugins: unknown[]): boolean {
   return plugins.some((plugin) => isNamedPlugin(plugin, "@tailwindcss/vite"));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function getExplicitPostcssPlugins(viteConfig: UserConfig): readonly unknown[] {

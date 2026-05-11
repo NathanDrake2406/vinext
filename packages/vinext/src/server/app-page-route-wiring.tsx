@@ -786,7 +786,8 @@ export function buildAppPageElements<
   // Source CSS links are dev-only route metadata. They make CSS available in
   // the initial SSR HTML before Vite's client-side CSS injection runs; the
   // trade-off is that dev may fetch a stylesheet Vite also sees in the module
-  // graph. Production CSS comes from the built client manifest.
+  // graph. They stay in the route body for dev simplicity; production CSS comes
+  // from the built client manifest.
   elements[routeId] = (
     <>
       {options.route.styles?.map((href) => {

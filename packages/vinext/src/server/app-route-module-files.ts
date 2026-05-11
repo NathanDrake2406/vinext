@@ -4,6 +4,8 @@ type RouteModuleFilesOptions = {
   includeRouteHandler?: boolean;
 };
 
+// Ordering is not cascade-sensitive here; these files are registered as route
+// modules, unlike client-visible asset collection below.
 export function collectAppRouteModuleFiles(
   route: AppRoute,
   options: RouteModuleFilesOptions = {},

@@ -286,6 +286,9 @@ async function getCachedCssImportScan(
     return cached.scan;
   }
 
+  // Dev cache validation intentionally uses cheap file metadata. Rapid same-size
+  // edits or renamed transitive imports can serve stale scans until an importer
+  // changes, but missing files are dropped on stat failure below.
   const scan = scanDevCssImports(filePath, context);
   cache.set(filePath, { scan, mtimeMs: stats.mtimeMs, size: stats.size });
   return scan;

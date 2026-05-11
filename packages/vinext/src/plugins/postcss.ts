@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import type { UserConfig } from "vite";
+import { isRecord } from "../utils/is-record.js";
 import { readJsonFile } from "../utils/safe-json-file.js";
 
 export type ExplicitPostcssConfig = Extract<
@@ -66,10 +67,6 @@ type FoundPostcssConfig = {
  * parallel) all await the same in-flight scan rather than each starting their own.
  */
 export const postcssCache = new Map<string, Promise<PostcssConfigInfo | undefined>>();
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function hasDefaultExport(value: unknown): value is { default: unknown } {
   return isRecord(value) && "default" in value;
@@ -229,7 +226,7 @@ async function resolvePostcssPlugins(
 ): Promise<PostcssAcceptedPlugin[]> {
   const req = createRequire(path.join(projectRoot, "package.json"));
   return Promise.all(
-    entries.map(async (entry) => {
+    entries.map(async (entry): Promise<PostcssAcceptedPlugin | undefined> => {
       if (!isPostcssPluginSpec(entry)) {
         return toAcceptedPostcssPlugin(entry.value, "inline");
       }

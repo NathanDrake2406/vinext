@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "vinext/shims/constants";
 import { normalizePageExtensions } from "../routing/file-matcher.js";
+import { isRecord } from "../utils/is-record.js";
 import { isExternalUrl } from "./config-matchers.js";
 
 /**
@@ -323,10 +324,6 @@ function isCjsError(e: unknown): boolean {
     msg.includes("__dirname is not defined") ||
     msg.includes("__filename is not defined")
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 // Dev-server phase is the safe default for config loading: it enables all
@@ -691,7 +688,7 @@ export async function resolveNextConfig(
 
   if (hasUnsupportedTurbopackRules) {
     console.warn(
-      '[vinext] next.config option "turbopack.rules" is not generally supported and will be ignored. ' +
+      '[vinext] next.config option "turbopack.rules" contains rules that are not supported and will be ignored. ' +
         "The known Tailwind CSS loader shape is translated automatically.",
     );
   }
