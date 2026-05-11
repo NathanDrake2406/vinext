@@ -1189,6 +1189,16 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   const serverMtime = fs.statSync(serverEntryPath).mtimeMs;
   const serverEntry = await import(`${pathToFileURL(serverEntryPath).href}?t=${serverMtime}`);
   const { renderPage, handleApiRoute: handleApi, runMiddleware, vinextConfig } = serverEntry;
+  const matchPageRoute =
+    typeof serverEntry.matchPageRoute === "function" ? serverEntry.matchPageRoute : undefined;
+  const pageRoutes = serverEntry.pageRoutes as
+    | Array<{
+        pattern: string;
+        module?: {
+          getStaticPaths?: (opts: { locales: string[]; defaultLocale: string }) => Promise<unknown>;
+        };
+      }>
+    | undefined;
 
   // Load prerender secret written at build time by vinext:server-manifest plugin.
   // Used to authenticate internal /__vinext/prerender/* HTTP endpoints.
@@ -1292,17 +1302,6 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       const localesRaw = parsedUrl.searchParams.get("locales");
       const locales: string[] = localesRaw ? JSON.parse(localesRaw) : [];
       const defaultLocale = parsedUrl.searchParams.get("defaultLocale") ?? "";
-      const pageRoutes = serverEntry.pageRoutes as
-        | Array<{
-            pattern: string;
-            module?: {
-              getStaticPaths?: (opts: {
-                locales: string[];
-                defaultLocale: string;
-              }) => Promise<unknown>;
-            };
-          }>
-        | undefined;
       const route = pageRoutes?.find((r) => r.pattern === pattern);
       const fn = route?.module?.getStaticPaths;
       if (typeof fn !== "function") {
@@ -1655,8 +1654,11 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         return;
       }
 
+      const pageMatch = matchPageRoute ? matchPageRoute(resolvedPathname, webRequest) : null;
+
       // ── 9. Apply afterFiles rewrites from next.config.js ──────────
-      if (configRewrites.afterFiles?.length) {
+      // These run after non-dynamic page routes but before dynamic routes.
+      if ((!pageMatch || pageMatch.route.isDynamic) && configRewrites.afterFiles?.length) {
         const rewritten = matchRewrite(resolvedPathname, configRewrites.afterFiles, postMwReqCtx);
         if (rewritten) {
           if (isExternalUrl(rewritten)) {
