@@ -35,6 +35,7 @@ import {
   VINEXT_RSC_MOUNTED_SLOTS_HEADER,
 } from "../server/app-rsc-cache-busting.js";
 import { isDangerousScheme } from "./url-safety.js";
+import { getLinkPrefetchDecision, getLinkPrefetchHref } from "./link-prefetch.js";
 import {
   resolveRelativeHref,
   toBrowserNavigationHref,
@@ -53,8 +54,6 @@ type NavigateEvent = {
   /** Whether preventDefault() has been called. */
   defaultPrevented: boolean;
 };
-
-type PrefetchPriority = "low" | "high";
 
 type LinkProps = {
   href: string | { pathname?: string; query?: UrlQuery };
@@ -121,10 +120,14 @@ function resolveHref(href: LinkProps["href"]): string {
  * Uses `requestIdleCallback` (or `setTimeout` fallback) to avoid blocking
  * the main thread during initial page load.
  */
-function prefetchUrl(href: string, priority: PrefetchPriority = "low"): void {
+function prefetchUrl(href: string, priority: "low" | "high" = "low"): void {
   if (typeof window === "undefined") return;
 
-  const prefetchHref = getPrefetchHref(href);
+  const prefetchHref = getLinkPrefetchHref({
+    href,
+    basePath: __basePath,
+    currentOrigin: window.location.origin,
+  });
   if (prefetchHref == null) return;
 
   const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
@@ -174,14 +177,6 @@ function prefetchUrl(href: string, priority: PrefetchPriority = "low"): void {
       console.error("[vinext] RSC prefetch setup error:", error);
     });
   });
-}
-
-function getPrefetchHref(href: string): string | null {
-  if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//")) {
-    return toSameOriginAppPath(href, __basePath);
-  }
-
-  return href;
 }
 
 /**
@@ -323,8 +318,26 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   // Prefetching: observe the element when it enters the viewport.
   // prefetch={false} disables, prefetch={true} or undefined/null (default) enables.
   const internalRef = useRef<HTMLAnchorElement | null>(null);
-  const shouldPrefetch =
-    process.env.NODE_ENV === "production" && prefetchProp !== false && !isDangerous;
+  const viewportPrefetchDecision = getLinkPrefetchDecision({
+    nodeEnv: process.env.NODE_ENV,
+    prefetch: prefetchProp,
+    isDangerous,
+    intent: "viewport",
+  });
+  const intentPrefetchDecision = getLinkPrefetchDecision({
+    nodeEnv: process.env.NODE_ENV,
+    prefetch: prefetchProp,
+    isDangerous,
+    intent: "intent",
+  });
+  const shouldViewportPrefetch = viewportPrefetchDecision.shouldPrefetch;
+  const viewportPrefetchPriority = viewportPrefetchDecision.shouldPrefetch
+    ? viewportPrefetchDecision.priority
+    : "low";
+  const shouldIntentPrefetch = intentPrefetchDecision.shouldPrefetch;
+  const intentPrefetchPriority = intentPrefetchDecision.shouldPrefetch
+    ? intentPrefetchDecision.priority
+    : "high";
 
   const setRefs = useCallback(
     (node: HTMLAnchorElement | null) => {
@@ -337,29 +350,33 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   );
 
   useEffect(() => {
-    if (!shouldPrefetch || typeof window === "undefined") return;
+    if (!shouldViewportPrefetch || typeof window === "undefined") return;
     const node = internalRef.current;
     if (!node) return;
 
-    const hrefToPrefetch = getPrefetchHref(localizedHref);
+    const hrefToPrefetch = getLinkPrefetchHref({
+      href: localizedHref,
+      basePath: __basePath,
+      currentOrigin: window.location.origin,
+    });
     if (hrefToPrefetch == null) return;
 
     const observer = getSharedObserver();
     if (!observer) return;
 
-    observerCallbacks.set(node, () => prefetchUrl(hrefToPrefetch));
+    observerCallbacks.set(node, () => prefetchUrl(hrefToPrefetch, viewportPrefetchPriority));
     observer.observe(node);
 
     return () => {
       observer.unobserve(node);
       observerCallbacks.delete(node);
     };
-  }, [shouldPrefetch, localizedHref]);
+  }, [shouldViewportPrefetch, viewportPrefetchPriority, localizedHref]);
 
   const prefetchOnIntent = useCallback(() => {
-    if (!shouldPrefetch) return;
-    prefetchUrl(localizedHref, "high");
-  }, [shouldPrefetch, localizedHref]);
+    if (!shouldIntentPrefetch) return;
+    prefetchUrl(localizedHref, intentPrefetchPriority);
+  }, [shouldIntentPrefetch, intentPrefetchPriority, localizedHref]);
 
   const handleMouseEnter = useCallback(
     (e: MouseEvent<HTMLAnchorElement>) => {

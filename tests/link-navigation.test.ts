@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import ReactDOMServer from "react-dom/server";
 import type { ElementType, ReactNode } from "react";
+import {
+  getLinkPrefetchDecision,
+  getLinkPrefetchHref,
+  type LinkPrefetchIntent,
+  type LinkPrefetchDecision,
+} from "../packages/vinext/src/shims/link-prefetch.js";
 
 type CapturedEffect = () => void | (() => void);
 
@@ -30,10 +36,12 @@ type MockReactAnchorCaptureOptions = {
   startTransition?: (callback: () => void) => void;
 };
 
-// This is a narrow Link shim test harness. It captures rendered anchor props
-// because app-router production prefetch is not covered by dev E2E. Do not
-// expand this pattern for general component testing.
-function mockReactAnchorCapture(options: MockReactAnchorCaptureOptions): void {
+// This is a tactical escape hatch for Link only. It intercepts React and JSX
+// runtime output because the current E2E setup cannot honestly reach the
+// production-only Link prefetch path. Do not reuse it as a component harness.
+function mockReactAnchorCaptureForLinkOnly_DO_NOT_REUSE(
+  options: MockReactAnchorCaptureOptions,
+): void {
   vi.doMock("react", async () => {
     const actual = await vi.importActual<typeof import("react")>("react");
     const createElement = ((
@@ -115,6 +123,135 @@ async function flushPrefetchTasks(): Promise<void> {
   await Promise.resolve();
 }
 
+describe("Link prefetch pure decisions", () => {
+  it("decides whether Link should prefetch and with which priority", () => {
+    const cases = [
+      {
+        name: "dev + viewport",
+        input: {
+          nodeEnv: "development",
+          prefetch: undefined,
+          isDangerous: false,
+          intent: "viewport",
+        },
+        expected: { shouldPrefetch: false },
+      },
+      {
+        name: "dev + intent",
+        input: {
+          nodeEnv: "development",
+          prefetch: undefined,
+          isDangerous: false,
+          intent: "intent",
+        },
+        expected: { shouldPrefetch: false },
+      },
+      {
+        name: "prod + viewport",
+        input: {
+          nodeEnv: "production",
+          prefetch: undefined,
+          isDangerous: false,
+          intent: "viewport",
+        },
+        expected: { shouldPrefetch: true, priority: "low" },
+      },
+      {
+        name: "prod + intent",
+        input: { nodeEnv: "production", prefetch: undefined, isDangerous: false, intent: "intent" },
+        expected: { shouldPrefetch: true, priority: "high" },
+      },
+      {
+        name: "prod + prefetch=false",
+        input: { nodeEnv: "production", prefetch: false, isDangerous: false, intent: "intent" },
+        expected: { shouldPrefetch: false },
+      },
+      {
+        name: "prod + dangerous",
+        input: { nodeEnv: "production", prefetch: undefined, isDangerous: true, intent: "intent" },
+        expected: { shouldPrefetch: false },
+      },
+    ] satisfies Array<{
+      name: string;
+      input: {
+        nodeEnv: string;
+        prefetch: boolean | undefined;
+        isDangerous: boolean;
+        intent: LinkPrefetchIntent;
+      };
+      expected: LinkPrefetchDecision;
+    }>;
+
+    for (const testCase of cases) {
+      expect(getLinkPrefetchDecision(testCase.input), testCase.name).toEqual(testCase.expected);
+    }
+  });
+
+  it("normalizes only local or same-origin prefetch hrefs", () => {
+    const cases = [
+      {
+        name: "local path",
+        input: { href: "/local", basePath: "", currentOrigin: "https://example.com" },
+        expected: "/local",
+      },
+      {
+        name: "same-origin absolute URL",
+        input: {
+          href: "https://example.com/path",
+          basePath: "",
+          currentOrigin: "https://example.com",
+        },
+        expected: "/path",
+      },
+      {
+        name: "same-origin protocol-relative URL",
+        input: { href: "//example.com/path", basePath: "", currentOrigin: "https://example.com" },
+        expected: "/path",
+      },
+      {
+        name: "external absolute URL",
+        input: {
+          href: "https://external.com/path",
+          basePath: "",
+          currentOrigin: "https://example.com",
+        },
+        expected: null,
+      },
+      {
+        name: "external protocol-relative URL",
+        input: { href: "//external.com/path", basePath: "", currentOrigin: "https://example.com" },
+        expected: null,
+      },
+      {
+        name: "same-origin with basePath",
+        input: {
+          href: "https://example.com/docs/path?tab=1#section",
+          basePath: "/docs",
+          currentOrigin: "https://example.com",
+        },
+        expected: "/path?tab=1#section",
+      },
+      {
+        name: "same-origin without required basePath",
+        input: {
+          href: "https://example.com/path",
+          basePath: "/docs",
+          currentOrigin: "https://example.com",
+        },
+        expected: null,
+      },
+    ] satisfies Array<{
+      name: string;
+      input: Parameters<typeof getLinkPrefetchHref>[0];
+      expected: string | null;
+    }>;
+
+    for (const testCase of cases) {
+      expect(getLinkPrefetchHref(testCase.input), testCase.name).toBe(testCase.expected);
+    }
+  });
+});
+
 afterEach(() => {
   vi.doUnmock("react");
   vi.doUnmock("react/jsx-runtime");
@@ -146,7 +283,7 @@ describe("Link App Router navigation scheduling", () => {
       }
     };
 
-    mockReactAnchorCapture({ captureAnchor, startTransition });
+    mockReactAnchorCaptureForLinkOnly_DO_NOT_REUSE({ captureAnchor, startTransition });
 
     const navigate = vi.fn(async () => {
       transitionStates.push(transitionActive);
@@ -224,7 +361,7 @@ async function renderIsolatedLink(options: {
     }
   };
 
-  mockReactAnchorCapture({
+  mockReactAnchorCaptureForLinkOnly_DO_NOT_REUSE({
     captureAnchor,
     captureEffect(effect) {
       effects.push(effect);
@@ -383,6 +520,44 @@ describe("Link App Router prefetch scheduling", () => {
     }
   });
 
+  it("does not prefetch on mouse intent in development while preserving the user handler", async () => {
+    const userOnMouseEnter = vi.fn();
+    const result = await renderIsolatedLink({
+      href: "/dev-mouse-intent-prefetch-target",
+      nodeEnv: "development",
+      props: { onMouseEnter: userOnMouseEnter },
+    });
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
+      expect(userOnMouseEnter).toHaveBeenCalledTimes(1);
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not prefetch on touch intent in development while preserving the user handler", async () => {
+    const userOnTouchStart = vi.fn();
+    const result = await renderIsolatedLink({
+      href: "/dev-touch-intent-prefetch-target",
+      nodeEnv: "development",
+      props: { onTouchStart: userOnTouchStart },
+    });
+
+    try {
+      result.capturedAnchorProps.onTouchStart?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
+      expect(userOnTouchStart).toHaveBeenCalledTimes(1);
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
   it("prefetches on mouse intent in production while preserving the user handler", async () => {
     // Next.js triggers intent prefetch from Link onMouseEnter:
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/app-dir/link.tsx
@@ -432,6 +607,67 @@ describe("Link App Router prefetch scheduling", () => {
           priority: "high",
         }),
       );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not prefetch external absolute URLs on production intent", async () => {
+    const userOnMouseEnter = vi.fn();
+    const result = await renderIsolatedLink({
+      href: "https://external.example/prefetch-target",
+      nodeEnv: "production",
+      props: { onMouseEnter: userOnMouseEnter },
+    });
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
+      expect(userOnMouseEnter).toHaveBeenCalledTimes(1);
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("normalizes same-origin absolute URLs before production intent prefetch", async () => {
+    const result = await renderIsolatedLink({
+      href: "https://example.com/same-origin-intent-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/same-origin-intent-prefetch-target.rsc"),
+        expect.objectContaining({
+          credentials: "include",
+          priority: "high",
+        }),
+      );
+      expect(result.fetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("https://example.com/same-origin-intent-prefetch-target.rsc"),
+        expect.anything(),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not prefetch external protocol-relative URLs on production intent", async () => {
+    const result = await renderIsolatedLink({
+      href: "//external.example/protocol-relative-prefetch-target",
+      nodeEnv: "production",
+    });
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
+      expect(result.fetch).not.toHaveBeenCalled();
     } finally {
       result.restoreNodeEnv();
     }
