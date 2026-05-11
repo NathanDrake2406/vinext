@@ -5,6 +5,8 @@ import { createAppBrowserNavigationController } from "../packages/vinext/src/ser
 import { devOnCaughtError } from "../packages/vinext/src/server/dev-error-overlay.js";
 import {
   APP_INTERCEPTION_CONTEXT_KEY,
+  AppElementsWire,
+  APP_LAYOUT_IDS_KEY,
   APP_LAYOUT_FLAGS_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
@@ -22,9 +24,7 @@ import {
   readHistoryStatePreviousNextUrl,
   resolveInterceptionContextFromPreviousNextUrl,
   resolveServerActionRequestState,
-  resolvePendingNavigationCommitDisposition,
   resolvePendingNavigationCommitDispositionDecision,
-  shouldHardNavigate,
   type AppRouterState,
   type OperationLane,
 } from "../packages/vinext/src/server/app-browser-state.js";
@@ -46,9 +46,13 @@ function createResolvedElements(
   rootLayoutTreePath: string | null,
   interceptionContext: string | null = null,
   extraEntries: Record<string, unknown> = {},
+  layoutIds: readonly string[] = rootLayoutTreePath === null
+    ? []
+    : [AppElementsWire.encodeLayoutId(rootLayoutTreePath)],
 ) {
   return normalizeAppElements({
     [APP_INTERCEPTION_CONTEXT_KEY]: interceptionContext,
+    [APP_LAYOUT_IDS_KEY]: layoutIds,
     [APP_ROUTE_KEY]: routeId,
     [APP_ROOT_LAYOUT_KEY]: rootLayoutTreePath,
     ...extraEntries,
@@ -58,6 +62,7 @@ function createResolvedElements(
 function createState(overrides: Partial<AppRouterState> = {}): AppRouterState {
   return {
     elements: createResolvedElements("route:/initial", "/"),
+    layoutIds: [AppElementsWire.encodeLayoutId("/")],
     layoutFlags: {},
     navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/initial", {}),
     renderId: 0,
@@ -133,6 +138,7 @@ type ApprovedTestCommitOptions = {
   activeNavigationId?: number;
   extraEntries?: Record<string, unknown>;
   interceptionContext?: string | null;
+  layoutIds?: readonly string[];
   layoutFlags?: AppRouterState["layoutFlags"];
   navigationSnapshot?: AppRouterState["navigationSnapshot"];
   operationLane?: OperationLane;
@@ -160,6 +166,7 @@ async function applyApprovedTestCommit(
           [APP_LAYOUT_FLAGS_KEY]: options.layoutFlags ?? {},
           ...options.extraEntries,
         },
+        options.layoutIds,
       ),
     ),
     navigationSnapshot: options.navigationSnapshot ?? state.navigationSnapshot,
@@ -414,12 +421,12 @@ describe("app browser entry state helpers", () => {
     });
 
     expect(
-      resolvePendingNavigationCommitDisposition({
+      resolvePendingNavigationCommitDispositionDecision({
         activeNavigationId: 3,
         currentState,
         pending,
         startedNavigationId: 3,
-      }),
+      }).disposition,
     ).toBe("hard-navigate");
   });
 
@@ -516,12 +523,12 @@ describe("app browser entry state helpers", () => {
     });
 
     expect(
-      resolvePendingNavigationCommitDisposition({
+      resolvePendingNavigationCommitDispositionDecision({
         activeNavigationId: 5,
         currentState,
         pending,
         startedNavigationId: 4,
-      }),
+      }).disposition,
     ).toBe("skip");
   });
 
@@ -679,6 +686,7 @@ describe("app browser entry state helpers", () => {
 
     expect(decision).toEqual({
       disposition: "skip",
+      preserveElementIds: [],
       trace: {
         schemaVersion: NAVIGATION_TRACE_SCHEMA_VERSION,
         entries: [
@@ -1052,18 +1060,17 @@ describe("app browser entry state helpers", () => {
     expect(hardNavigateApproval.approvedCommit).toBeNull();
   });
 
-  it("merges layoutFlags on approved navigate commits", async () => {
+  it("preserves layoutFlags only for approved same-layout ancestors", async () => {
     const state = createState({ layoutFlags: { "layout:/": "s", "layout:/old": "d" } });
     const nextState = await applyApprovedTestCommit(state, {
-      layoutFlags: { "layout:/": "s", "layout:/blog": "d" },
+      layoutFlags: { "layout:/blog": "d" },
+      layoutIds: ["layout:/", "layout:/blog"],
       rootLayoutTreePath: "/",
       routeId: "route:/next",
     });
 
-    // Navigate merges: old flags preserved, new flags override
     expect(nextState.layoutFlags).toEqual({
       "layout:/": "s",
-      "layout:/old": "d",
       "layout:/blog": "d",
     });
   });
@@ -2324,10 +2331,78 @@ describe("app browser entry previousNextUrl helpers", () => {
     ]);
   });
 
-  it("treats null root-layout identities as soft-navigation compatible", () => {
-    expect(shouldHardNavigate(null, null)).toBe(false);
-    expect(shouldHardNavigate(null, "/")).toBe(false);
-    expect(shouldHardNavigate("/", null)).toBe(false);
+  it("preserves only planner-approved same-layout ancestors on navigate commits", async () => {
+    const rootLayout = React.createElement("div", null, "root layout");
+    const dashboardLayout = React.createElement("div", null, "dashboard layout");
+    const staleLayout = React.createElement("div", null, "stale layout");
+    const stalePage = React.createElement("main", null, "stale page");
+    const state = createState({
+      elements: createResolvedElements(
+        "route:/dashboard",
+        "/",
+        null,
+        {
+          "layout:/": rootLayout,
+          "layout:/dashboard": dashboardLayout,
+          "layout:/stale": staleLayout,
+          "page:/stale": stalePage,
+        },
+        ["layout:/", "layout:/dashboard"],
+      ),
+      layoutFlags: {
+        "layout:/": "s",
+        "layout:/dashboard": "s",
+        "layout:/stale": "d",
+      },
+      layoutIds: ["layout:/", "layout:/dashboard"],
+    });
+
+    const nextState = await applyApprovedTestCommit(state, {
+      extraEntries: {
+        "page:/dashboard/settings": React.createElement("main", null, "settings"),
+      },
+      layoutIds: ["layout:/", "layout:/dashboard", "layout:/dashboard/settings"],
+      layoutFlags: { "layout:/dashboard/settings": "d" },
+      rootLayoutTreePath: "/",
+      routeId: "route:/dashboard/settings",
+    });
+
+    expect(nextState.elements["layout:/"]).toBe(rootLayout);
+    expect(nextState.elements["layout:/dashboard"]).toBe(dashboardLayout);
+    expect(Object.hasOwn(nextState.elements, "layout:/stale")).toBe(false);
+    expect(Object.hasOwn(nextState.elements, "page:/stale")).toBe(false);
+    expect(nextState.layoutFlags).toEqual({
+      "layout:/": "s",
+      "layout:/dashboard": "s",
+      "layout:/dashboard/settings": "d",
+    });
+    expect(nextState.layoutIds).toEqual([
+      "layout:/",
+      "layout:/dashboard",
+      "layout:/dashboard/settings",
+    ]);
+  });
+
+  it("does not preserve same-layout ancestors when root identity is unknown", async () => {
+    const rootLayout = React.createElement("div", null, "root layout");
+    const state = createState({
+      elements: createResolvedElements("route:/dashboard", "/", null, { "layout:/": rootLayout }, [
+        "layout:/",
+      ]),
+      layoutIds: ["layout:/"],
+    });
+
+    const nextState = await applyApprovedTestCommit(state, {
+      extraEntries: {
+        "page:/legacy": React.createElement("main", null, "legacy"),
+      },
+      layoutIds: [],
+      rootLayoutTreePath: null,
+      routeId: "route:/legacy",
+    });
+
+    expect(Object.hasOwn(nextState.elements, "layout:/")).toBe(false);
+    expect(nextState.layoutIds).toEqual([]);
   });
 
   it("clears stale parallel slots on approved traverse commits", async () => {

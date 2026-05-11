@@ -52,6 +52,7 @@ export type AppRouterState = {
   elements: AppElements;
   interceptionContext: string | null;
   layoutFlags: LayoutFlags;
+  layoutIds: readonly string[];
   previousNextUrl: string | null;
   renderId: number;
   navigationSnapshot: ClientNavigationRenderSnapshot;
@@ -64,6 +65,7 @@ export type AppRouterAction = {
   elements: AppElements;
   interceptionContext: string | null;
   layoutFlags: LayoutFlags;
+  layoutIds: readonly string[];
   navigationSnapshot: ClientNavigationRenderSnapshot;
   operation: PendingOperationRecord;
   previousNextUrl: string | null;
@@ -84,6 +86,7 @@ export type PendingNavigationCommit = {
 type PendingNavigationCommitDisposition = "dispatch" | "hard-navigate" | "skip";
 type PendingNavigationCommitDispositionDecision = {
   disposition: PendingNavigationCommitDisposition;
+  preserveElementIds: readonly string[];
   trace: NavigationTrace;
 };
 
@@ -188,27 +191,6 @@ export function resolveServerActionRequestState(
   return { headers };
 }
 
-export function shouldHardNavigate(
-  currentRootLayoutTreePath: string | null,
-  nextRootLayoutTreePath: string | null,
-): boolean {
-  return (
-    navigationPlanner.classifyRootBoundaryTransition(
-      currentRootLayoutTreePath,
-      nextRootLayoutTreePath,
-    ) === "rootBoundaryChanged"
-  );
-}
-
-export function resolvePendingNavigationCommitDisposition(options: {
-  activeNavigationId: number;
-  currentState: AppRouterState;
-  pending: PendingNavigationCommit;
-  startedNavigationId: number;
-}): PendingNavigationCommitDisposition {
-  return resolvePendingNavigationCommitDispositionDecision(options).disposition;
-}
-
 export function resolvePendingNavigationCommitDispositionDecision(options: {
   activeNavigationId: number;
   currentState: AppRouterState;
@@ -225,6 +207,7 @@ export function resolvePendingNavigationCommitDispositionDecision(options: {
   ) {
     return {
       disposition: "skip",
+      preserveElementIds: [],
       trace: createNavigationTrace(NavigationTraceReasonCodes.staleOperation, traceFields),
     };
   }
@@ -268,6 +251,7 @@ function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
   const displayUrl = createNavigationSnapshotUrl(state.navigationSnapshot);
   return {
     displayUrl,
+    layoutIds: state.layoutIds,
     // `displayUrl` preserves the browser-visible query string for decisions and
     // traces. `matchedUrl` stays path-only because route matching has already
     // consumed query params before AppElements metadata reaches this boundary.
@@ -281,6 +265,7 @@ function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnap
   const displayUrl = createNavigationSnapshotUrl(pending.action.navigationSnapshot);
   return {
     displayUrl,
+    layoutIds: pending.action.layoutIds,
     // See createVisibleRouteSnapshot: matchedUrl intentionally models the route
     // identity, not the address bar URL.
     matchedUrl: pending.action.navigationSnapshot.pathname,
@@ -352,11 +337,15 @@ function mapNavigationDecisionToPendingDisposition(
 ): PendingNavigationCommitDispositionDecision {
   switch (decision.kind) {
     case "proposeCommit":
-      return { disposition: "dispatch", trace: decision.trace };
+      return {
+        disposition: "dispatch",
+        preserveElementIds: decision.proposal.preserveElementIds,
+        trace: decision.trace,
+      };
     case "hardNavigate":
-      return { disposition: "hard-navigate", trace: decision.trace };
+      return { disposition: "hard-navigate", preserveElementIds: [], trace: decision.trace };
     case "noCommit":
-      return { disposition: "skip", trace: decision.trace };
+      return { disposition: "skip", preserveElementIds: [], trace: decision.trace };
     case "requestWork":
       throw new Error(
         `[vinext] Root-boundary commit planning returned requestWork (${decision.work.kind}); flightResponseArrived should never request work`,
@@ -388,6 +377,7 @@ export async function createPendingNavigationCommit(options: {
     action: {
       elements,
       interceptionContext: metadata.interceptionContext,
+      layoutIds: metadata.layoutIds,
       layoutFlags: metadata.layoutFlags,
       navigationSnapshot: options.navigationSnapshot,
       operation: createOperationRecord({

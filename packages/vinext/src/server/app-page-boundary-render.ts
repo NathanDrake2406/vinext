@@ -179,6 +179,20 @@ function resolveAppPageBoundaryRootLayoutTreePath<TModule extends AppPageModule>
   return null;
 }
 
+function resolveAppPageBoundaryLayoutIds<TModule extends AppPageModule>(
+  route: AppPageBoundaryRoute<TModule> | null | undefined,
+): readonly string[] {
+  if (!route?.layouts) return [];
+
+  return createAppPageLayoutEntries({
+    errors: route.errors,
+    layoutTreePositions: route.layoutTreePositions,
+    layouts: route.layouts,
+    notFounds: null,
+    routeSegments: route.routeSegments,
+  }).map((entry) => entry.id);
+}
+
 function resolveHttpAccessFallbackHeadRouteSegments<TModule extends AppPageModule>(
   route: AppPageBoundaryRoute<TModule> | null | undefined,
   layoutModules: readonly (TModule | null | undefined)[],
@@ -219,6 +233,7 @@ function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
   return {
     ...AppElementsWire.createMetadataEntries({
       interceptionContext: null,
+      layoutIds: resolveAppPageBoundaryLayoutIds(options.route),
       rootLayoutTreePath: resolveAppPageBoundaryRootLayoutTreePath(options.route),
       routeId,
     }),

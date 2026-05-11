@@ -310,6 +310,7 @@ describe("app page boundary render helpers", () => {
 
     const payload = JSON.parse((await response?.text()) ?? "{}") as Record<string, unknown>;
     expect(payload.__route).toBe("route:/posts/missing");
+    expect(payload.__layoutIds).toEqual(["layout:/", "layout:/posts"]);
     expect(payload.__rootLayout).toBe("/");
     expect(payload["route:/posts/missing"]).toBeTruthy();
   });
@@ -355,6 +356,7 @@ describe("app page boundary render helpers", () => {
 
     const payload = JSON.parse((await response?.text()) ?? "{}") as Record<string, unknown>;
     expect(payload.__route).toBe("route:/posts/missing");
+    expect(payload.__layoutIds).toEqual([]);
     expect(payload.__rootLayout).toBeNull();
     expect(payload["route:/posts/missing"]).toBeTruthy();
   });
@@ -494,6 +496,7 @@ describe("app page boundary render helpers", () => {
 
     const payload = JSON.parse((await response?.text()) ?? "{}") as Record<string, unknown>;
     expect(payload.__route).toBe("route:/posts/missing");
+    expect(payload.__layoutIds).toEqual(["layout:/"]);
     expect(payload.__rootLayout).toBe("/");
     expect(payload["route:/posts/missing"]).toBeTruthy();
   });

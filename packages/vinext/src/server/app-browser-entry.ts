@@ -459,6 +459,7 @@ function BrowserRoot({
     activeOperation: null,
     elements: resolvedElements,
     interceptionContext: initialMetadata.interceptionContext,
+    layoutIds: initialMetadata.layoutIds,
     layoutFlags: initialMetadata.layoutFlags,
     navigationSnapshot: initialNavigationSnapshot,
     previousNextUrl: null,

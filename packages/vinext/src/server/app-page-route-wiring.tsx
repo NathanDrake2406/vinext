@@ -392,6 +392,7 @@ export function buildAppPageElements<
   const elements: Record<string, ReactNode | string | null> = {
     ...AppElementsWire.createMetadataEntries({
       interceptionContext,
+      layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath,
       routeId,
     }),

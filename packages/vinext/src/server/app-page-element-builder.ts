@@ -114,6 +114,13 @@ export async function buildPageElements<
     const interceptionContext = opts?.interceptionContext ?? null;
     const noExportRouteId = AppElementsWire.encodeRouteId(routePath, interceptionContext);
     let noExportRootLayout: string | null = null;
+    const noExportLayoutIds =
+      route.ids?.layouts ??
+      route.layouts.map((_, index) =>
+        AppElementsWire.encodeLayoutId(
+          createAppPageTreePath(route.routeSegments, route.layoutTreePositions?.[index] ?? 0),
+        ),
+      );
     if (route.layouts?.length > 0) {
       const treePosition = route.layoutTreePositions?.[0] ?? 0;
       noExportRootLayout = createAppPageTreePath(route.routeSegments, treePosition);
@@ -121,6 +128,7 @@ export async function buildPageElements<
     return {
       ...AppElementsWire.createMetadataEntries({
         interceptionContext,
+        layoutIds: noExportLayoutIds,
         rootLayoutTreePath: noExportRootLayout,
         routeId: noExportRouteId,
       }),
