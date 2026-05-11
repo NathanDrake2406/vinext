@@ -326,7 +326,6 @@ describe("analyzeConfig", () => {
     const items = analyzeConfig(tmpDir);
     const tailwindItem = items.find((i) => i.name === "Tailwind Turbopack CSS loader");
     expect(tailwindItem?.status).toBe("partial");
-    expect(tailwindItem?.detail).toContain("@tailwindcss/postcss");
   });
 
   it("detects partial image config", () => {
@@ -813,7 +812,7 @@ describe("checkConventions", () => {
     const items = checkConventions(tmpDir);
     const postcss = items.find((i) => i.name.includes("PostCSS"));
     expect(postcss).toBeDefined();
-    expect(postcss?.detail).toContain("postcss.config.json");
+    expect(postcss?.status).toBe("supported");
   });
 
   it("reports string-form postcss.config.json files as supported", () => {

@@ -867,10 +867,15 @@ describe("app page route wiring helpers", () => {
     });
 
     const body = await renderRouteEntry(elements, "route:/blog");
+    const stylesheetHrefs = [
+      ...body.matchAll(/<link\b(?=[^>]*\brel="stylesheet")(?=[^>]*\bhref="([^"]+)")[^>]*>/g),
+    ].map((match) => match[1]);
 
-    expect(body).toContain('<link rel="stylesheet" href="/docs/src/app/globals.css"/>');
-    expect(body).toContain('<link rel="stylesheet" href="/docs/src/app/already-prefixed.css"/>');
-    expect(body).toContain('<link rel="stylesheet" href="//cdn.test/app.css"/>');
+    expect(stylesheetHrefs).toEqual([
+      "/docs/src/app/globals.css",
+      "/docs/src/app/already-prefixed.css",
+      "//cdn.test/app.css",
+    ]);
   });
 
   it("nests per-segment NotFoundBoundary inside the template wrapper", () => {
