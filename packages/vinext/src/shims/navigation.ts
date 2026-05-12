@@ -18,7 +18,11 @@ import {
   createRscRequestUrl,
   VINEXT_RSC_MOUNTED_SLOTS_HEADER,
 } from "../server/app-rsc-cache-busting.js";
-import { toBrowserNavigationHref, toSameOriginAppPath } from "./url-utils.js";
+import {
+  isHashOnlyBrowserUrlChange,
+  toBrowserNavigationHref,
+  toSameOriginAppPath,
+} from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
@@ -965,18 +969,7 @@ function isExternalUrl(href: string): boolean {
 function isHashOnlyChange(href: string): boolean {
   if (typeof window === "undefined") return false;
   if (href.startsWith("#")) return true;
-  try {
-    const current = new URL(window.location.href);
-    const next = new URL(href, window.location.href);
-    // Strip basePath for consistent same-origin comparison.
-    const strippedCurrentPath = stripBasePath(current.pathname, __basePath);
-    const strippedNextPath = stripBasePath(next.pathname, __basePath);
-    return (
-      strippedCurrentPath === strippedNextPath && current.search === next.search && next.hash !== ""
-    );
-  } catch {
-    return false;
-  }
+  return isHashOnlyBrowserUrlChange(href, window.location.href, __basePath);
 }
 
 /**

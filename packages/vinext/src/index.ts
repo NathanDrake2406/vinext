@@ -898,6 +898,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         defines["process.env.__VINEXT_IMAGE_DANGEROUSLY_ALLOW_SVG"] = JSON.stringify(
           String(nextConfig.images?.dangerouslyAllowSVG ?? false),
         );
+        // Expose dangerouslyAllowLocalIP flag for the image shim's private-IP guard.
+        // When false (default), remote image URLs with literal private-IP hostnames are blocked.
+        defines["process.env.__VINEXT_IMAGE_DANGEROUSLY_ALLOW_LOCAL_IP"] = JSON.stringify(
+          String(nextConfig.images?.dangerouslyAllowLocalIP ?? false),
+        );
         // Draft mode secret — generated once at build time so the
         // __prerender_bypass cookie is consistent across all server
         // instances (e.g. multiple Cloudflare Workers isolates).
@@ -1213,7 +1218,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               ? { ssr: { external: true as const } }
               : {
                   ssr: {
-                    external: ["react", "react-dom", "react-dom/server"],
+                    external: ["react", "react-dom", "react-dom/server", "ipaddr.js"],
                     noExternal: true,
                   },
                 }),
@@ -1372,7 +1377,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 ? {}
                 : {
                     resolve: {
-                      external: userSsrExternal === true ? true : [...userSsrExternal],
+                      external: userSsrExternal === true ? true : [...userSsrExternal, "ipaddr.js"],
                       // Force all node_modules through Vite's transform pipeline
                       // so non-JS imports (CSS, images) don't hit Node's native
                       // ESM loader. Matches Next.js behavior of bundling everything.
@@ -1506,7 +1511,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             },
             ssr: {
               resolve: {
-                external: ["react", "react-dom", "react-dom/server"],
+                external: ["react", "react-dom", "react-dom/server", "ipaddr.js"],
                 noExternal: true as const,
               },
               build: {
@@ -2255,7 +2260,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             });
           }
 
-          server.middlewares.use(async (req, res, next) => {
+          const handlePagesMiddleware = async (
+            req: import("node:http").IncomingMessage,
+            res: import("node:http").ServerResponse,
+            next: (err?: unknown) => void,
+          ): Promise<void> => {
             try {
               let url: string = req.url ?? "/";
 
@@ -2713,17 +2722,20 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
               const routes = await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
 
-              // Apply afterFiles rewrites — these run after initial route matching
-              // If beforeFiles already rewrote the URL, afterFiles still run on the
-              // *resolved* pathname. Next.js applies these when route matching succeeds
-              // but allows overriding with rewrites.
-              if (nextConfig?.rewrites.afterFiles.length) {
+              let match = matchRoute(resolvedUrl.split("?")[0], routes);
+
+              // Apply afterFiles rewrites after non-dynamic page routes have had a
+              // chance to win, but before dynamic route matching.
+              if ((!match || match.route.isDynamic) && nextConfig?.rewrites.afterFiles.length) {
                 const afterRewrite = applyRewrites(
                   resolvedUrl.split("?")[0],
                   nextConfig.rewrites.afterFiles,
                   reqCtx,
                 );
-                if (afterRewrite) resolvedUrl = afterRewrite;
+                if (afterRewrite) {
+                  resolvedUrl = afterRewrite;
+                  match = matchRoute(resolvedUrl.split("?")[0], routes);
+                }
               }
 
               // External rewrite from afterFiles — proxy to external URL
@@ -2747,7 +2759,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               const mwStatus = req.__vinextMiddlewareStatus;
 
               // Try rendering the resolved URL
-              const match = matchRoute(resolvedUrl.split("?")[0], routes);
               if (match) {
                 applyDeferredMwHeaders();
                 if (middlewareRequestHeaders) {
@@ -2793,6 +2804,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             } catch (e) {
               next(e);
             }
+          };
+
+          server.middlewares.use((req, res, next) => {
+            void handlePagesMiddleware(req, res, next);
           });
         };
       },

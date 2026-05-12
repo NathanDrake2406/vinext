@@ -1,6 +1,7 @@
 import { getAndClearActionRevalidationKind, type ActionRevalidationKind } from "vinext/shims/cache";
 import type { HeadersAccessPhase } from "vinext/shims/headers";
 import { type FetchCacheMode, setCurrentFetchCacheMode } from "vinext/shims/fetch-cache";
+import type { ReactFormState } from "react-dom/client";
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
@@ -31,6 +32,10 @@ type AppServerActionErrorReporter = (
 ) => void;
 
 type AppServerActionDecoder = (body: FormData) => Promise<unknown>;
+type AppServerActionFormStateDecoder = (
+  actionResult: unknown,
+  body: FormData,
+) => Promise<ReactFormState | undefined>;
 
 type ReadFormDataWithLimit = (request: Request, maxBytes: number) => Promise<FormData>;
 
@@ -56,6 +61,11 @@ type AppServerActionRedirect = {
 
 type AppServerActionRoute = {
   pattern: string;
+};
+
+type ProgressiveServerActionResult = {
+  formState: ReactFormState | null;
+  kind: "form-state";
 };
 
 type AppServerActionMatch<TRoute extends AppServerActionRoute> = {
@@ -108,6 +118,7 @@ export type HandleProgressiveServerActionRequestOptions = {
   clearRequestContext: () => void;
   contentType: string;
   decodeAction: AppServerActionDecoder;
+  decodeFormState: AppServerActionFormStateDecoder;
   getAndClearPendingCookies: () => string[];
   getDraftModeCookieHeader: () => string | null | undefined;
   maxActionBodySize: number;
@@ -312,7 +323,7 @@ function getActionRedirect(error: unknown): AppServerActionRedirect | null {
 
   return {
     status: redirect.status,
-    type: redirect.type,
+    type: redirect.type ?? "push",
     url: redirect.url,
   };
 }
@@ -383,7 +394,7 @@ export function isProgressiveServerActionRequest(
 
 export async function handleProgressiveServerActionRequest(
   options: HandleProgressiveServerActionRequestOptions,
-): Promise<Response | null> {
+): Promise<Response | ProgressiveServerActionResult | null> {
   if (!isProgressiveServerActionRequest(options.request, options.contentType, options.actionId)) {
     return null;
   }
@@ -424,14 +435,15 @@ export async function handleProgressiveServerActionRequest(
     }
 
     const action = await options.decodeAction(body);
-    if (typeof action !== "function") {
+    if (!isAppServerActionFunction(action)) {
       return null;
     }
 
     let actionControlResponse: ActionControlResponse | null = null;
+    let actionResult: unknown;
     const previousHeadersPhase = options.setHeadersAccessPhase("action");
     try {
-      await action();
+      actionResult = await action();
     } catch (error) {
       actionControlResponse = getActionControlResponse(error);
       if (!actionControlResponse) {
@@ -442,11 +454,9 @@ export async function handleProgressiveServerActionRequest(
     }
 
     if (!actionControlResponse) {
-      // Next.js decodes form state and re-renders after a successful MPA action.
-      // vinext currently supports the redirect/error status cases; successful
-      // non-redirect actions intentionally fall through to the page render.
       getAndClearActionRevalidationKind();
-      return null;
+      const formState = await options.decodeFormState(actionResult, body);
+      return { kind: "form-state", formState: formState ?? null };
     }
 
     const actionPendingCookies = options.getAndClearPendingCookies();

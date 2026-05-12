@@ -51,6 +51,10 @@ import {
   type AppBrowserServerActionResult,
 } from "./app-browser-action-result.js";
 import {
+  consumeInitialFormState,
+  createVinextHydrateRootOptions,
+} from "./app-browser-hydration.js";
+import {
   AppElementsWire,
   getMountedSlotIdsHeader,
   resolveVisitedResponseInterceptionContext,
@@ -455,6 +459,7 @@ function BrowserRoot({
     activeOperation: null,
     elements: resolvedElements,
     interceptionContext: initialMetadata.interceptionContext,
+    layoutIds: initialMetadata.layoutIds,
     layoutFlags: initialMetadata.layoutFlags,
     navigationSnapshot: initialNavigationSnapshot,
     previousNextUrl: null,
@@ -912,15 +917,24 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   const onUncaughtError = import.meta.env.DEV
     ? devOnUncaughtError
     : createOnUncaughtError(() => pendingNavigationRecoveryHref);
+  const formState = consumeInitialFormState(getVinextBrowserGlobal());
+  const hydrateRootOptions = import.meta.env.DEV
+    ? createVinextHydrateRootOptions({
+        formState,
+        onCaughtError: devOnCaughtError,
+        onUncaughtError,
+      })
+    : createVinextHydrateRootOptions({
+        formState,
+        onUncaughtError,
+      });
   window.__VINEXT_RSC_ROOT__ = hydrateRoot(
     document,
     createElement(BrowserRoot, {
       initialElements: root,
       initialNavigationSnapshot,
     }),
-    import.meta.env.DEV
-      ? { onCaughtError: devOnCaughtError, onUncaughtError }
-      : { onUncaughtError },
+    hydrateRootOptions,
   );
   window.__VINEXT_HYDRATED_AT = performance.now();
 
@@ -1224,7 +1238,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   });
 
   if (import.meta.hot) {
-    import.meta.hot.on("rsc:update", async () => {
+    const handleRscUpdate = async (): Promise<void> => {
       try {
         // If BrowserRoot has been mounted before but isn't now, a render
         // error tore down the tree (e.g. a server route threw). HMR can't
@@ -1282,6 +1296,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       } catch (error) {
         console.error("[vinext] RSC HMR error:", error);
       }
+    };
+
+    import.meta.hot.on("rsc:update", () => {
+      void handleRscUpdate();
     });
   }
 }

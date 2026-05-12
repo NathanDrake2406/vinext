@@ -462,6 +462,7 @@ function matchWildcardDomain(domain: string, pattern: string): boolean {
   while (patternParts.length) {
     const patternPart = patternParts.pop();
     const domainPart = domainParts.pop();
+    if (patternPart === undefined) return false;
 
     switch (patternPart) {
       case "":
@@ -601,7 +602,7 @@ export function filterInternalHeaders(headers: Headers): Headers {
   return filtered;
 }
 
-function getRequestCf(request: Request): unknown | undefined {
+function getRequestCf(request: Request): unknown {
   const cf = Reflect.get(request, "cf");
   return cf === undefined ? undefined : cf;
 }

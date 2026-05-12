@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { ReactFormState } from "react-dom/client";
 import type { ClassificationReason } from "../build/layout-classification-types.js";
 import {
   _consumeRequestScopedCacheLife,
@@ -142,6 +143,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   dynamicParamsConfig?: boolean;
   fetchCache?: FetchCacheMode | null;
   findIntercept: (pathname: string) => AppPageDispatchIntercept | null;
+  formState?: ReactFormState | null;
   generateStaticParams?: ValidateAppPageDynamicParamsOptions["generateStaticParams"];
   getFontLinks: () => string[];
   getFontPreloads: () => AppPageFontPreload[];
@@ -153,6 +155,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   hasPageModule: boolean;
   handlerStart: number;
   interceptionContext: string | null;
+  isProgressiveActionRender?: boolean;
   isProduction: boolean;
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
@@ -205,6 +208,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
 };
 
 function shouldReadAppPageCache(options: {
+  isProgressiveActionRender: boolean;
   isDraftMode: boolean;
   isForceDynamic: boolean;
   isProduction: boolean;
@@ -214,6 +218,7 @@ function shouldReadAppPageCache(options: {
 }): boolean {
   return (
     options.isProduction &&
+    !options.isProgressiveActionRender &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
     (options.isRscRequest || !options.scriptNonce) &&
@@ -336,7 +341,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     return methodResponse;
   }
 
-  if (isForceStatic || isDynamicError) {
+  if ((isForceStatic || isDynamicError) && !isDraftMode) {
     setHeadersContext(
       createStaticGenerationHeadersContext({
         dynamicConfig,
@@ -355,6 +360,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     shouldReadAppPageCache({
       isDraftMode,
       isForceDynamic,
+      isProgressiveActionRender: options.isProgressiveActionRender === true,
       isProduction: options.isProduction,
       isRscRequest: options.isRscRequest,
       revalidateSeconds: currentRevalidateSeconds,
@@ -576,6 +582,8 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     )
       ? false
       : Boolean(route.loading?.default),
+    formState: options.formState ?? null,
+    isProgressiveActionRender: options.isProgressiveActionRender === true,
     isDynamicError,
     isDraftMode,
     isForceDynamic,

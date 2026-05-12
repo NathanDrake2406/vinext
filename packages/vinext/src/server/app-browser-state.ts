@@ -8,10 +8,18 @@ import {
 import { createRscRequestHeaders } from "./app-rsc-cache-busting.js";
 import {
   NavigationTraceReasonCodes,
+  createNavigationLifecycleTraceFields,
   createNavigationTrace,
   type NavigationTrace,
-  type NavigationTraceReasonCode,
+  type NavigationTraceFields,
 } from "./navigation-trace.js";
+import {
+  navigationPlanner,
+  type NavigationDecisionV0,
+  type OperationLane,
+  type OperationToken,
+  type RouteSnapshotV0,
+} from "./navigation-planner.js";
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
 
 const VINEXT_PREVIOUS_NEXT_URL_HISTORY_STATE_KEY = "__vinext_previousNextUrl";
@@ -20,7 +28,7 @@ type HistoryStateRecord = {
   [key: string]: unknown;
 };
 
-export type OperationLane = "navigation" | "refresh" | "traverse" | "server-action" | "hmr";
+export type { OperationLane } from "./navigation-planner.js";
 
 type OperationRecordBase = {
   id: number;
@@ -44,6 +52,7 @@ export type AppRouterState = {
   elements: AppElements;
   interceptionContext: string | null;
   layoutFlags: LayoutFlags;
+  layoutIds: readonly string[];
   previousNextUrl: string | null;
   renderId: number;
   navigationSnapshot: ClientNavigationRenderSnapshot;
@@ -56,6 +65,7 @@ export type AppRouterAction = {
   elements: AppElements;
   interceptionContext: string | null;
   layoutFlags: LayoutFlags;
+  layoutIds: readonly string[];
   navigationSnapshot: ClientNavigationRenderSnapshot;
   operation: PendingOperationRecord;
   previousNextUrl: string | null;
@@ -76,6 +86,7 @@ export type PendingNavigationCommit = {
 type PendingNavigationCommitDisposition = "dispatch" | "hard-navigate" | "skip";
 type PendingNavigationCommitDispositionDecision = {
   disposition: PendingNavigationCommitDisposition;
+  preserveElementIds: readonly string[];
   trace: NavigationTrace;
 };
 
@@ -180,91 +191,168 @@ export function resolveServerActionRequestState(
   return { headers };
 }
 
-export function shouldHardNavigate(
-  currentRootLayoutTreePath: string | null,
-  nextRootLayoutTreePath: string | null,
-): boolean {
-  // `null` means the payload could not identify an enclosing root layout
-  // boundary. Treat that as soft-navigation compatible so fallback payloads
-  // do not force a hard reload purely because metadata is absent.
-  return (
-    currentRootLayoutTreePath !== null &&
-    nextRootLayoutTreePath !== null &&
-    currentRootLayoutTreePath !== nextRootLayoutTreePath
+export function resolvePendingNavigationCommitDispositionDecision(options: {
+  activeNavigationId: number;
+  currentState: AppRouterState;
+  pending: PendingNavigationCommit;
+  startedNavigationId: number;
+  targetHref?: string;
+}): PendingNavigationCommitDispositionDecision {
+  const traceFields = createPendingNavigationTraceFields(options);
+
+  if (
+    options.startedNavigationId !== options.activeNavigationId ||
+    options.pending.action.operation.startedVisibleCommitVersion !==
+      options.currentState.visibleCommitVersion
+  ) {
+    return {
+      disposition: "skip",
+      preserveElementIds: [],
+      trace: createNavigationTrace(NavigationTraceReasonCodes.staleOperation, traceFields),
+    };
+  }
+
+  return mapNavigationDecisionToPendingDisposition(
+    planPendingRootBoundaryFlightResponse({
+      currentState: options.currentState,
+      pending: options.pending,
+      targetHref: options.targetHref,
+      traceFields,
+    }),
   );
 }
 
-export function resolvePendingNavigationCommitDisposition(options: {
+function createPendingNavigationTraceFields(options: {
   activeNavigationId: number;
-  currentVisibleCommitVersion: number;
-  currentRootLayoutTreePath: string | null;
-  nextRootLayoutTreePath: string | null;
+  currentState: AppRouterState;
+  pending: PendingNavigationCommit;
   startedNavigationId: number;
-  startedVisibleCommitVersion: number;
-}): PendingNavigationCommitDisposition {
-  if (options.startedNavigationId !== options.activeNavigationId) {
-    return "skip";
-  }
-
-  if (options.startedVisibleCommitVersion !== options.currentVisibleCommitVersion) {
-    return "skip";
-  }
-
-  if (shouldHardNavigate(options.currentRootLayoutTreePath, options.nextRootLayoutTreePath)) {
-    return "hard-navigate";
-  }
-
-  return "dispatch";
-}
-
-export function resolvePendingNavigationCommitDispositionDecision(options: {
-  activeNavigationId: number;
-  currentVisibleCommitVersion: number;
-  currentRootLayoutTreePath: string | null;
-  nextRootLayoutTreePath: string | null;
-  startedNavigationId: number;
-  startedVisibleCommitVersion: number;
-}): PendingNavigationCommitDispositionDecision {
-  const disposition = resolvePendingNavigationCommitDisposition(options);
-  const traceFields = {
-    activeNavigationId: options.activeNavigationId,
-    currentRootLayoutTreePath: options.currentRootLayoutTreePath,
-    currentVisibleCommitVersion: options.currentVisibleCommitVersion,
-    nextRootLayoutTreePath: options.nextRootLayoutTreePath,
-    startedNavigationId: options.startedNavigationId,
-    startedVisibleCommitVersion: options.startedVisibleCommitVersion,
-  };
-
+  targetHref?: string;
+}): NavigationTraceFields {
   return {
-    disposition,
-    trace: createNavigationTrace(
-      getPendingNavigationCommitDispositionTraceCode({
-        currentRootLayoutTreePath: options.currentRootLayoutTreePath,
-        disposition,
-        nextRootLayoutTreePath: options.nextRootLayoutTreePath,
-      }),
-      traceFields,
-    ),
+    ...createNavigationLifecycleTraceFields({
+      activeNavigationId: options.activeNavigationId,
+      currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
+      currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
+      nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
+      startedNavigationId: options.startedNavigationId,
+      startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
+    }),
+    ...(options.targetHref !== undefined ? { targetHref: options.targetHref } : {}),
   };
 }
 
-function getPendingNavigationCommitDispositionTraceCode(options: {
-  currentRootLayoutTreePath: string | null;
-  disposition: PendingNavigationCommitDisposition;
-  nextRootLayoutTreePath: string | null;
-}): NavigationTraceReasonCode {
-  switch (options.disposition) {
-    case "skip":
-      return NavigationTraceReasonCodes.staleOperation;
-    case "hard-navigate":
-      return NavigationTraceReasonCodes.rootBoundaryChanged;
-    case "dispatch":
-      return options.currentRootLayoutTreePath === null || options.nextRootLayoutTreePath === null
-        ? NavigationTraceReasonCodes.rootBoundaryUnknown
-        : NavigationTraceReasonCodes.commitCurrent;
+function createNavigationSnapshotUrl(snapshot: ClientNavigationRenderSnapshot): string {
+  const query = snapshot.searchParams.toString();
+  return query === "" ? snapshot.pathname : `${snapshot.pathname}?${query}`;
+}
+
+function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
+  const displayUrl = createNavigationSnapshotUrl(state.navigationSnapshot);
+  return {
+    displayUrl,
+    layoutIds: state.layoutIds,
+    // `displayUrl` preserves the browser-visible query string for decisions and
+    // traces. `matchedUrl` stays path-only because route matching has already
+    // consumed query params before AppElements metadata reaches this boundary.
+    matchedUrl: state.navigationSnapshot.pathname,
+    rootBoundaryId: state.rootLayoutTreePath,
+    routeId: state.routeId,
+  };
+}
+
+function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnapshotV0 {
+  const displayUrl = createNavigationSnapshotUrl(pending.action.navigationSnapshot);
+  return {
+    displayUrl,
+    layoutIds: pending.action.layoutIds,
+    // See createVisibleRouteSnapshot: matchedUrl intentionally models the route
+    // identity, not the address bar URL.
+    matchedUrl: pending.action.navigationSnapshot.pathname,
+    rootBoundaryId: pending.rootLayoutTreePath,
+    routeId: pending.routeId,
+  };
+}
+
+function createPendingNavigationOperationToken(options: {
+  pending: PendingNavigationCommit;
+  targetSnapshot: RouteSnapshotV0;
+}): OperationToken {
+  return {
+    baseVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
+    deploymentVersion: null,
+    graphVersion: null,
+    lane: options.pending.action.operation.lane,
+    operationId: options.pending.action.operation.id,
+    targetSnapshotFingerprint: createRootBoundarySnapshotFingerprint(options.targetSnapshot),
+  };
+}
+
+function createRootBoundarySnapshotFingerprint(snapshot: RouteSnapshotV0): string {
+  return `${snapshot.routeId}|root:${snapshot.rootBoundaryId ?? "unknown"}`;
+}
+
+function planPendingRootBoundaryFlightResponse(options: {
+  currentState: AppRouterState;
+  pending: PendingNavigationCommit;
+  targetHref?: string;
+  traceFields: NavigationTraceFields;
+}): NavigationDecisionV0 {
+  const targetSnapshot = createPendingRouteSnapshot(options.pending);
+  const token = createPendingNavigationOperationToken({
+    pending: options.pending,
+    targetSnapshot,
+  });
+
+  // #726-CORE-07/08 keeps the browser state layer as the lifecycle gate and
+  // only translates committed AppElements metadata into planner snapshots.
+  // The planner owns the root-boundary decision; later #726 route-graph work
+  // should replace these client-visible snapshots with the read model called
+  // out in routing/app-router.ts instead of adding more local topology checks.
+  return navigationPlanner.plan({
+    routeManifest: null,
+    state: {
+      nextOperationToken: token,
+      traceFields: options.traceFields,
+      visibleCommitVersion: options.currentState.visibleCommitVersion,
+      visibleSnapshot: createVisibleRouteSnapshot(options.currentState),
+    },
+    event: {
+      kind: "flightResponseArrived",
+      result: {
+        // Approval call sites must pass the executor's targetHref so the
+        // planner trace and future hard-nav executor agree with the browser
+        // URL. The fallback remains for lower-level tests and direct disposition
+        // callers that exercise only snapshot-derived planner semantics.
+        href: options.targetHref ?? targetSnapshot.displayUrl,
+        targetSnapshot,
+      },
+      token,
+    },
+  });
+}
+
+function mapNavigationDecisionToPendingDisposition(
+  decision: NavigationDecisionV0,
+): PendingNavigationCommitDispositionDecision {
+  switch (decision.kind) {
+    case "proposeCommit":
+      return {
+        disposition: "dispatch",
+        preserveElementIds: decision.proposal.preserveElementIds,
+        trace: decision.trace,
+      };
+    case "hardNavigate":
+      return { disposition: "hard-navigate", preserveElementIds: [], trace: decision.trace };
+    case "noCommit":
+      return { disposition: "skip", preserveElementIds: [], trace: decision.trace };
+    case "requestWork":
+      throw new Error(
+        `[vinext] Root-boundary commit planning returned requestWork (${decision.work.kind}); flightResponseArrived should never request work`,
+      );
     default: {
-      const _exhaustive: never = options.disposition;
-      throw new Error("[vinext] Unknown navigation commit disposition: " + String(_exhaustive));
+      const _exhaustive: never = decision;
+      throw new Error("[vinext] Unknown navigation decision: " + String(_exhaustive));
     }
   }
 }
@@ -289,6 +377,7 @@ export async function createPendingNavigationCommit(options: {
     action: {
       elements,
       interceptionContext: metadata.interceptionContext,
+      layoutIds: metadata.layoutIds,
       layoutFlags: metadata.layoutFlags,
       navigationSnapshot: options.navigationSnapshot,
       operation: createOperationRecord({
