@@ -64,6 +64,8 @@ const SELF_CLOSING_HEAD_TAGS = new Set(["meta", "link", "base"]);
 /** Tags whose content is raw text — closing-tag sequences must be escaped during SSR. */
 const RAW_CONTENT_TAGS = new Set(["script", "style"]);
 
+type HeadDOMElement = Pick<HTMLElement, "innerHTML" | "setAttribute" | "textContent">;
+
 function warnDisallowedHeadTag(tag: string): void {
   if (process.env.NODE_ENV !== "production") {
     console.warn(
@@ -218,11 +220,10 @@ function headChildToHTML(tag: string, props: Record<string, unknown>): string {
       if (typeof value === "string") innerHTML = escapeHTML(value);
     } else if (key === "dangerouslySetInnerHTML") {
       // Intentionally raw — developer explicitly opted in.
-      // SECURITY NOTE: This injects raw HTML during SSR. The client-side
-      // path skips dangerouslySetInnerHTML for safety. Developers must never
-      // pass unsanitized user input here — it is a stored XSS vector.
-      const html = value as { __html?: string };
-      if (html?.__html) innerHTML = html.__html;
+      // SECURITY NOTE: This injects raw HTML. Developers must never pass
+      // unsanitized user input here — it is a stored XSS vector.
+      const html = getDangerouslySetInnerHTML(value);
+      if (html) innerHTML = html;
     } else if (key === "className") {
       attrs.push(`class="${escapeAttr(String(value))}"`);
     } else if (typeof value === "string") {
@@ -279,6 +280,40 @@ export function escapeInlineContent(content: string, tag: string): string {
   return content.replace(pattern, "<\\/$1");
 }
 
+function getDangerouslySetInnerHTML(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+
+  const html = Reflect.get(value, "__html");
+  return typeof html === "string" ? html : undefined;
+}
+
+export function _applyHeadPropsToElement(
+  domEl: HeadDOMElement,
+  props: Record<string, unknown>,
+): void {
+  const dangerouslySetInnerHTML = props.dangerouslySetInnerHTML;
+
+  if (dangerouslySetInnerHTML) {
+    domEl.innerHTML = getDangerouslySetInnerHTML(dangerouslySetInnerHTML) ?? "";
+  } else if (typeof props.children === "string") {
+    domEl.textContent = props.children;
+  }
+
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "children" || key === "dangerouslySetInnerHTML") {
+      continue;
+    } else if (key === "className") {
+      domEl.setAttribute("class", String(value));
+    } else if (typeof value === "boolean" && value) {
+      if (!isSafeAttrName(key)) continue;
+      domEl.setAttribute(key, "");
+    } else if (typeof value === "string") {
+      if (!isSafeAttrName(key)) continue;
+      domEl.setAttribute(key, value);
+    }
+  }
+}
+
 function syncClientHead(): void {
   document.querySelectorAll("[data-vinext-head]").forEach((el) => el.remove());
 
@@ -287,22 +322,7 @@ function syncClientHead(): void {
 
     const domEl = document.createElement(child.type);
     const props = child.props as Record<string, unknown>;
-
-    for (const [key, value] of Object.entries(props)) {
-      if (key === "children" && typeof value === "string") {
-        domEl.textContent = value;
-      } else if (key === "dangerouslySetInnerHTML") {
-        // skip for safety
-      } else if (key === "className") {
-        domEl.setAttribute("class", String(value));
-      } else if (typeof value === "boolean" && value) {
-        if (!isSafeAttrName(key)) continue;
-        domEl.setAttribute(key, "");
-      } else if (key !== "children" && typeof value === "string") {
-        if (!isSafeAttrName(key)) continue;
-        domEl.setAttribute(key, value);
-      }
-    }
+    _applyHeadPropsToElement(domEl, props);
 
     domEl.setAttribute("data-vinext-head", "true");
     document.head.appendChild(domEl);

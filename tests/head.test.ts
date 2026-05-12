@@ -13,6 +13,7 @@ import Head, {
   getSSRHeadHTML,
   escapeAttr,
   reduceHeadChildren,
+  _applyHeadPropsToElement,
 } from "../packages/vinext/src/shims/head.js";
 
 // ─── SSR rendering (mirrors Next.js test/unit/next-head-rendering.test.ts) ──
@@ -422,6 +423,56 @@ describe("Head escaping", () => {
     const headHtml = getSSRHeadHTML();
     expect(headHtml).toContain(" async ");
     expect(headHtml).toContain(" defer ");
+  });
+});
+
+describe("Head client sync", () => {
+  function createElementDouble() {
+    const attributes = new Map<string, string>();
+    return {
+      attributes,
+      innerHTML: "",
+      textContent: "",
+      setAttribute(name: string, value: string) {
+        attributes.set(name, value);
+      },
+    };
+  }
+
+  it("applies dangerouslySetInnerHTML to client-managed head elements", () => {
+    // Next.js client reference:
+    // packages/next/src/client/head-manager.ts reactElementToDOM()
+    // sets el.innerHTML from dangerouslySetInnerHTML.__html.
+    const element = createElementDouble();
+
+    _applyHeadPropsToElement(element, {
+      dangerouslySetInnerHTML: { __html: "body { color: red; }" },
+    });
+
+    expect(element.innerHTML).toBe("body { color: red; }");
+  });
+
+  it("uses an empty string for missing dangerouslySetInnerHTML.__html on the client", () => {
+    const element = createElementDouble();
+    element.innerHTML = "previous";
+
+    _applyHeadPropsToElement(element, {
+      dangerouslySetInnerHTML: {},
+    });
+
+    expect(element.innerHTML).toBe("");
+  });
+
+  it("prefers dangerouslySetInnerHTML over children on client-managed head elements", () => {
+    const element = createElementDouble();
+
+    _applyHeadPropsToElement(element, {
+      children: "children content",
+      dangerouslySetInnerHTML: { __html: "raw content" },
+    });
+
+    expect(element.innerHTML).toBe("raw content");
+    expect(element.textContent).toBe("");
   });
 });
 
