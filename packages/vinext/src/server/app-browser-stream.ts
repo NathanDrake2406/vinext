@@ -21,6 +21,12 @@ export function getVinextBrowserGlobal(): typeof globalThis & VinextBrowserGloba
   return globalThis as typeof globalThis & VinextBrowserGlobals;
 }
 
+function createUnexpectedRscStreamCloseError(): Error {
+  return new Error(
+    "The connection to the page was unexpectedly closed, possibly due to the stop button being clicked, loss of Wi-Fi, or an unstable internet connection.",
+  );
+}
+
 /**
  * Convert embedded text chunks back to a ReadableStream of Uint8Array chunks.
  */
@@ -61,10 +67,24 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
       }
 
       let closed = false;
+      let cancelDocumentCompletionCheck: (() => void) | undefined;
+      const cancelPendingDocumentCompletionCheck = () => {
+        const cancel = cancelDocumentCompletionCheck;
+        cancelDocumentCompletionCheck = undefined;
+        cancel?.();
+      };
       const closeOnce = () => {
         if (!closed) {
           closed = true;
+          cancelPendingDocumentCompletionCheck();
           controller.close();
+        }
+      };
+      const errorOnce = () => {
+        if (!closed) {
+          closed = true;
+          cancelPendingDocumentCompletionCheck();
+          controller.error(createUnexpectedRscStreamCloseError());
         }
       };
 
@@ -87,9 +107,12 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
 
       if (typeof document !== "undefined") {
         if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", closeOnce);
+          document.addEventListener("DOMContentLoaded", errorOnce);
+          cancelDocumentCompletionCheck = () =>
+            document.removeEventListener("DOMContentLoaded", errorOnce);
         } else {
-          closeOnce();
+          const timeoutId = setTimeout(errorOnce);
+          cancelDocumentCompletionCheck = () => clearTimeout(timeoutId);
         }
       }
     },
