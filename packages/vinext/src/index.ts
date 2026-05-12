@@ -1785,7 +1785,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           return generateSsrEntry(hasPagesDir);
         }
         if (id === RESOLVED_APP_BROWSER_ENTRY && hasAppDir) {
-          return generateBrowserEntry();
+          const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
+          return generateBrowserEntry(routes);
         }
         if (id.startsWith(RESOLVED_VIRTUAL_GOOGLE_FONTS + "?")) {
           return generateGoogleFontsVirtualModule(id, _fontGoogleShimPath);

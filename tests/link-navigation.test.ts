@@ -7,6 +7,7 @@ import {
   type LinkPrefetchIntent,
   type LinkPrefetchDecision,
 } from "../packages/vinext/src/shims/link-prefetch.js";
+import type { VinextLinkPrefetchRoute } from "../packages/vinext/src/client/vinext-next-data.js";
 
 type CapturedEffect = () => void | (() => void);
 
@@ -29,6 +30,14 @@ type CapturedAnchorProps = {
   onTouchStart?: (event: CapturedIntentEvent) => void;
   ref?: (node: HTMLAnchorElement | null) => void;
 };
+
+const linkPrefetchRoutes = [
+  { patternParts: ["viewport-prefetch-target"], isDynamic: false },
+  { patternParts: ["intent-prefetch-target"], isDynamic: false },
+  { patternParts: ["touch-prefetch-target"], isDynamic: false },
+  { patternParts: ["same-origin-intent-prefetch-target"], isDynamic: false },
+  { patternParts: ["blog", ":slug"], isDynamic: true },
+] satisfies VinextLinkPrefetchRoute[];
 
 type MockReactAnchorCaptureOptions = {
   captureAnchor(type: unknown, props: unknown): void;
@@ -390,6 +399,7 @@ async function renderIsolatedLink(options: {
       replaceState: vi.fn(),
     },
     location,
+    __VINEXT_LINK_PREFETCH_ROUTES__: linkPrefetchRoutes,
     requestIdleCallback: vi.fn((callback: () => void) => {
       callback();
       return 1;
@@ -434,7 +444,7 @@ async function renderIsolatedLink(options: {
 }
 
 describe("Link App Router prefetch scheduling", () => {
-  it("prefetches visible links in production with low priority", async () => {
+  function stubIntersectionObserver() {
     let intersectionCallback: IntersectionObserverCallback | undefined;
     const observe = vi.fn();
     const unobserve = vi.fn();
@@ -454,44 +464,102 @@ describe("Link App Router prefetch scheduling", () => {
     }
     vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
 
+    return {
+      observe,
+      unobserve,
+      dispatchIntersectingEntry(anchor: HTMLAnchorElement) {
+        const rect = {
+          bottom: 0,
+          height: 0,
+          left: 0,
+          right: 0,
+          top: 0,
+          width: 0,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        };
+        intersectionCallback?.(
+          [
+            {
+              boundingClientRect: rect,
+              intersectionRatio: 1,
+              intersectionRect: rect,
+              isIntersecting: true,
+              rootBounds: null,
+              target: anchor,
+              time: 0,
+            },
+          ],
+          {} as IntersectionObserver,
+        );
+      },
+    };
+  }
+
+  it("prefetches visible links in production with low priority", async () => {
+    const observer = stubIntersectionObserver();
+
     const result = await renderIsolatedLink({
       href: "/viewport-prefetch-target",
       nodeEnv: "production",
     });
 
     try {
-      expect(observe).toHaveBeenCalledWith(result.anchor);
-      expect(intersectionCallback).toBeTypeOf("function");
-      const rect = {
-        bottom: 0,
-        height: 0,
-        left: 0,
-        right: 0,
-        top: 0,
-        width: 0,
-        x: 0,
-        y: 0,
-        toJSON: () => ({}),
-      };
-      intersectionCallback?.(
-        [
-          {
-            boundingClientRect: rect,
-            intersectionRatio: 1,
-            intersectionRect: rect,
-            isIntersecting: true,
-            rootBounds: null,
-            target: result.anchor,
-            time: 0,
-          },
-        ],
-        {} as IntersectionObserver,
-      );
+      expect(observer.observe).toHaveBeenCalledWith(result.anchor);
+      observer.dispatchIntersectingEntry(result.anchor);
       await flushPrefetchTasks();
 
-      expect(unobserve).toHaveBeenCalledWith(result.anchor);
+      expect(observer.unobserve).toHaveBeenCalledWith(result.anchor);
       expect(result.fetch).toHaveBeenCalledWith(
         expect.stringContaining("/viewport-prefetch-target.rsc"),
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not full-prefetch visible dynamic links in automatic production mode", async () => {
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+    });
+
+    try {
+      expect(observer.observe).toHaveBeenCalledWith(result.anchor);
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+
+      expect(observer.unobserve).toHaveBeenCalledWith(result.anchor);
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("full-prefetches visible dynamic links when prefetch is explicitly true", async () => {
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+      props: { prefetch: true },
+    });
+
+    try {
+      expect(observer.observe).toHaveBeenCalledWith(result.anchor);
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+
+      expect(observer.unobserve).toHaveBeenCalledWith(result.anchor);
+      expect(result.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/blog/hello.rsc"),
         expect.objectContaining({
           credentials: "include",
           priority: "low",
