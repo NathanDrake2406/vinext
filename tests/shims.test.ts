@@ -1188,7 +1188,10 @@ describe("next/headers shim", () => {
     expect(dm.isEnabled).toBe(false);
 
     dm.enable();
-    // After enabling, the cookie should be set on the context
+    // isEnabled should reflect the change on the same object (live getter)
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/draft-mode.ts
+    expect(dm.isEnabled).toBe(true);
+    // A fresh draftMode() call should also see the change
     const dm2 = await draftMode();
     expect(dm2.isEnabled).toBe(true);
 
@@ -1201,26 +1204,6 @@ describe("next/headers shim", () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
     expect(cookieHeader).toContain("HttpOnly");
-    setHeadersContext(null);
-  });
-
-  it("draftMode().isEnabled reflects enable() on the same draft mode object", async () => {
-    const { setHeadersContext, draftMode } =
-      await import("../packages/vinext/src/shims/headers.js");
-
-    setHeadersContext({
-      headers: new Headers(),
-      cookies: new Map(),
-    });
-
-    const dm = await draftMode();
-    expect(dm.isEnabled).toBe(false);
-
-    dm.enable();
-    // Next.js exposes DraftMode.isEnabled as a live getter backed by DraftModeProvider.
-    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/draft-mode.ts
-    expect(dm.isEnabled).toBe(true);
-
     setHeadersContext(null);
   });
 
@@ -1241,33 +1224,15 @@ describe("next/headers shim", () => {
     expect(dm1.isEnabled).toBe(true);
 
     dm1.disable();
+    // isEnabled should reflect the change on the same object (live getter)
+    expect(dm1.isEnabled).toBe(false);
+    // A fresh draftMode() call should also see the change
     const dm2 = await draftMode();
     expect(dm2.isEnabled).toBe(false);
 
     const cookieHeader = getDraftModeCookieHeader();
     expect(cookieHeader).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT");
     expect(cookieHeader).not.toContain("Max-Age=0");
-    setHeadersContext(null);
-  });
-
-  it("draftMode().isEnabled reflects disable() on the same draft mode object", async () => {
-    const { setHeadersContext, draftMode, getDraftModeCookieHeader } =
-      await import("../packages/vinext/src/shims/headers.js");
-
-    setHeadersContext({
-      headers: new Headers(),
-      cookies: new Map(),
-    });
-
-    const dm = await draftMode();
-    dm.enable();
-    getDraftModeCookieHeader();
-
-    expect(dm.isEnabled).toBe(true);
-
-    dm.disable();
-    expect(dm.isEnabled).toBe(false);
-
     setHeadersContext(null);
   });
 
