@@ -48,7 +48,7 @@ import {
   mergeMiddlewareResponseHeaders,
   type AppPageMiddlewareContext,
 } from "./app-page-response.js";
-import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
+import { VINEXT_RSC_VARY_HEADER, applyRscBuildIdHeader } from "./app-rsc-cache-busting.js";
 import { createAppPageTreePath } from "./app-page-route-wiring.js";
 import type { AppPageSsrHandler } from "./app-page-stream.js";
 import { createStaticGenerationHeadersContext } from "./app-static-generation.js";
@@ -500,6 +500,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         Vary: VINEXT_RSC_VARY_HEADER,
       });
       mergeMiddlewareResponseHeaders(interceptHeaders, options.middlewareContext.headers);
+      applyRscBuildIdHeader(interceptHeaders);
       return new Response(interceptStream, {
         status: options.middlewareContext.status ?? 200,
         headers: interceptHeaders,

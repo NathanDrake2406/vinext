@@ -6,7 +6,10 @@ import {
   resolveAppPageHtmlResponsePolicy,
   resolveAppPageRscResponsePolicy,
 } from "../packages/vinext/src/server/app-page-response.js";
-import { VINEXT_RSC_VARY_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import {
+  VINEXT_RSC_BUILD_ID_HEADER,
+  VINEXT_RSC_VARY_HEADER,
+} from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 
 function createBody(text: string): ReadableStream {
   return new ReadableStream({
@@ -362,6 +365,30 @@ describe("app page response helpers", () => {
     expect(response.headers.get("vary")).toBe(VINEXT_RSC_VARY_HEADER);
     expect(response.headers.get("x-vinext-timing")).toBe("10,5,-1");
     await expect(response.text()).resolves.toBe("flight");
+  });
+
+  it("builds RSC responses with the current build ID header", () => {
+    const response = buildAppPageRscResponse(createBody("flight"), {
+      buildId: "build-a",
+      middlewareContext: { headers: null, status: null },
+      policy: {},
+    });
+
+    expect(response.headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("build-a");
+  });
+
+  it("keeps the framework build ID when middleware sets the same internal header", () => {
+    const middlewareHeaders = new Headers({
+      [VINEXT_RSC_BUILD_ID_HEADER]: "middleware-build",
+    });
+
+    const response = buildAppPageRscResponse(createBody("flight"), {
+      buildId: "framework-build",
+      middlewareContext: { headers: middlewareHeaders, status: null },
+      policy: {},
+    });
+
+    expect(response.headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("framework-build");
   });
 
   it("percent-encodes X-Vinext-Params so non-ASCII characters survive the ByteString header constraint (issue #676)", () => {

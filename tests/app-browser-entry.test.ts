@@ -2,6 +2,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createOnUncaughtError } from "../packages/vinext/src/server/app-browser-error.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
+import { resolveRscBuildIdNavigationDecision } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { devOnCaughtError } from "../packages/vinext/src/server/dev-error-overlay.js";
 import {
   APP_INTERCEPTION_CONTEXT_KEY,
@@ -219,6 +220,50 @@ afterEach(() => {
 });
 
 describe("app browser entry navigation scheduling", () => {
+  it("hard-navigates RSC responses when the response build ID is missing or stale", () => {
+    stubWindow("https://example.com/current");
+
+    expect(
+      resolveRscBuildIdNavigationDecision({
+        clientBuildId: "build-a",
+        currentHref: "/target?tab=1#details",
+        origin: "https://example.com",
+        responseBuildId: null,
+        responseUrl: "https://example.com/target.rsc?tab=1&_rsc=stale",
+      }),
+    ).toEqual({
+      hardNavigationTarget: "/target?tab=1#details",
+      kind: "hard-navigate",
+    });
+
+    expect(
+      resolveRscBuildIdNavigationDecision({
+        clientBuildId: "build-a",
+        currentHref: "/target/",
+        origin: "https://example.com",
+        responseBuildId: "build-b",
+        responseUrl: "https://example.com/target.rsc?_rsc=stale",
+      }),
+    ).toEqual({
+      hardNavigationTarget: "/target/",
+      kind: "hard-navigate",
+    });
+  });
+
+  it("keeps RSC responses on the soft-navigation path when build IDs match", () => {
+    stubWindow("https://example.com/current");
+
+    expect(
+      resolveRscBuildIdNavigationDecision({
+        clientBuildId: "build-a",
+        currentHref: "/target",
+        origin: "https://example.com",
+        responseBuildId: "build-a",
+        responseUrl: "https://example.com/target.rsc?_rsc=fresh",
+      }),
+    ).toEqual({ kind: "compatible" });
+  });
+
   it("does not expose a per-navigation transition override at the controller boundary", () => {
     type Controller = ReturnType<typeof createAppBrowserNavigationController>;
     function assertNoTransitionOverride(controller: Controller) {

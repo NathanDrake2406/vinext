@@ -8,7 +8,10 @@ import {
   scheduleAppPageRscCacheWrite,
 } from "../packages/vinext/src/server/app-page-cache.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
-import { VINEXT_RSC_VARY_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import {
+  VINEXT_RSC_BUILD_ID_HEADER,
+  VINEXT_RSC_VARY_HEADER,
+} from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 
 function buildISRCacheEntry(
@@ -71,6 +74,7 @@ describe("app page cache helpers", () => {
     await expect(htmlResponse?.text()).resolves.toBe("<h1>cached</h1>");
 
     const rscResponse = buildAppPageCachedResponse(cachedValue, {
+      buildId: "build-a",
       cacheState: "STALE",
       expireSeconds: 300,
       isRscRequest: true,
@@ -78,6 +82,7 @@ describe("app page cache helpers", () => {
     });
     expect(rscResponse?.headers.get("content-type")).toBe("text/x-component; charset=utf-8");
     expect(rscResponse?.headers.get("cache-control")).toBe("s-maxage=0, stale-while-revalidate");
+    expect(rscResponse?.headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("build-a");
     expect(await rscResponse?.arrayBuffer()).toEqual(rscData);
   });
 
@@ -109,10 +114,12 @@ describe("app page cache helpers", () => {
     const rscData = new TextEncoder().encode("flight").buffer;
     const middlewareHeaders = new Headers({
       "Access-Control-Allow-Origin": "https://example.com",
+      [VINEXT_RSC_BUILD_ID_HEADER]: "middleware-build",
       Vary: "Origin",
     });
 
     const response = buildAppPageCachedResponse(buildCachedAppPageValue("", rscData), {
+      buildId: "framework-build",
       cacheState: "STALE",
       isRscRequest: true,
       middlewareHeaders,
@@ -120,6 +127,7 @@ describe("app page cache helpers", () => {
     });
 
     expect(response?.headers.get("Access-Control-Allow-Origin")).toBe("https://example.com");
+    expect(response?.headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("framework-build");
     expect(response?.headers.get("Vary")).toBe(`${VINEXT_RSC_VARY_HEADER}, Origin`);
     expect(response?.headers.get("X-Vinext-Cache")).toBe("STALE");
     await expect(response?.arrayBuffer()).resolves.toEqual(rscData);

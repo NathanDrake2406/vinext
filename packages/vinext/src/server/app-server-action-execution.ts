@@ -1,7 +1,7 @@
 import { getAndClearActionRevalidationKind, type ActionRevalidationKind } from "vinext/shims/cache";
 import type { HeadersAccessPhase } from "vinext/shims/headers";
 import { type FetchCacheMode, setCurrentFetchCacheMode } from "vinext/shims/fetch-cache";
-import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
+import { VINEXT_RSC_VARY_HEADER, applyRscBuildIdHeader } from "./app-rsc-cache-busting.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import {
@@ -606,6 +606,7 @@ export async function handleServerActionRscRequest<
         Vary: VINEXT_RSC_VARY_HEADER,
       });
       mergeMiddlewareResponseHeaders(redirectHeaders, options.middlewareHeaders);
+      applyRscBuildIdHeader(redirectHeaders);
       redirectHeaders.set("x-action-redirect", actionRedirect.url);
       redirectHeaders.set("x-action-redirect-type", actionRedirect.type);
       redirectHeaders.set("x-action-redirect-status", String(actionRedirect.status));
@@ -678,6 +679,7 @@ export async function handleServerActionRscRequest<
       Vary: VINEXT_RSC_VARY_HEADER,
     });
     mergeMiddlewareResponseHeaders(actionHeaders, options.middlewareHeaders);
+    applyRscBuildIdHeader(actionHeaders);
     setActionRevalidatedHeader(actionHeaders, actionRevalidationKind);
     const actionResponse = new Response(rscStream, {
       status: options.middlewareStatus ?? actionStatus,

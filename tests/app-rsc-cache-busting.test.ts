@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  applyRscBuildIdHeader,
   computeRscCacheBustingSearchParam,
   createRscRequestHeaders,
   createRscRequestUrl,
+  isRscBuildIdCompatible,
   resolveInvalidRscCacheBustingRequest,
   setRscCacheBustingSearchParam,
   stripRscCacheBustingSearchParam,
+  VINEXT_RSC_BUILD_ID_HEADER,
   VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM,
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
@@ -172,5 +175,34 @@ describe("App Router RSC cache-busting", () => {
     expect(VINEXT_RSC_VARY_HEADER).toBe(
       "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots",
     );
+  });
+
+  it("applies the current build ID to RSC response headers when available", () => {
+    const headers = new Headers();
+
+    applyRscBuildIdHeader(headers, "build-a");
+
+    expect(headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("build-a");
+  });
+
+  it("does not add an empty build ID header", () => {
+    const headers = new Headers();
+
+    applyRscBuildIdHeader(headers, "");
+
+    expect(headers.has(VINEXT_RSC_BUILD_ID_HEADER)).toBe(false);
+  });
+
+  it("classifies mismatched RSC build IDs as incompatible", () => {
+    expect(isRscBuildIdCompatible("build-a", "build-a")).toBe(true);
+    expect(isRscBuildIdCompatible("build-b", "build-a")).toBe(false);
+  });
+
+  it("treats missing response build IDs as incompatible when the client has a build ID", () => {
+    expect(isRscBuildIdCompatible(null, "build-a")).toBe(false);
+  });
+
+  it("treats missing response build IDs as compatible only when the client has no build ID", () => {
+    expect(isRscBuildIdCompatible("build-a", null)).toBe(true);
   });
 });

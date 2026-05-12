@@ -120,6 +120,7 @@ declare module "next/navigation" {
 
   // RSC prefetch cache utilities (shared between link.tsx and browser entry)
   export type CachedRscResponse = {
+    buildIdHeader?: string | null;
     buffer: ArrayBuffer;
     contentType: string;
     mountedSlotsHeader?: string | null;

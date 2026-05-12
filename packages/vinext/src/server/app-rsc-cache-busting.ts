@@ -7,6 +7,7 @@ import { fnv1a64 } from "../utils/hash.js";
  * repeated canonicalization redirects.
  */
 export const VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM = "_rsc";
+export const VINEXT_RSC_BUILD_ID_HEADER = "X-Vinext-Build-Id";
 export const VINEXT_RSC_CONTENT_TYPE = "text/x-component";
 export const VINEXT_RSC_MOUNTED_SLOTS_HEADER = "X-Vinext-Mounted-Slots";
 
@@ -52,6 +53,83 @@ function encodeBase64Url(bytes: Uint8Array): string {
 
 function normalizeHeaderValue(value: string | null): string {
   return value ?? "0";
+}
+
+function normalizeBuildId(value: string | null | undefined): string | null {
+  return value && value.length > 0 ? value : null;
+}
+
+export function getVinextBuildId(): string | null {
+  return normalizeBuildId(process.env.__VINEXT_BUILD_ID);
+}
+
+export function applyRscBuildIdHeader(
+  headers: Headers,
+  buildId: string | null | undefined = getVinextBuildId(),
+): void {
+  const normalized = normalizeBuildId(buildId);
+  if (normalized) {
+    headers.set(VINEXT_RSC_BUILD_ID_HEADER, normalized);
+  }
+}
+
+export function isRscBuildIdCompatible(
+  responseBuildId: string | null | undefined,
+  clientBuildId: string | null | undefined = getVinextBuildId(),
+): boolean {
+  const normalizedResponseBuildId = normalizeBuildId(responseBuildId);
+  const normalizedClientBuildId = normalizeBuildId(clientBuildId);
+  return (
+    normalizedClientBuildId === null ||
+    (normalizedResponseBuildId !== null && normalizedResponseBuildId === normalizedClientBuildId)
+  );
+}
+
+type RscBuildIdNavigationDecision =
+  | { kind: "compatible" }
+  | { hardNavigationTarget: string; kind: "hard-navigate" };
+
+export function resolveHardNavigationTargetFromRscResponse(
+  responseUrl: string | null | undefined,
+  currentHref: string,
+  origin: string,
+): string {
+  if (!responseUrl) {
+    return currentHref;
+  }
+
+  const parsed = new URL(responseUrl, origin);
+  stripRscCacheBustingSearchParam(parsed);
+  const origUrl = new URL(currentHref, origin);
+  let pathname = stripRscSuffix(parsed.pathname);
+  if (origUrl.pathname.length > 1 && origUrl.pathname.endsWith("/") && !pathname.endsWith("/")) {
+    pathname += "/";
+  }
+
+  let hardNavigationTarget = pathname + parsed.search;
+  if (origUrl.hash) hardNavigationTarget += origUrl.hash;
+  return hardNavigationTarget;
+}
+
+export function resolveRscBuildIdNavigationDecision(options: {
+  clientBuildId?: string | null;
+  currentHref: string;
+  origin: string;
+  responseBuildId: string | null | undefined;
+  responseUrl?: string | null;
+}): RscBuildIdNavigationDecision {
+  if (isRscBuildIdCompatible(options.responseBuildId, options.clientBuildId)) {
+    return { kind: "compatible" };
+  }
+
+  return {
+    hardNavigationTarget: resolveHardNavigationTargetFromRscResponse(
+      options.responseUrl,
+      options.currentHref,
+      options.origin,
+    ),
+    kind: "hard-navigate",
+  };
 }
 
 function createCacheBustingInput(headers: Headers): string | null {
