@@ -819,27 +819,28 @@ export async function draftMode(): Promise<DraftModeResult> {
   }
   markDynamicUsage();
   const secret = getDraftSecret();
-  const headersContext = state.headersContext;
 
   return {
     get isEnabled(): boolean {
-      return headersContext ? headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret : false;
+      return state.headersContext
+        ? state.headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret
+        : false;
     },
     enable(): void {
-      if (headersContext?.accessError) {
-        throw headersContext.accessError;
+      if (state.headersContext?.accessError) {
+        throw state.headersContext.accessError;
       }
-      if (headersContext) {
-        headersContext.cookies.set(DRAFT_MODE_COOKIE, secret);
+      if (state.headersContext) {
+        state.headersContext.cookies.set(DRAFT_MODE_COOKIE, secret);
       }
       state.draftModeCookieHeader = `${DRAFT_MODE_COOKIE}=${secret}; ${draftModeCookieAttributes()}`;
     },
     disable(): void {
-      if (headersContext?.accessError) {
-        throw headersContext.accessError;
+      if (state.headersContext?.accessError) {
+        throw state.headersContext.accessError;
       }
-      if (headersContext) {
-        headersContext.cookies.delete(DRAFT_MODE_COOKIE);
+      if (state.headersContext) {
+        state.headersContext.cookies.delete(DRAFT_MODE_COOKIE);
       }
       state.draftModeCookieHeader = `${DRAFT_MODE_COOKIE}=; ${draftModeCookieAttributes()}; Expires=${DRAFT_MODE_EXPIRED_DATE}`;
     },
