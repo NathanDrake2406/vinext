@@ -35,7 +35,7 @@ import {
   VINEXT_RSC_MOUNTED_SLOTS_HEADER,
 } from "../server/app-rsc-cache-busting.js";
 import { isDangerousScheme } from "./url-safety.js";
-import { getLinkPrefetchDecision, getLinkPrefetchHref } from "./link-prefetch.js";
+import { canLinkPrefetch, getLinkPrefetchHref } from "./link-prefetch.js";
 import {
   resolveRelativeHref,
   toBrowserNavigationHref,
@@ -318,26 +318,11 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   // Prefetching: observe the element when it enters the viewport.
   // prefetch={false} disables, prefetch={true} or undefined/null (default) enables.
   const internalRef = useRef<HTMLAnchorElement | null>(null);
-  const viewportPrefetchDecision = getLinkPrefetchDecision({
+  const shouldPrefetch = canLinkPrefetch({
     nodeEnv: process.env.NODE_ENV,
     prefetch: prefetchProp,
     isDangerous,
-    intent: "viewport",
   });
-  const intentPrefetchDecision = getLinkPrefetchDecision({
-    nodeEnv: process.env.NODE_ENV,
-    prefetch: prefetchProp,
-    isDangerous,
-    intent: "intent",
-  });
-  const shouldViewportPrefetch = viewportPrefetchDecision.shouldPrefetch;
-  const viewportPrefetchPriority = viewportPrefetchDecision.shouldPrefetch
-    ? viewportPrefetchDecision.priority
-    : "low";
-  const shouldIntentPrefetch = intentPrefetchDecision.shouldPrefetch;
-  const intentPrefetchPriority = intentPrefetchDecision.shouldPrefetch
-    ? intentPrefetchDecision.priority
-    : "high";
 
   const setRefs = useCallback(
     (node: HTMLAnchorElement | null) => {
@@ -350,7 +335,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   );
 
   useEffect(() => {
-    if (!shouldViewportPrefetch || typeof window === "undefined") return;
+    if (!shouldPrefetch || typeof window === "undefined") return;
     const node = internalRef.current;
     if (!node) return;
 
@@ -364,19 +349,19 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     const observer = getSharedObserver();
     if (!observer) return;
 
-    observerCallbacks.set(node, () => prefetchUrl(hrefToPrefetch, viewportPrefetchPriority));
+    observerCallbacks.set(node, () => prefetchUrl(hrefToPrefetch, "low"));
     observer.observe(node);
 
     return () => {
       observer.unobserve(node);
       observerCallbacks.delete(node);
     };
-  }, [shouldViewportPrefetch, viewportPrefetchPriority, localizedHref]);
+  }, [shouldPrefetch, localizedHref]);
 
   const prefetchOnIntent = useCallback(() => {
-    if (!shouldIntentPrefetch) return;
-    prefetchUrl(localizedHref, intentPrefetchPriority);
-  }, [shouldIntentPrefetch, intentPrefetchPriority, localizedHref]);
+    if (!shouldPrefetch) return;
+    prefetchUrl(localizedHref, "high");
+  }, [shouldPrefetch, localizedHref]);
 
   const handleMouseEnter = useCallback(
     (e: MouseEvent<HTMLAnchorElement>) => {
@@ -510,7 +495,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       console.warn(`<Link> blocked dangerous href: ${resolvedHref}`);
     }
     return (
-      <a {...anchorProps} onMouseEnter={onMouseEnter} onTouchStart={onTouchStart}>
+      <a {...anchorProps} onMouseEnter={handleMouseEnter} onTouchStart={handleTouchStart}>
         {children}
       </a>
     );

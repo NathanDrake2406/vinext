@@ -99,6 +99,8 @@ test.describe("Next.js compat: prefetch (browser)", () => {
     await page.goto(`${BASE}/nextjs-compat/prefetch-test`);
     await waitForAppRouterHydration(page);
 
+    // Verify the fetch instrumentation sees .rsc URLs before relying on it
+    // to assert that Link prefetch does not issue a no-prefetch request.
     await page.evaluate(async () => {
       await window.fetch("/nextjs-compat/prefetch-test/target.rsc");
     });

@@ -38,7 +38,10 @@ type MockReactAnchorCaptureOptions = {
 
 // This is a tactical escape hatch for Link only. It intercepts React and JSX
 // runtime output because the current E2E setup cannot honestly reach the
-// production-only Link prefetch path. Do not reuse it as a component harness.
+// production-only Link prefetch path. It mocks useEffect synchronously and
+// captures element creation before reconciliation, so it cannot test commit
+// scheduling, cleanup, re-renders, or conditional effect execution. Do not
+// reuse it as a component harness.
 function mockReactAnchorCaptureForLinkOnly_DO_NOT_REUSE(
   options: MockReactAnchorCaptureOptions,
 ): void {
@@ -118,6 +121,9 @@ function mockReactAnchorCaptureForLinkOnly_DO_NOT_REUSE(
 }
 
 async function flushPrefetchTasks(): Promise<void> {
+  // requestIdleCallback is mocked as sync, then prefetchUrl enters an async
+  // IIFE with one awaited createRscRequestUrl call. These ticks drain the
+  // current chain; update this helper if the async depth grows.
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();

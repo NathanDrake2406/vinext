@@ -12,15 +12,21 @@ export type LinkPrefetchDecision =
       priority: LinkPrefetchPriority;
     };
 
+export function canLinkPrefetch(input: {
+  nodeEnv: string | undefined;
+  prefetch: boolean | null | undefined;
+  isDangerous: boolean;
+}): boolean {
+  return input.nodeEnv === "production" && input.prefetch !== false && !input.isDangerous;
+}
+
 export function getLinkPrefetchDecision(input: {
   nodeEnv: string | undefined;
   prefetch: boolean | null | undefined;
   isDangerous: boolean;
   intent: LinkPrefetchIntent;
 }): LinkPrefetchDecision {
-  if (input.nodeEnv !== "production") return { shouldPrefetch: false };
-  if (input.prefetch === false) return { shouldPrefetch: false };
-  if (input.isDangerous) return { shouldPrefetch: false };
+  if (!canLinkPrefetch(input)) return { shouldPrefetch: false };
 
   return {
     shouldPrefetch: true,
@@ -28,6 +34,12 @@ export function getLinkPrefetchDecision(input: {
   };
 }
 
+/**
+ * Normalize absolute and protocol-relative Link hrefs to app-relative paths
+ * that are eligible for prefetching. Non-absolute relative hrefs are returned
+ * unchanged; callers must resolve them against the current browser URL before
+ * constructing a concrete fetch target.
+ */
 export function getLinkPrefetchHref(input: {
   href: string;
   basePath: string;
