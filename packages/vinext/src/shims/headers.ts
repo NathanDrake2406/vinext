@@ -791,7 +791,7 @@ export function isDraftModeRequest(request: Request): boolean {
 }
 
 type DraftModeResult = {
-  isEnabled: boolean;
+  readonly isEnabled: boolean;
   enable(): void;
   disable(): void;
 };
@@ -819,12 +819,13 @@ export async function draftMode(): Promise<DraftModeResult> {
   }
   markDynamicUsage();
   const secret = getDraftSecret();
-  const isEnabled = state.headersContext
-    ? state.headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret
-    : false;
 
   return {
-    isEnabled,
+    get isEnabled(): boolean {
+      return state.headersContext
+        ? state.headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret
+        : false;
+    },
     enable(): void {
       if (state.headersContext?.accessError) {
         throw state.headersContext.accessError;
