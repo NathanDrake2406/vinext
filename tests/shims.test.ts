@@ -1204,6 +1204,26 @@ describe("next/headers shim", () => {
     setHeadersContext(null);
   });
 
+  it("draftMode().isEnabled reflects enable() on the same draft mode object", async () => {
+    const { setHeadersContext, draftMode } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    setHeadersContext({
+      headers: new Headers(),
+      cookies: new Map(),
+    });
+
+    const dm = await draftMode();
+    expect(dm.isEnabled).toBe(false);
+
+    dm.enable();
+    // Next.js exposes DraftMode.isEnabled as a live getter backed by DraftModeProvider.
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/draft-mode.ts
+    expect(dm.isEnabled).toBe(true);
+
+    setHeadersContext(null);
+  });
+
   it("draftMode().disable() clears the bypass cookie", async () => {
     const { setHeadersContext, draftMode, getDraftModeCookieHeader } =
       await import("../packages/vinext/src/shims/headers.js");
@@ -1227,6 +1247,27 @@ describe("next/headers shim", () => {
     const cookieHeader = getDraftModeCookieHeader();
     expect(cookieHeader).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT");
     expect(cookieHeader).not.toContain("Max-Age=0");
+    setHeadersContext(null);
+  });
+
+  it("draftMode().isEnabled reflects disable() on the same draft mode object", async () => {
+    const { setHeadersContext, draftMode, getDraftModeCookieHeader } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    setHeadersContext({
+      headers: new Headers(),
+      cookies: new Map(),
+    });
+
+    const dm = await draftMode();
+    dm.enable();
+    getDraftModeCookieHeader();
+
+    expect(dm.isEnabled).toBe(true);
+
+    dm.disable();
+    expect(dm.isEnabled).toBe(false);
+
     setHeadersContext(null);
   });
 

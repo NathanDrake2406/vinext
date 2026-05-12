@@ -791,7 +791,7 @@ export function isDraftModeRequest(request: Request): boolean {
 }
 
 type DraftModeResult = {
-  isEnabled: boolean;
+  readonly isEnabled: boolean;
   enable(): void;
   disable(): void;
 };
@@ -819,27 +819,27 @@ export async function draftMode(): Promise<DraftModeResult> {
   }
   markDynamicUsage();
   const secret = getDraftSecret();
-  const isEnabled = state.headersContext
-    ? state.headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret
-    : false;
+  const headersContext = state.headersContext;
 
   return {
-    isEnabled,
+    get isEnabled(): boolean {
+      return headersContext ? headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret : false;
+    },
     enable(): void {
-      if (state.headersContext?.accessError) {
-        throw state.headersContext.accessError;
+      if (headersContext?.accessError) {
+        throw headersContext.accessError;
       }
-      if (state.headersContext) {
-        state.headersContext.cookies.set(DRAFT_MODE_COOKIE, secret);
+      if (headersContext) {
+        headersContext.cookies.set(DRAFT_MODE_COOKIE, secret);
       }
       state.draftModeCookieHeader = `${DRAFT_MODE_COOKIE}=${secret}; ${draftModeCookieAttributes()}`;
     },
     disable(): void {
-      if (state.headersContext?.accessError) {
-        throw state.headersContext.accessError;
+      if (headersContext?.accessError) {
+        throw headersContext.accessError;
       }
-      if (state.headersContext) {
-        state.headersContext.cookies.delete(DRAFT_MODE_COOKIE);
+      if (headersContext) {
+        headersContext.cookies.delete(DRAFT_MODE_COOKIE);
       }
       state.draftModeCookieHeader = `${DRAFT_MODE_COOKIE}=; ${draftModeCookieAttributes()}; Expires=${DRAFT_MODE_EXPIRED_DATE}`;
     },
