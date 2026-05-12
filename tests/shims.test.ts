@@ -1188,7 +1188,10 @@ describe("next/headers shim", () => {
     expect(dm.isEnabled).toBe(false);
 
     dm.enable();
-    // After enabling, the cookie should be set on the context
+    // isEnabled should reflect the change on the same object (live getter)
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/draft-mode.ts
+    expect(dm.isEnabled).toBe(true);
+    // A fresh draftMode() call should also see the change
     const dm2 = await draftMode();
     expect(dm2.isEnabled).toBe(true);
 
@@ -1221,6 +1224,9 @@ describe("next/headers shim", () => {
     expect(dm1.isEnabled).toBe(true);
 
     dm1.disable();
+    // isEnabled should reflect the change on the same object (live getter)
+    expect(dm1.isEnabled).toBe(false);
+    // A fresh draftMode() call should also see the change
     const dm2 = await draftMode();
     expect(dm2.isEnabled).toBe(false);
 
@@ -8332,7 +8338,7 @@ describe("next/dynamic shim", () => {
     expect(result).toEqual([]);
   });
 
-  it("loading component receives isLoading and pastDelay props", async () => {
+  it("loading component receives Next.js noSSR loading props", async () => {
     const { default: dynamic } = await import("../packages/vinext/src/shims/dynamic.js");
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
@@ -8352,7 +8358,7 @@ describe("next/dynamic shim", () => {
     renderToStaticMarkup(React.createElement(DynComp));
     expect(receivedProps).not.toBeNull();
     expect(receivedProps.isLoading).toBe(true);
-    expect(receivedProps.pastDelay).toBe(true);
+    expect(receivedProps.pastDelay).toBe(false);
     expect(receivedProps.error).toBeNull();
   });
 
@@ -9804,6 +9810,106 @@ describe("Pages Router concurrent navigation", () => {
       }
       globalThis.fetch = originalFetch;
     }
+  });
+
+  async function expectBasePathHashOnlyPush({
+    browserPath,
+    target,
+    expectedBrowserUrl,
+    expectedEventUrl,
+  }: {
+    browserPath: string;
+    target: string;
+    expectedBrowserUrl: string;
+    expectedEventUrl: string;
+  }) {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const { win } = createNavWindow();
+    win.location.pathname = browserPath;
+    win.location.href = `http://localhost${browserPath}`;
+    (globalThis as any).window = win;
+    (globalThis as any).document = {
+      getElementById: vi.fn(() => ({ scrollIntoView: vi.fn() })),
+    };
+    process.env.__NEXT_ROUTER_BASEPATH = "/app";
+    vi.resetModules();
+
+    const fetch = vi.fn(async () => {
+      throw new Error("hash-only navigations must not fetch page HTML");
+    });
+    globalThis.fetch = fetch;
+
+    const hashEvents: string[] = [];
+    const routeEvents: string[] = [];
+    const onHashChangeStart = (...args: unknown[]) => {
+      hashEvents.push(`start:${String(args[0])}`);
+    };
+    const onHashChangeComplete = (...args: unknown[]) => {
+      hashEvents.push(`complete:${String(args[0])}`);
+    };
+    const onRouteChangeStart = (...args: unknown[]) => {
+      routeEvents.push(`start:${String(args[0])}`);
+    };
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      Router.events.on("hashChangeStart", onHashChangeStart);
+      Router.events.on("hashChangeComplete", onHashChangeComplete);
+      Router.events.on("routeChangeStart", onRouteChangeStart);
+
+      const result = await Router.push(target);
+
+      expect(result).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(win.history.pushState).toHaveBeenCalledWith({}, "", expectedBrowserUrl);
+      expect(hashEvents).toEqual([`start:${expectedEventUrl}`, `complete:${expectedEventUrl}`]);
+      expect(routeEvents).toEqual([]);
+    } finally {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      Router.events.off("hashChangeStart", onHashChangeStart);
+      Router.events.off("hashChangeComplete", onHashChangeComplete);
+      Router.events.off("routeChangeStart", onRouteChangeStart);
+      if (previousBasePath === undefined) {
+        delete process.env.__NEXT_ROUTER_BASEPATH;
+      } else {
+        process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      }
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  it("treats app-relative hash navigations as hash-only when basePath is configured", async () => {
+    await expectBasePathHashOnlyPush({
+      browserPath: "/app/router-events-test",
+      target: "/router-events-test#section-1",
+      expectedBrowserUrl: "/app/router-events-test#section-1",
+      expectedEventUrl: "/router-events-test#section-1",
+    });
+  });
+
+  it("does not strip app-relative targets that start with the basePath segment", async () => {
+    await expectBasePathHashOnlyPush({
+      browserPath: "/app/app/foo",
+      target: "/app/foo#section-1",
+      expectedBrowserUrl: "/app/app/foo#section-1",
+      expectedEventUrl: "/app/foo#section-1",
+    });
   });
 
   it("popstate known failures schedule a single hard navigation", async () => {

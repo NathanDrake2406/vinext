@@ -16,9 +16,13 @@ import {
   type RootBoundaryTransition,
 } from "../packages/vinext/src/server/navigation-planner.js";
 
-function createRouteSnapshot(rootBoundaryId: string | null): RouteSnapshotV0 {
+function createRouteSnapshot(
+  rootBoundaryId: string | null,
+  layoutIds: readonly string[] = rootBoundaryId === null ? [] : [`layout:${rootBoundaryId}`],
+): RouteSnapshotV0 {
   return {
     displayUrl: "https://example.com/dashboard",
+    layoutIds,
     matchedUrl: "/dashboard",
     rootBoundaryId,
     routeId: "route:/dashboard",
@@ -114,6 +118,7 @@ describe("navigationPlanner root-boundary decisions", () => {
       throw new Error("Expected proposeCommit decision");
     }
     expect(decision.proposal.targetSnapshot.rootBoundaryId).toBe("/");
+    expect(decision.proposal.preserveElementIds).toEqual(["layout:/"]);
     expect(decision.trace).toEqual({
       schemaVersion: NAVIGATION_TRACE_SCHEMA_VERSION,
       entries: [
@@ -165,6 +170,7 @@ describe("navigationPlanner root-boundary decisions", () => {
       throw new Error("Expected proposeCommit decision");
     }
     expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
+    expect(decision.proposal.preserveElementIds).toEqual([]);
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
   });
 
@@ -181,7 +187,34 @@ describe("navigationPlanner root-boundary decisions", () => {
       throw new Error("Expected proposeCommit decision");
     }
     expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
+    expect(decision.proposal.preserveElementIds).toEqual([]);
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
+  });
+
+  it("preserves only the common same-root layout ancestor prefix", () => {
+    const currentSnapshot = createRouteSnapshot("/", [
+      "layout:/",
+      "layout:/dashboard",
+      "layout:/dashboard/settings",
+    ]);
+    const targetSnapshot = createRouteSnapshot("/", [
+      "layout:/",
+      "layout:/dashboard",
+      "layout:/dashboard/profile",
+    ]);
+
+    expect(
+      navigationPlanner.resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot),
+    ).toEqual(["layout:/", "layout:/dashboard"]);
+  });
+
+  it("does not preserve layouts across root-boundary uncertainty", () => {
+    const currentSnapshot = createRouteSnapshot("/", ["layout:/"]);
+    const targetSnapshot = createRouteSnapshot(null, ["layout:/"]);
+
+    expect(
+      navigationPlanner.resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot),
+    ).toEqual([]);
   });
 
   it("never hard-navigates prefetch flight responses", () => {
