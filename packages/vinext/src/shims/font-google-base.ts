@@ -1,4 +1,10 @@
 import { buildGoogleFontsUrl as buildUrlFromAxes } from "../build/google-fonts/build-url.js";
+import {
+  formatFontClassRule,
+  resolveFontStyle,
+  resolveFontWeight,
+  type FontStyle,
+} from "./font-utils.js";
 
 /**
  * next/font/google shim
@@ -15,8 +21,8 @@ import { buildGoogleFontsUrl as buildUrlFromAxes } from "../build/google-fonts/b
  *   import { Inter } from 'next/font/google';
  *   const inter = Inter({ subsets: ['latin'], weight: ['400', '700'] });
  *   // inter.className -> stable CSS class for this font/options pair
- *   // inter.style -> { fontFamily: "'Inter', sans-serif" }
- *   // inter.variable -> CSS class that sets the font CSS variable
+ *   // inter.style -> { fontFamily: "'Inter', 'Inter Fallback'", fontStyle: "normal" }
+ *   // inter.variable -> CSS class that sets the font CSS variable when requested
  */
 
 /**
@@ -94,11 +100,14 @@ export type FontOptions = {
 
 export type FontResult = {
   className: string;
-  style: { fontFamily: string };
+  style: FontStyle;
   variable?: string;
 };
 
-type FontLoaderOptions = FontOptions & { _selfHostedCSS?: string };
+type FontLoaderOptions = FontOptions & {
+  _selfHostedCSS?: string;
+  _adjustFontFallbackCSS?: string;
+};
 
 /**
  * Convert a font family name to a CSS variable name.
@@ -152,6 +161,11 @@ function normalizeBooleanOption(value: boolean | undefined): string {
 function normalizeStringOrBooleanOption(value: boolean | string | undefined): string {
   if (value === undefined) return "";
   return typeof value === "boolean" ? normalizeBooleanOption(value) : value;
+}
+
+function resolveGoogleFontStyle(style: string | string[] | undefined): string | undefined {
+  if (Array.isArray(style) && new Set(style).size > 1) return undefined;
+  return resolveFontStyle(style) ?? "normal";
 }
 
 function hashString(value: string): string {
@@ -259,19 +273,19 @@ function injectFontStylesheet(url: string): void {
 const injectedClassRules = new Set<string>();
 
 /**
- * Inject a CSS rule that maps a className to a font-family.
+ * Inject a CSS rule that maps a className to the exported font style.
  *
  * This is what makes `<div className={inter.className}>` apply the font.
  * Next.js generates equivalent rules at build time.
  *
- * In Next.js, the .className class ONLY sets font-family — it does NOT
- * set CSS variables. CSS variables are handled separately by the .variable class.
+ * In Next.js, the .className class sets font-family and any single
+ * font-weight/font-style. CSS variables are handled separately by .variable.
  */
-function injectClassNameRule(className: string, fontFamily: string): void {
+function injectClassNameRule(className: string, fontStyle: FontStyle): void {
   if (injectedClassRules.has(className)) return;
   injectedClassRules.add(className);
 
-  const css = `.${className} { font-family: ${fontFamily}; }\n`;
+  const css = formatFontClassRule(className, fontStyle);
 
   // On server, store the CSS for SSR injection
   if (typeof document === "undefined") {
@@ -280,10 +294,10 @@ function injectClassNameRule(className: string, fontFamily: string): void {
   }
 
   // On client, inject a <style> tag
-  const style = document.createElement("style");
-  style.textContent = css;
-  style.setAttribute("data-vinext-font-class", className);
-  document.head.appendChild(style);
+  const styleElement = document.createElement("style");
+  styleElement.textContent = css;
+  styleElement.setAttribute("data-vinext-font-class", className);
+  document.head.appendChild(styleElement);
 }
 
 /** Track which variable class CSS rules have been injected. */
@@ -438,9 +452,17 @@ export type FontLoader = (options?: FontLoaderOptions) => FontResult;
 
 export function createFontLoader(family: string): FontLoader {
   return function fontLoader(options: FontLoaderOptions = {}): FontResult {
-    const fallback = options.fallback ?? ["sans-serif"];
+    const fallback = options.fallback ?? [];
+    const adjustedFallback =
+      options.adjustFontFallback === false || !options._adjustFontFallbackCSS
+        ? []
+        : [`'${escapeCSSString(family)} Fallback'`];
     // Sanitize each fallback name to prevent CSS injection via crafted values
-    const fontFamily = `'${escapeCSSString(family)}', ${fallback.map(sanitizeFallback).join(", ")}`;
+    const fontFamily = [
+      `'${escapeCSSString(family)}'`,
+      ...adjustedFallback,
+      ...fallback.map(sanitizeFallback),
+    ].join(", ");
     // Validate CSS variable name — reject anything that could inject CSS.
     // Fall back to auto-generated name if invalid.
     const defaultVarName = toVarName(family);
@@ -453,6 +475,13 @@ export function createFontLoader(family: string): FontLoader {
     // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
     // Users apply this class to set the CSS variable on that element.
     const variableClassName = `__variable_${classSegment}_${id}`;
+    const fontWeight = resolveFontWeight(options.weight);
+    const fontStyle = resolveGoogleFontStyle(options.style);
+    const style = {
+      fontFamily,
+      ...(fontWeight !== undefined ? { fontWeight } : {}),
+      ...(fontStyle ? { fontStyle } : {}),
+    };
 
     if (options._selfHostedCSS) {
       // Self-hosted mode: inject local @font-face CSS instead of CDN link
@@ -470,18 +499,24 @@ export function createFontLoader(family: string): FontLoader {
       }
     }
 
+    if (options.adjustFontFallback !== false && options._adjustFontFallbackCSS) {
+      injectSelfHostedCSS(options._adjustFontFallbackCSS);
+    }
+
     // Inject a CSS rule that maps className to font-family.
     // This is what makes `<div className={inter.className}>` work.
-    injectClassNameRule(className, fontFamily);
+    injectClassNameRule(className, style);
 
-    // Inject a CSS rule for the variable class name.
-    // This is what makes `<html className={inter.variable}>` set the CSS variable.
-    injectVariableClassRule(variableClassName, cssVarName, fontFamily);
+    if (options.variable) {
+      // Inject a CSS rule for the variable class name.
+      // This is what makes `<html className={inter.variable}>` set the CSS variable.
+      injectVariableClassRule(variableClassName, cssVarName, fontFamily);
+    }
 
     return {
       className,
-      style: { fontFamily },
-      variable: variableClassName,
+      style,
+      ...(options.variable ? { variable: variableClassName } : {}),
     };
   };
 }

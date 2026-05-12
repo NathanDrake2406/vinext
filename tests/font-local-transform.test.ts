@@ -304,6 +304,27 @@ describe("vinext:local-fonts plugin", () => {
     expect(result.variable).toMatch(/^__variable_local_\d+$/);
   });
 
+  it("matches Next.js style exports for a single local source", () => {
+    // Ported from Next.js: test/e2e/next-font/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/next-font/index.test.ts
+    const beforeCount = getSSRFontStyles().length;
+    const result = localFont({
+      src: "./font.woff2",
+      weight: "100",
+      style: "italic",
+    });
+
+    expect(result.style).toMatchObject({
+      fontWeight: 100,
+      fontStyle: "italic",
+    });
+
+    const addedStyles = getSSRFontStyles().slice(beforeCount).join("\n");
+    expect(addedStyles).toContain(`.${result.className}`);
+    expect(addedStyles).toContain("font-weight: 100");
+    expect(addedStyles).toContain("font-style: italic");
+  });
+
   it("sanitizes declaration props to prevent injection", () => {
     const beforeCount = getSSRFontStyles().length;
     const result = localFont({

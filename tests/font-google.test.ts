@@ -43,14 +43,13 @@ describe("next/font/google shim", () => {
     expect(typeof Inter).toBe("function");
   });
 
-  it("createFontLoader returns className, style, variable", async () => {
+  it("createFontLoader returns className and style without variable unless requested", async () => {
     const { createFontLoader } = await import("../packages/vinext/src/shims/font-google.js");
     const Inter = createFontLoader("Inter");
     const result = Inter({ weight: ["400", "700"], subsets: ["latin"] });
     expect(result.className).toMatch(/^__font_inter_[a-z0-9]+$/);
     expect(result.style.fontFamily).toContain("Inter");
-    // variable returns a class name that sets the CSS variable, not the variable name itself
-    expect(result.variable).toMatch(/^__variable_inter_[a-z0-9]+$/);
+    expect(result.variable).toBeUndefined();
   });
 
   it("supports custom variable name", async () => {
@@ -59,6 +58,73 @@ describe("next/font/google shim", () => {
     const result = Inter({ weight: ["400"], variable: "--my-font" });
     // variable returns a class name that sets the CSS variable, not the variable name itself
     expect(result.variable).toMatch(/^__variable_inter_[a-z0-9]+$/);
+  });
+
+  it("matches Next.js style exports for single weight and style", async () => {
+    // Ported from Next.js: test/e2e/next-font/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/next-font/index.test.ts
+    const { createFontLoader, getSSRFontStyles } =
+      await import("../packages/vinext/src/shims/font-google.js");
+    const Roboto = createFontLoader("Roboto");
+    const beforeStyles = getSSRFontStyles();
+    const result = Roboto({ weight: "100", style: "italic", subsets: ["latin"] });
+
+    expect(result.style).toMatchObject({
+      fontWeight: 100,
+      fontStyle: "italic",
+    });
+
+    const addedStyles = getSSRFontStyles().slice(beforeStyles.length).join("\n");
+    expect(addedStyles).toContain(`.${result.className}`);
+    expect(addedStyles).toContain("font-weight: 100");
+    expect(addedStyles).toContain("font-style: italic");
+  });
+
+  it("uses adjusted Google font fallback metrics by default", async () => {
+    // Ported from Next.js: packages/font/src/google/loader.ts and
+    // packages/next/src/build/webpack/loaders/next-font-loader/postcss-next-font.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/font/src/google/loader.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/build/webpack/loaders/next-font-loader/postcss-next-font.ts
+    const { createFontLoader, getSSRFontStyles } =
+      await import("../packages/vinext/src/shims/font-google.js");
+    const Inter = createFontLoader("Open Sans");
+    const beforeStyles = getSSRFontStyles();
+    const fallbackCSS = `@font-face {
+  font-family: 'Open Sans Fallback';
+  src: local("Arial");
+  ascent-override: 100.00%;
+  descent-override: 20.00%;
+  line-gap-override: 0.00%;
+  size-adjust: 90.00%;
+}\n`;
+    const result = Inter({
+      weight: "400",
+      subsets: ["latin"],
+      _adjustFontFallbackCSS: fallbackCSS,
+    } as any);
+
+    expect(result.style.fontFamily).toContain("'Open Sans Fallback'");
+
+    const addedStyles = getSSRFontStyles().slice(beforeStyles.length).join("\n");
+    expect(addedStyles).toContain("font-family: 'Open Sans Fallback'");
+    expect(addedStyles).toContain('src: local("Arial")');
+    expect(addedStyles).toContain("ascent-override:");
+    expect(addedStyles).toContain("descent-override:");
+    expect(addedStyles).toContain("line-gap-override:");
+    expect(addedStyles).toContain("size-adjust:");
+  });
+
+  it("does not include adjusted Google fallback when disabled", async () => {
+    const { createFontLoader, getSSRFontStyles } =
+      await import("../packages/vinext/src/shims/font-google.js");
+    const NoAdjust = createFontLoader("No Adjust");
+    const beforeStyles = getSSRFontStyles();
+    const result = NoAdjust({ weight: "400", adjustFontFallback: false });
+
+    expect(result.style.fontFamily).not.toContain("No Adjust Fallback");
+
+    const addedStyles = getSSRFontStyles().slice(beforeStyles.length).join("\n");
+    expect(addedStyles).not.toContain("No Adjust Fallback");
   });
 
   it("supports custom fallback fonts", async () => {
@@ -253,7 +319,7 @@ describe("next/font/google shim", () => {
     expect(equivalent.variable).toBe(canonical.variable);
   });
 
-  it("normalizes the default fallback to the same identity as an explicit fallback", async () => {
+  it("uses explicit fallback fonts as part of the class identity", async () => {
     const { createFontLoader } = await import("../packages/vinext/src/shims/font-google.js");
     const DefaultFallback = createFontLoader("Default Fallback");
     const implicit = DefaultFallback({ weight: ["400"], subsets: ["latin"] });
@@ -263,8 +329,7 @@ describe("next/font/google shim", () => {
       fallback: ["sans-serif"],
     });
 
-    expect(explicit.className).toBe(implicit.className);
-    expect(explicit.variable).toBe(implicit.variable);
+    expect(explicit.className).not.toBe(implicit.className);
   });
 
   it("does not emit Next-incompatible :root font variable rules", async () => {
@@ -338,6 +403,7 @@ describe("next/font/google shim", () => {
     const fonts = mod.default as any;
     const result = fonts["Evil']; } body { color: red; } .x { font-family: '"]({
       weight: ["400"],
+      variable: "--evil-font",
     });
 
     expect(result.className).toMatch(/^__font_[a-z0-9_-]+_[a-z0-9]+$/);
@@ -582,6 +648,7 @@ describe("vinext:google-fonts plugin", () => {
     expect(result).not.toBeNull();
     expect(result.code).toContain("virtual:vinext-google-fonts?");
     expect(result.code).toContain("_selfHostedCSS");
+    expect(result.code).toContain("_adjustFontFallbackCSS");
     expect(result.code).toContain("@font-face");
     expect(result.code).toContain("Inter");
     expect(result.map).toBeDefined();
@@ -600,6 +667,35 @@ describe("vinext:google-fonts plugin", () => {
     // Clean up
     fs.rmSync(root, { recursive: true, force: true });
   }, 15000); // Network timeout
+
+  it("does not inject adjusted fallback CSS when adjustFontFallback is false", async () => {
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-no-adjust");
+    initPlugin(plugin, { command: "build", root });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }", {
+        status: 200,
+        headers: { "content-type": "text/css" },
+      });
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Inter } from 'next/font/google';`,
+        `const inter = Inter({ weight: '400', subsets: ['latin'], adjustFontFallback: false });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).not.toContain("_adjustFontFallbackCSS");
+    } finally {
+      globalThis.fetch = originalFetch;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("uses cached fonts on second call", async () => {
     const plugin = getGoogleFontsPlugin();

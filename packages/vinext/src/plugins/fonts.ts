@@ -11,7 +11,9 @@
  *   2. During production builds, fetches Google Fonts CSS + font files, caches
  *      them locally under `.vinext/fonts/`, and injects `_selfHostedCSS` into
  *      statically analyzable font loader calls so fonts are served from the
- *      deployed origin rather than fonts.googleapis.com.
+ *      deployed origin rather than fonts.googleapis.com. Static calls also
+ *      receive `_adjustFontFallbackCSS` when Next.js-compatible fallback
+ *      metrics exist for the selected Google Font.
  *
  * `createLocalFontsPlugin` — vinext:local-fonts
  *   When a source file calls localFont({ src: "./font.woff2" }) or
@@ -27,6 +29,10 @@ import { parseAst } from "vite";
 import path from "node:path";
 import fs from "node:fs";
 import MagicString from "magic-string";
+import {
+  buildFallbackFontFace,
+  getFallbackFontOverrideMetrics,
+} from "../build/google-fonts/fallback-metrics.js";
 import { validateGoogleFontOptions } from "../build/google-fonts/validate.js";
 import { getFontAxes } from "../build/google-fonts/get-axes.js";
 import { buildGoogleFontsUrl } from "../build/google-fonts/build-url.js";
@@ -909,9 +915,21 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
             cacheDir,
             transformAssetsDir,
           );
+          const fallbackMetrics =
+            validated.adjustFontFallback === false
+              ? undefined
+              : getFallbackFontOverrideMetrics(family);
+          const adjustedFallbackCSS = fallbackMetrics
+            ? buildFallbackFontFace(family, fallbackMetrics)
+            : undefined;
 
-          // Inject _selfHostedCSS into the options object
-          const escapedCSS = JSON.stringify(servedCSS);
+          // Inject internal CSS strings into the options object
+          const injectedProperties = [`_selfHostedCSS: ${JSON.stringify(servedCSS)}`];
+          if (adjustedFallbackCSS) {
+            injectedProperties.push(
+              `_adjustFontFallbackCSS: ${JSON.stringify(adjustedFallbackCSS)}`,
+            );
+          }
           const closingBrace = optionsStr.lastIndexOf("}");
           const beforeBrace = optionsStr.slice(0, closingBrace).trim();
           // Determine the separator to insert before the new property:
@@ -922,7 +940,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
           const optionsWithCSS =
             optionsStr.slice(0, closingBrace) +
             separator +
-            `_selfHostedCSS: ${escapedCSS}` +
+            injectedProperties.join(", ") +
             optionsStr.slice(closingBrace);
 
           const replacement = `${calleeSource}(${optionsWithCSS})`;

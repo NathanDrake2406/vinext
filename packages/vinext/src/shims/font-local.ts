@@ -13,8 +13,14 @@
  *   const myFont = localFont({ src: './my-font.woff2' });
  *   // myFont.className -> unique CSS class
  *   // myFont.style -> { fontFamily: "'__local_font_0', sans-serif" }
- *   // myFont.variable -> generated class name (e.g. "__variable_local_0")
+ *   // myFont.variable -> generated class name when requested
  */
+import {
+  formatFontClassRule,
+  resolveFontStyle,
+  resolveFontWeight,
+  type FontStyle,
+} from "./font-utils.js";
 
 /**
  * Escape a string for safe interpolation inside a CSS single-quoted string.
@@ -120,13 +126,15 @@ type LocalFontOptions = {
 
 type FontResult = {
   className: string;
-  style: { fontFamily: string };
+  style: FontStyle;
   variable?: string;
 };
 
-function generateFontFaceCSS(family: string, options: LocalFontOptions): string {
-  const sources = normalizeSources(options);
-
+function generateFontFaceCSS(
+  family: string,
+  options: LocalFontOptions,
+  sources: LocalFontSrc[],
+): string {
   const display = options.display ?? "swap";
   const rules: string[] = [];
 
@@ -213,18 +221,18 @@ function injectFontFaceCSS(css: string, id: string): void {
 const injectedClassRules = new Set<string>();
 
 /**
- * Inject a CSS rule that maps a className to a font-family.
+ * Inject a CSS rule that maps a className to the exported font style.
  *
  * This is what makes `<div className={font.className}>` apply the font.
  *
- * In Next.js, the .className class ONLY sets font-family — it does NOT
- * set CSS variables. CSS variables are handled separately by the .variable class.
+ * In Next.js, the .className class sets font-family and any single
+ * font-weight/font-style. CSS variables are handled separately by .variable.
  */
-function injectClassNameRule(className: string, fontFamily: string): void {
+function injectClassNameRule(className: string, fontStyle: FontStyle): void {
   if (injectedClassRules.has(className)) return;
   injectedClassRules.add(className);
 
-  const css = `.${className} { font-family: ${fontFamily}; }\n`;
+  const css = formatFontClassRule(className, fontStyle);
 
   // On server, store the CSS for SSR injection
   if (typeof document === "undefined") {
@@ -316,10 +324,8 @@ function getFontMimeType(pathOrUrl: string): string {
  * Collect font source URLs for preload link generation.
  * Only collects on the server (SSR). Deduplicates by href using a Set for O(1) lookups.
  */
-function collectFontPreloads(options: LocalFontOptions): void {
+function collectFontPreloads(sources: LocalFontSrc[]): void {
   if (typeof document !== "undefined") return; // client-side, skip
-
-  const sources = normalizeSources(options);
 
   for (const src of sources) {
     const href = src.path;
@@ -335,6 +341,8 @@ function collectFontPreloads(options: LocalFontOptions): void {
 
 export default function localFont(options: LocalFontOptions): FontResult {
   const id = classCounter++;
+  const sources = normalizeSources(options);
+  const singleSource = sources.length === 1 ? sources[0] : undefined;
   const family = `__local_font_${id}`;
   const className = `__font_local_${id}`;
   const fallback = options.fallback ?? ["sans-serif"];
@@ -345,16 +353,27 @@ export default function localFont(options: LocalFontOptions): FontResult {
   // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
   // Users apply this class to set the CSS variable on that element.
   const variableClassName = `__variable_local_${id}`;
+  const fontWeight = singleSource
+    ? resolveFontWeight(singleSource.weight ?? options.weight)
+    : undefined;
+  const resolvedFontStyle = singleSource
+    ? resolveFontStyle(singleSource.style ?? options.style)
+    : undefined;
+  const style = {
+    fontFamily,
+    ...(fontWeight !== undefined ? { fontWeight } : {}),
+    ...(resolvedFontStyle ? { fontStyle: resolvedFontStyle } : {}),
+  };
 
   // Collect font URLs for preload <link> tags (SSR only)
-  collectFontPreloads(options);
+  collectFontPreloads(sources);
 
   // Inject @font-face declarations
-  const css = generateFontFaceCSS(family, options);
+  const css = generateFontFaceCSS(family, options, sources);
   injectFontFaceCSS(css, family);
 
   // Inject the className -> font-family CSS rule
-  injectClassNameRule(className, fontFamily);
+  injectClassNameRule(className, style);
 
   // Inject a CSS rule for the variable class name if variable is specified.
   // This is what makes `<html className={font.variable}>` set the CSS variable.
@@ -364,7 +383,7 @@ export default function localFont(options: LocalFontOptions): FontResult {
 
   return {
     className,
-    style: { fontFamily },
+    style,
     ...(cssVarName ? { variable: variableClassName } : {}),
   };
 }
