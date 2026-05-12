@@ -468,7 +468,9 @@ describe("Head client sync", () => {
     expect(element.innerHTML).toBe("body { color: red; }");
   });
 
-  it("uses an empty string for missing dangerouslySetInnerHTML.__html on the client", () => {
+  it("ignores malformed dangerouslySetInnerHTML without __html key", () => {
+    // dangerouslySetInnerHTML: {} has no __html key, so getDangerouslySetInnerHTML
+    // returns undefined. The client falls through to children (matching SSR behavior).
     const element = createElementDouble();
     element.innerHTML = "previous";
 
@@ -476,7 +478,20 @@ describe("Head client sync", () => {
       dangerouslySetInnerHTML: {},
     });
 
-    expect(element.innerHTML).toBe("");
+    // No valid __html and no children — content is unchanged.
+    expect(element.innerHTML).toBe("previous");
+  });
+
+  it("falls through to children when dangerouslySetInnerHTML has no __html key", () => {
+    const element = createElementDouble();
+
+    _applyHeadPropsToElement(element, {
+      dangerouslySetInnerHTML: {},
+      children: "fallback",
+    });
+
+    // Malformed dangerouslySetInnerHTML is ignored, children win.
+    expect(element.textContent).toBe("fallback");
   });
 
   it("empty dangerouslySetInnerHTML.__html takes precedence over children on client", () => {

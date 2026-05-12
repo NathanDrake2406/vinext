@@ -225,6 +225,8 @@ function headChildToHTML(tag: string, props: Record<string, unknown>): string {
     innerHTML = rawHtml;
   } else if (typeof props.children === "string") {
     innerHTML = escapeHTML(props.children);
+  } else if (Array.isArray(props.children)) {
+    innerHTML = escapeHTML(props.children.join(""));
   }
 
   for (const [key, value] of Object.entries(props)) {
@@ -297,10 +299,10 @@ export function _applyHeadPropsToElement(
   domEl: HeadDOMElement,
   props: Record<string, unknown>,
 ): void {
-  const dangerouslySetInnerHTML = props.dangerouslySetInnerHTML;
+  const rawHtml = getDangerouslySetInnerHTML(props.dangerouslySetInnerHTML);
 
-  if (dangerouslySetInnerHTML) {
-    domEl.innerHTML = getDangerouslySetInnerHTML(dangerouslySetInnerHTML) ?? "";
+  if (rawHtml != null) {
+    domEl.innerHTML = rawHtml;
   } else if (typeof props.children === "string") {
     domEl.textContent = props.children;
   } else if (Array.isArray(props.children)) {
