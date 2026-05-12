@@ -474,6 +474,20 @@ describe("Head client sync", () => {
     expect(element.innerHTML).toBe("raw content");
     expect(element.textContent).toBe("");
   });
+
+  it("sets textContent from children when dangerouslySetInnerHTML is absent", () => {
+    const element = createElementDouble();
+    _applyHeadPropsToElement(element, { children: "hello" });
+    expect(element.textContent).toBe("hello");
+    expect(element.innerHTML).toBe("");
+  });
+
+  it("sets textContent from array children by joining them", () => {
+    const element = createElementDouble();
+    _applyHeadPropsToElement(element, { children: ["a", "b", "c"] });
+    expect(element.textContent).toBe("abc");
+    expect(element.innerHTML).toBe("");
+  });
 });
 
 // ─── escapeAttr utility ─────────────────────────────────────────────────

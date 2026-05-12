@@ -297,6 +297,8 @@ export function _applyHeadPropsToElement(
     domEl.innerHTML = getDangerouslySetInnerHTML(dangerouslySetInnerHTML) ?? "";
   } else if (typeof props.children === "string") {
     domEl.textContent = props.children;
+  } else if (Array.isArray(props.children)) {
+    domEl.textContent = props.children.join("");
   }
 
   for (const [key, value] of Object.entries(props)) {
