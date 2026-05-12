@@ -43,6 +43,7 @@ import { buildPostMwRequestContext } from "./app-post-middleware-context.js";
 import {
   cloneRequestWithHeaders,
   filterInternalHeaders,
+  applyConfigHeadersToResponse,
   normalizeTrailingSlash,
   resolvePublicFileRoute,
   validateImageUrl,
@@ -217,6 +218,39 @@ async function applyRewrite(
   return rewritten;
 }
 
+function applyConfigHeadersToMiddlewareRedirect(
+  response: Response,
+  options: {
+    configHeaders: NextHeader[];
+    pathname: string;
+    requestContext: RequestContext;
+  },
+): Response {
+  // Non-redirect middleware responses still pass through finalization, where
+  // config headers are applied once. Redirects skip finalization to avoid
+  // mutating immutable redirect headers, so they need the earlier header layer here.
+  if (response.status < 300 || response.status >= 400) return response;
+  if (!options.configHeaders.length) return response;
+
+  const headers = new Headers();
+  applyConfigHeadersToResponse(headers, {
+    configHeaders: options.configHeaders,
+    pathname: options.pathname,
+    requestContext: options.requestContext,
+  });
+
+  if (!headers.entries().next().done) {
+    mergeMiddlewareResponseHeaders(headers, response.headers);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
+  return response;
+}
+
 async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   options: CreateAppRscHandlerOptions<TRoute>,
   request: Request,
@@ -296,7 +330,13 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       module: options.middlewareModule,
       request,
     });
-    if (middlewareResult.kind === "response") return middlewareResult.response;
+    if (middlewareResult.kind === "response") {
+      return applyConfigHeadersToMiddlewareRedirect(middlewareResult.response, {
+        configHeaders: options.configHeaders,
+        pathname: cleanPathname,
+        requestContext: preMiddlewareRequestContext,
+      });
+    }
 
     cleanPathname = middlewareResult.cleanPathname;
     if (middlewareResult.search !== null) {
