@@ -226,6 +226,14 @@ export function appIsrHtmlKey(pathname: string): string {
   return appIsrCacheKey(pathname, "html");
 }
 
+/**
+ * Build the ISR cache key for an RSC payload.
+ *
+ * Note: the key format changed from `rsc:<hash>` to `rsc:slots:<hash>` (and
+ * optionally `rsc:slots:<hash>:preserve-ui`). Existing cached entries under
+ * the old format will become unreachable after deployment. This is acceptable
+ * because ISR entries have TTLs and will be regenerated on the next request.
+ */
 export function appIsrRscKey(
   pathname: string,
   mountedSlotsHeader?: string | null,
