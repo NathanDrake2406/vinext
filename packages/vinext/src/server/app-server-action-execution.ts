@@ -302,7 +302,7 @@ function getActionRedirect(error: unknown): AppServerActionRedirect | null {
 
   return {
     status: redirect.status,
-    type: redirect.type,
+    type: redirect.type ?? "push",
     url: redirect.url,
   };
 }
