@@ -62,6 +62,18 @@ describe("next/dynamic ssr: false", () => {
     expect(html).not.toContain("Hello from dynamic");
   });
 
+  it("does not force loading UI when ssr: false has not passed the delay", () => {
+    const LoadingAfterDelay = ({ pastDelay }: { pastDelay?: boolean }) =>
+      pastDelay ? React.createElement("div", null, "Delayed loading") : null;
+    const DynamicNoSSR = dynamic(() => Promise.resolve({ default: Hello }), {
+      ssr: false,
+      loading: LoadingAfterDelay,
+    });
+
+    const html = ReactDOMServer.renderToString(React.createElement(DynamicNoSSR));
+    expect(html).toBe("");
+  });
+
   it("renders nothing on server when ssr: false and no loading", () => {
     const DynamicNoSSR = dynamic(() => Promise.resolve({ default: Hello }), { ssr: false });
 
@@ -78,7 +90,7 @@ describe("next/dynamic ssr: false", () => {
 // ─── Loading component ──────────────────────────────────────────────────
 
 describe("next/dynamic loading component", () => {
-  it("passes the full Next.js loading props shape to loading component on SSR", () => {
+  it("passes the Next.js noSSR loading props to loading component on SSR", () => {
     let receivedProps: any = null;
     function TrackingLoader(props: any) {
       receivedProps = props;
@@ -94,7 +106,7 @@ describe("next/dynamic loading component", () => {
 
     expect(receivedProps).toEqual({
       isLoading: true,
-      pastDelay: true,
+      pastDelay: false,
       error: null,
       timedOut: false,
       retry: expect.any(Function),

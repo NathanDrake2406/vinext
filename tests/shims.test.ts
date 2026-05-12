@@ -8332,7 +8332,7 @@ describe("next/dynamic shim", () => {
     expect(result).toEqual([]);
   });
 
-  it("loading component receives isLoading and pastDelay props", async () => {
+  it("loading component receives Next.js noSSR loading props", async () => {
     const { default: dynamic } = await import("../packages/vinext/src/shims/dynamic.js");
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
@@ -8352,7 +8352,7 @@ describe("next/dynamic shim", () => {
     renderToStaticMarkup(React.createElement(DynComp));
     expect(receivedProps).not.toBeNull();
     expect(receivedProps.isLoading).toBe(true);
-    expect(receivedProps.pastDelay).toBe(true);
+    expect(receivedProps.pastDelay).toBe(false);
     expect(receivedProps.error).toBeNull();
   });
 
