@@ -29,6 +29,7 @@ import { deferUntilStreamConsumed } from "./app-page-stream.js";
 import { AppElementsWire, type AppWireElements } from "./app-elements.js";
 import { ElementsContext, Slot } from "vinext/shims/slot";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
+import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 
 export type FontPreload = {
   href: string;
@@ -139,7 +140,7 @@ function buildHeadInjectionHtml(
     formState === null
       ? ""
       : createInlineScriptTag(
-          "self.__VINEXT_RSC_FORM_STATE__=" + safeJsonStringify(formState),
+          "self[" + safeJsonStringify(RSC_FORM_STATE_GLOBAL) + "]=" + safeJsonStringify(formState),
           scriptNonce,
         );
 

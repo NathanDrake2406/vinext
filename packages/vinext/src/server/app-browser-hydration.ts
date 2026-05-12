@@ -4,32 +4,34 @@ type HydrateRootOptions = NonNullable<Parameters<typeof hydrateRoot>[2]>;
 type HydrateRootCaughtErrorHandler = NonNullable<HydrateRootOptions["onCaughtError"]>;
 type HydrateRootUncaughtErrorHandler = NonNullable<HydrateRootOptions["onUncaughtError"]>;
 
+export const RSC_FORM_STATE_GLOBAL = "__VINEXT_RSC_FORM_STATE__";
+
 type FormStateGlobal = {
-  __VINEXT_RSC_FORM_STATE__?: ReactFormState;
+  [RSC_FORM_STATE_GLOBAL]?: ReactFormState;
 };
 
 export function consumeInitialFormState(global: FormStateGlobal): ReactFormState | null {
-  const formState = global.__VINEXT_RSC_FORM_STATE__ ?? null;
-  delete global.__VINEXT_RSC_FORM_STATE__;
+  const formState = global[RSC_FORM_STATE_GLOBAL] ?? null;
+  delete global[RSC_FORM_STATE_GLOBAL];
   return formState;
 }
 
 export function createVinextHydrateRootOptions(options: {
   formState: ReactFormState | null;
-  isDev: boolean;
-  onCaughtError: HydrateRootCaughtErrorHandler;
+  onCaughtError?: HydrateRootCaughtErrorHandler;
   onUncaughtError: HydrateRootUncaughtErrorHandler;
 }): HydrateRootOptions {
-  if (options.isDev) {
-    return {
-      formState: options.formState,
-      onCaughtError: options.onCaughtError,
-      onUncaughtError: options.onUncaughtError,
-    };
-  }
-
-  return {
+  const hydrateOptions = {
     formState: options.formState,
     onUncaughtError: options.onUncaughtError,
   };
+
+  if (options.onCaughtError) {
+    return {
+      ...hydrateOptions,
+      onCaughtError: options.onCaughtError,
+    };
+  }
+
+  return hydrateOptions;
 }

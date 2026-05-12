@@ -2,6 +2,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createOnUncaughtError } from "../packages/vinext/src/server/app-browser-error.js";
 import {
+  RSC_FORM_STATE_GLOBAL,
   consumeInitialFormState,
   createVinextHydrateRootOptions,
 } from "../packages/vinext/src/server/app-browser-hydration.js";
@@ -2420,7 +2421,7 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
 describe("app browser form-state hydration", () => {
   it("passes the one-shot form-state bootstrap payload to hydrateRoot options", () => {
     const formState = ["action-result", "key-path", "reference-id", 1] as never;
-    const global = { __VINEXT_RSC_FORM_STATE__: formState };
+    const global = { [RSC_FORM_STATE_GLOBAL]: formState };
     const onCaughtError = vi.fn();
     const onUncaughtError = vi.fn();
     const hydrateRoot = vi.fn();
@@ -2428,13 +2429,12 @@ describe("app browser form-state hydration", () => {
     const consumedFormState = consumeInitialFormState(global);
     const hydrateOptions = createVinextHydrateRootOptions({
       formState: consumedFormState,
-      isDev: true,
       onCaughtError,
       onUncaughtError,
     });
     hydrateRoot("document", "root", hydrateOptions);
 
-    expect(global).not.toHaveProperty("__VINEXT_RSC_FORM_STATE__");
+    expect(global).not.toHaveProperty(RSC_FORM_STATE_GLOBAL);
     expect(hydrateRoot).toHaveBeenCalledWith(
       "document",
       "root",
@@ -2448,14 +2448,11 @@ describe("app browser form-state hydration", () => {
   });
 
   it("preserves null form state as an explicit hydrateRoot option", () => {
-    const onCaughtError = vi.fn();
     const onUncaughtError = vi.fn();
 
     expect(
       createVinextHydrateRootOptions({
         formState: consumeInitialFormState({}),
-        isDev: false,
-        onCaughtError,
         onUncaughtError,
       }),
     ).toEqual({

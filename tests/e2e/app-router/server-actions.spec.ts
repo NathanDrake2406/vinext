@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { RSC_FORM_STATE_GLOBAL } from "../../../packages/vinext/src/server/app-browser-hydration";
 import { waitForAppRouterHydration } from "../helpers";
 
 const BASE = "http://localhost:4174";
@@ -165,7 +166,7 @@ test.describe("useActionState", () => {
 
       await expect(page.locator("#count")).toHaveText("Count: 1");
       const html = await page.content();
-      expect(html).toContain("__VINEXT_RSC_FORM_STATE__");
+      expect(html).toContain(RSC_FORM_STATE_GLOBAL);
     } finally {
       await context.close();
     }
