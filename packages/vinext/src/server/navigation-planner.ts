@@ -27,6 +27,8 @@ export type OperationToken = {
 
 export type RouteSnapshotV0 = {
   routeId: string;
+  // Ordered ancestor-first, with the root layout at index 0. Same-layout
+  // persistence uses prefix comparison, so callers must preserve this order.
   layoutIds: readonly string[];
   rootBoundaryId: string | null;
   displayUrl: string;
