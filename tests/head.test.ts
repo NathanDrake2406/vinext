@@ -399,6 +399,22 @@ describe("Head escaping", () => {
     expect(headHtml).toContain('console.log("hello")');
   });
 
+  it("empty dangerouslySetInnerHTML.__html takes precedence over children on SSR", () => {
+    ReactDOMServer.renderToString(
+      React.createElement(
+        Head,
+        null,
+        React.createElement("style", {
+          dangerouslySetInnerHTML: { __html: "" },
+          children: "fallback",
+        }),
+      ),
+    );
+    const headHtml = getSSRHeadHTML();
+    expect(headHtml).not.toContain("fallback");
+    expect(headHtml).toMatch(/<style[^>]*><\/style>/);
+  });
+
   it("converts className to class attribute", () => {
     ReactDOMServer.renderToString(
       React.createElement(
@@ -461,6 +477,16 @@ describe("Head client sync", () => {
     });
 
     expect(element.innerHTML).toBe("");
+  });
+
+  it("empty dangerouslySetInnerHTML.__html takes precedence over children on client", () => {
+    const element = createElementDouble();
+    _applyHeadPropsToElement(element, {
+      children: "fallback",
+      dangerouslySetInnerHTML: { __html: "" },
+    });
+    expect(element.innerHTML).toBe("");
+    expect(element.textContent).toBe("");
   });
 
   it("prefers dangerouslySetInnerHTML over children on client-managed head elements", () => {

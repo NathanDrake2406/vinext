@@ -215,15 +215,21 @@ function headChildToHTML(tag: string, props: Record<string, unknown>): string {
   const attrs: string[] = [];
   let innerHTML = "";
 
+  // dangerouslySetInnerHTML takes precedence over children, regardless of
+  // prop iteration order. Check it first to match Next.js semantics.
+  const rawHtml = getDangerouslySetInnerHTML(props.dangerouslySetInnerHTML);
+  if (rawHtml != null) {
+    // Intentionally raw — developer explicitly opted in.
+    // SECURITY NOTE: This injects raw HTML. Developers must never pass
+    // unsanitized user input here — it is a stored XSS vector.
+    innerHTML = rawHtml;
+  } else if (typeof props.children === "string") {
+    innerHTML = escapeHTML(props.children);
+  }
+
   for (const [key, value] of Object.entries(props)) {
-    if (key === "children") {
-      if (typeof value === "string") innerHTML = escapeHTML(value);
-    } else if (key === "dangerouslySetInnerHTML") {
-      // Intentionally raw — developer explicitly opted in.
-      // SECURITY NOTE: This injects raw HTML. Developers must never pass
-      // unsanitized user input here — it is a stored XSS vector.
-      const html = getDangerouslySetInnerHTML(value);
-      if (html) innerHTML = html;
+    if (key === "children" || key === "dangerouslySetInnerHTML") {
+      continue;
     } else if (key === "className") {
       attrs.push(`class="${escapeAttr(String(value))}"`);
     } else if (typeof value === "string") {
