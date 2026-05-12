@@ -108,6 +108,81 @@ describe("createAppRscHandler", () => {
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
   });
 
+  it("lets middleware redirect headers override earlier matching config headers", async () => {
+    // Next.js route order reference:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/lib/router-utils/resolve-routes.ts
+    const dispatchMatchedPage = vi.fn(async () => new Response("page", { status: 200 }));
+    const handler = createHandler({
+      dispatchMatchedPage,
+      middlewareModule: {
+        default: () =>
+          new Response(null, {
+            status: 307,
+            headers: {
+              Location: "/login",
+              "x-test-header": "middleware",
+            },
+          }),
+      },
+    });
+
+    const response = await handler(new Request("https://example.test/docs/about"), null);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("/login");
+    expect(response.headers.get("x-test-header")).toBe("middleware");
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("carries config headers on middleware redirects when middleware does not override them", async () => {
+    // Next.js route order reference:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/lib/router-utils/resolve-routes.ts
+    const dispatchMatchedPage = vi.fn(async () => new Response("page", { status: 200 }));
+    const handler = createHandler({
+      dispatchMatchedPage,
+      middlewareModule: {
+        default: () =>
+          new Response(null, {
+            status: 307,
+            headers: { Location: "/login" },
+          }),
+      },
+    });
+
+    const response = await handler(new Request("https://example.test/docs/about"), null);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("/login");
+    expect(response.headers.get("x-test-header")).toBe("applied");
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate additive config headers on non-redirect middleware responses", async () => {
+    const handler = createHandler({
+      configHeaders: [
+        {
+          source: "/about",
+          headers: [{ key: "Vary", value: "X-Config" }],
+        },
+      ],
+      middlewareModule: {
+        default: () =>
+          new Response("blocked", {
+            status: 401,
+            headers: { Vary: "User-Agent" },
+          }),
+      },
+    });
+
+    const response = await handler(new Request("https://example.test/docs/about"), null);
+    const varyTokens = (response.headers.get("vary") ?? "").split(",").map((token) => token.trim());
+
+    expect(response.status).toBe(401);
+    expect(varyTokens).toContain("User-Agent");
+    expect(varyTokens).toContain("X-Config");
+    expect(varyTokens.filter((token) => token === "X-Config")).toHaveLength(1);
+  });
+
   it("canonicalizes config redirect locations for RSC requests", async () => {
     const headers = createRscRequestHeaders({ mountedSlotsHeader: "slot:modal:/" });
     const expectedHash = await computeRscCacheBustingSearchParam(headers);
