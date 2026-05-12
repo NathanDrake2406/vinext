@@ -23,6 +23,7 @@ export function parseAppRscRenderMode(value: string | null): AppRscRenderMode {
       return APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI;
     case APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI:
       return APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI;
+    case null:
     default:
       return APP_RSC_RENDER_MODE_NAVIGATION;
   }
