@@ -105,6 +105,27 @@ describe("next/font/google shim", () => {
     expect(addedStyles).toContain("font-style: italic");
   });
 
+  it("does not export Google fontStyle for ambiguous multi-style requests", async () => {
+    // Ported from Next.js: packages/font/src/google/loader.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/font/src/google/loader.ts
+    const { createFontLoader, getSSRFontStyles } =
+      await import("../packages/vinext/src/shims/font-google.js");
+    const Inter = createFontLoader("Inter");
+    const beforeStyles = getSSRFontStyles();
+    const result = Inter({
+      weight: "400",
+      style: ["normal", "italic"],
+      subsets: ["latin"],
+    });
+
+    expect(result.style.fontStyle).toBeUndefined();
+
+    const addedStyles = getSSRFontStyles().slice(beforeStyles.length).join("\n");
+    expect(addedStyles).toContain(`.${result.className}`);
+    expect(addedStyles).not.toContain("font-style: normal");
+    expect(addedStyles).not.toContain("font-style: italic");
+  });
+
   it("rejects unsafe Google font-style values in class rules", async () => {
     const { createFontLoader, getSSRFontStyles } =
       await import("../packages/vinext/src/shims/font-google.js");

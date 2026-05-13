@@ -31,8 +31,9 @@ export function resolveFontStyle(style: string | string[] | undefined): string |
 }
 
 export function resolveGoogleFontStyle(style: string | string[] | undefined): string | undefined {
+  if (style === undefined) return "normal";
   const value = singleFontOptionValue(style);
-  if (!value) return "normal";
+  if (!value) return undefined;
   if (value === "normal" || value === "italic") return value;
   return undefined;
 }
