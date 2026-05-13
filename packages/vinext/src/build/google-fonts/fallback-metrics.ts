@@ -4,7 +4,7 @@
 // The tuple shape is:
 // [serifFlag, ascent, descent, lineGap, unitsPerEm, xWidthAvg]
 
-import rawFallbackMetrics from "./fallback-metrics.json" with { type: "json" };
+import rawFallbackMetrics from "./fallback-metrics-data.json" with { type: "json" };
 
 type AdjustFontFallback = {
   fallbackFont: string;
