@@ -26,7 +26,7 @@ import {
 } from "./app-rsc-render-mode.js";
 import {
   resolveAppPageChildSegments,
-  resolveAppPageLeafSegmentStateKey,
+  resolveAppPageRouteStateKey,
   resolveAppPageSegmentStateKey,
 } from "./app-page-segment-state.js";
 
@@ -307,7 +307,7 @@ export function buildAppPageElements<
 >(options: BuildAppPageElementsOptions<TModule, TErrorModule>): AppElements {
   const interceptionContext = options.interceptionContext ?? null;
   const routeSegments = options.route.routeSegments ?? [];
-  const routeResetKey = resolveAppPageLeafSegmentStateKey(routeSegments, options.matchedParams);
+  const routeResetKey = resolveAppPageRouteStateKey(routeSegments, options.matchedParams);
   const routeId = AppElementsWire.encodeRouteId(options.routePath, interceptionContext);
   const pageId = AppElementsWire.encodePageId(options.routePath, interceptionContext);
   const layoutEntries = createAppPageLayoutEntries(options.route);
@@ -478,7 +478,7 @@ export function buildAppPageElements<
     const slotOverride = resolveSlotOverride(slotKey, slotName);
     const slotParams = getEffectiveSlotParams(slotKey, slotName);
     const slotRouteSegments = slot.routeSegments ?? [];
-    const slotResetKey = resolveAppPageLeafSegmentStateKey(slotRouteSegments, slotParams);
+    const slotResetKey = resolveAppPageRouteStateKey(slotRouteSegments, slotParams);
     const overrideOrPageComponent =
       getDefaultExport(slotOverride?.pageModule) ?? getDefaultExport(slot.page);
     const defaultComponent = getDefaultExport(slot.default);
@@ -596,8 +596,10 @@ export function buildAppPageElements<
     !shouldSuppressLoadingBoundaries(options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION)
   ) {
     const RouteLoadingComponent = routeLoadingComponent;
-    // Next.js keys loading.tsx to the active segment state key. Dynamic param
-    // changes reset the pending boundary, while search-only changes preserve it.
+    // Route-level wrappers cover the full page branch in vinext's flat element
+    // transport, so their reset key includes the visible segment-state path.
+    // Dynamic param changes reset the pending boundary, while search-only changes
+    // preserve it.
     routeChildren = (
       <Suspense key={routeResetKey} fallback={<RouteLoadingComponent />}>
         {routeChildren}

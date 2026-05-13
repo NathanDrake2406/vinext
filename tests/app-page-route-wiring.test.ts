@@ -1089,10 +1089,10 @@ describe("app page route wiring helpers", () => {
     const templateSlot = findSlotById(elements["route:/docs/launch"], "template:/docs");
 
     expect(templateSlot).not.toBeNull();
-    expect(templateSlot?.key).toBe("launch");
+    expect(templateSlot?.key).toBe("slug|launch|d");
   });
 
-  it("threads segment reset keys into loading, error, and not-found boundaries", () => {
+  it("threads route state reset keys into loading, error, and not-found boundaries", () => {
     function RouteLoading() {
       return createElement("p", null, "Loading");
     }
@@ -1135,9 +1135,122 @@ describe("app page route wiring helpers", () => {
     const errorBoundary = findElementByTypeName(routeEntry, "ErrorBoundary");
     const notFoundBoundary = findElementByTypeName(routeEntry, "NotFoundBoundary");
 
-    expect(loadingBoundary?.key).toBe("alpha");
-    expect(errorBoundary?.props.resetKey).toBe("alpha");
-    expect(notFoundBoundary?.props.resetKey).toBe("alpha");
+    expect(loadingBoundary?.key).toBe(JSON.stringify(["products", "id|alpha|d"]));
+    expect(errorBoundary?.props.resetKey).toBe(JSON.stringify(["products", "id|alpha|d"]));
+    expect(notFoundBoundary?.props.resetKey).toBe(JSON.stringify(["products", "id|alpha|d"]));
+  });
+
+  it("does not collide route reset keys across branches with the same dynamic leaf value", () => {
+    function RouteLoading() {
+      return createElement("p", null, "Loading");
+    }
+
+    function RouteError() {
+      return createElement("p", null, "Error");
+    }
+
+    function RouteNotFound() {
+      return createElement("p", null, "Not Found");
+    }
+
+    function buildBranchElements(branch: "posts" | "photos") {
+      return buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(params) {
+          return Promise.resolve(params);
+        },
+        matchedParams: { id: "123" },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: { default: RouteError },
+          errors: [null],
+          layoutTreePositions: [0],
+          layouts: [{ default: RootLayout }],
+          loading: { default: RouteLoading },
+          notFound: { default: RouteNotFound },
+          notFounds: [null],
+          routeSegments: ["reset-collision", branch, "[id]"],
+          slots: {},
+          templateTreePositions: [],
+          templates: [],
+        },
+        routePath: `/reset-collision/${branch}/123`,
+        rootNotFoundModule: null,
+      })[`route:/reset-collision/${branch}/123`];
+    }
+
+    const postsRoute = buildBranchElements("posts");
+    const photosRoute = buildBranchElements("photos");
+    const postsLoadingBoundary = findSuspenseWithFallback(postsRoute, "RouteLoading");
+    const photosLoadingBoundary = findSuspenseWithFallback(photosRoute, "RouteLoading");
+    const postsErrorBoundary = findElementByTypeName(postsRoute, "ErrorBoundary");
+    const photosErrorBoundary = findElementByTypeName(photosRoute, "ErrorBoundary");
+    const postsNotFoundBoundary = findElementByTypeName(postsRoute, "NotFoundBoundary");
+    const photosNotFoundBoundary = findElementByTypeName(photosRoute, "NotFoundBoundary");
+
+    expect(postsLoadingBoundary?.key).toBe(
+      JSON.stringify(["reset-collision", "posts", "id|123|d"]),
+    );
+    expect(photosLoadingBoundary?.key).toBe(
+      JSON.stringify(["reset-collision", "photos", "id|123|d"]),
+    );
+    expect(postsLoadingBoundary?.key).not.toBe(photosLoadingBoundary?.key);
+    expect(postsErrorBoundary?.props.resetKey).not.toBe(photosErrorBoundary?.props.resetKey);
+    expect(postsNotFoundBoundary?.props.resetKey).not.toBe(photosNotFoundBoundary?.props.resetKey);
+  });
+
+  it("does not collide route reset keys across static branches with the same leaf segment", () => {
+    function RouteLoading() {
+      return createElement("p", null, "Loading");
+    }
+
+    function RouteError() {
+      return createElement("p", null, "Error");
+    }
+
+    function buildStaticBranchElements(branch: "account" | "admin") {
+      return buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(params) {
+          return Promise.resolve(params);
+        },
+        matchedParams: {},
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: { default: RouteError },
+          errors: [null],
+          layoutTreePositions: [0],
+          layouts: [{ default: RootLayout }],
+          loading: { default: RouteLoading },
+          notFound: null,
+          notFounds: [null],
+          routeSegments: ["reset-collision", branch, "settings"],
+          slots: {},
+          templateTreePositions: [],
+          templates: [],
+        },
+        routePath: `/reset-collision/${branch}/settings`,
+        rootNotFoundModule: null,
+      })[`route:/reset-collision/${branch}/settings`];
+    }
+
+    const accountRoute = buildStaticBranchElements("account");
+    const adminRoute = buildStaticBranchElements("admin");
+    const accountLoadingBoundary = findSuspenseWithFallback(accountRoute, "RouteLoading");
+    const adminLoadingBoundary = findSuspenseWithFallback(adminRoute, "RouteLoading");
+    const accountErrorBoundary = findElementByTypeName(accountRoute, "ErrorBoundary");
+    const adminErrorBoundary = findElementByTypeName(adminRoute, "ErrorBoundary");
+
+    expect(accountLoadingBoundary?.key).toBe(
+      JSON.stringify(["reset-collision", "account", "settings"]),
+    );
+    expect(adminLoadingBoundary?.key).toBe(
+      JSON.stringify(["reset-collision", "admin", "settings"]),
+    );
+    expect(accountLoadingBoundary?.key).not.toBe(adminLoadingBoundary?.key);
+    expect(accountErrorBoundary?.props.resetKey).not.toBe(adminErrorBoundary?.props.resetKey);
   });
 
   it("threads segment reset keys into boundaries even without template.tsx", () => {
@@ -1174,7 +1287,7 @@ describe("app page route wiring helpers", () => {
 
     const errorBoundary = findElementByTypeName(elements["route:/docs/intro"], "ErrorBoundary");
 
-    expect(errorBoundary?.props.resetKey).toBe("intro");
+    expect(errorBoundary?.props.resetKey).toBe("slug|intro|d");
   });
 
   it("interleaves templates with their corresponding layouts", async () => {

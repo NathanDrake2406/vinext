@@ -16,11 +16,69 @@ function isRouteGroupSegment(segment: string): boolean {
   return segment.startsWith("(") && segment.endsWith(")");
 }
 
+type AppPageSegmentParamType = "d" | "c" | "oc";
+
+type AppPageSegmentParam = {
+  name: string;
+  type: AppPageSegmentParamType;
+};
+
 function formatParamSegmentValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
     return value.join("/");
   }
   return value;
+}
+
+function readSegmentParam(segment: string): AppPageSegmentParam | null {
+  if (isOptionalCatchAllSegment(segment)) {
+    return {
+      name: segment.slice(5, -2),
+      type: "oc",
+    };
+  }
+
+  if (isCatchAllSegment(segment)) {
+    return {
+      name: segment.slice(4, -1),
+      type: "c",
+    };
+  }
+
+  if (isDynamicSegment(segment)) {
+    return {
+      name: segment.slice(1, -1),
+      type: "d",
+    };
+  }
+
+  return null;
+}
+
+function formatSegmentStateParamValue(
+  param: AppPageSegmentParam,
+  params: AppPageParams,
+  fallbackSegment: string,
+): string {
+  const value = params[param.name];
+
+  if (
+    param.type === "oc" &&
+    (value === undefined || (Array.isArray(value) && value.length === 0))
+  ) {
+    return "";
+  }
+
+  return formatParamSegmentValue(value) ?? fallbackSegment;
+}
+
+function resolveSingleSegmentStateKey(segment: string, params: AppPageParams): string {
+  const param = readSegmentParam(segment);
+  if (!param) {
+    return segment;
+  }
+
+  return `${param.name}|${formatSegmentStateParamValue(param, params, segment)}|${param.type}`;
 }
 
 export function resolveAppPageChildSegments(
@@ -68,12 +126,27 @@ export function resolveAppPageSegmentStateKey(
   treePosition: number,
   params: AppPageParams,
 ): string {
-  for (const segment of resolveAppPageChildSegments(routeSegments, treePosition, params)) {
+  for (const segment of routeSegments.slice(treePosition)) {
     if (!isRouteGroupSegment(segment)) {
-      return segment;
+      return resolveSingleSegmentStateKey(segment, params);
     }
   }
   return "";
+}
+
+export function resolveAppPageRouteStateKey(
+  routeSegments: readonly string[],
+  params: AppPageParams,
+): string {
+  const statePath: string[] = [];
+
+  for (const segment of routeSegments) {
+    if (!isRouteGroupSegment(segment)) {
+      statePath.push(resolveSingleSegmentStateKey(segment, params));
+    }
+  }
+
+  return statePath.length > 0 ? JSON.stringify(statePath) : "";
 }
 
 export function resolveAppPageLeafSegmentStateKey(

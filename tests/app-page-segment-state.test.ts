@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   resolveAppPageLeafSegmentStateKey,
+  resolveAppPageRouteStateKey,
   resolveAppPageSegmentStateKey,
 } from "../packages/vinext/src/server/app-page-segment-state.js";
 
@@ -13,7 +14,7 @@ describe("app page segment state keys", () => {
       resolveAppPageSegmentStateKey(["dashboard", "[team]", "settings"], 1, {
         team: "alpha",
       }),
-    ).toBe("alpha");
+    ).toBe("team|alpha|d");
   });
 
   it("skips route groups when selecting the state key below a tree position", () => {
@@ -31,16 +32,38 @@ describe("app page segment state keys", () => {
       resolveAppPageSegmentStateKey(["(marketing)", "blog", "[slug]"], 2, {
         slug: "launch",
       }),
-    ).toBe("launch");
+    ).toBe("slug|launch|d");
   });
 
-  it("uses the final visible segment for route-level loading and boundary reset", () => {
+  it("keeps the leaf segment helper scoped to the active local segment", () => {
     expect(
       resolveAppPageLeafSegmentStateKey(["(marketing)", "blog", "[slug]"], {
         slug: "launch",
       }),
-    ).toBe("launch");
+    ).toBe("slug|launch|d");
     expect(resolveAppPageLeafSegmentStateKey(["(marketing)"], {})).toBe("");
+  });
+
+  it("uses the full visible segment-state path for route-wide reset keys", () => {
+    expect(
+      resolveAppPageRouteStateKey(["(marketing)", "blog", "[slug]"], {
+        slug: "launch",
+      }),
+    ).toBe(JSON.stringify(["blog", "slug|launch|d"]));
+
+    expect(
+      resolveAppPageRouteStateKey(["posts", "[id]"], {
+        id: "123",
+      }),
+    ).not.toBe(
+      resolveAppPageRouteStateKey(["photos", "[id]"], {
+        id: "123",
+      }),
+    );
+
+    expect(resolveAppPageRouteStateKey(["account", "settings"], {})).not.toBe(
+      resolveAppPageRouteStateKey(["admin", "settings"], {}),
+    );
   });
 
   it("keeps catch-all segment keys canonical", () => {
@@ -48,11 +71,11 @@ describe("app page segment state keys", () => {
       resolveAppPageSegmentStateKey(["docs", "[...parts]"], 1, {
         parts: ["guides", "routing"],
       }),
-    ).toBe("guides/routing");
+    ).toBe("parts|guides/routing|c");
     expect(
       resolveAppPageSegmentStateKey(["docs", "[[...parts]]"], 1, {
         parts: [],
       }),
-    ).toBe("");
+    ).toBe("parts||oc");
   });
 });
