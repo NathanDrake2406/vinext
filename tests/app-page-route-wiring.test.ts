@@ -1,4 +1,4 @@
-import { Fragment, createElement, isValidElement, type ReactNode } from "react";
+import { Fragment, createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vite-plus/test";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
 import type { AppElements } from "../packages/vinext/src/server/app-elements.js";
@@ -52,6 +52,83 @@ function containsElementType(node: unknown, type: unknown): boolean {
     containsElementType(node.props.children, type) ||
     containsElementType(node.props.fallback, type)
   );
+}
+
+function getElementTypeName(type: unknown): string {
+  if (typeof type === "string") return type;
+  if (typeof type === "function") {
+    return (
+      (type as { displayName?: string; name?: string }).displayName ??
+      (type as { name?: string }).name ??
+      ""
+    );
+  }
+  return String(type);
+}
+
+type InspectableElementProps = Record<string, unknown> & {
+  children?: unknown;
+  fallback?: unknown;
+  id?: unknown;
+};
+
+function findElement(
+  node: unknown,
+  predicate: (element: ReactElement<InspectableElementProps>) => boolean,
+): ReactElement<InspectableElementProps> | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const match = findElement(child, predicate);
+      if (match) return match;
+    }
+    return null;
+  }
+
+  if (!isValidElement<InspectableElementProps>(node)) {
+    return null;
+  }
+
+  if (predicate(node)) return node;
+
+  for (const value of Object.values(node.props)) {
+    const match = findElement(value, predicate);
+    if (match) return match;
+  }
+
+  return null;
+}
+
+function findElementByTypeName(
+  node: unknown,
+  typeName: string,
+): ReactElement<Record<string, unknown>> | null {
+  const match = findElement(node, (element) => getElementTypeName(element.type) === typeName);
+  return match as ReactElement<Record<string, unknown>> | null;
+}
+
+function findSlotById(node: unknown, id: string): ReactElement<Record<string, unknown>> | null {
+  const match = findElement(
+    node,
+    (element) =>
+      getElementTypeName(element.type) === "Slot" &&
+      typeof element.props.id === "string" &&
+      element.props.id === id,
+  );
+  return match as ReactElement<Record<string, unknown>> | null;
+}
+
+function findSuspenseWithFallback(
+  node: unknown,
+  fallbackTypeName: string,
+): ReactElement<Record<string, unknown>> | null {
+  const match = findElement(node, (element) => {
+    if (getElementTypeName(element.type) !== "Symbol(react.suspense)") {
+      return false;
+    }
+    const fallback = element.props.fallback;
+    return isValidElement(fallback) && getElementTypeName(fallback.type) === fallbackTypeName;
+  });
+  return match as ReactElement<Record<string, unknown>> | null;
 }
 
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -977,6 +1054,127 @@ describe("app page route wiring helpers", () => {
     expect(templateDepth).toBeDefined();
     expect(notFoundDepth).toBeDefined();
     expect(templateDepth).toBeLessThan(notFoundDepth!);
+  });
+
+  it("keys template slots with the semantic segment state key", () => {
+    function LeafTemplate(props: { children?: ReactNode }) {
+      return createElement("section", { "data-template": "leaf" }, readChildren(props.children));
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: { slug: "launch" },
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null, null],
+        layoutTreePositions: [0, 1],
+        layouts: [{ default: RootLayout }, { default: GroupLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null, null],
+        routeSegments: ["docs", "[slug]"],
+        slots: {},
+        templateTreePositions: [1],
+        templates: [{ default: LeafTemplate }],
+      },
+      routePath: "/docs/launch",
+      rootNotFoundModule: null,
+    });
+
+    const templateSlot = findSlotById(elements["route:/docs/launch"], "template:/docs");
+
+    expect(templateSlot).not.toBeNull();
+    expect(templateSlot?.key).toBe("launch");
+  });
+
+  it("threads segment reset keys into loading, error, and not-found boundaries", () => {
+    function RouteLoading() {
+      return createElement("p", null, "Loading");
+    }
+
+    function RouteError() {
+      return createElement("p", null, "Error");
+    }
+
+    function RouteNotFound() {
+      return createElement("p", null, "Not Found");
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: { id: "alpha" },
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: { default: RouteError },
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: RootLayout }],
+        loading: { default: RouteLoading },
+        notFound: { default: RouteNotFound },
+        notFounds: [null],
+        routeSegments: ["products", "[id]"],
+        slots: {},
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/products/alpha",
+      rootNotFoundModule: null,
+    });
+
+    const routeEntry = elements["route:/products/alpha"];
+    const loadingBoundary = findSuspenseWithFallback(routeEntry, "RouteLoading");
+    const errorBoundary = findElementByTypeName(routeEntry, "ErrorBoundary");
+    const notFoundBoundary = findElementByTypeName(routeEntry, "NotFoundBoundary");
+
+    expect(loadingBoundary?.key).toBe("alpha");
+    expect(errorBoundary?.props.resetKey).toBe("alpha");
+    expect(notFoundBoundary?.props.resetKey).toBe("alpha");
+  });
+
+  it("threads segment reset keys into boundaries even without template.tsx", () => {
+    function SegmentError() {
+      return createElement("p", null, "Segment Error");
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: { slug: "intro" },
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errorPaths: [{ default: SegmentError }],
+        errors: [null],
+        errorTreePositions: [1],
+        layoutTreePositions: [0],
+        layouts: [{ default: RootLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null],
+        routeSegments: ["docs", "[slug]"],
+        slots: {},
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/docs/intro",
+      rootNotFoundModule: null,
+    });
+
+    const errorBoundary = findElementByTypeName(elements["route:/docs/intro"], "ErrorBoundary");
+
+    expect(errorBoundary?.props.resetKey).toBe("intro");
   });
 
   it("interleaves templates with their corresponding layouts", async () => {
