@@ -9,11 +9,11 @@
  *      delete the generated ~1,900-line runtime catalog while keeping ESM import
  *      semantics intact.
  *   2. During production builds, fetches Google Fonts CSS + font files, caches
- *      them locally under `.vinext/fonts/`, and injects `_selfHostedCSS` into
+ *      them locally under `.vinext/fonts/`, and injects `_vinext.font` into
  *      statically analyzable font loader calls so fonts are served from the
  *      deployed origin rather than fonts.googleapis.com. Static calls also
- *      receive `_adjustFontFallbackCSS` when Next.js-compatible fallback
- *      metrics exist for the selected Google Font.
+ *      receive adjusted fallback CSS when Next.js-compatible fallback metrics
+ *      exist for the selected Google Font.
  *
  * `createLocalFontsPlugin` — vinext:local-fonts
  *   When a source file calls localFont({ src: "./font.woff2" }) or
@@ -79,8 +79,8 @@ const GOOGLE_FONT_UTILITY_EXPORTS = new Set([
  * and writes an `@font-face` CSS snippet whose `src: url(...)` references
  * the files by absolute filesystem path — convenient for disk, unusable at
  * runtime because browsers resolve relative to the origin. Before the CSS
- * is embedded in the bundle as `_selfHostedCSS`, the filesystem prefix is
- * rewritten to this URL prefix by `_rewriteCachedFontCssToServedUrls()`,
+ * is embedded in the bundle as `_vinext.font.selfHostedCSS`, the filesystem
+ * prefix is rewritten to this URL prefix by `_rewriteCachedFontCssToServedUrls()`,
  * and the matching `writeBundle` hook in `createGoogleFontsPlugin` copies
  * the font files into `<clientOutDir>/<assetsDir>/_vinext_fonts/` so the
  * rewritten URL actually resolves against the origin at request time.
@@ -106,8 +106,8 @@ function formatGoogleFontsErrorBody(body: string): string {
  * plugin's `writeBundle` hook copies the font files to.
  *
  * This is called once per transform, before the CSS string is embedded in
- * the bundle as `_selfHostedCSS`. Every downstream consumer reads from the
- * same rewritten CSS: the injected `<style data-vinext-fonts>` block, the
+ * the bundle as `_vinext.font.selfHostedCSS`. Every downstream consumer reads
+ * from the same rewritten CSS: the injected `<style data-vinext-fonts>` block, the
  * HTML body's `<link rel="preload">` tags (via `collectFontPreloadsFromCSS`
  * in `shims/font-google-base.ts`), and the HTTP `Link:` response header
  * (via `buildAppPageFontLinkHeader` in `server/app-page-execution.ts`).
@@ -664,7 +664,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
     // .vinext/fonts/ tree is served directly under the same URL prefix that
     // `_rewriteCachedFontCssToServedUrls()` embeds into the @font-face CSS
     // (`/<assetsDir>/_vinext_fonts/...`). Without this hook the rewritten
-    // URLs 404 — and once `_selfHostedCSS` is injected, the shim no longer
+    // URLs 404 — and once `_vinext.font.selfHostedCSS` is injected, the shim no longer
     // emits the fonts.googleapis.com `<link>`, so a 404 here means no
     // glyphs render at all (no CDN fallback path).
     configureServer(server) {
@@ -897,7 +897,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
 
           // Rewrite absolute `.vinext/fonts/` filesystem paths in the cached
           // CSS to served URLs under `/<assetsDir>/_vinext_fonts/` so the
-          // embedded `_selfHostedCSS` string has origin-relative URLs that
+          // embedded `_vinext.font.selfHostedCSS` string has origin-relative URLs that
           // the browser can actually resolve. The plugin's writeBundle hook
           // copies the referenced font files to the matching location under
           // the client output directory so the URLs serve 200s, not 404s.
@@ -929,19 +929,22 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
           const validatedFontStyle =
             validated.styles.length === 1 ? validated.styles[0] : undefined;
 
-          // Inject internal CSS strings into the options object
-          const injectedProperties = [`_selfHostedCSS: ${JSON.stringify(servedCSS)}`];
+          // Inject the internal transform-to-runtime payload into the options object.
+          const internalFontProperties = [`selfHostedCSS: ${JSON.stringify(servedCSS)}`];
           if (adjustedFallbackCSS) {
-            injectedProperties.push(
-              `_adjustFontFallbackCSS: ${JSON.stringify(adjustedFallbackCSS)}`,
+            internalFontProperties.push(
+              `adjustedFallbackCSS: ${JSON.stringify(adjustedFallbackCSS)}`,
             );
           }
           if (Number.isFinite(validatedFontWeight)) {
-            injectedProperties.push(`_fontWeight: ${validatedFontWeight}`);
+            internalFontProperties.push(`fontWeight: ${validatedFontWeight}`);
           }
           if (validatedFontStyle) {
-            injectedProperties.push(`_fontStyle: ${JSON.stringify(validatedFontStyle)}`);
+            internalFontProperties.push(`fontStyle: ${JSON.stringify(validatedFontStyle)}`);
           }
+          const injectedProperties = [
+            `_vinext: { font: { ${internalFontProperties.join(", ")} } }`,
+          ];
           const closingBrace = optionsStr.lastIndexOf("}");
           const beforeBrace = optionsStr.slice(0, closingBrace).trim();
           // Determine the separator to insert before the new property:

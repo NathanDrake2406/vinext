@@ -4,6 +4,15 @@ export type FontStyle = {
   fontStyle?: string;
 };
 
+export type FontFaceStyleInput = {
+  fontFamily: string;
+  weight?: string | string[];
+  style?: string | string[];
+  internalWeight?: number;
+  internalStyle?: string;
+  google?: boolean;
+};
+
 export function singleFontOptionValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
     const values = new Set(value);
@@ -36,6 +45,22 @@ export function resolveGoogleFontStyle(style: string | string[] | undefined): st
   if (!value) return undefined;
   if (value === "normal" || value === "italic") return value;
   return undefined;
+}
+
+export function resolveSingleFaceStyle(input: FontFaceStyleInput): FontStyle {
+  const fontWeight = input.internalWeight ?? resolveFontWeight(input.weight);
+  const internalStyle = input.internalStyle
+    ? sanitizeFontDescriptorValue(input.internalStyle)
+    : undefined;
+  const fontStyle =
+    internalStyle ??
+    (input.google ? resolveGoogleFontStyle(input.style) : resolveFontStyle(input.style));
+
+  return {
+    fontFamily: input.fontFamily,
+    ...(fontWeight !== undefined ? { fontWeight } : {}),
+    ...(fontStyle ? { fontStyle } : {}),
+  };
 }
 
 export function formatFontClassRule(className: string, style: FontStyle): string {

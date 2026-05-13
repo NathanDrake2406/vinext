@@ -1,10 +1,5 @@
 import { buildGoogleFontsUrl as buildUrlFromAxes } from "../build/google-fonts/build-url.js";
-import {
-  formatFontClassRule,
-  resolveGoogleFontStyle,
-  resolveFontWeight,
-  type FontStyle,
-} from "./font-utils.js";
+import { formatFontClassRule, resolveSingleFaceStyle, type FontStyle } from "./font-utils.js";
 
 /**
  * next/font/google shim
@@ -104,11 +99,23 @@ export type FontResult = {
   variable?: string;
 };
 
+type InternalGoogleFontRuntimeOptions = {
+  selfHostedCSS?: string;
+  adjustedFallbackCSS?: string;
+  fontWeight?: number;
+  fontStyle?: "normal" | "italic";
+};
+
 type FontLoaderOptions = FontOptions & {
-  _selfHostedCSS?: string;
-  _adjustFontFallbackCSS?: string;
-  _fontWeight?: number;
-  _fontStyle?: string;
+  /**
+   * Internal payload injected by the vinext:google-fonts transform after
+   * metadata validation. Runtime must prefer these values over user options
+   * because they represent the resolved Next-compatible face, including
+   * metadata defaults such as italic-only families.
+   */
+  _vinext?: {
+    font?: InternalGoogleFontRuntimeOptions;
+  };
 };
 
 /**
@@ -192,9 +199,9 @@ function createFontIdentity(
       normalizeFallbackOption(fallback),
       normalizeStringOrBooleanOption(options.adjustFontFallback),
       normalizeStringSetOption(options.axes),
-      options._selfHostedCSS ?? "",
-      options._fontWeight?.toString() ?? "",
-      options._fontStyle ?? "",
+      options._vinext?.font?.selfHostedCSS ?? "",
+      options._vinext?.font?.fontWeight?.toString() ?? "",
+      options._vinext?.font?.fontStyle ?? "",
     ].join("\0"),
   );
 }
@@ -205,10 +212,10 @@ function createFontIdentity(
  * In production this code path is dead. The build plugin
  * (`vinext:google-fonts` in `src/plugins/fonts.ts`) statically resolves
  * each font call's axis values against the bundled metadata, fetches the
- * Google Fonts CSS, and injects the resulting CSS as `_selfHostedCSS` so
- * the runtime never queries Google. The shim only reaches this builder
- * when the plugin's static parser bails (dynamic options, eval-only
- * shapes), which is dev-only.
+ * Google Fonts CSS, and injects the resulting CSS as
+ * `_vinext.font.selfHostedCSS` so the runtime never queries Google. The shim
+ * only reaches this builder when the plugin's static parser bails (dynamic
+ * options, eval-only shapes), which is dev-only.
  *
  * The dev fallback intentionally has no metadata: shipping the 388 KB
  * `font-data.json` to the Worker bundle would dwarf the rest of the shim,
@@ -451,9 +458,10 @@ export type FontLoader = (options?: FontLoaderOptions) => FontResult;
 
 export function createFontLoader(family: string): FontLoader {
   return function fontLoader(options: FontLoaderOptions = {}): FontResult {
+    const internal = options._vinext?.font;
     const fallback = options.fallback ?? [];
     const adjustedFallback =
-      options.adjustFontFallback === false || !options._adjustFontFallbackCSS
+      options.adjustFontFallback === false || !internal?.adjustedFallbackCSS
         ? []
         : [`'${escapeCSSString(family)} Fallback'`];
     // Sanitize each fallback name to prevent CSS injection via crafted values
@@ -474,17 +482,18 @@ export function createFontLoader(family: string): FontLoader {
     // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
     // Users apply this class to set the CSS variable on that element.
     const variableClassName = `__variable_${classSegment}_${id}`;
-    const fontWeight = options._fontWeight ?? resolveFontWeight(options.weight);
-    const fontStyle = options._fontStyle ?? resolveGoogleFontStyle(options.style);
-    const style = {
+    const style = resolveSingleFaceStyle({
       fontFamily,
-      ...(fontWeight !== undefined ? { fontWeight } : {}),
-      ...(fontStyle ? { fontStyle } : {}),
-    };
+      weight: options.weight,
+      style: options.style,
+      internalWeight: internal?.fontWeight,
+      internalStyle: internal?.fontStyle,
+      google: true,
+    });
 
-    if (options._selfHostedCSS) {
+    if (internal?.selfHostedCSS) {
       // Self-hosted mode: inject local @font-face CSS instead of CDN link
-      injectSelfHostedCSS(options._selfHostedCSS);
+      injectSelfHostedCSS(internal.selfHostedCSS);
     } else {
       // CDN mode: inject <link> to Google Fonts
       const url = buildGoogleFontsUrl(family, options);
@@ -498,8 +507,8 @@ export function createFontLoader(family: string): FontLoader {
       }
     }
 
-    if (options.adjustFontFallback !== false && options._adjustFontFallbackCSS) {
-      injectSelfHostedCSS(options._adjustFontFallbackCSS);
+    if (options.adjustFontFallback !== false && internal?.adjustedFallbackCSS) {
+      injectSelfHostedCSS(internal.adjustedFallbackCSS);
     }
 
     // Inject a CSS rule that maps className to font-family.

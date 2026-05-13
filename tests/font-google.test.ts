@@ -90,8 +90,7 @@ describe("next/font/google shim", () => {
     const result = Molle({
       weight: "400",
       subsets: ["latin"],
-      _fontWeight: 400,
-      _fontStyle: "italic",
+      _vinext: { font: { fontWeight: 400, fontStyle: "italic" } },
     } as any);
 
     expect(result.style).toMatchObject({
@@ -165,7 +164,7 @@ describe("next/font/google shim", () => {
     const result = Inter({
       weight: "400",
       subsets: ["latin"],
-      _adjustFontFallbackCSS: fallbackCSS,
+      _vinext: { font: { adjustedFallbackCSS: fallbackCSS } },
     } as any);
 
     expect(result.style.fontFamily).toContain("'Open Sans Fallback'");
@@ -223,11 +222,11 @@ describe("next/font/google shim", () => {
     expect(rm.style.fontFamily).toContain("Roboto Mono");
   });
 
-  it("accepts _selfHostedCSS option for self-hosted mode", async () => {
+  it("accepts internal self-hosted CSS for self-hosted mode", async () => {
     const { createFontLoader } = await import("../packages/vinext/src/shims/font-google.js");
     const Inter = createFontLoader("Inter");
     const fakeCSS = "@font-face { font-family: 'Inter'; src: url(/fonts/inter.woff2); }";
-    const result = Inter({ weight: ["400"], _selfHostedCSS: fakeCSS } as any);
+    const result = Inter({ weight: ["400"], _vinext: { font: { selfHostedCSS: fakeCSS } } } as any);
     expect(result.className).toBeDefined();
     expect(result.style.fontFamily).toContain("Inter");
   });
@@ -566,7 +565,7 @@ describe("vinext:google-fonts plugin", () => {
     const result = await transform.call(plugin, code, "/app/layout.tsx");
     expect(result).not.toBeNull();
     expect(result.code).toContain("virtual:vinext-google-fonts?");
-    expect(result.code).not.toContain("_selfHostedCSS");
+    expect(result.code).not.toContain("selfHostedCSS");
   });
 
   it("returns null for files without next/font/google imports", async () => {
@@ -671,7 +670,7 @@ describe("vinext:google-fonts plugin", () => {
     const result = await transform.call(plugin, code, "/app/layout.tsx");
     expect(result).not.toBeNull();
     expect(result.code).toContain("virtual:vinext-google-fonts?");
-    expect(result.code).not.toContain("_selfHostedCSS");
+    expect(result.code).not.toContain("selfHostedCSS");
   });
 
   it("rewrites namespace imports to the default proxy", async () => {
@@ -698,7 +697,7 @@ describe("vinext:google-fonts plugin", () => {
     expect(result.code).toContain("virtual:vinext-google-fonts?");
   });
 
-  it("transforms font call to include _selfHostedCSS during build", async () => {
+  it("transforms font call to include the internal font payload during build", async () => {
     const plugin = getGoogleFontsPlugin();
     const root = path.join(import.meta.dirname, ".test-font-root");
     initPlugin(plugin, { command: "build", root });
@@ -712,8 +711,9 @@ describe("vinext:google-fonts plugin", () => {
     const result = await transform.call(plugin, code, "/app/layout.tsx");
     expect(result).not.toBeNull();
     expect(result.code).toContain("virtual:vinext-google-fonts?");
-    expect(result.code).toContain("_selfHostedCSS");
-    expect(result.code).toContain("_adjustFontFallbackCSS");
+    expect(result.code).toContain("_vinext");
+    expect(result.code).toContain("selfHostedCSS");
+    expect(result.code).toContain("adjustedFallbackCSS");
     expect(result.code).toContain("@font-face");
     expect(result.code).toContain("Inter");
     expect(result.map).toBeDefined();
@@ -754,9 +754,41 @@ describe("vinext:google-fonts plugin", () => {
 
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
-      expect(result.code).toContain("_selfHostedCSS");
-      expect(result.code).toContain("_fontWeight: 400");
-      expect(result.code).toContain('_fontStyle: "italic"');
+      expect(result.code).toContain("_vinext");
+      expect(result.code).toContain("selfHostedCSS");
+      expect(result.code).toContain("fontWeight: 400");
+      expect(result.code).toContain('fontStyle: "italic"');
+    } finally {
+      globalThis.fetch = originalFetch;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not inject single-face style metadata for multi-style Google fonts", async () => {
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-multi-style");
+    initPlugin(plugin, { command: "build", root });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response("@font-face { font-family: 'Inter'; }", {
+        status: 200,
+        headers: { "content-type": "text/css" },
+      });
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Inter } from 'next/font/google';`,
+        `const inter = Inter({ weight: '400', style: ['normal', 'italic'], subsets: ['latin'] });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain("_vinext");
+      expect(result.code).toContain("selfHostedCSS");
+      expect(result.code).toContain("fontWeight: 400");
+      expect(result.code).not.toContain("fontStyle:");
     } finally {
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -784,8 +816,8 @@ describe("vinext:google-fonts plugin", () => {
 
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
-      expect(result.code).toContain("_selfHostedCSS");
-      expect(result.code).not.toContain("_adjustFontFallbackCSS");
+      expect(result.code).toContain("selfHostedCSS");
+      expect(result.code).not.toContain("adjustedFallbackCSS");
     } finally {
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -825,7 +857,7 @@ describe("vinext:google-fonts plugin", () => {
       const result1 = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result1).not.toBeNull();
       expect(result1.code).toContain("virtual:vinext-google-fonts?");
-      expect(result1.code).toContain("_selfHostedCSS");
+      expect(result1.code).toContain("selfHostedCSS");
       const firstFetchCount = fetchCount.value;
 
       // Second call: should use in-memory cache (no additional fetch)
@@ -871,7 +903,7 @@ describe("vinext:google-fonts plugin", () => {
       expect(result).not.toBeNull();
       expect(result.code).toContain("virtual:vinext-google-fonts?");
       // Both font calls should be transformed
-      const matches = result.code.match(/_selfHostedCSS/g);
+      const matches = result.code.match(/selfHostedCSS/g);
       expect(matches?.length).toBe(2);
     } finally {
       globalThis.fetch = originalFetch;
@@ -905,7 +937,7 @@ describe("vinext:google-fonts plugin", () => {
       expect(result).not.toBeNull();
       expect(result.code).toContain("virtual:vinext-google-fonts?");
       // Only Inter should be transformed (1 match)
-      const matches = result.code.match(/_selfHostedCSS/g);
+      const matches = result.code.match(/selfHostedCSS/g);
       expect(matches?.length).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
@@ -916,7 +948,7 @@ describe("vinext:google-fonts plugin", () => {
   it("does not produce double-comma when font options have a trailing comma", async () => {
     // Regression test: Inter({ subsets: ["latin"], }) already has a trailing comma.
     // injectSelfHostedCss must not prepend another ", " making the object literal
-    // {subsets: ["latin"],, _selfHostedCSS: "..."} which is a syntax error.
+    // {subsets: ["latin"],, selfHostedCSS: "..."} which is a syntax error.
     const plugin = getGoogleFontsPlugin();
     const root = path.join(import.meta.dirname, ".test-font-root-trailing-comma");
     initPlugin(plugin, { command: "build", root });
@@ -940,11 +972,11 @@ describe("vinext:google-fonts plugin", () => {
 
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
-      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).toContain("selfHostedCSS");
       // Must not have a double-comma — that would be a JS syntax error
       expect(result.code).not.toMatch(/,\s*,/);
       // Verify the generated code is syntactically valid by checking structure
-      expect(result.code).toContain('_selfHostedCSS: "');
+      expect(result.code).toContain('selfHostedCSS: "');
     } finally {
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -977,8 +1009,8 @@ describe("vinext:google-fonts plugin", () => {
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
       expect(result.code).toContain("virtual:vinext-google-fonts?");
-      // _selfHostedCSS must have been injected — without the fix this was absent
-      expect(result.code).toContain("_selfHostedCSS");
+      // selfHostedCSS must have been injected — without the fix this was absent
+      expect(result.code).toContain("selfHostedCSS");
       expect(result.code).toContain("@font-face");
       // Verify the injected object is syntactically valid (no double-comma)
       expect(result.code).not.toMatch(/,\s*,/);
@@ -1011,7 +1043,7 @@ describe("vinext:google-fonts plugin", () => {
 
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
-      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).toContain("selfHostedCSS");
       expect(result.code).not.toMatch(/,\s*,/);
     } finally {
       globalThis.fetch = originalFetch;
@@ -1043,7 +1075,7 @@ describe("vinext:google-fonts plugin", () => {
 
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
-      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).toContain("selfHostedCSS");
       expect(result.code).not.toMatch(/,\s*,/);
     } finally {
       globalThis.fetch = originalFetch;
@@ -1072,7 +1104,7 @@ describe("vinext:google-fonts plugin", () => {
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
       expect(result.code).toContain("virtual:vinext-google-fonts?");
-      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).toContain("selfHostedCSS");
     } finally {
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -1106,7 +1138,7 @@ describe("vinext:google-fonts plugin", () => {
 
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
-      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).toContain("selfHostedCSS");
 
       const cssFetch = fetchedUrls.find((u) => u.includes("fonts.googleapis.com/css2"));
       expect(cssFetch).toBeDefined();
@@ -1145,7 +1177,7 @@ describe("vinext:google-fonts plugin", () => {
 
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
-      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).toContain("selfHostedCSS");
 
       const cssFetch = fetchedUrls.find((u) => u.includes("fonts.googleapis.com/css2"));
       expect(cssFetch).toBeDefined();
@@ -1246,9 +1278,9 @@ describe("vinext:google-fonts plugin", () => {
         `const inter = Inter({ weight: '400', subsets: ['latin'] });`,
       ].join("\n");
       const result = await transform.call(plugin, code, "/app/layout.tsx");
-      // Transform still returns; it just does not inject _selfHostedCSS.
+      // Transform still returns; it just does not inject selfHostedCSS.
       expect(result).not.toBeNull();
-      expect(result.code).not.toContain("_selfHostedCSS");
+      expect(result.code).not.toContain("selfHostedCSS");
     } finally {
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -1275,7 +1307,7 @@ describe("vinext:google-fonts plugin", () => {
       ].join("\n");
       const result = await transform.call(plugin, code, "/app/layout.tsx");
       expect(result).not.toBeNull();
-      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).toContain("selfHostedCSS");
     } finally {
       globalThis.fetch = originalFetch;
       fs.rmSync(root, { recursive: true, force: true });
@@ -1307,7 +1339,7 @@ describe("fetchAndCacheFont", () => {
     expect(result).not.toBeNull();
 
     // Verify the transformed code contains self-hosted CSS with @font-face
-    expect(result.code).toContain("_selfHostedCSS");
+    expect(result.code).toContain("selfHostedCSS");
     expect(result.code).toContain("@font-face");
     expect(result.code).toContain("Inter");
     // Should reference local file paths, not googleapis.com CDN
@@ -1340,7 +1372,7 @@ describe("_rewriteCachedFontCssToServedUrls", () => {
   // <link rel="preload"> tags, and the HTTP Link: response header — because
   // `fetchAndCacheFont` wrote `path.join(cacheDir, ...)` into the cached
   // CSS and nothing rewrote those paths before the CSS was embedded in the
-  // bundle as `_selfHostedCSS`. Every downstream consumer then read the
+  // bundle as `selfHostedCSS`. Every downstream consumer then read the
   // same leaked filesystem path. In production this caused high-priority
   // 404s (`<origin>/home/user/project/.vinext/fonts/...`) on every request.
   //

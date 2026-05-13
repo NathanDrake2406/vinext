@@ -17,8 +17,7 @@
  */
 import {
   formatFontClassRule,
-  resolveFontStyle,
-  resolveFontWeight,
+  resolveSingleFaceStyle,
   sanitizeFontDescriptorValue,
   type FontStyle,
 } from "./font-utils.js";
@@ -353,17 +352,13 @@ export default function localFont(options: LocalFontOptions): FontResult {
   // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
   // Users apply this class to set the CSS variable on that element.
   const variableClassName = `__variable_local_${id}`;
-  const fontWeight = singleSource
-    ? resolveFontWeight(singleSource.weight ?? options.weight)
-    : undefined;
-  const resolvedFontStyle = singleSource
-    ? resolveFontStyle(singleSource.style ?? options.style)
-    : undefined;
-  const style = {
-    fontFamily,
-    ...(fontWeight !== undefined ? { fontWeight } : {}),
-    ...(resolvedFontStyle ? { fontStyle: resolvedFontStyle } : {}),
-  };
+  const style = singleSource
+    ? resolveSingleFaceStyle({
+        fontFamily,
+        weight: singleSource.weight ?? options.weight,
+        style: singleSource.style ?? options.style,
+      })
+    : { fontFamily };
 
   // Collect font URLs for preload <link> tags (SSR only)
   collectFontPreloads(sources);
