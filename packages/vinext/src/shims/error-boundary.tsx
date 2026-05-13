@@ -46,10 +46,14 @@ type BoundaryResetState = {
   previousResetKey: string | null;
 };
 
+function normalizeBoundaryResetKey(resetKey: string | null | undefined): string | null {
+  return resetKey === undefined || resetKey === null || resetKey === "" ? null : resetKey;
+}
+
 function readBoundaryResetState(props: BoundaryResetProps): BoundaryResetState {
   return {
     previousPathname: props.pathname,
-    previousResetKey: props.resetKey ?? null,
+    previousResetKey: normalizeBoundaryResetKey(props.resetKey),
   };
 }
 
@@ -57,8 +61,11 @@ function shouldResetBoundary(
   nextResetState: BoundaryResetState,
   previousResetState: BoundaryResetState,
 ): boolean {
-  if (nextResetState.previousResetKey !== null || previousResetState.previousResetKey !== null) {
-    return nextResetState.previousResetKey !== previousResetState.previousResetKey;
+  const nextResetKey = normalizeBoundaryResetKey(nextResetState.previousResetKey);
+  const previousResetKey = normalizeBoundaryResetKey(previousResetState.previousResetKey);
+
+  if (nextResetKey !== null || previousResetKey !== null) {
+    return nextResetKey !== previousResetKey;
   }
 
   return nextResetState.previousPathname !== previousResetState.previousPathname;

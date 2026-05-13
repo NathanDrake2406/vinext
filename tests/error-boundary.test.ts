@@ -260,6 +260,37 @@ describe("ErrorBoundary digest classification (actual class)", () => {
     });
   });
 
+  it("treats an empty semantic reset key as absent for pathname fallback", () => {
+    expect(ErrorBoundaryInner).not.toBeNull();
+    if (!ErrorBoundaryInner) {
+      throw new Error("Expected ErrorBoundaryInner export");
+    }
+
+    function Fallback() {
+      return null;
+    }
+
+    const state = ErrorBoundaryInner.getDerivedStateFromProps(
+      {
+        children: null,
+        fallback: Fallback,
+        pathname: "/next",
+        resetKey: "",
+      },
+      {
+        error: { thrownValue: new Error("stuck") },
+        previousPathname: "/previous",
+        previousResetKey: "",
+      },
+    );
+
+    expect(state).toEqual({
+      error: null,
+      previousPathname: "/next",
+      previousResetKey: null,
+    });
+  });
+
   it("keeps caught errors when the semantic reset key is unchanged", () => {
     expect(ErrorBoundaryInner).not.toBeNull();
     if (!ErrorBoundaryInner) {
