@@ -4,6 +4,7 @@
 // The tuple shape is:
 // [serifFlag, ascent, descent, lineGap, unitsPerEm, xWidthAvg]
 
+import { escapeCSSString } from "vinext/shims/font-utils";
 import rawFallbackMetrics from "./fallback-metrics-data.json" with { type: "json" };
 
 type AdjustFontFallback = {
@@ -57,14 +58,9 @@ export function getFallbackFontOverrideMetrics(fontFamily: string): AdjustFontFa
   };
 }
 
-function escapeCSSString(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\\'")
-    .replace(/\n/g, "\\a ")
-    .replace(/\r/g, "\\d ");
-}
-
+// The fallback family name pattern '{family} Fallback' must match the name
+// constructed in createFontLoader() in shims/font-google-base.ts. Keep both
+// sites in sync to prevent silent fallback mismatches.
 export function buildFallbackFontFace(family: string, metrics: AdjustFontFallback): string {
   const fallbackFamily = `'${escapeCSSString(family)} Fallback'`;
   return `@font-face {

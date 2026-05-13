@@ -13,6 +13,66 @@ export type FontFaceStyleInput = {
   google?: boolean;
 };
 
+/**
+ * Escape a string for safe interpolation inside a CSS single-quoted string.
+ *
+ * Prevents CSS injection by escaping characters that could break out of
+ * a `'...'` CSS string context: backslashes, single quotes, and newlines.
+ *
+ * Used by font-google-base.ts, font-local.ts, and fallback-metrics.ts.
+ */
+export function escapeCSSString(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, "\\a ")
+    .replace(/\r/g, "\\d ");
+}
+
+/**
+ * Validate a CSS custom property name (e.g. `--font-inter`).
+ *
+ * Custom properties must start with `--` and only contain alphanumeric
+ * characters, hyphens, and underscores. Anything else could be used to
+ * break out of the CSS declaration and inject arbitrary rules.
+ *
+ * Returns the name if valid, undefined otherwise.
+ */
+export function sanitizeCSSVarName(name: string): string | undefined {
+  if (/^--[a-zA-Z0-9_-]+$/.test(name)) return name;
+  return undefined;
+}
+
+/**
+ * Sanitize a CSS font-family fallback name.
+ *
+ * Generic family names (sans-serif, serif, monospace, etc.) are used as-is.
+ * Named families are wrapped in escaped quotes. This prevents injection via
+ * crafted fallback values like `); } body { color: red; } .x {`.
+ */
+export function sanitizeFallback(name: string): string {
+  // CSS generic font families — safe to use unquoted
+  const generics = new Set([
+    "serif",
+    "sans-serif",
+    "monospace",
+    "cursive",
+    "fantasy",
+    "system-ui",
+    "ui-serif",
+    "ui-sans-serif",
+    "ui-monospace",
+    "ui-rounded",
+    "emoji",
+    "math",
+    "fangsong",
+  ]);
+  const trimmed = name.trim();
+  if (generics.has(trimmed)) return trimmed;
+  // Wrap in single quotes with escaping to prevent CSS injection
+  return `'${escapeCSSString(trimmed)}'`;
+}
+
 export function singleFontOptionValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
     const values = new Set(value);
