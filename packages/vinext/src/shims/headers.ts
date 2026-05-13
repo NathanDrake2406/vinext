@@ -9,6 +9,7 @@
  */
 
 import type { AsyncLocalStorage } from "node:async_hooks";
+import { MIDDLEWARE_SET_COOKIE_HEADER } from "../server/headers.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../server/middleware-request-headers.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import {
@@ -69,7 +70,6 @@ const _fallbackState = (_g[_FALLBACK_KEY] ??= {
   phase: "render",
 } satisfies VinextHeadersShimState) as VinextHeadersShimState;
 const EXPIRED_COOKIE_DATE = new Date(0).toUTCString();
-const MIDDLEWARE_SET_COOKIE_HEADER = "x-middleware-set-cookie";
 
 function splitMiddlewareSetCookieHeader(value: string): string[] {
   const cookies: string[] = [];
@@ -791,7 +791,7 @@ export function isDraftModeRequest(request: Request): boolean {
 }
 
 type DraftModeResult = {
-  isEnabled: boolean;
+  readonly isEnabled: boolean;
   enable(): void;
   disable(): void;
 };
@@ -819,12 +819,13 @@ export async function draftMode(): Promise<DraftModeResult> {
   }
   markDynamicUsage();
   const secret = getDraftSecret();
-  const isEnabled = state.headersContext
-    ? state.headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret
-    : false;
 
   return {
-    isEnabled,
+    get isEnabled(): boolean {
+      return state.headersContext
+        ? state.headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret
+        : false;
+    },
     enable(): void {
       if (state.headersContext?.accessError) {
         throw state.headersContext.accessError;

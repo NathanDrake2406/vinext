@@ -4,6 +4,7 @@ import {
   ErrorBoundary,
   ForbiddenBoundary,
   NotFoundBoundary,
+  RedirectBoundary,
   UnauthorizedBoundary,
 } from "vinext/shims/error-boundary";
 import type { AppRouteSemanticIds } from "../routing/app-route-graph.js";
@@ -18,6 +19,11 @@ import {
   type AppRenderDependency,
 } from "./app-render-dependency.js";
 import { resolveAppPageSegmentParams } from "./app-page-params.js";
+import {
+  APP_RSC_RENDER_MODE_NAVIGATION,
+  shouldSuppressLoadingBoundaries,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
 
 type AppPageComponentProps = {
   children?: ReactNode;
@@ -140,6 +146,7 @@ type BuildAppPageElementsOptions<
   interceptionContext?: string | null;
   isRscRequest?: boolean;
   mountedSlotIds?: ReadonlySet<string> | null;
+  renderMode?: AppRscRenderMode;
   routePath: string;
 };
 
@@ -392,6 +399,7 @@ export function buildAppPageElements<
   const elements: Record<string, ReactNode | string | null> = {
     ...AppElementsWire.createMetadataEntries({
       interceptionContext,
+      layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath,
       routeId,
     }),
@@ -587,7 +595,10 @@ export function buildAppPageElements<
     }
 
     const slotLoadingComponent = getDefaultExport(slot.loading);
-    if (slotLoadingComponent) {
+    if (
+      slotLoadingComponent &&
+      !shouldSuppressLoadingBoundaries(options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION)
+    ) {
       const SlotLoadingComponent = slotLoadingComponent;
       slotElement = <Suspense fallback={<SlotLoadingComponent />}>{slotElement}</Suspense>;
     }
@@ -609,10 +620,44 @@ export function buildAppPageElements<
     </LayoutSegmentProvider>
   );
 
+  // Wrap the page slot in a per-segment RedirectBoundary so that a
+  // redirect() thrown from a server component (or a client component
+  // within the page subtree) is caught here — below the route's layouts —
+  // rather than at the top-level boundary in app-browser-entry. Catching
+  // at the top level unmounts the entire route tree including layouts,
+  // which destroys client-side state in layout-hosted components
+  // (counters, theme toggles, form drafts). Here, only the page subtree
+  // is unmounted; the surrounding layouts stay mounted across the
+  // boundary's null-render → router.replace transition, and segment
+  // reuse keeps their React state intact.
+  //
+  // Placed inside the Suspense (loading) boundary to match Next.js nesting
+  // for the redirect boundary specifically:
+  //   Error > AccessFallback > Loading (Suspense) > Redirect > content
+  // (Note: Next.js places AccessFallback inside Loading, not outside — that
+  // is a pre-existing nesting divergence tracked separately.)
+  // This keeps the loading fallback visible during redirect-driven
+  // transitions rather than unmounting it.
+  routeChildren = <RedirectBoundary>{routeChildren}</RedirectBoundary>;
+
   const routeLoadingComponent = getDefaultExport(options.route.loading);
-  if (routeLoadingComponent) {
+  if (
+    routeLoadingComponent &&
+    !shouldSuppressLoadingBoundaries(options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION)
+  ) {
     const RouteLoadingComponent = routeLoadingComponent;
-    routeChildren = <Suspense fallback={<RouteLoadingComponent />}>{routeChildren}</Suspense>;
+    // Key the Suspense by pageId so cross-route navigations produce a fresh
+    // Suspense identity. Without this, React's transition behavior matches
+    // the old and new route's Suspense by position and keeps showing the
+    // old UI while the new page's data fetches — the loading.tsx fallback
+    // never paints. Same route renders (refresh, search-param changes)
+    // share the pageId, so the existing Suspense is preserved and fallback
+    // doesn't flash unnecessarily.
+    routeChildren = (
+      <Suspense key={pageId} fallback={<RouteLoadingComponent />}>
+        {routeChildren}
+      </Suspense>
+    );
   }
 
   const lastLayoutErrorModule =
