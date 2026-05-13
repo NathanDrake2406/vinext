@@ -19,6 +19,7 @@ import {
   formatFontClassRule,
   resolveFontStyle,
   resolveFontWeight,
+  sanitizeFontDescriptorValue,
   type FontStyle,
 } from "./font-utils.js";
 
@@ -99,8 +100,7 @@ function sanitizeCSSProperty(prop: string): string | undefined {
  * declaration: `{`, `}`, `;`, and `</` (to prevent closing style tags).
  */
 function sanitizeCSSValue(value: string): string | undefined {
-  if (/[{}]|<\//.test(value)) return undefined;
-  return value;
+  return sanitizeFontDescriptorValue(value);
 }
 
 let classCounter = 0;
@@ -139,8 +139,8 @@ function generateFontFaceCSS(
   const rules: string[] = [];
 
   for (const src of sources) {
-    const weight = src.weight ?? options.weight ?? "400";
-    const style = src.style ?? options.style ?? "normal";
+    const weight = sanitizeCSSValue(src.weight ?? options.weight ?? "400") ?? "400";
+    const style = sanitizeCSSValue(src.style ?? options.style ?? "normal") ?? "normal";
     const format = src.path.endsWith(".woff2")
       ? "woff2"
       : src.path.endsWith(".woff")

@@ -365,6 +365,22 @@ describe("vinext:local-fonts plugin", () => {
     }
   });
 
+  it("rejects unsafe local font-style values in generated CSS", () => {
+    const beforeCount = getSSRFontStyles().length;
+    const result = localFont({
+      src: "./font.woff2",
+      style: "italic;}body{color:red",
+    } as any);
+
+    expect(result.style.fontStyle).toBeUndefined();
+
+    const newStyles = getSSRFontStyles().slice(beforeCount).join("\n");
+    expect(newStyles).not.toContain("color:red");
+    expect(newStyles).not.toContain("color: red");
+    expect(newStyles).not.toContain("italic;}body");
+    expect(newStyles).toContain("font-style: normal");
+  });
+
   // ── Sourcemap ────────────────────────────────────────────────
 
   it("generates a sourcemap", () => {

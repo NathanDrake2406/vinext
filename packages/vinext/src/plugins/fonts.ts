@@ -922,6 +922,12 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
           const adjustedFallbackCSS = fallbackMetrics
             ? buildFallbackFontFace(family, fallbackMetrics)
             : undefined;
+          const validatedFontWeight =
+            validated.weights.length === 1 && validated.weights[0] !== "variable"
+              ? Number(validated.weights[0])
+              : undefined;
+          const validatedFontStyle =
+            validated.styles.length === 1 ? validated.styles[0] : undefined;
 
           // Inject internal CSS strings into the options object
           const injectedProperties = [`_selfHostedCSS: ${JSON.stringify(servedCSS)}`];
@@ -929,6 +935,12 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
             injectedProperties.push(
               `_adjustFontFallbackCSS: ${JSON.stringify(adjustedFallbackCSS)}`,
             );
+          }
+          if (Number.isFinite(validatedFontWeight)) {
+            injectedProperties.push(`_fontWeight: ${validatedFontWeight}`);
+          }
+          if (validatedFontStyle) {
+            injectedProperties.push(`_fontStyle: ${JSON.stringify(validatedFontStyle)}`);
           }
           const closingBrace = optionsStr.lastIndexOf("}");
           const beforeBrace = optionsStr.slice(0, closingBrace).trim();

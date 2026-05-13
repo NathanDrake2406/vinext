@@ -1,7 +1,7 @@
 import { buildGoogleFontsUrl as buildUrlFromAxes } from "../build/google-fonts/build-url.js";
 import {
   formatFontClassRule,
-  resolveFontStyle,
+  resolveGoogleFontStyle,
   resolveFontWeight,
   type FontStyle,
 } from "./font-utils.js";
@@ -107,6 +107,8 @@ export type FontResult = {
 type FontLoaderOptions = FontOptions & {
   _selfHostedCSS?: string;
   _adjustFontFallbackCSS?: string;
+  _fontWeight?: number;
+  _fontStyle?: string;
 };
 
 /**
@@ -163,11 +165,6 @@ function normalizeStringOrBooleanOption(value: boolean | string | undefined): st
   return typeof value === "boolean" ? normalizeBooleanOption(value) : value;
 }
 
-function resolveGoogleFontStyle(style: string | string[] | undefined): string | undefined {
-  if (Array.isArray(style) && new Set(style).size > 1) return undefined;
-  return resolveFontStyle(style) ?? "normal";
-}
-
 function hashString(value: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < value.length; i++) {
@@ -196,6 +193,8 @@ function createFontIdentity(
       normalizeStringOrBooleanOption(options.adjustFontFallback),
       normalizeStringSetOption(options.axes),
       options._selfHostedCSS ?? "",
+      options._fontWeight?.toString() ?? "",
+      options._fontStyle ?? "",
     ].join("\0"),
   );
 }
@@ -475,8 +474,8 @@ export function createFontLoader(family: string): FontLoader {
     // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
     // Users apply this class to set the CSS variable on that element.
     const variableClassName = `__variable_${classSegment}_${id}`;
-    const fontWeight = resolveFontWeight(options.weight);
-    const fontStyle = resolveGoogleFontStyle(options.style);
+    const fontWeight = options._fontWeight ?? resolveFontWeight(options.weight);
+    const fontStyle = options._fontStyle ?? resolveGoogleFontStyle(options.style);
     const style = {
       fontFamily,
       ...(fontWeight !== undefined ? { fontWeight } : {}),

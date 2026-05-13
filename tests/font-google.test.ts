@@ -80,6 +80,50 @@ describe("next/font/google shim", () => {
     expect(addedStyles).toContain("font-style: italic");
   });
 
+  it("uses transform-resolved Google style metadata for italic-only fonts", async () => {
+    // Ported from Next.js: packages/font/src/google/loader.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/font/src/google/loader.ts
+    const { createFontLoader, getSSRFontStyles } =
+      await import("../packages/vinext/src/shims/font-google.js");
+    const Molle = createFontLoader("Molle");
+    const beforeStyles = getSSRFontStyles();
+    const result = Molle({
+      weight: "400",
+      subsets: ["latin"],
+      _fontWeight: 400,
+      _fontStyle: "italic",
+    } as any);
+
+    expect(result.style).toMatchObject({
+      fontWeight: 400,
+      fontStyle: "italic",
+    });
+
+    const addedStyles = getSSRFontStyles().slice(beforeStyles.length).join("\n");
+    expect(addedStyles).toContain(`.${result.className}`);
+    expect(addedStyles).toContain("font-weight: 400");
+    expect(addedStyles).toContain("font-style: italic");
+  });
+
+  it("rejects unsafe Google font-style values in class rules", async () => {
+    const { createFontLoader, getSSRFontStyles } =
+      await import("../packages/vinext/src/shims/font-google.js");
+    const Roboto = createFontLoader("Roboto");
+    const beforeStyles = getSSRFontStyles();
+    const result = Roboto({
+      weight: "400",
+      style: "italic;}body{color:red",
+      subsets: ["latin"],
+    } as any);
+
+    expect(result.style.fontStyle).toBeUndefined();
+
+    const addedStyles = getSSRFontStyles().slice(beforeStyles.length).join("\n");
+    expect(addedStyles).not.toContain("color:red");
+    expect(addedStyles).not.toContain("color: red");
+    expect(addedStyles).not.toContain("italic;}body");
+  });
+
   it("uses adjusted Google font fallback metrics by default", async () => {
     // Ported from Next.js: packages/font/src/google/loader.ts and
     // packages/next/src/build/webpack/loaders/next-font-loader/postcss-next-font.ts
@@ -667,6 +711,36 @@ describe("vinext:google-fonts plugin", () => {
     // Clean up
     fs.rmSync(root, { recursive: true, force: true });
   }, 15000); // Network timeout
+
+  it("injects validated single-face metadata for italic-only Google fonts", async () => {
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-italic-only");
+    initPlugin(plugin, { command: "build", root });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response("@font-face { font-family: 'Molle'; font-style: italic; }", {
+        status: 200,
+        headers: { "content-type": "text/css" },
+      });
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Molle } from 'next/font/google';`,
+        `const molle = Molle({ weight: '400', subsets: ['latin'] });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain("_selfHostedCSS");
+      expect(result.code).toContain("_fontWeight: 400");
+      expect(result.code).toContain('_fontStyle: "italic"');
+    } finally {
+      globalThis.fetch = originalFetch;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("does not inject adjusted fallback CSS when adjustFontFallback is false", async () => {
     const plugin = getGoogleFontsPlugin();
