@@ -404,8 +404,10 @@ describe("Head escaping", () => {
       React.createElement(
         Head,
         null,
+        // oxlint-disable-next-line react/no-danger-with-children
         React.createElement("style", {
           dangerouslySetInnerHTML: { __html: "" },
+          // oxlint-disable-next-line react/no-children-prop
           children: "fallback",
         }),
       ),
