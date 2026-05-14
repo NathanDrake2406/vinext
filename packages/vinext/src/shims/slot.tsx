@@ -29,6 +29,7 @@ export const ParallelSlotsContext = React.createContext<Readonly<
 
 type MergeElementsOptions = {
   clearAbsentSlots?: boolean;
+  preserveAbsentSlots?: boolean;
   preserveElementIds?: readonly string[];
 };
 
@@ -39,6 +40,8 @@ export function mergeElements(
 ): AppElements {
   const clearAbsentSlots =
     typeof options === "boolean" ? options : (options.clearAbsentSlots ?? false);
+  const preserveAbsentSlots =
+    typeof options === "boolean" ? !options : (options.preserveAbsentSlots ?? true);
   const preserveElementIds = typeof options === "boolean" ? [] : (options.preserveElementIds ?? []);
   const merged: Record<string, AppElementValue> = { ...next };
 
@@ -63,16 +66,16 @@ export function mergeElements(
   }
   // On traversal (browser back/forward), the server renders the full destination
   // route tree. A slot absent from next means the destination route tree does not
-  // include it, so clear it rather than keeping the stale prev value. This only
-  // runs for traversals because soft forward navigations may omit parent layout
-  // slots that should be preserved.
+  // include it, so clear it rather than keeping the stale prev value. The legacy
+  // absent-slot path stays opt-in for unpromoted fallbacks; promoted navigation
+  // commits preserve mounted slots through planner-approved preserveElementIds.
   if (clearAbsentSlots) {
     for (const key of slotKeys) {
       if (!Object.hasOwn(next, key)) {
         delete merged[key];
       }
     }
-  } else {
+  } else if (preserveAbsentSlots) {
     for (const key of slotKeys) {
       if (!Object.hasOwn(merged, key) && Object.hasOwn(prev, key)) {
         const value = prev[key];
