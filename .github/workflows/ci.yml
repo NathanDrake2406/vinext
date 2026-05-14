@@ -25,6 +25,11 @@ jobs:
         run: vp run build
       - run: vp run check
       - run: vp run knip
+      - name: Bash syntax check
+        run: |
+          for f in scripts/*.sh; do
+            bash -n "$f" || { echo "Syntax error in $f"; exit 1; }
+          done
 
   test-unit:
     name: Vitest (unit)
