@@ -1,6 +1,7 @@
 import { stripBasePath } from "../utils/base-path.js";
 import {
   AppElementsWire,
+  getMountedSlotIds,
   getMountedSlotIdsHeader,
   type AppElements,
   type LayoutFlags,
@@ -20,6 +21,7 @@ import {
 } from "./navigation-trace.js";
 import {
   navigationPlanner,
+  type MountedParallelSlotSnapshotV0,
   type NavigationDecisionV0,
   type OperationLane,
   type OperationToken,
@@ -89,11 +91,20 @@ export type PendingNavigationCommit = {
 };
 
 type PendingNavigationCommitDisposition = "dispatch" | "hard-navigate" | "skip";
-type PendingNavigationCommitDispositionDecision = {
-  disposition: PendingNavigationCommitDisposition;
+type DispatchPendingNavigationCommitDispositionDecision = {
+  disposition: "dispatch";
+  preserveAbsentSlots: boolean;
   preserveElementIds: readonly string[];
   trace: NavigationTrace;
 };
+type NonDispatchPendingNavigationCommitDispositionDecision = {
+  disposition: Exclude<PendingNavigationCommitDisposition, "dispatch">;
+  preserveElementIds: readonly [];
+  trace: NavigationTrace;
+};
+type PendingNavigationCommitDispositionDecision =
+  | DispatchPendingNavigationCommitDispositionDecision
+  | NonDispatchPendingNavigationCommitDispositionDecision;
 
 function cloneHistoryState(state: unknown): HistoryStateRecord {
   if (!state || typeof state !== "object") {
@@ -252,6 +263,21 @@ function createNavigationSnapshotUrl(snapshot: ClientNavigationRenderSnapshot): 
   return query === "" ? snapshot.pathname : `${snapshot.pathname}?${query}`;
 }
 
+function createMountedParallelSlotSnapshots(
+  elements: AppElements,
+): readonly MountedParallelSlotSnapshotV0[] {
+  const snapshots: MountedParallelSlotSnapshotV0[] = [];
+  for (const slotId of getMountedSlotIds(elements)) {
+    const parsed = AppElementsWire.parseElementKey(slotId);
+    if (parsed?.kind !== "slot") continue;
+    snapshots.push({
+      ownerLayoutId: AppElementsWire.encodeLayoutId(parsed.treePath),
+      slotId,
+    });
+  }
+  return snapshots;
+}
+
 function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
   const displayUrl = createNavigationSnapshotUrl(state.navigationSnapshot);
   return {
@@ -261,6 +287,7 @@ function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
     // traces. `matchedUrl` stays path-only because route matching has already
     // consumed query params before AppElements metadata reaches this boundary.
     matchedUrl: state.navigationSnapshot.pathname,
+    mountedParallelSlots: createMountedParallelSlotSnapshots(state.elements),
     rootBoundaryId: state.rootLayoutTreePath,
     routeId: state.routeId,
   };
@@ -274,6 +301,7 @@ function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnap
     // See createVisibleRouteSnapshot: matchedUrl intentionally models the route
     // identity, not the address bar URL.
     matchedUrl: pending.action.navigationSnapshot.pathname,
+    mountedParallelSlots: createMountedParallelSlotSnapshots(pending.action.elements),
     rootBoundaryId: pending.rootLayoutTreePath,
     routeId: pending.routeId,
   };
@@ -344,6 +372,7 @@ function mapNavigationDecisionToPendingDisposition(
     case "proposeCommit":
       return {
         disposition: "dispatch",
+        preserveAbsentSlots: decision.proposal.preserveAbsentSlots,
         preserveElementIds: decision.proposal.preserveElementIds,
         trace: decision.trace,
       };

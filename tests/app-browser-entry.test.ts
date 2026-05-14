@@ -844,6 +844,7 @@ describe("app browser entry state helpers", () => {
     if (approval.decision.disposition !== "commit") {
       throw new Error("Expected visible commit approval");
     }
+    expect(approval.decision.preserveAbsentSlots).toBe(false);
     if (approval.approvedCommit === null) {
       throw new Error("Expected approved visible commit");
     }
@@ -902,6 +903,10 @@ describe("app browser entry state helpers", () => {
     });
 
     expect(approval.decision.disposition).toBe("commit");
+    if (approval.decision.disposition !== "commit") {
+      throw new Error("Expected visible commit approval");
+    }
+    expect(approval.decision.preserveAbsentSlots).toBe(true);
     expect(approval.decision.trace.entries[0]?.code).toBe(
       NavigationTraceTransactionCodes.visibleCommit,
     );
@@ -2450,19 +2455,62 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(false);
   });
 
-  it("preserves absent parallel slots on approved navigate commits", async () => {
+  it("preserves planner-approved mounted parallel slots on approved navigate commits", async () => {
+    const mountedSlot = React.createElement("div", null, "modal");
     const state = createState({
-      elements: createResolvedElements("route:/feed", "/", null, {
-        "slot:modal:/feed": React.createElement("div", null, "modal"),
-      }),
+      elements: createResolvedElements(
+        "route:/feed",
+        "/",
+        null,
+        {
+          "layout:/": React.createElement("div", null, "root layout"),
+          "layout:/feed": React.createElement("div", null, "feed layout"),
+          "slot:modal:/feed": mountedSlot,
+        },
+        ["layout:/", "layout:/feed"],
+      ),
+      layoutIds: ["layout:/", "layout:/feed"],
     });
 
     const nextState = await applyApprovedTestCommit(state, {
+      extraEntries: {
+        "page:/feed/comments": React.createElement("main", null, "comments"),
+      },
+      layoutIds: ["layout:/", "layout:/feed", "layout:/feed/comments"],
       rootLayoutTreePath: "/",
       routeId: "route:/feed/comments",
     });
 
     expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(true);
+    expect(nextState.elements["slot:modal:/feed"]).toBe(mountedSlot);
+  });
+
+  it("does not preserve absent parallel slots when their owner layout is not approved", async () => {
+    const state = createState({
+      elements: createResolvedElements(
+        "route:/feed",
+        "/",
+        null,
+        {
+          "layout:/": React.createElement("div", null, "root layout"),
+          "layout:/feed": React.createElement("div", null, "feed layout"),
+          "slot:modal:/feed": React.createElement("div", null, "modal"),
+        },
+        ["layout:/", "layout:/feed"],
+      ),
+      layoutIds: ["layout:/", "layout:/feed"],
+    });
+
+    const nextState = await applyApprovedTestCommit(state, {
+      extraEntries: {
+        "page:/settings": React.createElement("main", null, "settings"),
+      },
+      layoutIds: ["layout:/", "layout:/settings"],
+      rootLayoutTreePath: "/",
+      routeId: "route:/settings",
+    });
+
+    expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(false);
   });
 });
 

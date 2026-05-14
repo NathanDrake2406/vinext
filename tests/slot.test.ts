@@ -361,6 +361,47 @@ describe("slot primitives", () => {
     expect(Object.hasOwn(merged, "slot:team:/dashboard")).toBe(true);
   });
 
+  it("mergeElements drops absent slots when legacy absent-slot preservation is fenced", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+
+    const merged = mergeElements(
+      {
+        "layout:/": React.createElement("div", null, "layout"),
+        "page:/dashboard": React.createElement("div", null, "dashboard"),
+        "slot:team:/dashboard": React.createElement("div", null, "team panel"),
+      },
+      {
+        "page:/dashboard/settings": React.createElement("div", null, "settings"),
+      },
+      { preserveAbsentSlots: false },
+    );
+
+    expect(Object.hasOwn(merged, "slot:team:/dashboard")).toBe(false);
+  });
+
+  it("mergeElements preserves explicitly approved mounted slots without wire absence semantics", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+
+    const mountedSlot = React.createElement("div", null, "team panel");
+    const merged = mergeElements(
+      {
+        "layout:/": React.createElement("div", null, "layout"),
+        "layout:/dashboard": React.createElement("div", null, "dashboard layout"),
+        "page:/dashboard": React.createElement("div", null, "dashboard"),
+        "slot:team:/dashboard": mountedSlot,
+      },
+      {
+        "page:/dashboard/settings": React.createElement("div", null, "settings"),
+      },
+      {
+        preserveAbsentSlots: false,
+        preserveElementIds: ["layout:/", "layout:/dashboard", "slot:team:/dashboard"],
+      },
+    );
+
+    expect(merged["slot:team:/dashboard"]).toBe(mountedSlot);
+  });
+
   it("Slot renders element from resolved context", async () => {
     const mod = await import("../packages/vinext/src/shims/slot.js");
 

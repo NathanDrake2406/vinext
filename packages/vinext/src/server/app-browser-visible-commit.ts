@@ -23,6 +23,7 @@ import {
 
 type VisibleCommitDecision = {
   disposition: "commit";
+  preserveAbsentSlots: boolean;
   preserveElementIds: readonly string[];
   trace: NavigationTrace;
 };
@@ -116,6 +117,7 @@ function reduceApprovedVisibleCommitState(
         {
           elements: mergeElements(state.elements, action.elements, {
             clearAbsentSlots: action.type === "traverse",
+            preserveAbsentSlots: commit.decision.preserveAbsentSlots,
             preserveElementIds: commit.decision.preserveElementIds,
           }),
           interceptionContext: action.interceptionContext,
@@ -163,18 +165,21 @@ function resolvePendingNavigationCommitDecision(options: {
   startedNavigationId: number;
   targetHref: string;
 }): CommitDecision {
-  const { disposition, preserveElementIds, trace } =
-    resolvePendingNavigationCommitDispositionDecision(options);
+  const decision = resolvePendingNavigationCommitDispositionDecision(options);
 
-  switch (disposition) {
+  switch (decision.disposition) {
     case "skip":
-      return { disposition: "no-commit", trace };
+      return { disposition: "no-commit", trace: decision.trace };
     case "hard-navigate":
-      return { disposition: "hard-navigate", trace };
+      return { disposition: "hard-navigate", trace: decision.trace };
     case "dispatch":
-      return createVisibleCommitDecision(trace, preserveElementIds);
+      return createVisibleCommitDecision(
+        decision.trace,
+        decision.preserveElementIds,
+        decision.preserveAbsentSlots,
+      );
     default: {
-      const _exhaustive: never = disposition;
+      const _exhaustive: never = decision;
       throw new Error("[vinext] Unknown navigation commit disposition: " + String(_exhaustive));
     }
   }
@@ -183,8 +188,14 @@ function resolvePendingNavigationCommitDecision(options: {
 function createVisibleCommitDecision(
   trace: NavigationTrace = createNavigationTrace(NavigationTraceReasonCodes.commitCurrent),
   preserveElementIds: readonly string[] = [],
+  preserveAbsentSlots: boolean = false,
 ): VisibleCommitDecision {
-  return { disposition: "commit", preserveElementIds: [...preserveElementIds], trace };
+  return {
+    disposition: "commit",
+    preserveAbsentSlots,
+    preserveElementIds: [...preserveElementIds],
+    trace,
+  };
 }
 
 function mergeLayoutFlags(

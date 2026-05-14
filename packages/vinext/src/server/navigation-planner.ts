@@ -30,9 +30,15 @@ export type RouteSnapshotV0 = {
   // Ordered ancestor-first, with the root layout at index 0. Same-layout
   // persistence uses prefix comparison, so callers must preserve this order.
   layoutIds: readonly string[];
+  mountedParallelSlots: readonly MountedParallelSlotSnapshotV0[];
   rootBoundaryId: string | null;
   displayUrl: string;
   matchedUrl: string;
+};
+
+export type MountedParallelSlotSnapshotV0 = {
+  slotId: string;
+  ownerLayoutId: string | null;
 };
 
 export type NavigationPlannerStateV0 = {
@@ -64,6 +70,7 @@ export type RequestedWork =
   | { kind: "prefetch"; href: string };
 
 export type CommitProposal = {
+  preserveAbsentSlots: boolean;
   preserveElementIds: readonly string[];
   reason: "currentRootBoundary" | "rootBoundaryUnknownFallback";
   targetSnapshot: RouteSnapshotV0;
@@ -205,6 +212,38 @@ function resolveSameLayoutAncestorPersistence(
   return commonLayoutIds;
 }
 
+function resolveMountedParallelSlotPersistence(
+  currentSnapshot: RouteSnapshotV0,
+  targetSnapshot: RouteSnapshotV0,
+): readonly string[] {
+  const preservedLayoutIds = new Set(
+    resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot),
+  );
+  if (preservedLayoutIds.size === 0) return [];
+
+  const preservedSlotIds: string[] = [];
+  const seenSlotIds = new Set<string>();
+  for (const slot of currentSnapshot.mountedParallelSlots) {
+    if (slot.ownerLayoutId === null) continue;
+    if (!preservedLayoutIds.has(slot.ownerLayoutId)) continue;
+    if (seenSlotIds.has(slot.slotId)) continue;
+
+    preservedSlotIds.push(slot.slotId);
+    seenSlotIds.add(slot.slotId);
+  }
+  return preservedSlotIds;
+}
+
+function resolveCurrentRootBoundaryElementPersistence(
+  currentSnapshot: RouteSnapshotV0,
+  targetSnapshot: RouteSnapshotV0,
+): readonly string[] {
+  return [
+    ...resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot),
+    ...resolveMountedParallelSlotPersistence(currentSnapshot, targetSnapshot),
+  ];
+}
+
 function planFlightResponseArrived(options: {
   event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
   state: NavigationPlannerStateV0;
@@ -243,6 +282,7 @@ function planFlightResponseArrived(options: {
     return {
       kind: "proposeCommit",
       proposal: {
+        preserveAbsentSlots: true,
         preserveElementIds: [],
         reason: "rootBoundaryUnknownFallback",
         targetSnapshot: options.event.result.targetSnapshot,
@@ -255,7 +295,8 @@ function planFlightResponseArrived(options: {
   return {
     kind: "proposeCommit",
     proposal: {
-      preserveElementIds: resolveSameLayoutAncestorPersistence(
+      preserveAbsentSlots: false,
+      preserveElementIds: resolveCurrentRootBoundaryElementPersistence(
         options.state.visibleSnapshot,
         options.event.result.targetSnapshot,
       ),
@@ -323,5 +364,7 @@ function planNavigation(input: NavigationPlannerInput): NavigationDecisionV0 {
 export const navigationPlanner = {
   classifyRootBoundaryTransition,
   plan: planNavigation,
+  resolveCurrentRootBoundaryElementPersistence,
+  resolveMountedParallelSlotPersistence,
   resolveSameLayoutAncestorPersistence,
 };
