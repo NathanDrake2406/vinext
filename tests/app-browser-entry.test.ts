@@ -2455,7 +2455,7 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(false);
   });
 
-  it("clears planner-approved mounted parallel slots on approved traverse commits", async () => {
+  it("does not approve mounted parallel slots on approved traverse commits", async () => {
     const feedLayout = React.createElement("div", null, "feed layout");
     const mountedSlot = React.createElement("div", null, "modal");
     const state = createState({
@@ -2509,7 +2509,7 @@ describe("app browser entry previousNextUrl helpers", () => {
     if (approval.decision.disposition !== "commit") {
       throw new Error("Expected visible commit approval");
     }
-    expect(approval.decision.preserveElementIds).toContain("slot:modal:/feed");
+    expect(approval.decision.preserveElementIds).toEqual(["layout:/", "layout:/feed"]);
     if (approval.approvedCommit === null) {
       throw new Error("Expected approved visible commit");
     }

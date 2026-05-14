@@ -261,6 +261,59 @@ describe("navigationPlanner root-boundary decisions", () => {
     ).toEqual(["layout:/"]);
   });
 
+  it("does not approve mounted parallel slot preservation for traverse commits", () => {
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(
+        "/",
+        ["layout:/", "layout:/feed"],
+        [{ ownerLayoutId: "layout:/feed", slotId: "slot:modal:/feed" }],
+      ),
+      displayUrl: "https://example.com/feed",
+      matchedUrl: "/feed",
+      routeId: "route:/feed",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/", ["layout:/", "layout:/feed", "layout:/feed/comments"]),
+      displayUrl: "https://example.com/feed/comments",
+      matchedUrl: "/feed/comments",
+      routeId: "route:/feed/comments",
+    };
+    const token = createOperationToken({
+      lane: "traverse",
+      targetSnapshotFingerprint: "route:/feed/comments|root:/",
+    });
+
+    const decision = navigationPlanner.plan({
+      event: {
+        kind: "flightResponseArrived",
+        result: {
+          href: "https://example.com/feed/comments",
+          targetSnapshot,
+        },
+        token,
+      },
+      routeManifest: null,
+      state: {
+        nextOperationToken: token,
+        traceFields: {
+          currentRootLayoutTreePath: "/",
+          currentVisibleCommitVersion: 2,
+          nextRootLayoutTreePath: "/",
+          startedVisibleCommitVersion: 2,
+        },
+        visibleCommitVersion: 2,
+        visibleSnapshot: currentSnapshot,
+      },
+    });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.preserveAbsentSlots).toBe(false);
+    expect(decision.proposal.preserveElementIds).toEqual(["layout:/", "layout:/feed"]);
+  });
+
   it("does not preserve layouts across root-boundary uncertainty", () => {
     const currentSnapshot = createRouteSnapshot("/", ["layout:/"]);
     const targetSnapshot = createRouteSnapshot(null, ["layout:/"]);

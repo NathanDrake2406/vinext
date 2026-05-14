@@ -216,16 +216,22 @@ function resolveMountedParallelSlotPersistence(
   currentSnapshot: RouteSnapshotV0,
   targetSnapshot: RouteSnapshotV0,
 ): readonly string[] {
-  const preservedLayoutIds = new Set(
-    resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot),
-  );
-  if (preservedLayoutIds.size === 0) return [];
+  const preservedLayoutIds = resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot);
+  return resolveMountedParallelSlotPersistenceForLayouts(currentSnapshot, preservedLayoutIds);
+}
+
+function resolveMountedParallelSlotPersistenceForLayouts(
+  currentSnapshot: RouteSnapshotV0,
+  preservedLayoutIds: readonly string[],
+): readonly string[] {
+  if (preservedLayoutIds.length === 0) return [];
+  const preservedLayoutIdSet = new Set(preservedLayoutIds);
 
   const preservedSlotIds: string[] = [];
   const seenSlotIds = new Set<string>();
   for (const slot of currentSnapshot.mountedParallelSlots) {
     if (slot.ownerLayoutId === null) continue;
-    if (!preservedLayoutIds.has(slot.ownerLayoutId)) continue;
+    if (!preservedLayoutIdSet.has(slot.ownerLayoutId)) continue;
     if (seenSlotIds.has(slot.slotId)) continue;
 
     preservedSlotIds.push(slot.slotId);
@@ -238,9 +244,30 @@ function resolveCurrentRootBoundaryElementPersistence(
   currentSnapshot: RouteSnapshotV0,
   targetSnapshot: RouteSnapshotV0,
 ): readonly string[] {
+  const preservedLayoutIds = resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot);
   return [
-    ...resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot),
-    ...resolveMountedParallelSlotPersistence(currentSnapshot, targetSnapshot),
+    ...preservedLayoutIds,
+    ...resolveMountedParallelSlotPersistenceForLayouts(currentSnapshot, preservedLayoutIds),
+  ];
+}
+
+function resolveCurrentRootBoundaryCommitElementPersistence(options: {
+  currentSnapshot: RouteSnapshotV0;
+  lane: OperationLane;
+  targetSnapshot: RouteSnapshotV0;
+}): readonly string[] {
+  const preservedLayoutIds = resolveSameLayoutAncestorPersistence(
+    options.currentSnapshot,
+    options.targetSnapshot,
+  );
+
+  if (options.lane === "traverse") {
+    return preservedLayoutIds;
+  }
+
+  return [
+    ...preservedLayoutIds,
+    ...resolveMountedParallelSlotPersistenceForLayouts(options.currentSnapshot, preservedLayoutIds),
   ];
 }
 
@@ -296,10 +323,11 @@ function planFlightResponseArrived(options: {
     kind: "proposeCommit",
     proposal: {
       preserveAbsentSlots: false,
-      preserveElementIds: resolveCurrentRootBoundaryElementPersistence(
-        options.state.visibleSnapshot,
-        options.event.result.targetSnapshot,
-      ),
+      preserveElementIds: resolveCurrentRootBoundaryCommitElementPersistence({
+        currentSnapshot: options.state.visibleSnapshot,
+        lane: options.event.token.lane,
+        targetSnapshot: options.event.result.targetSnapshot,
+      }),
       reason: "currentRootBoundary",
       targetSnapshot: options.event.result.targetSnapshot,
     },
