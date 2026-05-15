@@ -265,6 +265,9 @@ function resolveCurrentRootBoundaryCommitElementPersistence(options: {
   lane: OperationLane;
   targetSnapshot: RouteSnapshotV0;
 }): readonly string[] {
+  // Commit element persistence only keeps layout IDs. Default/unmatched slot
+  // reuse is handled separately by preservePreviousSlotIds, using slot-binding
+  // metadata as proof; payloads without __slotBindings get no semantic reuse.
   return resolveSameLayoutAncestorPersistence(options.currentSnapshot, options.targetSnapshot);
 }
 

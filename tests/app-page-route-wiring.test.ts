@@ -1,7 +1,11 @@
 import { Fragment, createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vite-plus/test";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
-import type { AppElements } from "../packages/vinext/src/server/app-elements.js";
+import {
+  APP_SLOT_BINDINGS_KEY,
+  APP_UNMATCHED_SLOT_WIRE_VALUE,
+  type AppElements,
+} from "../packages/vinext/src/server/app-elements.js";
 import type { AppPageParams } from "../packages/vinext/src/server/app-page-boundary.js";
 import {
   type AppPageModule,
@@ -819,6 +823,62 @@ describe("app page route wiring helpers", () => {
     // On hard navigation the default.tsx must render so the initial HTML is
     // fully populated.
     expect(elements["slot:team:/"]).toBeDefined();
+  });
+
+  it.each([
+    {
+      label: "page module without default export",
+      slotModule: { default: null, page: {} },
+    },
+    {
+      label: "default module without default export",
+      slotModule: { default: {}, page: null },
+    },
+  ])("marks slots unmatched when the effective $label is not renderable", ({ slotModule }) => {
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: RootLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null],
+        routeSegments: [],
+        slots: {
+          team: {
+            default: slotModule.default,
+            error: null,
+            layout: null,
+            layoutIndex: 0,
+            loading: null,
+            name: "team",
+            page: slotModule.page,
+            routeSegments: [],
+          },
+        },
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/",
+      rootNotFoundModule: null,
+    });
+
+    expect(elements[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        ownerLayoutId: "layout:/",
+        slotId: "slot:team:/",
+        state: "unmatched",
+      },
+    ]);
+    expect(elements["slot:team:/"]).toBe(APP_UNMATCHED_SLOT_WIRE_VALUE);
   });
 
   it("does not deadlock when a layout renders without children", async () => {

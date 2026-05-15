@@ -41,8 +41,9 @@ declare global {
     __VINEXT_ROOT__: Root | undefined;
 
     /**
-     * High-resolution timestamp recorded after client hydration completes.
-     * Used by instrumentation-client compatibility tests.
+     * High-resolution timestamp recorded after client hydration is usable.
+     * Pages Router writes after hydrateRoot() returns; App Router writes after
+     * the first committed tree attaches browser router state.
      */
     __VINEXT_HYDRATED_AT: number | undefined;
 

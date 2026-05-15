@@ -311,8 +311,9 @@ function resolveAppPageSlotBindingState(
   slot: AppPageRouteWiringSlot,
   override: AppPageSlotOverride | undefined,
 ): AppElementsSlotBinding["state"] {
-  if (getDefaultExport(override?.pageModule) || slot.page) return "active";
-  if (slot.default) return "default";
+  const pageComponent = getDefaultExport(override?.pageModule) ?? getDefaultExport(slot.page);
+  if (pageComponent) return "active";
+  if (getDefaultExport(slot.default)) return "default";
   return "unmatched";
 }
 

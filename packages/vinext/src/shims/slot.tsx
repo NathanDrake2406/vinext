@@ -14,6 +14,7 @@ import { notFound } from "./navigation.js";
 
 const EMPTY_ELEMENTS: AppElements = Object.freeze({});
 const warnedMissingEntryIds = new Set<string>();
+const warnedTransportMetadataEntryIds = new Set<string>();
 
 export { UNMATCHED_SLOT };
 
@@ -78,6 +79,14 @@ function isTransportMetadataValue(
     isArtifactCompatibilityEnvelopeValue(value) ||
     isSlotBindingListValue(value)
   );
+}
+
+function warnTransportMetadataEntry(id: string): void {
+  if (process.env.NODE_ENV === "production") return;
+  if (warnedTransportMetadataEntryIds.has(id)) return;
+
+  warnedTransportMetadataEntryIds.add(id);
+  console.warn("[vinext] Transport metadata value found under App Router render entry: " + id);
 }
 
 export function mergeElements(
@@ -163,6 +172,7 @@ export function Slot({
 
   const element = elements[id];
   if (isTransportMetadataValue(element)) {
+    warnTransportMetadataEntry(id);
     return null;
   }
   if (element === UNMATCHED_SLOT) {

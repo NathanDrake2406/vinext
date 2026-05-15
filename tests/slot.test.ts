@@ -134,6 +134,28 @@ describe("slot primitives", () => {
     }
   });
 
+  it("warns in development when transport metadata appears under a render entry", async () => {
+    const mod = await import("../packages/vinext/src/shims/slot.js");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const html = await renderHtml(
+        createContextProvider(
+          mod.ElementsContext,
+          { "slot:metadata-warning:/": { "layout:/": "s" } },
+          React.createElement(mod.Slot, { id: "slot:metadata-warning:/" }),
+        ),
+      );
+
+      expect(html).toBe("");
+      expect(warn).toHaveBeenCalledWith(
+        "[vinext] Transport metadata value found under App Router render entry: slot:metadata-warning:/",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("warns in development when a non-slot entry is absent", async () => {
     const mod = await import("../packages/vinext/src/shims/slot.js");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
