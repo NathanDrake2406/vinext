@@ -49,6 +49,61 @@ describe("next/navigation shim", () => {
     expect(typeof router.prefetch).toBe("function");
   });
 
+  it("useRouter() exposes the stable bfcacheId placeholder", async () => {
+    const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
+    const first = useRouter();
+    const second = useRouter();
+    expect(typeof first.bfcacheId).toBe("string");
+    expect(first.bfcacheId).toBe("0");
+    expect(second.bfcacheId).toBe(first.bfcacheId);
+  });
+
+  // Next.js parity: refresh-reducer.ts invalidates the entire segment cache.
+  // Our equivalent is clearClientNavigationCaches(), which router.refresh()
+  // must call before re-fetching, or stale cached RSC payloads for sibling
+  // routes will still satisfy a subsequent client navigation. The clear must
+  // happen before the rscNavigate dispatch so it cannot race with prefetches
+  // kicked off during the transition's renders.
+  // Ported from: https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/router-reducer/reducers/refresh-reducer.ts
+  it("router.refresh() clears nav caches before dispatching the RSC re-fetch", async () => {
+    const previousWindow = (globalThis as any).window;
+    const calls: string[] = [];
+    const win = {
+      location: { href: "http://localhost/current" },
+      history: {
+        state: null,
+        pushState: () => {},
+        replaceState: () => {},
+      },
+      addEventListener: () => {},
+      __VINEXT_CLEAR_NAV_CACHES__: () => {
+        calls.push("clear");
+      },
+      __VINEXT_RSC_NAVIGATE__: async (_href: string, _depth: number, kind: string) => {
+        calls.push(`navigate:${kind}`);
+      },
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
+      useRouter().refresh();
+      // refresh() schedules the rscNavigate inside React.startTransition, so
+      // the navigate call lands after the synchronous clear but is dispatched
+      // in the same tick — yield once to let it flush.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(calls[0]).toBe("clear");
+      expect(calls).toContain("navigate:refresh");
+      expect(calls.indexOf("clear")).toBeLessThan(calls.indexOf("navigate:refresh"));
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
   it("keeps pending render snapshot active when external history.pushState syncs the URL", async () => {
     const previousWindow = (globalThis as any).window;
     const win = {
@@ -578,6 +633,310 @@ describe("next/navigation shim", () => {
     );
 
     expect(html).toContain("[]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// window.next debug/diagnostic global
+//
+// Next.js exposes a `window.next` object from both the Pages Router client
+// bootstrap (packages/next/src/client/next.ts) and the App Router bootstrap
+// (packages/next/src/client/app-bootstrap.ts). Pages Router test suites,
+// userland code, and third-party libraries reach into it directly — most
+// commonly `window.next.router.push(...)` and
+// `window.next.router.events.on(...)`. Without this global, the Next.js
+// deploy test suite reports ~422 console errors and 30+ runtime failures
+// against vinext, with `TypeError: Cannot read properties of undefined
+// (reading 'router')` the most cited.
+//
+// The installer helper lives in packages/vinext/src/client/window-next.ts
+// and is invoked from both router bootstraps. The Pages Router shim
+// (shims/router.ts) installs it as a top-level side effect, and the App
+// Router browser entry (server/app-browser-entry.ts) installs it before
+// hydration starts.
+// ---------------------------------------------------------------------------
+describe("window.next debug global", () => {
+  it("installWindowNext sets version, router, and appDir fields on window.next", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {};
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const { installWindowNext } = await import("../packages/vinext/src/client/window-next.js");
+
+      const routerStub = {
+        push() {},
+        replace() {},
+        back() {},
+        forward() {},
+        refresh() {},
+        prefetch() {},
+      };
+      installWindowNext({ version: "test-version", appDir: true, router: routerStub });
+
+      expect(win.next).toBeDefined();
+      expect(win.next.version).toBe("test-version");
+      expect(win.next.appDir).toBe(true);
+      expect(win.next.router).toBe(routerStub);
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
+  it("installWindowNext merges subsequent calls without clobbering existing fields", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {};
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const { installWindowNext } = await import("../packages/vinext/src/client/window-next.js");
+
+      const pagesRouter = { kind: "pages" } as any;
+      const appRouter = { kind: "app" } as any;
+
+      installWindowNext({ version: "v1", router: pagesRouter });
+      installWindowNext({ appDir: true, router: appRouter });
+
+      // Whichever installer ran last (in real-world hybrid setups, App
+      // Router) wins for `router` — mirrors Next.js's load order where
+      // app-bootstrap.ts runs after next.ts.
+      expect(win.next.router).toBe(appRouter);
+      expect(win.next.appDir).toBe(true);
+      // Fields not overridden are preserved.
+      expect(win.next.version).toBe("v1");
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
+  it("Pages Router shim installs window.next.router with the expected NextRouter surface", async () => {
+    // Build a minimal fake window so importing shims/router.ts (which
+    // touches window at module load to attach popstate) does not crash.
+    const previousWindow = (globalThis as any).window;
+    const win: any = {
+      location: { pathname: "/", search: "", hash: "", href: "http://localhost/" },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      // Side-effecting import: installs window.next.router at module load.
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      expect(win.next).toBeDefined();
+      expect(win.next.router).toBe(Router);
+
+      // Ported from Next.js: NextRouter type in
+      // packages/next/src/shared/lib/router/router.ts (line 372).
+      const router = win.next.router;
+      expect(typeof router.push).toBe("function");
+      expect(typeof router.replace).toBe("function");
+      expect(typeof router.back).toBe("function");
+      expect(typeof router.reload).toBe("function");
+      expect(typeof router.prefetch).toBe("function");
+      expect(typeof router.beforePopState).toBe("function");
+      expect(router.events).toBeDefined();
+      expect(typeof router.events.on).toBe("function");
+      expect(typeof router.events.off).toBe("function");
+      expect(typeof router.events.emit).toBe("function");
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
+  // Ported from Next.js: tests that rely on `window.next.router.events.on(...)`
+  // — e.g. test/development/pages-dir/client-navigation/index.test.ts:457
+  // (`window.next.router.events.on('routeChangeError', ...)`).
+  it("window.next.router.events forwards Pages Router events", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {
+      location: { pathname: "/", search: "", hash: "", href: "http://localhost/" },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      await import("../packages/vinext/src/shims/router.js");
+
+      const fired: unknown[] = [];
+      win.next.router.events.on("routeChangeStart", (url: unknown) => {
+        fired.push(url);
+      });
+      win.next.router.events.emit("routeChangeStart", "/next-page");
+      expect(fired).toEqual(["/next-page"]);
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
+  it("appRouterInstance exported from the navigation shim has the public router surface", async () => {
+    vi.resetModules();
+    const { appRouterInstance } = await import("../packages/vinext/src/shims/navigation.js");
+
+    // Ported from Next.js: publicAppRouterInstance shape in
+    // packages/next/src/client/components/app-router-instance.ts (line 392).
+    expect(typeof appRouterInstance.push).toBe("function");
+    expect(typeof appRouterInstance.replace).toBe("function");
+    expect(typeof appRouterInstance.back).toBe("function");
+    expect(typeof appRouterInstance.forward).toBe("function");
+    expect(typeof appRouterInstance.refresh).toBe("function");
+    expect(typeof appRouterInstance.prefetch).toBe("function");
+    expect(appRouterInstance.bfcacheId).toBe("0");
+  });
+
+  it("installWindowNext is a no-op on the server (typeof window === 'undefined')", async () => {
+    const previousWindow = (globalThis as any).window;
+    delete (globalThis as any).window;
+
+    try {
+      vi.resetModules();
+      const { installWindowNext } = await import("../packages/vinext/src/client/window-next.js");
+
+      // Does not throw and does not attempt to create a global. We cannot
+      // observe a non-existent window, so the assertion is structural: the
+      // call returns without error and there is no global to inspect.
+      expect(() => installWindowNext({ version: "x", appDir: true })).not.toThrow();
+    } finally {
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      vi.resetModules();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// next/router withRouter HOC
+//
+// withRouter is a higher-order component that injects the Pages Router
+// `router` instance as a prop into class components (which cannot call
+// hooks). Real Next.js apps and the Next.js deploy test suite depend on
+// this export — without it, bundlers fail with
+// `[MISSING_EXPORT] "withRouter" is not exported by ".../shims/router.js"`.
+//
+// Ported from Next.js: packages/next/src/client/with-router.tsx
+// https://github.com/vercel/next.js/blob/canary/packages/next/src/client/with-router.tsx
+//
+// Reference Next.js e2e fixture (class component using withRouter):
+// .nextjs-ref/test/e2e/with-router/pages/a.js
+// ---------------------------------------------------------------------------
+describe("next/router withRouter HOC", () => {
+  let previousWindow: unknown;
+
+  beforeEach(() => {
+    previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      location: { pathname: "/", search: "", hash: "", href: "http://localhost/" },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+    };
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    (globalThis as any).window = previousWindow;
+    vi.resetModules();
+  });
+
+  it("exports withRouter as a named function", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    expect(typeof withRouter).toBe("function");
+  });
+
+  it("withRouter wraps a component and forwards static props", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    const React = await import("react");
+
+    const Inner: React.ComponentType<{ router: any; label: string }> = ({ label }) =>
+      React.createElement("span", null, label);
+
+    const Wrapped = withRouter(Inner);
+    expect(typeof Wrapped).toBe("function");
+    // displayName is set in dev to `withRouter(<Inner>)`.
+    if (process.env.NODE_ENV !== "production") {
+      expect(Wrapped.displayName).toContain("withRouter");
+    }
+  });
+
+  it("withRouter injects a router prop into the wrapped component", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+
+    let receivedRouter: any = null;
+    let receivedLabel: string | undefined;
+    const Inner: React.ComponentType<{ router: any; label: string }> = (props) => {
+      receivedRouter = props.router;
+      receivedLabel = props.label;
+      return React.createElement("span", null, "ok");
+    };
+
+    const Wrapped = withRouter(Inner);
+    const html = renderToStaticMarkup(React.createElement(Wrapped as any, { label: "hi" }));
+    expect(html).toBe("<span>ok</span>");
+    expect(receivedLabel).toBe("hi");
+    // router must be the NextRouter shape (push/replace/back/...).
+    expect(receivedRouter).toBeTruthy();
+    expect(typeof receivedRouter.push).toBe("function");
+    expect(typeof receivedRouter.replace).toBe("function");
+    expect(typeof receivedRouter.back).toBe("function");
+    expect(typeof receivedRouter.reload).toBe("function");
+    expect(typeof receivedRouter.prefetch).toBe("function");
+    expect(receivedRouter.events).toBeDefined();
+  });
+
+  // Regression guard for Next.js spread order:
+  // packages/next/src/client/with-router.tsx renders
+  //   `<ComposedComponent router={useRouter()} {...props} />`
+  // — the injected `router` is placed FIRST and `{...props}` spread after,
+  // so a user-passed `router` prop overrides the HOC-injected one. If the
+  // spread order is ever inverted in the shim, this test fails.
+  it("user-passed router prop overrides the HOC-injected router (Next.js spread order)", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+
+    let receivedRouter: any = null;
+    const Inner: React.ComponentType<{ router: any }> = (props) => {
+      receivedRouter = props.router;
+      return React.createElement("span", null, "ok");
+    };
+
+    const Wrapped = withRouter(Inner);
+    const userRouter = { sentinel: "user-provided" };
+    renderToStaticMarkup(React.createElement(Wrapped as any, { router: userRouter }));
+    // Last spread wins: the user-passed router survives.
+    expect(receivedRouter).toBe(userRouter);
+  });
+
+  it("withRouter forwards getInitialProps from the composed component", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+
+    type InnerType = ((props: { router: any }) => null) & {
+      getInitialProps?: () => unknown;
+      origGetInitialProps?: () => unknown;
+    };
+    const Inner: InnerType = (() => null) as InnerType;
+    const gip = () => ({ foo: "bar" });
+    Inner.getInitialProps = gip;
+    Inner.origGetInitialProps = gip;
+
+    const Wrapped = withRouter(Inner) as typeof Inner;
+    expect(Wrapped.getInitialProps).toBe(gip);
+    expect(Wrapped.origGetInitialProps).toBe(gip);
   });
 });
 
@@ -1188,7 +1547,10 @@ describe("next/headers shim", () => {
     expect(dm.isEnabled).toBe(false);
 
     dm.enable();
-    // After enabling, the cookie should be set on the context
+    // isEnabled should reflect the change on the same object (live getter)
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/draft-mode.ts
+    expect(dm.isEnabled).toBe(true);
+    // A fresh draftMode() call should also see the change
     const dm2 = await draftMode();
     expect(dm2.isEnabled).toBe(true);
 
@@ -1221,6 +1583,9 @@ describe("next/headers shim", () => {
     expect(dm1.isEnabled).toBe(true);
 
     dm1.disable();
+    // isEnabled should reflect the change on the same object (live getter)
+    expect(dm1.isEnabled).toBe(false);
+    // A fresh draftMode() call should also see the change
     const dm2 = await draftMode();
     expect(dm2.isEnabled).toBe(false);
 
@@ -2271,6 +2636,54 @@ describe("next/cache shim", () => {
     expect(typeof cacheTag).toBe("function");
     // Should accept multiple tags without throwing
     expect(() => cacheTag("tag1", "tag2", "tag3")).not.toThrow();
+  });
+
+  // Ported from Next.js: test/e2e/app-dir/cache-components-errors/cache-components-unstable-deprecations.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/cache-components-errors/cache-components-unstable-deprecations.test.ts
+  it("unstable_cacheLife is exported as a deprecation alias for cacheLife", async () => {
+    const mod = await import("../packages/vinext/src/shims/cache.js");
+    expect(typeof mod.unstable_cacheLife).toBe("function");
+
+    // Matches the cacheLife signature: accepts a profile name or an inline config.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => mod.unstable_cacheLife("hours")).not.toThrow();
+      expect(() =>
+        mod.unstable_cacheLife({ stale: 60, revalidate: 300, expire: 3600 }),
+      ).not.toThrow();
+
+      // Next.js asserts CLI output contains "Error: `unstable_cacheLife` was recently stabilized".
+      // That string comes from console.error(new Error(...)) — match the same surface here.
+      const warned = error.mock.calls.some((args) => {
+        const msg = args[0];
+        const text = msg instanceof Error ? msg.message : String(msg ?? "");
+        return text.includes("`unstable_cacheLife` was recently stabilized");
+      });
+      expect(warned).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("unstable_cacheTag is exported as a deprecation alias for cacheTag", async () => {
+    const mod = await import("../packages/vinext/src/shims/cache.js");
+    expect(typeof mod.unstable_cacheTag).toBe("function");
+
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Matches the cacheTag signature: variadic string tags. Outside a "use cache"
+      // scope this is a no-op (same as cacheTag).
+      expect(() => mod.unstable_cacheTag("tag1", "tag2", "tag3")).not.toThrow();
+
+      const warned = error.mock.calls.some((args) => {
+        const msg = args[0];
+        const text = msg instanceof Error ? msg.message : String(msg ?? "");
+        return text.includes("`unstable_cacheTag` was recently stabilized");
+      });
+      expect(warned).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it("unstable_cache re-fetches when entry is stale (time-expired)", async () => {
@@ -7777,16 +8190,14 @@ describe("next/form shim", () => {
 });
 
 describe("next/font/google shim", () => {
-  it("returns className, style, and variable for a Google Font", async () => {
+  it("returns className and style without variable unless requested for a Google Font", async () => {
     const { createFontLoader } = await import("../packages/vinext/src/shims/font-google.js");
     const Inter = createFontLoader("Inter");
     const result = Inter({ subsets: ["latin"], weight: ["400", "700"] });
 
     expect(result.className).toMatch(/^__font_inter_/);
     expect(result.style.fontFamily).toContain("Inter");
-    // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
-    // Users apply this class to set the CSS variable on that element.
-    expect(result.variable).toMatch(/^__variable_inter_/);
+    expect(result.variable).toBeUndefined();
   });
 
   it("Proxy returns font loaders for any family", async () => {
@@ -7806,8 +8217,7 @@ describe("next/font/google shim", () => {
     const result = googleFonts.RobotoMono({ weight: "400" });
 
     expect(result.style.fontFamily).toContain("Roboto Mono");
-    // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
-    expect(result.variable).toMatch(/^__variable_roboto_mono_/);
+    expect(result.variable).toBeUndefined();
   });
 
   it("uses custom variable name when provided", async () => {
@@ -8332,7 +8742,7 @@ describe("next/dynamic shim", () => {
     expect(result).toEqual([]);
   });
 
-  it("loading component receives isLoading and pastDelay props", async () => {
+  it("loading component receives Next.js noSSR loading props", async () => {
     const { default: dynamic } = await import("../packages/vinext/src/shims/dynamic.js");
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
@@ -8352,7 +8762,7 @@ describe("next/dynamic shim", () => {
     renderToStaticMarkup(React.createElement(DynComp));
     expect(receivedProps).not.toBeNull();
     expect(receivedProps.isLoading).toBe(true);
-    expect(receivedProps.pastDelay).toBe(true);
+    expect(receivedProps.pastDelay).toBe(false);
     expect(receivedProps.error).toBeNull();
   });
 
@@ -9804,6 +10214,106 @@ describe("Pages Router concurrent navigation", () => {
       }
       globalThis.fetch = originalFetch;
     }
+  });
+
+  async function expectBasePathHashOnlyPush({
+    browserPath,
+    target,
+    expectedBrowserUrl,
+    expectedEventUrl,
+  }: {
+    browserPath: string;
+    target: string;
+    expectedBrowserUrl: string;
+    expectedEventUrl: string;
+  }) {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const { win } = createNavWindow();
+    win.location.pathname = browserPath;
+    win.location.href = `http://localhost${browserPath}`;
+    (globalThis as any).window = win;
+    (globalThis as any).document = {
+      getElementById: vi.fn(() => ({ scrollIntoView: vi.fn() })),
+    };
+    process.env.__NEXT_ROUTER_BASEPATH = "/app";
+    vi.resetModules();
+
+    const fetch = vi.fn(async () => {
+      throw new Error("hash-only navigations must not fetch page HTML");
+    });
+    globalThis.fetch = fetch;
+
+    const hashEvents: string[] = [];
+    const routeEvents: string[] = [];
+    const onHashChangeStart = (...args: unknown[]) => {
+      hashEvents.push(`start:${String(args[0])}`);
+    };
+    const onHashChangeComplete = (...args: unknown[]) => {
+      hashEvents.push(`complete:${String(args[0])}`);
+    };
+    const onRouteChangeStart = (...args: unknown[]) => {
+      routeEvents.push(`start:${String(args[0])}`);
+    };
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      Router.events.on("hashChangeStart", onHashChangeStart);
+      Router.events.on("hashChangeComplete", onHashChangeComplete);
+      Router.events.on("routeChangeStart", onRouteChangeStart);
+
+      const result = await Router.push(target);
+
+      expect(result).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(win.history.pushState).toHaveBeenCalledWith({}, "", expectedBrowserUrl);
+      expect(hashEvents).toEqual([`start:${expectedEventUrl}`, `complete:${expectedEventUrl}`]);
+      expect(routeEvents).toEqual([]);
+    } finally {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      Router.events.off("hashChangeStart", onHashChangeStart);
+      Router.events.off("hashChangeComplete", onHashChangeComplete);
+      Router.events.off("routeChangeStart", onRouteChangeStart);
+      if (previousBasePath === undefined) {
+        delete process.env.__NEXT_ROUTER_BASEPATH;
+      } else {
+        process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      }
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  it("treats app-relative hash navigations as hash-only when basePath is configured", async () => {
+    await expectBasePathHashOnlyPush({
+      browserPath: "/app/router-events-test",
+      target: "/router-events-test#section-1",
+      expectedBrowserUrl: "/app/router-events-test#section-1",
+      expectedEventUrl: "/router-events-test#section-1",
+    });
+  });
+
+  it("does not strip app-relative targets that start with the basePath segment", async () => {
+    await expectBasePathHashOnlyPush({
+      browserPath: "/app/app/foo",
+      target: "/app/foo#section-1",
+      expectedBrowserUrl: "/app/app/foo#section-1",
+      expectedEventUrl: "/app/foo#section-1",
+    });
   });
 
   it("popstate known failures schedule a single hard navigation", async () => {
@@ -11774,6 +12284,84 @@ describe("next/error shim", () => {
     );
     expect(html).toContain("403");
     expect(html).toContain("Forbidden");
+  });
+});
+
+// next/app default export
+//
+// Ported from Next.js: packages/next/src/pages/_app.tsx
+// https://github.com/vercel/next.js/blob/canary/packages/next/src/pages/_app.tsx
+//
+// Pages Router fixtures very commonly do:
+//   import App from "next/app";
+//   export default class MyApp extends App { ... }
+// or call App.getInitialProps(appContext) from a custom getInitialProps.
+// Without a runtime default export, every such fixture fails to build with
+// "[MISSING_EXPORT] 'default' is not exported by ...shims/app.js".
+describe("next/app shim", () => {
+  it("exports a React class component as default", async () => {
+    const React = await import("react");
+    const AppDefault = (await import("../packages/vinext/src/shims/app.js")).default;
+    expect(typeof AppDefault).toBe("function");
+    // Class component: prototype must have a render method, instances must
+    // be instances of React.Component.
+    expect(typeof AppDefault.prototype.render).toBe("function");
+    const instance = new AppDefault({ Component: () => null, pageProps: {} });
+    expect(instance).toBeInstanceOf(React.Component);
+  });
+
+  it("default App.render() returns <Component {...pageProps} />", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const AppDefault = (await import("../packages/vinext/src/shims/app.js")).default;
+
+    function Page(props: { greeting: string }) {
+      return React.createElement("p", null, props.greeting);
+    }
+
+    // Use explicit generics so React.createElement's prop type inference
+    // lines up with `AppProps<{ greeting: string }>`.
+    const html = renderToStaticMarkup(
+      React.createElement(AppDefault<unknown, { greeting: string }>, {
+        Component: Page,
+        pageProps: { greeting: "hello world" },
+      }),
+    );
+    expect(html).toBe("<p>hello world</p>");
+  });
+
+  it("App.getInitialProps is a function and forwards Component.getInitialProps result as pageProps", async () => {
+    const AppDefault = (await import("../packages/vinext/src/shims/app.js")).default;
+    expect(typeof AppDefault.getInitialProps).toBe("function");
+    // origGetInitialProps is preserved for userland code that introspects it.
+    expect(typeof AppDefault.origGetInitialProps).toBe("function");
+
+    const pageCtx = { req: { url: "/test" } };
+    const Component = Object.assign(() => null, {
+      getInitialProps: async (ctx: unknown) => {
+        expect(ctx).toBe(pageCtx);
+        return { foo: "bar" };
+      },
+    });
+
+    const result = await AppDefault.getInitialProps({
+      Component,
+      AppTree: () => null,
+      ctx: pageCtx,
+      router: {},
+    });
+    expect(result).toEqual({ pageProps: { foo: "bar" } });
+  });
+
+  it("App.getInitialProps returns { pageProps: {} } when Component has no getInitialProps", async () => {
+    const AppDefault = (await import("../packages/vinext/src/shims/app.js")).default;
+    const result = await AppDefault.getInitialProps({
+      Component: () => null,
+      AppTree: () => null,
+      ctx: {},
+      router: {},
+    });
+    expect(result).toEqual({ pageProps: {} });
   });
 });
 

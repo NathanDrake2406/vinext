@@ -5,7 +5,7 @@ import {
   scanWithExtensions,
   type ValidFileMatcher,
 } from "./file-matcher.js";
-import { patternToNextFormat, validateRoutePatterns } from "./route-validation.js";
+import { validateRoutePatterns } from "./route-validation.js";
 import { createRouteTrieCache, matchRouteWithTrie } from "./route-matching.js";
 
 export type Route = {

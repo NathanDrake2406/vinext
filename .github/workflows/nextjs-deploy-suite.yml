@@ -1,0 +1,331 @@
+name: Next.js Deploy Suite
+
+on:
+  schedule:
+    # Nightly at 02:00 UTC against main
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      vinext-ref:
+        description: vinext branch/ref to test
+        required: false
+        default: main
+        type: string
+      next-ref:
+        description: Next.js ref to test against
+        required: false
+        default: v16.2.6
+        type: string
+      suite-filter:
+        description: Which suites to run (pages, app, or all)
+        required: false
+        default: all
+        type: choice
+        options:
+          - app
+          - pages
+          - all
+      test-concurrency:
+        description: Per-shard Next.js test concurrency
+        required: false
+        default: "2"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nextjs-deploy-suite-${{ inputs.vinext-ref || github.ref }}-${{ inputs.next-ref || 'v16.2.6' }}-${{ inputs.suite-filter || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build vinext + Next.js
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout vinext
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.vinext-ref || github.ref }}
+
+      - uses: ./.github/actions/setup
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm shim for Next.js scripts
+        run: corepack enable pnpm
+
+      - name: Checkout Next.js
+        uses: actions/checkout@v6
+        with:
+          repository: vercel/next.js
+          ref: ${{ inputs.next-ref || 'v16.2.6' }}
+          path: next.js
+
+      - name: Build vinext
+        run: vp run vinext#build
+
+      - name: Prepare Next.js checkout
+        run: bash scripts/run-nextjs-deploy-suite.sh "$GITHUB_WORKSPACE/next.js"
+        env:
+          CI: true
+          VINEXT_BUILD: "0"
+          NEXTJS_PREPARE: "1"
+          NEXTJS_PREPARE_ONLY: "1"
+
+      - name: Generate deploy manifest
+        run: >-
+          node scripts/nextjs-deploy-manifest.mjs
+          "$GITHUB_WORKSPACE/next.js"
+          "$GITHUB_WORKSPACE/nextjs-deploy-manifest.json"
+          --filter ${{ inputs.suite-filter || 'all' }}
+
+      - name: Save build artifacts
+        uses: actions/cache/save@v5
+        with:
+          # The test job needs: vinext built dist + workspace metadata (for
+          # e2e-deploy.sh dependency injection), the scripts, the prepared
+          # Next.js checkout, Playwright browsers, and the filtered manifest.
+          # next.js/ is under $GITHUB_WORKSPACE so it's included in ".".
+          path: |
+            .
+            ~/.cache/ms-playwright
+            nextjs-deploy-manifest.json
+          key: nextjs-deploy-build-${{ github.sha }}-${{ github.run_id }}
+
+  test:
+    name: Deploy suite (${{ matrix.group }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          [
+            1/16,
+            2/16,
+            3/16,
+            4/16,
+            5/16,
+            6/16,
+            7/16,
+            8/16,
+            9/16,
+            10/16,
+            11/16,
+            12/16,
+            13/16,
+            14/16,
+            15/16,
+            16/16,
+          ]
+
+    steps:
+      - name: Restore build artifacts
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .
+            ~/.cache/ms-playwright
+            nextjs-deploy-manifest.json
+          key: nextjs-deploy-build-${{ github.sha }}-${{ github.run_id }}
+
+      - uses: ./.github/actions/setup
+        with:
+          node-version: "22"
+          # Skip install — the workspace is already fully built in the cache
+          run-install: false
+
+      - name: Enable pnpm shim for Next.js scripts
+        run: corepack enable pnpm
+
+      - name: Ensure Playwright browsers
+        working-directory: next.js
+        run: corepack pnpm playwright install chromium chromium-headless-shell
+
+      - name: Make scripts executable
+        run: chmod +x scripts/e2e-deploy.sh scripts/e2e-logs.sh scripts/e2e-cleanup.sh
+
+      - name: Run deploy shard
+        working-directory: next.js
+        env:
+          CI: true
+          NEXT_TEST_MODE: deploy
+          NEXT_E2E_TEST_TIMEOUT: "240000"
+          NEXT_EXTERNAL_TESTS_FILTERS: ${{ github.workspace }}/nextjs-deploy-manifest.json
+          VINEXT_DIR: ${{ github.workspace }}
+          ADAPTER_DIR: ${{ github.workspace }}
+          # Required by the Next.js deploy test manifest — tests are keyed to
+          # the turbopack variant, so this must be set even though vinext uses Vite.
+          IS_TURBOPACK_TEST: "1"
+          NEXT_TEST_JOB: "1"
+          NEXT_TELEMETRY_DISABLED: "1"
+          NEXT_TEST_DEPLOY_SCRIPT_PATH: ${{ github.workspace }}/scripts/e2e-deploy.sh
+          NEXT_TEST_DEPLOY_LOGS_SCRIPT_PATH: ${{ github.workspace }}/scripts/e2e-logs.sh
+          NEXT_TEST_CLEANUP_SCRIPT_PATH: ${{ github.workspace }}/scripts/e2e-cleanup.sh
+        run: node run-tests.js --timings --retries 0 -g ${{ matrix.group }} -c ${{ inputs.test-concurrency || '2' }} --type e2e
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ strategy.job-index }}
+          path: next.js/test/**/*.results.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload deploy debug logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-debug-${{ strategy.job-index }}
+          path: reports/nextjs-deploy-debug/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  report:
+    name: Test report
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download all test results
+        uses: actions/download-artifact@v7
+        with:
+          pattern: test-results-*
+          path: results
+          merge-multiple: true
+
+      - name: Generate report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+
+            function findResultFiles(dir) {
+              const files = [];
+              if (!fs.existsSync(dir)) return files;
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                  files.push(...findResultFiles(full));
+                } else if (entry.name.endsWith('.results.json')) {
+                  files.push(full);
+                }
+              }
+              return files;
+            }
+
+            const resultFiles = findResultFiles('results');
+            if (resultFiles.length === 0) {
+              core.summary.addHeading('Next.js Deploy Suite', 2);
+              core.summary.addRaw('No test result files found. All shards may have been skipped or produced no output.');
+              await core.summary.write();
+              return;
+            }
+
+            const passed = [];
+            const failed = [];
+            const skipped = [];
+
+            for (const file of resultFiles) {
+              try {
+                const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+                for (const suite of data.testResults || []) {
+                  const suiteName = suite.testFilePath
+                    ? suite.testFilePath.replace(/^.*?test\//, 'test/')
+                    : path.basename(file, '.results.json');
+
+                  for (const tc of suite.assertionResults || []) {
+                    const testName = tc.ancestorTitles
+                      ? [...tc.ancestorTitles, tc.title].join(' > ')
+                      : tc.fullName || tc.title;
+
+                    if (tc.status === 'passed') {
+                      passed.push({ suite: suiteName, test: testName });
+                    } else if (tc.status === 'failed') {
+                      const msg = (tc.failureMessages || []).join('\n').slice(0, 500);
+                      failed.push({ suite: suiteName, test: testName, message: msg });
+                    } else {
+                      skipped.push({ suite: suiteName, test: testName });
+                    }
+                  }
+                }
+              } catch (e) {
+                core.warning(`Failed to parse ${file}: ${e.message}`);
+              }
+            }
+
+            const total = passed.length + failed.length + skipped.length;
+            const passRate = total > 0 ? ((passed.length / total) * 100).toFixed(1) : '0.0';
+            const statsLine = `${passed.length} passed, ${failed.length} failed, ${skipped.length} skipped (${total} total, ${passRate}% pass rate)`;
+
+            // Top-level annotation visible on the workflow run page
+            if (failed.length > 0) {
+              core.warning(`Next.js Deploy Suite: ${statsLine}`, { title: 'Next.js Deploy Suite results' });
+            } else {
+              core.notice(`Next.js Deploy Suite: ${statsLine}`, { title: 'Next.js Deploy Suite results' });
+            }
+
+            // Job summary
+            core.summary.addHeading('Next.js Deploy Suite', 2);
+            core.summary.addRaw(
+              `**${passed.length}** passed, **${failed.length}** failed, **${skipped.length}** skipped (${total} total, ${passRate}% pass rate)\n\n`
+            );
+
+            if (failed.length > 0) {
+              core.summary.addHeading('Failed tests', 3);
+              const rows = [
+                [{data: 'Suite', header: true}, {data: 'Test', header: true}, {data: 'Error', header: true}],
+                ...failed.slice(0, 100).map(f => [
+                  f.suite,
+                  f.test,
+                  f.message ? `<details><summary>Details</summary>\n\n\`\`\`\n${f.message}\n\`\`\`\n</details>` : ''
+                ])
+              ];
+              core.summary.addTable(rows);
+
+              if (failed.length > 100) {
+                core.summary.addRaw(`\n_...and ${failed.length - 100} more failures. Download the test-results artifacts for full details._\n`);
+              }
+            }
+
+            if (passed.length > 0) {
+              const suites = [...new Set(passed.map(p => p.suite))].sort();
+              core.summary.addHeading('Passed suites', 3);
+              core.summary.addDetails(
+                `${suites.length} suites (click to expand)`,
+                suites.map(s => `- \`${s}\``).join('\n')
+              );
+            }
+
+            await core.summary.write();
+
+            // Also write a JSON report as an artifact
+            const report = {
+              timestamp: new Date().toISOString(),
+              vinextRef: '${{ inputs.vinext-ref || github.ref }}',
+              nextRef: '${{ inputs.next-ref || 'v16.2.6' }}',
+              suiteFilter: '${{ inputs.suite-filter || 'all' }}',
+              summary: { total, passed: passed.length, failed: failed.length, skipped: skipped.length },
+              failed: failed.map(f => ({ suite: f.suite, test: f.test })),
+              passed: passed.map(p => ({ suite: p.suite, test: p.test })),
+            };
+            fs.mkdirSync('report', { recursive: true });
+            fs.writeFileSync('report/deploy-suite-report.json', JSON.stringify(report, null, 2) + '\n');
+
+            if (failed.length > 0) {
+              core.setFailed(`${failed.length} test(s) failed`);
+            }
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-suite-report
+          path: report/deploy-suite-report.json
+          retention-days: 90

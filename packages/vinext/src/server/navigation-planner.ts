@@ -27,9 +27,18 @@ export type OperationToken = {
 
 export type RouteSnapshotV0 = {
   routeId: string;
+  // Ordered ancestor-first, with the root layout at index 0. Same-layout
+  // persistence uses prefix comparison, so callers must preserve this order.
+  layoutIds: readonly string[];
+  mountedParallelSlots: readonly MountedParallelSlotSnapshotV0[];
   rootBoundaryId: string | null;
   displayUrl: string;
   matchedUrl: string;
+};
+
+export type MountedParallelSlotSnapshotV0 = {
+  slotId: string;
+  ownerLayoutId: string | null;
 };
 
 export type NavigationPlannerStateV0 = {
@@ -61,6 +70,8 @@ export type RequestedWork =
   | { kind: "prefetch"; href: string };
 
 export type CommitProposal = {
+  preserveAbsentSlots: boolean;
+  preserveElementIds: readonly string[];
   reason: "currentRootBoundary" | "rootBoundaryUnknownFallback";
   targetSnapshot: RouteSnapshotV0;
 };
@@ -178,6 +189,88 @@ function classifyRootBoundaryTransition(
     : "rootBoundaryChanged";
 }
 
+function resolveSameLayoutAncestorPersistence(
+  currentSnapshot: RouteSnapshotV0,
+  targetSnapshot: RouteSnapshotV0,
+): readonly string[] {
+  if (
+    classifyRootBoundaryTransition(
+      currentSnapshot.rootBoundaryId,
+      targetSnapshot.rootBoundaryId,
+    ) !== "currentRootBoundary"
+  ) {
+    return [];
+  }
+
+  const commonLayoutIds: string[] = [];
+  const maxLength = Math.min(currentSnapshot.layoutIds.length, targetSnapshot.layoutIds.length);
+  for (let index = 0; index < maxLength; index++) {
+    const layoutId = currentSnapshot.layoutIds[index];
+    if (layoutId !== targetSnapshot.layoutIds[index]) break;
+    commonLayoutIds.push(layoutId);
+  }
+  return commonLayoutIds;
+}
+
+function resolveMountedParallelSlotPersistence(
+  currentSnapshot: RouteSnapshotV0,
+  targetSnapshot: RouteSnapshotV0,
+): readonly string[] {
+  const preservedLayoutIds = resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot);
+  return resolveMountedParallelSlotPersistenceForLayouts(currentSnapshot, preservedLayoutIds);
+}
+
+function resolveMountedParallelSlotPersistenceForLayouts(
+  currentSnapshot: RouteSnapshotV0,
+  preservedLayoutIds: readonly string[],
+): readonly string[] {
+  if (preservedLayoutIds.length === 0) return [];
+  const preservedLayoutIdSet = new Set(preservedLayoutIds);
+
+  const preservedSlotIds: string[] = [];
+  const seenSlotIds = new Set<string>();
+  for (const slot of currentSnapshot.mountedParallelSlots) {
+    if (slot.ownerLayoutId === null) continue;
+    if (!preservedLayoutIdSet.has(slot.ownerLayoutId)) continue;
+    if (seenSlotIds.has(slot.slotId)) continue;
+
+    preservedSlotIds.push(slot.slotId);
+    seenSlotIds.add(slot.slotId);
+  }
+  return preservedSlotIds;
+}
+
+function resolveCurrentRootBoundaryElementPersistence(
+  currentSnapshot: RouteSnapshotV0,
+  targetSnapshot: RouteSnapshotV0,
+): readonly string[] {
+  const preservedLayoutIds = resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot);
+  return [
+    ...preservedLayoutIds,
+    ...resolveMountedParallelSlotPersistenceForLayouts(currentSnapshot, preservedLayoutIds),
+  ];
+}
+
+function resolveCurrentRootBoundaryCommitElementPersistence(options: {
+  currentSnapshot: RouteSnapshotV0;
+  lane: OperationLane;
+  targetSnapshot: RouteSnapshotV0;
+}): readonly string[] {
+  const preservedLayoutIds = resolveSameLayoutAncestorPersistence(
+    options.currentSnapshot,
+    options.targetSnapshot,
+  );
+
+  if (options.lane === "traverse") {
+    return preservedLayoutIds;
+  }
+
+  return [
+    ...preservedLayoutIds,
+    ...resolveMountedParallelSlotPersistenceForLayouts(options.currentSnapshot, preservedLayoutIds),
+  ];
+}
+
 function planFlightResponseArrived(options: {
   event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
   state: NavigationPlannerStateV0;
@@ -216,6 +309,8 @@ function planFlightResponseArrived(options: {
     return {
       kind: "proposeCommit",
       proposal: {
+        preserveAbsentSlots: true,
+        preserveElementIds: [],
         reason: "rootBoundaryUnknownFallback",
         targetSnapshot: options.event.result.targetSnapshot,
       },
@@ -227,6 +322,12 @@ function planFlightResponseArrived(options: {
   return {
     kind: "proposeCommit",
     proposal: {
+      preserveAbsentSlots: false,
+      preserveElementIds: resolveCurrentRootBoundaryCommitElementPersistence({
+        currentSnapshot: options.state.visibleSnapshot,
+        lane: options.event.token.lane,
+        targetSnapshot: options.event.result.targetSnapshot,
+      }),
       reason: "currentRootBoundary",
       targetSnapshot: options.event.result.targetSnapshot,
     },
@@ -291,4 +392,7 @@ function planNavigation(input: NavigationPlannerInput): NavigationDecisionV0 {
 export const navigationPlanner = {
   classifyRootBoundaryTransition,
   plan: planNavigation,
+  resolveCurrentRootBoundaryElementPersistence,
+  resolveMountedParallelSlotPersistence,
+  resolveSameLayoutAncestorPersistence,
 };

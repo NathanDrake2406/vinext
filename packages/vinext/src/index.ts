@@ -1,5 +1,5 @@
 import type { Plugin, PluginOption, UserConfig, ViteDevServer } from "vite";
-import { loadEnv, parseAst } from "vite";
+import { loadEnv, parseAst, transformWithOxc } from "vite";
 import {
   pagesRouter,
   apiRouter,
@@ -42,6 +42,13 @@ import {
 } from "./config/next-config.js";
 
 import { findMiddlewareFile, runMiddleware } from "./server/middleware.js";
+import {
+  MIDDLEWARE_HEADER_PREFIX,
+  MIDDLEWARE_NEXT_HEADER,
+  MIDDLEWARE_REWRITE_HEADER,
+  VINEXT_MW_CTX_HEADER,
+  VINEXT_TIMING_HEADER,
+} from "./server/headers.js";
 import { logRequest, now } from "./server/request-log.js";
 import { normalizePath } from "./server/normalize-path.js";
 import {
@@ -74,6 +81,7 @@ import { manifestFileWithBase, manifestFilesWithBase } from "./utils/manifest-pa
 import { hasBasePath, removeTrailingSlash } from "./utils/base-path.js";
 import { asyncHooksStubPlugin } from "./plugins/async-hooks-stub.js";
 import { clientReferenceDedupPlugin } from "./plugins/client-reference-dedup.js";
+import { createRscClientReferenceLoadersPlugin } from "./plugins/rsc-client-reference-loaders.js";
 import { createInstrumentationClientTransformPlugin } from "./plugins/instrumentation-client.js";
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
 import { createOgInlineFetchAssetsPlugin, ogAssetsPlugin } from "./plugins/og-assets.js";
@@ -333,6 +341,28 @@ function getViteMajorVersion(): number {
     console.warn(`[vinext] Failed to resolve vite/package.json (${message}); assuming Vite 7`);
     return 7;
   }
+}
+
+/**
+ * Read the vinext package version once at plugin load. Surfaced via
+ * `process.env.__NEXT_VERSION` define so `window.next.version` lands a
+ * real string instead of the `"vinext"` fallback. Resolved relative to
+ * this module's own `package.json`, not the project root.
+ *
+ * Defaults to `"vinext"` on read failure so a malformed install never
+ * breaks the build — only the diagnostic global loses fidelity.
+ */
+let _vinextVersionCache: string | null = null;
+function getVinextVersion(): string {
+  if (_vinextVersionCache !== null) return _vinextVersionCache;
+  try {
+    const pkgUrl = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(fs.readFileSync(pkgUrl, "utf-8")) as { version?: unknown };
+    _vinextVersionCache = typeof pkg.version === "string" ? pkg.version : "vinext";
+  } catch {
+    _vinextVersionCache = "vinext";
+  }
+  return _vinextVersionCache;
 }
 
 type UserResolveConfigWithTsconfigPaths = NonNullable<UserConfig["resolve"]> & {
@@ -756,6 +786,50 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // Transform CJS require()/module.exports to ESM before other plugins
     // analyze imports (RSC directive scanning, shim resolution, etc.)
     commonjs(),
+    // Enable JSX in plain .js files. Next.js allows JSX in .js files
+    // (Babel/SWC handle it transparently), but Vite 8's built-in `vite:oxc`
+    // plugin excludes .js files by default (`exclude: /\.js$/`) AND infers
+    // `lang: "js"` from the extension (which disables JSX parsing).
+    //
+    // We can't fix both issues via config alone:
+    //  - Setting `oxc.exclude: []` bypasses the filter, but `lang` is still
+    //    inferred as "js" from the extension, causing parse errors.
+    //  - Setting `oxc.lang: "jsx"` globally breaks TypeScript files (OXC
+    //    can't parse TS type annotations with `lang: "jsx"`).
+    //
+    // Additionally, `@vitejs/plugin-react` sets `jsxRefreshInclude` which
+    // matches `.js` files, pulling them into `vite:oxc`'s transform even
+    // when the main filter excludes them.
+    //
+    // Solution: use `enforce: "pre"` so this plugin's transform runs before
+    // `vite:oxc`. We transform `.js` files with `lang: "jsx"` using Vite's
+    // exported `transformWithOxc`. When `vite:oxc` later processes the
+    // output, the JSX has already been compiled to createElement calls.
+    ...(viteMajorVersion >= 8
+      ? [
+          {
+            name: "vinext:jsx-in-js",
+            enforce: "pre" as const,
+            async transform(code: string, id: string) {
+              // Only handle .js/.mjs files outside node_modules.
+              // TypeScript (.ts/.tsx/.jsx) files are handled by vite:oxc.
+              const cleanId = id.split("?")[0];
+              if (!/\.(m?js)$/.test(cleanId)) return;
+              if (cleanId.includes("/node_modules/")) return;
+
+              const result = await transformWithOxc(code, id, {
+                lang: "jsx",
+                jsx: { runtime: "automatic" as const },
+                sourcemap: true,
+              });
+              return {
+                code: result.code,
+                map: result.map,
+              };
+            },
+          } satisfies Plugin,
+        ]
+      : []),
     {
       name: "vinext:config",
       enforce: "pre",
@@ -917,6 +991,16 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         defines["process.env.__VINEXT_DEPLOYMENT_ID"] = JSON.stringify(
           nextConfig.deploymentId ?? "",
         );
+        // Next.js version compat — mirrors Next.js' `process.env.__NEXT_VERSION`,
+        // which is substituted by their webpack DefinePlugin at build time
+        // (see `packages/next/src/client/next.ts` line 5 and
+        // `packages/next/src/client/app-bootstrap.ts` line 11). Userland code
+        // and third-party libraries occasionally branch on this value, and
+        // it's the source for `window.next.version` (set in
+        // `client/window-next.ts`). We report the vinext package version
+        // because vinext is the runtime — there is no underlying Next.js
+        // version to surface.
+        defines["process.env.__NEXT_VERSION"] = JSON.stringify(getVinextVersion());
 
         // Build the shim alias map. Exact `.js` variants are included for the
         // public Next entrypoints that are file-backed in `next/package.json`.
@@ -1241,8 +1325,20 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // NOTE: top-level optimizeDeps is now set below (after capturing
           // incoming values from earlier plugins) so both Pages Router and
           // App Router builds merge correctly.
-          // Enable JSX in .tsx/.jsx files
-          // Vite 7 uses `esbuild` for transforms, Vite 8+ uses `oxc`
+          // Enable JSX in .js files. Next.js allows JSX in plain .js
+          // files (Babel/SWC handle it transparently), but Vite 8's OXC
+          // transform defaults exclude .js files (both via the filter
+          // `exclude: /\.js$/` and by inferring `lang: "js"` from the
+          // extension, which disables JSX parsing).
+          //
+          // We leave the OXC filter defaults alone (letting `.js` files be
+          // excluded from `vite:oxc`) and instead handle `.js` files in a
+          // separate `vinext:jsx-in-js` plugin that runs before `vite:oxc`.
+          // That plugin transforms `.js` files with OXC using `lang: "jsx"`
+          // so JSX syntax is parsed correctly, while TypeScript files
+          // continue to use `vite:oxc`'s default `lang` inference.
+          //
+          // Vite 7 uses `esbuild` for transforms, Vite 8+ uses `oxc`.
           ...(viteMajorVersion >= 8
             ? { oxc: { jsx: { runtime: "automatic" } } }
             : { esbuild: { jsx: "automatic" } }),
@@ -1778,7 +1874,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           return generateSsrEntry(hasPagesDir);
         }
         if (id === RESOLVED_APP_BROWSER_ENTRY && hasAppDir) {
-          return generateBrowserEntry();
+          const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
+          return generateBrowserEntry(routes);
         }
         if (id.startsWith(RESOLVED_VIRTUAL_GOOGLE_FONTS + "?")) {
           return generateGoogleFontsVirtualModule(id, _fontGoogleShimPath);
@@ -2196,7 +2293,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
               const _origSetHeader = res.setHeader.bind(res);
               res.setHeader = function (name, value) {
-                if (name.toLowerCase() === "x-vinext-timing") {
+                if (name.toLowerCase() === VINEXT_TIMING_HEADER) {
                   _parseTiming(value);
                   return res; // drop the header — don't forward to client
                 }
@@ -2218,7 +2315,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // Pull timing out of the headers object when present.
                 if (headers && typeof headers === "object" && !Array.isArray(headers)) {
                   const timingKey = Object.keys(headers).find(
-                    (k) => k.toLowerCase() === "x-vinext-timing",
+                    (k) => k.toLowerCase() === VINEXT_TIMING_HEADER,
                   );
                   if (timingKey) {
                     _parseTiming(headers[timingKey]);
@@ -2500,7 +2597,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 if (middlewareRequestHeaders) {
                   applyRequestHeadersToNodeRequest(middlewareRequestHeaders);
                 } else {
-                  delete req.headers["x-vinext-mw-ctx"];
+                  delete req.headers[VINEXT_MW_CTX_HEADER];
                 }
               };
 
@@ -2601,13 +2698,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     // entry (via x-vinext-mw-ctx) for App Router routes.
                     deferredMwResponseHeaders = [];
                     for (const [key, value] of result.responseHeaders) {
-                      if (!key.startsWith("x-middleware-")) {
+                      if (!key.startsWith(MIDDLEWARE_HEADER_PREFIX)) {
                         deferredMwResponseHeaders.push([key, value]);
                       }
                     }
                   } else {
                     for (const [key, value] of result.responseHeaders) {
-                      if (!key.startsWith("x-middleware-")) {
+                      if (!key.startsWith(MIDDLEWARE_HEADER_PREFIX)) {
                         res.appendHeader(key, value);
                       }
                     }
@@ -2641,12 +2738,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     for (const [key, value] of result.responseHeaders) {
                       // Exclude control headers that runMiddleware already
                       // consumed — matches the RSC entry's inline filtering.
-                      if (key !== "x-middleware-next" && key !== "x-middleware-rewrite") {
+                      if (key !== MIDDLEWARE_NEXT_HEADER && key !== MIDDLEWARE_REWRITE_HEADER) {
                         mwCtxEntries.push([key, value]);
                       }
                     }
                   }
-                  req.headers["x-vinext-mw-ctx"] = JSON.stringify({
+                  req.headers[VINEXT_MW_CTX_HEADER] = JSON.stringify({
                     h: mwCtxEntries,
                     s: middlewareStatus ?? null,
                     r: result.rewriteUrl ?? null,
@@ -3730,6 +3827,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   // Append auto-injected RSC plugins if applicable
   if (rscPluginPromise) {
     plugins.push(rscPluginPromise);
+    plugins.push(createRscClientReferenceLoadersPlugin());
   }
 
   return plugins;

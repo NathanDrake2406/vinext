@@ -6,6 +6,7 @@ import {
 import {
   navigationPlanner,
   type FlightResultV0,
+  type MountedParallelSlotSnapshotV0,
   type NavigationDecisionV0,
   type NavigationEvent,
   type NavigationPlannerInput,
@@ -16,10 +17,16 @@ import {
   type RootBoundaryTransition,
 } from "../packages/vinext/src/server/navigation-planner.js";
 
-function createRouteSnapshot(rootBoundaryId: string | null): RouteSnapshotV0 {
+function createRouteSnapshot(
+  rootBoundaryId: string | null,
+  layoutIds: readonly string[] = rootBoundaryId === null ? [] : [`layout:${rootBoundaryId}`],
+  mountedParallelSlots: readonly MountedParallelSlotSnapshotV0[] = [],
+): RouteSnapshotV0 {
   return {
     displayUrl: "https://example.com/dashboard",
+    layoutIds,
     matchedUrl: "/dashboard",
+    mountedParallelSlots,
     rootBoundaryId,
     routeId: "route:/dashboard",
   };
@@ -113,7 +120,9 @@ describe("navigationPlanner root-boundary decisions", () => {
     if (decision.kind !== "proposeCommit") {
       throw new Error("Expected proposeCommit decision");
     }
+    expect(decision.proposal.preserveAbsentSlots).toBe(false);
     expect(decision.proposal.targetSnapshot.rootBoundaryId).toBe("/");
+    expect(decision.proposal.preserveElementIds).toEqual(["layout:/"]);
     expect(decision.trace).toEqual({
       schemaVersion: NAVIGATION_TRACE_SCHEMA_VERSION,
       entries: [
@@ -165,6 +174,8 @@ describe("navigationPlanner root-boundary decisions", () => {
       throw new Error("Expected proposeCommit decision");
     }
     expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
+    expect(decision.proposal.preserveAbsentSlots).toBe(true);
+    expect(decision.proposal.preserveElementIds).toEqual([]);
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
   });
 
@@ -181,7 +192,135 @@ describe("navigationPlanner root-boundary decisions", () => {
       throw new Error("Expected proposeCommit decision");
     }
     expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
+    expect(decision.proposal.preserveAbsentSlots).toBe(true);
+    expect(decision.proposal.preserveElementIds).toEqual([]);
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
+  });
+
+  it("preserves only the common same-root layout ancestor prefix", () => {
+    const currentSnapshot = createRouteSnapshot("/", [
+      "layout:/",
+      "layout:/dashboard",
+      "layout:/dashboard/settings",
+    ]);
+    const targetSnapshot = createRouteSnapshot("/", [
+      "layout:/",
+      "layout:/dashboard",
+      "layout:/dashboard/profile",
+    ]);
+
+    expect(
+      navigationPlanner.resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot),
+    ).toEqual(["layout:/", "layout:/dashboard"]);
+  });
+
+  it("preserves mounted parallel slots owned by approved same-layout ancestors", () => {
+    // Mirrors Next.js mounted parallel route preservation covered by:
+    // .nextjs-ref/test/e2e/app-dir/parallel-routes-and-interception-catchall/parallel-routes-and-interception-catchall.test.ts
+    const currentSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/feed"],
+      [
+        { ownerLayoutId: "layout:/feed", slotId: "slot:modal:/feed" },
+        { ownerLayoutId: "layout:/other", slotId: "slot:stale:/other" },
+      ],
+    );
+    const targetSnapshot = createRouteSnapshot("/", [
+      "layout:/",
+      "layout:/feed",
+      "layout:/feed/comments",
+    ]);
+
+    expect(
+      navigationPlanner.resolveMountedParallelSlotPersistence(currentSnapshot, targetSnapshot),
+    ).toEqual(["slot:modal:/feed"]);
+    expect(
+      navigationPlanner.resolveCurrentRootBoundaryElementPersistence(
+        currentSnapshot,
+        targetSnapshot,
+      ),
+    ).toEqual(["layout:/", "layout:/feed", "slot:modal:/feed"]);
+  });
+
+  it("does not preserve mounted parallel slots when their owner layout is not retained", () => {
+    const currentSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/feed"],
+      [{ ownerLayoutId: "layout:/feed", slotId: "slot:modal:/feed" }],
+    );
+    const targetSnapshot = createRouteSnapshot("/", ["layout:/", "layout:/settings"]);
+
+    expect(
+      navigationPlanner.resolveMountedParallelSlotPersistence(currentSnapshot, targetSnapshot),
+    ).toEqual([]);
+    expect(
+      navigationPlanner.resolveCurrentRootBoundaryElementPersistence(
+        currentSnapshot,
+        targetSnapshot,
+      ),
+    ).toEqual(["layout:/"]);
+  });
+
+  it("does not approve mounted parallel slot preservation for traverse commits", () => {
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(
+        "/",
+        ["layout:/", "layout:/feed"],
+        [{ ownerLayoutId: "layout:/feed", slotId: "slot:modal:/feed" }],
+      ),
+      displayUrl: "https://example.com/feed",
+      matchedUrl: "/feed",
+      routeId: "route:/feed",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/", ["layout:/", "layout:/feed", "layout:/feed/comments"]),
+      displayUrl: "https://example.com/feed/comments",
+      matchedUrl: "/feed/comments",
+      routeId: "route:/feed/comments",
+    };
+    const token = createOperationToken({
+      lane: "traverse",
+      targetSnapshotFingerprint: "route:/feed/comments|root:/",
+    });
+
+    const decision = navigationPlanner.plan({
+      event: {
+        kind: "flightResponseArrived",
+        result: {
+          href: "https://example.com/feed/comments",
+          targetSnapshot,
+        },
+        token,
+      },
+      routeManifest: null,
+      state: {
+        nextOperationToken: token,
+        traceFields: {
+          currentRootLayoutTreePath: "/",
+          currentVisibleCommitVersion: 2,
+          nextRootLayoutTreePath: "/",
+          startedVisibleCommitVersion: 2,
+        },
+        visibleCommitVersion: 2,
+        visibleSnapshot: currentSnapshot,
+      },
+    });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.preserveAbsentSlots).toBe(false);
+    expect(decision.proposal.preserveElementIds).toEqual(["layout:/", "layout:/feed"]);
+  });
+
+  it("does not preserve layouts across root-boundary uncertainty", () => {
+    const currentSnapshot = createRouteSnapshot("/", ["layout:/"]);
+    const targetSnapshot = createRouteSnapshot(null, ["layout:/"]);
+
+    expect(
+      navigationPlanner.resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot),
+    ).toEqual([]);
   });
 
   it("never hard-navigates prefetch flight responses", () => {

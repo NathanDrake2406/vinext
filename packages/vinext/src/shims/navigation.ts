@@ -17,9 +17,13 @@ import {
   createRscRequestHeaders,
   createRscRequestUrl,
   VINEXT_RSC_BUILD_ID_HEADER,
-  VINEXT_RSC_MOUNTED_SLOTS_HEADER,
 } from "../server/app-rsc-cache-busting.js";
-import { toBrowserNavigationHref, toSameOriginAppPath } from "./url-utils.js";
+import { VINEXT_MOUNTED_SLOTS_HEADER, VINEXT_PARAMS_HEADER } from "../server/headers.js";
+import {
+  isHashOnlyBrowserUrlChange,
+  toBrowserNavigationHref,
+  toSameOriginAppPath,
+} from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
@@ -414,8 +418,8 @@ export async function snapshotRscResponse(response: Response): Promise<CachedRsc
     buildIdHeader: response.headers.get(VINEXT_RSC_BUILD_ID_HEADER),
     buffer,
     contentType: response.headers.get("content-type") ?? "text/x-component",
-    mountedSlotsHeader: response.headers.get(VINEXT_RSC_MOUNTED_SLOTS_HEADER),
-    paramsHeader: response.headers.get("X-Vinext-Params"),
+    mountedSlotsHeader: response.headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
+    paramsHeader: response.headers.get(VINEXT_PARAMS_HEADER),
     url: response.url,
   };
 }
@@ -438,13 +442,13 @@ export async function snapshotRscResponse(response: Response): Promise<CachedRsc
 export function restoreRscResponse(cached: CachedRscResponse, copy = true): Response {
   const headers = new Headers({ "content-type": cached.contentType });
   if (cached.mountedSlotsHeader != null) {
-    headers.set(VINEXT_RSC_MOUNTED_SLOTS_HEADER, cached.mountedSlotsHeader);
+    headers.set(VINEXT_MOUNTED_SLOTS_HEADER, cached.mountedSlotsHeader);
   }
   if (cached.buildIdHeader != null) {
     headers.set(VINEXT_RSC_BUILD_ID_HEADER, cached.buildIdHeader);
   }
   if (cached.paramsHeader != null) {
-    headers.set("X-Vinext-Params", cached.paramsHeader);
+    headers.set(VINEXT_PARAMS_HEADER, cached.paramsHeader);
   }
 
   return new Response(copy ? cached.buffer.slice(0) : cached.buffer, {
@@ -971,18 +975,7 @@ function isExternalUrl(href: string): boolean {
 function isHashOnlyChange(href: string): boolean {
   if (typeof window === "undefined") return false;
   if (href.startsWith("#")) return true;
-  try {
-    const current = new URL(window.location.href);
-    const next = new URL(href, window.location.href);
-    // Strip basePath for consistent same-origin comparison.
-    const strippedCurrentPath = stripBasePath(current.pathname, __basePath);
-    const strippedNextPath = stripBasePath(next.pathname, __basePath);
-    return (
-      strippedCurrentPath === strippedNextPath && current.search === next.search && next.hash !== ""
-    );
-  } catch {
-    return false;
-  }
+  return isHashOnlyBrowserUrlChange(href, window.location.href, __basePath);
 }
 
 /**
@@ -1250,7 +1243,17 @@ export async function navigateClientSide(
 // useEffect dependency arrays, React.memo bailouts).
 // ---------------------------------------------------------------------------
 
+/**
+ * App Router public router instance. Mirrors Next.js's
+ * `publicAppRouterInstance` from
+ * `packages/next/src/client/components/app-router-instance.ts`.
+ *
+ * Exported so the App Router browser entry can install it on
+ * `window.next.router` for Next.js parity (see `client/window-next.ts`).
+ * Internal callers in this file continue to use `_appRouter` for brevity.
+ */
 const _appRouter = {
+  bfcacheId: "0",
   push(href: string, options?: { scroll?: boolean }): void {
     assertSafeNavigationUrl(href);
     if (isServer) return;
@@ -1275,6 +1278,16 @@ const _appRouter = {
   },
   refresh(): void {
     if (isServer) return;
+    // Drop cached RSC payloads for every previously-visited / prefetched route
+    // before re-fetching. Next.js's refresh-reducer invalidates the entire
+    // segment cache (refresh-reducer.ts → invalidateSegmentCacheEntries), so
+    // without this, a stale cached payload for a sibling route (e.g. a page
+    // gated by a session that has since been cleared) would still satisfy a
+    // subsequent client navigation and bypass the server's redirect logic.
+    const clearCaches = window.__VINEXT_CLEAR_NAV_CACHES__;
+    if (typeof clearCaches === "function") {
+      clearCaches();
+    }
     // Re-fetch the current page's RSC stream
     const rscNavigate = window.__VINEXT_RSC_NAVIGATE__;
     if (typeof rscNavigate === "function") {
@@ -1306,7 +1319,7 @@ const _appRouter = {
       const mountedSlotsHeader = getMountedSlotsHeader();
       const headers = createRscRequestHeaders({ interceptionContext });
       if (mountedSlotsHeader) {
-        headers.set(VINEXT_RSC_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
+        headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
       }
       const rscUrl = await createRscRequestUrl(fullHref, headers);
       const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
@@ -1328,6 +1341,15 @@ const _appRouter = {
     });
   },
 };
+
+/**
+ * Public App Router instance, exposed for the browser entry so it can wire
+ * `window.next.router` to the same singleton returned from `useRouter()`.
+ *
+ * Mirrors `publicAppRouterInstance` from Next.js's
+ * `packages/next/src/client/components/app-router-instance.ts` (line 392).
+ */
+export const appRouterInstance = _appRouter;
 
 /**
  * App Router's useRouter — returns push/replace/back/forward/refresh.

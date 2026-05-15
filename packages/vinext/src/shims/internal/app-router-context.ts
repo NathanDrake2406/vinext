@@ -18,6 +18,7 @@ export type PrefetchOptions = {
 };
 
 export type AppRouterInstance = {
+  bfcacheId: string;
   back(): void;
   forward(): void;
   refresh(): void;

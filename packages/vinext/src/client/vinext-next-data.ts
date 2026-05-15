@@ -7,6 +7,11 @@
  */
 import type { NEXT_DATA } from "vinext/shims/internal/utils";
 
+export type VinextLinkPrefetchRoute = {
+  patternParts: string[];
+  isDynamic: boolean;
+};
+
 export type VinextNextData = {
   /** vinext-specific additions (not part of Next.js upstream). */
   __vinext?: {

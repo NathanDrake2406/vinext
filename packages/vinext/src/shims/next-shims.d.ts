@@ -6,9 +6,30 @@
  * satisfies TypeScript when one shim imports another (e.g. link -> router).
  */
 
+declare module "next" {
+  import type { IncomingMessage, ServerResponse } from "node:http";
+  export type NextApiRequest = {
+    query: Record<string, string | string[]>;
+    body: unknown;
+    cookies: Record<string, string>;
+  } & IncomingMessage;
+  export type NextApiResponse<T = unknown> = {
+    status(code: number): NextApiResponse<T>;
+    json(data: T): void;
+    send(data: T): void;
+    redirect(statusOrUrl: number | string, url?: string): void;
+  } & ServerResponse;
+}
+
 declare module "next/router" {
+  import { ComponentType } from "react";
   export function useRouter(): any;
   export function setSSRContext(ctx: any): void;
+  export type WithRouterProps = { router: any };
+  export type ExcludeRouterProps<P> = Pick<P, Exclude<keyof P, keyof WithRouterProps>>;
+  export function withRouter<P extends WithRouterProps>(
+    ComposedComponent: ComponentType<P>,
+  ): ComponentType<ExcludeRouterProps<P>>;
   const Router: {
     push(url: string | object): Promise<boolean>;
     replace(url: string | object): Promise<boolean>;
@@ -26,6 +47,14 @@ declare module "next/head" {
   export default Head;
   export function resetSSRHead(): void;
   export function getSSRHeadHTML(): string;
+}
+
+declare module "next/document" {
+  import { ComponentType, ReactNode } from "react";
+  export const Html: ComponentType<{ lang?: string; children?: ReactNode; [key: string]: unknown }>;
+  export const Head: ComponentType<{ children?: ReactNode }>;
+  export const Main: ComponentType;
+  export const NextScript: ComponentType;
 }
 
 declare module "next/dynamic" {
@@ -74,8 +103,34 @@ declare module "next/script" {
   export function initScriptLoader(scripts: ScriptProps[]): void;
 }
 
+declare module "next/headers" {
+  export function headers(): Promise<Headers>;
+  export function cookies(): Promise<any>;
+  export function draftMode(): Promise<{ isEnabled: boolean }>;
+}
+
+declare module "next/link" {
+  import { ComponentType, AnchorHTMLAttributes, ReactNode } from "react";
+  type UrlQueryValue = string | number | boolean | null | undefined;
+  type UrlQuery = Record<string, UrlQueryValue | readonly UrlQueryValue[]>;
+  type LinkProps = {
+    href: string | { pathname?: string; query?: UrlQuery };
+    as?: string;
+    replace?: boolean;
+    prefetch?: boolean;
+    passHref?: boolean;
+    scroll?: boolean;
+    locale?: string | false;
+    onNavigate?: (event: { preventDefault(): void }) => void;
+    children?: ReactNode;
+  } & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href">;
+  const Link: ComponentType<LinkProps>;
+  export default Link;
+}
+
 declare module "next/navigation" {
   export function useRouter(): {
+    bfcacheId: string;
     push(href: string, options?: { scroll?: boolean }): void;
     replace(href: string, options?: { scroll?: boolean }): void;
     back(): void;
@@ -417,7 +472,7 @@ declare module "next/font/google" {
 
   type FontResult = {
     className: string;
-    style: { fontFamily: string };
+    style: { fontFamily: string; fontWeight?: number; fontStyle?: string };
     variable?: string;
   };
 
@@ -448,11 +503,54 @@ declare module "next/font/local" {
 
   type FontResult = {
     className: string;
-    style: { fontFamily: string };
+    style: { fontFamily: string; fontWeight?: number; fontStyle?: string };
     variable?: string;
   };
 
   export default function localFont(options: LocalFontOptions): FontResult;
+}
+
+declare module "next/app" {
+  import * as React from "react";
+  import type { ComponentType } from "react";
+
+  export type AppProps<P = any> = {
+    Component: ComponentType<P> & {
+      getInitialProps?: (ctx: any) => any;
+    };
+    pageProps: P;
+    router?: any;
+    __N_SSG?: boolean;
+    __N_SSP?: boolean;
+  };
+
+  export type AppContext = {
+    Component: ComponentType<any> & {
+      getInitialProps?: (ctx: any) => any;
+    };
+    AppTree: ComponentType<any>;
+    ctx: any;
+    router: any;
+  };
+
+  export type AppInitialProps<PageProps = any> = {
+    pageProps: PageProps;
+  };
+
+  /**
+   * Default `App` class component used by Pages Router `_app.js`. Mirrors
+   * Next.js's `packages/next/src/pages/_app.tsx` so userland code can
+   * `import App from "next/app"` and either subclass or call
+   * `App.getInitialProps(appContext)` directly.
+   */
+  export default class App<P = any, CP = any, S = any> extends React.Component<
+    P & AppProps<CP>,
+    S
+  > {
+    static origGetInitialProps: (ctx: AppContext) => Promise<AppInitialProps>;
+    static getInitialProps: (ctx: AppContext) => Promise<AppInitialProps>;
+    render(): React.ReactNode;
+  }
 }
 
 declare module "next/cache" {
