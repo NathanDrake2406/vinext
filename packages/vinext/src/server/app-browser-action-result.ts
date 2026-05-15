@@ -13,6 +13,13 @@ export type ServerActionRevalidationKind = "dynamicOnly" | "none" | "staticAndDy
 const ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC = 1;
 const ACTION_DID_REVALIDATE_DYNAMIC_ONLY = 2;
 
+type ServerActionInitiationSnapshot<TRouterState> = {
+  href: string;
+  navigationId: number;
+  path: string;
+  routerState: TRouterState;
+};
+
 /**
  * Structural discriminator: matches on `"returnValue"` or `"root"` keys.
  * This is safe because {@link AppWireElements} keys are prefixed (`route:`,
@@ -67,6 +74,22 @@ export function shouldScheduleRefreshForDiscardedServerAction(
   revalidation: ServerActionRevalidationKind,
 ): boolean {
   return revalidation !== "none";
+}
+
+export function createServerActionInitiationSnapshot<TRouterState>(options: {
+  href: string;
+  navigationId: number;
+  origin?: string;
+  routerState: TRouterState;
+}): ServerActionInitiationSnapshot<TRouterState> {
+  const url =
+    options.origin === undefined ? new URL(options.href) : new URL(options.href, options.origin);
+  return {
+    href: url.href,
+    navigationId: options.navigationId,
+    path: url.pathname + url.search,
+    routerState: options.routerState,
+  };
 }
 
 type DiscardedServerActionRefreshScheduler = {

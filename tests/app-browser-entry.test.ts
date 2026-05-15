@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createOnUncaughtError } from "../packages/vinext/src/server/app-browser-error.js";
 import {
   createDiscardedServerActionRefreshScheduler,
+  createServerActionInitiationSnapshot,
   parseServerActionRevalidationHeader,
   shouldClearClientNavigationCachesForServerActionResult,
   shouldScheduleRefreshForDiscardedServerAction,
@@ -345,6 +346,26 @@ describe("app browser entry navigation scheduling", () => {
     expect(
       parseServerActionRevalidationHeader(new Headers({ [ACTION_REVALIDATED_HEADER]: "not-json" })),
     ).toBe("none");
+  });
+
+  it("captures server action initiation URL state without a hash in the request path", () => {
+    const routerState = createState({
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/a?tab=1", {
+        slug: "a",
+      }),
+      routeId: "route:/a",
+    });
+
+    const snapshot = createServerActionInitiationSnapshot({
+      href: "https://example.com/a?tab=1#section",
+      navigationId: 42,
+      routerState,
+    });
+
+    expect(snapshot.href).toBe("https://example.com/a?tab=1#section");
+    expect(snapshot.navigationId).toBe(42);
+    expect(snapshot.path).toBe("/a?tab=1");
+    expect(snapshot.routerState).toBe(routerState);
   });
 
   it("keeps client navigation caches for no-root server action results", () => {
@@ -1851,13 +1872,14 @@ describe("app browser navigation controller", () => {
   });
 
   it("hard-navigates same-URL server action payloads when the root layout changes", async () => {
+    const actionTargetHref = "https://example.com/marketing?from=action";
     const initialState = createState({
       rootLayoutTreePath: "/(marketing)",
       routeId: "route:/marketing",
-      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/marketing", {}),
+      navigationSnapshot: createClientNavigationRenderSnapshot(actionTargetHref, {}),
     });
     const { controller, detach, stateRef } = createControllerHarness(initialState);
-    const { assign } = stubWindow("https://example.com/marketing");
+    const { assign } = stubWindow("https://example.com/current");
     const nextElements = Promise.resolve(
       createResolvedElements("route:/dashboard", "/(dashboard)", null, {
         "page:/dashboard": React.createElement("main", null, "dashboard"),
@@ -1868,11 +1890,16 @@ describe("app browser navigation controller", () => {
       const result = await controller.commitSameUrlNavigatePayload(
         nextElements,
         stateRef.current.navigationSnapshot,
+        undefined,
+        undefined,
+        {
+          targetHref: actionTargetHref,
+        },
       );
 
       expect(result).toBeUndefined();
       expect(assign).toHaveBeenCalledTimes(1);
-      expect(assign).toHaveBeenCalledWith("https://example.com/marketing");
+      expect(assign).toHaveBeenCalledWith(actionTargetHref);
       expect(stateRef.current.routeId).toBe("route:/marketing");
     } finally {
       detach();

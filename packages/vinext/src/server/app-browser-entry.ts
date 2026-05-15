@@ -49,6 +49,7 @@ import {
 } from "./app-browser-navigation-controller.js";
 import {
   createDiscardedServerActionRefreshScheduler,
+  createServerActionInitiationSnapshot,
   isServerActionResult,
   parseServerActionRevalidationHeader,
   shouldClearClientNavigationCachesForServerActionResult,
@@ -212,12 +213,9 @@ function applyClientParams(params: Record<string, string | string[]>): void {
 
 function stageClientParams(params: Record<string, string | string[]>): void {
   // NB: latestClientParams diverges from ClientNavigationState.clientParams
-  // between staging and commit. Server action snapshots (same-URL
-  // commitSameUrlNavigatePayload() calls inside registerServerActionCallback)
-  // read latestClientParams, so a
-  // server action fired during this window would get the pending (not yet
-  // committed) params. This is acceptable because the commit effect fires
-  // before hooks observe the new URL state, keeping the window vanishingly small.
+  // between staging and commit. Server action snapshots capture the committed
+  // browser router state at invocation time, so they do not read this mutable
+  // module-level value after their async request boundary.
   latestClientParams = params;
   replaceClientParamsWithoutNotify(params);
 }
@@ -235,6 +233,17 @@ function clearClientNavigationCaches(): void {
   clearVisitedResponseCache();
   clearPrefetchState();
 }
+
+function createActionInitiationSnapshot() {
+  const routerState = getBrowserRouterState();
+  return createServerActionInitiationSnapshot({
+    href: window.location.href,
+    navigationId: browserNavigationController.getActiveNavigationId(),
+    routerState,
+  });
+}
+
+type ActionInitiationSnapshot = ReturnType<typeof createActionInitiationSnapshot>;
 
 function createNavigationCommitEffect(options: {
   href: string;
@@ -312,26 +321,26 @@ async function renderNavigationPayload(
 
 async function commitSameUrlNavigatePayload(
   nextElements: Promise<AppElements>,
+  actionInitiation: ActionInitiationSnapshot,
   returnValue?: ServerActionResult["returnValue"],
-  actionInitiationState?: AppRouterState,
-  actionInitiationNavigationId?: number,
   revalidation: ServerActionRevalidationKind = "none",
 ): Promise<unknown> {
   const navigationSnapshot = createClientNavigationRenderSnapshot(
-    window.location.href,
-    latestClientParams,
+    actionInitiation.href,
+    actionInitiation.routerState.navigationSnapshot.params,
   );
   return browserNavigationController.commitSameUrlNavigatePayload(
     nextElements,
     navigationSnapshot,
     returnValue,
-    actionInitiationState,
+    actionInitiation.routerState,
     {
       onDiscardedRevalidation() {
         discardedServerActionRefreshScheduler.schedule();
       },
       revalidation,
-      startedNavigationId: actionInitiationNavigationId,
+      startedNavigationId: actionInitiation.navigationId,
+      targetHref: actionInitiation.href,
     },
   );
 }
@@ -823,24 +832,20 @@ function registerServerActionCallback(): void {
     // instead of replacing it with the direct page. Parity with Next.js,
     // which sends `Next-URL` on action POSTs when the current tree contains
     // an interception route.
-    const currentState = getBrowserRouterState();
-    const actionInitiationNavigationId = browserNavigationController.getActiveNavigationId();
+    const actionInitiation = createActionInitiationSnapshot();
     const body = await encodeReply(args, { temporaryReferences });
     const { headers } = resolveServerActionRequestState({
       actionId: id,
       basePath: __basePath,
-      elements: currentState.elements,
-      previousNextUrl: currentState.previousNextUrl,
+      elements: actionInitiation.routerState.elements,
+      previousNextUrl: actionInitiation.routerState.previousNextUrl,
     });
 
-    const fetchResponse = await fetch(
-      await createRscRequestUrl(window.location.pathname + window.location.search, headers),
-      {
-        method: "POST",
-        headers,
-        body,
-      },
-    );
+    const fetchResponse = await fetch(await createRscRequestUrl(actionInitiation.path, headers), {
+      method: "POST",
+      headers,
+      body,
+    });
 
     if (isServerActionNotFoundResponse(fetchResponse)) {
       throw new Error(getServerActionNotFoundClientMessage(id));
@@ -881,7 +886,7 @@ function registerServerActionCallback(): void {
     if (
       resolveRscCompatibilityNavigationDecision({
         clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
-        currentHref: window.location.href,
+        currentHref: actionInitiation.href,
         origin: window.location.origin,
         responseCompatibilityId: fetchResponse.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
         responseUrl: fetchResponse.url,
@@ -910,9 +915,8 @@ function registerServerActionCallback(): void {
       if (result.root !== undefined) {
         return commitSameUrlNavigatePayload(
           Promise.resolve(AppElementsWire.decode(result.root)),
+          actionInitiation,
           result.returnValue,
-          currentState,
-          actionInitiationNavigationId,
           revalidation,
         );
       }
@@ -929,9 +933,8 @@ function registerServerActionCallback(): void {
 
     return commitSameUrlNavigatePayload(
       Promise.resolve(AppElementsWire.decode(result)),
+      actionInitiation,
       undefined,
-      currentState,
-      actionInitiationNavigationId,
       revalidation,
     );
   });

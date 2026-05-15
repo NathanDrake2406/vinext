@@ -49,6 +49,7 @@ type SameUrlServerActionLifecycleOptions = {
   onDiscardedRevalidation?: () => void;
   revalidation?: ServerActionRevalidationKind;
   startedNavigationId?: number;
+  targetHref?: string;
 };
 
 type BrowserNavigationControllerDeps = {
@@ -572,6 +573,7 @@ export function createAppBrowserNavigationController(
   ): Promise<unknown> {
     const currentState = actionInitiationState ?? getBrowserRouterState();
     const startedNavigationId = lifecycleOptions?.startedNavigationId ?? activeNavigationId;
+    const targetHref = lifecycleOptions?.targetHref ?? window.location.href;
     const {
       approvedCommit,
       decision,
@@ -590,7 +592,7 @@ export function createAppBrowserNavigationController(
       renderId: allocateRenderId(),
       operationLane: "server-action",
       startedNavigationId,
-      targetHref: window.location.href,
+      targetHref,
       type: "navigate",
     });
 
@@ -598,7 +600,7 @@ export function createAppBrowserNavigationController(
       // Same-URL action hard navigations do not expose a navigation outcome to
       // callers. If the loop guard blocks, the degraded state is still the
       // existing return contract: no visible commit and no action value.
-      performHardNavigation(window.location.href);
+      performHardNavigation(targetHref);
       return undefined;
     }
 
@@ -610,13 +612,13 @@ export function createAppBrowserNavigationController(
         currentState: getBrowserRouterState(),
         pending,
         startedNavigationId,
-        targetHref: window.location.href,
+        targetHref,
       });
 
       if (latestApproval.decision.disposition === "hard-navigate") {
         // See the same-URL hard-navigation note above. The guard result is
         // deliberately not surfaced through the server-action return channel.
-        performHardNavigation(window.location.href);
+        performHardNavigation(targetHref);
         return undefined;
       }
 
