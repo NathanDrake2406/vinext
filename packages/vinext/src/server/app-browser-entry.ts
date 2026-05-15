@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { createElement, use, useLayoutEffect, useRef, useState } from "react";
+import { createElement, startTransition, use, useLayoutEffect, useRef, useState } from "react";
 import {
   createFromFetch,
   createFromReadableStream,
@@ -55,6 +55,7 @@ import {
 import {
   consumeInitialFormState,
   createVinextHydrateRootOptions,
+  hydrateRootInTransition,
 } from "./app-browser-hydration.js";
 import {
   AppElementsWire,
@@ -957,14 +958,16 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         formState,
         onUncaughtError,
       });
-  window.__VINEXT_RSC_ROOT__ = hydrateRoot(
-    document,
-    createElement(BrowserRoot, {
+  window.__VINEXT_RSC_ROOT__ = hydrateRootInTransition({
+    children: createElement(BrowserRoot, {
       initialElements: root,
       initialNavigationSnapshot,
     }),
-    hydrateRootOptions,
-  );
+    container: document,
+    hydrateRoot,
+    options: hydrateRootOptions,
+    startTransition,
+  });
   window.__VINEXT_HYDRATED_AT = performance.now();
 
   // Exposed so the navigation shim's `router.refresh()` can invalidate the

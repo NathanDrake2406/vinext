@@ -6,6 +6,7 @@ import {
   RSC_FORM_STATE_GLOBAL,
   consumeInitialFormState,
   createVinextHydrateRootOptions,
+  hydrateRootInTransition,
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
@@ -2843,6 +2844,34 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
 });
 
 describe("app browser form-state hydration", () => {
+  it("schedules App Router hydrateRoot inside a transition", () => {
+    const container = { nodeType: 1 } as Element;
+    const root = { render: vi.fn(), unmount: vi.fn() };
+    const callOrder: string[] = [];
+    const hydrateRoot = vi.fn(() => {
+      callOrder.push("hydrateRoot");
+      return root;
+    });
+    const startTransition = vi.fn((action: () => void) => {
+      callOrder.push("transition:start");
+      action();
+      callOrder.push("transition:end");
+    });
+
+    const result = hydrateRootInTransition({
+      children: "root",
+      container,
+      hydrateRoot,
+      options: {},
+      startTransition,
+    });
+
+    expect(result).toBe(root);
+    expect(startTransition).toHaveBeenCalledTimes(1);
+    expect(hydrateRoot).toHaveBeenCalledWith(container, "root", {});
+    expect(callOrder).toEqual(["transition:start", "hydrateRoot", "transition:end"]);
+  });
+
   it("passes the one-shot form-state bootstrap payload to hydrateRoot options", () => {
     const formState = ["action-result", "key-path", "reference-id", 1] as never;
     const global = { [RSC_FORM_STATE_GLOBAL]: formState };
