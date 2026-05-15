@@ -434,6 +434,8 @@ export function finalizeAppPageHtmlCacheResponse(
       // This continuation is scheduled while the request ALS scope is active.
       // It intentionally consumes observation state only after the HTML stream
       // drains, so late Server Component request API usage is included.
+      // Consume once: HTML and captured RSC artifacts come from the same render
+      // pass, so both cache artifacts share the same observation snapshot.
       const observationState =
         options.consumeRenderObservationState?.() ?? createEmptyAppPageRenderObservationState();
       const htmlRenderObservation = options.createHtmlRenderObservation?.({

@@ -107,6 +107,9 @@ export function createAppPageRscOutputScope(options: {
   };
 }
 
+// HTML output is derived from the resolved RSC render and does not vary by the
+// set of mounted parallel-route slots; only RSC payload artifacts include that
+// slot fingerprint in their output scope.
 export function createAppPageHtmlOutputScope(options: {
   element: ReactNode | Readonly<Record<string, ReactNode>>;
   renderEpoch: string | null;

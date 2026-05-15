@@ -191,7 +191,7 @@ export function peekRenderRequestApiUsage(): RenderRequestApiKind[] {
 export function consumeRenderRequestApiUsage(): RenderRequestApiKind[] {
   const state = _getState();
   const observed = [...state.renderRequestApiUsage].sort();
-  state.renderRequestApiUsage.clear();
+  state.renderRequestApiUsage = new Set<RenderRequestApiKind>();
   return observed;
 }
 
