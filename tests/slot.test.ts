@@ -254,7 +254,7 @@ describe("slot primitives", () => {
     expect(Object.hasOwn(merged, "page:/settings")).toBe(true);
   });
 
-  it("mergeElements preserves previous slot content when next marks it unmatched", async () => {
+  it("mergeElements does not infer unmatched slot preservation from the wire marker", async () => {
     const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
 
     const previousSlotContent = React.createElement("div", null, "previous modal");
@@ -271,12 +271,60 @@ describe("slot primitives", () => {
       { preserveElementIds: ["layout:/"] },
     );
 
-    // The slot should keep its previous content, not become UNMATCHED_SLOT.
-    // This matches Next.js soft navigation behavior: unmatched parallel slots
-    // preserve their previous subtree instead of showing 404.
-    expect(merged["slot:modal:/"]).toBe(previousSlotContent);
+    expect(merged["slot:modal:/"]).toBe(UNMATCHED_SLOT);
     expect(merged["page:/blog"]).toBeDefined();
     expect(merged["layout:/"]).toBeDefined();
+  });
+
+  it("mergeElements preserves previous slot content for planner-approved default/unmatched slots", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+
+    const previousSlotContent = React.createElement("div", null, "previous modal");
+    const defaultSlotContent = React.createElement("div", null, "default modal");
+    const mergedFromUnmatched = mergeElements(
+      {
+        "layout:/": React.createElement("div", null, "layout"),
+        "slot:modal:/": previousSlotContent,
+      },
+      {
+        "page:/blog": React.createElement("div", null, "blog page"),
+        "slot:modal:/": UNMATCHED_SLOT,
+      },
+      { preserveElementIds: ["layout:/"], preservePreviousSlotIds: ["slot:modal:/"] },
+    );
+    const mergedFromDefault = mergeElements(
+      {
+        "layout:/": React.createElement("div", null, "layout"),
+        "slot:modal:/": previousSlotContent,
+      },
+      {
+        "page:/blog": React.createElement("div", null, "blog page"),
+        "slot:modal:/": defaultSlotContent,
+      },
+      { preserveElementIds: ["layout:/"], preservePreviousSlotIds: ["slot:modal:/"] },
+    );
+
+    expect(mergedFromUnmatched["slot:modal:/"]).toBe(previousSlotContent);
+    expect(mergedFromDefault["slot:modal:/"]).toBe(previousSlotContent);
+  });
+
+  it("mergeElements preserves a present null default slot when the planner approves it", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+
+    const merged = mergeElements(
+      {
+        "layout:/": React.createElement("div", null, "layout"),
+        "slot:modal:/": null,
+      },
+      {
+        "page:/blog": React.createElement("div", null, "blog page"),
+        "slot:modal:/": UNMATCHED_SLOT,
+      },
+      { preserveElementIds: ["layout:/"], preservePreviousSlotIds: ["slot:modal:/"] },
+    );
+
+    expect(Object.hasOwn(merged, "slot:modal:/")).toBe(true);
+    expect(merged["slot:modal:/"]).toBeNull();
   });
 
   it("mergeElements allows UNMATCHED_SLOT for slots absent from previous state", async () => {
@@ -317,7 +365,7 @@ describe("slot primitives", () => {
     expect(Object.hasOwn(merged, "slot:modal:/feed")).toBe(false);
   });
 
-  it("mergeElements on traversal: UNMATCHED_SLOT in next is restored from prev and not cleared", async () => {
+  it("mergeElements keeps unmatched slot markers on traversal without planner approval", async () => {
     const { mergeElements, UNMATCHED_SLOT } = await import("../packages/vinext/src/shims/slot.js");
 
     const realContent = React.createElement("div", null, "modal content");
@@ -336,11 +384,8 @@ describe("slot primitives", () => {
       { clearAbsentSlots: true, preserveElementIds: ["layout:/"] },
     );
 
-    // The slot IS present in next (as UNMATCHED_SLOT), so clearAbsentSlots does not
-    // delete it. The UNMATCHED_SLOT preservation loop then restores the real prev
-    // content because prev had a non-sentinel value.
     expect(Object.hasOwn(merged, "slot:modal:/feed")).toBe(true);
-    expect(merged["slot:modal:/feed"]).toBe(realContent);
+    expect(merged["slot:modal:/feed"]).toBe(UNMATCHED_SLOT);
   });
 
   it("mergeElements preserves absent slots when clearAbsentSlots is not set", async () => {

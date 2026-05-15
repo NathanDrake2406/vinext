@@ -11,6 +11,7 @@ import {
   APP_LAYOUT_FLAGS_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
+  APP_SLOT_BINDINGS_KEY,
   APP_UNMATCHED_SLOT_WIRE_VALUE,
   buildOutgoingAppPayload,
   isAppElementsRecord,
@@ -71,6 +72,7 @@ describe("AppElementsWire", () => {
       layoutFlags: {},
       rootLayoutTreePath: "/",
       routeId: "route:/photos/42\0/feed",
+      slotBindings: [],
     });
   });
 
@@ -168,6 +170,7 @@ describe("AppElementsWire", () => {
       layoutFlags: { [AppElementsWire.encodeLayoutId("/")]: "s" },
       rootLayoutTreePath: "/",
       routeId: "route:/dashboard",
+      slotBindings: [],
     });
   });
 
@@ -375,6 +378,41 @@ describe("app elements payload helpers", () => {
     expect(metadata.layoutIds).toEqual(["layout:/", "layout:/dashboard"]);
   });
 
+  it("reads validated slot bindings from payload metadata", () => {
+    const metadata = readAppElementsMetadata(
+      normalizeAppElements({
+        [APP_LAYOUT_IDS_KEY]: ["layout:/", "layout:/dashboard"],
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard/settings",
+        [APP_SLOT_BINDINGS_KEY]: [
+          {
+            ownerLayoutId: "layout:/dashboard",
+            slotId: "slot:team:/dashboard",
+            state: "default",
+          },
+          {
+            ownerLayoutId: "layout:/dashboard",
+            slotId: "slot:analytics:/dashboard",
+            state: "unmatched",
+          },
+        ],
+      }),
+    );
+
+    expect(metadata.slotBindings).toEqual([
+      {
+        ownerLayoutId: "layout:/dashboard",
+        slotId: "slot:team:/dashboard",
+        state: "default",
+      },
+      {
+        ownerLayoutId: "layout:/dashboard",
+        slotId: "slot:analytics:/dashboard",
+        state: "unmatched",
+      },
+    ]);
+  });
+
   it("rejects invalid layoutIds metadata", () => {
     expect(() =>
       readAppElementsMetadata({
@@ -385,6 +423,48 @@ describe("app elements payload helpers", () => {
         [APP_LAYOUT_IDS_KEY]: ["layout:/", 1],
       }),
     ).toThrow("[vinext] Invalid __layoutIds in App Router payload: expected layout id string[]");
+  });
+
+  it.each([
+    {
+      label: "non-array",
+      value: "slot:team:/dashboard",
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected array",
+    },
+    {
+      label: "non-object",
+      value: ["slot:team:/dashboard"],
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected objects",
+    },
+    {
+      label: "non-slot id",
+      value: [{ ownerLayoutId: "layout:/dashboard", slotId: "page:/dashboard", state: "active" }],
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected slot ids",
+    },
+    {
+      label: "non-layout owner",
+      value: [
+        { ownerLayoutId: "slot:team:/dashboard", slotId: "slot:team:/dashboard", state: "active" },
+      ],
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected owner layout ids",
+    },
+    {
+      label: "invalid state",
+      value: [
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "stale" },
+      ],
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected state",
+    },
+  ])("rejects invalid slotBindings metadata: $label", ({ value, message }) => {
+    expect(() =>
+      readAppElementsMetadata({
+        ...normalizeAppElements({
+          [APP_ROOT_LAYOUT_KEY]: "/",
+          [APP_ROUTE_KEY]: "route:/dashboard",
+        }),
+        [APP_SLOT_BINDINGS_KEY]: value,
+      }),
+    ).toThrow(message);
   });
 
   it.each([

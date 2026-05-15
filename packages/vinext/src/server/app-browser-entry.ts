@@ -472,6 +472,7 @@ function BrowserRoot({
     renderId: 0,
     rootLayoutTreePath: initialMetadata.rootLayoutTreePath,
     routeId: initialMetadata.routeId,
+    slotBindings: initialMetadata.slotBindings,
     visibleCommitVersion: 0,
   });
   const treeState = isRouterStatePromise(treeStateValue) ? use(treeStateValue) : treeStateValue;

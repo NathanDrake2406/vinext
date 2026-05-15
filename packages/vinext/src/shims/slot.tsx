@@ -6,7 +6,10 @@ import {
   UNMATCHED_SLOT,
   type AppElementValue,
   type AppElements,
+  type AppElementsSlotBinding,
+  type LayoutFlags,
 } from "../server/app-elements.js";
+import type { ArtifactCompatibilityEnvelope } from "../server/artifact-compatibility.js";
 import { notFound } from "./navigation.js";
 
 const EMPTY_ELEMENTS: AppElements = Object.freeze({});
@@ -31,7 +34,47 @@ type MergeElementsOptions = {
   clearAbsentSlots?: boolean;
   preserveAbsentSlots?: boolean;
   preserveElementIds?: readonly string[];
+  preservePreviousSlotIds?: readonly string[];
 };
+
+function isLayoutFlagsValue(value: unknown): value is LayoutFlags {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.values(value).every((entry) => entry === "s" || entry === "d");
+}
+
+function isArtifactCompatibilityEnvelopeValue(
+  value: unknown,
+): value is ArtifactCompatibilityEnvelope {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return (
+    "schemaVersion" in value &&
+    "appElementsSchemaVersion" in value &&
+    "rscPayloadSchemaVersion" in value &&
+    "graphVersion" in value &&
+    "deploymentVersion" in value &&
+    "rootBoundaryId" in value &&
+    "renderEpoch" in value
+  );
+}
+
+function isSlotBindingValue(value: unknown): value is AppElementsSlotBinding {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return "ownerLayoutId" in value && "slotId" in value && "state" in value;
+}
+
+function isSlotBindingListValue(value: unknown): value is readonly AppElementsSlotBinding[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isSlotBindingValue);
+}
+
+function isTransportMetadataValue(
+  value: AppElementValue | undefined,
+): value is LayoutFlags | ArtifactCompatibilityEnvelope | readonly AppElementsSlotBinding[] {
+  return (
+    isLayoutFlagsValue(value) ||
+    isArtifactCompatibilityEnvelopeValue(value) ||
+    isSlotBindingListValue(value)
+  );
+}
 
 export function mergeElements(
   prev: AppElements,
@@ -43,6 +86,8 @@ export function mergeElements(
   const preserveAbsentSlots =
     typeof options === "boolean" ? !options : (options.preserveAbsentSlots ?? true);
   const preserveElementIds = typeof options === "boolean" ? [] : (options.preserveElementIds ?? []);
+  const preservePreviousSlotIds =
+    typeof options === "boolean" ? [] : (options.preservePreviousSlotIds ?? []);
   const merged: Record<string, AppElementValue> = { ...next };
 
   for (const id of preserveElementIds) {
@@ -53,22 +98,15 @@ export function mergeElements(
     }
   }
 
-  // On soft navigation, unmatched parallel slots preserve their previous subtree
-  // instead of firing notFound(). Only hard navigation (full page load) should 404.
-  // This matches Next.js behavior for parallel route persistence.
   const slotKeys = new Set(
     [...Object.keys(prev), ...Object.keys(next)].filter((key) => AppElementsWire.isSlotId(key)),
   );
-  for (const key of slotKeys) {
-    if (next[key] === UNMATCHED_SLOT && Object.hasOwn(prev, key)) {
-      merged[key] = prev[key];
-    }
-  }
   // On traversal (browser back/forward), the server renders the full destination
   // route tree. A slot absent from next means the destination route tree does not
   // include it, so clear it rather than keeping the stale prev value. The legacy
   // absent-slot path stays opt-in for unpromoted fallbacks; promoted navigation
-  // commits preserve mounted slots through planner-approved preserveElementIds.
+  // commits preserve default/unmatched slots through planner-approved
+  // preservePreviousSlotIds.
   if (clearAbsentSlots) {
     for (const key of slotKeys) {
       if (!Object.hasOwn(next, key)) {
@@ -83,6 +121,18 @@ export function mergeElements(
       }
     }
   }
+
+  // Default/unmatched slot preservation is a router-state decision, not a
+  // consequence of a missing key or an unmatched marker on the transport.
+  for (const id of preservePreviousSlotIds) {
+    if (!AppElementsWire.isSlotId(id)) continue;
+    if (!Object.hasOwn(prev, id)) continue;
+    const value = prev[id];
+    if (value !== undefined && value !== UNMATCHED_SLOT) {
+      merged[id] = value;
+    }
+  }
+
   return merged;
 }
 
@@ -108,6 +158,9 @@ export function Slot({
   }
 
   const element = elements[id];
+  if (isTransportMetadataValue(element)) {
+    return null;
+  }
   if (element === UNMATCHED_SLOT) {
     notFound();
   }

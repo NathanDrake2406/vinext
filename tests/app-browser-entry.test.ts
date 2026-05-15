@@ -13,9 +13,7 @@ import {
   devOnUncaughtError,
 } from "../packages/vinext/src/server/dev-error-overlay.js";
 import {
-  APP_INTERCEPTION_CONTEXT_KEY,
   AppElementsWire,
-  APP_LAYOUT_IDS_KEY,
   APP_LAYOUT_FLAGS_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
@@ -24,6 +22,7 @@ import {
   getMountedSlotIdsHeader,
   normalizeAppElements,
   type AppElements,
+  type AppElementsSlotBinding,
 } from "../packages/vinext/src/server/app-elements.js";
 import { createClientNavigationRenderSnapshot } from "../packages/vinext/src/shims/navigation.js";
 import * as navigationShim from "../packages/vinext/src/shims/navigation.js";
@@ -58,12 +57,16 @@ function createResolvedElements(
   layoutIds: readonly string[] = rootLayoutTreePath === null
     ? []
     : [AppElementsWire.encodeLayoutId(rootLayoutTreePath)],
+  slotBindings: readonly AppElementsSlotBinding[] = [],
 ) {
   return normalizeAppElements({
-    [APP_INTERCEPTION_CONTEXT_KEY]: interceptionContext,
-    [APP_LAYOUT_IDS_KEY]: layoutIds,
-    [APP_ROUTE_KEY]: routeId,
-    [APP_ROOT_LAYOUT_KEY]: rootLayoutTreePath,
+    ...AppElementsWire.createMetadataEntries({
+      interceptionContext,
+      layoutIds,
+      rootLayoutTreePath,
+      routeId,
+      slotBindings,
+    }),
     ...extraEntries,
   });
 }
@@ -80,6 +83,7 @@ function createState(overrides: Partial<AppRouterState> = {}): AppRouterState {
     previousNextUrl: null,
     rootLayoutTreePath: "/",
     routeId: "route:/initial",
+    slotBindings: [],
     visibleCommitVersion: 0,
     ...overrides,
   };
@@ -155,6 +159,7 @@ type ApprovedTestCommitOptions = {
   renderId?: number;
   rootLayoutTreePath: string | null;
   routeId: string;
+  slotBindings?: readonly AppElementsSlotBinding[];
   startedNavigationId?: number;
   targetHref?: string;
   type?: "navigate" | "replace" | "traverse";
@@ -176,6 +181,7 @@ async function applyApprovedTestCommit(
           ...options.extraEntries,
         },
         options.layoutIds,
+        options.slotBindings,
       ),
     ),
     navigationSnapshot: options.navigationSnapshot ?? state.navigationSnapshot,
@@ -2458,6 +2464,11 @@ describe("app browser entry previousNextUrl helpers", () => {
   it("does not approve mounted parallel slots on approved traverse commits", async () => {
     const feedLayout = React.createElement("div", null, "feed layout");
     const mountedSlot = React.createElement("div", null, "modal");
+    const modalSlotBinding = {
+      ownerLayoutId: "layout:/feed",
+      slotId: "slot:modal:/feed",
+      state: "active",
+    } satisfies AppElementsSlotBinding;
     const state = createState({
       elements: createResolvedElements(
         "route:/feed",
@@ -2469,10 +2480,12 @@ describe("app browser entry previousNextUrl helpers", () => {
           "slot:modal:/feed": mountedSlot,
         },
         ["layout:/", "layout:/feed"],
+        [modalSlotBinding],
       ),
       layoutIds: ["layout:/", "layout:/feed"],
       navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/feed", {}),
       routeId: "route:/feed",
+      slotBindings: [modalSlotBinding],
     });
     const pending = await createPendingNavigationCommit({
       currentState: state,
@@ -2485,6 +2498,13 @@ describe("app browser entry previousNextUrl helpers", () => {
             "page:/feed/comments": React.createElement("main", null, "comments"),
           },
           ["layout:/", "layout:/feed", "layout:/feed/comments"],
+          [
+            {
+              ownerLayoutId: "layout:/feed",
+              slotId: "slot:modal:/feed",
+              state: "default",
+            },
+          ],
         ),
       ),
       navigationSnapshot: createClientNavigationRenderSnapshot(
@@ -2510,6 +2530,7 @@ describe("app browser entry previousNextUrl helpers", () => {
       throw new Error("Expected visible commit approval");
     }
     expect(approval.decision.preserveElementIds).toEqual(["layout:/", "layout:/feed"]);
+    expect(approval.decision.preservePreviousSlotIds).toEqual([]);
     if (approval.approvedCommit === null) {
       throw new Error("Expected approved visible commit");
     }
@@ -2519,8 +2540,13 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(false);
   });
 
-  it("preserves planner-approved mounted parallel slots on approved navigate commits", async () => {
+  it("preserves planner-approved default parallel slots on approved navigate commits", async () => {
     const mountedSlot = React.createElement("div", null, "modal");
+    const modalSlotBinding = {
+      ownerLayoutId: "layout:/feed",
+      slotId: "slot:modal:/feed",
+      state: "active",
+    } satisfies AppElementsSlotBinding;
     const state = createState({
       elements: createResolvedElements(
         "route:/feed",
@@ -2530,6 +2556,89 @@ describe("app browser entry previousNextUrl helpers", () => {
           "layout:/": React.createElement("div", null, "root layout"),
           "layout:/feed": React.createElement("div", null, "feed layout"),
           "slot:modal:/feed": mountedSlot,
+        },
+        ["layout:/", "layout:/feed"],
+        [modalSlotBinding],
+      ),
+      layoutIds: ["layout:/", "layout:/feed"],
+      slotBindings: [modalSlotBinding],
+    });
+
+    const nextState = await applyApprovedTestCommit(state, {
+      extraEntries: {
+        "page:/feed/comments": React.createElement("main", null, "comments"),
+      },
+      layoutIds: ["layout:/", "layout:/feed", "layout:/feed/comments"],
+      rootLayoutTreePath: "/",
+      routeId: "route:/feed/comments",
+      slotBindings: [
+        {
+          ownerLayoutId: "layout:/feed",
+          slotId: "slot:modal:/feed",
+          state: "default",
+        },
+      ],
+    });
+
+    expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(true);
+    expect(nextState.elements["slot:modal:/feed"]).toBe(mountedSlot);
+    expect(nextState.slotBindings).toEqual([modalSlotBinding]);
+  });
+
+  it("keeps previous slot binding proof when the target marks a preserved slot unmatched", async () => {
+    const mountedSlot = React.createElement("div", null, "modal");
+    const modalSlotBinding = {
+      ownerLayoutId: "layout:/feed",
+      slotId: "slot:modal:/feed",
+      state: "active",
+    } satisfies AppElementsSlotBinding;
+    const state = createState({
+      elements: createResolvedElements(
+        "route:/feed",
+        "/",
+        null,
+        {
+          "layout:/": React.createElement("div", null, "root layout"),
+          "layout:/feed": React.createElement("div", null, "feed layout"),
+          "slot:modal:/feed": mountedSlot,
+        },
+        ["layout:/", "layout:/feed"],
+        [modalSlotBinding],
+      ),
+      layoutIds: ["layout:/", "layout:/feed"],
+      slotBindings: [modalSlotBinding],
+    });
+
+    const nextState = await applyApprovedTestCommit(state, {
+      extraEntries: {
+        "page:/feed/comments": React.createElement("main", null, "comments"),
+      },
+      layoutIds: ["layout:/", "layout:/feed", "layout:/feed/comments"],
+      rootLayoutTreePath: "/",
+      routeId: "route:/feed/comments",
+      slotBindings: [
+        {
+          ownerLayoutId: "layout:/feed",
+          slotId: "slot:modal:/feed",
+          state: "unmatched",
+        },
+      ],
+    });
+
+    expect(nextState.elements["slot:modal:/feed"]).toBe(mountedSlot);
+    expect(nextState.slotBindings).toEqual([modalSlotBinding]);
+  });
+
+  it("does not infer default slot preservation from previous wire entries", async () => {
+    const state = createState({
+      elements: createResolvedElements(
+        "route:/feed",
+        "/",
+        null,
+        {
+          "layout:/": React.createElement("div", null, "root layout"),
+          "layout:/feed": React.createElement("div", null, "feed layout"),
+          "slot:modal:/feed": React.createElement("div", null, "modal"),
         },
         ["layout:/", "layout:/feed"],
       ),
@@ -2543,10 +2652,16 @@ describe("app browser entry previousNextUrl helpers", () => {
       layoutIds: ["layout:/", "layout:/feed", "layout:/feed/comments"],
       rootLayoutTreePath: "/",
       routeId: "route:/feed/comments",
+      slotBindings: [
+        {
+          ownerLayoutId: "layout:/feed",
+          slotId: "slot:modal:/feed",
+          state: "default",
+        },
+      ],
     });
 
-    expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(true);
-    expect(nextState.elements["slot:modal:/feed"]).toBe(mountedSlot);
+    expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(false);
   });
 
   it("does not preserve absent parallel slots when their owner layout is not approved", async () => {

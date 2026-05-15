@@ -5,6 +5,7 @@ import {
   APP_LAYOUT_IDS_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
+  APP_SLOT_BINDINGS_KEY,
 } from "../packages/vinext/src/server/app-elements.js";
 import type { AppPageModule } from "../packages/vinext/src/server/app-page-route-wiring.js";
 import type { AppPageParams } from "../packages/vinext/src/server/app-page-boundary.js";
@@ -163,6 +164,66 @@ describe("buildPageElements", () => {
     expect(record[APP_ROUTE_KEY]).toBe("route:/hello");
     expect(Object.prototype.hasOwnProperty.call(record, "page:/hello")).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(record, "route:/hello")).toBe(true);
+  });
+
+  it("attaches route-state slot bindings for active, default, and unmatched slots", async () => {
+    function TestPage(): React.ReactNode {
+      return React.createElement("div", null, "Hello");
+    }
+    function TestLayout({ children }: { children?: React.ReactNode }): React.ReactNode {
+      return children;
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(TestPage),
+      layouts: [createSyntheticPageModule(TestLayout)],
+      layoutTreePositions: [0],
+      routeSegments: ["dashboard"],
+      pattern: "/dashboard",
+      slots: {
+        "team@dashboard/@team": {
+          id: "slot:team:/",
+          name: "team",
+          page: createSyntheticPageModule(() => React.createElement("div", null, "team")),
+          layoutIndex: 0,
+          routeSegments: [],
+        },
+        "analytics@dashboard/@analytics": {
+          id: "slot:analytics:/",
+          name: "analytics",
+          default: createSyntheticPageModule(() => React.createElement("div", null, "analytics")),
+          layoutIndex: 0,
+          routeSegments: null,
+        },
+        "reports@dashboard/@reports": {
+          id: "slot:reports:/",
+          name: "reports",
+          layoutIndex: 0,
+          routeSegments: null,
+        },
+      },
+    });
+
+    const result = await buildPageElements(createBaseOptions({ route, routePath: "/dashboard" }));
+    const record = result as Record<string, unknown>;
+
+    expect(record[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        ownerLayoutId: "layout:/",
+        slotId: "slot:analytics:/",
+        state: "default",
+      },
+      {
+        ownerLayoutId: "layout:/",
+        slotId: "slot:reports:/",
+        state: "unmatched",
+      },
+      {
+        ownerLayoutId: "layout:/",
+        slotId: "slot:team:/",
+        state: "active",
+      },
+    ]);
   });
 
   it("calls markDynamicUsage when search params have content", async () => {

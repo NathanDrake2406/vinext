@@ -13,12 +13,34 @@ export const APP_LAYOUT_IDS_KEY = "__layoutIds";
 export const APP_LAYOUT_FLAGS_KEY = "__layoutFlags";
 export const APP_ROUTE_KEY = "__route";
 export const APP_ROOT_LAYOUT_KEY = "__rootLayout";
+export const APP_SLOT_BINDINGS_KEY = "__slotBindings";
 export const APP_UNMATCHED_SLOT_WIRE_VALUE = "__VINEXT_UNMATCHED_SLOT__";
 
 export const UNMATCHED_SLOT = Symbol.for("vinext.unmatchedSlot");
 
-export type AppElementValue = ReactNode | typeof UNMATCHED_SLOT | string | null;
-type AppWireElementValue = ReactNode | string | null;
+export type AppElementsSlotBindingState = "active" | "default" | "unmatched";
+
+export type AppElementsSlotBinding = Readonly<{
+  ownerLayoutId: string | null;
+  slotId: string;
+  state: AppElementsSlotBindingState;
+}>;
+
+export type AppElementValue =
+  | ReactNode
+  | typeof UNMATCHED_SLOT
+  | string
+  | null
+  | LayoutFlags
+  | ArtifactCompatibilityEnvelope
+  | readonly AppElementsSlotBinding[];
+type AppWireElementValue =
+  | ReactNode
+  | string
+  | null
+  | LayoutFlags
+  | ArtifactCompatibilityEnvelope
+  | readonly AppElementsSlotBinding[];
 
 export type AppElements = Readonly<Record<string, AppElementValue>>;
 export type AppWireElements = Readonly<Record<string, AppWireElementValue>>;
@@ -49,6 +71,7 @@ type AppElementsMetadata = {
   layoutFlags: LayoutFlags;
   routeId: string;
   rootLayoutTreePath: string | null;
+  slotBindings: readonly AppElementsSlotBinding[];
 };
 
 type AppElementsWireElementKey =
@@ -63,6 +86,7 @@ type AppElementsWireMetadataInput = {
   layoutIds?: readonly string[];
   routeId: string;
   rootLayoutTreePath: string | null;
+  slotBindings?: readonly AppElementsSlotBinding[];
 };
 
 type AppElementsWireMetadataEntries = Readonly<{
@@ -70,6 +94,7 @@ type AppElementsWireMetadataEntries = Readonly<{
   [APP_INTERCEPTION_CONTEXT_KEY]: string | null;
   [APP_LAYOUT_IDS_KEY]: readonly string[];
   [APP_ROOT_LAYOUT_KEY]: string | null;
+  [APP_SLOT_BINDINGS_KEY]?: readonly AppElementsSlotBinding[];
 }>;
 
 /**
@@ -79,7 +104,10 @@ type AppElementsWireMetadataEntries = Readonly<{
  * which only carry render-time values.
  */
 export type AppOutgoingElements = Readonly<
-  Record<string, ReactNode | LayoutFlags | ArtifactCompatibilityEnvelope>
+  Record<
+    string,
+    ReactNode | LayoutFlags | ArtifactCompatibilityEnvelope | readonly AppElementsSlotBinding[]
+  >
 >;
 
 type AppElementsWireKeys = {
@@ -89,6 +117,7 @@ type AppElementsWireKeys = {
   readonly layoutFlags: typeof APP_LAYOUT_FLAGS_KEY;
   readonly rootLayout: typeof APP_ROOT_LAYOUT_KEY;
   readonly route: typeof APP_ROUTE_KEY;
+  readonly slotBindings: typeof APP_SLOT_BINDINGS_KEY;
 };
 
 type AppElementsWireCodec = {
@@ -99,7 +128,7 @@ type AppElementsWireCodec = {
   encodeCacheKey(rscUrl: string, interceptionContext: string | null): string;
   encodeLayoutId(treePath: string): string;
   encodeOutgoingPayload(input: {
-    element: ReactNode | Readonly<Record<string, ReactNode>>;
+    element: ReactNode | Readonly<Record<string, ReactNode | readonly AppElementsSlotBinding[]>>;
     artifactCompatibility?: ArtifactCompatibilityEnvelope;
     layoutFlags: LayoutFlags;
   }): ReactNode | AppOutgoingElements;
@@ -213,12 +242,19 @@ function isAppElementsWireSlotId(key: string): boolean {
 function createAppElementsWireMetadataEntries(
   input: AppElementsWireMetadataInput,
 ): AppElementsWireMetadataEntries {
-  return {
+  const entries: AppElementsWireMetadataEntries = {
     [APP_ROUTE_KEY]: input.routeId,
     [APP_INTERCEPTION_CONTEXT_KEY]: input.interceptionContext,
     [APP_LAYOUT_IDS_KEY]: [...(input.layoutIds ?? [])],
     [APP_ROOT_LAYOUT_KEY]: input.rootLayoutTreePath,
   };
+  if (input.slotBindings && input.slotBindings.length > 0) {
+    return {
+      ...entries,
+      [APP_SLOT_BINDINGS_KEY]: input.slotBindings.map((binding) => ({ ...binding })),
+    };
+  }
+  return entries;
 }
 
 export function normalizeAppElements(elements: AppWireElements): AppElements {
@@ -253,6 +289,10 @@ function isLayoutFlagsRecord(value: unknown): value is LayoutFlags {
   return true;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function parseLayoutFlags(value: unknown): LayoutFlags {
   if (isLayoutFlagsRecord(value)) return value;
   return {};
@@ -284,6 +324,48 @@ function parseLayoutIds(value: unknown): readonly string[] {
   return layoutIds;
 }
 
+function isSlotBindingState(value: unknown): value is AppElementsSlotBindingState {
+  return value === "active" || value === "default" || value === "unmatched";
+}
+
+function parseSlotBindings(value: unknown): readonly AppElementsSlotBinding[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected array");
+  }
+
+  const slotBindings: AppElementsSlotBinding[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected objects");
+    }
+
+    const slotId = entry.slotId;
+    if (typeof slotId !== "string" || parseAppElementsWireElementKey(slotId)?.kind !== "slot") {
+      throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected slot ids");
+    }
+
+    const ownerLayoutId = entry.ownerLayoutId;
+    if (
+      ownerLayoutId !== null &&
+      (typeof ownerLayoutId !== "string" ||
+        parseAppElementsWireElementKey(ownerLayoutId)?.kind !== "layout")
+    ) {
+      throw new Error(
+        "[vinext] Invalid __slotBindings in App Router payload: expected owner layout ids",
+      );
+    }
+
+    const state = entry.state;
+    if (!isSlotBindingState(state)) {
+      throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected state");
+    }
+
+    slotBindings.push({ ownerLayoutId, slotId, state });
+  }
+  return slotBindings;
+}
+
 /**
  * Type predicate for a plain (non-null, non-array) record of app payload values.
  * Used to distinguish the App Router payload object from bare React elements at
@@ -308,7 +390,7 @@ export function withLayoutFlags<T extends Record<string, unknown>>(
 }
 
 export function buildOutgoingAppPayload(input: {
-  element: ReactNode | Readonly<Record<string, ReactNode>>;
+  element: ReactNode | Readonly<Record<string, ReactNode | readonly AppElementsSlotBinding[]>>;
   artifactCompatibility?: ArtifactCompatibilityEnvelope;
   layoutFlags: LayoutFlags;
 }): ReactNode | AppOutgoingElements {
@@ -361,6 +443,7 @@ export function readAppElementsMetadata(
 
   const layoutFlags = parseLayoutFlags(elements[APP_LAYOUT_FLAGS_KEY]);
   const layoutIds = parseLayoutIds(elements[APP_LAYOUT_IDS_KEY]);
+  const slotBindings = parseSlotBindings(elements[APP_SLOT_BINDINGS_KEY]);
   const artifactCompatibility = readArtifactCompatibilityMetadata(
     elements[APP_ARTIFACT_COMPATIBILITY_KEY],
   );
@@ -372,6 +455,7 @@ export function readAppElementsMetadata(
     layoutFlags,
     routeId,
     rootLayoutTreePath,
+    slotBindings,
   };
 }
 
@@ -385,6 +469,7 @@ export const AppElementsWire: AppElementsWireCodec = {
     layoutFlags: APP_LAYOUT_FLAGS_KEY,
     rootLayout: APP_ROOT_LAYOUT_KEY,
     route: APP_ROUTE_KEY,
+    slotBindings: APP_SLOT_BINDINGS_KEY,
   },
   unmatchedSlotValue: APP_UNMATCHED_SLOT_WIRE_VALUE,
   createMetadataEntries: createAppElementsWireMetadataEntries,

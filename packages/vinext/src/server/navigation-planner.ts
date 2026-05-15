@@ -34,11 +34,20 @@ export type RouteSnapshotV0 = {
   rootBoundaryId: string | null;
   displayUrl: string;
   matchedUrl: string;
+  slotBindings: readonly ParallelSlotBindingSnapshotV0[];
 };
 
 export type MountedParallelSlotSnapshotV0 = {
   slotId: string;
   ownerLayoutId: string | null;
+};
+
+export type ParallelSlotBindingStateV0 = "active" | "default" | "unmatched";
+
+export type ParallelSlotBindingSnapshotV0 = {
+  ownerLayoutId: string | null;
+  slotId: string;
+  state: ParallelSlotBindingStateV0;
 };
 
 export type NavigationPlannerStateV0 = {
@@ -72,6 +81,7 @@ export type RequestedWork =
 export type CommitProposal = {
   preserveAbsentSlots: boolean;
   preserveElementIds: readonly string[];
+  preservePreviousSlotIds: readonly string[];
   reason: "currentRootBoundary" | "rootBoundaryUnknownFallback";
   targetSnapshot: RouteSnapshotV0;
 };
@@ -256,19 +266,54 @@ function resolveCurrentRootBoundaryCommitElementPersistence(options: {
   lane: OperationLane;
   targetSnapshot: RouteSnapshotV0;
 }): readonly string[] {
+  return resolveSameLayoutAncestorPersistence(options.currentSnapshot, options.targetSnapshot);
+}
+
+function resolveCurrentRootBoundaryCommitSlotPersistence(options: {
+  currentSnapshot: RouteSnapshotV0;
+  lane: OperationLane;
+  targetSnapshot: RouteSnapshotV0;
+}): readonly string[] {
+  if (options.lane === "traverse") return [];
+
   const preservedLayoutIds = resolveSameLayoutAncestorPersistence(
     options.currentSnapshot,
     options.targetSnapshot,
   );
+  if (preservedLayoutIds.length === 0) return [];
 
-  if (options.lane === "traverse") {
-    return preservedLayoutIds;
+  return resolveDefaultOrUnmatchedSlotPersistenceForLayouts({
+    currentSnapshot: options.currentSnapshot,
+    preservedLayoutIds,
+    targetSnapshot: options.targetSnapshot,
+  });
+}
+
+function resolveDefaultOrUnmatchedSlotPersistenceForLayouts(options: {
+  currentSnapshot: RouteSnapshotV0;
+  preservedLayoutIds: readonly string[];
+  targetSnapshot: RouteSnapshotV0;
+}): readonly string[] {
+  const preservedLayoutIdSet = new Set(options.preservedLayoutIds);
+  const visibleSlotIds = new Set<string>();
+  for (const binding of options.currentSnapshot.slotBindings) {
+    if (binding.state === "unmatched") continue;
+    visibleSlotIds.add(binding.slotId);
   }
 
-  return [
-    ...preservedLayoutIds,
-    ...resolveMountedParallelSlotPersistenceForLayouts(options.currentSnapshot, preservedLayoutIds),
-  ];
+  const preservedSlotIds: string[] = [];
+  const seenSlotIds = new Set<string>();
+  for (const binding of options.targetSnapshot.slotBindings) {
+    if (binding.ownerLayoutId === null) continue;
+    if (!preservedLayoutIdSet.has(binding.ownerLayoutId)) continue;
+    if (binding.state === "active") continue;
+    if (!visibleSlotIds.has(binding.slotId)) continue;
+    if (seenSlotIds.has(binding.slotId)) continue;
+
+    preservedSlotIds.push(binding.slotId);
+    seenSlotIds.add(binding.slotId);
+  }
+  return preservedSlotIds.sort();
 }
 
 function planFlightResponseArrived(options: {
@@ -311,6 +356,7 @@ function planFlightResponseArrived(options: {
       proposal: {
         preserveAbsentSlots: true,
         preserveElementIds: [],
+        preservePreviousSlotIds: [],
         reason: "rootBoundaryUnknownFallback",
         targetSnapshot: options.event.result.targetSnapshot,
       },
@@ -324,6 +370,11 @@ function planFlightResponseArrived(options: {
     proposal: {
       preserveAbsentSlots: false,
       preserveElementIds: resolveCurrentRootBoundaryCommitElementPersistence({
+        currentSnapshot: options.state.visibleSnapshot,
+        lane: options.event.token.lane,
+        targetSnapshot: options.event.result.targetSnapshot,
+      }),
+      preservePreviousSlotIds: resolveCurrentRootBoundaryCommitSlotPersistence({
         currentSnapshot: options.state.visibleSnapshot,
         lane: options.event.token.lane,
         targetSnapshot: options.event.result.targetSnapshot,

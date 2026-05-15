@@ -12,6 +12,7 @@ import {
   type NavigationPlannerInput,
   type NavigationPlannerStateV0,
   type OperationToken,
+  type ParallelSlotBindingSnapshotV0,
   type RefreshScope,
   type RouteSnapshotV0,
   type RootBoundaryTransition,
@@ -21,6 +22,7 @@ function createRouteSnapshot(
   rootBoundaryId: string | null,
   layoutIds: readonly string[] = rootBoundaryId === null ? [] : [`layout:${rootBoundaryId}`],
   mountedParallelSlots: readonly MountedParallelSlotSnapshotV0[] = [],
+  slotBindings: readonly ParallelSlotBindingSnapshotV0[] = [],
 ): RouteSnapshotV0 {
   return {
     displayUrl: "https://example.com/dashboard",
@@ -29,7 +31,16 @@ function createRouteSnapshot(
     mountedParallelSlots,
     rootBoundaryId,
     routeId: "route:/dashboard",
+    slotBindings,
   };
+}
+
+function createSlotBinding(
+  slotId: string,
+  ownerLayoutId: string,
+  state: ParallelSlotBindingSnapshotV0["state"] = "active",
+): ParallelSlotBindingSnapshotV0 {
+  return { ownerLayoutId, slotId, state };
 }
 
 function createOperationToken(overrides: Partial<OperationToken> = {}): OperationToken {
@@ -123,6 +134,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     expect(decision.proposal.preserveAbsentSlots).toBe(false);
     expect(decision.proposal.targetSnapshot.rootBoundaryId).toBe("/");
     expect(decision.proposal.preserveElementIds).toEqual(["layout:/"]);
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
     expect(decision.trace).toEqual({
       schemaVersion: NAVIGATION_TRACE_SCHEMA_VERSION,
       entries: [
@@ -176,6 +188,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
     expect(decision.proposal.preserveAbsentSlots).toBe(true);
     expect(decision.proposal.preserveElementIds).toEqual([]);
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
   });
 
@@ -194,6 +207,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
     expect(decision.proposal.preserveAbsentSlots).toBe(true);
     expect(decision.proposal.preserveElementIds).toEqual([]);
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
   });
 
@@ -312,6 +326,112 @@ describe("navigationPlanner root-boundary decisions", () => {
     }
     expect(decision.proposal.preserveAbsentSlots).toBe(false);
     expect(decision.proposal.preserveElementIds).toEqual(["layout:/", "layout:/feed"]);
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
+  });
+
+  it("preserves previous slot ids for default and unmatched target bindings", () => {
+    // Mirrors Next.js default-slot reuse semantics:
+    // .nextjs-ref/packages/next/src/client/components/router-reducer/ppr-navigations.ts
+    const currentSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard"],
+      [],
+      [
+        createSlotBinding("slot:team:/dashboard", "layout:/dashboard", "active"),
+        createSlotBinding("slot:analytics:/dashboard", "layout:/dashboard", "default"),
+        createSlotBinding("slot:reports:/dashboard", "layout:/dashboard", "active"),
+      ],
+    );
+    const targetSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard", "layout:/dashboard/settings"],
+      [],
+      [
+        createSlotBinding("slot:team:/dashboard", "layout:/dashboard", "default"),
+        createSlotBinding("slot:analytics:/dashboard", "layout:/dashboard", "unmatched"),
+        createSlotBinding("slot:reports:/dashboard", "layout:/dashboard", "active"),
+      ],
+    );
+    const token = createOperationToken({
+      targetSnapshotFingerprint: "route:/dashboard/settings|root:/",
+    });
+
+    const decision = navigationPlanner.plan({
+      event: {
+        kind: "flightResponseArrived",
+        result: {
+          href: "https://example.com/dashboard/settings",
+          targetSnapshot,
+        },
+        token,
+      },
+      routeManifest: null,
+      state: {
+        nextOperationToken: token,
+        traceFields: {
+          currentRootLayoutTreePath: "/",
+          currentVisibleCommitVersion: 2,
+          nextRootLayoutTreePath: "/",
+          startedVisibleCommitVersion: 2,
+        },
+        visibleCommitVersion: 2,
+        visibleSnapshot: currentSnapshot,
+      },
+    });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.preserveElementIds).toEqual(["layout:/", "layout:/dashboard"]);
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([
+      "slot:analytics:/dashboard",
+      "slot:team:/dashboard",
+    ]);
+  });
+
+  it("does not preserve default or unmatched target slots without visible route-state proof", () => {
+    const currentSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard"],
+      [],
+      [createSlotBinding("slot:team:/dashboard", "layout:/dashboard", "active")],
+    );
+    const targetSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard", "layout:/dashboard/settings"],
+      [],
+      [
+        createSlotBinding("slot:team:/dashboard", "layout:/dashboard", "default"),
+        createSlotBinding("slot:analytics:/dashboard", "layout:/dashboard", "unmatched"),
+      ],
+    );
+    const token = createOperationToken({
+      targetSnapshotFingerprint: "route:/dashboard/settings|root:/",
+    });
+
+    const decision = navigationPlanner.plan({
+      event: {
+        kind: "flightResponseArrived",
+        result: {
+          href: "https://example.com/dashboard/settings",
+          targetSnapshot,
+        },
+        token,
+      },
+      routeManifest: null,
+      state: {
+        nextOperationToken: token,
+        visibleCommitVersion: 2,
+        visibleSnapshot: currentSnapshot,
+      },
+    });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.preservePreviousSlotIds).toEqual(["slot:team:/dashboard"]);
   });
 
   it("does not preserve layouts across root-boundary uncertainty", () => {

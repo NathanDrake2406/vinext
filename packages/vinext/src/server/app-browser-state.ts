@@ -4,6 +4,7 @@ import {
   getMountedSlotIds,
   getMountedSlotIdsHeader,
   type AppElements,
+  type AppElementsSlotBinding,
   type LayoutFlags,
 } from "./app-elements.js";
 import { createRscRequestHeaders } from "./app-rsc-cache-busting.js";
@@ -65,6 +66,7 @@ export type AppRouterState = {
   navigationSnapshot: ClientNavigationRenderSnapshot;
   rootLayoutTreePath: string | null;
   routeId: string;
+  slotBindings: readonly AppElementsSlotBinding[];
   visibleCommitVersion: number;
 };
 
@@ -79,6 +81,7 @@ export type AppRouterAction = {
   renderId: number;
   rootLayoutTreePath: string | null;
   routeId: string;
+  slotBindings: readonly AppElementsSlotBinding[];
   type: "navigate" | "replace" | "traverse";
 };
 
@@ -95,6 +98,7 @@ type DispatchPendingNavigationCommitDispositionDecision = {
   disposition: "dispatch";
   preserveAbsentSlots: boolean;
   preserveElementIds: readonly string[];
+  preservePreviousSlotIds: readonly string[];
   trace: NavigationTrace;
 };
 type NonDispatchPendingNavigationCommitDispositionDecision = {
@@ -290,6 +294,7 @@ function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
     mountedParallelSlots: createMountedParallelSlotSnapshots(state.elements),
     rootBoundaryId: state.rootLayoutTreePath,
     routeId: state.routeId,
+    slotBindings: state.slotBindings,
   };
 }
 
@@ -304,6 +309,7 @@ function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnap
     mountedParallelSlots: createMountedParallelSlotSnapshots(pending.action.elements),
     rootBoundaryId: pending.rootLayoutTreePath,
     routeId: pending.routeId,
+    slotBindings: pending.action.slotBindings,
   };
 }
 
@@ -374,6 +380,7 @@ function mapNavigationDecisionToPendingDisposition(
         disposition: "dispatch",
         preserveAbsentSlots: decision.proposal.preserveAbsentSlots,
         preserveElementIds: decision.proposal.preserveElementIds,
+        preservePreviousSlotIds: decision.proposal.preservePreviousSlotIds,
         trace: decision.trace,
       };
     case "hardNavigate":
@@ -413,6 +420,7 @@ export async function createPendingNavigationCommit(options: {
       interceptionContext: metadata.interceptionContext,
       layoutIds: metadata.layoutIds,
       layoutFlags: metadata.layoutFlags,
+      slotBindings: metadata.slotBindings,
       navigationSnapshot: options.navigationSnapshot,
       operation: createOperationRecord({
         id: options.renderId,
