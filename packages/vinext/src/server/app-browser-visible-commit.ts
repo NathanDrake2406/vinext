@@ -1,6 +1,10 @@
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
 import { mergeElements } from "vinext/shims/slot";
-import type { AppElements, AppElementsSlotBinding } from "./app-elements.js";
+import {
+  normalizeAppElementsSlotBindings,
+  type AppElements,
+  type AppElementsSlotBinding,
+} from "./app-elements.js";
 import {
   createPendingNavigationCommit,
   resolvePendingNavigationCommitDispositionDecision,
@@ -108,6 +112,7 @@ function commitVisibleRouterState(
 function mergeSlotBindings(
   previousBindings: readonly AppElementsSlotBinding[],
   nextBindings: readonly AppElementsSlotBinding[],
+  layoutIds: readonly string[],
   preservePreviousSlotIds: readonly string[],
 ): readonly AppElementsSlotBinding[] {
   if (preservePreviousSlotIds.length === 0) return nextBindings;
@@ -131,11 +136,7 @@ function mergeSlotBindings(
     const previousBinding = previousBindingsBySlotId.get(slotId);
     if (previousBinding) mergedBindings.push(previousBinding);
   }
-  return mergedBindings.sort((left, right) => {
-    if (left.slotId < right.slotId) return -1;
-    if (left.slotId > right.slotId) return 1;
-    return 0;
-  });
+  return normalizeAppElementsSlotBindings(mergedBindings, { layoutIds });
 }
 
 function reduceApprovedVisibleCommitState(
@@ -170,6 +171,7 @@ function reduceApprovedVisibleCommitState(
           slotBindings: mergeSlotBindings(
             state.slotBindings,
             action.slotBindings,
+            action.layoutIds,
             commit.decision.preservePreviousSlotIds,
           ),
         },

@@ -39,7 +39,8 @@ type MergeElementsOptions = {
 
 function isLayoutFlagsValue(value: unknown): value is LayoutFlags {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  return Object.values(value).every((entry) => entry === "s" || entry === "d");
+  const entries = Object.values(value);
+  return entries.length > 0 && entries.every((entry) => entry === "s" || entry === "d");
 }
 
 function isArtifactCompatibilityEnvelopeValue(
@@ -63,6 +64,9 @@ function isSlotBindingValue(value: unknown): value is AppElementsSlotBinding {
 }
 
 function isSlotBindingListValue(value: unknown): value is readonly AppElementsSlotBinding[] {
+  // Empty [] is valid metadata when parsed from a missing __slotBindings key,
+  // but it is not valid renderable slot content. Keep this guard non-empty so
+  // accidental [] entries under render keys are not silently swallowed.
   return Array.isArray(value) && value.length > 0 && value.every(isSlotBindingValue);
 }
 

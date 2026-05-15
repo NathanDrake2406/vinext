@@ -120,6 +120,36 @@ function planFlightResponseFromRootBoundaries(options: {
   });
 }
 
+function planFlightResponseFromSnapshots(options: {
+  currentSnapshot: RouteSnapshotV0;
+  lane?: OperationToken["lane"];
+  targetSnapshot: RouteSnapshotV0;
+}): NavigationDecisionV0 {
+  const token = createOperationToken({
+    lane: options.lane ?? "navigation",
+    targetSnapshotFingerprint: `${options.targetSnapshot.routeId}|root:${
+      options.targetSnapshot.rootBoundaryId ?? "unknown"
+    }`,
+  });
+
+  return navigationPlanner.plan({
+    event: {
+      kind: "flightResponseArrived",
+      result: {
+        href: options.targetSnapshot.displayUrl,
+        targetSnapshot: options.targetSnapshot,
+      },
+      token,
+    },
+    routeManifest: null,
+    state: {
+      nextOperationToken: token,
+      visibleCommitVersion: 2,
+      visibleSnapshot: options.currentSnapshot,
+    },
+  });
+}
+
 describe("navigationPlanner root-boundary decisions", () => {
   // Root-layout MPA semantics match Next.js coverage:
   // .nextjs-ref/test/e2e/app-dir/root-layout/root-layout.test.ts
@@ -432,6 +462,76 @@ describe("navigationPlanner root-boundary decisions", () => {
       throw new Error("Expected proposeCommit decision");
     }
     expect(decision.proposal.preservePreviousSlotIds).toEqual(["slot:team:/dashboard"]);
+  });
+
+  it("does not preserve default target slots when their owner layout is not retained", () => {
+    const currentSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/feed"],
+      [],
+      [createSlotBinding("slot:modal:/dashboard", "layout:/dashboard", "active")],
+    );
+    const targetSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard"],
+      [],
+      [createSlotBinding("slot:modal:/dashboard", "layout:/dashboard", "default")],
+    );
+
+    const decision = planFlightResponseFromSnapshots({ currentSnapshot, targetSnapshot });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.preserveElementIds).toEqual(["layout:/"]);
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
+  });
+
+  it("does not preserve target slots when the current binding is unmatched", () => {
+    const currentSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard"],
+      [],
+      [createSlotBinding("slot:team:/dashboard", "layout:/dashboard", "unmatched")],
+    );
+    const targetSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard", "layout:/dashboard/settings"],
+      [],
+      [createSlotBinding("slot:team:/dashboard", "layout:/dashboard", "default")],
+    );
+
+    const decision = planFlightResponseFromSnapshots({ currentSnapshot, targetSnapshot });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
+  });
+
+  it("does not preserve active target slot bindings", () => {
+    const currentSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard"],
+      [],
+      [createSlotBinding("slot:team:/dashboard", "layout:/dashboard", "active")],
+    );
+    const targetSnapshot = createRouteSnapshot(
+      "/",
+      ["layout:/", "layout:/dashboard", "layout:/dashboard/settings"],
+      [],
+      [createSlotBinding("slot:team:/dashboard", "layout:/dashboard", "active")],
+    );
+
+    const decision = planFlightResponseFromSnapshots({ currentSnapshot, targetSnapshot });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
   });
 
   it("does not preserve layouts across root-boundary uncertainty", () => {

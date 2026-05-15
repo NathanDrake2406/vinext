@@ -39,6 +39,31 @@ test.describe("Parallel Routes", () => {
     await expect(page.locator('[data-testid="analytics-slot"]')).not.toBeVisible();
   });
 
+  test("soft navigation preserves active parallel slot content over target defaults", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/dashboard`);
+    await waitForAppRouterHydration(page);
+
+    await expect(page.locator('[data-testid="team-slot"]')).toBeVisible();
+    await expect(page.locator('[data-testid="analytics-slot"]')).toBeVisible();
+
+    await page.click('[data-testid="dash-settings-link"]');
+    await expect(page).toHaveURL(`${BASE}/dashboard/settings`);
+    await expect(page.locator("h1")).toHaveText("Settings");
+    await expect(page.locator('[data-testid="team-slot"]')).toBeVisible();
+    await expect(page.locator('[data-testid="analytics-slot"]')).toBeVisible();
+    await expect(page.locator('[data-testid="team-default"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="analytics-default"]')).not.toBeVisible();
+
+    await page.reload();
+    await waitForAppRouterHydration(page);
+    await expect(page.locator('[data-testid="team-default"]')).toBeVisible();
+    await expect(page.locator('[data-testid="analytics-default"]')).toBeVisible();
+    await expect(page.locator('[data-testid="team-slot"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="analytics-slot"]')).not.toBeVisible();
+  });
+
   test("slot directories are not accessible as direct routes", async ({ page }) => {
     const response = await page.goto(`${BASE}/dashboard/team`);
     expect(response?.status()).toBe(404);

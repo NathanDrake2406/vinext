@@ -1,5 +1,10 @@
 import { Suspense, type ComponentType, type ReactNode } from "react";
-import { AppElementsWire, type AppElements, type AppElementsSlotBinding } from "./app-elements.js";
+import {
+  AppElementsWire,
+  normalizeAppElementsSlotBindings,
+  type AppElements,
+  type AppElementsSlotBinding,
+} from "./app-elements.js";
 import {
   ErrorBoundary,
   ForbiddenBoundary,
@@ -334,10 +339,8 @@ function createAppPageSlotBindings<
       state: resolveAppPageSlotBindingState(slot, override),
     });
   }
-  return bindings.sort((left, right) => {
-    if (left.slotId < right.slotId) return -1;
-    if (left.slotId > right.slotId) return 1;
-    return 0;
+  return normalizeAppElementsSlotBindings(bindings, {
+    layoutIds: layoutEntries.map((entry) => entry.id),
   });
 }
 

@@ -115,6 +115,25 @@ describe("slot primitives", () => {
     expect(html).toBe("");
   });
 
+  it("Slot does not treat empty objects as transport metadata", async () => {
+    const mod = await import("../packages/vinext/src/shims/slot.js");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        renderHtml(
+          createContextProvider(
+            mod.ElementsContext,
+            { "slot:modal:/": {} },
+            React.createElement(mod.Slot, { id: "slot:modal:/" }),
+          ),
+        ),
+      ).rejects.toThrow(/Objects are not valid|object/i);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("warns in development when a non-slot entry is absent", async () => {
     const mod = await import("../packages/vinext/src/shims/slot.js");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

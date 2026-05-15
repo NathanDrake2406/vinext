@@ -92,6 +92,74 @@ describe("AppElementsWire", () => {
     });
   });
 
+  it("normalizes slot binding metadata at the wire boundary", () => {
+    const metadata = AppElementsWire.createMetadataEntries({
+      interceptionContext: null,
+      layoutIds: ["layout:/dashboard"],
+      rootLayoutTreePath: "/",
+      routeId: AppElementsWire.encodeRouteId("/dashboard", null),
+      slotBindings: [
+        {
+          ownerLayoutId: "layout:/dashboard",
+          slotId: "slot:team:/dashboard",
+          state: "active",
+        },
+        {
+          ownerLayoutId: "layout:/dashboard",
+          slotId: "slot:analytics:/dashboard",
+          state: "default",
+        },
+      ],
+    });
+
+    expect(metadata[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        ownerLayoutId: "layout:/dashboard",
+        slotId: "slot:analytics:/dashboard",
+        state: "default",
+      },
+      {
+        ownerLayoutId: "layout:/dashboard",
+        slotId: "slot:team:/dashboard",
+        state: "active",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      label: "duplicate slot id",
+      layoutIds: ["layout:/dashboard"],
+      slotBindings: [
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "active" },
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "default" },
+      ],
+      message: "[vinext] Invalid __slotBindings in App Router payload: duplicate slot id",
+    },
+    {
+      label: "owner layout not present in layoutIds",
+      layoutIds: ["layout:/dashboard"],
+      slotBindings: [
+        { ownerLayoutId: "layout:/stale", slotId: "slot:team:/dashboard", state: "active" },
+      ],
+      message:
+        "[vinext] Invalid __slotBindings in App Router payload: owner layout id missing from __layoutIds",
+    },
+  ] as const)(
+    "rejects invalid slot binding metadata while creating payload entries: $label",
+    ({ layoutIds, message, slotBindings }) => {
+      expect(() =>
+        AppElementsWire.createMetadataEntries({
+          interceptionContext: null,
+          layoutIds,
+          rootLayoutTreePath: "/",
+          routeId: AppElementsWire.encodeRouteId("/dashboard", null),
+          slotBindings,
+        }),
+      ).toThrow(message);
+    },
+  );
+
   it("constructs and parses canonical element wire keys through the codec", () => {
     const keys = [
       AppElementsWire.encodeRouteId("/blog/[slug]", null),
@@ -402,13 +470,13 @@ describe("app elements payload helpers", () => {
     expect(metadata.slotBindings).toEqual([
       {
         ownerLayoutId: "layout:/dashboard",
-        slotId: "slot:team:/dashboard",
-        state: "default",
+        slotId: "slot:analytics:/dashboard",
+        state: "unmatched",
       },
       {
         ownerLayoutId: "layout:/dashboard",
-        slotId: "slot:analytics:/dashboard",
-        state: "unmatched",
+        slotId: "slot:team:/dashboard",
+        state: "default",
       },
     ]);
   });
@@ -455,6 +523,20 @@ describe("app elements payload helpers", () => {
       ],
       message: "[vinext] Invalid __slotBindings in App Router payload: expected state",
     },
+    {
+      label: "duplicate slot id",
+      value: [
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "active" },
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "default" },
+      ],
+      message: "[vinext] Invalid __slotBindings in App Router payload: duplicate slot id",
+    },
+    {
+      label: "owner layout not present in layoutIds",
+      value: [{ ownerLayoutId: "layout:/stale", slotId: "slot:team:/dashboard", state: "active" }],
+      message:
+        "[vinext] Invalid __slotBindings in App Router payload: owner layout id missing from __layoutIds",
+    },
   ])("rejects invalid slotBindings metadata: $label", ({ value, message }) => {
     expect(() =>
       readAppElementsMetadata({
@@ -462,6 +544,7 @@ describe("app elements payload helpers", () => {
           [APP_ROOT_LAYOUT_KEY]: "/",
           [APP_ROUTE_KEY]: "route:/dashboard",
         }),
+        [APP_LAYOUT_IDS_KEY]: ["layout:/dashboard"],
         [APP_SLOT_BINDINGS_KEY]: value,
       }),
     ).toThrow(message);

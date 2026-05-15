@@ -1,4 +1,5 @@
 import type { RouteManifest } from "../routing/app-route-graph.js";
+import { compareAppElementsSlotIds, type AppElementsSlotBinding } from "./app-elements.js";
 import {
   NavigationTraceReasonCodes,
   createNavigationLifecycleTraceFields,
@@ -42,13 +43,11 @@ export type MountedParallelSlotSnapshotV0 = {
   ownerLayoutId: string | null;
 };
 
-export type ParallelSlotBindingStateV0 = "active" | "default" | "unmatched";
-
-export type ParallelSlotBindingSnapshotV0 = {
-  ownerLayoutId: string | null;
-  slotId: string;
-  state: ParallelSlotBindingStateV0;
-};
+// Planner snapshots consume the same canonical slot-binding facts decoded from
+// AppElements metadata. Keep the alias explicit so route-state and transport
+// readers cannot drift into structurally identical but semantically separate
+// shapes.
+export type ParallelSlotBindingSnapshotV0 = AppElementsSlotBinding;
 
 export type NavigationPlannerStateV0 = {
   // V0 keeps a single state shape so intent events and result events can move
@@ -289,16 +288,26 @@ function resolveCurrentRootBoundaryCommitSlotPersistence(options: {
   });
 }
 
+/**
+ * Default/unmatched slot preservation law:
+ *
+ * A target default/unmatched slot may reuse previous content only when:
+ * - the slot's owner layout is part of the preserved layout ancestor set;
+ * - the current visible snapshot proves the same slot had renderable content;
+ * - the navigation is not a traversal.
+ *
+ * Wire absence and UNMATCHED_SLOT markers are not semantic proof.
+ */
 function resolveDefaultOrUnmatchedSlotPersistenceForLayouts(options: {
   currentSnapshot: RouteSnapshotV0;
   preservedLayoutIds: readonly string[];
   targetSnapshot: RouteSnapshotV0;
 }): readonly string[] {
   const preservedLayoutIdSet = new Set(options.preservedLayoutIds);
-  const visibleSlotIds = new Set<string>();
+  const slotIdsWithContent = new Set<string>();
   for (const binding of options.currentSnapshot.slotBindings) {
     if (binding.state === "unmatched") continue;
-    visibleSlotIds.add(binding.slotId);
+    slotIdsWithContent.add(binding.slotId);
   }
 
   const preservedSlotIds: string[] = [];
@@ -307,13 +316,13 @@ function resolveDefaultOrUnmatchedSlotPersistenceForLayouts(options: {
     if (binding.ownerLayoutId === null) continue;
     if (!preservedLayoutIdSet.has(binding.ownerLayoutId)) continue;
     if (binding.state === "active") continue;
-    if (!visibleSlotIds.has(binding.slotId)) continue;
+    if (!slotIdsWithContent.has(binding.slotId)) continue;
     if (seenSlotIds.has(binding.slotId)) continue;
 
     preservedSlotIds.push(binding.slotId);
     seenSlotIds.add(binding.slotId);
   }
-  return preservedSlotIds.sort();
+  return preservedSlotIds.sort(compareAppElementsSlotIds);
 }
 
 function planFlightResponseArrived(options: {

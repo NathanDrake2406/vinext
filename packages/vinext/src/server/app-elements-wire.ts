@@ -26,6 +26,49 @@ export type AppElementsSlotBinding = Readonly<{
   state: AppElementsSlotBindingState;
 }>;
 
+export function compareAppElementsSlotIds(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function compareAppElementsSlotBindingsBySlotId(
+  left: Pick<AppElementsSlotBinding, "slotId">,
+  right: Pick<AppElementsSlotBinding, "slotId">,
+): number {
+  return compareAppElementsSlotIds(left.slotId, right.slotId);
+}
+
+export function normalizeAppElementsSlotBindings(
+  slotBindings: readonly AppElementsSlotBinding[],
+  options: { layoutIds?: readonly string[] } = {},
+): readonly AppElementsSlotBinding[] {
+  const ownerLayoutIds = options.layoutIds ? new Set(options.layoutIds) : null;
+  const seenSlotIds = new Set<string>();
+  const normalized: AppElementsSlotBinding[] = [];
+
+  for (const binding of slotBindings) {
+    if (seenSlotIds.has(binding.slotId)) {
+      throw new Error("[vinext] Invalid __slotBindings in App Router payload: duplicate slot id");
+    }
+    seenSlotIds.add(binding.slotId);
+
+    if (
+      ownerLayoutIds &&
+      binding.ownerLayoutId !== null &&
+      !ownerLayoutIds.has(binding.ownerLayoutId)
+    ) {
+      throw new Error(
+        "[vinext] Invalid __slotBindings in App Router payload: owner layout id missing from __layoutIds",
+      );
+    }
+
+    normalized.push({ ...binding });
+  }
+
+  return normalized.sort(compareAppElementsSlotBindingsBySlotId);
+}
+
 export type AppElementValue =
   | ReactNode
   | typeof UNMATCHED_SLOT
@@ -242,16 +285,21 @@ function isAppElementsWireSlotId(key: string): boolean {
 function createAppElementsWireMetadataEntries(
   input: AppElementsWireMetadataInput,
 ): AppElementsWireMetadataEntries {
+  const layoutIds = [...(input.layoutIds ?? [])];
   const entries: AppElementsWireMetadataEntries = {
     [APP_ROUTE_KEY]: input.routeId,
     [APP_INTERCEPTION_CONTEXT_KEY]: input.interceptionContext,
-    [APP_LAYOUT_IDS_KEY]: [...(input.layoutIds ?? [])],
+    [APP_LAYOUT_IDS_KEY]: layoutIds,
     [APP_ROOT_LAYOUT_KEY]: input.rootLayoutTreePath,
   };
+  // Empty slot binding metadata is intentionally omitted. Missing
+  // __slotBindings round-trips as [] and means "no route-state proof", so
+  // default/unmatched slot preservation is not promoted for that payload.
   if (input.slotBindings && input.slotBindings.length > 0) {
+    const slotBindings = normalizeAppElementsSlotBindings(input.slotBindings, { layoutIds });
     return {
       ...entries,
-      [APP_SLOT_BINDINGS_KEY]: input.slotBindings.map((binding) => ({ ...binding })),
+      [APP_SLOT_BINDINGS_KEY]: slotBindings,
     };
   }
   return entries;
@@ -328,7 +376,13 @@ function isSlotBindingState(value: unknown): value is AppElementsSlotBindingStat
   return value === "active" || value === "default" || value === "unmatched";
 }
 
-function parseSlotBindings(value: unknown): readonly AppElementsSlotBinding[] {
+function parseSlotBindings(
+  value: unknown,
+  options: { layoutIds?: readonly string[] } = {},
+): readonly AppElementsSlotBinding[] {
+  // Missing metadata is compatibility-safe but not semantic proof: callers see
+  // an empty binding list, so promoted default/unmatched slot preservation is
+  // denied instead of inferred from legacy transport shape.
   if (value === undefined) return [];
   if (!Array.isArray(value)) {
     throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected array");
@@ -363,7 +417,7 @@ function parseSlotBindings(value: unknown): readonly AppElementsSlotBinding[] {
 
     slotBindings.push({ ownerLayoutId, slotId, state });
   }
-  return slotBindings;
+  return normalizeAppElementsSlotBindings(slotBindings, options);
 }
 
 /**
@@ -443,7 +497,7 @@ export function readAppElementsMetadata(
 
   const layoutFlags = parseLayoutFlags(elements[APP_LAYOUT_FLAGS_KEY]);
   const layoutIds = parseLayoutIds(elements[APP_LAYOUT_IDS_KEY]);
-  const slotBindings = parseSlotBindings(elements[APP_SLOT_BINDINGS_KEY]);
+  const slotBindings = parseSlotBindings(elements[APP_SLOT_BINDINGS_KEY], { layoutIds });
   const artifactCompatibility = readArtifactCompatibilityMetadata(
     elements[APP_ARTIFACT_COMPATIBILITY_KEY],
   );
