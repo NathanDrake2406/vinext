@@ -24,7 +24,7 @@ let PREFETCH_CACHE_TTL: Navigation["PREFETCH_CACHE_TTL"];
 let snapshotRscResponse: Navigation["snapshotRscResponse"];
 let restoreRscResponse: Navigation["restoreRscResponse"];
 let invalidatePrefetchCache: Navigation["invalidatePrefetchCache"];
-let useRouter: Navigation["useRouter"];
+let appRouterInstance: Navigation["appRouterInstance"];
 
 beforeEach(async () => {
   // Set window BEFORE importing so isServer evaluates to false
@@ -54,7 +54,7 @@ beforeEach(async () => {
   snapshotRscResponse = nav.snapshotRscResponse;
   restoreRscResponse = nav.restoreRscResponse;
   invalidatePrefetchCache = nav.invalidatePrefetchCache;
-  useRouter = nav.useRouter;
+  appRouterInstance = nav.appRouterInstance;
 });
 
 afterEach(() => {
@@ -100,7 +100,7 @@ describe("prefetch cache eviction", () => {
     const fetch = vi.fn();
     (globalThis as any).fetch = fetch;
 
-    useRouter().prefetch("https://external.example/dashboard");
+    appRouterInstance.prefetch("https://external.example/dashboard");
     await waitForPrefetchSetup();
 
     expect(fetch).not.toHaveBeenCalled();
@@ -115,7 +115,7 @@ describe("prefetch cache eviction", () => {
     });
     (globalThis as any).fetch = fetch;
 
-    useRouter().prefetch("http://localhost/dashboard?tab=1");
+    appRouterInstance.prefetch("http://localhost/dashboard?tab=1");
     await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -134,7 +134,7 @@ describe("prefetch cache eviction", () => {
     const onInvalidate = vi.fn();
     (globalThis as any).fetch = fetch;
 
-    useRouter().prefetch("/dashboard", { onInvalidate });
+    appRouterInstance.prefetch("/dashboard", { onInvalidate });
     await waitForPrefetchSetup(() => getPrefetchCache().size > 0);
 
     const cacheKey = AppElementsWire.encodeCacheKey(String(fetchedUrl), "/");
@@ -158,9 +158,9 @@ describe("prefetch cache eviction", () => {
     const secondInvalidate = vi.fn();
     (globalThis as any).fetch = fetch;
 
-    useRouter().prefetch("/dashboard", { onInvalidate: firstInvalidate });
+    appRouterInstance.prefetch("/dashboard", { onInvalidate: firstInvalidate });
     await waitForPrefetchSetup(() => getPrefetchCache().size > 0);
-    useRouter().prefetch("/dashboard", { onInvalidate: secondInvalidate });
+    appRouterInstance.prefetch("/dashboard", { onInvalidate: secondInvalidate });
     await waitForPrefetchSetup(() => {
       const entry = getPrefetchCache().values().next().value;
       return entry?.onInvalidateCallbacks?.size === 2;
@@ -266,7 +266,7 @@ describe("prefetch cache eviction", () => {
     (globalThis as any).fetch = fetch;
     (globalThis as any).window.__VINEXT_RSC_NAVIGATE__ = navigate;
 
-    useRouter().prefetch("/dashboard");
+    appRouterInstance.prefetch("/dashboard");
     await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
 
     if (fetchedUrl === undefined) {

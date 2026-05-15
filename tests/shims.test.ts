@@ -23,24 +23,62 @@ describe("next/navigation shim", () => {
     expect(typeof nav.useRouter).toBe("function");
   });
 
-  // Regression test: useRouter() must return a stable singleton.
-  // Next.js returns the same router object reference on every call.
-  // Components using the router in useMemo/useEffect dependency arrays or
-  // wrapped in React.memo would re-render unnecessarily if each call
-  // returned a new object.
-  // Ported from: https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/hooks/hooks.test.ts
-  it("useRouter() returns the same object reference on every call (stable singleton)", async () => {
+  // Next.js parity: next/navigation's useRouter reads AppRouterContext and
+  // throws when it is rendered outside the App Router provider.
+  // Ported from Next.js:
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/navigation.ts
+  it("useRouter() throws when AppRouterContext is not mounted", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
     const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
-    const first = useRouter();
-    const second = useRouter();
-    const third = useRouter();
-    expect(first).toBe(second);
-    expect(second).toBe(third);
+
+    function Probe() {
+      useRouter();
+      return React.createElement("span", null, "unreachable");
+    }
+
+    expect(() => renderToStaticMarkup(React.createElement(Probe))).toThrow(
+      "invariant expected app router to be mounted",
+    );
   });
 
-  it("useRouter() singleton exposes the expected navigation methods", async () => {
-    const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
-    const router = useRouter();
+  // Regression test: within the App Router provider, useRouter() must return
+  // the mounted router instance. Next.js returns a stable router reference from
+  // context, so components using the router in dependency arrays do not
+  // re-render unnecessarily.
+  // Ported from: https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/hooks/hooks.test.ts
+  it("useRouter() returns the mounted AppRouterContext router", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter, appRouterInstance } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    const { AppRouterContext } =
+      await import("../packages/vinext/src/shims/internal/app-router-context.js");
+    const captured: unknown[] = [];
+
+    function Probe() {
+      captured.push(useRouter(), useRouter());
+      return React.createElement("span", null, "ok");
+    }
+
+    if (!AppRouterContext) {
+      throw new Error("Expected AppRouterContext to be available in the test renderer");
+    }
+
+    renderToStaticMarkup(
+      React.createElement(
+        AppRouterContext.Provider,
+        { value: appRouterInstance },
+        React.createElement(Probe),
+      ),
+    );
+
+    expect(captured).toEqual([appRouterInstance, appRouterInstance]);
+  });
+
+  it("appRouterInstance singleton exposes the expected navigation methods", async () => {
+    const { appRouterInstance: router } =
+      await import("../packages/vinext/src/shims/navigation.js");
     expect(typeof router.push).toBe("function");
     expect(typeof router.replace).toBe("function");
     expect(typeof router.back).toBe("function");
@@ -49,13 +87,10 @@ describe("next/navigation shim", () => {
     expect(typeof router.prefetch).toBe("function");
   });
 
-  it("useRouter() exposes the stable bfcacheId placeholder", async () => {
-    const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
-    const first = useRouter();
-    const second = useRouter();
-    expect(typeof first.bfcacheId).toBe("string");
-    expect(first.bfcacheId).toBe("0");
-    expect(second.bfcacheId).toBe(first.bfcacheId);
+  it("appRouterInstance exposes the stable bfcacheId placeholder", async () => {
+    const { appRouterInstance } = await import("../packages/vinext/src/shims/navigation.js");
+    expect(typeof appRouterInstance.bfcacheId).toBe("string");
+    expect(appRouterInstance.bfcacheId).toBe("0");
   });
 
   // Next.js parity: refresh-reducer.ts invalidates the entire segment cache.
@@ -87,8 +122,8 @@ describe("next/navigation shim", () => {
 
     try {
       vi.resetModules();
-      const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
-      useRouter().refresh();
+      const { appRouterInstance } = await import("../packages/vinext/src/shims/navigation.js");
+      appRouterInstance.refresh();
       // refresh() schedules the rscNavigate inside React.startTransition, so
       // the navigate call lands after the synchronous clear but is dispatched
       // in the same tick — yield once to let it flush.
@@ -13093,6 +13128,23 @@ describe("next/dist/* internal import shims", () => {
     expect(mod.LayoutRouterContext).toBeDefined();
     expect(mod.MissingSlotContext).toBeDefined();
     expect(mod.TemplateContext).toBeDefined();
+  });
+
+  it("app-router-context imports when React.createContext is unavailable", async () => {
+    vi.resetModules();
+    vi.doMock("react", () => ({ createContext: undefined }));
+
+    try {
+      const mod = await import("../packages/vinext/src/shims/internal/app-router-context.js");
+      expect(mod.AppRouterContext).toBeNull();
+      expect(mod.GlobalLayoutRouterContext).toBeNull();
+      expect(mod.LayoutRouterContext).toBeNull();
+      expect(mod.MissingSlotContext).toBeNull();
+      expect(mod.TemplateContext).toBeNull();
+    } finally {
+      vi.doUnmock("react");
+      vi.resetModules();
+    }
   });
 
   it("utils exports NEXT_DATA type helpers", async () => {

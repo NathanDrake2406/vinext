@@ -373,6 +373,14 @@ describe("App Router integration", () => {
     expect(html).toContain("hello");
   });
 
+  it("SSR renders a real app route that calls useRouter()", async () => {
+    const { res, html } = await fetchHtml(baseUrl, "/nextjs-compat/hooks-router");
+    expect(res.status).toBe(200);
+    expect(html).toContain("Router Test Page");
+    expect(html).toContain("/nextjs-compat/hooks-router");
+    expect(html).not.toContain("invariant expected app router to be mounted");
+  });
+
   it("applies nested layouts (dashboard layout wraps dashboard pages)", async () => {
     const res = await fetch(`${baseUrl}/dashboard`);
     expect(res.status).toBe(200);

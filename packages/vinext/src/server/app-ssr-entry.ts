@@ -9,6 +9,7 @@ import clientReferences from "virtual:vite-rsc/client-references";
 import type { NavigationContext } from "vinext/shims/navigation";
 import {
   ServerInsertedHTMLContext,
+  appRouterInstance,
   clearServerInsertedHTML,
   renderServerInsertedHTML,
   setNavigationContext,
@@ -28,6 +29,7 @@ import { createRscEmbedTransform, createTickBufferedTransform } from "./app-ssr-
 import { deferUntilStreamConsumed } from "./app-page-stream.js";
 import { AppElementsWire, type AppWireElements } from "./app-elements.js";
 import { ElementsContext, Slot } from "vinext/shims/slot";
+import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 
@@ -222,7 +224,14 @@ export async function handleSsr(
         );
       }
 
-      const root = createReactElement(VinextFlightRoot);
+      const flightRootElement = createReactElement(VinextFlightRoot);
+      const root = AppRouterContext
+        ? createReactElement(
+            AppRouterContext.Provider,
+            { value: appRouterInstance },
+            flightRootElement,
+          )
+        : flightRootElement;
       const ssrTree = ServerInsertedHTMLContext
         ? createReactElement(
             ServerInsertedHTMLContext.Provider,

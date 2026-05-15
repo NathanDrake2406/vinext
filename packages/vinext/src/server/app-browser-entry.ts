@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { createElement, use, useLayoutEffect, useRef, useState } from "react";
+import { createElement, startTransition, use, useLayoutEffect, useRef, useState } from "react";
 import {
   createFromFetch,
   createFromReadableStream,
@@ -47,13 +47,18 @@ import {
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
 import {
+  createDiscardedServerActionRefreshScheduler,
+  createServerActionInitiationSnapshot,
   isServerActionResult,
+  parseServerActionRevalidationHeader,
   shouldClearClientNavigationCachesForServerActionResult,
+  type ServerActionRevalidationKind,
   type AppBrowserServerActionResult,
 } from "./app-browser-action-result.js";
 import {
   consumeInitialFormState,
   createVinextHydrateRootOptions,
+  hydrateRootInTransition,
 } from "./app-browser-hydration.js";
 import {
   AppElementsWire,
@@ -71,6 +76,7 @@ import {
   type OperationLane,
 } from "./app-browser-state.js";
 import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-boundary";
+import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { ElementsContext, Slot } from "vinext/shims/slot";
 import { createOnUncaughtError } from "./app-browser-error.js";
 import {
@@ -142,6 +148,15 @@ const VISITED_RESPONSE_CACHE_TTL = 5 * 60_000;
 const MAX_TRAVERSAL_CACHE_TTL = 30 * 60_000;
 const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
 const browserNavigationController = createAppBrowserNavigationController();
+const discardedServerActionRefreshScheduler = createDiscardedServerActionRefreshScheduler({
+  runRefresh() {
+    clearClientNavigationCaches();
+    const rscNavigate = window.__VINEXT_RSC_NAVIGATE__;
+    if (typeof rscNavigate !== "function") return;
+
+    void rscNavigate(window.location.href, 0, "refresh", undefined, undefined, true);
+  },
+});
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
 
 // Parses a URI-encoded JSON value carried in a response header (e.g.
@@ -199,12 +214,9 @@ function applyClientParams(params: Record<string, string | string[]>): void {
 
 function stageClientParams(params: Record<string, string | string[]>): void {
   // NB: latestClientParams diverges from ClientNavigationState.clientParams
-  // between staging and commit. Server action snapshots (same-URL
-  // commitSameUrlNavigatePayload() calls inside registerServerActionCallback)
-  // read latestClientParams, so a
-  // server action fired during this window would get the pending (not yet
-  // committed) params. This is acceptable because the commit effect fires
-  // before hooks observe the new URL state, keeping the window vanishingly small.
+  // between staging and commit. Server action snapshots capture the committed
+  // browser router state at invocation time, so they do not read this mutable
+  // module-level value after their async request boundary.
   latestClientParams = params;
   replaceClientParamsWithoutNotify(params);
 }
@@ -221,6 +233,17 @@ function clearClientNavigationCaches(): void {
   clearVisitedResponseCache();
   clearPrefetchState();
 }
+
+function createActionInitiationSnapshot() {
+  const routerState = getBrowserRouterState();
+  return createServerActionInitiationSnapshot({
+    href: window.location.href,
+    navigationId: browserNavigationController.getActiveNavigationId(),
+    routerState,
+  });
+}
+
+type ActionInitiationSnapshot = ReturnType<typeof createActionInitiationSnapshot>;
 
 function createNavigationCommitEffect(options: {
   href: string;
@@ -298,18 +321,27 @@ async function renderNavigationPayload(
 
 async function commitSameUrlNavigatePayload(
   nextElements: Promise<AppElements>,
+  actionInitiation: ActionInitiationSnapshot,
   returnValue?: ServerActionResult["returnValue"],
-  actionInitiationState?: AppRouterState,
+  revalidation: ServerActionRevalidationKind = "none",
 ): Promise<unknown> {
   const navigationSnapshot = createClientNavigationRenderSnapshot(
-    window.location.href,
-    latestClientParams,
+    actionInitiation.href,
+    actionInitiation.routerState.navigationSnapshot.params,
   );
   return browserNavigationController.commitSameUrlNavigatePayload(
     nextElements,
     navigationSnapshot,
     returnValue,
-    actionInitiationState,
+    actionInitiation.routerState,
+    {
+      onDiscardedRevalidation() {
+        discardedServerActionRefreshScheduler.schedule();
+      },
+      revalidation,
+      startedNavigationId: actionInitiation.navigationId,
+      targetHref: actionInitiation.href,
+    },
   );
 }
 
@@ -522,7 +554,7 @@ function BrowserRoot({
     );
   }, [treeState.previousNextUrl, treeState.renderId]);
 
-  const innerTree = createElement(
+  const routeTree = createElement(
     RedirectBoundary,
     null,
     createElement(
@@ -535,6 +567,9 @@ function BrowserRoot({
       ),
     ),
   );
+  const innerTree = AppRouterContext
+    ? createElement(AppRouterContext.Provider, { value: appRouterInstance }, routeTree)
+    : routeTree;
 
   // In dev, wrap the route tree in a top-level recovery boundary. A render
   // error (e.g. a slot's RSC reference rejects) is caught here instead of
@@ -794,29 +829,26 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
 function registerServerActionCallback(): void {
   setServerCallback(async (id, args) => {
     const temporaryReferences = createTemporaryReferenceSet();
-    const body = await encodeReply(args, { temporaryReferences });
 
     // Carry the interception context + mounted slots from the current router
     // state so the server-action re-render rebuilds the intercepted tree
     // instead of replacing it with the direct page. Parity with Next.js,
     // which sends `Next-URL` on action POSTs when the current tree contains
     // an interception route.
-    const currentState = getBrowserRouterState();
+    const actionInitiation = createActionInitiationSnapshot();
+    const body = await encodeReply(args, { temporaryReferences });
     const { headers } = resolveServerActionRequestState({
       actionId: id,
       basePath: __basePath,
-      elements: currentState.elements,
-      previousNextUrl: currentState.previousNextUrl,
+      elements: actionInitiation.routerState.elements,
+      previousNextUrl: actionInitiation.routerState.previousNextUrl,
     });
 
-    const fetchResponse = await fetch(
-      await createRscRequestUrl(window.location.pathname + window.location.search, headers),
-      {
-        method: "POST",
-        headers,
-        body,
-      },
-    );
+    const fetchResponse = await fetch(await createRscRequestUrl(actionInitiation.path, headers), {
+      method: "POST",
+      headers,
+      body,
+    });
 
     if (isServerActionNotFoundResponse(fetchResponse)) {
       throw new Error(getServerActionNotFoundClientMessage(id));
@@ -857,7 +889,7 @@ function registerServerActionCallback(): void {
     if (
       resolveRscCompatibilityNavigationDecision({
         clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
-        currentHref: window.location.href,
+        currentHref: actionInitiation.href,
         origin: window.location.origin,
         responseCompatibilityId: fetchResponse.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
         responseUrl: fetchResponse.url,
@@ -867,11 +899,12 @@ function registerServerActionCallback(): void {
       return undefined;
     }
 
+    const revalidation = parseServerActionRevalidationHeader(fetchResponse.headers);
     const result = await createFromFetch<ServerActionResult | AppWireElements>(
       Promise.resolve(fetchResponse),
       { temporaryReferences },
     );
-    if (shouldClearClientNavigationCachesForServerActionResult(result)) {
+    if (shouldClearClientNavigationCachesForServerActionResult(result, revalidation)) {
       clearClientNavigationCaches();
     }
 
@@ -885,8 +918,9 @@ function registerServerActionCallback(): void {
       if (result.root !== undefined) {
         return commitSameUrlNavigatePayload(
           Promise.resolve(AppElementsWire.decode(result.root)),
+          actionInitiation,
           result.returnValue,
-          currentState,
+          revalidation,
         );
       }
 
@@ -902,8 +936,9 @@ function registerServerActionCallback(): void {
 
     return commitSameUrlNavigatePayload(
       Promise.resolve(AppElementsWire.decode(result)),
+      actionInitiation,
       undefined,
-      currentState,
+      revalidation,
     );
   });
 }
@@ -955,14 +990,16 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         formState,
         onUncaughtError,
       });
-  window.__VINEXT_RSC_ROOT__ = hydrateRoot(
-    document,
-    createElement(BrowserRoot, {
+  window.__VINEXT_RSC_ROOT__ = hydrateRootInTransition({
+    children: createElement(BrowserRoot, {
       initialElements: root,
       initialNavigationSnapshot,
     }),
-    hydrateRootOptions,
-  );
+    container: document,
+    hydrateRoot,
+    options: hydrateRootOptions,
+    startTransition,
+  });
   window.__VINEXT_HYDRATED_AT = performance.now();
 
   // Exposed so the navigation shim's `router.refresh()` can invalidate the
@@ -983,6 +1020,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     let pendingRouterState: PendingBrowserRouterState | null = null;
     // Hoist navId above try so the catch and finally blocks can reference it.
     const navId = browserNavigationController.beginNavigation();
+    discardedServerActionRefreshScheduler.markNavigationStart();
 
     // Loop variables for inline redirect following. On a redirect, these are
     // updated and the loop continues without returning or re-entering navigateRsc,
@@ -1273,6 +1311,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       // checks, and error paths. The finally runs even when the catch returns.
       // settlePendingBrowserRouterState is idempotent via the settled flag.
       browserNavigationController.finalizeNavigation(navId, pendingRouterState);
+      discardedServerActionRefreshScheduler.markNavigationSettled();
     }
   };
 
