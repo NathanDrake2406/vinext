@@ -226,6 +226,86 @@ describe("buildPageElements", () => {
     ]);
   });
 
+  it("marks intercepted slot override bindings as active", async () => {
+    function TestPage(): React.ReactNode {
+      return React.createElement("div", null, "Hello");
+    }
+    function TestLayout({ children }: { children?: React.ReactNode }): React.ReactNode {
+      return children;
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(TestPage),
+      layouts: [createSyntheticPageModule(TestLayout), createSyntheticPageModule(TestLayout)],
+      layoutTreePositions: [0, 1],
+      routeSegments: ["feed"],
+      pattern: "/feed",
+      slots: {
+        "modal@feed/@modal": {
+          id: "slot:modal:/feed",
+          name: "modal",
+          default: createSyntheticPageModule(() => null),
+          layoutIndex: 1,
+          routeSegments: null,
+        },
+      },
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({
+        route,
+        routePath: "/photos/42",
+        opts: {
+          interceptionContext: "/feed",
+          interceptSlotKey: "modal@feed/@modal",
+          interceptPage: createSyntheticPageModule(() =>
+            React.createElement("div", null, "Intercepted"),
+          ),
+          interceptParams: { id: "42" },
+        } as Record<string, unknown>,
+      }),
+    );
+    const record = result as Record<string, unknown>;
+
+    expect(record[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        ownerLayoutId: "layout:/feed",
+        slotId: "slot:modal:/feed",
+        state: "active",
+      },
+    ]);
+  });
+
+  it("rejects graph slot ids that diverge from the wire slot id", async () => {
+    function TestPage(): React.ReactNode {
+      return React.createElement("div", null, "Hello");
+    }
+    function TestLayout({ children }: { children?: React.ReactNode }): React.ReactNode {
+      return children;
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(TestPage),
+      layouts: [createSyntheticPageModule(TestLayout), createSyntheticPageModule(TestLayout)],
+      layoutTreePositions: [0, 1],
+      routeSegments: ["feed"],
+      pattern: "/feed",
+      slots: {
+        "modal@feed/@modal": {
+          id: "slot:modal:/wrong",
+          name: "modal",
+          default: createSyntheticPageModule(() => null),
+          layoutIndex: 1,
+          routeSegments: null,
+        },
+      },
+    });
+
+    await expect(
+      buildPageElements(createBaseOptions({ route, routePath: "/feed" })),
+    ).rejects.toThrow("App Router slot id mismatch");
+  });
+
   it("calls markDynamicUsage when search params have content", async () => {
     function SearchPage(): React.ReactNode {
       return React.createElement("div", null, "Search");

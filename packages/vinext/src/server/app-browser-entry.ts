@@ -497,6 +497,7 @@ function BrowserRoot({
       stateRef,
     );
     browserRouterStateHasEverCommitted = true;
+    window.__VINEXT_HYDRATED_AT = performance.now();
     return () => {
       detach();
       setMountedSlotsHeader(null);
@@ -947,7 +948,6 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     }),
     hydrateRootOptions,
   );
-  window.__VINEXT_HYDRATED_AT = performance.now();
 
   // Exposed so the navigation shim's `router.refresh()` can invalidate the
   // entire client navigation cache (visited-response + prefetch) before
