@@ -16,6 +16,7 @@ import {
   appRouterInstance,
   commitClientNavigationState,
   consumePrefetchResponse,
+  createCachedRscResponseSnapshot,
   createClientNavigationRenderSnapshot,
   getCurrentNextUrl,
   getCurrentInterceptionContext,
@@ -1252,13 +1253,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             requestInterceptionContext,
             metadata.interceptionContext,
           ),
-          {
-            buffer: cacheBuffer,
-            contentType: navResponse.headers.get("content-type") ?? "text/x-component",
-            mountedSlotsHeader: navResponse.headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
-            paramsHeader: navResponse.headers.get(VINEXT_PARAMS_HEADER),
-            url: navResponse.url,
-          },
+          createCachedRscResponseSnapshot(navResponse, cacheBuffer, navResponseUrl),
           navParams,
         );
         return;

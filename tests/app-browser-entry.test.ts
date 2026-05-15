@@ -8,7 +8,10 @@ import {
   createVinextHydrateRootOptions,
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
-import { resolveRscBuildIdNavigationDecision } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import {
+  VINEXT_RSC_BUILD_ID_HEADER,
+  resolveRscBuildIdNavigationDecision,
+} from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import {
   devOnCaughtError,
   devOnUncaughtError,
@@ -50,6 +53,10 @@ import {
   NavigationTraceTransactionCodes,
   createNavigationTrace,
 } from "../packages/vinext/src/server/navigation-trace.js";
+import {
+  VINEXT_MOUNTED_SLOTS_HEADER,
+  VINEXT_PARAMS_HEADER,
+} from "../packages/vinext/src/server/headers.js";
 
 function createResolvedElements(
   routeId: string,
@@ -278,6 +285,42 @@ describe("app browser entry navigation scheduling", () => {
         responseUrl: "https://example.com/target.rsc?_rsc=fresh",
       }),
     ).toEqual({ kind: "compatible" });
+  });
+
+  it("creates replayable cached RSC snapshots with build IDs", async () => {
+    stubWindow("https://example.com/current");
+
+    const responseUrl = "https://example.com/target.rsc?_rsc=fresh";
+    const snapshot = navigationShim.createCachedRscResponseSnapshot(
+      new Response("unused", {
+        headers: {
+          "content-type": "text/x-component; charset=utf-8",
+          [VINEXT_MOUNTED_SLOTS_HEADER]: "children",
+          [VINEXT_PARAMS_HEADER]: "%7B%22slug%22%3A%22target%22%7D",
+          [VINEXT_RSC_BUILD_ID_HEADER]: "build-a",
+        },
+      }),
+      await new Response("flight").arrayBuffer(),
+      responseUrl,
+    );
+
+    expect(snapshot.buildIdHeader).toBe("build-a");
+    expect(snapshot.url).toBe(responseUrl);
+    expect(
+      resolveRscBuildIdNavigationDecision({
+        clientBuildId: "build-a",
+        currentHref: "/target",
+        origin: "https://example.com",
+        responseBuildId: snapshot.buildIdHeader,
+        responseUrl: snapshot.url,
+      }),
+    ).toEqual({ kind: "compatible" });
+
+    const replayed = navigationShim.restoreRscResponse(snapshot);
+    expect(replayed.headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("build-a");
+    expect(replayed.headers.get(VINEXT_MOUNTED_SLOTS_HEADER)).toBe("children");
+    expect(replayed.headers.get(VINEXT_PARAMS_HEADER)).toBe("%7B%22slug%22%3A%22target%22%7D");
+    expect(await replayed.text()).toBe("flight");
   });
 
   it("keeps client navigation caches for no-root server action results", () => {

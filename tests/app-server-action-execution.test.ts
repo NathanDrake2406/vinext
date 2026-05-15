@@ -8,7 +8,10 @@ import {
   readActionFormDataWithLimit,
   type HandleProgressiveServerActionRequestOptions,
 } from "../packages/vinext/src/server/app-server-action-execution.js";
-import { VINEXT_RSC_VARY_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import {
+  VINEXT_RSC_BUILD_ID_HEADER,
+  VINEXT_RSC_VARY_HEADER,
+} from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { refresh, revalidatePath, revalidateTag } from "../packages/vinext/src/shims/cache.js";
 import { setHeadersAccessPhase } from "../packages/vinext/src/shims/headers.js";
 
@@ -639,29 +642,41 @@ describe("app server action execution helpers", () => {
   });
 
   it("skips page rerendering for fetch actions that do not revalidate", async () => {
+    const previousBuildId = process.env.__VINEXT_BUILD_ID;
+    process.env.__VINEXT_BUILD_ID = "build-action";
     const buildPageElement = vi.fn(() => "dashboard:{}:none");
     const setNavigationContext = vi.fn();
     const renderToReadableStream = vi.fn(
       (model: TestActionModel) => new Response(JSON.stringify(model)).body,
     );
 
-    const response = await handleServerActionRscRequest(
-      createRscOptions({
-        buildPageElement,
-        renderToReadableStream,
-        setNavigationContext,
-      }),
-    );
+    try {
+      const response = await handleServerActionRscRequest(
+        createRscOptions({
+          buildPageElement,
+          middlewareHeaders: new Headers([[VINEXT_RSC_BUILD_ID_HEADER, "spoofed-build"]]),
+          renderToReadableStream,
+          setNavigationContext,
+        }),
+      );
 
-    expect(response?.status).toBe(200);
-    expect(response?.headers.get("content-type")).toBe("text/x-component; charset=utf-8");
-    expect(response?.headers.get("x-action-revalidated")).toBeNull();
-    expect(buildPageElement).not.toHaveBeenCalled();
-    expect(setNavigationContext).not.toHaveBeenCalled();
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("content-type")).toBe("text/x-component; charset=utf-8");
+      expect(response?.headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("build-action");
+      expect(response?.headers.get("x-action-revalidated")).toBeNull();
+      expect(buildPageElement).not.toHaveBeenCalled();
+      expect(setNavigationContext).not.toHaveBeenCalled();
 
-    const model = JSON.parse(await response!.text()) as Partial<TestActionModel>;
-    expect(model.returnValue).toEqual({ ok: true, data: "action-result" });
-    expect(model).not.toHaveProperty("root");
+      const model = JSON.parse(await response!.text()) as Partial<TestActionModel>;
+      expect(model.returnValue).toEqual({ ok: true, data: "action-result" });
+      expect(model).not.toHaveProperty("root");
+    } finally {
+      if (previousBuildId === undefined) {
+        delete process.env.__VINEXT_BUILD_ID;
+      } else {
+        process.env.__VINEXT_BUILD_ID = previousBuildId;
+      }
+    }
   });
 
   // Mirrors Next.js' action revalidation header contract:

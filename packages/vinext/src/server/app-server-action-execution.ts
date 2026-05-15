@@ -669,6 +669,7 @@ export async function handleServerActionRscRequest<
         Vary: VINEXT_RSC_VARY_HEADER,
       });
       mergeMiddlewareResponseHeaders(actionHeaders, options.middlewareHeaders);
+      applyRscBuildIdHeader(actionHeaders);
 
       return new Response(rscStream, {
         status: options.middlewareStatus ?? actionStatus,

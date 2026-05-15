@@ -17,6 +17,7 @@ import {
   createRscRequestHeaders,
   createRscRequestUrl,
   VINEXT_RSC_BUILD_ID_HEADER,
+  VINEXT_RSC_CONTENT_TYPE,
 } from "../server/app-rsc-cache-busting.js";
 import { VINEXT_MOUNTED_SLOTS_HEADER, VINEXT_PARAMS_HEADER } from "../server/headers.js";
 import {
@@ -408,20 +409,27 @@ export function storePrefetchResponse(
   getPrefetchCache().set(cacheKey, entry);
 }
 
+export function createCachedRscResponseSnapshot(
+  response: Response,
+  buffer: ArrayBuffer,
+  responseUrl: string | null = null,
+): CachedRscResponse {
+  return {
+    buildIdHeader: response.headers.get(VINEXT_RSC_BUILD_ID_HEADER),
+    buffer,
+    contentType: response.headers.get("content-type") ?? VINEXT_RSC_CONTENT_TYPE,
+    mountedSlotsHeader: response.headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
+    paramsHeader: response.headers.get(VINEXT_PARAMS_HEADER),
+    url: responseUrl ?? response.url,
+  };
+}
+
 /**
  * Snapshot an RSC response to an ArrayBuffer for caching and replay.
  * Consumes the response body and stores it with content-type and URL metadata.
  */
 export async function snapshotRscResponse(response: Response): Promise<CachedRscResponse> {
-  const buffer = await response.arrayBuffer();
-  return {
-    buildIdHeader: response.headers.get(VINEXT_RSC_BUILD_ID_HEADER),
-    buffer,
-    contentType: response.headers.get("content-type") ?? "text/x-component",
-    mountedSlotsHeader: response.headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
-    paramsHeader: response.headers.get(VINEXT_PARAMS_HEADER),
-    url: response.url,
-  };
+  return createCachedRscResponseSnapshot(response, await response.arrayBuffer());
 }
 
 /**
