@@ -28,6 +28,7 @@ import {
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
+import { AppRouterContext } from "./internal/app-router-context.js";
 
 // ─── Layout segment context ───────────────────────────────────────────────────
 // Stores the child segments below the current layout. Each layout wraps its
@@ -1368,7 +1369,14 @@ export const appRouterInstance = _appRouter;
  * (e.g. useMemo / useEffect deps, React.memo) don't re-render unnecessarily.
  */
 export function useRouter() {
-  return _appRouter;
+  if (!AppRouterContext || typeof React.useContext !== "function") {
+    throw new Error("invariant expected app router to be mounted");
+  }
+  const router = React.useContext(AppRouterContext);
+  if (router === null) {
+    throw new Error("invariant expected app router to be mounted");
+  }
+  return router;
 }
 
 /**

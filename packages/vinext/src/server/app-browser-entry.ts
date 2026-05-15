@@ -72,6 +72,7 @@ import {
   type OperationLane,
 } from "./app-browser-state.js";
 import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-boundary";
+import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { ElementsContext, Slot } from "vinext/shims/slot";
 import { createOnUncaughtError } from "./app-browser-error.js";
 import {
@@ -524,7 +525,7 @@ function BrowserRoot({
     );
   }, [treeState.previousNextUrl, treeState.renderId]);
 
-  const innerTree = createElement(
+  const routeTree = createElement(
     RedirectBoundary,
     null,
     createElement(
@@ -537,6 +538,9 @@ function BrowserRoot({
       ),
     ),
   );
+  const innerTree = AppRouterContext
+    ? createElement(AppRouterContext.Provider, { value: appRouterInstance }, routeTree)
+    : routeTree;
 
   // In dev, wrap the route tree in a top-level recovery boundary. A render
   // error (e.g. a slot's RSC reference rejects) is caught here instead of

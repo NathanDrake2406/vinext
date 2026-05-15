@@ -23,7 +23,7 @@ let MAX_PREFETCH_CACHE_SIZE: Navigation["MAX_PREFETCH_CACHE_SIZE"];
 let PREFETCH_CACHE_TTL: Navigation["PREFETCH_CACHE_TTL"];
 let snapshotRscResponse: Navigation["snapshotRscResponse"];
 let restoreRscResponse: Navigation["restoreRscResponse"];
-let useRouter: Navigation["useRouter"];
+let appRouterInstance: Navigation["appRouterInstance"];
 
 beforeEach(async () => {
   // Set window BEFORE importing so isServer evaluates to false
@@ -52,7 +52,7 @@ beforeEach(async () => {
   PREFETCH_CACHE_TTL = nav.PREFETCH_CACHE_TTL;
   snapshotRscResponse = nav.snapshotRscResponse;
   restoreRscResponse = nav.restoreRscResponse;
-  useRouter = nav.useRouter;
+  appRouterInstance = nav.appRouterInstance;
 });
 
 afterEach(() => {
@@ -98,7 +98,7 @@ describe("prefetch cache eviction", () => {
     const fetch = vi.fn();
     (globalThis as any).fetch = fetch;
 
-    useRouter().prefetch("https://external.example/dashboard");
+    appRouterInstance.prefetch("https://external.example/dashboard");
     await waitForPrefetchSetup();
 
     expect(fetch).not.toHaveBeenCalled();
@@ -113,7 +113,7 @@ describe("prefetch cache eviction", () => {
     });
     (globalThis as any).fetch = fetch;
 
-    useRouter().prefetch("http://localhost/dashboard?tab=1");
+    appRouterInstance.prefetch("http://localhost/dashboard?tab=1");
     await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -215,7 +215,7 @@ describe("prefetch cache eviction", () => {
     (globalThis as any).fetch = fetch;
     (globalThis as any).window.__VINEXT_RSC_NAVIGATE__ = navigate;
 
-    useRouter().prefetch("/dashboard");
+    appRouterInstance.prefetch("/dashboard");
     await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
 
     if (fetchedUrl === undefined) {
