@@ -8,7 +8,7 @@ import {
   ACTION_REDIRECT_TYPE_HEADER,
   ACTION_REVALIDATED_HEADER,
 } from "./headers.js";
-import { VINEXT_RSC_VARY_HEADER, applyRscBuildIdHeader } from "./app-rsc-cache-busting.js";
+import { VINEXT_RSC_VARY_HEADER, applyRscCompatibilityIdHeader } from "./app-rsc-cache-busting.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import {
@@ -632,7 +632,7 @@ export async function handleServerActionRscRequest<
         Vary: VINEXT_RSC_VARY_HEADER,
       });
       mergeMiddlewareResponseHeaders(redirectHeaders, options.middlewareHeaders);
-      applyRscBuildIdHeader(redirectHeaders);
+      applyRscCompatibilityIdHeader(redirectHeaders);
       redirectHeaders.set(ACTION_REDIRECT_HEADER, actionRedirect.url);
       redirectHeaders.set(ACTION_REDIRECT_TYPE_HEADER, actionRedirect.type);
       redirectHeaders.set(ACTION_REDIRECT_STATUS_HEADER, String(actionRedirect.status));
@@ -669,7 +669,7 @@ export async function handleServerActionRscRequest<
         Vary: VINEXT_RSC_VARY_HEADER,
       });
       mergeMiddlewareResponseHeaders(actionHeaders, options.middlewareHeaders);
-      applyRscBuildIdHeader(actionHeaders);
+      applyRscCompatibilityIdHeader(actionHeaders);
 
       return new Response(rscStream, {
         status: options.middlewareStatus ?? actionStatus,
@@ -733,7 +733,7 @@ export async function handleServerActionRscRequest<
       Vary: VINEXT_RSC_VARY_HEADER,
     });
     mergeMiddlewareResponseHeaders(actionHeaders, options.middlewareHeaders);
-    applyRscBuildIdHeader(actionHeaders);
+    applyRscCompatibilityIdHeader(actionHeaders);
     setActionRevalidatedHeader(actionHeaders, actionRevalidationKind);
     const actionResponse = new Response(rscStream, {
       status: options.middlewareStatus ?? actionStatus,

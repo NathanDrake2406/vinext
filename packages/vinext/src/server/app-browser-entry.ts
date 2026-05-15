@@ -88,12 +88,12 @@ import {
 import {
   createRscRequestHeaders,
   createRscRequestUrl,
-  getVinextBuildId,
+  getVinextRscCompatibilityId,
   resolveHardNavigationTargetFromRscResponse,
-  resolveRscBuildIdNavigationDecision,
+  resolveRscCompatibilityNavigationDecision,
   stripRscCacheBustingSearchParam,
   stripRscSuffix,
-  VINEXT_RSC_BUILD_ID_HEADER,
+  VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_CONTENT_TYPE,
 } from "./app-rsc-cache-busting.js";
 import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "./app-rsc-render-mode.js";
@@ -141,7 +141,7 @@ type VisitedResponseCacheEntry = {
 const MAX_VISITED_RESPONSE_CACHE_SIZE = 50;
 const VISITED_RESPONSE_CACHE_TTL = 5 * 60_000;
 const MAX_TRAVERSAL_CACHE_TTL = 30 * 60_000;
-const CLIENT_RSC_BUILD_ID = getVinextBuildId();
+const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
 const browserNavigationController = createAppBrowserNavigationController();
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
 
@@ -857,11 +857,11 @@ function registerServerActionCallback(): void {
     }
 
     if (
-      resolveRscBuildIdNavigationDecision({
-        clientBuildId: CLIENT_RSC_BUILD_ID,
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
         currentHref: window.location.href,
         origin: window.location.origin,
-        responseBuildId: fetchResponse.headers.get(VINEXT_RSC_BUILD_ID_HEADER),
+        responseCompatibilityId: fetchResponse.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
         responseUrl: fetchResponse.url,
       }).kind === "hard-navigate"
     ) {
@@ -1043,15 +1043,15 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           navigationKind,
         );
         if (cachedRoute) {
-          const buildIdDecision = resolveRscBuildIdNavigationDecision({
-            clientBuildId: CLIENT_RSC_BUILD_ID,
+          const compatibilityDecision = resolveRscCompatibilityNavigationDecision({
+            clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
             currentHref,
             origin: window.location.origin,
-            responseBuildId: cachedRoute.response.buildIdHeader,
+            responseCompatibilityId: cachedRoute.response.compatibilityIdHeader,
             responseUrl: cachedRoute.response.url,
           });
-          if (buildIdDecision.kind === "hard-navigate") {
-            window.location.href = buildIdDecision.hardNavigationTarget;
+          if (compatibilityDecision.kind === "hard-navigate") {
+            window.location.href = compatibilityDecision.hardNavigationTarget;
             return;
           }
           // Check stale-navigation before and after createFromFetch. The pre-check
@@ -1149,15 +1149,15 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           return;
         }
 
-        const buildIdDecision = resolveRscBuildIdNavigationDecision({
-          clientBuildId: CLIENT_RSC_BUILD_ID,
+        const compatibilityDecision = resolveRscCompatibilityNavigationDecision({
+          clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
           currentHref,
           origin: window.location.origin,
-          responseBuildId: navResponse.headers.get(VINEXT_RSC_BUILD_ID_HEADER),
+          responseCompatibilityId: navResponse.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
           responseUrl: navResponseUrl ?? navResponse.url,
         });
-        if (buildIdDecision.kind === "hard-navigate") {
-          window.location.href = buildIdDecision.hardNavigationTarget;
+        if (compatibilityDecision.kind === "hard-navigate") {
+          window.location.href = compatibilityDecision.hardNavigationTarget;
           return;
         }
 

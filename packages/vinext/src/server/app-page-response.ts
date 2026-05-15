@@ -10,7 +10,7 @@ import {
   VINEXT_TIMING_HEADER,
 } from "./headers.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
-import { VINEXT_RSC_VARY_HEADER, applyRscBuildIdHeader } from "./app-rsc-cache-busting.js";
+import { VINEXT_RSC_VARY_HEADER, applyRscCompatibilityIdHeader } from "./app-rsc-cache-busting.js";
 
 export type AppPageMiddlewareContext = {
   headers: Headers | null;
@@ -54,7 +54,6 @@ type AppPageHtmlResponsePolicy = {
 } & AppPageResponsePolicy;
 
 type BuildAppPageRscResponseOptions = {
-  buildId?: string | null;
   middlewareContext: AppPageMiddlewareContext;
   mountedSlotsHeader?: string | null;
   params?: Record<string, unknown>;
@@ -237,7 +236,7 @@ export function buildAppPageRscResponse(
     headers.set(VINEXT_CACHE_HEADER, options.policy.cacheState);
   }
   mergeMiddlewareResponseHeaders(headers, options.middlewareContext.headers);
-  applyRscBuildIdHeader(headers, options.buildId);
+  applyRscCompatibilityIdHeader(headers);
 
   applyTimingHeader(headers, options.timing);
 

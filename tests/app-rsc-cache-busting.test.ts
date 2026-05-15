@@ -1,20 +1,21 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-  applyRscBuildIdHeader,
+  applyRscCompatibilityIdHeader,
   computeRscCacheBustingSearchParam,
   createRscRequestHeaders,
   createRscRequestUrl,
-  isRscBuildIdCompatible,
+  isRscCompatibilityIdCompatible,
   resolveInvalidRscCacheBustingRequest,
   setRscCacheBustingSearchParam,
   stripRscCacheBustingSearchParam,
-  VINEXT_RSC_BUILD_ID_HEADER,
+  VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM,
   VINEXT_RSC_RENDER_MODE_HEADER,
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import { fnv1a64 } from "../packages/vinext/src/utils/hash.js";
+import { withEnvVar } from "./env-test-helpers.js";
 
 const textEncoder = new TextEncoder();
 
@@ -260,32 +261,44 @@ describe("App Router RSC cache-busting", () => {
     );
   });
 
-  it("applies the current build ID to RSC response headers when available", () => {
+  it("applies the current compatibility ID to RSC response headers when available", () => {
     const headers = new Headers();
 
-    applyRscBuildIdHeader(headers, "build-a");
+    applyRscCompatibilityIdHeader(headers, "compat-a");
 
-    expect(headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("build-a");
+    expect(headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe("compat-a");
   });
 
-  it("does not add an empty build ID header", () => {
+  it("uses the injected RSC compatibility ID by default", () => {
     const headers = new Headers();
 
-    applyRscBuildIdHeader(headers, "");
+    withEnvVar("__VINEXT_RSC_COMPATIBILITY_ID", "compat-env", () =>
+      applyRscCompatibilityIdHeader(headers),
+    );
 
-    expect(headers.has(VINEXT_RSC_BUILD_ID_HEADER)).toBe(false);
+    expect(headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe("compat-env");
   });
 
-  it("classifies mismatched RSC build IDs as incompatible", () => {
-    expect(isRscBuildIdCompatible("build-a", "build-a")).toBe(true);
-    expect(isRscBuildIdCompatible("build-b", "build-a")).toBe(false);
+  it("removes a spoofed compatibility ID header when no framework ID is available", () => {
+    const headers = new Headers({
+      [VINEXT_RSC_COMPATIBILITY_ID_HEADER]: "spoofed-compat",
+    });
+
+    applyRscCompatibilityIdHeader(headers, "");
+
+    expect(headers.has(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe(false);
   });
 
-  it("treats missing response build IDs as incompatible when the client has a build ID", () => {
-    expect(isRscBuildIdCompatible(null, "build-a")).toBe(false);
+  it("classifies mismatched RSC compatibility IDs as incompatible", () => {
+    expect(isRscCompatibilityIdCompatible("compat-a", "compat-a")).toBe(true);
+    expect(isRscCompatibilityIdCompatible("compat-b", "compat-a")).toBe(false);
   });
 
-  it("treats missing response build IDs as compatible only when the client has no build ID", () => {
-    expect(isRscBuildIdCompatible("build-a", null)).toBe(true);
+  it("treats missing response compatibility IDs as incompatible when the client has one", () => {
+    expect(isRscCompatibilityIdCompatible(null, "compat-a")).toBe(false);
+  });
+
+  it("treats missing response compatibility IDs as compatible only when the client has none", () => {
+    expect(isRscCompatibilityIdCompatible("compat-a", null)).toBe(true);
   });
 });

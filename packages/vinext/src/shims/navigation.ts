@@ -16,7 +16,7 @@ import { AppElementsWire } from "../server/app-elements.js";
 import {
   createRscRequestHeaders,
   createRscRequestUrl,
-  VINEXT_RSC_BUILD_ID_HEADER,
+  VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_CONTENT_TYPE,
 } from "../server/app-rsc-cache-busting.js";
 import { VINEXT_MOUNTED_SLOTS_HEADER, VINEXT_PARAMS_HEADER } from "../server/headers.js";
@@ -288,7 +288,7 @@ export const PREFETCH_CACHE_TTL = 30_000;
 
 /** A buffered RSC response stored as an ArrayBuffer for replay. */
 export type CachedRscResponse = {
-  buildIdHeader?: string | null;
+  compatibilityIdHeader?: string | null;
   buffer: ArrayBuffer;
   contentType: string;
   mountedSlotsHeader?: string | null;
@@ -415,7 +415,7 @@ export function createCachedRscResponseSnapshot(
   responseUrl: string | null = null,
 ): CachedRscResponse {
   return {
-    buildIdHeader: response.headers.get(VINEXT_RSC_BUILD_ID_HEADER),
+    compatibilityIdHeader: response.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
     buffer,
     contentType: response.headers.get("content-type") ?? VINEXT_RSC_CONTENT_TYPE,
     mountedSlotsHeader: response.headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
@@ -452,8 +452,8 @@ export function restoreRscResponse(cached: CachedRscResponse, copy = true): Resp
   if (cached.mountedSlotsHeader != null) {
     headers.set(VINEXT_MOUNTED_SLOTS_HEADER, cached.mountedSlotsHeader);
   }
-  if (cached.buildIdHeader != null) {
-    headers.set(VINEXT_RSC_BUILD_ID_HEADER, cached.buildIdHeader);
+  if (cached.compatibilityIdHeader != null) {
+    headers.set(VINEXT_RSC_COMPATIBILITY_ID_HEADER, cached.compatibilityIdHeader);
   }
   if (cached.paramsHeader != null) {
     headers.set(VINEXT_PARAMS_HEADER, cached.paramsHeader);

@@ -22,7 +22,7 @@ import {
  * repeated canonicalization redirects.
  */
 export const VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM = "_rsc";
-export const VINEXT_RSC_BUILD_ID_HEADER = "X-Vinext-Build-Id";
+export const VINEXT_RSC_COMPATIBILITY_ID_HEADER = "X-Vinext-RSC-Compatibility-Id";
 export const VINEXT_RSC_CONTENT_TYPE = "text/x-component";
 
 // Re-export so existing consumers that import from this module keep working.
@@ -67,37 +67,40 @@ function normalizeHeaderValue(value: string | null): string {
   return value ?? "0";
 }
 
-function normalizeBuildId(value: string | null | undefined): string | null {
+function normalizeCompatibilityId(value: string | null | undefined): string | null {
   return value && value.length > 0 ? value : null;
 }
 
-export function getVinextBuildId(): string | null {
-  return normalizeBuildId(process.env.__VINEXT_BUILD_ID);
+export function getVinextRscCompatibilityId(): string | null {
+  return normalizeCompatibilityId(process.env.__VINEXT_RSC_COMPATIBILITY_ID);
 }
 
-export function applyRscBuildIdHeader(
+export function applyRscCompatibilityIdHeader(
   headers: Headers,
-  buildId: string | null | undefined = getVinextBuildId(),
+  compatibilityId: string | null | undefined = getVinextRscCompatibilityId(),
 ): void {
-  const normalized = normalizeBuildId(buildId);
+  const normalized = normalizeCompatibilityId(compatibilityId);
   if (normalized) {
-    headers.set(VINEXT_RSC_BUILD_ID_HEADER, normalized);
+    headers.set(VINEXT_RSC_COMPATIBILITY_ID_HEADER, normalized);
+  } else {
+    headers.delete(VINEXT_RSC_COMPATIBILITY_ID_HEADER);
   }
 }
 
-export function isRscBuildIdCompatible(
-  responseBuildId: string | null | undefined,
-  clientBuildId: string | null | undefined = getVinextBuildId(),
+export function isRscCompatibilityIdCompatible(
+  responseCompatibilityId: string | null | undefined,
+  clientCompatibilityId: string | null | undefined = getVinextRscCompatibilityId(),
 ): boolean {
-  const normalizedResponseBuildId = normalizeBuildId(responseBuildId);
-  const normalizedClientBuildId = normalizeBuildId(clientBuildId);
+  const normalizedResponseCompatibilityId = normalizeCompatibilityId(responseCompatibilityId);
+  const normalizedClientCompatibilityId = normalizeCompatibilityId(clientCompatibilityId);
   return (
-    normalizedClientBuildId === null ||
-    (normalizedResponseBuildId !== null && normalizedResponseBuildId === normalizedClientBuildId)
+    normalizedClientCompatibilityId === null ||
+    (normalizedResponseCompatibilityId !== null &&
+      normalizedResponseCompatibilityId === normalizedClientCompatibilityId)
   );
 }
 
-type RscBuildIdNavigationDecision =
+type RscCompatibilityNavigationDecision =
   | { kind: "compatible" }
   | { hardNavigationTarget: string; kind: "hard-navigate" };
 
@@ -123,14 +126,16 @@ export function resolveHardNavigationTargetFromRscResponse(
   return hardNavigationTarget;
 }
 
-export function resolveRscBuildIdNavigationDecision(options: {
-  clientBuildId?: string | null;
+export function resolveRscCompatibilityNavigationDecision(options: {
+  clientCompatibilityId?: string | null;
   currentHref: string;
   origin: string;
-  responseBuildId: string | null | undefined;
+  responseCompatibilityId: string | null | undefined;
   responseUrl?: string | null;
-}): RscBuildIdNavigationDecision {
-  if (isRscBuildIdCompatible(options.responseBuildId, options.clientBuildId)) {
+}): RscCompatibilityNavigationDecision {
+  if (
+    isRscCompatibilityIdCompatible(options.responseCompatibilityId, options.clientCompatibilityId)
+  ) {
     return { kind: "compatible" };
   }
 

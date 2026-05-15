@@ -9,8 +9,8 @@ import {
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
-  VINEXT_RSC_BUILD_ID_HEADER,
-  resolveRscBuildIdNavigationDecision,
+  VINEXT_RSC_COMPATIBILITY_ID_HEADER,
+  resolveRscCompatibilityNavigationDecision,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import {
   devOnCaughtError,
@@ -243,15 +243,15 @@ afterEach(() => {
 });
 
 describe("app browser entry navigation scheduling", () => {
-  it("hard-navigates RSC responses when the response build ID is missing or stale", () => {
+  it("hard-navigates RSC responses when the response compatibility ID is missing or stale", () => {
     stubWindow("https://example.com/current");
 
     expect(
-      resolveRscBuildIdNavigationDecision({
-        clientBuildId: "build-a",
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: "compat-a",
         currentHref: "/target?tab=1#details",
         origin: "https://example.com",
-        responseBuildId: null,
+        responseCompatibilityId: null,
         responseUrl: "https://example.com/target.rsc?tab=1&_rsc=stale",
       }),
     ).toEqual({
@@ -260,11 +260,11 @@ describe("app browser entry navigation scheduling", () => {
     });
 
     expect(
-      resolveRscBuildIdNavigationDecision({
-        clientBuildId: "build-a",
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: "compat-a",
         currentHref: "/target/",
         origin: "https://example.com",
-        responseBuildId: "build-b",
+        responseCompatibilityId: "compat-b",
         responseUrl: "https://example.com/target.rsc?_rsc=stale",
       }),
     ).toEqual({
@@ -273,21 +273,21 @@ describe("app browser entry navigation scheduling", () => {
     });
   });
 
-  it("keeps RSC responses on the soft-navigation path when build IDs match", () => {
+  it("keeps RSC responses on the soft-navigation path when compatibility IDs match", () => {
     stubWindow("https://example.com/current");
 
     expect(
-      resolveRscBuildIdNavigationDecision({
-        clientBuildId: "build-a",
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: "compat-a",
         currentHref: "/target",
         origin: "https://example.com",
-        responseBuildId: "build-a",
+        responseCompatibilityId: "compat-a",
         responseUrl: "https://example.com/target.rsc?_rsc=fresh",
       }),
     ).toEqual({ kind: "compatible" });
   });
 
-  it("creates replayable cached RSC snapshots with build IDs", async () => {
+  it("creates replayable cached RSC snapshots with compatibility IDs", async () => {
     stubWindow("https://example.com/current");
 
     const responseUrl = "https://example.com/target.rsc?_rsc=fresh";
@@ -297,27 +297,27 @@ describe("app browser entry navigation scheduling", () => {
           "content-type": "text/x-component; charset=utf-8",
           [VINEXT_MOUNTED_SLOTS_HEADER]: "children",
           [VINEXT_PARAMS_HEADER]: "%7B%22slug%22%3A%22target%22%7D",
-          [VINEXT_RSC_BUILD_ID_HEADER]: "build-a",
+          [VINEXT_RSC_COMPATIBILITY_ID_HEADER]: "compat-a",
         },
       }),
       await new Response("flight").arrayBuffer(),
       responseUrl,
     );
 
-    expect(snapshot.buildIdHeader).toBe("build-a");
+    expect(snapshot.compatibilityIdHeader).toBe("compat-a");
     expect(snapshot.url).toBe(responseUrl);
     expect(
-      resolveRscBuildIdNavigationDecision({
-        clientBuildId: "build-a",
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: "compat-a",
         currentHref: "/target",
         origin: "https://example.com",
-        responseBuildId: snapshot.buildIdHeader,
+        responseCompatibilityId: snapshot.compatibilityIdHeader,
         responseUrl: snapshot.url,
       }),
     ).toEqual({ kind: "compatible" });
 
     const replayed = navigationShim.restoreRscResponse(snapshot);
-    expect(replayed.headers.get(VINEXT_RSC_BUILD_ID_HEADER)).toBe("build-a");
+    expect(replayed.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe("compat-a");
     expect(replayed.headers.get(VINEXT_MOUNTED_SLOTS_HEADER)).toBe("children");
     expect(replayed.headers.get(VINEXT_PARAMS_HEADER)).toBe("%7B%22slug%22%3A%22target%22%7D");
     expect(await replayed.text()).toBe("flight");

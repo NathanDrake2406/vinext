@@ -14,7 +14,7 @@ async function pushAppRoute(page: Page, pathname: string): Promise<void> {
   }, pathname);
 }
 
-test.describe("App Router build ID navigation", () => {
+test.describe("App Router RSC compatibility navigation", () => {
   test("replays same-build visited RSC payloads instead of refetching or reloading", async ({
     page,
   }) => {
