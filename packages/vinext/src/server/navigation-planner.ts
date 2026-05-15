@@ -254,6 +254,9 @@ function resolveCurrentRootBoundaryElementPersistence(
   targetSnapshot: RouteSnapshotV0,
 ): readonly string[] {
   const preservedLayoutIds = resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot);
+  // Non-commit consumers still receive the legacy mounted-slot element list.
+  // Commit promotion uses preservePreviousSlotIds instead so default/unmatched
+  // slot reuse requires route-state proof.
   return [
     ...preservedLayoutIds,
     ...resolveMountedParallelSlotPersistenceForLayouts(currentSnapshot, preservedLayoutIds),
@@ -268,6 +271,9 @@ function resolveCurrentRootBoundaryCommitElementPersistence(options: {
   // Commit element persistence only keeps layout IDs. Default/unmatched slot
   // reuse is handled separately by preservePreviousSlotIds, using slot-binding
   // metadata as proof; payloads without __slotBindings get no semantic reuse.
+  // resolveCurrentRootBoundaryCommitSlotPersistence recomputes this same
+  // ancestor set; planner correctness relies on both calls agreeing so any
+  // preserved slot's owner layout is also present in preserveElementIds.
   return resolveSameLayoutAncestorPersistence(options.currentSnapshot, options.targetSnapshot);
 }
 

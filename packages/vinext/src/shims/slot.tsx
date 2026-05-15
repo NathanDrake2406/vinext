@@ -136,7 +136,9 @@ export function mergeElements(
   }
 
   // Default/unmatched slot preservation is a router-state decision, not a
-  // consequence of a missing key or an unmatched marker on the transport.
+  // consequence of a missing key or an unmatched marker on the transport. This
+  // loop intentionally runs after clear/preserve element handling so planner-
+  // approved slot content and binding proof win the final merged value.
   for (const id of preservePreviousSlotIds) {
     if (!AppElementsWire.isSlotId(id)) continue;
     if (!Object.hasOwn(prev, id)) continue;
