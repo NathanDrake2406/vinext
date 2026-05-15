@@ -186,7 +186,7 @@ export function buildAppPageCacheValue(
     status,
   };
   if (renderObservation) {
-    return { ...value, renderObservation };
+    value.renderObservation = renderObservation;
   }
   return value;
 }

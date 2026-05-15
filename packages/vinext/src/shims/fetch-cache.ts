@@ -477,7 +477,7 @@ export type FetchCacheState = {
   currentRequestTags: string[];
   currentFetchSoftTags: string[];
   currentFetchCacheMode: FetchCacheMode | null;
-  dynamicFetchUrls: string[];
+  dynamicFetchUrls: Set<string>;
   isFetchDedupeActive: boolean;
   currentFetchDedupeEntries: Map<string, FetchDedupeEntry[]>;
 };
@@ -511,7 +511,7 @@ const _fallbackState = (_g[_FALLBACK_KEY] ??= {
   currentRequestTags: [],
   currentFetchSoftTags: [],
   currentFetchCacheMode: null,
-  dynamicFetchUrls: [],
+  dynamicFetchUrls: new Set<string>(),
   isFetchDedupeActive: false,
   currentFetchDedupeEntries: new Map(),
 } satisfies FetchCacheState) as FetchCacheState;
@@ -531,7 +531,7 @@ function _resetFallbackState(isFetchDedupeActive: boolean): void {
   _fallbackState.currentRequestTags = [];
   _fallbackState.currentFetchSoftTags = [];
   _fallbackState.currentFetchCacheMode = null;
-  _fallbackState.dynamicFetchUrls = [];
+  _fallbackState.dynamicFetchUrls = new Set<string>();
   _fallbackState.isFetchDedupeActive = isFetchDedupeActive;
   _fallbackState.currentFetchDedupeEntries = new Map();
 }
@@ -541,7 +541,7 @@ function getFetchObservationUrl(input: string | URL | Request): string {
 }
 
 function recordDynamicFetchObservation(input: string | URL | Request): void {
-  _getState().dynamicFetchUrls.push(getFetchObservationUrl(input));
+  _getState().dynamicFetchUrls.add(getFetchObservationUrl(input));
 }
 
 export function peekDynamicFetchObservations(): string[] {
@@ -551,7 +551,7 @@ export function peekDynamicFetchObservations(): string[] {
 export function consumeDynamicFetchObservations(): string[] {
   const state = _getState();
   const observed = [...state.dynamicFetchUrls].sort();
-  state.dynamicFetchUrls = [];
+  state.dynamicFetchUrls = new Set<string>();
   return observed;
 }
 
@@ -1147,7 +1147,7 @@ export async function runWithFetchCache<T>(fn: () => Promise<T>): Promise<T> {
     return await runWithUnifiedStateMutation((uCtx) => {
       uCtx.currentRequestTags = [];
       uCtx.currentFetchSoftTags = [];
-      uCtx.dynamicFetchUrls = [];
+      uCtx.dynamicFetchUrls = new Set<string>();
       uCtx.isFetchDedupeActive = true;
       uCtx.currentFetchDedupeEntries = new Map();
     }, fn);
@@ -1157,7 +1157,7 @@ export async function runWithFetchCache<T>(fn: () => Promise<T>): Promise<T> {
       currentRequestTags: [],
       currentFetchSoftTags: [],
       currentFetchCacheMode: null,
-      dynamicFetchUrls: [],
+      dynamicFetchUrls: new Set<string>(),
       isFetchDedupeActive: true,
       currentFetchDedupeEntries: new Map(),
     },

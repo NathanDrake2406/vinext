@@ -322,6 +322,9 @@ export async function renderAppPageLifecycle(
     rootBoundaryId,
     routePattern: options.routePattern,
   });
+  // Partial payload metadata is a pre-stream snapshot. Fetch tags may still
+  // accumulate while the RSC/HTML streams are consumed; complete cache artifact
+  // observations below rebuild this field after the stream drains.
   const payloadRenderObservation = createAppPageRenderObservation({
     boundaryOutcome: { kind: "unknown" },
     cacheability: "unknown",

@@ -49,6 +49,8 @@ function mergeObservedRequestApis(
   params: Record<string, unknown>,
 ): RenderRequestApiKind[] {
   const merged = new Set<RenderRequestApiKind>(observed);
+  // Conservative: route params are marked observed when the route supplies
+  // values, since this slice does not add property-access proxying.
   if (Object.keys(params).length > 0) {
     merged.add("params");
   }

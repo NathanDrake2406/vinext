@@ -447,6 +447,8 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
               getCollectedFetchTags(),
               route.routeSegments,
             );
+            // Consume once: HTML and RSC artifacts are produced by the same
+            // regeneration render and should carry the same observation set.
             const observationState = {
               dynamicFetches: consumeDynamicFetchObservations(),
               requestApis: consumeRenderRequestApiUsage(),
