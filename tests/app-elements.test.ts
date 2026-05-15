@@ -771,6 +771,112 @@ describe("artifact compatibility proof evaluation", () => {
     });
   });
 
+  it("accepts rolling deploy payloads when compatibility is explicitly declared", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-next",
+      deploymentVersion: "deploy-canary",
+      rootBoundaryId: "root-next",
+      renderEpoch: "epoch-next",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-current",
+      deploymentVersion: "deploy-stable",
+      rootBoundaryId: "root-current",
+      renderEpoch: "epoch-current",
+    });
+
+    expect(
+      evaluateArtifactCompatibility(current, candidate, {
+        compatibilityMap: {
+          graphVersions: [["graph-current", "graph-next"]],
+          deploymentVersions: [["deploy-stable", "deploy-canary"]],
+          rootBoundaryIds: [["root-current", "root-next"]],
+          renderEpochs: [["epoch-current", "epoch-next"]],
+        },
+      }),
+    ).toEqual({ kind: "compatible" });
+  });
+
+  it("supports canary and rollback only when they share a declared compatibility set", () => {
+    const rollback = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-rollback",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const canary = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-canary",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(
+      evaluateArtifactCompatibility(rollback, canary, {
+        compatibilityMap: {
+          deploymentVersions: [["deploy-stable", "deploy-canary", "deploy-rollback"]],
+        },
+      }),
+    ).toEqual({ kind: "compatible" });
+  });
+
+  it("does not infer transitive deployment compatibility across overlapping pairs", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-c",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(
+      evaluateArtifactCompatibility(current, candidate, {
+        compatibilityMap: {
+          deploymentVersions: [
+            ["deploy-a", "deploy-b"],
+            ["deploy-b", "deploy-c"],
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: "incompatible",
+      fallback: "renderFresh",
+      reason: "deploymentVersionNotDeclaredCompatible",
+    });
+  });
+
+  it("falls back to fresh render when a stale compatibility map lacks the rollback deploy", () => {
+    const rollback = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-rollback",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const staleCanary = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-canary",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(
+      evaluateArtifactCompatibility(rollback, staleCanary, {
+        compatibilityMap: {
+          deploymentVersions: [["deploy-stable", "deploy-canary"]],
+        },
+      }),
+    ).toEqual({
+      kind: "incompatible",
+      fallback: "renderFresh",
+      reason: "deploymentVersionNotDeclaredCompatible",
+    });
+  });
+
   it("treats old-client/new-server future compatibility metadata as unknown proof", () => {
     const current = createArtifactCompatibilityEnvelope({
       graphVersion: "graph-current",
@@ -791,6 +897,29 @@ describe("artifact compatibility proof evaluation", () => {
         rootBoundaryId: "root-next",
         renderEpoch: "epoch-next",
       },
+    } satisfies Readonly<Record<string, unknown>>;
+
+    const metadata = AppElementsWire.readMetadata(payload);
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
+    expect(evaluateArtifactCompatibility(current, metadata.artifactCompatibility)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "graphVersionUnknown",
+    });
+  });
+
+  it("treats new-client/old-server legacy payload metadata as unknown proof", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-current",
+      deploymentVersion: "deploy-current",
+      rootBoundaryId: "root-current",
+      renderEpoch: "epoch-current",
+    });
+    const payload = {
+      [APP_ROUTE_KEY]: "route:/dashboard",
+      [APP_INTERCEPTION_CONTEXT_KEY]: null,
+      [APP_ROOT_LAYOUT_KEY]: "/",
     } satisfies Readonly<Record<string, unknown>>;
 
     const metadata = AppElementsWire.readMetadata(payload);
