@@ -20,12 +20,14 @@ import type { AppPageBuildRoute } from "../packages/vinext/src/server/app-page-e
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { markDynamicUsageMock } = vi.hoisted(() => ({
+const { markDynamicUsageMock, markRenderRequestApiUsageMock } = vi.hoisted(() => ({
   markDynamicUsageMock: vi.fn(),
+  markRenderRequestApiUsageMock: vi.fn(),
 }));
 
 vi.mock("../packages/vinext/src/shims/headers.js", () => ({
   markDynamicUsage: markDynamicUsageMock,
+  markRenderRequestApiUsage: markRenderRequestApiUsageMock,
 }));
 
 // ---------------------------------------------------------------------------
@@ -87,6 +89,7 @@ function createBaseOptions(overrides?: {
 describe("buildPageElements", () => {
   beforeEach(() => {
     markDynamicUsageMock.mockClear();
+    markRenderRequestApiUsageMock.mockClear();
   });
 
   it("returns an error element record when a page module has no default export", async () => {
@@ -327,6 +330,7 @@ describe("buildPageElements", () => {
     );
 
     expect(markDynamicUsageMock).toHaveBeenCalled();
+    expect(markRenderRequestApiUsageMock).toHaveBeenCalledWith("searchParams");
   });
 
   it("does NOT call markDynamicUsage when search params are empty", async () => {
@@ -350,6 +354,7 @@ describe("buildPageElements", () => {
     );
 
     expect(markDynamicUsageMock).not.toHaveBeenCalled();
+    expect(markRenderRequestApiUsageMock).not.toHaveBeenCalled();
   });
 
   it("passes slot overrides when interception opts have a slot key and page", async () => {
