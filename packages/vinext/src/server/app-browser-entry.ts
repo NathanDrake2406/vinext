@@ -21,8 +21,7 @@ import {
   getCurrentNextUrl,
   getCurrentInterceptionContext,
   getClientNavigationRenderContext,
-  getPrefetchCache,
-  getPrefetchedUrls,
+  invalidatePrefetchCache,
   pushHistoryStateWithoutNotify,
   replaceClientParamsWithoutNotify,
   replaceHistoryStateWithoutNotify,
@@ -215,8 +214,7 @@ function clearVisitedResponseCache(): void {
 }
 
 function clearPrefetchState(): void {
-  getPrefetchCache().clear();
-  getPrefetchedUrls().clear();
+  invalidatePrefetchCache();
 }
 
 function clearClientNavigationCaches(): void {

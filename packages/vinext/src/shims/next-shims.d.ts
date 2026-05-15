@@ -136,7 +136,7 @@ declare module "next/navigation" {
     back(): void;
     forward(): void;
     refresh(): void;
-    prefetch(href: string): void;
+    prefetch(href: string, options?: { onInvalidate?: () => void }): void;
   };
   export function usePathname(): string;
   export class ReadonlyURLSearchParams extends URLSearchParams {
@@ -202,6 +202,8 @@ declare module "next/navigation" {
     url: string;
   };
   export type PrefetchCacheEntry = {
+    invalidationTimer?: ReturnType<typeof setTimeout>;
+    onInvalidateCallbacks?: Set<() => void>;
     outcome: "pending" | "cache-seeded";
     snapshot?: CachedRscResponse;
     pending?: Promise<void>;
@@ -211,10 +213,12 @@ declare module "next/navigation" {
   export const PREFETCH_CACHE_TTL: number;
   export function getPrefetchCache(): Map<string, PrefetchCacheEntry>;
   export function getPrefetchedUrls(): Set<string>;
+  export function invalidatePrefetchCache(): void;
   export function storePrefetchResponse(
     rscUrl: string,
     response: Response,
     interceptionContext?: string | null,
+    options?: { onInvalidate?: () => void },
   ): void;
   export function snapshotRscResponse(response: Response): Promise<CachedRscResponse>;
   export function restoreRscResponse(cached: CachedRscResponse, copy?: boolean): Response;

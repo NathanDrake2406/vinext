@@ -23,6 +23,7 @@ let MAX_PREFETCH_CACHE_SIZE: Navigation["MAX_PREFETCH_CACHE_SIZE"];
 let PREFETCH_CACHE_TTL: Navigation["PREFETCH_CACHE_TTL"];
 let snapshotRscResponse: Navigation["snapshotRscResponse"];
 let restoreRscResponse: Navigation["restoreRscResponse"];
+let invalidatePrefetchCache: Navigation["invalidatePrefetchCache"];
 let useRouter: Navigation["useRouter"];
 
 beforeEach(async () => {
@@ -52,6 +53,7 @@ beforeEach(async () => {
   PREFETCH_CACHE_TTL = nav.PREFETCH_CACHE_TTL;
   snapshotRscResponse = nav.snapshotRscResponse;
   restoreRscResponse = nav.restoreRscResponse;
+  invalidatePrefetchCache = nav.invalidatePrefetchCache;
   useRouter = nav.useRouter;
 });
 
@@ -121,6 +123,55 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchedUrls().has(AppElementsWire.encodeCacheKey(String(fetchedUrl), "/"))).toBe(
       true,
     );
+  });
+
+  it("router.prefetch calls onInvalidate once when the prefetched response is invalidated", async () => {
+    let fetchedUrl: unknown;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      fetchedUrl = input;
+      return new Response("flight", { headers: { "content-type": "text/x-component" } });
+    });
+    const onInvalidate = vi.fn();
+    (globalThis as any).fetch = fetch;
+
+    useRouter().prefetch("/dashboard", { onInvalidate });
+    await waitForPrefetchSetup(() => getPrefetchCache().size > 0);
+
+    const cacheKey = AppElementsWire.encodeCacheKey(String(fetchedUrl), "/");
+    expect(getPrefetchedUrls().has(cacheKey)).toBe(true);
+
+    invalidatePrefetchCache();
+
+    expect(onInvalidate).toHaveBeenCalledTimes(1);
+    expect(getPrefetchedUrls().has(cacheKey)).toBe(false);
+    expect(getPrefetchCache().has(cacheKey)).toBe(false);
+
+    invalidatePrefetchCache();
+    expect(onInvalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("router.prefetch preserves onInvalidate callbacks attached to an already-prefetched URL", async () => {
+    const fetch = vi.fn(
+      async () => new Response("flight", { headers: { "content-type": "text/x-component" } }),
+    );
+    const firstInvalidate = vi.fn();
+    const secondInvalidate = vi.fn();
+    (globalThis as any).fetch = fetch;
+
+    useRouter().prefetch("/dashboard", { onInvalidate: firstInvalidate });
+    await waitForPrefetchSetup(() => getPrefetchCache().size > 0);
+    useRouter().prefetch("/dashboard", { onInvalidate: secondInvalidate });
+    await waitForPrefetchSetup(() => {
+      const entry = getPrefetchCache().values().next().value;
+      return entry?.onInvalidateCallbacks?.size === 2;
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    invalidatePrefetchCache();
+
+    expect(firstInvalidate).toHaveBeenCalledTimes(1);
+    expect(secondInvalidate).toHaveBeenCalledTimes(1);
   });
 
   it("reuses a prefetched response only when mounted-slot context matches", () => {
