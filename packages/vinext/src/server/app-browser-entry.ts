@@ -48,8 +48,11 @@ import {
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
 import {
+  createDiscardedServerActionRefreshScheduler,
   isServerActionResult,
+  parseServerActionRevalidationHeader,
   shouldClearClientNavigationCachesForServerActionResult,
+  type ServerActionRevalidationKind,
   type AppBrowserServerActionResult,
 } from "./app-browser-action-result.js";
 import {
@@ -143,6 +146,15 @@ const VISITED_RESPONSE_CACHE_TTL = 5 * 60_000;
 const MAX_TRAVERSAL_CACHE_TTL = 30 * 60_000;
 const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
 const browserNavigationController = createAppBrowserNavigationController();
+const discardedServerActionRefreshScheduler = createDiscardedServerActionRefreshScheduler({
+  runRefresh() {
+    clearClientNavigationCaches();
+    const rscNavigate = window.__VINEXT_RSC_NAVIGATE__;
+    if (typeof rscNavigate !== "function") return;
+
+    void rscNavigate(window.location.href, 0, "refresh", undefined, undefined, true);
+  },
+});
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
 
 // Parses a URI-encoded JSON value carried in a response header (e.g.
@@ -302,6 +314,8 @@ async function commitSameUrlNavigatePayload(
   nextElements: Promise<AppElements>,
   returnValue?: ServerActionResult["returnValue"],
   actionInitiationState?: AppRouterState,
+  actionInitiationNavigationId?: number,
+  revalidation: ServerActionRevalidationKind = "none",
 ): Promise<unknown> {
   const navigationSnapshot = createClientNavigationRenderSnapshot(
     window.location.href,
@@ -312,6 +326,13 @@ async function commitSameUrlNavigatePayload(
     navigationSnapshot,
     returnValue,
     actionInitiationState,
+    {
+      onDiscardedRevalidation() {
+        discardedServerActionRefreshScheduler.schedule();
+      },
+      revalidation,
+      startedNavigationId: actionInitiationNavigationId,
+    },
   );
 }
 
@@ -796,7 +817,6 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
 function registerServerActionCallback(): void {
   setServerCallback(async (id, args) => {
     const temporaryReferences = createTemporaryReferenceSet();
-    const body = await encodeReply(args, { temporaryReferences });
 
     // Carry the interception context + mounted slots from the current router
     // state so the server-action re-render rebuilds the intercepted tree
@@ -804,6 +824,8 @@ function registerServerActionCallback(): void {
     // which sends `Next-URL` on action POSTs when the current tree contains
     // an interception route.
     const currentState = getBrowserRouterState();
+    const actionInitiationNavigationId = browserNavigationController.getActiveNavigationId();
+    const body = await encodeReply(args, { temporaryReferences });
     const { headers } = resolveServerActionRequestState({
       actionId: id,
       basePath: __basePath,
@@ -869,11 +891,12 @@ function registerServerActionCallback(): void {
       return undefined;
     }
 
+    const revalidation = parseServerActionRevalidationHeader(fetchResponse.headers);
     const result = await createFromFetch<ServerActionResult | AppWireElements>(
       Promise.resolve(fetchResponse),
       { temporaryReferences },
     );
-    if (shouldClearClientNavigationCachesForServerActionResult(result)) {
+    if (shouldClearClientNavigationCachesForServerActionResult(result, revalidation)) {
       clearClientNavigationCaches();
     }
 
@@ -889,6 +912,8 @@ function registerServerActionCallback(): void {
           Promise.resolve(AppElementsWire.decode(result.root)),
           result.returnValue,
           currentState,
+          actionInitiationNavigationId,
+          revalidation,
         );
       }
 
@@ -906,6 +931,8 @@ function registerServerActionCallback(): void {
       Promise.resolve(AppElementsWire.decode(result)),
       undefined,
       currentState,
+      actionInitiationNavigationId,
+      revalidation,
     );
   });
 }
@@ -985,6 +1012,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     let pendingRouterState: PendingBrowserRouterState | null = null;
     // Hoist navId above try so the catch and finally blocks can reference it.
     const navId = browserNavigationController.beginNavigation();
+    discardedServerActionRefreshScheduler.markNavigationStart();
 
     // Loop variables for inline redirect following. On a redirect, these are
     // updated and the loop continues without returning or re-entering navigateRsc,
@@ -1275,6 +1303,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       // checks, and error paths. The finally runs even when the catch returns.
       // settlePendingBrowserRouterState is idempotent via the settled flag.
       browserNavigationController.finalizeNavigation(navId, pendingRouterState);
+      discardedServerActionRefreshScheduler.markNavigationSettled();
     }
   };
 
