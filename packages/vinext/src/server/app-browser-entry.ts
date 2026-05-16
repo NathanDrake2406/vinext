@@ -33,6 +33,7 @@ import {
   type CachedRscResponse,
   type ClientNavigationRenderSnapshot,
 } from "vinext/shims/navigation";
+import { scrollToHashTargetOnNextFrame } from "vinext/shims/hash-scroll";
 import { installWindowNext } from "../client/window-next.js";
 import {
   chunksToReadableStream,
@@ -75,6 +76,7 @@ import {
   type AppRouterState,
   type OperationLane,
 } from "./app-browser-state.js";
+import { createPopstateRestoreHandler } from "./app-browser-popstate.js";
 import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-boundary";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { ElementsContext, Slot } from "vinext/shims/slot";
@@ -86,10 +88,7 @@ import {
   installDevErrorOverlay,
 } from "./dev-error-overlay.js";
 import { DANGEROUS_URL_BLOCK_MESSAGE, isDangerousScheme } from "vinext/shims/url-safety";
-import {
-  getServerActionNotFoundClientMessage,
-  isServerActionNotFoundResponse,
-} from "./server-action-not-found.js";
+import { throwOnServerActionNotFound } from "./server-action-not-found.js";
 import {
   createRscRequestHeaders,
   createRscRequestUrl,
@@ -546,6 +545,7 @@ function BrowserRoot({
 
   useLayoutEffect(() => {
     setMountedSlotsHeader(getMountedSlotIdsHeader(stateRef.current.elements));
+    window.__VINEXT_PING_VISIBLE_LINKS__?.();
   }, [treeState.elements]);
 
   useLayoutEffect(() => {
@@ -627,37 +627,10 @@ function restoreHydrationNavigationContext(
   });
 }
 
-function decodeHashFragment(fragment: string): string {
-  try {
-    return decodeURIComponent(fragment);
-  } catch {
-    return fragment;
-  }
-}
-
-function scrollToHashTarget(hash: string): void {
-  const fragment = decodeHashFragment(hash.startsWith("#") ? hash.slice(1) : hash);
-
-  requestAnimationFrame(() => {
-    if (fragment === "" || fragment === "top") {
-      window.scrollTo(0, 0);
-      return;
-    }
-
-    const idElement = document.getElementById(fragment);
-    if (idElement) {
-      idElement.scrollIntoView({ behavior: "auto" });
-      return;
-    }
-
-    document.getElementsByName(fragment)[0]?.scrollIntoView({ behavior: "auto" });
-  });
-}
-
 function restorePopstateScrollPosition(state: unknown): void {
   if (!(state && typeof state === "object" && "__vinext_scrollY" in state)) {
     if (window.location.hash) {
-      scrollToHashTarget(window.location.hash);
+      scrollToHashTargetOnNextFrame(window.location.hash);
     }
     return;
   }
@@ -856,9 +829,9 @@ function registerServerActionCallback(): void {
       body,
     });
 
-    if (isServerActionNotFoundResponse(fetchResponse)) {
-      throw new Error(getServerActionNotFoundClientMessage(id));
-    }
+    // Surface an `UnrecognizedActionError` so client `catch` blocks can detect
+    // client/server deployment skew via `unstable_isUnrecognizedActionError`.
+    throwOnServerActionNotFound(fetchResponse, id);
 
     const actionRedirect = fetchResponse.headers.get(ACTION_REDIRECT_HEADER);
     if (actionRedirect) {
@@ -1036,7 +1009,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     let redirectCount = redirectDepth;
 
     try {
-      const shouldUsePendingRouterState = programmaticTransition && navigationKind !== "refresh";
+      const shouldUsePendingRouterState = programmaticTransition;
       if (shouldUsePendingRouterState && hasBrowserRouterState()) {
         pendingRouterState = beginPendingBrowserRouterState();
       } else {
@@ -1329,18 +1302,25 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // Pages Router scroll restoration is handled in shims/navigation.ts:1289 with
   // microtask-based deferral for compatibility with non-RSC navigation.
   // See: https://github.com/vercel/next.js/discussions/41934#discussioncomment-4602607
-  window.addEventListener("popstate", (event) => {
-    notifyAppRouterTransitionStart(window.location.href, "traverse");
-    const pendingNavigation =
-      window.__VINEXT_RSC_NAVIGATE__?.(window.location.href, 0, "traverse") ?? Promise.resolve();
-    window.__VINEXT_RSC_PENDING__ = pendingNavigation;
-    void pendingNavigation.finally(() => {
-      restorePopstateScrollPosition(event.state);
-      if (window.__VINEXT_RSC_PENDING__ === pendingNavigation) {
-        window.__VINEXT_RSC_PENDING__ = null;
-      }
-    });
+  const handlePopstate = createPopstateRestoreHandler({
+    getActiveNavigationId: browserNavigationController.getActiveNavigationId.bind(
+      browserNavigationController,
+    ),
+    getPendingNavigation: () => window.__VINEXT_RSC_PENDING__,
+    getNavigate: () => window.__VINEXT_RSC_NAVIGATE__,
+    isCurrentNavigation: browserNavigationController.isCurrentNavigation.bind(
+      browserNavigationController,
+    ),
+    notifyAppRouterTransitionStart: (href) => {
+      notifyAppRouterTransitionStart(href, "traverse");
+    },
+    restorePopstateScrollPosition,
+    setPendingNavigation: (pendingNavigation) => {
+      window.__VINEXT_RSC_PENDING__ = pendingNavigation;
+    },
   });
+
+  window.addEventListener("popstate", handlePopstate);
 
   if (import.meta.hot) {
     const handleRscUpdate = async (): Promise<void> => {

@@ -104,6 +104,27 @@ describe("Image SSR rendering", () => {
     expect(html).toContain('sizes="100vw"');
   });
 
+  it("renders remote fill mode with absolute positioning", () => {
+    // Ported from Next.js: test/unit/next-image-get-img-props.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/unit/next-image-get-img-props.test.ts
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Image, {
+        alt: "remote fill image",
+        src: "https://images.unsplash.com/photo-fill",
+        fill: true,
+      }),
+    );
+    // Remote fill must preserve the same layout contract as local fill:
+    // the DOM img is absolutely positioned and marked as data-nimg="fill".
+    expect(html).not.toMatch(/width="\d+"/);
+    expect(html).not.toMatch(/height="\d+"/);
+    expect(html).toContain("position:absolute");
+    expect(html).toContain("width:100%");
+    expect(html).toContain("height:100%");
+    expect(html).toContain('data-nimg="fill"');
+    expect(html).toContain('sizes="100vw"');
+  });
+
   it("renders with custom sizes prop", () => {
     const html = ReactDOMServer.renderToString(
       React.createElement(Image, {

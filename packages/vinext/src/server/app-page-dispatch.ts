@@ -157,6 +157,8 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   fetchCache?: FetchCacheMode | null;
   findIntercept: (pathname: string) => AppPageDispatchIntercept | null;
   formState?: ReactFormState | null;
+  actionError?: unknown;
+  actionFailed?: boolean;
   generateStaticParams?: ValidateAppPageDynamicParamsOptions["generateStaticParams"];
   getFontLinks: () => string[];
   getFontPreloads: () => AppPageFontPreload[];
@@ -435,12 +437,15 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
                 styles: options.getFontStyles(),
                 preloads: options.getFontPreloads(),
               },
-              revalidatedRscCapture.sideStream
-                ? {
-                    sideStream: revalidatedRscCapture.sideStream,
-                    capturedRscDataRef: revalidatedCapturedRscRef,
-                  }
-                : undefined,
+              {
+                basePath: options.basePath,
+                ...(revalidatedRscCapture.sideStream
+                  ? {
+                      sideStream: revalidatedRscCapture.sideStream,
+                      capturedRscDataRef: revalidatedCapturedRscRef,
+                    }
+                  : {}),
+              },
             );
             const html = await readStreamAsText(revalidatedHtmlStream);
             const rscData = await getCapturedRscDataPromise(revalidatedCapturedRscRef.value);
@@ -583,6 +588,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
 
   const pageBuildResult = await buildAppPageElement({
     buildPageElement() {
+      if (options.actionFailed) {
+        throw options.actionError;
+      }
       return options.buildPageElement(
         route,
         options.params,
@@ -603,6 +611,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   }
 
   return renderAppPageLifecycle({
+    basePath: options.basePath,
     cleanPathname: options.cleanPathname,
     clearRequestContext: options.clearRequestContext,
     consumeDynamicUsage,

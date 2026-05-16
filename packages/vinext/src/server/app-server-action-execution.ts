@@ -73,10 +73,17 @@ type AppServerActionRoute = {
   pattern: string;
 };
 
-type ProgressiveServerActionResult = {
-  formState: ReactFormState | null;
-  kind: "form-state";
-};
+type ProgressiveServerActionResult =
+  | {
+      formState: ReactFormState | null;
+      kind: "form-state";
+    }
+  | {
+      actionError: unknown;
+      actionFailed: true;
+      formState: null;
+      kind: "form-state";
+    };
 
 type AppServerActionMatch<TRoute extends AppServerActionRoute> = {
   params: AppPageParams;
@@ -198,16 +205,6 @@ export type HandleServerActionRscRequestOptions<
   toInterceptOpts: (intercept: AppServerActionIntercept<TPage>) => TInterceptOpts;
 };
 
-type ActionControlResponse =
-  | {
-      kind: "redirect";
-      url: string;
-    }
-  | {
-      kind: "status";
-      statusCode: number;
-    };
-
 /**
  * Matches Next.js' server action argument cap to prevent stack overflow in
  * Function.prototype.apply when decoding hostile action payloads.
@@ -295,33 +292,6 @@ export async function readActionFormDataWithLimit(
   return new Response(combined, {
     headers: { "Content-Type": request.headers.get("content-type") || "" },
   }).formData();
-}
-
-function getActionControlResponse(error: unknown): ActionControlResponse | null {
-  const digest = getNextErrorDigest(error);
-  if (!digest) return null;
-
-  const redirect = parseNextRedirectDigest(digest);
-  if (redirect) {
-    return {
-      kind: "redirect",
-      url: redirect.url,
-    };
-  }
-
-  const httpError = parseNextHttpErrorDigest(digest);
-  if (httpError) {
-    if (!Number.isInteger(httpError.status)) {
-      return null;
-    }
-
-    return {
-      kind: "status",
-      statusCode: httpError.status,
-    };
-  }
-
-  return null;
 }
 
 function getActionRedirect(error: unknown): AppServerActionRedirect | null {
@@ -449,22 +419,43 @@ export async function handleProgressiveServerActionRequest(
       return null;
     }
 
-    let actionControlResponse: ActionControlResponse | null = null;
+    let actionRedirect: AppServerActionRedirect | null = null;
+    let actionError: unknown = undefined;
+    let actionFailed = false;
     let actionResult: unknown;
     const previousHeadersPhase = options.setHeadersAccessPhase("action");
     try {
       actionResult = await action();
     } catch (error) {
-      actionControlResponse = getActionControlResponse(error);
-      if (!actionControlResponse) {
-        throw error;
+      actionRedirect = getActionRedirect(error);
+      if (!actionRedirect) {
+        actionError = error;
+        actionFailed = true;
+        const isControlFlow =
+          getActionHttpFallbackStatus(error) !== null || isServerActionNotFoundError(error, null);
+        if (!isControlFlow) {
+          console.error("[vinext] Server action error:", error);
+          options.reportRequestError(
+            normalizeError(error),
+            {
+              path: options.cleanPathname,
+              method: options.request.method,
+              headers: Object.fromEntries(options.request.headers.entries()),
+            },
+            { routerKind: "App Router", routePath: options.cleanPathname, routeType: "action" },
+          );
+        }
       }
     } finally {
       options.setHeadersAccessPhase(previousHeadersPhase);
     }
 
-    if (!actionControlResponse) {
+    if (!actionRedirect) {
       getAndClearActionRevalidationKind();
+      if (actionFailed) {
+        return { kind: "form-state", formState: null, actionError, actionFailed };
+      }
+
       const formState = await options.decodeFormState(actionResult, body);
       return { kind: "form-state", formState: formState ?? null };
     }
@@ -477,9 +468,7 @@ export async function handleProgressiveServerActionRequest(
     options.clearRequestContext();
 
     const headers = new Headers();
-    if (actionControlResponse.kind === "redirect") {
-      headers.set("Location", new URL(actionControlResponse.url, options.request.url).toString());
-    }
+    headers.set("Location", new URL(actionRedirect.url, options.request.url).toString());
     mergeMiddlewareResponseHeaders(headers, options.middlewareHeaders);
     for (const cookie of actionPendingCookies) {
       headers.append("Set-Cookie", cookie);
@@ -490,7 +479,7 @@ export async function handleProgressiveServerActionRequest(
     setActionRevalidatedHeader(headers, actionRevalidationKind);
 
     return new Response(null, {
-      status: actionControlResponse.kind === "redirect" ? 303 : actionControlResponse.statusCode,
+      status: 303,
       headers,
     });
   } catch (error) {
@@ -503,10 +492,7 @@ export async function handleProgressiveServerActionRequest(
 
     getAndClearActionRevalidationKind();
     options.getAndClearPendingCookies();
-    // Next.js rethrows generic MPA action errors into its page render path.
-    // vinext does not yet implement that form-state render path, so unexpected
-    // action failures remain request failures here.
-    console.error("[vinext] Server action error:", error);
+    console.error("[vinext] Server action payload parsing error:", error);
     options.reportRequestError(
       normalizeError(error),
       {
@@ -520,7 +506,7 @@ export async function handleProgressiveServerActionRequest(
     return internalServerErrorResponse(
       process.env.NODE_ENV === "production"
         ? undefined
-        : "Server action failed: " + getServerActionFailureMessage(error),
+        : "Server action parsing failed: " + getServerActionFailureMessage(error),
     );
   }
 }

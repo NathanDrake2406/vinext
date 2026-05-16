@@ -223,6 +223,21 @@ function isRemoteUrl(src: string): boolean {
   return src.startsWith("http://") || src.startsWith("https://") || src.startsWith("//");
 }
 
+function getFillStyle(
+  style?: React.CSSProperties,
+  backgroundStyle?: React.CSSProperties,
+): React.CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    ...backgroundStyle,
+    ...style,
+  };
+}
+
 /**
  * Resolve src, width, height, blurDataURL from Image props (string or StaticImageData).
  * Shared by the Image component and getImageProps to keep behavior in sync.
@@ -450,24 +465,15 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         className={className}
         onLoad={handleLoad}
         onError={handleError}
-        style={
-          fill
-            ? {
-                position: "absolute",
-                inset: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-                ...style,
-              }
-            : style
-        }
+        style={fill ? getFillStyle(style) : style}
         {...rest}
       />
     );
   }
 
-  // For remote URLs, validate against remotePatterns then use @unpic/react
+  // For remote URLs, validate against remotePatterns. Non-fill images use
+  // @unpic/react for CDN URL transforms; fill uses a plain img so the DOM
+  // element keeps Next.js's absolute-positioned fill contract.
   if (isRemoteUrl(src)) {
     const validation = validateRemoteUrl(src);
     if (!validation.allowed) {
@@ -482,32 +488,44 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
     }
 
     const sanitizedBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
+    const blurStyle =
+      placeholder === "blur" && sanitizedBlur
+        ? {
+            backgroundImage: `url(${sanitizedBlur})`,
+            backgroundSize: "cover",
+            backgroundRepeat: "no-repeat",
+            backgroundPosition: "center",
+          }
+        : undefined;
     const bg = placeholder === "blur" && sanitizedBlur ? `url(${sanitizedBlur})` : undefined;
 
     if (fill) {
+      const fillSizes = sizes ?? "100vw";
       preloadImageResource({
         shouldPreload,
         src,
-        sizes,
+        sizes: fillSizes,
         fetchPriority: priorityFetchPriority,
       });
       return (
-        <UnpicImage
+        <img
+          ref={mergedRef}
           src={src}
           alt={alt}
-          layout="fullWidth"
           // `priority` is a Next.js concept — translate it to HTML attributes so
           // it is never forwarded to the DOM as a non-boolean attribute, which
           // would trigger React's "Received `true` for a non-boolean attribute"
           // warning.
           loading={imageLoading}
           fetchPriority={priorityFetchPriority}
-          sizes={sizes}
+          decoding="async"
+          sizes={fillSizes}
           className={className}
-          background={bg}
+          data-nimg="fill"
           onLoad={handleLoad}
           onError={handleError}
-          ref={mergedRef}
+          style={getFillStyle(style, blurStyle)}
+          {...rest}
         />
       );
     }
@@ -611,19 +629,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
       data-nimg={fill ? "fill" : "1"}
       onLoad={handleLoad}
       onError={handleError}
-      style={
-        fill
-          ? {
-              position: "absolute",
-              inset: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-              ...blurStyle,
-              ...style,
-            }
-          : { ...blurStyle, ...style }
-      }
+      style={fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style }}
       {...rest}
     />
   );
@@ -736,17 +742,7 @@ export function getImageProps(props: ImageProps): {
       sizes: sizes ?? (fill ? "100vw" : undefined),
       className,
       "data-nimg": fill ? "fill" : "1",
-      style: fill
-        ? {
-            position: "absolute" as const,
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "cover" as const,
-            ...blurStyle,
-            ...style,
-          }
-        : { ...blurStyle, ...style },
+      style: fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style },
       ...rest,
     } as React.ImgHTMLAttributes<HTMLImageElement>,
   };
