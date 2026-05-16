@@ -143,9 +143,12 @@ function loadClientScript(
   if (src) {
     const existingLoad = loadingScripts.get(src);
     if (existingLoad) {
-      if (key) loadedScripts.add(key);
       void existingLoad.then(
-        (event) => onLoad?.(event),
+        (event) => {
+          if (key) loadedScripts.add(key);
+          onLoad?.(event);
+          onReady?.();
+        },
         (event) => onError?.(event),
       );
       return;
@@ -193,7 +196,7 @@ function loadClientScript(
         onError?.(event);
       });
     });
-    loadPromise.catch(() => undefined);
+    loadPromise.catch(() => undefined).finally(() => loadingScripts.delete(src));
     loadingScripts.set(src, loadPromise);
   }
 
