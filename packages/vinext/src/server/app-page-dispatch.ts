@@ -435,12 +435,15 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
                 styles: options.getFontStyles(),
                 preloads: options.getFontPreloads(),
               },
-              revalidatedRscCapture.sideStream
-                ? {
-                    sideStream: revalidatedRscCapture.sideStream,
-                    capturedRscDataRef: revalidatedCapturedRscRef,
-                  }
-                : undefined,
+              {
+                basePath: options.basePath,
+                ...(revalidatedRscCapture.sideStream
+                  ? {
+                      sideStream: revalidatedRscCapture.sideStream,
+                      capturedRscDataRef: revalidatedCapturedRscRef,
+                    }
+                  : {}),
+              },
             );
             const html = await readStreamAsText(revalidatedHtmlStream);
             const rscData = await getCapturedRscDataPromise(revalidatedCapturedRscRef.value);
@@ -603,6 +606,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   }
 
   return renderAppPageLifecycle({
+    basePath: options.basePath,
     cleanPathname: options.cleanPathname,
     clearRequestContext: options.clearRequestContext,
     consumeDynamicUsage,
