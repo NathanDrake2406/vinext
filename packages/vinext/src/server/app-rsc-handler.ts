@@ -168,7 +168,11 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   ensureInstrumentation?: () => Promise<void>;
   handleProgressiveActionRequest: (
     options: HandleProgressiveActionRequestOptions,
-  ) => Promise<Response | { formState: ReactFormState | null; kind: "form-state" } | null>;
+  ) => Promise<
+    | Response
+    | { actionError?: unknown; formState: ReactFormState | null; kind: "form-state" }
+    | null
+  >;
   handleServerActionRequest: (
     options: HandleServerActionRequestOptions,
   ) => Promise<Response | null>;

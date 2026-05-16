@@ -74,6 +74,7 @@ type AppServerActionRoute = {
 };
 
 type ProgressiveServerActionResult = {
+  actionError?: unknown;
   formState: ReactFormState | null;
   kind: "form-state";
 };
