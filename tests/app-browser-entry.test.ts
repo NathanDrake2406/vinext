@@ -1,6 +1,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createOnUncaughtError } from "../packages/vinext/src/server/app-browser-error.js";
+import { createPopstateRestoreHandler } from "../packages/vinext/src/server/app-browser-entry.js";
 import {
   createDiscardedServerActionRefreshScheduler,
   createServerActionInitiationSnapshot,
@@ -250,6 +251,71 @@ function stubWindow(href: string) {
 
   return { assign, replace, storage };
 }
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+describe("createPopstateRestoreHandler", () => {
+  it("restores scroll only for the latest popstate navigation", async () => {
+    stubWindow("https://example.com/page");
+    const restoredStates: unknown[] = [];
+    const first = createDeferred<void>();
+    const second = createDeferred<void>();
+    const deferreds = [first, second];
+    let navigationIndex = 0;
+
+    const getNavigate = () => {
+      const index = navigationIndex;
+      if (index >= deferreds.length) {
+        return null;
+      }
+      navigationIndex += 1;
+      return async () => deferreds[index].promise;
+    };
+    let activeNavId = 0;
+
+    window.__VINEXT_RSC_PENDING__ = null;
+
+    const handler = createPopstateRestoreHandler({
+      getActiveNavigationId: () => activeNavId,
+      getNavigate: () => {
+        const navigation = getNavigate();
+        if (navigation === null || navigation === undefined) return null;
+
+        activeNavId += 1;
+        return async () => navigation();
+      },
+      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ as Promise<void> | null,
+      isCurrentNavigation: (navId) => navId === activeNavId,
+      restorePopstateScrollPosition: (state) => {
+        restoredStates.push(state);
+      },
+      setPendingNavigation: (pending) => {
+        window.__VINEXT_RSC_PENDING__ = pending;
+      },
+    });
+
+    handler({ state: { __vinext_scrollY: 10 } } as PopStateEvent);
+    handler({ state: { __vinext_scrollY: 20 } } as PopStateEvent);
+
+    // Resolve the newest popstate nav first; it should restore its state.
+    second.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(restoredStates).toEqual([{ __vinext_scrollY: 20 }]);
+
+    first.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(restoredStates).toEqual([{ __vinext_scrollY: 20 }]);
+    expect(window.__VINEXT_RSC_PENDING__).toBeNull();
+  });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

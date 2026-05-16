@@ -654,6 +654,45 @@ function scrollToHashTarget(hash: string): void {
   });
 }
 
+type PopstateRestoreHandlerDependencies = {
+  getActiveNavigationId: () => number;
+  getNavigate: () =>
+    | ((href: string, redirectDepth: number, navigationKind: NavigationKind) => Promise<void>)
+    | null
+    | undefined;
+  getPendingNavigation: () => Promise<void> | null;
+  isCurrentNavigation: (navId: number) => boolean;
+  restorePopstateScrollPosition: (state: unknown) => void;
+  setPendingNavigation: (pendingNavigation: Promise<void> | null) => void;
+};
+
+export function createPopstateRestoreHandler({
+  getActiveNavigationId,
+  getNavigate,
+  getPendingNavigation,
+  isCurrentNavigation,
+  restorePopstateScrollPosition: restore,
+  setPendingNavigation,
+}: PopstateRestoreHandlerDependencies): (event: PopStateEvent) => void {
+  return (event) => {
+    notifyAppRouterTransitionStart(window.location.href, "traverse");
+    const navigateRsc = getNavigate();
+    const pendingNavigation =
+      navigateRsc?.(window.location.href, 0, "traverse") ?? Promise.resolve();
+    const popstateNavId = navigateRsc ? getActiveNavigationId() : null;
+    setPendingNavigation(pendingNavigation);
+    void pendingNavigation.finally(() => {
+      if (popstateNavId !== null && !isCurrentNavigation(popstateNavId)) {
+        return;
+      }
+      restore(event.state);
+      if (getPendingNavigation() === pendingNavigation) {
+        setPendingNavigation(null);
+      }
+    });
+  };
+}
+
 function restorePopstateScrollPosition(state: unknown): void {
   if (!(state && typeof state === "object" && "__vinext_scrollY" in state)) {
     if (window.location.hash) {
@@ -1329,26 +1368,20 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // Pages Router scroll restoration is handled in shims/navigation.ts:1289 with
   // microtask-based deferral for compatibility with non-RSC navigation.
   // See: https://github.com/vercel/next.js/discussions/41934#discussioncomment-4602607
-  window.addEventListener("popstate", (event) => {
-    notifyAppRouterTransitionStart(window.location.href, "traverse");
-    const navigateRsc = window.__VINEXT_RSC_NAVIGATE__;
-    const pendingNavigation =
-      navigateRsc?.(window.location.href, 0, "traverse") ?? Promise.resolve();
-    const popstateNavId = navigateRsc ? browserNavigationController.getActiveNavigationId() : null;
-    window.__VINEXT_RSC_PENDING__ = pendingNavigation;
-    void pendingNavigation.finally(() => {
-      if (
-        popstateNavId !== null &&
-        !browserNavigationController.isCurrentNavigation(popstateNavId)
-      ) {
-        return;
-      }
-      restorePopstateScrollPosition(event.state);
-      if (window.__VINEXT_RSC_PENDING__ === pendingNavigation) {
-        window.__VINEXT_RSC_PENDING__ = null;
-      }
-    });
-  });
+  window.addEventListener(
+    "popstate",
+    createPopstateRestoreHandler({
+      getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
+      getNavigate: () => window.__VINEXT_RSC_NAVIGATE__,
+      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ as Promise<void> | null,
+      isCurrentNavigation: (navId: number) =>
+        browserNavigationController.isCurrentNavigation(navId),
+      restorePopstateScrollPosition,
+      setPendingNavigation: (navigation) => {
+        window.__VINEXT_RSC_PENDING__ = navigation;
+      },
+    }),
+  );
 
   if (import.meta.hot) {
     const handleRscUpdate = async (): Promise<void> => {
