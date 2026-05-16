@@ -132,7 +132,10 @@ function declarationHasBindingName(declaration: Statement | null, name: string):
 export function hasNamedExport(code: string, name: string): boolean {
   const program = parseRouteModule(code);
   if (!program) return false;
+  return hasNamedExportInProgram(program, name);
+}
 
+function hasNamedExportInProgram(program: Program, name: string): boolean {
   for (const node of program.body) {
     if (node.type !== "ExportNamedDeclaration") continue;
 
@@ -164,7 +167,10 @@ function unwrapStaticExpression(expression: Expression): Expression {
 function findExportedConstInitializer(code: string, name: string): Expression | null {
   const program = parseRouteModule(code);
   if (!program) return null;
+  return findExportedConstInitializerInProgram(program, name);
+}
 
+function findExportedConstInitializerInProgram(program: Program, name: string): Expression | null {
   for (const node of program.body) {
     if (node.type !== "ExportNamedDeclaration") continue;
     const declaration = node.declaration;
@@ -187,6 +193,14 @@ function findExportedConstInitializer(code: string, name: string): Expression | 
  */
 export function extractExportConstString(code: string, name: string): string | null {
   const initializer = findExportedConstInitializer(code, name);
+  return extractStringFromConstInitializer(initializer);
+}
+
+function extractExportConstStringFromProgram(program: Program, name: string): string | null {
+  return extractStringFromConstInitializer(findExportedConstInitializerInProgram(program, name));
+}
+
+function extractStringFromConstInitializer(initializer: Expression | null): string | null {
   if (initializer === null) return null;
 
   const expression = unwrapStaticExpression(initializer);
@@ -211,6 +225,14 @@ export function extractExportConstString(code: string, name: string): string | n
  */
 export function extractExportConstNumber(code: string, name: string): number | null {
   const initializer = findExportedConstInitializer(code, name);
+  return extractNumberFromConstInitializer(initializer);
+}
+
+function extractExportConstNumberFromProgram(program: Program, name: string): number | null {
+  return extractNumberFromConstInitializer(findExportedConstInitializerInProgram(program, name));
+}
+
+function extractNumberFromConstInitializer(initializer: Expression | null): number | null {
   if (initializer === null) return null;
 
   const value = extractStaticNumberValue(initializer);
@@ -232,10 +254,16 @@ export function extractExportConstNumber(code: string, name: string): number | n
 export function extractGetStaticPropsRevalidate(code: string): number | false | null {
   const program = parseRouteModule(code);
   if (!program) return extractWrappedGetStaticPropsRevalidate(code);
+  return extractGetStaticPropsRevalidateFromProgram(program, code);
+}
 
+function extractGetStaticPropsRevalidateFromProgram(
+  program: Program,
+  fallbackCode: string,
+): number | false | null {
   const getStaticProps = findExportedGetStaticProps(program);
   if (getStaticProps === "external") return null;
-  if (getStaticProps === null) return extractWrappedGetStaticPropsRevalidate(code);
+  if (getStaticProps === null) return extractWrappedGetStaticPropsRevalidate(fallbackCode);
 
   return extractFunctionRevalidate(getStaticProps);
 }
@@ -258,13 +286,14 @@ function extractStaticNumberValue(expression: Expression): StaticNumberValue | n
     if (typeof argument !== "number") return null;
     if (unwrapped.operator === "-") return -argument;
     if (unwrapped.operator === "+") return argument;
+    return null;
   }
 
   return null;
 }
 
 function findExportedGetStaticProps(program: Program): FunctionLike | "external" | null {
-  const localExportNames = new Set<string>();
+  let hasLocalGetStaticPropsExport = false;
 
   for (const node of program.body) {
     if (node.type !== "ExportNamedDeclaration") continue;
@@ -283,22 +312,20 @@ function findExportedGetStaticProps(program: Program): FunctionLike | "external"
       const localName = moduleExportNameValue(specifier.local);
       if (localName !== "getStaticProps") continue;
       if (node.source !== null) return "external";
-      localExportNames.add(localName);
+      hasLocalGetStaticPropsExport = true;
     }
   }
 
-  if (localExportNames.size === 0) return null;
+  if (!hasLocalGetStaticPropsExport) return null;
 
   for (const node of program.body) {
-    if (node.type === "FunctionDeclaration" && node.id && localExportNames.has(node.id.name)) {
+    if (node.type === "FunctionDeclaration" && node.id?.name === "getStaticProps") {
       return node;
     }
 
     if (node.type === "VariableDeclaration") {
-      for (const localName of localExportNames) {
-        const local = findFunctionLikeVariable(node.declarations, localName);
-        if (local) return local;
-      }
+      const local = findFunctionLikeVariable(node.declarations, "getStaticProps");
+      if (local) return local;
     }
   }
 
@@ -324,6 +351,8 @@ function findFunctionLikeVariable(
 }
 
 function extractWrappedGetStaticPropsRevalidate(code: string): number | false | null {
+  // Exported helpers are also used by tests with bare `return { ... }` fragments,
+  // which are not valid module source until wrapped in a synthetic function.
   const program = parseRouteModule(`function __vinextGetStaticProps() {\n${code}\n}`);
   if (!program) return null;
 
@@ -443,7 +472,8 @@ function propertyName(key: PropertyKey): string | null {
  * (`revalidate = 0` → dynamic, `revalidate = Infinity` → static) are decisive.
  */
 export function classifyLayoutSegmentConfig(code: string): LayoutBuildClassification {
-  const dynamicValue = extractExportConstString(code, "dynamic");
+  const program = parseRouteModule(code);
+  const dynamicValue = program ? extractExportConstStringFromProgram(program, "dynamic") : null;
   if (dynamicValue === "force-dynamic") {
     return {
       kind: "dynamic",
@@ -457,7 +487,9 @@ export function classifyLayoutSegmentConfig(code: string): LayoutBuildClassifica
     };
   }
 
-  const revalidateValue = extractExportConstNumber(code, "revalidate");
+  const revalidateValue = program
+    ? extractExportConstNumberFromProgram(program, "revalidate")
+    : null;
   if (revalidateValue === Infinity) {
     return {
       kind: "static",
@@ -499,12 +531,14 @@ export function classifyPagesRoute(filePath: string): {
     return { type: "unknown" };
   }
 
-  if (hasNamedExport(code, "getServerSideProps")) {
+  const program = parseRouteModule(code);
+
+  if (program && hasNamedExportInProgram(program, "getServerSideProps")) {
     return { type: "ssr" };
   }
 
-  if (hasNamedExport(code, "getStaticProps")) {
-    const revalidate = extractGetStaticPropsRevalidate(code);
+  if (program && hasNamedExportInProgram(program, "getStaticProps")) {
+    const revalidate = extractGetStaticPropsRevalidateFromProgram(program, code);
 
     if (revalidate === null || revalidate === false || revalidate === Infinity) {
       return { type: "static" };
@@ -546,8 +580,10 @@ export function classifyAppRoute(
     return { type: "unknown" };
   }
 
+  const program = parseRouteModule(code);
+
   // Check `export const dynamic`
-  const dynamicValue = extractExportConstString(code, "dynamic");
+  const dynamicValue = program ? extractExportConstStringFromProgram(program, "dynamic") : null;
   if (dynamicValue === "force-dynamic") {
     return { type: "ssr" };
   }
@@ -558,7 +594,9 @@ export function classifyAppRoute(
   }
 
   // Check `export const revalidate`
-  const revalidateValue = extractExportConstNumber(code, "revalidate");
+  const revalidateValue = program
+    ? extractExportConstNumberFromProgram(program, "revalidate")
+    : null;
   if (revalidateValue !== null) {
     if (revalidateValue === Infinity) return { type: "static" };
     if (revalidateValue === 0) return { type: "ssr" };
