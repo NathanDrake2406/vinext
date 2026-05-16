@@ -12,7 +12,7 @@
  * `images.domains` from next.config.js. Unmatched URLs are blocked
  * in production and warn in development, matching Next.js behavior.
  */
-import React, { forwardRef, useEffect, useLayoutEffect, useRef } from "react";
+import React, { forwardRef, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as ReactDOM from "react-dom";
 import { Image as UnpicImage } from "@unpic/react";
 import { hasRemoteMatch, isPrivateIp, type RemotePattern } from "./image-config.js";
@@ -382,6 +382,14 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   const priorityFetchPriority = priority ? "high" : undefined;
   const imageLoading = priority ? "eager" : shouldPreload ? loading : (loading ?? "lazy");
 
+  const [completedBlurSrc, setCompletedBlurSrc] = useState<string | undefined>(undefined);
+  const blurComplete = completedBlurSrc === src;
+
+  const markBlurComplete = () => {
+    if (placeholder !== "blur") return;
+    setCompletedBlurSrc((current) => (current === src ? current : src));
+  };
+
   useNonWarningLayoutEffect(() => {
     if (!didInsertRef.current && imgElementRef.current !== null) {
       const img = imgElementRef.current;
@@ -400,6 +408,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
       // distinguish success from error — a failed image has naturalWidth === 0.
       // Ported from Next.js: https://github.com/vercel/next.js/pull/93209
       if (img.complete && img.naturalWidth > 0) {
+        markBlurComplete();
         const currentOnLoad = onLoadRef.current;
         const currentOnLoadingComplete = onLoadingCompleteRef.current;
         if (currentOnLoad || currentOnLoadingComplete) {
@@ -424,6 +433,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
     ? (e: React.SyntheticEvent<HTMLImageElement>) => {
         if (lastLoadedSrcRef.current === src) return;
         lastLoadedSrcRef.current = src;
+        markBlurComplete();
         onLoad?.(e);
         onLoadingComplete(e.currentTarget);
       }
@@ -431,17 +441,31 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
       ? (e: React.SyntheticEvent<HTMLImageElement>) => {
           if (lastLoadedSrcRef.current === src) return;
           lastLoadedSrcRef.current = src;
+          markBlurComplete();
           onLoad(e);
         }
-      : undefined;
+      : placeholder === "blur"
+        ? () => {
+            if (lastLoadedSrcRef.current === src) return;
+            lastLoadedSrcRef.current = src;
+            markBlurComplete();
+          }
+        : undefined;
 
   const handleError = onError
     ? (e: React.SyntheticEvent<HTMLImageElement>) => {
         if (lastErrorSrcRef.current === src) return;
         lastErrorSrcRef.current = src;
+        markBlurComplete();
         onError(e);
       }
-    : undefined;
+    : placeholder === "blur"
+      ? () => {
+          if (lastErrorSrcRef.current === src) return;
+          lastErrorSrcRef.current = src;
+          markBlurComplete();
+        }
+      : undefined;
 
   // If a custom loader is provided, use basic img with loader URL
   if (loader) {
@@ -488,16 +512,16 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
     }
 
     const sanitizedBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
-    const blurStyle =
-      placeholder === "blur" && sanitizedBlur
-        ? {
-            backgroundImage: `url(${sanitizedBlur})`,
-            backgroundSize: "cover",
-            backgroundRepeat: "no-repeat",
-            backgroundPosition: "center",
-          }
-        : undefined;
-    const bg = placeholder === "blur" && sanitizedBlur ? `url(${sanitizedBlur})` : undefined;
+    const showBlur = !blurComplete && placeholder === "blur" && sanitizedBlur;
+    const blurStyle = showBlur
+      ? {
+          backgroundImage: `url(${sanitizedBlur})`,
+          backgroundSize: "cover",
+          backgroundRepeat: "no-repeat",
+          backgroundPosition: "center",
+        }
+      : undefined;
+    const bg = showBlur ? `url(${sanitizedBlur})` : undefined;
 
     if (fill) {
       const fillSizes = sizes ?? "100vw";
@@ -593,7 +617,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   // Sanitize blurDataURL to prevent CSS injection via crafted data URLs.
   const sanitizedLocalBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
   const blurStyle =
-    placeholder === "blur" && sanitizedLocalBlur
+    !blurComplete && placeholder === "blur" && sanitizedLocalBlur
       ? {
           backgroundImage: `url(${sanitizedLocalBlur})`,
           backgroundSize: "cover",

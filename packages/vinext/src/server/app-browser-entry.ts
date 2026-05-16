@@ -80,6 +80,7 @@ import { createPopstateRestoreHandler } from "./app-browser-popstate.js";
 import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-boundary";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { ElementsContext, Slot } from "vinext/shims/slot";
+import { stripBasePath } from "../utils/base-path.js";
 import { createOnUncaughtError } from "./app-browser-error.js";
 import {
   devOnCaughtError,
@@ -641,6 +642,20 @@ function restorePopstateScrollPosition(state: unknown): void {
   requestAnimationFrame(() => {
     window.scrollTo(x, y);
   });
+}
+
+function isSameAppRoutePopstateTarget(href: string): boolean {
+  if (!hasBrowserRouterState()) return false;
+
+  const target = new URL(href, window.location.origin);
+  const routerState = getBrowserRouterState();
+  const targetPathname = stripBasePath(target.pathname, __basePath);
+  const targetSearch = new URLSearchParams(target.search).toString();
+  const currentSearch = routerState.navigationSnapshot.searchParams.toString();
+
+  return (
+    targetPathname === routerState.navigationSnapshot.pathname && targetSearch === currentSearch
+  );
 }
 
 // Set on pagehide so the RSC navigation catch block can distinguish expected
@@ -1320,7 +1335,21 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     },
   });
 
-  window.addEventListener("popstate", handlePopstate);
+  window.addEventListener("popstate", (event) => {
+    // The browser has already applied the history entry by the time popstate
+    // fires. App Router state does not include hashes, so matching the
+    // committed pathname/search proves this traversal does not need a new RSC
+    // payload. This covers both /page#target -> /page and /page -> /page#target.
+    // Notify the transition start so observers still see the URL change, then
+    // restore scroll directly and skip the RSC dispatch.
+    const href = window.location.href;
+    if (isSameAppRoutePopstateTarget(href)) {
+      notifyAppRouterTransitionStart(href, "traverse");
+      restorePopstateScrollPosition(event.state);
+      return;
+    }
+    handlePopstate(event);
+  });
 
   if (import.meta.hot) {
     const handleRscUpdate = async (): Promise<void> => {
