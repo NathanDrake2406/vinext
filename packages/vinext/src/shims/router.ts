@@ -31,6 +31,7 @@ import {
   type UrlQuery,
   urlQueryToSearchParams,
 } from "../utils/query.js";
+import { matchRoutePattern, routePatternParts } from "../routing/route-pattern.js";
 
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
@@ -300,91 +301,20 @@ function extractRouteParamNames(pattern: string): string[] {
   return names;
 }
 
-type RoutePatternPart =
-  | { kind: "static"; value: string }
-  | { kind: "single"; key: string }
-  | { kind: "catchAll"; key: string; optional: boolean };
-
 type RouteQueryNextData = {
   page?: string;
   query?: Record<string, string | string[] | undefined>;
 };
 
-function decodePathSegment(segment: string): string {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
-}
-
 function splitPathSegments(pathname: string): string[] {
   return pathname.split("/").filter(Boolean);
-}
-
-function parseRoutePatternPart(segment: string): RoutePatternPart {
-  if (segment.startsWith("[[...") && segment.endsWith("]]") && segment.length > 7) {
-    return { kind: "catchAll", key: segment.slice(5, -2), optional: true };
-  }
-  if (segment.startsWith("[...") && segment.endsWith("]") && segment.length > 5) {
-    return { kind: "catchAll", key: segment.slice(4, -1), optional: false };
-  }
-  if (segment.startsWith("[") && segment.endsWith("]") && segment.length > 2) {
-    return { kind: "single", key: segment.slice(1, -1) };
-  }
-  if (segment.startsWith(":") && segment.length > 1) {
-    const marker = segment.at(-1);
-    if (marker === "+" || marker === "*") {
-      return { kind: "catchAll", key: segment.slice(1, -1), optional: marker === "*" };
-    }
-    return { kind: "single", key: segment.slice(1) };
-  }
-  return { kind: "static", value: segment };
 }
 
 function extractRouteParamsFromPath(
   pattern: string,
   pathname: string,
 ): Record<string, string | string[]> | null {
-  const patternParts = splitPathSegments(pattern).map(parseRoutePatternPart);
-  const pathSegments = splitPathSegments(pathname);
-  const params: Record<string, string | string[]> = {};
-  let pathIndex = 0;
-
-  for (let patternIndex = 0; patternIndex < patternParts.length; patternIndex++) {
-    const part = patternParts[patternIndex];
-    const currentPathSegment = pathSegments[pathIndex];
-
-    if (part.kind === "static") {
-      if (
-        currentPathSegment === undefined ||
-        decodePathSegment(currentPathSegment) !== part.value
-      ) {
-        return null;
-      }
-      pathIndex++;
-      continue;
-    }
-
-    if (part.kind === "single") {
-      if (currentPathSegment === undefined) return null;
-      params[part.key] = decodePathSegment(currentPathSegment);
-      pathIndex++;
-      continue;
-    }
-
-    const remainingPatternParts = patternParts.length - patternIndex - 1;
-    const captureCount = pathSegments.length - pathIndex - remainingPatternParts;
-    if (captureCount < 0 || (!part.optional && captureCount === 0)) return null;
-    if (captureCount > 0) {
-      params[part.key] = pathSegments
-        .slice(pathIndex, pathIndex + captureCount)
-        .map(decodePathSegment);
-      pathIndex += captureCount;
-    }
-  }
-
-  return pathIndex === pathSegments.length ? params : null;
+  return matchRoutePattern(splitPathSegments(pathname), routePatternParts(pattern));
 }
 
 function getRouteQueryFromNextData(
