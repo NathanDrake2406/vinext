@@ -547,16 +547,24 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
 
   // Block dangerous URI schemes (javascript:, data:, vbscript:).
   // Render an inert <a> without href to prevent XSS while preserving
-  // styling and attributes like className, id, aria-*.
+  // styling, refs, and developer event handlers like onClick.
   // This check is placed after all hooks to satisfy the Rules of Hooks.
   if (isDangerous) {
     if (process.env.NODE_ENV !== "production") {
       console.warn(`<Link> blocked dangerous href: ${resolvedHref}`);
     }
     return (
-      <a {...anchorProps} onMouseEnter={handleMouseEnter} onTouchStart={handleTouchStart}>
-        {children}
-      </a>
+      <LinkStatusContext.Provider value={linkStatusValue}>
+        <a
+          ref={setRefs}
+          onClick={onClick}
+          onMouseEnter={handleMouseEnter}
+          onTouchStart={handleTouchStart}
+          {...anchorProps}
+        >
+          {children}
+        </a>
+      </LinkStatusContext.Provider>
     );
   }
 
