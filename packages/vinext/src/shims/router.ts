@@ -675,7 +675,9 @@ export function useRouter(): NextRouter {
         const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
         window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
         _lastPathnameAndSearch = window.location.pathname + window.location.search;
-        scrollToHashTarget(hash);
+        if (options?.scroll !== false) {
+          scrollToHashTarget(hash);
+        }
         setState(getPathnameAndQuery());
         routerEvents.emit("hashChangeComplete", eventUrl, {
           shallow: options?.shallow ?? false,
@@ -699,10 +701,12 @@ export function useRouter(): NextRouter {
 
       // Scroll: handle hash target, else scroll to top unless scroll:false
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-      if (hash) {
-        scrollToHashTarget(hash);
-      } else if (options?.scroll !== false) {
-        window.scrollTo(0, 0);
+      if (options?.scroll !== false) {
+        if (hash) {
+          scrollToHashTarget(hash);
+        } else {
+          window.scrollTo(0, 0);
+        }
       }
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return true;
@@ -735,7 +739,9 @@ export function useRouter(): NextRouter {
         const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
         window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
         _lastPathnameAndSearch = window.location.pathname + window.location.search;
-        scrollToHashTarget(hash);
+        if (options?.scroll !== false) {
+          scrollToHashTarget(hash);
+        }
         setState(getPathnameAndQuery());
         routerEvents.emit("hashChangeComplete", eventUrl, {
           shallow: options?.shallow ?? false,
@@ -758,10 +764,12 @@ export function useRouter(): NextRouter {
 
       // Scroll: handle hash target, else scroll to top unless scroll:false
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-      if (hash) {
-        scrollToHashTarget(hash);
-      } else if (options?.scroll !== false) {
-        window.scrollTo(0, 0);
+      if (options?.scroll !== false) {
+        if (hash) {
+          scrollToHashTarget(hash);
+        } else {
+          window.scrollTo(0, 0);
+        }
       }
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return true;
@@ -1000,7 +1008,9 @@ const Router = {
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
       window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
       _lastPathnameAndSearch = window.location.pathname + window.location.search;
-      scrollToHashTarget(hash);
+      if (options?.scroll !== false) {
+        scrollToHashTarget(hash);
+      }
       routerEvents.emit("hashChangeComplete", eventUrl, {
         shallow: options?.shallow ?? false,
       });
@@ -1021,10 +1031,12 @@ const Router = {
     routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
 
     const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-    if (hash) {
-      scrollToHashTarget(hash);
-    } else if (options?.scroll !== false) {
-      window.scrollTo(0, 0);
+    if (options?.scroll !== false) {
+      if (hash) {
+        scrollToHashTarget(hash);
+      } else {
+        window.scrollTo(0, 0);
+      }
     }
     window.dispatchEvent(new CustomEvent("vinext:navigate"));
     return true;
@@ -1053,7 +1065,9 @@ const Router = {
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
       window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
       _lastPathnameAndSearch = window.location.pathname + window.location.search;
-      scrollToHashTarget(hash);
+      if (options?.scroll !== false) {
+        scrollToHashTarget(hash);
+      }
       routerEvents.emit("hashChangeComplete", eventUrl, {
         shallow: options?.shallow ?? false,
       });
@@ -1073,10 +1087,12 @@ const Router = {
     routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
 
     const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-    if (hash) {
-      scrollToHashTarget(hash);
-    } else if (options?.scroll !== false) {
-      window.scrollTo(0, 0);
+    if (options?.scroll !== false) {
+      if (hash) {
+        scrollToHashTarget(hash);
+      } else {
+        window.scrollTo(0, 0);
+      }
     }
     window.dispatchEvent(new CustomEvent("vinext:navigate"));
     return true;
