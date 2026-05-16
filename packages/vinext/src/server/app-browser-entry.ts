@@ -75,6 +75,7 @@ import {
   type AppRouterState,
   type OperationLane,
 } from "./app-browser-state.js";
+import { createPopstateRestoreHandler } from "./app-browser-popstate.js";
 import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-boundary";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { ElementsContext, Slot } from "vinext/shims/slot";
@@ -652,44 +653,6 @@ function scrollToHashTarget(hash: string): void {
 
     document.getElementsByName(fragment)[0]?.scrollIntoView({ behavior: "auto" });
   });
-}
-
-type PopstateRestoreHandlerDependencies = {
-  getActiveNavigationId: () => number;
-  getNavigate: () =>
-    | ((href: string, redirectDepth: number, navigationKind: NavigationKind) => Promise<void>)
-    | null
-    | undefined;
-  getPendingNavigation: () => Promise<void> | null;
-  isCurrentNavigation: (navId: number) => boolean;
-  restorePopstateScrollPosition: (state: unknown) => void;
-  setPendingNavigation: (pendingNavigation: Promise<void> | null) => void;
-};
-
-export function createPopstateRestoreHandler({
-  getActiveNavigationId,
-  getNavigate,
-  getPendingNavigation,
-  isCurrentNavigation,
-  restorePopstateScrollPosition: restore,
-  setPendingNavigation,
-}: PopstateRestoreHandlerDependencies): (event: PopStateEvent) => void {
-  return (event) => {
-    notifyAppRouterTransitionStart(window.location.href, "traverse");
-    const navigateRsc = getNavigate();
-    const pendingNavigation =
-      navigateRsc?.(window.location.href, 0, "traverse") ?? Promise.resolve();
-    const popstateNavId = navigateRsc ? getActiveNavigationId() : null;
-    setPendingNavigation(pendingNavigation);
-    void pendingNavigation.finally(() => {
-      if (popstateNavId === null || isCurrentNavigation(popstateNavId)) {
-        restore(event.state);
-      }
-      if (getPendingNavigation() === pendingNavigation) {
-        setPendingNavigation(null);
-      }
-    });
-  };
 }
 
 function restorePopstateScrollPosition(state: unknown): void {
@@ -1372,9 +1335,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     createPopstateRestoreHandler({
       getActiveNavigationId: () => browserNavigationController.getActiveNavigationId(),
       getNavigate: () => window.__VINEXT_RSC_NAVIGATE__,
-      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ as Promise<void> | null,
+      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ ?? null,
       isCurrentNavigation: (navId: number) =>
         browserNavigationController.isCurrentNavigation(navId),
+      notifyAppRouterTransitionStart: (href) => notifyAppRouterTransitionStart(href, "traverse"),
       restorePopstateScrollPosition,
       setPendingNavigation: (navigation) => {
         window.__VINEXT_RSC_PENDING__ = navigation;

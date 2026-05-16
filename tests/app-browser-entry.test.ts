@@ -1,7 +1,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createOnUncaughtError } from "../packages/vinext/src/server/app-browser-error.js";
-import { createPopstateRestoreHandler } from "../packages/vinext/src/server/app-browser-entry.js";
+import { createPopstateRestoreHandler } from "../packages/vinext/src/server/app-browser-popstate.js";
 import {
   createDiscardedServerActionRefreshScheduler,
   createServerActionInitiationSnapshot,
@@ -275,7 +275,7 @@ describe("createPopstateRestoreHandler", () => {
         return null;
       }
       navigationIndex += 1;
-      return async () => deferreds[index].promise;
+      return () => deferreds[index].promise;
     };
     let activeNavId = 0;
 
@@ -288,10 +288,11 @@ describe("createPopstateRestoreHandler", () => {
         if (navigation === null || navigation === undefined) return null;
 
         activeNavId += 1;
-        return async () => navigation();
+        return () => navigation();
       },
-      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ as Promise<void> | null,
+      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ ?? null,
       isCurrentNavigation: (navId) => navId === activeNavId,
+      notifyAppRouterTransitionStart: () => {},
       restorePopstateScrollPosition: (state) => {
         restoredStates.push(state);
       },
@@ -330,13 +331,12 @@ describe("createPopstateRestoreHandler", () => {
       getNavigate: () => {
         if (navigationCalls > 0) return null;
         navigationCalls += 1;
-        return async () => {
-          activeNavId += 1;
-          return first.promise;
-        };
+        activeNavId += 1;
+        return () => first.promise;
       },
-      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ as Promise<void> | null,
+      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ ?? null,
       isCurrentNavigation: (navId) => navId === activeNavId,
+      notifyAppRouterTransitionStart: () => {},
       restorePopstateScrollPosition: () => {
         restoreCalls += 1;
       },
