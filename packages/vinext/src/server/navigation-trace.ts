@@ -8,6 +8,7 @@ export const NavigationTraceReasonCodes = {
   interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT",
   interceptedRejectedMissingProof: "NC_INTERCEPT_REJECT_MISSING_PROOF",
   interceptedRejectedMissingSlotProof: "NC_INTERCEPT_REJECT_SLOT",
+  interceptedRejectedTargetMismatch: "NC_INTERCEPT_REJECT_TARGET",
   interceptedRejectedUnknownSource: "NC_INTERCEPT_REJECT_SOURCE",
   prefetchOnly: "NC_PREFETCH_ONLY",
   requestWork: "NC_REQUEST",
@@ -20,6 +21,7 @@ export const NavigationTraceReasonCodes = {
   interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT";
   interceptedRejectedMissingProof: "NC_INTERCEPT_REJECT_MISSING_PROOF";
   interceptedRejectedMissingSlotProof: "NC_INTERCEPT_REJECT_SLOT";
+  interceptedRejectedTargetMismatch: "NC_INTERCEPT_REJECT_TARGET";
   interceptedRejectedUnknownSource: "NC_INTERCEPT_REJECT_SOURCE";
   prefetchOnly: "NC_PREFETCH_ONLY";
   requestWork: "NC_REQUEST";

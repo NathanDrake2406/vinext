@@ -76,10 +76,15 @@ function isInterceptionMetadataValue(value: unknown): value is AppElementsInterc
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   return (
     "sourceMatchedUrl" in value &&
+    typeof value.sourceMatchedUrl === "string" &&
     "sourceRouteId" in value &&
+    typeof value.sourceRouteId === "string" &&
     "slotId" in value &&
+    typeof value.slotId === "string" &&
     "targetMatchedUrl" in value &&
-    "targetRouteId" in value
+    typeof value.targetMatchedUrl === "string" &&
+    "targetRouteId" in value &&
+    typeof value.targetRouteId === "string"
   );
 }
 

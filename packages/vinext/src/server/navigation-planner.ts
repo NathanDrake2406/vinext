@@ -405,7 +405,7 @@ function validateInterceptedPreservation(options: {
   if (proof.targetMatchedUrl !== options.targetSnapshot.matchedUrl) {
     return {
       kind: "rejected",
-      reasonCode: NavigationTraceReasonCodes.interceptedRejectedUnknownSource,
+      reasonCode: NavigationTraceReasonCodes.interceptedRejectedTargetMismatch,
     };
   }
 
@@ -476,6 +476,11 @@ function planFlightResponseArrived(options: {
   }
 
   const targetSnapshot = options.event.result.targetSnapshot;
+  // A payload with legacy interceptionContext (no __interception proof metadata)
+  // enters validation but gets rejected with interceptedRejectedMissingProof →
+  // hard navigation. This fences legacy cached RSC payloads from before this
+  // deploy. The cache is busted by the deploy (different build), so no stale
+  // artifact should persist across deploys.
   const hasInterceptedPayload =
     targetSnapshot.interception !== null || targetSnapshot.interceptionContext !== null;
   if (hasInterceptedPayload) {
