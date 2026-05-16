@@ -31,6 +31,7 @@ import {
   type UrlQuery,
   urlQueryToSearchParams,
 } from "../utils/query.js";
+import { scrollToHashTarget } from "./hash-scroll.js";
 
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
@@ -203,16 +204,6 @@ export function isHashOnlyChange(href: string): boolean {
   if (href.startsWith("#")) return true;
   if (typeof window === "undefined") return false;
   return isHashOnlyBrowserUrlChange(href, window.location.href, __basePath);
-}
-
-/** Scroll to hash target element, or top if no hash */
-function scrollToHash(hash: string): void {
-  if (!hash || hash === "#") {
-    window.scrollTo(0, 0);
-    return;
-  }
-  const el = document.getElementById(hash.slice(1));
-  if (el) el.scrollIntoView({ behavior: "auto" });
 }
 
 /** Save current scroll position into history state for back/forward restoration */
@@ -684,7 +675,9 @@ export function useRouter(): NextRouter {
         const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
         window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
         _lastPathnameAndSearch = window.location.pathname + window.location.search;
-        scrollToHash(hash);
+        if (options?.scroll !== false) {
+          scrollToHashTarget(hash);
+        }
         setState(getPathnameAndQuery());
         routerEvents.emit("hashChangeComplete", eventUrl, {
           shallow: options?.shallow ?? false,
@@ -708,10 +701,12 @@ export function useRouter(): NextRouter {
 
       // Scroll: handle hash target, else scroll to top unless scroll:false
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-      if (hash) {
-        scrollToHash(hash);
-      } else if (options?.scroll !== false) {
-        window.scrollTo(0, 0);
+      if (options?.scroll !== false) {
+        if (hash) {
+          scrollToHashTarget(hash);
+        } else {
+          window.scrollTo(0, 0);
+        }
       }
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return true;
@@ -744,7 +739,9 @@ export function useRouter(): NextRouter {
         const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
         window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
         _lastPathnameAndSearch = window.location.pathname + window.location.search;
-        scrollToHash(hash);
+        if (options?.scroll !== false) {
+          scrollToHashTarget(hash);
+        }
         setState(getPathnameAndQuery());
         routerEvents.emit("hashChangeComplete", eventUrl, {
           shallow: options?.shallow ?? false,
@@ -767,10 +764,12 @@ export function useRouter(): NextRouter {
 
       // Scroll: handle hash target, else scroll to top unless scroll:false
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-      if (hash) {
-        scrollToHash(hash);
-      } else if (options?.scroll !== false) {
-        window.scrollTo(0, 0);
+      if (options?.scroll !== false) {
+        if (hash) {
+          scrollToHashTarget(hash);
+        } else {
+          window.scrollTo(0, 0);
+        }
       }
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return true;
@@ -855,7 +854,7 @@ if (typeof window !== "undefined") {
       // Hash-only back/forward — no page fetch needed
       const hashUrl = appUrl + window.location.hash;
       routerEvents.emit("hashChangeStart", hashUrl, { shallow: false });
-      scrollToHash(window.location.hash);
+      scrollToHashTarget(window.location.hash);
       routerEvents.emit("hashChangeComplete", hashUrl, { shallow: false });
       window.dispatchEvent(new CustomEvent("vinext:navigate"));
       return;
@@ -1009,7 +1008,9 @@ const Router = {
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
       window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
       _lastPathnameAndSearch = window.location.pathname + window.location.search;
-      scrollToHash(hash);
+      if (options?.scroll !== false) {
+        scrollToHashTarget(hash);
+      }
       routerEvents.emit("hashChangeComplete", eventUrl, {
         shallow: options?.shallow ?? false,
       });
@@ -1030,10 +1031,12 @@ const Router = {
     routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
 
     const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-    if (hash) {
-      scrollToHash(hash);
-    } else if (options?.scroll !== false) {
-      window.scrollTo(0, 0);
+    if (options?.scroll !== false) {
+      if (hash) {
+        scrollToHashTarget(hash);
+      } else {
+        window.scrollTo(0, 0);
+      }
     }
     window.dispatchEvent(new CustomEvent("vinext:navigate"));
     return true;
@@ -1062,7 +1065,9 @@ const Router = {
       const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
       window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
       _lastPathnameAndSearch = window.location.pathname + window.location.search;
-      scrollToHash(hash);
+      if (options?.scroll !== false) {
+        scrollToHashTarget(hash);
+      }
       routerEvents.emit("hashChangeComplete", eventUrl, {
         shallow: options?.shallow ?? false,
       });
@@ -1082,10 +1087,12 @@ const Router = {
     routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
 
     const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-    if (hash) {
-      scrollToHash(hash);
-    } else if (options?.scroll !== false) {
-      window.scrollTo(0, 0);
+    if (options?.scroll !== false) {
+      if (hash) {
+        scrollToHashTarget(hash);
+      } else {
+        window.scrollTo(0, 0);
+      }
     }
     window.dispatchEvent(new CustomEvent("vinext:navigate"));
     return true;

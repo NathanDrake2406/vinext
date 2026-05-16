@@ -29,6 +29,7 @@ import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
 import { AppRouterContext } from "./internal/app-router-context.js";
+import { scrollToHashTarget } from "./hash-scroll.js";
 
 // ─── Layout segment context ───────────────────────────────────────────────────
 // Stores the child segments below the current layout. Each layout wraps its
@@ -1101,21 +1102,6 @@ function isHashOnlyChange(href: string): boolean {
   return isHashOnlyBrowserUrlChange(href, window.location.href, __basePath);
 }
 
-/**
- * Scroll to a hash target element, or to the top if no hash.
- */
-function scrollToHash(hash: string): void {
-  if (!hash || hash === "#") {
-    window.scrollTo(0, 0);
-    return;
-  }
-  const id = hash.slice(1);
-  const element = document.getElementById(id);
-  if (element) {
-    element.scrollIntoView({ behavior: "auto" });
-  }
-}
-
 // ---------------------------------------------------------------------------
 // History method wrappers — suppress notifications for internal updates
 // ---------------------------------------------------------------------------
@@ -1312,7 +1298,7 @@ export async function navigateClientSide(
     }
     commitClientNavigationState();
     if (scroll) {
-      scrollToHash(hash);
+      scrollToHashTarget(hash);
     }
     return;
   }
@@ -1349,7 +1335,7 @@ export async function navigateClientSide(
 
   if (scroll) {
     if (hash) {
-      scrollToHash(hash);
+      scrollToHashTarget(hash);
     } else {
       window.scrollTo(0, 0);
     }
