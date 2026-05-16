@@ -10365,6 +10365,12 @@ describe("Pages Router router helpers", () => {
       expect(isExternalUrl("//cdn.example.com/img.png")).toBe(true);
     });
 
+    it("detects native URI schemes as external", () => {
+      expect(isExternalUrl("mailto:hello@example.com")).toBe(true);
+      expect(isExternalUrl("tel:+123456789")).toBe(true);
+      expect(isExternalUrl("sms:+123456789")).toBe(true);
+    });
+
     it("returns false for relative paths", () => {
       expect(isExternalUrl("/about")).toBe(false);
       expect(isExternalUrl("/")).toBe(false);
@@ -10433,6 +10439,19 @@ describe("Pages Router router helpers", () => {
         expect(applyNavigationLocale("//cdn.example.com/img.png", "fr")).toBe(
           "//cdn.example.com/img.png",
         );
+      } finally {
+        delete (globalThis as any).window;
+      }
+    });
+
+    it("does not prefix native URI schemes", async () => {
+      const { applyNavigationLocale } = await import("../packages/vinext/src/shims/router.js");
+      (globalThis as any).window = { __VINEXT_DEFAULT_LOCALE__: "en" };
+      try {
+        expect(applyNavigationLocale("mailto:hello@example.com", "fr")).toBe(
+          "mailto:hello@example.com",
+        );
+        expect(applyNavigationLocale("tel:+123456789", "fr")).toBe("tel:+123456789");
       } finally {
         delete (globalThis as any).window;
       }

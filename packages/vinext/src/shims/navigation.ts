@@ -21,6 +21,7 @@ import {
 } from "../server/app-rsc-cache-busting.js";
 import { VINEXT_MOUNTED_SLOTS_HEADER, VINEXT_PARAMS_HEADER } from "../server/headers.js";
 import {
+  isAbsoluteOrProtocolRelativeUrl,
   isHashOnlyBrowserUrlChange,
   toBrowserNavigationHref,
   toSameOriginAppPath,
@@ -1089,7 +1090,7 @@ export function useParams<
  * Check if a href is an external URL (any URL scheme per RFC 3986, or protocol-relative).
  */
 function isExternalUrl(href: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//");
+  return isAbsoluteOrProtocolRelativeUrl(href);
 }
 
 /**
@@ -1428,7 +1429,7 @@ const _appRouter = {
       // origins so we don't pollute the prefetch cache with a same-path .rsc on
       // the current origin. Mirrors Link's prefetchUrl and navigateClientSide.
       let prefetchHref = href;
-      if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//")) {
+      if (isAbsoluteOrProtocolRelativeUrl(href)) {
         const localPath = toSameOriginAppPath(href, __basePath);
         if (localPath == null) return;
         prefetchHref = localPath;

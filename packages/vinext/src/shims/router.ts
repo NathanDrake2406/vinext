@@ -19,6 +19,7 @@ import type { VinextNextData } from "../client/vinext-next-data.js";
 import { isValidModulePath } from "../client/validate-module-path.js";
 import { installWindowNext, type PagesRouterPublicInstance } from "../client/window-next.js";
 import {
+  isAbsoluteOrProtocolRelativeUrl,
   isHashOnlyBrowserUrlChange,
   toBrowserNavigationHref,
   toSameOriginAppPath,
@@ -169,7 +170,7 @@ export function applyNavigationLocale(url: string, locale?: string): string {
   if (!locale || typeof window === "undefined") return url;
   // Absolute and protocol-relative URLs must not be prefixed — locale
   // only applies to local paths.
-  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("//")) {
+  if (isAbsoluteOrProtocolRelativeUrl(url)) {
     return url;
   }
 
@@ -181,7 +182,7 @@ export function applyNavigationLocale(url: string, locale?: string): string {
 
 /** Check if a URL is external (any URL scheme per RFC 3986, or protocol-relative) */
 export function isExternalUrl(url: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//");
+  return isAbsoluteOrProtocolRelativeUrl(url);
 }
 
 /** Resolve a hash URL to a basePath-stripped app URL for event payloads */
