@@ -75,6 +75,7 @@ import {
   type AppRouterState,
   type OperationLane,
 } from "./app-browser-state.js";
+import { createPopstateRestoreHandler } from "./app-browser-popstate.js";
 import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-boundary";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { ElementsContext, Slot } from "vinext/shims/slot";
@@ -1329,18 +1330,25 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // Pages Router scroll restoration is handled in shims/navigation.ts:1289 with
   // microtask-based deferral for compatibility with non-RSC navigation.
   // See: https://github.com/vercel/next.js/discussions/41934#discussioncomment-4602607
-  window.addEventListener("popstate", (event) => {
-    notifyAppRouterTransitionStart(window.location.href, "traverse");
-    const pendingNavigation =
-      window.__VINEXT_RSC_NAVIGATE__?.(window.location.href, 0, "traverse") ?? Promise.resolve();
-    window.__VINEXT_RSC_PENDING__ = pendingNavigation;
-    void pendingNavigation.finally(() => {
-      restorePopstateScrollPosition(event.state);
-      if (window.__VINEXT_RSC_PENDING__ === pendingNavigation) {
-        window.__VINEXT_RSC_PENDING__ = null;
-      }
-    });
+  const handlePopstate = createPopstateRestoreHandler({
+    getActiveNavigationId: browserNavigationController.getActiveNavigationId.bind(
+      browserNavigationController,
+    ),
+    getPendingNavigation: () => window.__VINEXT_RSC_PENDING__,
+    getNavigate: () => window.__VINEXT_RSC_NAVIGATE__,
+    isCurrentNavigation: browserNavigationController.isCurrentNavigation.bind(
+      browserNavigationController,
+    ),
+    notifyAppRouterTransitionStart: (href) => {
+      notifyAppRouterTransitionStart(href, "traverse");
+    },
+    restorePopstateScrollPosition,
+    setPendingNavigation: (pendingNavigation) => {
+      window.__VINEXT_RSC_PENDING__ = pendingNavigation;
+    },
   });
+
+  window.addEventListener("popstate", handlePopstate);
 
   if (import.meta.hot) {
     const handleRscUpdate = async (): Promise<void> => {

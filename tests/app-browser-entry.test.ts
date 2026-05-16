@@ -15,6 +15,7 @@ import {
   hydrateRootInTransition,
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
+import { createPopstateRestoreHandler } from "../packages/vinext/src/server/app-browser-popstate.js";
 import {
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   resolveRscCompatibilityNavigationDecision,
@@ -249,6 +250,16 @@ function stubWindow(href: string) {
   });
 
   return { assign, replace, storage };
+}
+
+function createDeferred(): { resolve: () => void; promise: Promise<void> } {
+  let resolve = () => {
+    throw new Error("Promise was not initialized");
+  };
+  const promise = new Promise<void>((resolveInner) => {
+    resolve = resolveInner;
+  });
+  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -2990,6 +3001,99 @@ describe("app browser entry previousNextUrl helpers", () => {
     });
 
     expect(Object.hasOwn(nextState.elements, "slot:modal:/feed")).toBe(false);
+  });
+});
+
+describe("createPopstateRestoreHandler", () => {
+  it("restores scroll only after the latest popstate navigation commits", async () => {
+    const restoreCalls: unknown[] = [];
+    const firstNavigation = createDeferred();
+    const secondNavigation = createDeferred();
+    let popstateCalls = 0;
+    const popstate = vi.fn(() => {
+      popstateCalls += 1;
+      if (popstateCalls === 1) {
+        return firstNavigation.promise;
+      }
+      return secondNavigation.promise;
+    });
+    let activeNavigationId = 0;
+
+    stubWindow("https://example.com/feed");
+    window.__VINEXT_RSC_PENDING__ = null;
+
+    const handler = createPopstateRestoreHandler({
+      getActiveNavigationId: () => activeNavigationId,
+      getNavigate: () => {
+        activeNavigationId += 1;
+        return (href: string) => popstate();
+      },
+      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__,
+      isCurrentNavigation: (navId) => navId === activeNavigationId,
+      notifyAppRouterTransitionStart: () => {},
+      restorePopstateScrollPosition: (scrollState) => {
+        restoreCalls.push(scrollState);
+      },
+      setPendingNavigation: (pendingNavigation) => {
+        window.__VINEXT_RSC_PENDING__ = pendingNavigation;
+      },
+    });
+
+    handler({ state: { __vinext_scrollY: 10 } } as PopStateEvent);
+    handler({ state: { __vinext_scrollY: 20 } } as PopStateEvent);
+
+    expect(window.__VINEXT_RSC_PENDING__).toBe(secondNavigation.promise);
+
+    secondNavigation.resolve();
+    await secondNavigation.promise;
+    await Promise.resolve();
+
+    expect(restoreCalls).toEqual([{ __vinext_scrollY: 20 }]);
+    expect(window.__VINEXT_RSC_PENDING__).toBeNull();
+
+    firstNavigation.resolve();
+    await firstNavigation.promise;
+    await Promise.resolve();
+
+    expect(restoreCalls).toEqual([{ __vinext_scrollY: 20 }]);
+    expect(window.__VINEXT_RSC_PENDING__).toBeNull();
+  });
+
+  it("clears __VINEXT_RSC_PENDING__ when a stale popstate navigation settles", async () => {
+    const restoreCalls: unknown[] = [];
+    const navigation = createDeferred();
+    let activeNavigationId = 1;
+
+    stubWindow("https://example.com/feed");
+    window.__VINEXT_RSC_PENDING__ = null;
+
+    const handler = createPopstateRestoreHandler({
+      getActiveNavigationId: () => activeNavigationId,
+      getNavigate: () => {
+        activeNavigationId = 1;
+        return () => navigation.promise;
+      },
+      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__,
+      isCurrentNavigation: (navId) => navId === activeNavigationId,
+      notifyAppRouterTransitionStart: () => {},
+      restorePopstateScrollPosition: (scrollState) => {
+        restoreCalls.push(scrollState);
+      },
+      setPendingNavigation: (pendingNavigation) => {
+        window.__VINEXT_RSC_PENDING__ = pendingNavigation;
+      },
+    });
+
+    handler({ state: { __vinext_scrollY: 10 } } as PopStateEvent);
+    expect(window.__VINEXT_RSC_PENDING__).toBe(navigation.promise);
+
+    activeNavigationId = 2;
+    navigation.resolve();
+    await navigation.promise;
+    await Promise.resolve();
+
+    expect(restoreCalls).toEqual([]);
+    expect(window.__VINEXT_RSC_PENDING__).toBeNull();
   });
 });
 
