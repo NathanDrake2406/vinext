@@ -157,6 +157,8 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   fetchCache?: FetchCacheMode | null;
   findIntercept: (pathname: string) => AppPageDispatchIntercept | null;
   formState?: ReactFormState | null;
+  actionError?: unknown;
+  actionFailed?: boolean;
   generateStaticParams?: ValidateAppPageDynamicParamsOptions["generateStaticParams"];
   getFontLinks: () => string[];
   getFontPreloads: () => AppPageFontPreload[];
@@ -583,6 +585,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
 
   const pageBuildResult = await buildAppPageElement({
     buildPageElement() {
+      if (options.actionFailed) {
+        throw options.actionError;
+      }
       return options.buildPageElement(
         route,
         options.params,

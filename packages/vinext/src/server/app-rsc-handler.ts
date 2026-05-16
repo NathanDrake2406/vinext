@@ -85,6 +85,8 @@ type AppRscRouteMatch<TRoute> = {
 type DispatchMatchedPageOptions<TRoute> = {
   cleanPathname: string;
   formState: ReactFormState | null;
+  actionError?: unknown;
+  actionFailed?: boolean;
   handlerStart: number;
   interceptionContext: string | null;
   isProgressiveActionRender: boolean;
@@ -165,9 +167,16 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
     options: DispatchMatchedRouteHandlerOptions<TRoute>,
   ) => Promise<Response>;
   ensureInstrumentation?: () => Promise<void>;
-  handleProgressiveActionRequest: (
-    options: HandleProgressiveActionRequestOptions,
-  ) => Promise<Response | { formState: ReactFormState | null; kind: "form-state" } | null>;
+  handleProgressiveActionRequest: (options: HandleProgressiveActionRequestOptions) => Promise<
+    | Response
+    | {
+        actionError?: unknown;
+        actionFailed?: boolean;
+        formState: ReactFormState | null;
+        kind: "form-state";
+      }
+    | null
+  >;
   handleServerActionRequest: (
     options: HandleServerActionRequestOptions,
   ) => Promise<Response | null>;
@@ -420,6 +429,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   if (progressiveActionResult instanceof Response) return progressiveActionResult;
   const isProgressiveActionRender = progressiveActionResult?.kind === "form-state";
   const formState = isProgressiveActionRender ? progressiveActionResult.formState : null;
+  const actionError = isProgressiveActionRender ? progressiveActionResult.actionError : undefined;
+  const actionFailed = isProgressiveActionRender && progressiveActionResult.actionFailed === true;
 
   const serverActionResponse = await options.handleServerActionRequest({
     actionId,
@@ -521,6 +532,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   return options.dispatchMatchedPage({
     cleanPathname,
     formState,
+    actionError,
+    actionFailed,
     handlerStart,
     interceptionContext: interceptionContextHeader,
     isProgressiveActionRender,
