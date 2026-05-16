@@ -341,7 +341,7 @@ export function createSSRHandler(
       try {
         await _alsRegistration;
 
-        // Set SSR context for the router shim so useRouter() returns
+        // Set SSR context for the Pages Router provider so useRouter() returns
         // the correct URL and params during server-side rendering.
         const routerShim = await importModule(runner, "next/router");
         if (typeof routerShim.setSSRContext === "function") {
@@ -799,7 +799,7 @@ export function createSSRHandler(
         let element: React.ReactElement;
 
         // wrapWithRouterContext wraps the element in RouterContext.Provider so that
-        // next/compat/router's useRouter() returns the real router.
+        // next/router and next/compat/router return the real Pages Router.
         const wrapWithRouterContext = routerShim.wrapWithRouterContext;
 
         if (AppComponent) {
