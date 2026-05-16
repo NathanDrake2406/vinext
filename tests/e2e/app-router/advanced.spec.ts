@@ -1,28 +1,7 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { waitForAppRouterHydration } from "../helpers";
 
 const BASE = "http://localhost:4174";
-
-async function waitForAppRouterHydration(page: Page) {
-  await page.waitForFunction(() => typeof window.__VINEXT_RSC_NAVIGATE__ === "function", null, {
-    timeout: 10_000,
-  });
-}
-
-function normalizePrefetchCacheKey(key: string): string {
-  const [url = "", context] = key.split("\0");
-  const normalizedUrl = url.replace(/[?&]_rsc(?:=[^&]*)?/, "");
-  return context === undefined ? normalizedUrl : `${normalizedUrl}\0${context}`;
-}
-
-async function readPhotoPrefetchCacheKeys(page: Page): Promise<string[]> {
-  const keys = await page.evaluate(() =>
-    Array.from(window.__VINEXT_RSC_PREFETCH_CACHE__?.keys() ?? []).filter((key) =>
-      key.includes("/photos/42.rsc"),
-    ),
-  );
-
-  return keys.map(normalizePrefetchCacheKey).sort();
-}
 
 test.describe("Parallel Routes", () => {
   test("dashboard renders all parallel slot content", async ({ page }) => {
@@ -56,6 +35,31 @@ test.describe("Parallel Routes", () => {
     await expect(page.locator('[data-testid="analytics-default"]')).toBeVisible();
 
     // Should NOT contain the slot page.tsx content
+    await expect(page.locator('[data-testid="team-slot"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="analytics-slot"]')).not.toBeVisible();
+  });
+
+  test("soft navigation preserves active parallel slot content over target defaults", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/dashboard`);
+    await waitForAppRouterHydration(page);
+
+    await expect(page.locator('[data-testid="team-slot"]')).toBeVisible();
+    await expect(page.locator('[data-testid="analytics-slot"]')).toBeVisible();
+
+    await page.click('[data-testid="dash-settings-link"]');
+    await expect(page).toHaveURL(`${BASE}/dashboard/settings`);
+    await expect(page.locator("h1")).toHaveText("Settings");
+    await expect(page.locator('[data-testid="team-slot"]')).toBeVisible();
+    await expect(page.locator('[data-testid="analytics-slot"]')).toBeVisible();
+    await expect(page.locator('[data-testid="team-default"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="analytics-default"]')).not.toBeVisible();
+
+    await page.reload();
+    await waitForAppRouterHydration(page);
+    await expect(page.locator('[data-testid="team-default"]')).toBeVisible();
+    await expect(page.locator('[data-testid="analytics-default"]')).toBeVisible();
     await expect(page.locator('[data-testid="team-slot"]')).not.toBeVisible();
     await expect(page.locator('[data-testid="analytics-slot"]')).not.toBeVisible();
   });
@@ -285,23 +289,6 @@ test.describe("Intercepting Routes", () => {
     await expect(page.locator('[data-testid="photo-modal"]')).toBeVisible();
     await expect(page.locator('[data-testid="feed-page"]')).toBeVisible();
     await expect(page.locator('[data-testid="photo-page"]')).not.toBeVisible();
-  });
-
-  test("prefetches keep separate cache entries for feed and gallery interception contexts", async ({
-    page,
-  }) => {
-    await page.goto(`${BASE}/feed`);
-    await waitForAppRouterHydration(page);
-    await expect
-      .poll(async () => readPhotoPrefetchCacheKeys(page))
-      .toEqual(["/photos/42.rsc\u0000/feed"]);
-
-    await page.click("#gallery-link");
-    await page.waitForURL(`${BASE}/gallery`);
-    await waitForAppRouterHydration(page);
-    await expect
-      .poll(async () => readPhotoPrefetchCacheKeys(page))
-      .toEqual(["/photos/42.rsc\u0000/feed", "/photos/42.rsc\u0000/gallery"]);
   });
 });
 

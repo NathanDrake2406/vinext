@@ -17,6 +17,7 @@ import React, {
   useState,
   type AnchorHTMLAttributes,
   type MouseEvent,
+  type TouchEvent,
 } from "react";
 // Import shared RSC prefetch utilities from navigation shim (relative path
 // so this resolves both via the Vite plugin and in direct vitest imports)
@@ -28,12 +29,10 @@ import {
   prefetchRscResponse,
 } from "./navigation.js";
 import { AppElementsWire } from "../server/app-elements.js";
-import {
-  createRscRequestHeaders,
-  createRscRequestUrl,
-  VINEXT_RSC_MOUNTED_SLOTS_HEADER,
-} from "../server/app-rsc-cache-busting.js";
+import { createRscRequestHeaders, createRscRequestUrl } from "../server/app-rsc-cache-busting.js";
+import { VINEXT_MOUNTED_SLOTS_HEADER } from "../server/headers.js";
 import { isDangerousScheme } from "./url-safety.js";
+import { canLinkPrefetch, getLinkPrefetchHref } from "./link-prefetch.js";
 import {
   resolveRelativeHref,
   toBrowserNavigationHref,
@@ -43,7 +42,9 @@ import {
 import { appendSearchParamsToUrl, type UrlQuery, urlQueryToSearchParams } from "../utils/query.js";
 import { addLocalePrefix, getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
 import { getI18nContext } from "./i18n-context.js";
-import type { VinextNextData } from "../client/vinext-next-data.js";
+import type { VinextLinkPrefetchRoute, VinextNextData } from "../client/vinext-next-data.js";
+import { createRouteTrieCache, matchRouteWithTrie } from "../routing/route-matching.js";
+import { stripBasePath } from "../utils/base-path.js";
 
 type NavigateEvent = {
   url: URL;
@@ -59,8 +60,8 @@ type LinkProps = {
   as?: string;
   /** Replace the current history entry instead of pushing */
   replace?: boolean;
-  /** Prefetch the page in the background (default: true, uses IntersectionObserver) */
-  prefetch?: boolean;
+  /** Prefetch the page in the background (App Router default: auto, Pages Router default: true) */
+  prefetch?: boolean | "auto" | null;
   /** Whether to pass the href to the child element */
   passHref?: boolean;
   /** Scroll to top on navigation (default: true) */
@@ -71,6 +72,17 @@ type LinkProps = {
   onNavigate?: (event: NavigateEvent) => void;
   children?: React.ReactNode;
 } & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href">;
+
+type LinkPrefetchMode = "disabled" | "auto" | "full";
+
+declare global {
+  // Window is an ambient interface from lib.dom; interface merging is required
+  // for this global browser hook.
+  // oxlint-disable-next-line typescript-eslint/consistent-type-definitions
+  interface Window {
+    __VINEXT_LINK_PREFETCH_ROUTES__?: VinextLinkPrefetchRoute[];
+  }
+}
 
 // ---------------------------------------------------------------------------
 // useLinkStatus — reports the pending state of a parent <Link> navigation
@@ -93,6 +105,7 @@ export function useLinkStatus(): LinkStatusContextValue {
 
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
+const linkPrefetchRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 
 function resolveHref(href: LinkProps["href"]): string {
   if (typeof href === "string") return href;
@@ -102,6 +115,45 @@ function resolveHref(href: LinkProps["href"]): string {
     url = appendSearchParamsToUrl(url, params);
   }
   return url;
+}
+
+export function resolveLinkPrefetchMode(
+  prefetchProp: LinkProps["prefetch"],
+  isDangerous: boolean,
+): LinkPrefetchMode {
+  if (isDangerous || prefetchProp === false) return "disabled";
+  if (prefetchProp === true) return "full";
+  return "auto";
+}
+
+function toSameOriginRouteHref(href: string): string | null {
+  if (typeof window === "undefined") return null;
+
+  let url: URL;
+  try {
+    url = new URL(href, window.location.href);
+  } catch {
+    return null;
+  }
+
+  if (url.origin !== window.location.origin) return null;
+
+  return `${stripBasePath(url.pathname, __basePath)}${url.search}`;
+}
+
+export function canAutoPrefetchFullAppRoute(href: string): boolean {
+  if (typeof window === "undefined") return false;
+
+  const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
+  if (!routes) return false;
+
+  const routeHref = toSameOriginRouteHref(href);
+  if (routeHref === null) return false;
+
+  const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
+  if (!match) return false;
+
+  return !match.route.isDynamic;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,16 +170,15 @@ function resolveHref(href: LinkProps["href"]): string {
  * Uses `requestIdleCallback` (or `setTimeout` fallback) to avoid blocking
  * the main thread during initial page load.
  */
-function prefetchUrl(href: string): void {
+function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "high" = "low"): void {
   if (typeof window === "undefined") return;
 
-  // Normalize same-origin absolute URLs to local paths before prefetching
-  let prefetchHref = href;
-  if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//")) {
-    const localPath = toSameOriginAppPath(href, __basePath);
-    if (localPath == null) return; // truly external — don't prefetch
-    prefetchHref = localPath;
-  }
+  const prefetchHref = getLinkPrefetchHref({
+    href,
+    basePath: __basePath,
+    currentOrigin: window.location.origin,
+  });
+  if (prefetchHref == null) return;
 
   const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
 
@@ -136,11 +187,18 @@ function prefetchUrl(href: string): void {
   schedule(() => {
     void (async () => {
       if (typeof window.__VINEXT_RSC_NAVIGATE__ === "function") {
+        // `auto`/`null`/undefined should not behave like `prefetch={true}` for
+        // App Router dynamic routes. Next.js may prefetch a loading-boundary
+        // shell for dynamic routes, but vinext's current client cache stores
+        // complete RSC responses only; keep automatic full prefetch to route
+        // shapes that are statically known safe until segment prefetch exists.
+        if (mode === "auto" && !canAutoPrefetchFullAppRoute(prefetchHref)) return;
+
         const interceptionContext = getCurrentInterceptionContext();
         const mountedSlotsHeader = getMountedSlotsHeader();
         const headers = createRscRequestHeaders({ interceptionContext });
         if (mountedSlotsHeader) {
-          headers.set(VINEXT_RSC_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
+          headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
         }
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
@@ -154,7 +212,7 @@ function prefetchUrl(href: string): void {
           fetch(rscUrl, {
             headers,
             credentials: "include",
-            priority: "low" as const,
+            priority,
             // @ts-expect-error — purpose is a valid fetch option in some browsers
             purpose: "prefetch",
           }),
@@ -282,6 +340,8 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     scroll = true,
     children,
     onClick,
+    onMouseEnter,
+    onTouchStart,
     onNavigate,
     ...rest
   },
@@ -313,9 +373,15 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   }, []);
 
   // Prefetching: observe the element when it enters the viewport.
-  // prefetch={false} disables, prefetch={true} or undefined/null (default) enables.
+  // In App Router, null/undefined/"auto" is automatic prefetch and true opts
+  // into a full RSC prefetch, matching Next.js's public prefetch contract.
   const internalRef = useRef<HTMLAnchorElement | null>(null);
-  const shouldPrefetch = prefetchProp !== false && !isDangerous;
+  const prefetchMode = resolveLinkPrefetchMode(prefetchProp, isDangerous);
+  const shouldPrefetch = canLinkPrefetch({
+    nodeEnv: process.env.NODE_ENV,
+    prefetch: prefetchProp,
+    isDangerous,
+  });
 
   const setRefs = useCallback(
     (node: HTMLAnchorElement | null) => {
@@ -332,29 +398,45 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     const node = internalRef.current;
     if (!node) return;
 
-    // Normalize same-origin absolute URLs; skip truly external ones
-    let hrefToPrefetch = localizedHref;
-    if (
-      localizedHref.startsWith("http://") ||
-      localizedHref.startsWith("https://") ||
-      localizedHref.startsWith("//")
-    ) {
-      const localPath = toSameOriginAppPath(localizedHref, __basePath);
-      if (localPath == null) return; // truly external
-      hrefToPrefetch = localPath;
-    }
+    const hrefToPrefetch = getLinkPrefetchHref({
+      href: localizedHref,
+      basePath: __basePath,
+      currentOrigin: window.location.origin,
+    });
+    if (hrefToPrefetch == null) return;
 
     const observer = getSharedObserver();
     if (!observer) return;
 
-    observerCallbacks.set(node, () => prefetchUrl(hrefToPrefetch));
+    observerCallbacks.set(node, () => prefetchUrl(hrefToPrefetch, prefetchMode, "low"));
     observer.observe(node);
 
     return () => {
       observer.unobserve(node);
       observerCallbacks.delete(node);
     };
-  }, [shouldPrefetch, localizedHref]);
+  }, [shouldPrefetch, prefetchMode, localizedHref]);
+
+  const prefetchOnIntent = useCallback(() => {
+    if (!shouldPrefetch) return;
+    prefetchUrl(localizedHref, prefetchMode, "high");
+  }, [shouldPrefetch, prefetchMode, localizedHref]);
+
+  const handleMouseEnter = useCallback(
+    (e: MouseEvent<HTMLAnchorElement>) => {
+      onMouseEnter?.(e);
+      prefetchOnIntent();
+    },
+    [onMouseEnter, prefetchOnIntent],
+  );
+
+  const handleTouchStart = useCallback(
+    (e: TouchEvent<HTMLAnchorElement>) => {
+      onTouchStart?.(e);
+      prefetchOnIntent();
+    },
+    [onTouchStart, prefetchOnIntent],
+  );
 
   const handleClick = async (e: MouseEvent<HTMLAnchorElement>) => {
     if (onClick) onClick(e);
@@ -471,12 +553,25 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     if (process.env.NODE_ENV !== "production") {
       console.warn(`<Link> blocked dangerous href: ${resolvedHref}`);
     }
-    return <a {...anchorProps}>{children}</a>;
+    return (
+      <a {...anchorProps} onMouseEnter={handleMouseEnter} onTouchStart={handleTouchStart}>
+        {children}
+      </a>
+    );
   }
 
   return (
     <LinkStatusContext.Provider value={linkStatusValue}>
-      <a ref={setRefs} href={fullHref} onClick={handleClick} {...anchorProps}>
+      <a
+        ref={setRefs}
+        href={fullHref}
+        onClick={(event) => {
+          void handleClick(event);
+        }}
+        onMouseEnter={handleMouseEnter}
+        onTouchStart={handleTouchStart}
+        {...anchorProps}
+      >
         {children}
       </a>
     </LinkStatusContext.Provider>

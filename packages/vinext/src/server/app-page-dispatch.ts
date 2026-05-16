@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { ReactFormState } from "react-dom/client";
 import type { ClassificationReason } from "../build/layout-classification-types.js";
 import {
   _consumeRequestScopedCacheLife,
@@ -8,18 +9,22 @@ import {
 import {
   consumeDynamicUsage,
   consumeInvalidDynamicUsageError,
+  consumeRenderRequestApiUsage,
   getAndClearPendingCookies,
   getDraftModeCookieHeader,
   isDraftModeRequest,
   markDynamicUsage,
+  peekRenderRequestApiUsage,
   setHeadersContext,
 } from "vinext/shims/headers";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { createRequestContext, runWithRequestContext } from "vinext/shims/unified-request-context";
 import {
   ensureFetchPatch,
+  consumeDynamicFetchObservations,
   type FetchCacheMode,
   getCollectedFetchTags,
+  peekDynamicFetchObservations,
   runWithFetchDedupe,
   setCurrentFetchCacheMode,
   setCurrentFetchSoftTags,
@@ -45,10 +50,24 @@ import {
 } from "./app-page-request.js";
 import { renderAppPageLifecycle } from "./app-page-render.js";
 import {
+  createAppPageHtmlOutputScope,
+  createAppPageRenderObservation,
+  createAppPageRscOutputScope,
+} from "./app-page-render-observation.js";
+import {
   mergeMiddlewareResponseHeaders,
   type AppPageMiddlewareContext,
 } from "./app-page-response.js";
-import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
+import {
+  VINEXT_RSC_CONTENT_TYPE,
+  VINEXT_RSC_VARY_HEADER,
+  applyRscCompatibilityIdHeader,
+} from "./app-rsc-cache-busting.js";
+import {
+  APP_RSC_RENDER_MODE_NAVIGATION,
+  shouldSuppressLoadingBoundaries,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
 import { createAppPageTreePath } from "./app-page-route-wiring.js";
 import type { AppPageSsrHandler } from "./app-page-stream.js";
 import { createStaticGenerationHeadersContext } from "./app-static-generation.js";
@@ -137,6 +156,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   dynamicParamsConfig?: boolean;
   fetchCache?: FetchCacheMode | null;
   findIntercept: (pathname: string) => AppPageDispatchIntercept | null;
+  formState?: ReactFormState | null;
   generateStaticParams?: ValidateAppPageDynamicParamsOptions["generateStaticParams"];
   getFontLinks: () => string[];
   getFontPreloads: () => AppPageFontPreload[];
@@ -148,12 +168,17 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   hasPageModule: boolean;
   handlerStart: number;
   interceptionContext: string | null;
+  isProgressiveActionRender?: boolean;
   isProduction: boolean;
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
   isrGet: AppPageCacheGetter;
   isrHtmlKey: (pathname: string) => string;
-  isrRscKey: (pathname: string, mountedSlotsHeader?: string | null) => string;
+  isrRscKey: (
+    pathname: string,
+    mountedSlotsHeader?: string | null,
+    renderMode?: AppRscRenderMode,
+  ) => string;
   isrSet: AppPageCacheSetter;
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
   middlewareContext: AppPageMiddlewareContext;
@@ -192,9 +217,11 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     pathname: string;
     searchParams: URLSearchParams;
   }) => void;
+  renderMode?: AppRscRenderMode;
 };
 
 function shouldReadAppPageCache(options: {
+  isProgressiveActionRender: boolean;
   isDraftMode: boolean;
   isForceDynamic: boolean;
   isProduction: boolean;
@@ -204,6 +231,7 @@ function shouldReadAppPageCache(options: {
 }): boolean {
   return (
     options.isProduction &&
+    !options.isProgressiveActionRender &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
     (options.isRscRequest || !options.scriptNonce) &&
@@ -219,7 +247,13 @@ function buildAppPageTags(
   return buildPageCacheTags(cleanPathname, extraTags, [...routeSegments], "page");
 }
 
-async function runAppPageRevalidationContext(
+async function runAppPageRevalidationContext<
+  TResult extends {
+    html: string;
+    rscData: ArrayBuffer;
+    tags: string[];
+  },
+>(
   options: {
     cleanPathname: string;
     currentFetchCacheMode?: FetchCacheMode | null;
@@ -229,16 +263,8 @@ async function runAppPageRevalidationContext(
     routeSegments: readonly string[];
     setNavigationContext: DispatchAppPageOptions<AppPageDispatchRoute>["setNavigationContext"];
   },
-  renderFn: () => Promise<{
-    html: string;
-    rscData: ArrayBuffer;
-    tags: string[];
-  }>,
-): Promise<{
-  html: string;
-  rscData: ArrayBuffer;
-  tags: string[];
-}> {
+  renderFn: () => Promise<TResult>,
+): Promise<TResult> {
   const headersContext = createStaticGenerationHeadersContext({
     dynamicConfig: options.dynamicConfig,
     routeKind: "page",
@@ -326,7 +352,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     return methodResponse;
   }
 
-  if (isForceStatic || isDynamicError) {
+  if ((isForceStatic || isDynamicError) && !isDraftMode) {
     setHeadersContext(
       createStaticGenerationHeadersContext({
         dynamicConfig,
@@ -345,6 +371,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     shouldReadAppPageCache({
       isDraftMode,
       isForceDynamic,
+      isProgressiveActionRender: options.isProgressiveActionRender === true,
       isProduction: options.isProduction,
       isRscRequest: options.isRscRequest,
       revalidateSeconds: currentRevalidateSeconds,
@@ -363,6 +390,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       middlewareHeaders: options.middlewareContext.headers,
       middlewareStatus: options.middlewareContext.status,
       mountedSlotsHeader: options.mountedSlotsHeader,
+      renderMode: options.renderMode,
       expireSeconds: options.expireSeconds,
       // cacheLife-only routes discover their actual revalidate during the
       // fresh render; this seed only gets them into the cache read path.
@@ -423,9 +451,46 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
               getCollectedFetchTags(),
               route.routeSegments,
             );
+            // Consume once: HTML and RSC artifacts are produced by the same
+            // regeneration render and should carry the same observation set.
+            const observationState = {
+              dynamicFetches: consumeDynamicFetchObservations(),
+              requestApis: consumeRenderRequestApiUsage(),
+            };
             return {
               html,
+              htmlRenderObservation: createAppPageRenderObservation({
+                boundaryOutcome: { kind: "success" },
+                cacheability: "public",
+                cacheTags: tags,
+                cleanPathname: options.cleanPathname,
+                completeness: "complete",
+                output: createAppPageHtmlOutputScope({
+                  element: revalidatedElement,
+                  renderEpoch: null,
+                  rootBoundaryId: null,
+                  routePattern: route.pattern,
+                }),
+                params: options.params,
+                state: observationState,
+              }),
               rscData,
+              rscRenderObservation: createAppPageRenderObservation({
+                boundaryOutcome: { kind: "success" },
+                cacheability: "public",
+                cacheTags: tags,
+                cleanPathname: options.cleanPathname,
+                completeness: "complete",
+                output: createAppPageRscOutputScope({
+                  element: revalidatedElement,
+                  mountedSlotsHeader: options.mountedSlotsHeader,
+                  renderEpoch: null,
+                  rootBoundaryId: null,
+                  routePattern: route.pattern,
+                }),
+                params: options.params,
+                state: observationState,
+              }),
               tags,
               cacheControl:
                 typeof cacheLife?.revalidate === "number"
@@ -496,10 +561,11 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         onError: interceptOnError,
       });
       const interceptHeaders = new Headers({
-        "Content-Type": "text/x-component; charset=utf-8",
+        "Content-Type": VINEXT_RSC_CONTENT_TYPE,
         Vary: VINEXT_RSC_VARY_HEADER,
       });
       mergeMiddlewareResponseHeaders(interceptHeaders, options.middlewareContext.headers);
+      applyRscCompatibilityIdHeader(interceptHeaders);
       return new Response(interceptStream, {
         status: options.middlewareContext.status ?? 200,
         headers: interceptHeaders,
@@ -541,6 +607,12 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     clearRequestContext: options.clearRequestContext,
     consumeDynamicUsage,
     consumeInvalidDynamicUsageError,
+    consumeRenderObservationState() {
+      return {
+        dynamicFetches: consumeDynamicFetchObservations(),
+        requestApis: consumeRenderRequestApiUsage(),
+      };
+    },
     createRscOnErrorHandler(pathname, routePath) {
       return options.createRscOnErrorHandler(pathname, routePath);
     },
@@ -560,7 +632,13 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       return _peekRequestScopedCacheLife();
     },
     handlerStart: options.handlerStart,
-    hasLoadingBoundary: Boolean(route.loading?.default),
+    hasLoadingBoundary: shouldSuppressLoadingBoundaries(
+      options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION,
+    )
+      ? false
+      : Boolean(route.loading?.default),
+    formState: options.formState ?? null,
+    isProgressiveActionRender: options.isProgressiveActionRender === true,
     isDynamicError,
     isDraftMode,
     isForceDynamic,
@@ -577,6 +655,12 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     loadSsrHandler: options.loadSsrHandler,
     middlewareContext: options.middlewareContext,
     params: options.params,
+    peekRenderObservationState() {
+      return {
+        dynamicFetches: peekDynamicFetchObservations(),
+        requestApis: peekRenderRequestApiUsage(),
+      };
+    },
     probeLayoutAt(layoutIndex) {
       return options.probeLayoutAt(layoutIndex);
     },
@@ -607,6 +691,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     },
     revalidateSeconds: currentRevalidateSeconds,
     mountedSlotsHeader: options.mountedSlotsHeader,
+    renderMode: options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION,
     renderErrorBoundaryResponse(renderError) {
       return options.renderErrorBoundaryPage(renderError);
     },

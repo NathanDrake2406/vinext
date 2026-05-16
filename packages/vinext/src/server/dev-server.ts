@@ -2,9 +2,11 @@ import type { ViteDevServer } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Route } from "../routing/pages-router.js";
 import { matchRoute, patternToNextFormat } from "../routing/pages-router.js";
+import { normalizeStaticPathname, type StaticPathsEntry } from "../routing/route-pattern.js";
 import type { ModuleImporter } from "./instrumentation.js";
 import { importModule, reportRequestError } from "./instrumentation.js";
 import type { NextI18nConfig } from "../config/next-config.js";
+import { VINEXT_CACHE_HEADER } from "./headers.js";
 import {
   isrGet,
   isrSet,
@@ -403,18 +405,30 @@ export function createSSRHandler(
           const fallback = pathsResult?.fallback ?? false;
 
           if (fallback === false) {
-            // Only allow paths explicitly listed in getStaticPaths
-            const paths: Array<{ params: Record<string, string | string[]> }> =
-              pathsResult?.paths ?? [];
-            const isValidPath = paths.some((p: { params: Record<string, string | string[]> }) =>
-              Object.entries(p.params).every(([key, val]) => {
+            // Only allow paths explicitly listed in getStaticPaths. Next.js
+            // accepts `paths` as Array<string | { params, locale? }>; the
+            // shared `StaticPathsEntry` type and `normalizeStaticPathname`
+            // helper in `../routing/route-pattern.ts` reference the upstream
+            // implementation.
+            type DevStaticPathsEntry = Exclude<StaticPathsEntry, null | undefined>;
+            const paths: Array<DevStaticPathsEntry> = pathsResult?.paths ?? [];
+            const currentPathname = normalizeStaticPathname(url);
+            const isValidPath = paths.some((p) => {
+              if (typeof p === "string") {
+                return normalizeStaticPathname(p) === currentPathname;
+              }
+              const entryParams = p.params;
+              if (entryParams === undefined || entryParams === null) {
+                return false;
+              }
+              return Object.entries(entryParams).every(([key, val]) => {
                 const actual = params[key];
                 if (Array.isArray(val)) {
                   return Array.isArray(actual) && val.join("/") === actual.join("/");
                 }
                 return String(val) === String(actual);
-              }),
-            );
+              });
+            });
 
             if (!isValidPath) {
               await renderErrorPage(
@@ -563,7 +577,7 @@ export function createSSRHandler(
             const revalidateSecs = getRevalidateDuration(cacheKey) ?? 60;
             const hitHeaders: Record<string, string> = {
               "Content-Type": "text/html",
-              "X-Vinext-Cache": "HIT",
+              [VINEXT_CACHE_HEADER]: "HIT",
               "Cache-Control": `s-maxage=${revalidateSecs}, stale-while-revalidate`,
             };
             if (earlyFontLinkHeader) hitHeaders["Link"] = earlyFontLinkHeader;
@@ -710,7 +724,7 @@ export function createSSRHandler(
             const revalidateSecs = getRevalidateDuration(cacheKey) ?? 60;
             const staleHeaders: Record<string, string> = {
               "Content-Type": "text/html",
-              "X-Vinext-Cache": "STALE",
+              [VINEXT_CACHE_HEADER]: "STALE",
               "Cache-Control": `s-maxage=${revalidateSecs}, stale-while-revalidate`,
             };
             if (earlyFontLinkHeader) staleHeaders["Link"] = earlyFontLinkHeader;
@@ -954,7 +968,7 @@ hydrate();
           } else {
             extraHeaders["Cache-Control"] =
               `s-maxage=${isrRevalidateSeconds}, stale-while-revalidate`;
-            extraHeaders["X-Vinext-Cache"] = "MISS";
+            extraHeaders[VINEXT_CACHE_HEADER] = "MISS";
           }
         }
 

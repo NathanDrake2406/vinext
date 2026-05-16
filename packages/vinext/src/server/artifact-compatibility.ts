@@ -26,6 +26,19 @@ type ArtifactCompatibilityEnvelopeInput = Readonly<{
   renderEpoch?: string | null;
 }>;
 
+type ArtifactCompatibilitySet = readonly [string, string, ...string[]];
+
+type ArtifactCompatibilityMap = Readonly<{
+  graphVersions?: readonly ArtifactCompatibilitySet[];
+  deploymentVersions?: readonly ArtifactCompatibilitySet[];
+  rootBoundaryIds?: readonly ArtifactCompatibilitySet[];
+  renderEpochs?: readonly ArtifactCompatibilitySet[];
+}>;
+
+type ArtifactCompatibilityEvaluationOptions = Readonly<{
+  compatibilityMap?: ArtifactCompatibilityMap;
+}>;
+
 type ArtifactCompatibilityFallback = "renderFresh";
 
 type ArtifactCompatibilityUnknownReason =
@@ -36,9 +49,13 @@ type ArtifactCompatibilityUnknownReason =
 
 type ArtifactCompatibilityIncompatibleReason =
   | "appElementsSchemaVersionMismatch"
+  | "deploymentVersionNotDeclaredCompatible"
   | "deploymentVersionMismatch"
+  | "graphVersionNotDeclaredCompatible"
   | "graphVersionMismatch"
+  | "renderEpochNotDeclaredCompatible"
   | "renderEpochMismatch"
+  | "rootBoundaryIdNotDeclaredCompatible"
   | "rootBoundaryIdMismatch"
   | "rscPayloadSchemaVersionMismatch"
   | "schemaVersionMismatch";
@@ -137,22 +154,43 @@ function compareKnownField(
   candidateValue: string | null,
   unknownReason: ArtifactCompatibilityUnknownReason,
   mismatchReason: ArtifactCompatibilityIncompatibleReason,
+  notDeclaredCompatibleReason: ArtifactCompatibilityIncompatibleReason,
+  compatibilitySets: readonly ArtifactCompatibilitySet[] | undefined,
 ): ArtifactCompatibilityDecision | null {
   if (currentValue === null || candidateValue === null) {
     return unknown(unknownReason);
   }
-  if (currentValue !== candidateValue) {
+  if (currentValue === candidateValue) {
+    return null;
+  }
+  if (compatibilitySets === undefined) {
     return incompatible(mismatchReason);
   }
-  return null;
+  return isDeclaredCompatible(currentValue, candidateValue, compatibilitySets)
+    ? null
+    : incompatible(notDeclaredCompatibleReason);
+}
+
+function isDeclaredCompatible(
+  currentValue: string,
+  candidateValue: string,
+  compatibilitySets: readonly ArtifactCompatibilitySet[],
+): boolean {
+  // Compatibility is intentionally scoped to one declared set. Overlapping
+  // pair sets like [a,b] and [b,c] must not silently make a compatible with c.
+  return compatibilitySets.some(
+    (compatibilitySet) =>
+      compatibilitySet.includes(currentValue) && compatibilitySet.includes(candidateValue),
+  );
 }
 
 export function evaluateArtifactCompatibility(
   current: ArtifactCompatibilityEnvelope,
   candidate: ArtifactCompatibilityEnvelope,
+  options: ArtifactCompatibilityEvaluationOptions = {},
 ): ArtifactCompatibilityDecision {
-  // Pre-positioned for #726-COMPAT-04/05, where cache and visited-response
-  // reuse paths will compare the current render proof with a candidate payload.
+  // This remains a proof evaluator: mismatched fields are compatible only when
+  // the current build's compatibility map explicitly declares that relationship.
   if (current.schemaVersion !== candidate.schemaVersion) {
     return incompatible("schemaVersionMismatch");
   }
@@ -168,6 +206,8 @@ export function evaluateArtifactCompatibility(
     candidate.graphVersion,
     "graphVersionUnknown",
     "graphVersionMismatch",
+    "graphVersionNotDeclaredCompatible",
+    options.compatibilityMap?.graphVersions,
   );
   if (graphDecision) return graphDecision;
 
@@ -176,6 +216,8 @@ export function evaluateArtifactCompatibility(
     candidate.deploymentVersion,
     "deploymentVersionUnknown",
     "deploymentVersionMismatch",
+    "deploymentVersionNotDeclaredCompatible",
+    options.compatibilityMap?.deploymentVersions,
   );
   if (deploymentDecision) return deploymentDecision;
 
@@ -184,6 +226,8 @@ export function evaluateArtifactCompatibility(
     candidate.rootBoundaryId,
     "rootBoundaryIdUnknown",
     "rootBoundaryIdMismatch",
+    "rootBoundaryIdNotDeclaredCompatible",
+    options.compatibilityMap?.rootBoundaryIds,
   );
   if (rootBoundaryDecision) return rootBoundaryDecision;
 
@@ -192,6 +236,8 @@ export function evaluateArtifactCompatibility(
     candidate.renderEpoch,
     "renderEpochUnknown",
     "renderEpochMismatch",
+    "renderEpochNotDeclaredCompatible",
+    options.compatibilityMap?.renderEpochs,
   );
   if (renderEpochDecision) return renderEpochDecision;
 

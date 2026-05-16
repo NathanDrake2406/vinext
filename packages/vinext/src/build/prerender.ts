@@ -32,6 +32,8 @@ import {
 } from "vinext/shims/cache";
 import { runWithHeadersContext, headersContextFromRequest } from "vinext/shims/headers";
 import { createValidFileMatcher, findFileWithExtensions } from "../routing/file-matcher.js";
+import { normalizeStaticPathsEntry, type StaticPathsEntry } from "../routing/route-pattern.js";
+import { VINEXT_PRERENDER_SECRET_HEADER } from "../server/headers.js";
 import { startProdServer } from "../server/prod-server.js";
 import { readPrerenderSecret } from "./server-manifest.js";
 export { readPrerenderSecret } from "./server-manifest.js";
@@ -291,8 +293,24 @@ async function runWithConcurrency<T, R>(
  * Build a URL path from a route pattern and params.
  * "/posts/:id" + { id: "42" } → "/posts/42"
  * "/docs/:slug+" + { slug: ["a", "b"] } → "/docs/a/b"
+ *
+ * Throws a descriptive error rather than a cryptic `Cannot read properties of
+ * undefined` if `params` itself is missing or required keys are absent — the
+ * caller (prerenderPages / prerenderApp) catches this and surfaces it as a
+ * per-route error result.
  */
-function buildUrlFromParams(pattern: string, params: Record<string, string | string[]>): string {
+function buildUrlFromParams(
+  pattern: string,
+  params: Record<string, string | string[]> | undefined | null,
+): string {
+  if (params === undefined || params === null) {
+    throw new Error(
+      `[vinext] buildUrlFromParams: params is ${params === null ? "null" : "undefined"} for pattern "${pattern}". ` +
+        `Check that getStaticPaths / generateStaticParams returned an object with a "params" key, ` +
+        `or pass a string path (see https://nextjs.org/docs/pages/api-reference/functions/get-static-paths).`,
+    );
+  }
+
   const parts = pattern.split("/").filter(Boolean);
   const result: string[] = [];
 
@@ -503,16 +521,20 @@ export async function prerenderPages({
 
     const baseUrl = `http://127.0.0.1:${prodServer.port}`;
     const secretHeaders: Record<string, string> = prerenderSecret
-      ? { "x-vinext-prerender-secret": prerenderSecret }
+      ? { [VINEXT_PRERENDER_SECRET_HEADER]: prerenderSecret }
       : {};
 
+    // Next.js allows `paths` to be either a list of strings or a list of
+    // { params, locale? } objects. The `StaticPathsEntry` type and the
+    // `normalizeStaticPathsEntry` helper live in `../routing/route-pattern.ts`
+    // — see that file's doc comments for the Next.js references.
     type BundleRoute = {
       pattern: string;
       isDynamic: boolean;
       params: Record<string, string>;
       module: {
         getStaticPaths?: (opts: { locales: string[]; defaultLocale: string }) => Promise<{
-          paths: Array<{ params: Record<string, string | string[]> }>;
+          paths: Array<StaticPathsEntry>;
           fallback: unknown;
         }>;
         getStaticProps?: unknown;
@@ -551,7 +573,7 @@ export async function prerenderPages({
               }
               if (text === "null") return { paths: [], fallback: false };
               return JSON.parse(text) as {
-                paths: Array<{ params: Record<string, string | string[]> }>;
+                paths: Array<StaticPathsEntry>;
                 fallback: unknown;
               };
             }
@@ -632,11 +654,30 @@ export async function prerenderPages({
           continue;
         }
 
-        const paths: Array<{ params: Record<string, string | string[]> }> =
-          pathsResult?.paths ?? [];
-        for (const { params } of paths) {
-          const urlPath = buildUrlFromParams(route.pattern, params);
-          pagesToRender.push({ route, urlPath, params, revalidate });
+        // `paths` may be `Array<string | { params, locale? }>` — normalize
+        // each entry into a params object via the shared helper, surfacing any
+        // per-entry problem as a per-route error result instead of crashing
+        // the whole prerender.
+        const paths: Array<StaticPathsEntry> = pathsResult?.paths ?? [];
+        let entryError: string | null = null;
+        for (const item of paths) {
+          const normalized = normalizeStaticPathsEntry(item, route.pattern);
+          if ("error" in normalized) {
+            entryError = normalized.error;
+            break;
+          }
+          const { params } = normalized;
+          try {
+            const urlPath = buildUrlFromParams(route.pattern, params);
+            pagesToRender.push({ route, urlPath, params, revalidate });
+          } catch (e) {
+            entryError = (e as Error).message;
+            break;
+          }
+        }
+        if (entryError) {
+          results.push({ route: route.pattern, status: "error", error: entryError });
+          continue;
         }
       } else {
         pagesToRender.push({ route, urlPath: route.pattern, params: {}, revalidate });
@@ -837,7 +878,7 @@ export async function prerenderApp({
 
     const baseUrl = `http://127.0.0.1:${prodServer.port}`;
     const secretHeaders: Record<string, string> = prerenderSecret
-      ? { "x-vinext-prerender-secret": prerenderSecret }
+      ? { [VINEXT_PRERENDER_SECRET_HEADER]: prerenderSecret }
       : {};
 
     rscHandler = (req: Request) => {
@@ -1039,6 +1080,17 @@ export async function prerenderApp({
           }
 
           for (const params of paramSets) {
+            // Defensively guard against a generateStaticParams() that returns
+            // entries with no params object. Next.js's app static-paths code
+            // validates each required key per repeat/optional (see
+            // .nextjs-ref/packages/next/src/build/static-paths/app.ts around
+            // line 383) and throws a clear error; mirror that here instead of
+            // bubbling up a TypeError from buildUrlFromParams.
+            if (params === null || params === undefined) {
+              throw new Error(
+                `generateStaticParams() for ${route.pattern} returned an entry with no params object.`,
+              );
+            }
             const urlPath = buildUrlFromParams(route.pattern, params);
             urlsToRender.push({
               urlPath,

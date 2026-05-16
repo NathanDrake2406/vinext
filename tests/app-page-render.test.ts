@@ -4,6 +4,7 @@ import React from "react";
 import {
   APP_ARTIFACT_COMPATIBILITY_KEY,
   APP_LAYOUT_FLAGS_KEY,
+  APP_RENDER_OBSERVATION_KEY,
   APP_ROOT_LAYOUT_KEY,
   isAppElementsRecord,
   type AppOutgoingElements,
@@ -16,6 +17,7 @@ import {
 } from "../packages/vinext/src/server/artifact-compatibility.js";
 import type { LayoutClassificationOptions } from "../packages/vinext/src/server/app-page-execution.js";
 import { renderAppPageLifecycle } from "../packages/vinext/src/server/app-page-render.js";
+import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 
 function captureRecord(value: ReactNode | AppOutgoingElements): Record<string, unknown> {
   if (!isAppElementsRecord(value)) {
@@ -54,6 +56,7 @@ function createCommonOptions() {
       _navContext: unknown,
       _fontData: unknown,
       options?: {
+        formState?: unknown;
         scriptNonce?: string;
         sideStream?: ReadableStream<Uint8Array>;
         capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
@@ -90,7 +93,15 @@ function createCommonOptions() {
         status: specialError.statusCode,
       }),
   );
-  const isrSet = vi.fn(async () => {});
+  const isrSet = vi.fn(
+    async (
+      _key: string,
+      _data: CachedAppPageValue,
+      _revalidateSeconds: number,
+      _tags: string[],
+      _expireSeconds?: number,
+    ) => {},
+  );
 
   return {
     isrSet,
@@ -135,6 +146,7 @@ function createCommonOptions() {
       isDraftMode: false,
       isForceDynamic: false,
       isForceStatic: false,
+      isProgressiveActionRender: false,
       isProduction: false,
       isRscRequest: false,
       isrHtmlKey(pathname: string) {
@@ -254,6 +266,37 @@ describe("clearRequestContext timing — issue #660", () => {
   });
 });
 
+describe("form state rendering", () => {
+  it("passes action form state to SSR and disables HTML cache writes", async () => {
+    const common = createCommonOptions();
+    const formState = ["action-result", "key-path", "reference-id", 1] as never;
+    const loadSsrHandler = vi.fn(async () => ({
+      async handleSsr(
+        _rscStream: ReadableStream<Uint8Array>,
+        _navContext: unknown,
+        _fontData: unknown,
+        options?: { formState?: unknown },
+      ) {
+        expect(options?.formState).toBe(formState);
+        return createStream(["<html>action state</html>"]);
+      },
+    }));
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      formState,
+      isProgressiveActionRender: true,
+      isProduction: true,
+      loadSsrHandler,
+      revalidateSeconds: 60,
+    });
+
+    expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    expect(common.isrSet).not.toHaveBeenCalled();
+    await expect(response.text()).resolves.toBe("<html>action state</html>");
+  });
+});
+
 describe("app page render lifecycle", () => {
   it("returns pre-render special responses before starting the render stream", async () => {
     const common = createCommonOptions();
@@ -278,13 +321,19 @@ describe("app page render lifecycle", () => {
     const response = await renderAppPageLifecycle({
       ...common.options,
       consumeDynamicUsage,
+      consumeRenderObservationState() {
+        return {
+          dynamicFetches: ["https://api.example.test/posts?token=secret"],
+          requestApis: ["headers"],
+        };
+      },
       isProduction: true,
       isRscRequest: true,
       revalidateSeconds: 60,
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("text/x-component; charset=utf-8");
+    expect(response.headers.get("content-type")).toBe("text/x-component");
     expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
     expect(response.headers.get("x-vinext-cache")).toBe("MISS");
     await expect(response.text()).resolves.toBe("flight-data");
@@ -299,6 +348,24 @@ describe("app page render lifecycle", () => {
       ["_N_T_/posts/post"],
       undefined,
     );
+    const cachedValue = common.isrSet.mock.calls[0]?.[1];
+    expect(cachedValue?.renderObservation).toMatchObject({
+      boundaryOutcome: { kind: "success" },
+      cacheability: "public",
+      completeness: "complete",
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: null,
+        routeId: "route:/posts/[slug]",
+      },
+      requestApis: expect.arrayContaining([
+        { kind: "headers", status: "observed" },
+        { kind: "params", status: "observed" },
+      ]),
+    });
+    expect(JSON.stringify(cachedValue?.renderObservation)).not.toContain("secret");
     expect(consumeDynamicUsage).toHaveBeenCalledTimes(2);
   });
 
@@ -811,6 +878,47 @@ describe("layoutFlags injection into RSC payload", () => {
       rootBoundaryId: "/(shop)",
       renderEpoch: null,
     });
+  });
+
+  it("injects partial render observation metadata into outgoing AppElements payloads", async () => {
+    const { options, getCapturedElement } = createRscOptions({
+      element: {
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        "layout:/": "root-layout",
+        "page:/test": "test-page",
+      },
+    });
+
+    await renderAppPageLifecycle({
+      ...options,
+      params: { id: "123" },
+      peekRenderObservationState() {
+        return {
+          dynamicFetches: ["https://api.example.test/posts?token=secret"],
+          requestApis: ["headers"],
+        };
+      },
+    });
+
+    const renderObservation = getCapturedElement()[APP_RENDER_OBSERVATION_KEY];
+
+    expect(renderObservation).toMatchObject({
+      boundaryOutcome: { kind: "unknown" },
+      cacheability: "unknown",
+      completeness: "partial",
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: "/",
+        routeId: "route:/test",
+      },
+      requestApis: expect.arrayContaining([
+        { kind: "headers", status: "observed" },
+        { kind: "params", status: "observed" },
+      ]),
+    });
+    expect(JSON.stringify(renderObservation)).not.toContain("secret");
   });
 
   it("injects __layoutFlags for multiple independently classified layouts", async () => {

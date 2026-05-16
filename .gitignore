@@ -23,6 +23,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 coverage/
+reports/
 
 # Worktrees
 .worktrees/
@@ -44,3 +45,4 @@ result-*
 .corepack/
 
 .vinext
+next-env.d.ts

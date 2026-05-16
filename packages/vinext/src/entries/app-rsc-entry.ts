@@ -50,7 +50,7 @@ const appPageRouteWiringPath = resolveEntryPath(
   "../server/app-page-route-wiring.js",
   import.meta.url,
 );
-const appPageHeadPath = resolveEntryPath("../server/app-page-head.js", import.meta.url);
+const appPageProbePath = resolveEntryPath("../server/app-page-probe.js", import.meta.url);
 const appPageParamsPath = resolveEntryPath("../server/app-page-params.js", import.meta.url);
 const appPageDispatchPath = resolveEntryPath("../server/app-page-dispatch.js", import.meta.url);
 const appPageRequestPath = resolveEntryPath("../server/app-page-request.js", import.meta.url);
@@ -176,6 +176,7 @@ async function __loadPrerenderPagesRoutes() {
 import {
   renderToReadableStream as _renderToReadableStream,
   decodeAction,
+  decodeFormState,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -227,9 +228,7 @@ import { buildPageElements as __buildPageElements } from ${JSON.stringify(appPag
 import {
   resolveAppPageSegmentParams as __resolveAppPageSegmentParams,
 } from ${JSON.stringify(appPageParamsPath)};
-import {
-  collectAppPageSearchParams as __collectAppPageSearchParams,
-} from ${JSON.stringify(appPageHeadPath)};
+import { probeAppPage as __probeAppPage } from ${JSON.stringify(appPageProbePath)};
 import {
   dispatchAppPage as __dispatchAppPage,
 } from ${JSON.stringify(appPageDispatchPath)};
@@ -455,8 +454,10 @@ export default __createAppRscHandler({
   configRewrites: __configRewrites,
   dispatchMatchedPage({
     cleanPathname,
+    formState,
     handlerStart,
     interceptionContext,
+    isProgressiveActionRender,
     isRscRequest,
     middlewareContext,
     mountedSlotsHeader,
@@ -465,6 +466,7 @@ export default __createAppRscHandler({
     route,
     scriptNonce,
     searchParams,
+    renderMode,
   }) {
     const PageComponent = route.page?.default;
     const __segmentConfig = __resolveAppPageSegmentConfig({
@@ -487,6 +489,7 @@ export default __createAppRscHandler({
           isRscRequest,
           request,
           mountedSlotsHeader,
+          renderMode,
         });
       },
       cleanPathname,
@@ -517,6 +520,8 @@ export default __createAppRscHandler({
       handlerStart,
       interceptionContext,
       expireSeconds: __expireTime,
+      formState,
+      isProgressiveActionRender,
       isProduction: process.env.NODE_ENV === "production",
       isRscRequest,
       isrDebug: __isrDebug,
@@ -543,11 +548,11 @@ export default __createAppRscHandler({
         });
       },
       probePage() {
-        if (!PageComponent) return null;
-        const _asyncSearchParams = makeThenableParams(
-          __collectAppPageSearchParams(searchParams).searchParamsObject,
-        );
-        return PageComponent({ params: _asyncRouteParams, searchParams: _asyncSearchParams });
+        return __probeAppPage({
+          pageComponent: PageComponent,
+          asyncRouteParams: _asyncRouteParams,
+          searchParams,
+        });
       },
       renderErrorBoundaryPage(renderErr) {
         return __fallbackRenderer.renderErrorBoundary(route, renderErr, isRscRequest, request, params, scriptNonce, middlewareContext);
@@ -574,6 +579,7 @@ export default __createAppRscHandler({
       scriptNonce,
       searchParams,
       setNavigationContext,
+      renderMode,
     });
   },
   dispatchMatchedRouteHandler({
@@ -631,6 +637,7 @@ export default __createAppRscHandler({
       },
       contentType,
       decodeAction,
+      decodeFormState,
       getAndClearPendingCookies,
       getDraftModeCookieHeader,
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,
@@ -664,6 +671,7 @@ export default __createAppRscHandler({
         isRscRequest: actionIsRscRequest,
         request: actionRequest,
         mountedSlotsHeader: actionMountedSlotsHeader,
+        renderMode: actionRenderMode,
       }) {
         return buildPageElements(actionRoute, actionParams, actionCleanPathname, {
           opts: interceptOpts,
@@ -671,6 +679,7 @@ export default __createAppRscHandler({
           isRscRequest: actionIsRscRequest,
           request: actionRequest,
           mountedSlotsHeader: actionMountedSlotsHeader,
+          renderMode: actionRenderMode,
         });
       },
       cleanPathname,

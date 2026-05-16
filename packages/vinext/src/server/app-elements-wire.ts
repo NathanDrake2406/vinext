@@ -4,20 +4,88 @@ import {
   parseArtifactCompatibilityEnvelope,
   type ArtifactCompatibilityEnvelope,
 } from "./artifact-compatibility.js";
+import type { RenderObservation } from "./cache-proof.js";
 
 const APP_INTERCEPTION_SEPARATOR = "\0";
 
 export const APP_ARTIFACT_COMPATIBILITY_KEY = "__artifactCompatibility";
 export const APP_INTERCEPTION_CONTEXT_KEY = "__interceptionContext";
+export const APP_LAYOUT_IDS_KEY = "__layoutIds";
 export const APP_LAYOUT_FLAGS_KEY = "__layoutFlags";
+export const APP_RENDER_OBSERVATION_KEY = "__renderObservation";
 export const APP_ROUTE_KEY = "__route";
 export const APP_ROOT_LAYOUT_KEY = "__rootLayout";
+export const APP_SLOT_BINDINGS_KEY = "__slotBindings";
 export const APP_UNMATCHED_SLOT_WIRE_VALUE = "__VINEXT_UNMATCHED_SLOT__";
 
 export const UNMATCHED_SLOT = Symbol.for("vinext.unmatchedSlot");
 
-export type AppElementValue = ReactNode | typeof UNMATCHED_SLOT | string | null;
-type AppWireElementValue = ReactNode | string | null;
+export type AppElementsSlotBindingState = "active" | "default" | "unmatched";
+
+export type AppElementsSlotBinding = Readonly<{
+  ownerLayoutId: string | null;
+  slotId: string;
+  state: AppElementsSlotBindingState;
+}>;
+
+export function compareAppElementsSlotIds(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function compareAppElementsSlotBindingsBySlotId(
+  left: Pick<AppElementsSlotBinding, "slotId">,
+  right: Pick<AppElementsSlotBinding, "slotId">,
+): number {
+  return compareAppElementsSlotIds(left.slotId, right.slotId);
+}
+
+export function normalizeAppElementsSlotBindings(
+  slotBindings: readonly AppElementsSlotBinding[],
+  options: { layoutIds?: readonly string[] } = {},
+): readonly AppElementsSlotBinding[] {
+  const ownerLayoutIds = options.layoutIds ? new Set(options.layoutIds) : null;
+  const seenSlotIds = new Set<string>();
+  const normalized: AppElementsSlotBinding[] = [];
+
+  for (const binding of slotBindings) {
+    if (seenSlotIds.has(binding.slotId)) {
+      throw new Error("[vinext] Invalid __slotBindings in App Router payload: duplicate slot id");
+    }
+    seenSlotIds.add(binding.slotId);
+
+    if (
+      ownerLayoutIds &&
+      binding.ownerLayoutId !== null &&
+      !ownerLayoutIds.has(binding.ownerLayoutId)
+    ) {
+      throw new Error(
+        "[vinext] Invalid __slotBindings in App Router payload: owner layout id missing from __layoutIds",
+      );
+    }
+
+    normalized.push({ ...binding });
+  }
+
+  return normalized.sort(compareAppElementsSlotBindingsBySlotId);
+}
+
+export type AppElementValue =
+  | ReactNode
+  | typeof UNMATCHED_SLOT
+  | string
+  | null
+  | LayoutFlags
+  | ArtifactCompatibilityEnvelope
+  | readonly AppElementsSlotBinding[];
+type AppWireElementValue =
+  | ReactNode
+  | string
+  | null
+  | LayoutFlags
+  | ArtifactCompatibilityEnvelope
+  | readonly AppElementsSlotBinding[];
 
 export type AppElements = Readonly<Record<string, AppElementValue>>;
 export type AppWireElements = Readonly<Record<string, AppWireElementValue>>;
@@ -44,9 +112,11 @@ export type LayoutFlags = Readonly<Record<string, "s" | "d">>;
 type AppElementsMetadata = {
   artifactCompatibility: ArtifactCompatibilityEnvelope;
   interceptionContext: string | null;
+  layoutIds: readonly string[];
   layoutFlags: LayoutFlags;
   routeId: string;
   rootLayoutTreePath: string | null;
+  slotBindings: readonly AppElementsSlotBinding[];
 };
 
 type AppElementsWireElementKey =
@@ -58,14 +128,18 @@ type AppElementsWireElementKey =
 
 type AppElementsWireMetadataInput = {
   interceptionContext: string | null;
+  layoutIds?: readonly string[];
   routeId: string;
   rootLayoutTreePath: string | null;
+  slotBindings?: readonly AppElementsSlotBinding[];
 };
 
 type AppElementsWireMetadataEntries = Readonly<{
   [APP_ROUTE_KEY]: string;
   [APP_INTERCEPTION_CONTEXT_KEY]: string | null;
+  [APP_LAYOUT_IDS_KEY]: readonly string[];
   [APP_ROOT_LAYOUT_KEY]: string | null;
+  [APP_SLOT_BINDINGS_KEY]?: readonly AppElementsSlotBinding[];
 }>;
 
 /**
@@ -75,15 +149,25 @@ type AppElementsWireMetadataEntries = Readonly<{
  * which only carry render-time values.
  */
 export type AppOutgoingElements = Readonly<
-  Record<string, ReactNode | LayoutFlags | ArtifactCompatibilityEnvelope>
+  Record<
+    string,
+    | ReactNode
+    | LayoutFlags
+    | ArtifactCompatibilityEnvelope
+    | RenderObservation
+    | readonly AppElementsSlotBinding[]
+  >
 >;
 
 type AppElementsWireKeys = {
   readonly artifactCompatibility: typeof APP_ARTIFACT_COMPATIBILITY_KEY;
   readonly interceptionContext: typeof APP_INTERCEPTION_CONTEXT_KEY;
+  readonly layoutIds: typeof APP_LAYOUT_IDS_KEY;
   readonly layoutFlags: typeof APP_LAYOUT_FLAGS_KEY;
+  readonly renderObservation: typeof APP_RENDER_OBSERVATION_KEY;
   readonly rootLayout: typeof APP_ROOT_LAYOUT_KEY;
   readonly route: typeof APP_ROUTE_KEY;
+  readonly slotBindings: typeof APP_SLOT_BINDINGS_KEY;
 };
 
 type AppElementsWireCodec = {
@@ -94,9 +178,10 @@ type AppElementsWireCodec = {
   encodeCacheKey(rscUrl: string, interceptionContext: string | null): string;
   encodeLayoutId(treePath: string): string;
   encodeOutgoingPayload(input: {
-    element: ReactNode | Readonly<Record<string, ReactNode>>;
+    element: ReactNode | Readonly<Record<string, ReactNode | readonly AppElementsSlotBinding[]>>;
     artifactCompatibility?: ArtifactCompatibilityEnvelope;
     layoutFlags: LayoutFlags;
+    renderObservation?: RenderObservation;
   }): ReactNode | AppOutgoingElements;
   encodePageId(routePath: string, interceptionContext: string | null): string;
   encodeRouteId(routePath: string, interceptionContext: string | null): string;
@@ -208,11 +293,24 @@ function isAppElementsWireSlotId(key: string): boolean {
 function createAppElementsWireMetadataEntries(
   input: AppElementsWireMetadataInput,
 ): AppElementsWireMetadataEntries {
-  return {
+  const layoutIds = [...(input.layoutIds ?? [])];
+  const entries: AppElementsWireMetadataEntries = {
     [APP_ROUTE_KEY]: input.routeId,
     [APP_INTERCEPTION_CONTEXT_KEY]: input.interceptionContext,
+    [APP_LAYOUT_IDS_KEY]: layoutIds,
     [APP_ROOT_LAYOUT_KEY]: input.rootLayoutTreePath,
   };
+  // Empty slot binding metadata is intentionally omitted. Missing
+  // __slotBindings round-trips as [] and means "no route-state proof", so
+  // default/unmatched slot preservation is not promoted for that payload.
+  if (input.slotBindings && input.slotBindings.length > 0) {
+    const slotBindings = normalizeAppElementsSlotBindings(input.slotBindings, { layoutIds });
+    return {
+      ...entries,
+      [APP_SLOT_BINDINGS_KEY]: slotBindings,
+    };
+  }
+  return entries;
 }
 
 export function normalizeAppElements(elements: AppWireElements): AppElements {
@@ -247,9 +345,87 @@ function isLayoutFlagsRecord(value: unknown): value is LayoutFlags {
   return true;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function parseLayoutFlags(value: unknown): LayoutFlags {
   if (isLayoutFlagsRecord(value)) return value;
   return {};
+}
+
+function parseLayoutIds(value: unknown): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(
+      "[vinext] Invalid __layoutIds in App Router payload: expected layout id string[]",
+    );
+  }
+
+  const layoutIds: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new Error(
+        "[vinext] Invalid __layoutIds in App Router payload: expected layout id string[]",
+      );
+    }
+
+    const parsed = parseAppElementsWireElementKey(entry);
+    if (parsed?.kind !== "layout") {
+      throw new Error("[vinext] Invalid __layoutIds in App Router payload: expected layout ids");
+    }
+
+    layoutIds.push(entry);
+  }
+  return layoutIds;
+}
+
+function isSlotBindingState(value: unknown): value is AppElementsSlotBindingState {
+  return value === "active" || value === "default" || value === "unmatched";
+}
+
+function parseSlotBindings(
+  value: unknown,
+  options: { layoutIds?: readonly string[] } = {},
+): readonly AppElementsSlotBinding[] {
+  // Missing metadata is compatibility-safe but not semantic proof: callers see
+  // an empty binding list, so promoted default/unmatched slot preservation is
+  // denied instead of inferred from legacy transport shape.
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected array");
+  }
+
+  const slotBindings: AppElementsSlotBinding[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected objects");
+    }
+
+    const slotId = entry.slotId;
+    if (typeof slotId !== "string" || parseAppElementsWireElementKey(slotId)?.kind !== "slot") {
+      throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected slot ids");
+    }
+
+    const ownerLayoutId = entry.ownerLayoutId;
+    if (
+      ownerLayoutId !== null &&
+      (typeof ownerLayoutId !== "string" ||
+        parseAppElementsWireElementKey(ownerLayoutId)?.kind !== "layout")
+    ) {
+      throw new Error(
+        "[vinext] Invalid __slotBindings in App Router payload: expected owner layout ids",
+      );
+    }
+
+    const state = entry.state;
+    if (!isSlotBindingState(state)) {
+      throw new Error("[vinext] Invalid __slotBindings in App Router payload: expected state");
+    }
+
+    slotBindings.push({ ownerLayoutId, slotId, state });
+  }
+  return normalizeAppElementsSlotBindings(slotBindings, options);
 }
 
 /**
@@ -276,19 +452,31 @@ export function withLayoutFlags<T extends Record<string, unknown>>(
 }
 
 export function buildOutgoingAppPayload(input: {
-  element: ReactNode | Readonly<Record<string, ReactNode>>;
+  element: ReactNode | Readonly<Record<string, ReactNode | readonly AppElementsSlotBinding[]>>;
   artifactCompatibility?: ArtifactCompatibilityEnvelope;
   layoutFlags: LayoutFlags;
+  renderObservation?: RenderObservation;
 }): ReactNode | AppOutgoingElements {
   if (!isAppElementsRecord(input.element)) {
     return input.element;
   }
-  return {
+  const payload: Record<
+    string,
+    | ReactNode
+    | LayoutFlags
+    | ArtifactCompatibilityEnvelope
+    | RenderObservation
+    | readonly AppElementsSlotBinding[]
+  > = {
     ...input.element,
     [APP_LAYOUT_FLAGS_KEY]: input.layoutFlags,
     [APP_ARTIFACT_COMPATIBILITY_KEY]:
       input.artifactCompatibility ?? createArtifactCompatibilityEnvelope(),
   };
+  if (input.renderObservation) {
+    payload[APP_RENDER_OBSERVATION_KEY] = input.renderObservation;
+  }
+  return payload;
 }
 
 function readArtifactCompatibilityMetadata(value: unknown): ArtifactCompatibilityEnvelope {
@@ -328,6 +516,8 @@ export function readAppElementsMetadata(
   }
 
   const layoutFlags = parseLayoutFlags(elements[APP_LAYOUT_FLAGS_KEY]);
+  const layoutIds = parseLayoutIds(elements[APP_LAYOUT_IDS_KEY]);
+  const slotBindings = parseSlotBindings(elements[APP_SLOT_BINDINGS_KEY], { layoutIds });
   const artifactCompatibility = readArtifactCompatibilityMetadata(
     elements[APP_ARTIFACT_COMPATIBILITY_KEY],
   );
@@ -335,9 +525,11 @@ export function readAppElementsMetadata(
   return {
     artifactCompatibility,
     interceptionContext: interceptionContext ?? null,
+    layoutIds,
     layoutFlags,
     routeId,
     rootLayoutTreePath,
+    slotBindings,
   };
 }
 
@@ -347,9 +539,12 @@ export const AppElementsWire: AppElementsWireCodec = {
   keys: {
     artifactCompatibility: APP_ARTIFACT_COMPATIBILITY_KEY,
     interceptionContext: APP_INTERCEPTION_CONTEXT_KEY,
+    layoutIds: APP_LAYOUT_IDS_KEY,
     layoutFlags: APP_LAYOUT_FLAGS_KEY,
+    renderObservation: APP_RENDER_OBSERVATION_KEY,
     rootLayout: APP_ROOT_LAYOUT_KEY,
     route: APP_ROUTE_KEY,
+    slotBindings: APP_SLOT_BINDINGS_KEY,
   },
   unmatchedSlotValue: APP_UNMATCHED_SLOT_WIRE_VALUE,
   createMetadataEntries: createAppElementsWireMetadataEntries,

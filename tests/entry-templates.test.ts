@@ -8,6 +8,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { describe, it, expect } from "vite-plus/test";
+import { generateBrowserEntry } from "../packages/vinext/src/entries/app-browser-entry.js";
 import { buildAppRscManifestCode } from "../packages/vinext/src/entries/app-rsc-manifest.js";
 import { generateRscEntry } from "../packages/vinext/src/entries/app-rsc-entry.js";
 import { buildAppRouteGraph } from "../packages/vinext/src/routing/app-route-graph.js";
@@ -115,6 +116,64 @@ const minimalAppRoutes: AppRoute[] = [
 // ── App Router manifest construction ─────────────────────────────────
 
 describe("App Router generated manifest construction", () => {
+  it("embeds the Link auto-prefetch route manifest in the browser entry", () => {
+    const code = generateBrowserEntry([
+      ...minimalAppRoutes,
+      {
+        pattern: "/modal-host",
+        patternParts: ["modal-host"],
+        pagePath: null,
+        routePath: null,
+        layouts: ["/tmp/test/app/layout.tsx", "/tmp/test/app/modal-host/layout.tsx"],
+        templates: [],
+        parallelSlots: [],
+        loadingPath: null,
+        errorPath: null,
+        layoutErrorPaths: [null, null],
+        notFoundPath: null,
+        notFoundPaths: [null, null],
+        forbiddenPaths: [null, null],
+        forbiddenPath: null,
+        unauthorizedPaths: [null, null],
+        unauthorizedPath: null,
+        routeSegments: ["modal-host"],
+        templateTreePositions: [],
+        layoutTreePositions: [0, 1],
+        isDynamic: false,
+        params: [],
+      },
+      {
+        pattern: "/api",
+        patternParts: ["api"],
+        pagePath: null,
+        routePath: "/tmp/test/app/api/route.ts",
+        layouts: [],
+        templates: [],
+        parallelSlots: [],
+        loadingPath: null,
+        errorPath: null,
+        layoutErrorPaths: [],
+        notFoundPath: null,
+        notFoundPaths: [],
+        forbiddenPaths: [],
+        forbiddenPath: null,
+        unauthorizedPaths: [],
+        unauthorizedPath: null,
+        routeSegments: ["api"],
+        templateTreePositions: [],
+        layoutTreePositions: [],
+        isDynamic: false,
+        params: [],
+      },
+    ]);
+
+    expect(code).toContain("window.__VINEXT_LINK_PREFETCH_ROUTES__ = ");
+    expect(code).toContain('{"patternParts":["about"],"isDynamic":false}');
+    expect(code).toContain('{"patternParts":["blog",":slug"],"isDynamic":true}');
+    expect(code).toContain('{"patternParts":["modal-host"],"isDynamic":false}');
+    expect(code).not.toContain('{"patternParts":["api"],"isDynamic":false}');
+  });
+
   it("constructs route module imports and route entries from the scanned app shape", () => {
     const routes = [
       {

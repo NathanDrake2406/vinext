@@ -23,30 +23,120 @@ describe("next/navigation shim", () => {
     expect(typeof nav.useRouter).toBe("function");
   });
 
-  // Regression test: useRouter() must return a stable singleton.
-  // Next.js returns the same router object reference on every call.
-  // Components using the router in useMemo/useEffect dependency arrays or
-  // wrapped in React.memo would re-render unnecessarily if each call
-  // returned a new object.
-  // Ported from: https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/hooks/hooks.test.ts
-  it("useRouter() returns the same object reference on every call (stable singleton)", async () => {
+  // Next.js parity: next/navigation's useRouter reads AppRouterContext and
+  // throws when it is rendered outside the App Router provider.
+  // Ported from Next.js:
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/navigation.ts
+  it("useRouter() throws when AppRouterContext is not mounted", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
     const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
-    const first = useRouter();
-    const second = useRouter();
-    const third = useRouter();
-    expect(first).toBe(second);
-    expect(second).toBe(third);
+
+    function Probe() {
+      useRouter();
+      return React.createElement("span", null, "unreachable");
+    }
+
+    expect(() => renderToStaticMarkup(React.createElement(Probe))).toThrow(
+      "invariant expected app router to be mounted",
+    );
   });
 
-  it("useRouter() singleton exposes the expected navigation methods", async () => {
-    const { useRouter } = await import("../packages/vinext/src/shims/navigation.js");
-    const router = useRouter();
+  // Regression test: within the App Router provider, useRouter() must return
+  // the mounted router instance. Next.js returns a stable router reference from
+  // context, so components using the router in dependency arrays do not
+  // re-render unnecessarily.
+  // Ported from: https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/hooks/hooks.test.ts
+  it("useRouter() returns the mounted AppRouterContext router", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter, appRouterInstance } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    const { AppRouterContext } =
+      await import("../packages/vinext/src/shims/internal/app-router-context.js");
+    const captured: unknown[] = [];
+
+    function Probe() {
+      captured.push(useRouter(), useRouter());
+      return React.createElement("span", null, "ok");
+    }
+
+    if (!AppRouterContext) {
+      throw new Error("Expected AppRouterContext to be available in the test renderer");
+    }
+
+    renderToStaticMarkup(
+      React.createElement(
+        AppRouterContext.Provider,
+        { value: appRouterInstance },
+        React.createElement(Probe),
+      ),
+    );
+
+    expect(captured).toEqual([appRouterInstance, appRouterInstance]);
+  });
+
+  it("appRouterInstance singleton exposes the expected navigation methods", async () => {
+    const { appRouterInstance: router } =
+      await import("../packages/vinext/src/shims/navigation.js");
     expect(typeof router.push).toBe("function");
     expect(typeof router.replace).toBe("function");
     expect(typeof router.back).toBe("function");
     expect(typeof router.forward).toBe("function");
     expect(typeof router.refresh).toBe("function");
     expect(typeof router.prefetch).toBe("function");
+  });
+
+  it("appRouterInstance exposes the stable bfcacheId placeholder", async () => {
+    const { appRouterInstance } = await import("../packages/vinext/src/shims/navigation.js");
+    expect(typeof appRouterInstance.bfcacheId).toBe("string");
+    expect(appRouterInstance.bfcacheId).toBe("0");
+  });
+
+  // Next.js parity: refresh-reducer.ts invalidates the entire segment cache.
+  // Our equivalent is clearClientNavigationCaches(), which router.refresh()
+  // must call before re-fetching, or stale cached RSC payloads for sibling
+  // routes will still satisfy a subsequent client navigation. The clear must
+  // happen before the rscNavigate dispatch so it cannot race with prefetches
+  // kicked off during the transition's renders.
+  // Ported from: https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/router-reducer/reducers/refresh-reducer.ts
+  it("router.refresh() clears nav caches before dispatching the RSC re-fetch", async () => {
+    const previousWindow = (globalThis as any).window;
+    const calls: string[] = [];
+    const win = {
+      location: { href: "http://localhost/current" },
+      history: {
+        state: null,
+        pushState: () => {},
+        replaceState: () => {},
+      },
+      addEventListener: () => {},
+      __VINEXT_CLEAR_NAV_CACHES__: () => {
+        calls.push("clear");
+      },
+      __VINEXT_RSC_NAVIGATE__: async (_href: string, _depth: number, kind: string) => {
+        calls.push(`navigate:${kind}`);
+      },
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const { appRouterInstance } = await import("../packages/vinext/src/shims/navigation.js");
+      appRouterInstance.refresh();
+      // refresh() schedules the rscNavigate inside React.startTransition, so
+      // the navigate call lands after the synchronous clear but is dispatched
+      // in the same tick — yield once to let it flush.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(calls[0]).toBe("clear");
+      expect(calls).toContain("navigate:refresh");
+      expect(calls.indexOf("clear")).toBeLessThan(calls.indexOf("navigate:refresh"));
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
   });
 
   it("keeps pending render snapshot active when external history.pushState syncs the URL", async () => {
@@ -579,6 +669,883 @@ describe("next/navigation shim", () => {
 
     expect(html).toContain("[]");
   });
+
+  // -------------------------------------------------------------------------
+  // unstable_rethrow + unstable_isUnrecognizedActionError
+  //
+  // Ported from Next.js:
+  //   https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/unstable-rethrow.ts
+  //   https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/unrecognized-action-error.ts
+  // -------------------------------------------------------------------------
+  it("exports unstable_rethrow and unstable_isUnrecognizedActionError", async () => {
+    const nav = await import("../packages/vinext/src/shims/navigation.js");
+    expect(typeof nav.unstable_rethrow).toBe("function");
+    expect(typeof nav.unstable_isUnrecognizedActionError).toBe("function");
+    expect(typeof nav.isRedirectError).toBe("function");
+    expect(typeof nav.isNextRouterError).toBe("function");
+    expect(typeof nav.UnrecognizedActionError).toBe("function");
+  });
+
+  it("unstable_rethrow re-throws redirect errors", async () => {
+    const { redirect, unstable_rethrow } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    let captured: unknown = null;
+    try {
+      redirect("/login");
+    } catch (e) {
+      captured = e;
+    }
+    expect(captured).not.toBeNull();
+
+    expect(() => unstable_rethrow(captured)).toThrow();
+    try {
+      unstable_rethrow(captured);
+    } catch (rethrown) {
+      // Identity-preserving rethrow — must be the same error reference
+      expect(rethrown).toBe(captured);
+    }
+  });
+
+  it("unstable_rethrow re-throws notFound/forbidden/unauthorized errors", async () => {
+    const { notFound, forbidden, unauthorized, unstable_rethrow } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    for (const trigger of [notFound, forbidden, unauthorized]) {
+      let captured: unknown = null;
+      try {
+        trigger();
+      } catch (e) {
+        captured = e;
+      }
+      expect(captured).not.toBeNull();
+      expect(() => unstable_rethrow(captured)).toThrow();
+    }
+  });
+
+  it("unstable_rethrow is a no-op for unrelated errors", async () => {
+    const { unstable_rethrow } = await import("../packages/vinext/src/shims/navigation.js");
+    // Plain Error: no digest, no cause
+    expect(() => unstable_rethrow(new Error("plain"))).not.toThrow();
+    expect(() => unstable_rethrow("string error")).not.toThrow();
+    expect(() => unstable_rethrow(null)).not.toThrow();
+    expect(() => unstable_rethrow(undefined)).not.toThrow();
+    expect(() => unstable_rethrow({ digest: "not-a-next-error" })).not.toThrow();
+  });
+
+  // -------------------------------------------------------------------------
+  // BailoutToCSRError + DynamicServerError parity
+  //
+  // Ported from Next.js:
+  //   https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/lazy-dynamic/bailout-to-csr.ts
+  //   https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/hooks-server-context.ts
+  // -------------------------------------------------------------------------
+  it("exports BailoutToCSRError + isBailoutToCSRError with the canonical digest", async () => {
+    const { BailoutToCSRError, isBailoutToCSRError } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    const err = new BailoutToCSRError("test-reason");
+    expect(err.digest).toBe("BAILOUT_TO_CLIENT_SIDE_RENDERING");
+    expect(err.reason).toBe("test-reason");
+    expect(err.message).toBe("Bail out to client-side rendering: test-reason");
+    expect(isBailoutToCSRError(err)).toBe(true);
+    // Predicate matches by digest, not by instanceof — a foreign object with
+    // the canonical digest should also be detected (Next.js parity).
+    expect(isBailoutToCSRError({ digest: "BAILOUT_TO_CLIENT_SIDE_RENDERING" })).toBe(true);
+    // Negative cases.
+    expect(isBailoutToCSRError(new Error("plain"))).toBe(false);
+    expect(isBailoutToCSRError({ digest: "OTHER" })).toBe(false);
+    expect(isBailoutToCSRError(null)).toBe(false);
+    expect(isBailoutToCSRError(undefined)).toBe(false);
+  });
+
+  it("exports DynamicServerError + isDynamicServerError with the canonical digest", async () => {
+    const { DynamicServerError, isDynamicServerError } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    const err = new DynamicServerError("cookies()");
+    expect(err.digest).toBe("DYNAMIC_SERVER_USAGE");
+    expect(err.description).toBe("cookies()");
+    expect(err.message).toBe("Dynamic server usage: cookies()");
+    expect(isDynamicServerError(err)).toBe(true);
+    // Predicate matches by digest — Next.js parity.
+    expect(isDynamicServerError({ digest: "DYNAMIC_SERVER_USAGE" })).toBe(true);
+    // Negative cases.
+    expect(isDynamicServerError(new Error("plain"))).toBe(false);
+    expect(isDynamicServerError({ digest: "OTHER" })).toBe(false);
+    expect(isDynamicServerError(null)).toBe(false);
+    expect(isDynamicServerError(undefined)).toBe(false);
+  });
+
+  // Mirrors the Next.js fixture
+  //   .nextjs-ref/test/e2e/app-dir/unstable-rethrow/app/dynamic-error/page.tsx
+  // where `cookies()` throws a DynamicServerError inside a try/catch and
+  // unstable_rethrow must propagate it.
+  it("unstable_rethrow re-throws BailoutToCSRError (next/dynamic ssr:false bailout)", async () => {
+    const { BailoutToCSRError, unstable_rethrow } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    const err = new BailoutToCSRError("Lazy(): No ssr");
+    expect(() => unstable_rethrow(err)).toThrow();
+    try {
+      unstable_rethrow(err);
+    } catch (rethrown) {
+      expect(rethrown).toBe(err);
+    }
+  });
+
+  it("unstable_rethrow re-throws DynamicServerError (cookies()/headers() in static render)", async () => {
+    const { DynamicServerError, unstable_rethrow } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    const err = new DynamicServerError("Route used cookies()");
+    expect(() => unstable_rethrow(err)).toThrow();
+    try {
+      unstable_rethrow(err);
+    } catch (rethrown) {
+      expect(rethrown).toBe(err);
+    }
+  });
+
+  it("unstable_rethrow does NOT match the four server-only categories vinext does not implement", async () => {
+    // These categories (isDynamicPostpone, isPostpone,
+    // isHangingPromiseRejectionError, isPrerenderInterruptedError) are
+    // server-only Next.js internals tied to PPR / prerender-controller
+    // machinery vinext does not implement. They are deferred as follow-ups
+    // (see the JSDoc on unstable_rethrow). This test pins that intentional
+    // gap so the omission is visible to future maintainers.
+    const { unstable_rethrow } = await import("../packages/vinext/src/shims/navigation.js");
+
+    const postpone = { $$typeof: Symbol.for("react.postpone") };
+    expect(() => unstable_rethrow(postpone)).not.toThrow();
+
+    const hanging = Object.assign(new Error("hanging"), { digest: "HANGING_PROMISE_REJECTION" });
+    expect(() => unstable_rethrow(hanging)).not.toThrow();
+
+    const interrupted = Object.assign(new Error("interrupt"), {
+      digest: "NEXT_PRERENDER_INTERRUPTED",
+    });
+    expect(() => unstable_rethrow(interrupted)).not.toThrow();
+
+    // No fixed digest — message-shape based detection. We don't try to
+    // construct a faithful payload here; just confirm an arbitrary message
+    // doesn't match.
+    const dynamicPostpone = new Error("some random message");
+    expect(() => unstable_rethrow(dynamicPostpone)).not.toThrow();
+  });
+
+  it("unstable_rethrow recurses through error.cause to rethrow wrapped Next.js errors", async () => {
+    const { redirect, unstable_rethrow } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    let inner: unknown = null;
+    try {
+      redirect("/login");
+    } catch (e) {
+      inner = e;
+    }
+    const wrapped = new Error("user wrapped this", { cause: inner });
+
+    expect(() => unstable_rethrow(wrapped)).toThrow();
+    try {
+      unstable_rethrow(wrapped);
+    } catch (rethrown) {
+      // The recursion should rethrow the original Next.js error, not the wrapper
+      expect(rethrown).toBe(inner);
+    }
+  });
+
+  it("unstable_isUnrecognizedActionError returns true for UnrecognizedActionError instances", async () => {
+    const { UnrecognizedActionError, unstable_isUnrecognizedActionError } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    const err = new UnrecognizedActionError("missing action 'abc'");
+    expect(err.name).toBe("UnrecognizedActionError");
+    expect(unstable_isUnrecognizedActionError(err)).toBe(true);
+  });
+
+  it("unstable_isUnrecognizedActionError returns false for other errors", async () => {
+    const { unstable_isUnrecognizedActionError } =
+      await import("../packages/vinext/src/shims/navigation.js");
+    expect(unstable_isUnrecognizedActionError(new Error("other"))).toBe(false);
+    expect(unstable_isUnrecognizedActionError(null)).toBe(false);
+    expect(unstable_isUnrecognizedActionError(undefined)).toBe(false);
+    expect(unstable_isUnrecognizedActionError("string")).toBe(false);
+    expect(unstable_isUnrecognizedActionError({ name: "UnrecognizedActionError" })).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // react-server re-exports
+  // -------------------------------------------------------------------------
+  it("navigation.react-server re-exports unstable_rethrow and stubs unstable_isUnrecognizedActionError", async () => {
+    const rsc = await import("../packages/vinext/src/shims/navigation.react-server.js");
+    expect(typeof rsc.unstable_rethrow).toBe("function");
+    expect(typeof rsc.unstable_isUnrecognizedActionError).toBe("function");
+
+    // The RSC stub should throw a clear "client-only" error, matching Next.js.
+    expect(() => rsc.unstable_isUnrecognizedActionError()).toThrow(/client/i);
+
+    // unstable_rethrow itself is environment-agnostic — re-exported from
+    // ./navigation.js — and should behave identically to the client export.
+    const { redirect } = await import("../packages/vinext/src/shims/navigation.js");
+    let captured: unknown = null;
+    try {
+      redirect("/login");
+    } catch (e) {
+      captured = e;
+    }
+    expect(() => rsc.unstable_rethrow(captured)).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// next/error shim — unstable_catchError
+//
+// Ported from Next.js:
+//   https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/catch-error.tsx
+//   https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/catch-error/
+// ---------------------------------------------------------------------------
+describe("next/error shim — unstable_catchError", () => {
+  it("exports unstable_catchError as a function", async () => {
+    const mod = await import("../packages/vinext/src/shims/error.js");
+    expect(typeof mod.unstable_catchError).toBe("function");
+  });
+
+  it("returns a Component that renders children when no error occurs", async () => {
+    const React = (await import("react")).default;
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { unstable_catchError } = await import("../packages/vinext/src/shims/error.js");
+
+    function Fallback(_props: { title: string }) {
+      return React.createElement("p", null, "should not render");
+    }
+
+    const Boundary = unstable_catchError<{ title: string }>(Fallback);
+    const html = renderToStaticMarkup(
+      React.createElement(
+        Boundary,
+        { title: "ignored" },
+        React.createElement("span", { id: "ok" }, "hello"),
+      ),
+    );
+
+    expect(html).toContain('id="ok"');
+    expect(html).toContain("hello");
+  });
+
+  it("class-component lifecycle catches non-router errors and renders the fallback", async () => {
+    // React 19's renderToStaticMarkup does NOT invoke error boundaries during
+    // SSR — errors propagate up by design (boundaries only run during client
+    // commit). To validate behavior without spinning up a real browser, we
+    // exercise the lifecycle hooks directly: `getDerivedStateFromError` is
+    // the canonical predicate driving the class component's behavior, and
+    // its return value is the only thing the React runtime feeds into the
+    // next render.
+    const React = (await import("react")).default;
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { unstable_catchError } = await import("../packages/vinext/src/shims/error.js");
+
+    const seenErrors: unknown[] = [];
+    function Fallback(
+      props: { title: string },
+      info: { error: unknown; reset: () => void; unstable_retry: () => void },
+    ) {
+      seenErrors.push(info.error);
+      const message = info.error instanceof Error ? info.error.message : String(info.error);
+      return React.createElement(
+        "div",
+        null,
+        React.createElement("p", { id: "title" }, props.title),
+        React.createElement("p", { id: "msg" }, message),
+      );
+    }
+
+    const Boundary = unstable_catchError<{ title: string }>(Fallback);
+
+    // Locate the inner class component by inspecting what the HOC renders.
+    // The wrapper function returns `React.createElement(_CatchError, ...)`.
+    const wrapperResult = (
+      Boundary as unknown as (props: {
+        title: string;
+        children?: React.ReactNode;
+      }) => React.ReactElement
+    )({
+      title: "hello-title",
+      children: React.createElement("span", null, "child"),
+    });
+    const InnerCatchError = wrapperResult.type as unknown as React.ComponentClass<{
+      fallback: typeof Fallback;
+      forwardedProps: { title: string };
+      children?: React.ReactNode;
+    }>;
+
+    const props = {
+      fallback: Fallback,
+      forwardedProps: { title: "hello-title" },
+      children: React.createElement("span", null, "child"),
+    };
+    // Cast through unknown to instantiate without engaging React's renderer.
+    const instance = new (InnerCatchError as unknown as new (p: typeof props) => InstanceType<
+      typeof InnerCatchError
+    > & {
+      state: { error: { thrownValue: unknown } | null };
+      render(): React.ReactNode;
+    })(props);
+    instance.state = { error: null };
+
+    // 1. No error → renders children.
+    const childrenOutput = renderToStaticMarkup(instance.render() as React.ReactElement);
+    expect(childrenOutput).toContain("child");
+
+    // 2. After getDerivedStateFromError, renders the fallback with ErrorInfo.
+    const thrown = new Error("boom");
+    const derived = (
+      InnerCatchError as unknown as {
+        getDerivedStateFromError(e: unknown): { error: { thrownValue: unknown } | null };
+      }
+    ).getDerivedStateFromError(thrown);
+    expect(derived).toEqual({ error: { thrownValue: thrown } });
+    instance.state = derived;
+    const fallbackOutput = renderToStaticMarkup(instance.render() as React.ReactElement);
+    expect(fallbackOutput).toContain('id="msg"');
+    expect(fallbackOutput).toContain("boom");
+    expect(fallbackOutput).toContain("hello-title");
+    expect(seenErrors[seenErrors.length - 1]).toBe(thrown);
+  });
+
+  it("class-component getDerivedStateFromError re-throws Next.js router errors", async () => {
+    const { unstable_catchError } = await import("../packages/vinext/src/shims/error.js");
+    const { redirect } = await import("../packages/vinext/src/shims/navigation.js");
+
+    function Fallback() {
+      return null;
+    }
+    const Boundary = unstable_catchError(Fallback);
+
+    // Probe the inner class through the wrapper.
+    const wrapperResult = (Boundary as unknown as (p: Record<string, never>) => { type: unknown })(
+      {},
+    );
+    const InnerCatchError = wrapperResult.type as unknown as {
+      getDerivedStateFromError(e: unknown): unknown;
+    };
+
+    let captured: unknown = null;
+    try {
+      redirect("/login");
+    } catch (e) {
+      captured = e;
+    }
+    expect(() => InnerCatchError.getDerivedStateFromError(captured)).toThrow();
+    try {
+      InnerCatchError.getDerivedStateFromError(captured);
+    } catch (rethrown) {
+      // Identity-preserving rethrow.
+      expect(rethrown).toBe(captured);
+    }
+  });
+
+  it("rethrows Next.js navigation signals (redirect, notFound) instead of catching them", async () => {
+    const React = (await import("react")).default;
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { unstable_catchError } = await import("../packages/vinext/src/shims/error.js");
+    const { redirect } = await import("../packages/vinext/src/shims/navigation.js");
+
+    function RedirectThrower(): React.ReactElement {
+      redirect("/login");
+      // Unreachable: `redirect()` throws. Annotated explicitly to satisfy
+      // the `ReactElement` return-type contract.
+      return React.createElement("span", null);
+    }
+
+    function Fallback() {
+      return React.createElement("p", null, "should not be reached");
+    }
+
+    const Boundary = unstable_catchError(Fallback);
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // The boundary must let the redirect propagate up — renderToStaticMarkup
+      // should throw with the redirect digest.
+      let captured: unknown = null;
+      try {
+        renderToStaticMarkup(
+          React.createElement(Boundary, null, React.createElement(RedirectThrower)),
+        );
+      } catch (e) {
+        captured = e;
+      }
+      expect(captured).not.toBeNull();
+      expect((captured as { digest?: string }).digest).toContain("NEXT_REDIRECT");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("exposes the displayName matching Next.js (`unstable_catchError(...)`)", async () => {
+    const { unstable_catchError } = await import("../packages/vinext/src/shims/error.js");
+    const Fallback = function MyFallback() {
+      return null;
+    };
+    const Boundary = unstable_catchError(Fallback);
+    // Wrapper component carries the user fallback name for DevTools.
+    expect(Boundary.displayName).toBe("unstable_catchError(MyFallback)");
+  });
+
+  // Ported from Next.js:
+  //   .nextjs-ref/test/e2e/app-dir/catch-error/catch-error.test.ts
+  //   "should render fallback when null is thrown from a Client Component"
+  //   "should render fallback when undefined is thrown from a Client Component"
+  //
+  // The boundary must accept null/undefined as `thrownValue` (not just Error
+  // instances) and route them to the fallback. Crucially, the rethrow guard
+  // (`isNextRouterError`) must not crash on null/undefined inputs.
+  it("class-component getDerivedStateFromError accepts null thrown values", async () => {
+    const React = (await import("react")).default;
+    const { unstable_catchError } = await import("../packages/vinext/src/shims/error.js");
+
+    function Fallback() {
+      return null;
+    }
+    const Boundary = unstable_catchError(Fallback);
+    const wrapperResult = (Boundary as unknown as (p: Record<string, never>) => { type: unknown })(
+      {},
+    );
+    const InnerCatchError = wrapperResult.type as unknown as {
+      getDerivedStateFromError(e: unknown): { error: { thrownValue: unknown } | null };
+    };
+
+    const derivedNull = InnerCatchError.getDerivedStateFromError(null);
+    expect(derivedNull).toEqual({ error: { thrownValue: null } });
+
+    const derivedUndefined = InnerCatchError.getDerivedStateFromError(undefined);
+    expect(derivedUndefined).toEqual({ error: { thrownValue: undefined } });
+
+    // Exhaustive non-error primitives (strings, numbers, booleans) should
+    // also flow through to the fallback without throwing.
+    void React; // keep import for module side-effects parity with other tests
+    expect(InnerCatchError.getDerivedStateFromError("string")).toEqual({
+      error: { thrownValue: "string" },
+    });
+    expect(InnerCatchError.getDerivedStateFromError(0)).toEqual({
+      error: { thrownValue: 0 },
+    });
+  });
+
+  // unstable_retry behavior parity. Next.js refreshes the App Router segment
+  // and resets the boundary. vinext does the same on the client; on the
+  // server we throw (refresh is meaningless during SSR setup).
+  it("unstable_retry throws on the server (where refresh is meaningless)", async () => {
+    const React = (await import("react")).default;
+    const { unstable_catchError } = await import("../packages/vinext/src/shims/error.js");
+
+    function Fallback(
+      _props: Record<string, never>,
+      info: { error: unknown; reset: () => void; unstable_retry: () => void },
+    ) {
+      return React.createElement("button", { onClick: info.unstable_retry }, "retry");
+    }
+    const Boundary = unstable_catchError(Fallback);
+    // Probe the inner class for its instance shape.
+    const wrapperResult = (Boundary as unknown as (p: Record<string, never>) => { type: unknown })(
+      {},
+    );
+    const InnerCatchError = wrapperResult.type as unknown as new (props: object) => {
+      state: { error: { thrownValue: unknown } | null };
+      unstable_retry: () => void;
+    };
+    const instance = new InnerCatchError({
+      fallback: Fallback,
+      forwardedProps: {},
+    });
+    instance.state = { error: { thrownValue: new Error("boom") } };
+
+    // typeof window === "undefined" in this Node test environment, so
+    // unstable_retry should throw a clear "client only" error.
+    expect(() => instance.unstable_retry()).toThrow(/client/i);
+  });
+
+  it("unstable_retry on the client calls appRouterInstance.refresh and resets the boundary", async () => {
+    // Stub `window` with the minimum surface navigation.ts needs at
+    // module-load time (location, history, addEventListener). This must be
+    // installed BEFORE re-importing the shims, otherwise navigation.ts will
+    // initialize its client navigation state against a bare `{}` and crash.
+    // Mutable view over globalThis that allows assigning/deleting `window`.
+    // We avoid `as Window & typeof globalThis` because the stub doesn't have
+    // the full DOM surface — just the bits navigation.ts touches at
+    // module-load.
+    const globalAny = globalThis as unknown as { window?: unknown };
+    const previousWindow = globalAny.window;
+    const stubWindow = {
+      location: {
+        search: "",
+        pathname: "/",
+        href: "http://localhost/",
+        origin: "http://localhost",
+      },
+      history: {
+        pushState: () => {},
+        replaceState: () => {},
+        back: () => {},
+        forward: () => {},
+        state: null,
+      },
+      addEventListener: () => {},
+      scrollTo: () => {},
+    };
+    globalAny.window = stubWindow;
+
+    try {
+      vi.resetModules();
+
+      const React = (await import("react")).default;
+      const { unstable_catchError } = await import("../packages/vinext/src/shims/error.js");
+      const navigation = await import("../packages/vinext/src/shims/navigation.js");
+
+      const refreshSpy = vi
+        .spyOn(navigation.appRouterInstance, "refresh")
+        .mockImplementation(() => {});
+
+      function Fallback() {
+        return null;
+      }
+      const Boundary = unstable_catchError(Fallback);
+      const wrapperResult = (
+        Boundary as unknown as (p: Record<string, never>) => { type: unknown }
+      )({});
+      const InnerCatchError = wrapperResult.type as unknown as new (props: object) => {
+        state: { error: { thrownValue: unknown } | null };
+        unstable_retry: () => void;
+      };
+      const instance = new InnerCatchError({
+        fallback: Fallback,
+        forwardedProps: {},
+      });
+
+      // Seed an error so reset has something to clear, and replace setState
+      // with a spy so we can confirm the boundary self-resets.
+      instance.state = { error: { thrownValue: new Error("boom") } };
+      const setStateCalls: Array<{ error: { thrownValue: unknown } | null }> = [];
+      (instance as unknown as { setState: (partial: object) => void }).setState = (partial) => {
+        setStateCalls.push(partial as { error: { thrownValue: unknown } | null });
+        instance.state = { ...instance.state, ...(partial as object) } as typeof instance.state;
+      };
+
+      // startTransition runs synchronously here because there's no
+      // concurrent renderer in the test environment.
+      void React.startTransition;
+      instance.unstable_retry();
+
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(setStateCalls).toEqual([{ error: null }]);
+
+      refreshSpy.mockRestore();
+    } finally {
+      if (previousWindow === undefined) {
+        delete globalAny.window;
+      } else {
+        globalAny.window = previousWindow;
+      }
+      vi.resetModules();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// window.next debug/diagnostic global
+//
+// Next.js exposes a `window.next` object from both the Pages Router client
+// bootstrap (packages/next/src/client/next.ts) and the App Router bootstrap
+// (packages/next/src/client/app-bootstrap.ts). Pages Router test suites,
+// userland code, and third-party libraries reach into it directly — most
+// commonly `window.next.router.push(...)` and
+// `window.next.router.events.on(...)`. Without this global, the Next.js
+// deploy test suite reports ~422 console errors and 30+ runtime failures
+// against vinext, with `TypeError: Cannot read properties of undefined
+// (reading 'router')` the most cited.
+//
+// The installer helper lives in packages/vinext/src/client/window-next.ts
+// and is invoked from both router bootstraps. The Pages Router shim
+// (shims/router.ts) installs it as a top-level side effect, and the App
+// Router browser entry (server/app-browser-entry.ts) installs it before
+// hydration starts.
+// ---------------------------------------------------------------------------
+describe("window.next debug global", () => {
+  it("installWindowNext sets version, router, and appDir fields on window.next", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {};
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const { installWindowNext } = await import("../packages/vinext/src/client/window-next.js");
+
+      const routerStub = {
+        push() {},
+        replace() {},
+        back() {},
+        forward() {},
+        refresh() {},
+        prefetch() {},
+      };
+      installWindowNext({ version: "test-version", appDir: true, router: routerStub });
+
+      expect(win.next).toBeDefined();
+      expect(win.next.version).toBe("test-version");
+      expect(win.next.appDir).toBe(true);
+      expect(win.next.router).toBe(routerStub);
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
+  it("installWindowNext merges subsequent calls without clobbering existing fields", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {};
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const { installWindowNext } = await import("../packages/vinext/src/client/window-next.js");
+
+      const pagesRouter = { kind: "pages" } as any;
+      const appRouter = { kind: "app" } as any;
+
+      installWindowNext({ version: "v1", router: pagesRouter });
+      installWindowNext({ appDir: true, router: appRouter });
+
+      // Whichever installer ran last (in real-world hybrid setups, App
+      // Router) wins for `router` — mirrors Next.js's load order where
+      // app-bootstrap.ts runs after next.ts.
+      expect(win.next.router).toBe(appRouter);
+      expect(win.next.appDir).toBe(true);
+      // Fields not overridden are preserved.
+      expect(win.next.version).toBe("v1");
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
+  it("Pages Router shim installs window.next.router with the expected NextRouter surface", async () => {
+    // Build a minimal fake window so importing shims/router.ts (which
+    // touches window at module load to attach popstate) does not crash.
+    const previousWindow = (globalThis as any).window;
+    const win: any = {
+      location: { pathname: "/", search: "", hash: "", href: "http://localhost/" },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      // Side-effecting import: installs window.next.router at module load.
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      expect(win.next).toBeDefined();
+      expect(win.next.router).toBe(Router);
+
+      // Ported from Next.js: NextRouter type in
+      // packages/next/src/shared/lib/router/router.ts (line 372).
+      const router = win.next.router;
+      expect(typeof router.push).toBe("function");
+      expect(typeof router.replace).toBe("function");
+      expect(typeof router.back).toBe("function");
+      expect(typeof router.reload).toBe("function");
+      expect(typeof router.prefetch).toBe("function");
+      expect(typeof router.beforePopState).toBe("function");
+      expect(router.events).toBeDefined();
+      expect(typeof router.events.on).toBe("function");
+      expect(typeof router.events.off).toBe("function");
+      expect(typeof router.events.emit).toBe("function");
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
+  // Ported from Next.js: tests that rely on `window.next.router.events.on(...)`
+  // — e.g. test/development/pages-dir/client-navigation/index.test.ts:457
+  // (`window.next.router.events.on('routeChangeError', ...)`).
+  it("window.next.router.events forwards Pages Router events", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {
+      location: { pathname: "/", search: "", hash: "", href: "http://localhost/" },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      await import("../packages/vinext/src/shims/router.js");
+
+      const fired: unknown[] = [];
+      win.next.router.events.on("routeChangeStart", (url: unknown) => {
+        fired.push(url);
+      });
+      win.next.router.events.emit("routeChangeStart", "/next-page");
+      expect(fired).toEqual(["/next-page"]);
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.resetModules();
+    }
+  });
+
+  it("appRouterInstance exported from the navigation shim has the public router surface", async () => {
+    vi.resetModules();
+    const { appRouterInstance } = await import("../packages/vinext/src/shims/navigation.js");
+
+    // Ported from Next.js: publicAppRouterInstance shape in
+    // packages/next/src/client/components/app-router-instance.ts (line 392).
+    expect(typeof appRouterInstance.push).toBe("function");
+    expect(typeof appRouterInstance.replace).toBe("function");
+    expect(typeof appRouterInstance.back).toBe("function");
+    expect(typeof appRouterInstance.forward).toBe("function");
+    expect(typeof appRouterInstance.refresh).toBe("function");
+    expect(typeof appRouterInstance.prefetch).toBe("function");
+    expect(appRouterInstance.bfcacheId).toBe("0");
+  });
+
+  it("installWindowNext is a no-op on the server (typeof window === 'undefined')", async () => {
+    const previousWindow = (globalThis as any).window;
+    delete (globalThis as any).window;
+
+    try {
+      vi.resetModules();
+      const { installWindowNext } = await import("../packages/vinext/src/client/window-next.js");
+
+      // Does not throw and does not attempt to create a global. We cannot
+      // observe a non-existent window, so the assertion is structural: the
+      // call returns without error and there is no global to inspect.
+      expect(() => installWindowNext({ version: "x", appDir: true })).not.toThrow();
+    } finally {
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      vi.resetModules();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// next/router withRouter HOC
+//
+// withRouter is a higher-order component that injects the Pages Router
+// `router` instance as a prop into class components (which cannot call
+// hooks). Real Next.js apps and the Next.js deploy test suite depend on
+// this export — without it, bundlers fail with
+// `[MISSING_EXPORT] "withRouter" is not exported by ".../shims/router.js"`.
+//
+// Ported from Next.js: packages/next/src/client/with-router.tsx
+// https://github.com/vercel/next.js/blob/canary/packages/next/src/client/with-router.tsx
+//
+// Reference Next.js e2e fixture (class component using withRouter):
+// .nextjs-ref/test/e2e/with-router/pages/a.js
+// ---------------------------------------------------------------------------
+describe("next/router withRouter HOC", () => {
+  let previousWindow: unknown;
+
+  beforeEach(() => {
+    previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      location: { pathname: "/", search: "", hash: "", href: "http://localhost/" },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+    };
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    (globalThis as any).window = previousWindow;
+    vi.resetModules();
+  });
+
+  it("exports withRouter as a named function", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    expect(typeof withRouter).toBe("function");
+  });
+
+  it("withRouter wraps a component and forwards static props", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    const React = await import("react");
+
+    const Inner: React.ComponentType<{ router: any; label: string }> = ({ label }) =>
+      React.createElement("span", null, label);
+
+    const Wrapped = withRouter(Inner);
+    expect(typeof Wrapped).toBe("function");
+    // displayName is set in dev to `withRouter(<Inner>)`.
+    if (process.env.NODE_ENV !== "production") {
+      expect(Wrapped.displayName).toContain("withRouter");
+    }
+  });
+
+  it("withRouter injects a router prop into the wrapped component", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+
+    let receivedRouter: any = null;
+    let receivedLabel: string | undefined;
+    const Inner: React.ComponentType<{ router: any; label: string }> = (props) => {
+      receivedRouter = props.router;
+      receivedLabel = props.label;
+      return React.createElement("span", null, "ok");
+    };
+
+    const Wrapped = withRouter(Inner);
+    const html = renderToStaticMarkup(React.createElement(Wrapped as any, { label: "hi" }));
+    expect(html).toBe("<span>ok</span>");
+    expect(receivedLabel).toBe("hi");
+    // router must be the NextRouter shape (push/replace/back/...).
+    expect(receivedRouter).toBeTruthy();
+    expect(typeof receivedRouter.push).toBe("function");
+    expect(typeof receivedRouter.replace).toBe("function");
+    expect(typeof receivedRouter.back).toBe("function");
+    expect(typeof receivedRouter.reload).toBe("function");
+    expect(typeof receivedRouter.prefetch).toBe("function");
+    expect(receivedRouter.events).toBeDefined();
+  });
+
+  // Regression guard for Next.js spread order:
+  // packages/next/src/client/with-router.tsx renders
+  //   `<ComposedComponent router={useRouter()} {...props} />`
+  // — the injected `router` is placed FIRST and `{...props}` spread after,
+  // so a user-passed `router` prop overrides the HOC-injected one. If the
+  // spread order is ever inverted in the shim, this test fails.
+  it("user-passed router prop overrides the HOC-injected router (Next.js spread order)", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+
+    let receivedRouter: any = null;
+    const Inner: React.ComponentType<{ router: any }> = (props) => {
+      receivedRouter = props.router;
+      return React.createElement("span", null, "ok");
+    };
+
+    const Wrapped = withRouter(Inner);
+    const userRouter = { sentinel: "user-provided" };
+    renderToStaticMarkup(React.createElement(Wrapped as any, { router: userRouter }));
+    // Last spread wins: the user-passed router survives.
+    expect(receivedRouter).toBe(userRouter);
+  });
+
+  it("withRouter forwards getInitialProps from the composed component", async () => {
+    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+
+    type InnerType = ((props: { router: any }) => null) & {
+      getInitialProps?: () => unknown;
+      origGetInitialProps?: () => unknown;
+    };
+    const Inner: InnerType = (() => null) as InnerType;
+    const gip = () => ({ foo: "bar" });
+    Inner.getInitialProps = gip;
+    Inner.origGetInitialProps = gip;
+
+    const Wrapped = withRouter(Inner) as typeof Inner;
+    expect(Wrapped.getInitialProps).toBe(gip);
+    expect(Wrapped.origGetInitialProps).toBe(gip);
+  });
 });
 
 describe("next/headers shim", () => {
@@ -617,6 +1584,43 @@ describe("next/headers shim", () => {
     const awaited = await headerStore;
     expect(awaited.get("x-sync-header")).toBe("sync-value");
     setHeadersContext(null);
+  });
+
+  it("headers() and cookies() reuse request API promise identity within a request context", async () => {
+    // Next.js caches request API promises by the underlying request object:
+    // packages/next/src/server/request/headers.ts
+    // packages/next/src/server/request/cookies.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/headers.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/cookies.ts
+    const { setHeadersAccessPhase, setHeadersContext, headers, cookies } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    setHeadersContext({
+      headers: new Headers({ "x-custom": "test-value" }),
+      cookies: new Map([["session", "abc123"]]),
+    });
+
+    try {
+      const firstHeaders = headers();
+      const secondHeaders = headers();
+      expect(secondHeaders).toBe(firstHeaders);
+      expect(await secondHeaders).toBe(await firstHeaders);
+
+      const firstReadonlyCookies = cookies();
+      const secondReadonlyCookies = cookies();
+      expect(secondReadonlyCookies).toBe(firstReadonlyCookies);
+      expect(await secondReadonlyCookies).toBe(await firstReadonlyCookies);
+
+      setHeadersAccessPhase("route-handler");
+
+      const firstMutableCookies = cookies();
+      const secondMutableCookies = cookies();
+      expect(secondMutableCookies).toBe(firstMutableCookies);
+      expect(await secondMutableCookies).toBe(await firstMutableCookies);
+      expect(firstMutableCookies).not.toBe(firstReadonlyCookies);
+    } finally {
+      setHeadersContext(null);
+    }
   });
 
   it("headers() is read-only for both sync and awaited access", async () => {
@@ -1151,7 +2155,10 @@ describe("next/headers shim", () => {
     expect(dm.isEnabled).toBe(false);
 
     dm.enable();
-    // After enabling, the cookie should be set on the context
+    // isEnabled should reflect the change on the same object (live getter)
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/request/draft-mode.ts
+    expect(dm.isEnabled).toBe(true);
+    // A fresh draftMode() call should also see the change
     const dm2 = await draftMode();
     expect(dm2.isEnabled).toBe(true);
 
@@ -1184,6 +2191,9 @@ describe("next/headers shim", () => {
     expect(dm1.isEnabled).toBe(true);
 
     dm1.disable();
+    // isEnabled should reflect the change on the same object (live getter)
+    expect(dm1.isEnabled).toBe(false);
+    // A fresh draftMode() call should also see the change
     const dm2 = await draftMode();
     expect(dm2.isEnabled).toBe(false);
 
@@ -2234,6 +3244,54 @@ describe("next/cache shim", () => {
     expect(typeof cacheTag).toBe("function");
     // Should accept multiple tags without throwing
     expect(() => cacheTag("tag1", "tag2", "tag3")).not.toThrow();
+  });
+
+  // Ported from Next.js: test/e2e/app-dir/cache-components-errors/cache-components-unstable-deprecations.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/cache-components-errors/cache-components-unstable-deprecations.test.ts
+  it("unstable_cacheLife is exported as a deprecation alias for cacheLife", async () => {
+    const mod = await import("../packages/vinext/src/shims/cache.js");
+    expect(typeof mod.unstable_cacheLife).toBe("function");
+
+    // Matches the cacheLife signature: accepts a profile name or an inline config.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => mod.unstable_cacheLife("hours")).not.toThrow();
+      expect(() =>
+        mod.unstable_cacheLife({ stale: 60, revalidate: 300, expire: 3600 }),
+      ).not.toThrow();
+
+      // Next.js asserts CLI output contains "Error: `unstable_cacheLife` was recently stabilized".
+      // That string comes from console.error(new Error(...)) — match the same surface here.
+      const warned = error.mock.calls.some((args) => {
+        const msg = args[0];
+        const text = msg instanceof Error ? msg.message : String(msg ?? "");
+        return text.includes("`unstable_cacheLife` was recently stabilized");
+      });
+      expect(warned).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("unstable_cacheTag is exported as a deprecation alias for cacheTag", async () => {
+    const mod = await import("../packages/vinext/src/shims/cache.js");
+    expect(typeof mod.unstable_cacheTag).toBe("function");
+
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Matches the cacheTag signature: variadic string tags. Outside a "use cache"
+      // scope this is a no-op (same as cacheTag).
+      expect(() => mod.unstable_cacheTag("tag1", "tag2", "tag3")).not.toThrow();
+
+      const warned = error.mock.calls.some((args) => {
+        const msg = args[0];
+        const text = msg instanceof Error ? msg.message : String(msg ?? "");
+        return text.includes("`unstable_cacheTag` was recently stabilized");
+      });
+      expect(warned).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it("unstable_cache re-fetches when entry is stale (time-expired)", async () => {
@@ -5893,8 +6951,10 @@ describe("middleware request header overrides", () => {
     await runWithHeadersContext(headersContextFromRequest(request), async () => {
       // 1. Prime the sealed snapshot — this is exactly what
       //    `clerkMiddleware()` does internally via `buildRequestLike()`.
-      const preHeaders = await headers();
-      const preCookies = await cookies();
+      const preHeadersPromise = headers();
+      const preCookiesPromise = cookies();
+      const preHeaders = await preHeadersPromise;
+      const preCookies = await preCookiesPromise;
       expect(preHeaders.get("authorization")).toBe("Bearer secret");
       expect(preHeaders.get("x-keep")).toBe("original");
       expect(preCookies.getAll()).toEqual([
@@ -5915,9 +6975,13 @@ describe("middleware request header overrides", () => {
       // 3. A subsequent `headers()` call — for example from the Server
       //    Component's render — must observe the override, not the snapshot
       //    captured in step 1.
-      const postHeaders = await headers();
-      const postCookies = await cookies();
+      const postHeadersPromise = headers();
+      const postCookiesPromise = cookies();
+      const postHeaders = await postHeadersPromise;
+      const postCookies = await postCookiesPromise;
 
+      expect(postHeadersPromise).not.toBe(preHeadersPromise);
+      expect(postCookiesPromise).not.toBe(preCookiesPromise);
       expect(postHeaders.get("authorization")).toBeNull();
       expect(postHeaders.get("cookie")).toBeNull();
       expect(postHeaders.get("x-keep")).toBe("updated");
@@ -7734,16 +8798,14 @@ describe("next/form shim", () => {
 });
 
 describe("next/font/google shim", () => {
-  it("returns className, style, and variable for a Google Font", async () => {
+  it("returns className and style without variable unless requested for a Google Font", async () => {
     const { createFontLoader } = await import("../packages/vinext/src/shims/font-google.js");
     const Inter = createFontLoader("Inter");
     const result = Inter({ subsets: ["latin"], weight: ["400", "700"] });
 
     expect(result.className).toMatch(/^__font_inter_/);
     expect(result.style.fontFamily).toContain("Inter");
-    // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
-    // Users apply this class to set the CSS variable on that element.
-    expect(result.variable).toMatch(/^__variable_inter_/);
+    expect(result.variable).toBeUndefined();
   });
 
   it("Proxy returns font loaders for any family", async () => {
@@ -7763,8 +8825,7 @@ describe("next/font/google shim", () => {
     const result = googleFonts.RobotoMono({ weight: "400" });
 
     expect(result.style.fontFamily).toContain("Roboto Mono");
-    // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
-    expect(result.variable).toMatch(/^__variable_roboto_mono_/);
+    expect(result.variable).toBeUndefined();
   });
 
   it("uses custom variable name when provided", async () => {
@@ -8289,7 +9350,7 @@ describe("next/dynamic shim", () => {
     expect(result).toEqual([]);
   });
 
-  it("loading component receives isLoading and pastDelay props", async () => {
+  it("loading component receives Next.js noSSR loading props", async () => {
     const { default: dynamic } = await import("../packages/vinext/src/shims/dynamic.js");
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
@@ -8309,7 +9370,7 @@ describe("next/dynamic shim", () => {
     renderToStaticMarkup(React.createElement(DynComp));
     expect(receivedProps).not.toBeNull();
     expect(receivedProps.isLoading).toBe(true);
-    expect(receivedProps.pastDelay).toBe(true);
+    expect(receivedProps.pastDelay).toBe(false);
     expect(receivedProps.error).toBeNull();
   });
 
@@ -8901,11 +9962,9 @@ describe("extractMdxOptions", () => {
 });
 
 describe("next/web-vitals shim", () => {
-  it("exports useReportWebVitals as a no-op function", async () => {
+  it("exports useReportWebVitals as a hook function", async () => {
     const { useReportWebVitals } = await import("../packages/vinext/src/shims/web-vitals.js");
     expect(typeof useReportWebVitals).toBe("function");
-    // Should run without throwing
-    expect(() => useReportWebVitals(() => {})).not.toThrow();
   });
 });
 
@@ -9777,6 +10836,106 @@ describe("Pages Router concurrent navigation", () => {
       }
       globalThis.fetch = originalFetch;
     }
+  });
+
+  async function expectBasePathHashOnlyPush({
+    browserPath,
+    target,
+    expectedBrowserUrl,
+    expectedEventUrl,
+  }: {
+    browserPath: string;
+    target: string;
+    expectedBrowserUrl: string;
+    expectedEventUrl: string;
+  }) {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const { win } = createNavWindow();
+    win.location.pathname = browserPath;
+    win.location.href = `http://localhost${browserPath}`;
+    (globalThis as any).window = win;
+    (globalThis as any).document = {
+      getElementById: vi.fn(() => ({ scrollIntoView: vi.fn() })),
+    };
+    process.env.__NEXT_ROUTER_BASEPATH = "/app";
+    vi.resetModules();
+
+    const fetch = vi.fn(async () => {
+      throw new Error("hash-only navigations must not fetch page HTML");
+    });
+    globalThis.fetch = fetch;
+
+    const hashEvents: string[] = [];
+    const routeEvents: string[] = [];
+    const onHashChangeStart = (...args: unknown[]) => {
+      hashEvents.push(`start:${String(args[0])}`);
+    };
+    const onHashChangeComplete = (...args: unknown[]) => {
+      hashEvents.push(`complete:${String(args[0])}`);
+    };
+    const onRouteChangeStart = (...args: unknown[]) => {
+      routeEvents.push(`start:${String(args[0])}`);
+    };
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      Router.events.on("hashChangeStart", onHashChangeStart);
+      Router.events.on("hashChangeComplete", onHashChangeComplete);
+      Router.events.on("routeChangeStart", onRouteChangeStart);
+
+      const result = await Router.push(target);
+
+      expect(result).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(win.history.pushState).toHaveBeenCalledWith({}, "", expectedBrowserUrl);
+      expect(hashEvents).toEqual([`start:${expectedEventUrl}`, `complete:${expectedEventUrl}`]);
+      expect(routeEvents).toEqual([]);
+    } finally {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      Router.events.off("hashChangeStart", onHashChangeStart);
+      Router.events.off("hashChangeComplete", onHashChangeComplete);
+      Router.events.off("routeChangeStart", onRouteChangeStart);
+      if (previousBasePath === undefined) {
+        delete process.env.__NEXT_ROUTER_BASEPATH;
+      } else {
+        process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      }
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  it("treats app-relative hash navigations as hash-only when basePath is configured", async () => {
+    await expectBasePathHashOnlyPush({
+      browserPath: "/app/router-events-test",
+      target: "/router-events-test#section-1",
+      expectedBrowserUrl: "/app/router-events-test#section-1",
+      expectedEventUrl: "/router-events-test#section-1",
+    });
+  });
+
+  it("does not strip app-relative targets that start with the basePath segment", async () => {
+    await expectBasePathHashOnlyPush({
+      browserPath: "/app/app/foo",
+      target: "/app/foo#section-1",
+      expectedBrowserUrl: "/app/app/foo#section-1",
+      expectedEventUrl: "/app/foo#section-1",
+    });
   });
 
   it("popstate known failures schedule a single hard navigation", async () => {
@@ -11750,6 +12909,84 @@ describe("next/error shim", () => {
   });
 });
 
+// next/app default export
+//
+// Ported from Next.js: packages/next/src/pages/_app.tsx
+// https://github.com/vercel/next.js/blob/canary/packages/next/src/pages/_app.tsx
+//
+// Pages Router fixtures very commonly do:
+//   import App from "next/app";
+//   export default class MyApp extends App { ... }
+// or call App.getInitialProps(appContext) from a custom getInitialProps.
+// Without a runtime default export, every such fixture fails to build with
+// "[MISSING_EXPORT] 'default' is not exported by ...shims/app.js".
+describe("next/app shim", () => {
+  it("exports a React class component as default", async () => {
+    const React = await import("react");
+    const AppDefault = (await import("../packages/vinext/src/shims/app.js")).default;
+    expect(typeof AppDefault).toBe("function");
+    // Class component: prototype must have a render method, instances must
+    // be instances of React.Component.
+    expect(typeof AppDefault.prototype.render).toBe("function");
+    const instance = new AppDefault({ Component: () => null, pageProps: {} });
+    expect(instance).toBeInstanceOf(React.Component);
+  });
+
+  it("default App.render() returns <Component {...pageProps} />", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const AppDefault = (await import("../packages/vinext/src/shims/app.js")).default;
+
+    function Page(props: { greeting: string }) {
+      return React.createElement("p", null, props.greeting);
+    }
+
+    // Use explicit generics so React.createElement's prop type inference
+    // lines up with `AppProps<{ greeting: string }>`.
+    const html = renderToStaticMarkup(
+      React.createElement(AppDefault<unknown, { greeting: string }>, {
+        Component: Page,
+        pageProps: { greeting: "hello world" },
+      }),
+    );
+    expect(html).toBe("<p>hello world</p>");
+  });
+
+  it("App.getInitialProps is a function and forwards Component.getInitialProps result as pageProps", async () => {
+    const AppDefault = (await import("../packages/vinext/src/shims/app.js")).default;
+    expect(typeof AppDefault.getInitialProps).toBe("function");
+    // origGetInitialProps is preserved for userland code that introspects it.
+    expect(typeof AppDefault.origGetInitialProps).toBe("function");
+
+    const pageCtx = { req: { url: "/test" } };
+    const Component = Object.assign(() => null, {
+      getInitialProps: async (ctx: unknown) => {
+        expect(ctx).toBe(pageCtx);
+        return { foo: "bar" };
+      },
+    });
+
+    const result = await AppDefault.getInitialProps({
+      Component,
+      AppTree: () => null,
+      ctx: pageCtx,
+      router: {},
+    });
+    expect(result).toEqual({ pageProps: { foo: "bar" } });
+  });
+
+  it("App.getInitialProps returns { pageProps: {} } when Component has no getInitialProps", async () => {
+    const AppDefault = (await import("../packages/vinext/src/shims/app.js")).default;
+    const result = await AppDefault.getInitialProps({
+      Component: () => null,
+      AppTree: () => null,
+      ctx: {},
+      router: {},
+    });
+    expect(result).toEqual({ pageProps: {} });
+  });
+});
+
 describe("next/constants shim", () => {
   it("exports all phase constants", async () => {
     const constants = await import("../packages/vinext/src/shims/constants.js");
@@ -11905,6 +13142,23 @@ describe("next/dist/* internal import shims", () => {
     expect(mod.LayoutRouterContext).toBeDefined();
     expect(mod.MissingSlotContext).toBeDefined();
     expect(mod.TemplateContext).toBeDefined();
+  });
+
+  it("app-router-context imports when React.createContext is unavailable", async () => {
+    vi.resetModules();
+    vi.doMock("react", () => ({ createContext: undefined }));
+
+    try {
+      const mod = await import("../packages/vinext/src/shims/internal/app-router-context.js");
+      expect(mod.AppRouterContext).toBeNull();
+      expect(mod.GlobalLayoutRouterContext).toBeNull();
+      expect(mod.LayoutRouterContext).toBeNull();
+      expect(mod.MissingSlotContext).toBeNull();
+      expect(mod.TemplateContext).toBeNull();
+    } finally {
+      vi.doUnmock("react");
+      vi.resetModules();
+    }
   });
 
   it("utils exports NEXT_DATA type helpers", async () => {

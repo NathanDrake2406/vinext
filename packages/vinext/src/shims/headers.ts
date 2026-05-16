@@ -9,6 +9,7 @@
  */
 
 import type { AsyncLocalStorage } from "node:async_hooks";
+import { MIDDLEWARE_SET_COOKIE_HEADER } from "../server/headers.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../server/middleware-request-headers.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import {
@@ -22,6 +23,7 @@ import {
   getRequestContext,
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
+import type { RenderRequestApiKind } from "../server/cache-proof.js";
 
 // ---------------------------------------------------------------------------
 // Request context
@@ -42,6 +44,7 @@ export type HeadersAccessPhase = "render" | "action" | "route-handler";
 export type VinextHeadersShimState = {
   headersContext: HeadersContext | null;
   dynamicUsageDetected: boolean;
+  renderRequestApiUsage: Set<RenderRequestApiKind>;
   /** Error recorded by throwIfInsideCacheScope for dev diagnostics, persists even if caught by user code. */
   invalidDynamicUsageError: unknown;
   pendingSetCookies: string[];
@@ -63,13 +66,13 @@ const _als = getOrCreateAls<VinextHeadersShimState>("vinext.nextHeadersShim.als"
 const _fallbackState = (_g[_FALLBACK_KEY] ??= {
   headersContext: null,
   dynamicUsageDetected: false,
+  renderRequestApiUsage: new Set<RenderRequestApiKind>(),
   invalidDynamicUsageError: null,
   pendingSetCookies: [],
   draftModeCookieHeader: null,
   phase: "render",
 } satisfies VinextHeadersShimState) as VinextHeadersShimState;
 const EXPIRED_COOKIE_DATE = new Date(0).toUTCString();
-const MIDDLEWARE_SET_COOKIE_HEADER = "x-middleware-set-cookie";
 
 function splitMiddlewareSetCookieHeader(value: string): string[] {
   const cookies: string[] = [];
@@ -175,6 +178,21 @@ export function markDynamicUsage(): void {
     return;
   }
   state.dynamicUsageDetected = true;
+}
+
+export function markRenderRequestApiUsage(kind: RenderRequestApiKind): void {
+  _getState().renderRequestApiUsage.add(kind);
+}
+
+export function peekRenderRequestApiUsage(): RenderRequestApiKind[] {
+  return [..._getState().renderRequestApiUsage].sort();
+}
+
+export function consumeRenderRequestApiUsage(): RenderRequestApiKind[] {
+  const state = _getState();
+  const observed = [...state.renderRequestApiUsage].sort();
+  state.renderRequestApiUsage = new Set<RenderRequestApiKind>();
+  return observed;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +333,7 @@ export function setHeadersContext(ctx: HeadersContext | null): void {
   if (ctx !== null) {
     state.headersContext = ctx;
     state.dynamicUsageDetected = false;
+    state.renderRequestApiUsage = new Set();
     state.pendingSetCookies = [];
     state.draftModeCookieHeader = null;
     state.phase = "render";
@@ -347,6 +366,7 @@ export function runWithHeadersContext<T>(
     return runWithUnifiedStateMutation((uCtx) => {
       uCtx.headersContext = ctx;
       uCtx.dynamicUsageDetected = false;
+      uCtx.renderRequestApiUsage = new Set();
       uCtx.pendingSetCookies = [];
       uCtx.draftModeCookieHeader = null;
       uCtx.phase = "render";
@@ -356,6 +376,7 @@ export function runWithHeadersContext<T>(
   const state: VinextHeadersShimState = {
     headersContext: ctx,
     dynamicUsageDetected: false,
+    renderRequestApiUsage: new Set(),
     invalidDynamicUsageError: null,
     pendingSetCookies: [],
     draftModeCookieHeader: null,
@@ -475,6 +496,26 @@ function _decorateRequestApiPromise<T extends object>(
       );
     },
   });
+}
+
+// React.use() tracks thenables by identity, so request APIs must reuse the
+// same decorated promise for the same underlying request view.
+const _decoratedHeadersPromises = new WeakMap<Headers, Promise<Headers> & Headers>();
+const _decoratedCookiesPromises = new WeakMap<
+  RequestCookies,
+  Promise<RequestCookies> & RequestCookies
+>();
+
+function _getOrCreateDecoratedRequestApiPromise<T extends object>(
+  cache: WeakMap<T, Promise<T> & T>,
+  target: T,
+): Promise<T> & T {
+  const cached = cache.get(target);
+  if (cached) return cached;
+
+  const promise = _decorateRequestApiPromise(Promise.resolve(target), target);
+  cache.set(target, promise);
+  return promise;
 }
 
 function _decorateRejectedRequestApiPromise<T extends object>(error: unknown): Promise<T> & T {
@@ -657,6 +698,7 @@ export function headersContextFromRequest(request: Request): HeadersContext {
  * the context is already available).
  */
 export function headers(): Promise<Headers> & Headers {
+  markRenderRequestApiUsage("headers");
   try {
     throwIfInsideCacheScope("headers()");
   } catch (error) {
@@ -679,7 +721,7 @@ export function headers(): Promise<Headers> & Headers {
 
   markDynamicUsage();
   const readonlyHeaders = _getReadonlyHeaders(state.headersContext);
-  return _decorateRequestApiPromise(Promise.resolve(readonlyHeaders), readonlyHeaders);
+  return _getOrCreateDecoratedRequestApiPromise(_decoratedHeadersPromises, readonlyHeaders);
 }
 
 /**
@@ -687,6 +729,7 @@ export function headers(): Promise<Headers> & Headers {
  * Returns a ReadonlyRequestCookies-like object.
  */
 export function cookies(): Promise<RequestCookies> & RequestCookies {
+  markRenderRequestApiUsage("cookies");
   try {
     throwIfInsideCacheScope("cookies()");
   } catch (error) {
@@ -711,7 +754,7 @@ export function cookies(): Promise<RequestCookies> & RequestCookies {
     ? _getMutableCookies(state.headersContext)
     : _getReadonlyCookies(state.headersContext);
 
-  return _decorateRequestApiPromise(Promise.resolve(cookieStore), cookieStore);
+  return _getOrCreateDecoratedRequestApiPromise(_decoratedCookiesPromises, cookieStore);
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +814,7 @@ export function isDraftModeRequest(request: Request): boolean {
 }
 
 type DraftModeResult = {
-  isEnabled: boolean;
+  readonly isEnabled: boolean;
   enable(): void;
   disable(): void;
 };
@@ -791,6 +834,7 @@ function draftModeCookieAttributes(): string {
  * - `disable()`: clears the bypass cookie
  */
 export async function draftMode(): Promise<DraftModeResult> {
+  markRenderRequestApiUsage("draftMode");
   throwIfInsideCacheScope("draftMode()");
 
   const state = _getState();
@@ -799,12 +843,13 @@ export async function draftMode(): Promise<DraftModeResult> {
   }
   markDynamicUsage();
   const secret = getDraftSecret();
-  const isEnabled = state.headersContext
-    ? state.headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret
-    : false;
 
   return {
-    isEnabled,
+    get isEnabled(): boolean {
+      return state.headersContext
+        ? state.headersContext.cookies.get(DRAFT_MODE_COOKIE) === secret
+        : false;
+    },
     enable(): void {
       if (state.headersContext?.accessError) {
         throw state.headersContext.accessError;

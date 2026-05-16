@@ -29,6 +29,7 @@ import { workUnitAsyncStorage } from "./internal/work-unit-async-storage.js";
 import { makeHangingPromise } from "./internal/make-hanging-promise.js";
 import { readCacheControlNumberField } from "../utils/cache-control-metadata.js";
 import { encodeCacheTag, encodeCacheTags } from "../utils/encode-cache-tag.js";
+import type { RenderObservation } from "../server/cache-proof.js";
 
 // ---------------------------------------------------------------------------
 // Lazy accessor for cache context — avoids circular imports with cache-runtime.
@@ -97,6 +98,7 @@ export type CachedAppPageValue = {
   rscData: ArrayBuffer | undefined;
   headers: Record<string, string | string[]> | undefined;
   postponed: string | undefined;
+  renderObservation?: RenderObservation;
   status: number | undefined;
 };
 
@@ -797,6 +799,58 @@ export function cacheTag(...tags: string[]): void {
   } catch {
     // Not in a cache context — no-op
   }
+}
+
+/**
+ * @deprecated Use `cacheLife` instead. `unstable_cacheLife` was stabilized
+ * upstream and the `unstable_`-prefixed name will be removed in a future
+ * version of Next.js. Kept as a delegating alias for parity.
+ *
+ * Emits a one-time deprecation warning via `console.error` (matching Next.js),
+ * then delegates to `cacheLife`.
+ *
+ * Ported from Next.js: packages/next/cache.js
+ * https://github.com/vercel/next.js/blob/canary/packages/next/cache.js
+ *
+ * Asserted by Next.js test:
+ * test/e2e/app-dir/cache-components-errors/cache-components-unstable-deprecations.test.ts
+ */
+let _unstableCacheLifeWarned = false;
+export function unstable_cacheLife(profile: string | CacheLifeConfig): void {
+  if (!_unstableCacheLifeWarned) {
+    _unstableCacheLifeWarned = true;
+    const error = new Error(
+      "`unstable_cacheLife` was recently stabilized and should be imported as `cacheLife`. The `unstable` prefixed form will be removed in a future version of Next.js.",
+    );
+    console.error(error);
+  }
+  return cacheLife(profile);
+}
+
+/**
+ * @deprecated Use `cacheTag` instead. `unstable_cacheTag` was stabilized
+ * upstream and the `unstable_`-prefixed name will be removed in a future
+ * version of Next.js. Kept as a delegating alias for parity.
+ *
+ * Emits a one-time deprecation warning via `console.error` (matching Next.js),
+ * then delegates to `cacheTag`.
+ *
+ * Ported from Next.js: packages/next/cache.js
+ * https://github.com/vercel/next.js/blob/canary/packages/next/cache.js
+ *
+ * Asserted by Next.js test:
+ * test/e2e/app-dir/cache-components-errors/cache-components-unstable-deprecations.test.ts
+ */
+let _unstableCacheTagWarned = false;
+export function unstable_cacheTag(...tags: string[]): void {
+  if (!_unstableCacheTagWarned) {
+    _unstableCacheTagWarned = true;
+    const error = new Error(
+      "`unstable_cacheTag` was recently stabilized and should be imported as `cacheTag`. The `unstable` prefixed form will be removed in a future version of Next.js.",
+    );
+    console.error(error);
+  }
+  return cacheTag(...tags);
 }
 
 // ---------------------------------------------------------------------------

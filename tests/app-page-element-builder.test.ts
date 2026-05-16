@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import React from "react";
 import {
   APP_INTERCEPTION_CONTEXT_KEY,
+  APP_LAYOUT_IDS_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
+  APP_SLOT_BINDINGS_KEY,
 } from "../packages/vinext/src/server/app-elements.js";
 import type { AppPageModule } from "../packages/vinext/src/server/app-page-route-wiring.js";
 import type { AppPageParams } from "../packages/vinext/src/server/app-page-boundary.js";
@@ -18,12 +20,14 @@ import type { AppPageBuildRoute } from "../packages/vinext/src/server/app-page-e
 // Mocks
 // ---------------------------------------------------------------------------
 
-const { markDynamicUsageMock } = vi.hoisted(() => ({
+const { markDynamicUsageMock, markRenderRequestApiUsageMock } = vi.hoisted(() => ({
   markDynamicUsageMock: vi.fn(),
+  markRenderRequestApiUsageMock: vi.fn(),
 }));
 
 vi.mock("../packages/vinext/src/shims/headers.js", () => ({
   markDynamicUsage: markDynamicUsageMock,
+  markRenderRequestApiUsage: markRenderRequestApiUsageMock,
 }));
 
 // ---------------------------------------------------------------------------
@@ -85,6 +89,7 @@ function createBaseOptions(overrides?: {
 describe("buildPageElements", () => {
   beforeEach(() => {
     markDynamicUsageMock.mockClear();
+    markRenderRequestApiUsageMock.mockClear();
   });
 
   it("returns an error element record when a page module has no default export", async () => {
@@ -140,6 +145,7 @@ describe("buildPageElements", () => {
 
     const record = result as Record<string, unknown>;
     expect(record[APP_ROOT_LAYOUT_KEY]).toBe("/");
+    expect(record[APP_LAYOUT_IDS_KEY]).toEqual(["layout:/", "layout:/dashboard"]);
   });
 
   it("constructs a full element tree for a page with a default export", async () => {
@@ -163,6 +169,146 @@ describe("buildPageElements", () => {
     expect(Object.prototype.hasOwnProperty.call(record, "route:/hello")).toBe(true);
   });
 
+  it("attaches route-state slot bindings for active, default, and unmatched slots", async () => {
+    function TestPage(): React.ReactNode {
+      return React.createElement("div", null, "Hello");
+    }
+    function TestLayout({ children }: { children?: React.ReactNode }): React.ReactNode {
+      return children;
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(TestPage),
+      layouts: [createSyntheticPageModule(TestLayout)],
+      layoutTreePositions: [0],
+      routeSegments: ["dashboard"],
+      pattern: "/dashboard",
+      slots: {
+        "team@dashboard/@team": {
+          id: "slot:team:/",
+          name: "team",
+          page: createSyntheticPageModule(() => React.createElement("div", null, "team")),
+          layoutIndex: 0,
+          routeSegments: [],
+        },
+        "analytics@dashboard/@analytics": {
+          id: "slot:analytics:/",
+          name: "analytics",
+          default: createSyntheticPageModule(() => React.createElement("div", null, "analytics")),
+          layoutIndex: 0,
+          routeSegments: null,
+        },
+        "reports@dashboard/@reports": {
+          id: "slot:reports:/",
+          name: "reports",
+          layoutIndex: 0,
+          routeSegments: null,
+        },
+      },
+    });
+
+    const result = await buildPageElements(createBaseOptions({ route, routePath: "/dashboard" }));
+    const record = result as Record<string, unknown>;
+
+    expect(record[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        ownerLayoutId: "layout:/",
+        slotId: "slot:analytics:/",
+        state: "default",
+      },
+      {
+        ownerLayoutId: "layout:/",
+        slotId: "slot:reports:/",
+        state: "unmatched",
+      },
+      {
+        ownerLayoutId: "layout:/",
+        slotId: "slot:team:/",
+        state: "active",
+      },
+    ]);
+  });
+
+  it("marks intercepted slot override bindings as active", async () => {
+    function TestPage(): React.ReactNode {
+      return React.createElement("div", null, "Hello");
+    }
+    function TestLayout({ children }: { children?: React.ReactNode }): React.ReactNode {
+      return children;
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(TestPage),
+      layouts: [createSyntheticPageModule(TestLayout), createSyntheticPageModule(TestLayout)],
+      layoutTreePositions: [0, 1],
+      routeSegments: ["feed"],
+      pattern: "/feed",
+      slots: {
+        "modal@feed/@modal": {
+          id: "slot:modal:/feed",
+          name: "modal",
+          default: createSyntheticPageModule(() => null),
+          layoutIndex: 1,
+          routeSegments: null,
+        },
+      },
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({
+        route,
+        routePath: "/photos/42",
+        opts: {
+          interceptionContext: "/feed",
+          interceptSlotKey: "modal@feed/@modal",
+          interceptPage: createSyntheticPageModule(() =>
+            React.createElement("div", null, "Intercepted"),
+          ),
+          interceptParams: { id: "42" },
+        } as Record<string, unknown>,
+      }),
+    );
+    const record = result as Record<string, unknown>;
+
+    expect(record[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        ownerLayoutId: "layout:/feed",
+        slotId: "slot:modal:/feed",
+        state: "active",
+      },
+    ]);
+  });
+
+  it("rejects graph slot ids that diverge from the wire slot id", async () => {
+    function TestPage(): React.ReactNode {
+      return React.createElement("div", null, "Hello");
+    }
+    function TestLayout({ children }: { children?: React.ReactNode }): React.ReactNode {
+      return children;
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(TestPage),
+      layouts: [createSyntheticPageModule(TestLayout), createSyntheticPageModule(TestLayout)],
+      layoutTreePositions: [0, 1],
+      routeSegments: ["feed"],
+      pattern: "/feed",
+      slots: {
+        "modal@feed/@modal": {
+          id: "slot:modal:/wrong",
+          name: "modal",
+          default: createSyntheticPageModule(() => null),
+          layoutIndex: 1,
+          routeSegments: null,
+        },
+      },
+    });
+
+    await expect(
+      buildPageElements(createBaseOptions({ route, routePath: "/feed" })),
+    ).rejects.toThrow("App Router slot id mismatch");
+  });
+
   it("calls markDynamicUsage when search params have content", async () => {
     function SearchPage(): React.ReactNode {
       return React.createElement("div", null, "Search");
@@ -184,6 +330,7 @@ describe("buildPageElements", () => {
     );
 
     expect(markDynamicUsageMock).toHaveBeenCalled();
+    expect(markRenderRequestApiUsageMock).toHaveBeenCalledWith("searchParams");
   });
 
   it("does NOT call markDynamicUsage when search params are empty", async () => {
@@ -207,6 +354,7 @@ describe("buildPageElements", () => {
     );
 
     expect(markDynamicUsageMock).not.toHaveBeenCalled();
+    expect(markRenderRequestApiUsageMock).not.toHaveBeenCalled();
   });
 
   it("passes slot overrides when interception opts have a slot key and page", async () => {

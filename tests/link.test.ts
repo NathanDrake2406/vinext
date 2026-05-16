@@ -15,7 +15,11 @@ import ReactDOMServer from "react-dom/server";
 
 // We test the Link component and its internal helpers.
 // Link is a "use client" component but renderToString still works for SSR output.
-import Link, { useLinkStatus } from "../packages/vinext/src/shims/link.js";
+import Link, {
+  canAutoPrefetchFullAppRoute,
+  resolveLinkPrefetchMode,
+  useLinkStatus,
+} from "../packages/vinext/src/shims/link.js";
 
 // Internal helpers re-exported or accessible via the router shim
 import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/router.js";
@@ -130,6 +134,45 @@ describe("useLinkStatus", () => {
     }
     ReactDOMServer.renderToString(React.createElement(TestComponent));
     expect(status).toEqual({ pending: false });
+  });
+});
+
+describe("Link App Router prefetch mode", () => {
+  it("distinguishes automatic prefetch from explicit full prefetch", () => {
+    expect(resolveLinkPrefetchMode(undefined, false)).toBe("auto");
+    expect(resolveLinkPrefetchMode(null, false)).toBe("auto");
+    expect(resolveLinkPrefetchMode("auto", false)).toBe("auto");
+    expect(resolveLinkPrefetchMode(true, false)).toBe("full");
+    expect(resolveLinkPrefetchMode(false, false)).toBe("disabled");
+    expect(resolveLinkPrefetchMode(true, true)).toBe("disabled");
+  });
+
+  it("allows automatic full RSC prefetch only for known static App Router routes", () => {
+    const originalWindow = globalThis.window;
+    (globalThis as any).window = {
+      location: {
+        href: "http://localhost/blog",
+        origin: "http://localhost",
+      },
+      __VINEXT_LINK_PREFETCH_ROUTES__: [
+        { patternParts: ["about"], isDynamic: false },
+        { patternParts: ["blog", ":slug"], isDynamic: true },
+        { patternParts: ["docs", ":slug+"], isDynamic: true },
+      ],
+    };
+
+    try {
+      expect(canAutoPrefetchFullAppRoute("/about")).toBe(true);
+      expect(canAutoPrefetchFullAppRoute("/blog/hello-world")).toBe(false);
+      expect(canAutoPrefetchFullAppRoute("/docs/a/b")).toBe(false);
+      expect(canAutoPrefetchFullAppRoute("/missing")).toBe(false);
+    } finally {
+      if (originalWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = originalWindow;
+      }
+    }
   });
 });
 

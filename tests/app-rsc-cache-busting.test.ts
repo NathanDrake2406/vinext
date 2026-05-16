@@ -1,15 +1,37 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  applyRscCompatibilityIdHeader,
   computeRscCacheBustingSearchParam,
   createRscRequestHeaders,
   createRscRequestUrl,
+  isRscCompatibilityIdCompatible,
   resolveInvalidRscCacheBustingRequest,
   setRscCacheBustingSearchParam,
   stripRscCacheBustingSearchParam,
+  VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM,
+  VINEXT_RSC_RENDER_MODE_HEADER,
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
+import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import { fnv1a64 } from "../packages/vinext/src/utils/hash.js";
+import { withEnvVar } from "./env-test-helpers.js";
+
+const textEncoder = new TextEncoder();
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+async function sha256CacheBustingHash(input: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", textEncoder.encode(input));
+  return encodeBase64Url(new Uint8Array(digest).subarray(0, 12));
+}
 
 describe("App Router RSC cache-busting", () => {
   it("adds a bare _rsc search param when no variant headers are present", async () => {
@@ -43,6 +65,23 @@ describe("App Router RSC cache-busting", () => {
     );
 
     expect(feedHash).not.toBe(galleryHash);
+  });
+
+  it("varies preserve-current-UI refresh payloads from normal navigations", async () => {
+    const navigationHash = await computeRscCacheBustingSearchParam(createRscRequestHeaders());
+    const refreshHash = await computeRscCacheBustingSearchParam(
+      createRscRequestHeaders({ renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI }),
+    );
+
+    expect(navigationHash).toBe("");
+    expect(refreshHash).not.toBe("");
+  });
+
+  it("normalizes invalid render modes to normal navigation for cache-busting", async () => {
+    const headers = createRscRequestHeaders();
+    headers.set(VINEXT_RSC_RENDER_MODE_HEADER, "invalid");
+
+    await expect(computeRscCacheBustingSearchParam(headers)).resolves.toBe("");
   });
 
   it("preserves existing query params while replacing stale _rsc values", () => {
@@ -151,6 +190,54 @@ describe("App Router RSC cache-busting", () => {
     ).resolves.toBeNull();
   });
 
+  it("accepts previous SHA cache-busting params after adding a varying header", async () => {
+    const headers = createRscRequestHeaders({ mountedSlotsHeader: "slot:modal:/" });
+    const previousHash = await sha256CacheBustingHash("0,0,0,0,0,slot:modal:/");
+    const request = new Request(`https://example.com/photos/42.rsc?_rsc=${previousHash}`, {
+      headers,
+    });
+
+    await expect(
+      resolveInvalidRscCacheBustingRequest({ isRscRequest: true, request }),
+    ).resolves.toBeNull();
+  });
+
+  it("does not accept a bare previous hash for preserve-current-UI payloads", async () => {
+    const headers = createRscRequestHeaders({
+      renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+    });
+    const request = new Request("https://example.com/photos/42.rsc?_rsc", { headers });
+    const hash = await computeRscCacheBustingSearchParam(headers);
+
+    const response = await resolveInvalidRscCacheBustingRequest({
+      isRscRequest: true,
+      request,
+    });
+
+    expect(response?.status).toBe(307);
+    expect(response?.headers.get("Location")).toBe(`/photos/42.rsc?_rsc=${hash}`);
+  });
+
+  it("does not accept previous mounted-slot hashes for preserve-current-UI payloads", async () => {
+    const headers = createRscRequestHeaders({
+      mountedSlotsHeader: "slot:modal:/",
+      renderMode: APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI,
+    });
+    const previousHash = await sha256CacheBustingHash("0,0,0,0,0,slot:modal:/");
+    const currentHash = await computeRscCacheBustingSearchParam(headers);
+    const request = new Request(`https://example.com/photos/42.rsc?_rsc=${previousHash}`, {
+      headers,
+    });
+
+    const response = await resolveInvalidRscCacheBustingRequest({
+      isRscRequest: true,
+      request,
+    });
+
+    expect(response?.status).toBe(307);
+    expect(response?.headers.get("Location")).toBe(`/photos/42.rsc?_rsc=${currentHash}`);
+  });
+
   it("ignores non-RSC and mutating requests", async () => {
     const headers = createRscRequestHeaders({ interceptionContext: "/feed" });
 
@@ -170,7 +257,48 @@ describe("App Router RSC cache-busting", () => {
 
   it("exports the full Vary value for RSC-bearing App Router responses", () => {
     expect(VINEXT_RSC_VARY_HEADER).toBe(
-      "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots",
+      "RSC, Accept, Next-Router-State-Tree, Next-Router-Prefetch, Next-Router-Segment-Prefetch, Next-Url, X-Vinext-Interception-Context, X-Vinext-Mounted-Slots, X-Vinext-Rsc-Render-Mode",
     );
+  });
+
+  it("applies the current compatibility ID to RSC response headers when available", () => {
+    const headers = new Headers();
+
+    applyRscCompatibilityIdHeader(headers, "compat-a");
+
+    expect(headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe("compat-a");
+  });
+
+  it("uses the injected RSC compatibility ID by default", () => {
+    const headers = new Headers();
+
+    withEnvVar("__VINEXT_RSC_COMPATIBILITY_ID", "compat-env", () =>
+      applyRscCompatibilityIdHeader(headers),
+    );
+
+    expect(headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe("compat-env");
+  });
+
+  it("removes a spoofed compatibility ID header when no framework ID is available", () => {
+    const headers = new Headers({
+      [VINEXT_RSC_COMPATIBILITY_ID_HEADER]: "spoofed-compat",
+    });
+
+    applyRscCompatibilityIdHeader(headers, "");
+
+    expect(headers.has(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe(false);
+  });
+
+  it("classifies mismatched RSC compatibility IDs as incompatible", () => {
+    expect(isRscCompatibilityIdCompatible("compat-a", "compat-a")).toBe(true);
+    expect(isRscCompatibilityIdCompatible("compat-b", "compat-a")).toBe(false);
+  });
+
+  it("treats missing response compatibility IDs as incompatible when the client has one", () => {
+    expect(isRscCompatibilityIdCompatible(null, "compat-a")).toBe(false);
+  });
+
+  it("treats missing response compatibility IDs as compatible only when the client has none", () => {
+    expect(isRscCompatibilityIdCompatible("compat-a", null)).toBe(true);
   });
 });

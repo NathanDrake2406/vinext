@@ -20,6 +20,10 @@ import type { Root } from "react-dom/client";
 import type { OnRequestErrorHandler } from "./server/instrumentation";
 import type { CachedRscResponse, PrefetchCacheEntry } from "vinext/shims/navigation";
 
+// `window.next` is declared inline in `./client/window-next.ts` (mirroring
+// Next.js's own pattern in `packages/next/src/client/next.ts`), not here, so
+// the type is co-located with the installer that owns the runtime shape.
+
 // ---------------------------------------------------------------------------
 // Window globals — browser-side state shared across module boundaries
 // ---------------------------------------------------------------------------
@@ -37,8 +41,9 @@ declare global {
     __VINEXT_ROOT__: Root | undefined;
 
     /**
-     * High-resolution timestamp recorded after client hydration completes.
-     * Used by instrumentation-client compatibility tests.
+     * High-resolution timestamp recorded after client hydration is usable.
+     * Pages Router writes after hydrateRoot() returns; App Router writes after
+     * the first committed tree attaches browser router state.
      */
     __VINEXT_HYDRATED_AT: number | undefined;
 
@@ -100,6 +105,16 @@ declare global {
       | undefined;
 
     /**
+     * Invalidates the client-side RSC navigation caches (visited-response +
+     * prefetch). Installed by the browser RSC entry so that `router.refresh()`
+     * in the navigation shim can drop stale RSC payloads for routes other
+     * than the current one — required for Next.js parity, since refresh is
+     * specified to invalidate the entire segment cache (see
+     * Next.js refresh-reducer.ts).
+     */
+    __VINEXT_CLEAR_NAV_CACHES__: (() => void) | undefined;
+
+    /**
      * A Promise that resolves when the current in-flight popstate RSC navigation
      * finishes rendering.
      * Set by the popstate handler in the browser RSC entry; read by
@@ -129,6 +144,9 @@ declare global {
     // re-declare it here to avoid type conflicts. vinext-specific extensions
     // (__vinext) are accessed via the `VinextNextData` type in
     // `client/vinext-next-data.ts`.
+    //
+    // `window.next` is declared in `./client/window-next.ts` so its type
+    // (`WindowNext`) lives next to the installer that owns the runtime shape.
   }
 
   // ── self globals used inside server-injected inline scripts ───────────────
@@ -328,6 +346,13 @@ declare global {
       __VINEXT_BUILD_ID?: string;
 
       /**
+       * Public App Router RSC compatibility identity injected via Vite
+       * `define`. Used by browser navigation code to reject RSC payloads from
+       * a different vinext build without exposing the raw build ID header.
+       */
+      __VINEXT_RSC_COMPATIBILITY_ID?: string;
+
+      /**
        * Deployment ID string injected via Vite `define` when
        * `NEXT_DEPLOYMENT_ID` is present at build time.
        */
@@ -362,6 +387,21 @@ declare global {
        * image optimizer (`next.config.js` → `images.dangerouslyAllowSVG`).
        */
       __VINEXT_IMAGE_DANGEROUSLY_ALLOW_SVG?: string;
+
+      /**
+       * `"true"` or `"false"` — whether hostnames resolving to private IPs
+       * are allowed (`next.config.js` → `images.dangerouslyAllowLocalIP`).
+       */
+      __VINEXT_IMAGE_DANGEROUSLY_ALLOW_LOCAL_IP?: string;
+
+      /**
+       * Next.js-compatible version string. vinext mirrors Next.js's
+       * `process.env.__NEXT_VERSION` define (from
+       * `packages/next/src/client/next.ts` line 5) so library code that
+       * reads it works unmodified. Value is the vinext package version,
+       * injected by the plugin at build time.
+       */
+      __NEXT_VERSION?: string;
     }
   }
 }

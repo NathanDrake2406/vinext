@@ -1,6 +1,10 @@
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
 import { mergeElements } from "vinext/shims/slot";
-import type { AppElements } from "./app-elements.js";
+import {
+  normalizeAppElementsSlotBindings,
+  type AppElements,
+  type AppElementsSlotBinding,
+} from "./app-elements.js";
 import {
   createPendingNavigationCommit,
   resolvePendingNavigationCommitDispositionDecision,
@@ -23,6 +27,9 @@ import {
 
 type VisibleCommitDecision = {
   disposition: "commit";
+  preserveAbsentSlots: boolean;
+  preserveElementIds: readonly string[];
+  preservePreviousSlotIds: readonly string[];
   trace: NavigationTrace;
 };
 type HardNavigateCommitDecision = {
@@ -65,7 +72,7 @@ export function applyApprovedVisibleCommit(
   commit: ApprovedVisibleCommit,
 ): AppRouterState {
   assertApprovedVisibleCommit(commit);
-  return reduceApprovedVisibleCommitState(state, commit.action);
+  return reduceApprovedVisibleCommitState(state, commit);
 }
 
 function assertApprovedVisibleCommit(commit: ApprovedVisibleCommit): void {
@@ -102,24 +109,71 @@ function commitVisibleRouterState(
   };
 }
 
+function mergeSlotBindings(
+  previousBindings: readonly AppElementsSlotBinding[],
+  nextBindings: readonly AppElementsSlotBinding[],
+  layoutIds: readonly string[],
+  preservePreviousSlotIds: readonly string[],
+): readonly AppElementsSlotBinding[] {
+  if (preservePreviousSlotIds.length === 0) return nextBindings;
+
+  const preservedSlotIds = new Set(preservePreviousSlotIds);
+  const previousBindingsBySlotId = new Map<string, AppElementsSlotBinding>();
+  for (const binding of previousBindings) {
+    if (!preservedSlotIds.has(binding.slotId)) continue;
+    previousBindingsBySlotId.set(binding.slotId, binding);
+  }
+
+  const mergedBindings: AppElementsSlotBinding[] = [];
+  const seenSlotIds = new Set<string>();
+  for (const binding of nextBindings) {
+    const previousBinding = previousBindingsBySlotId.get(binding.slotId);
+    mergedBindings.push(previousBinding ?? binding);
+    seenSlotIds.add(binding.slotId);
+  }
+  for (const slotId of preservePreviousSlotIds) {
+    if (seenSlotIds.has(slotId)) continue;
+    const previousBinding = previousBindingsBySlotId.get(slotId);
+    if (previousBinding) mergedBindings.push(previousBinding);
+  }
+  return normalizeAppElementsSlotBindings(mergedBindings, { layoutIds });
+}
+
 function reduceApprovedVisibleCommitState(
   state: AppRouterState,
-  action: AppRouterAction,
+  commit: ApprovedVisibleCommit,
 ): AppRouterState {
+  const { action } = commit;
   switch (action.type) {
     case "traverse":
     case "navigate":
       return commitVisibleRouterState(
         state,
         {
-          elements: mergeElements(state.elements, action.elements, action.type === "traverse"),
+          elements: mergeElements(state.elements, action.elements, {
+            clearAbsentSlots: action.type === "traverse",
+            preserveAbsentSlots: commit.decision.preserveAbsentSlots,
+            preserveElementIds: commit.decision.preserveElementIds,
+            preservePreviousSlotIds: commit.decision.preservePreviousSlotIds,
+          }),
           interceptionContext: action.interceptionContext,
-          layoutFlags: { ...state.layoutFlags, ...action.layoutFlags },
+          layoutFlags: mergeLayoutFlags(
+            state.layoutFlags,
+            action.layoutFlags,
+            commit.decision.preserveElementIds,
+          ),
+          layoutIds: action.layoutIds,
           navigationSnapshot: action.navigationSnapshot,
           previousNextUrl: action.previousNextUrl,
           renderId: action.renderId,
           rootLayoutTreePath: action.rootLayoutTreePath,
           routeId: action.routeId,
+          slotBindings: mergeSlotBindings(
+            state.slotBindings,
+            action.slotBindings,
+            action.layoutIds,
+            commit.decision.preservePreviousSlotIds,
+          ),
         },
         action.operation,
       );
@@ -130,11 +184,13 @@ function reduceApprovedVisibleCommitState(
           elements: action.elements,
           interceptionContext: action.interceptionContext,
           layoutFlags: action.layoutFlags,
+          layoutIds: action.layoutIds,
           navigationSnapshot: action.navigationSnapshot,
           previousNextUrl: action.previousNextUrl,
           renderId: action.renderId,
           rootLayoutTreePath: action.rootLayoutTreePath,
           routeId: action.routeId,
+          slotBindings: action.slotBindings,
         },
         action.operation,
       );
@@ -147,23 +203,27 @@ function reduceApprovedVisibleCommitState(
 
 function resolvePendingNavigationCommitDecision(options: {
   activeNavigationId: number;
-  currentVisibleCommitVersion: number;
-  currentRootLayoutTreePath: string | null;
-  nextRootLayoutTreePath: string | null;
+  currentState: AppRouterState;
+  pending: PendingNavigationCommit;
   startedNavigationId: number;
-  startedVisibleCommitVersion: number;
+  targetHref: string;
 }): CommitDecision {
-  const { disposition, trace } = resolvePendingNavigationCommitDispositionDecision(options);
+  const decision = resolvePendingNavigationCommitDispositionDecision(options);
 
-  switch (disposition) {
+  switch (decision.disposition) {
     case "skip":
-      return { disposition: "no-commit", trace };
+      return { disposition: "no-commit", trace: decision.trace };
     case "hard-navigate":
-      return { disposition: "hard-navigate", trace };
+      return { disposition: "hard-navigate", trace: decision.trace };
     case "dispatch":
-      return createVisibleCommitDecision(trace);
+      return createVisibleCommitDecision(
+        decision.trace,
+        decision.preserveElementIds,
+        decision.preserveAbsentSlots,
+        decision.preservePreviousSlotIds,
+      );
     default: {
-      const _exhaustive: never = disposition;
+      const _exhaustive: never = decision;
       throw new Error("[vinext] Unknown navigation commit disposition: " + String(_exhaustive));
     }
   }
@@ -171,8 +231,31 @@ function resolvePendingNavigationCommitDecision(options: {
 
 function createVisibleCommitDecision(
   trace: NavigationTrace = createNavigationTrace(NavigationTraceReasonCodes.commitCurrent),
+  preserveElementIds: readonly string[] = [],
+  preserveAbsentSlots: boolean = false,
+  preservePreviousSlotIds: readonly string[] = [],
 ): VisibleCommitDecision {
-  return { disposition: "commit", trace };
+  return {
+    disposition: "commit",
+    preserveAbsentSlots,
+    preserveElementIds: [...preserveElementIds],
+    preservePreviousSlotIds: [...preservePreviousSlotIds],
+    trace,
+  };
+}
+
+function mergeLayoutFlags(
+  previousFlags: AppRouterState["layoutFlags"],
+  nextFlags: AppRouterState["layoutFlags"],
+  preserveElementIds: readonly string[],
+): AppRouterState["layoutFlags"] {
+  const merged: Record<string, "s" | "d"> = { ...nextFlags };
+  for (const id of preserveElementIds) {
+    if (Object.hasOwn(merged, id)) continue;
+    const value = previousFlags[id];
+    if (value) merged[id] = value;
+  }
+  return merged;
 }
 
 function createApprovedVisibleCommit(options: {
@@ -269,15 +352,15 @@ export function approvePendingNavigationCommit(options: {
   currentState: AppRouterState;
   pending: PendingNavigationCommit;
   startedNavigationId: number;
+  targetHref: string;
 }): CommitApproval {
   const decision = addCommitTransactionTrace(
     resolvePendingNavigationCommitDecision({
       activeNavigationId: options.activeNavigationId,
-      currentVisibleCommitVersion: options.currentState.visibleCommitVersion,
-      currentRootLayoutTreePath: options.currentState.rootLayoutTreePath,
-      nextRootLayoutTreePath: options.pending.rootLayoutTreePath,
+      currentState: options.currentState,
+      pending: options.pending,
       startedNavigationId: options.startedNavigationId,
-      startedVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
+      targetHref: options.targetHref,
     }),
     options.pending,
   );
@@ -317,6 +400,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
   previousNextUrl?: string | null;
   renderId: number;
   startedNavigationId: number;
+  targetHref: string;
   type: "navigate" | "replace" | "traverse";
 }): Promise<ClassifiedPendingNavigationCommit> {
   const pending = await createPendingNavigationCommit({
@@ -335,6 +419,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
     currentState: approvalState,
     pending,
     startedNavigationId: options.startedNavigationId,
+    targetHref: options.targetHref,
   });
 
   return {

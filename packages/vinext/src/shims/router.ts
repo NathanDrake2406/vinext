@@ -5,11 +5,24 @@
  * Backed by the browser History API. Supports client-side navigation
  * by fetching new page data and re-rendering the React root.
  */
-import { useState, useEffect, useCallback, useMemo, createElement, type ReactElement } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  createElement,
+  type ReactElement,
+  type ComponentType,
+} from "react";
 import { RouterContext } from "./internal/router-context.js";
 import type { VinextNextData } from "../client/vinext-next-data.js";
 import { isValidModulePath } from "../client/validate-module-path.js";
-import { toBrowserNavigationHref, toSameOriginAppPath } from "./url-utils.js";
+import { installWindowNext, type PagesRouterPublicInstance } from "../client/window-next.js";
+import {
+  isHashOnlyBrowserUrlChange,
+  toBrowserNavigationHref,
+  toSameOriginAppPath,
+} from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { addLocalePrefix, getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
 import {
@@ -189,13 +202,7 @@ function resolveHashUrl(url: string): string {
 export function isHashOnlyChange(href: string): boolean {
   if (href.startsWith("#")) return true;
   if (typeof window === "undefined") return false;
-  try {
-    const current = new URL(window.location.href);
-    const next = new URL(href, window.location.href);
-    return current.pathname === next.pathname && current.search === next.search && next.hash !== "";
-  } catch {
-    return false;
-  }
+  return isHashOnlyBrowserUrlChange(href, window.location.href, __basePath);
 }
 
 /** Scroll to hash target element, or top if no hash */
@@ -669,8 +676,8 @@ export function useRouter(): NextRouter {
       const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
 
       // Hash-only change — no page fetch needed
-      if (isHashOnlyChange(resolved)) {
-        const eventUrl = resolveHashUrl(resolved);
+      if (isHashOnlyChange(full)) {
+        const eventUrl = resolveHashUrl(full);
         routerEvents.emit("hashChangeStart", eventUrl, {
           shallow: options?.shallow ?? false,
         });
@@ -729,8 +736,8 @@ export function useRouter(): NextRouter {
       const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
 
       // Hash-only change — no page fetch needed
-      if (isHashOnlyChange(resolved)) {
-        const eventUrl = resolveHashUrl(resolved);
+      if (isHashOnlyChange(full)) {
+        const eventUrl = resolveHashUrl(full);
         routerEvents.emit("hashChangeStart", eventUrl, {
           shallow: options?.shallow ?? false,
         });
@@ -899,6 +906,83 @@ export function wrapWithRouterContext(element: ReactElement): ReactElement {
   return createElement(RouterContext.Provider, { value: routerValue }, element) as ReactElement;
 }
 
+/**
+ * Props injected by `withRouter` into the wrapped component.
+ *
+ * Ported from Next.js: packages/next/src/client/with-router.tsx
+ * https://github.com/vercel/next.js/blob/canary/packages/next/src/client/with-router.tsx
+ */
+export type WithRouterProps = {
+  router: NextRouter;
+};
+
+/**
+ * Pick<P, Exclude<keyof P, keyof WithRouterProps>> — the props of the
+ * composed component minus the `router` prop that `withRouter` injects.
+ *
+ * Ported from Next.js: packages/next/src/client/with-router.tsx
+ */
+export type ExcludeRouterProps<P> = Pick<P, Exclude<keyof P, keyof WithRouterProps>>;
+
+/**
+ * Higher-order component that injects the Pages Router `router` instance as
+ * a `router` prop into a wrapped component. Primarily used by class
+ * components (which cannot call hooks) to access the router. The wrapped
+ * component receives the same props as the original, minus `router`, which
+ * is filled in by the HOC.
+ *
+ * Ported from Next.js: packages/next/src/client/with-router.tsx
+ * https://github.com/vercel/next.js/blob/canary/packages/next/src/client/with-router.tsx
+ *
+ * Differences from Next.js:
+ * - We type the composed component as `ComponentType<P>` instead of
+ *   `NextComponentType<C, any, P>` because vinext does not expose
+ *   `NextComponentType` from this shim. The runtime shape (and the props
+ *   the wrapper forwards) is identical.
+ * - We forward `getInitialProps` and `origGetInitialProps` from the
+ *   composed component so `_app` parity holds for class components that
+ *   define `getInitialProps`.
+ */
+export function withRouter<P extends WithRouterProps>(
+  ComposedComponent: ComponentType<P>,
+): ComponentType<ExcludeRouterProps<P>> {
+  function WithRouterWrapper(props: ExcludeRouterProps<P>): ReactElement {
+    const router = useRouter();
+    // Match Next.js spread order:
+    // `<ComposedComponent router={useRouter()} {...props} />`
+    // The injected `router` is placed first, and `{...props}` is spread
+    // after, so a user-passed `router` prop overrides the HOC-injected
+    // one (last-spread wins). Mirrors
+    // packages/next/src/client/with-router.tsx. At the type level
+    // `props: ExcludeRouterProps<P>` has no `router` key, but TS still
+    // sees `P` as `WithRouterProps`-extending when checking the literal,
+    // so we widen to a `Record` for the final prop bag.
+    const merged: Record<string, unknown> = { router, ...(props as Record<string, unknown>) };
+    return createElement(ComposedComponent, merged as unknown as P);
+  }
+
+  // Forward getInitialProps so class-component pages that define it keep
+  // working when wrapped. Mirrors Next.js's with-router.tsx.
+  const composed = ComposedComponent as ComponentType<P> & {
+    getInitialProps?: unknown;
+    origGetInitialProps?: unknown;
+  };
+  (WithRouterWrapper as unknown as { getInitialProps?: unknown }).getInitialProps =
+    composed.getInitialProps;
+  (WithRouterWrapper as unknown as { origGetInitialProps?: unknown }).origGetInitialProps =
+    composed.origGetInitialProps;
+
+  if (process.env.NODE_ENV !== "production") {
+    const name = composed.displayName || composed.name || "Unknown";
+    WithRouterWrapper.displayName = `withRouter(${name})`;
+  }
+
+  return WithRouterWrapper;
+}
+
+// Note: `withRouter` is exposed only as a named export from `next/router`.
+// The default export of that module is the Router singleton declared below.
+
 // Also export a default Router singleton for `import Router from 'next/router'`
 const Router = {
   push: async (url: string | UrlObject, as?: string, options?: TransitionOptions) => {
@@ -917,8 +1001,8 @@ const Router = {
     const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
 
     // Hash-only change
-    if (isHashOnlyChange(resolved)) {
-      const eventUrl = resolveHashUrl(resolved);
+    if (isHashOnlyChange(full)) {
+      const eventUrl = resolveHashUrl(full);
       routerEvents.emit("hashChangeStart", eventUrl, {
         shallow: options?.shallow ?? false,
       });
@@ -970,8 +1054,8 @@ const Router = {
     const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
 
     // Hash-only change
-    if (isHashOnlyChange(resolved)) {
-      const eventUrl = resolveHashUrl(resolved);
+    if (isHashOnlyChange(full)) {
+      const eventUrl = resolveHashUrl(full);
       routerEvents.emit("hashChangeStart", eventUrl, {
         shallow: options?.shallow ?? false,
       });
@@ -1022,5 +1106,25 @@ const Router = {
   },
   events: routerEvents,
 };
+
+// Expose `window.next.router` for Next.js parity. Pages Router test suites,
+// userland scripts, and third-party libraries reach for this global directly
+// (e.g. `window.next.router.push(...)`, `window.next.router.events.on(...)`).
+// Without this assignment, those callers crash with
+// `TypeError: Cannot read properties of undefined (reading 'router')`.
+//
+// Ported from Next.js: `packages/next/src/client/next.ts` (line 13). We do
+// NOT use a live-binding getter like Next.js does because vinext's Router
+// singleton is constructed synchronously here, so by the time this module
+// finishes loading the value is final.
+if (typeof window !== "undefined") {
+  // Cast: `NextRouter.push`/`replace` are typed with narrow parameters
+  // (UrlObject | string) while `PagesRouterPublicInstance` accepts unknown
+  // args. The two are structurally compatible at runtime; TypeScript flags
+  // the narrowing of contravariant function params, which is benign here
+  // because callers reading off `window.next.router` are tests/userland
+  // and treat the surface as opaque.
+  installWindowNext({ router: Router as unknown as PagesRouterPublicInstance });
+}
 
 export default Router;

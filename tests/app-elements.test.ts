@@ -7,9 +7,12 @@ import {
   APP_ARTIFACT_COMPATIBILITY_KEY,
   AppElementsWire,
   APP_INTERCEPTION_CONTEXT_KEY,
+  APP_LAYOUT_IDS_KEY,
   APP_LAYOUT_FLAGS_KEY,
+  APP_RENDER_OBSERVATION_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
+  APP_SLOT_BINDINGS_KEY,
   APP_UNMATCHED_SLOT_WIRE_VALUE,
   buildOutgoingAppPayload,
   isAppElementsRecord,
@@ -25,6 +28,7 @@ import {
   evaluateArtifactCompatibility,
   RSC_PAYLOAD_SCHEMA_VERSION,
 } from "../packages/vinext/src/server/artifact-compatibility.js";
+import { buildRenderObservation } from "../packages/vinext/src/server/cache-proof.js";
 
 describe("AppElementsWire", () => {
   it("encodes outgoing record payloads without mutating caller-owned records", () => {
@@ -66,25 +70,97 @@ describe("AppElementsWire", () => {
     expect(AppElementsWire.readMetadata(decoded)).toEqual({
       artifactCompatibility: createArtifactCompatibilityEnvelope(),
       interceptionContext: "/feed",
+      layoutIds: [],
       layoutFlags: {},
       rootLayoutTreePath: "/",
       routeId: "route:/photos/42\0/feed",
+      slotBindings: [],
     });
   });
 
   it("creates the canonical metadata entries for outgoing AppElements records", () => {
     const metadata = AppElementsWire.createMetadataEntries({
       interceptionContext: null,
+      layoutIds: ["layout:/(dashboard)"],
       rootLayoutTreePath: "/(dashboard)",
       routeId: AppElementsWire.encodeRouteId("/dashboard", null),
     });
 
     expect(metadata).toEqual({
       [APP_INTERCEPTION_CONTEXT_KEY]: null,
+      [APP_LAYOUT_IDS_KEY]: ["layout:/(dashboard)"],
       [APP_ROOT_LAYOUT_KEY]: "/(dashboard)",
       [APP_ROUTE_KEY]: "route:/dashboard",
     });
   });
+
+  it("normalizes slot binding metadata at the wire boundary", () => {
+    const metadata = AppElementsWire.createMetadataEntries({
+      interceptionContext: null,
+      layoutIds: ["layout:/dashboard"],
+      rootLayoutTreePath: "/",
+      routeId: AppElementsWire.encodeRouteId("/dashboard", null),
+      slotBindings: [
+        {
+          ownerLayoutId: "layout:/dashboard",
+          slotId: "slot:team:/dashboard",
+          state: "active",
+        },
+        {
+          ownerLayoutId: "layout:/dashboard",
+          slotId: "slot:analytics:/dashboard",
+          state: "default",
+        },
+      ],
+    });
+
+    expect(metadata[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        ownerLayoutId: "layout:/dashboard",
+        slotId: "slot:analytics:/dashboard",
+        state: "default",
+      },
+      {
+        ownerLayoutId: "layout:/dashboard",
+        slotId: "slot:team:/dashboard",
+        state: "active",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      label: "duplicate slot id",
+      layoutIds: ["layout:/dashboard"],
+      slotBindings: [
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "active" },
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "default" },
+      ],
+      message: "[vinext] Invalid __slotBindings in App Router payload: duplicate slot id",
+    },
+    {
+      label: "owner layout not present in layoutIds",
+      layoutIds: ["layout:/dashboard"],
+      slotBindings: [
+        { ownerLayoutId: "layout:/stale", slotId: "slot:team:/dashboard", state: "active" },
+      ],
+      message:
+        "[vinext] Invalid __slotBindings in App Router payload: owner layout id missing from __layoutIds",
+    },
+  ] as const)(
+    "rejects invalid slot binding metadata while creating payload entries: $label",
+    ({ layoutIds, message, slotBindings }) => {
+      expect(() =>
+        AppElementsWire.createMetadataEntries({
+          interceptionContext: null,
+          layoutIds,
+          rootLayoutTreePath: "/",
+          routeId: AppElementsWire.encodeRouteId("/dashboard", null),
+          slotBindings,
+        }),
+      ).toThrow(message);
+    },
+  );
 
   it("constructs and parses canonical element wire keys through the codec", () => {
     const keys = [
@@ -160,9 +236,11 @@ describe("AppElementsWire", () => {
     expect(AppElementsWire.readMetadata(payload)).toEqual({
       artifactCompatibility: createArtifactCompatibilityEnvelope(),
       interceptionContext: null,
+      layoutIds: [],
       layoutFlags: { [AppElementsWire.encodeLayoutId("/")]: "s" },
       rootLayoutTreePath: "/",
       routeId: "route:/dashboard",
+      slotBindings: [],
     });
   });
 
@@ -340,6 +418,7 @@ describe("app elements payload helpers", () => {
     };
     const metadata = readAppElementsMetadata(elements);
 
+    expect(metadata.layoutIds).toEqual([]);
     expect(metadata.layoutFlags).toEqual({ "layout:/": "s", "layout:/blog": "d" });
   });
 
@@ -352,7 +431,141 @@ describe("app elements payload helpers", () => {
       }),
     );
 
+    expect(metadata.layoutIds).toEqual([]);
     expect(metadata.layoutFlags).toEqual({});
+  });
+
+  it("reads layoutIds from payload metadata", () => {
+    const metadata = readAppElementsMetadata(
+      normalizeAppElements({
+        [APP_LAYOUT_IDS_KEY]: ["layout:/", "layout:/dashboard"],
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard/settings",
+        "route:/dashboard/settings": React.createElement("div", null, "route"),
+      }),
+    );
+
+    expect(metadata.layoutIds).toEqual(["layout:/", "layout:/dashboard"]);
+  });
+
+  it("reads validated slot bindings from payload metadata", () => {
+    const metadata = readAppElementsMetadata(
+      normalizeAppElements({
+        [APP_LAYOUT_IDS_KEY]: ["layout:/", "layout:/dashboard"],
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard/settings",
+        [APP_SLOT_BINDINGS_KEY]: [
+          {
+            ownerLayoutId: "layout:/dashboard",
+            slotId: "slot:team:/dashboard",
+            state: "default",
+          },
+          {
+            ownerLayoutId: "layout:/dashboard",
+            slotId: "slot:analytics:/dashboard",
+            state: "unmatched",
+          },
+        ],
+      }),
+    );
+
+    expect(metadata.slotBindings).toEqual([
+      {
+        ownerLayoutId: "layout:/dashboard",
+        slotId: "slot:analytics:/dashboard",
+        state: "unmatched",
+      },
+      {
+        ownerLayoutId: "layout:/dashboard",
+        slotId: "slot:team:/dashboard",
+        state: "default",
+      },
+    ]);
+  });
+
+  it("rejects invalid layoutIds metadata", () => {
+    expect(() =>
+      readAppElementsMetadata({
+        ...normalizeAppElements({
+          [APP_ROOT_LAYOUT_KEY]: "/",
+          [APP_ROUTE_KEY]: "route:/dashboard",
+        }),
+        [APP_LAYOUT_IDS_KEY]: ["layout:/", 1],
+      }),
+    ).toThrow("[vinext] Invalid __layoutIds in App Router payload: expected layout id string[]");
+  });
+
+  it.each([
+    {
+      label: "non-array",
+      value: "slot:team:/dashboard",
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected array",
+    },
+    {
+      label: "non-object",
+      value: ["slot:team:/dashboard"],
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected objects",
+    },
+    {
+      label: "non-slot id",
+      value: [{ ownerLayoutId: "layout:/dashboard", slotId: "page:/dashboard", state: "active" }],
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected slot ids",
+    },
+    {
+      label: "non-layout owner",
+      value: [
+        { ownerLayoutId: "slot:team:/dashboard", slotId: "slot:team:/dashboard", state: "active" },
+      ],
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected owner layout ids",
+    },
+    {
+      label: "invalid state",
+      value: [
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "stale" },
+      ],
+      message: "[vinext] Invalid __slotBindings in App Router payload: expected state",
+    },
+    {
+      label: "duplicate slot id",
+      value: [
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "active" },
+        { ownerLayoutId: "layout:/dashboard", slotId: "slot:team:/dashboard", state: "default" },
+      ],
+      message: "[vinext] Invalid __slotBindings in App Router payload: duplicate slot id",
+    },
+    {
+      label: "owner layout not present in layoutIds",
+      value: [{ ownerLayoutId: "layout:/stale", slotId: "slot:team:/dashboard", state: "active" }],
+      message:
+        "[vinext] Invalid __slotBindings in App Router payload: owner layout id missing from __layoutIds",
+    },
+  ])("rejects invalid slotBindings metadata: $label", ({ value, message }) => {
+    expect(() =>
+      readAppElementsMetadata({
+        ...normalizeAppElements({
+          [APP_ROOT_LAYOUT_KEY]: "/",
+          [APP_ROUTE_KEY]: "route:/dashboard",
+        }),
+        [APP_LAYOUT_IDS_KEY]: ["layout:/dashboard"],
+        [APP_SLOT_BINDINGS_KEY]: value,
+      }),
+    ).toThrow(message);
+  });
+
+  it.each([
+    ["page id", "page:/dashboard"],
+    ["slot id", "slot:modal:/dashboard"],
+    ["malformed layout id", "layout:dashboard"],
+  ])("rejects %s in layoutIds metadata", (_, layoutId) => {
+    expect(() =>
+      readAppElementsMetadata({
+        ...normalizeAppElements({
+          [APP_ROOT_LAYOUT_KEY]: "/",
+          [APP_ROUTE_KEY]: "route:/dashboard",
+        }),
+        [APP_LAYOUT_IDS_KEY]: ["layout:/", layoutId],
+      }),
+    ).toThrow("[vinext] Invalid __layoutIds in App Router payload: expected layout ids");
   });
 
   it("reads artifact compatibility envelope metadata", () => {
@@ -575,6 +788,40 @@ describe("buildOutgoingAppPayload", () => {
     }
   });
 
+  it("attaches render observation metadata on the returned record when provided", () => {
+    const renderObservation = buildRenderObservation({
+      boundaryOutcome: { kind: "success" },
+      cacheability: "public",
+      cacheTags: ["posts"],
+      completeness: "complete",
+      dynamicFetches: ["https://api.example.test/posts?token=secret"],
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: "layout:/",
+        routeId: "route:/posts",
+      },
+      pathTags: ["/posts"],
+      requestApis: [
+        { kind: "headers", status: "notObserved" },
+        { kind: "cookies", status: "notObserved" },
+      ],
+    });
+
+    const result = buildOutgoingAppPayload({
+      element: { "page:/posts": "posts-page" },
+      layoutFlags: { "layout:/": "s" },
+      renderObservation,
+    });
+
+    expect(isAppElementsRecord(result)).toBe(true);
+    if (isAppElementsRecord(result)) {
+      expect(result[APP_RENDER_OBSERVATION_KEY]).toEqual(renderObservation);
+      expect(JSON.stringify(result[APP_RENDER_OBSERVATION_KEY])).not.toContain("secret");
+    }
+  });
+
   it("returns canonical record keys regardless of any upstream skip intent", () => {
     const result = buildOutgoingAppPayload({
       element: { "layout:/": "root-layout", "page:/": "page" },
@@ -723,6 +970,112 @@ describe("artifact compatibility proof evaluation", () => {
     });
   });
 
+  it("accepts rolling deploy payloads when compatibility is explicitly declared", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-next",
+      deploymentVersion: "deploy-canary",
+      rootBoundaryId: "root-next",
+      renderEpoch: "epoch-next",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-current",
+      deploymentVersion: "deploy-stable",
+      rootBoundaryId: "root-current",
+      renderEpoch: "epoch-current",
+    });
+
+    expect(
+      evaluateArtifactCompatibility(current, candidate, {
+        compatibilityMap: {
+          graphVersions: [["graph-current", "graph-next"]],
+          deploymentVersions: [["deploy-stable", "deploy-canary"]],
+          rootBoundaryIds: [["root-current", "root-next"]],
+          renderEpochs: [["epoch-current", "epoch-next"]],
+        },
+      }),
+    ).toEqual({ kind: "compatible" });
+  });
+
+  it("supports canary and rollback only when they share a declared compatibility set", () => {
+    const rollback = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-rollback",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const canary = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-canary",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(
+      evaluateArtifactCompatibility(rollback, canary, {
+        compatibilityMap: {
+          deploymentVersions: [["deploy-stable", "deploy-canary", "deploy-rollback"]],
+        },
+      }),
+    ).toEqual({ kind: "compatible" });
+  });
+
+  it("does not infer transitive deployment compatibility across overlapping pairs", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-c",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const candidate = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-a",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(
+      evaluateArtifactCompatibility(current, candidate, {
+        compatibilityMap: {
+          deploymentVersions: [
+            ["deploy-a", "deploy-b"],
+            ["deploy-b", "deploy-c"],
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: "incompatible",
+      fallback: "renderFresh",
+      reason: "deploymentVersionNotDeclaredCompatible",
+    });
+  });
+
+  it("falls back to fresh render when a stale compatibility map lacks the rollback deploy", () => {
+    const rollback = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-rollback",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+    const staleCanary = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-a",
+      deploymentVersion: "deploy-canary",
+      rootBoundaryId: "root-a",
+      renderEpoch: "epoch-a",
+    });
+
+    expect(
+      evaluateArtifactCompatibility(rollback, staleCanary, {
+        compatibilityMap: {
+          deploymentVersions: [["deploy-stable", "deploy-canary"]],
+        },
+      }),
+    ).toEqual({
+      kind: "incompatible",
+      fallback: "renderFresh",
+      reason: "deploymentVersionNotDeclaredCompatible",
+    });
+  });
+
   it("treats old-client/new-server future compatibility metadata as unknown proof", () => {
     const current = createArtifactCompatibilityEnvelope({
       graphVersion: "graph-current",
@@ -743,6 +1096,29 @@ describe("artifact compatibility proof evaluation", () => {
         rootBoundaryId: "root-next",
         renderEpoch: "epoch-next",
       },
+    } satisfies Readonly<Record<string, unknown>>;
+
+    const metadata = AppElementsWire.readMetadata(payload);
+
+    expect(metadata.artifactCompatibility).toEqual(createArtifactCompatibilityEnvelope());
+    expect(evaluateArtifactCompatibility(current, metadata.artifactCompatibility)).toEqual({
+      kind: "unknown",
+      fallback: "renderFresh",
+      reason: "graphVersionUnknown",
+    });
+  });
+
+  it("treats new-client/old-server legacy payload metadata as unknown proof", () => {
+    const current = createArtifactCompatibilityEnvelope({
+      graphVersion: "graph-current",
+      deploymentVersion: "deploy-current",
+      rootBoundaryId: "root-current",
+      renderEpoch: "epoch-current",
+    });
+    const payload = {
+      [APP_ROUTE_KEY]: "route:/dashboard",
+      [APP_INTERCEPTION_CONTEXT_KEY]: null,
+      [APP_ROOT_LAYOUT_KEY]: "/",
     } satisfies Readonly<Record<string, unknown>>;
 
     const metadata = AppElementsWire.readMetadata(payload);
