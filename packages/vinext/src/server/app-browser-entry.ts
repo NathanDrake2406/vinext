@@ -78,6 +78,7 @@ import {
 import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-boundary";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { ElementsContext, Slot } from "vinext/shims/slot";
+import { stripBasePath } from "../utils/base-path.js";
 import { createOnUncaughtError } from "./app-browser-error.js";
 import {
   devOnCaughtError,
@@ -668,6 +669,20 @@ function restorePopstateScrollPosition(state: unknown): void {
   requestAnimationFrame(() => {
     window.scrollTo(x, y);
   });
+}
+
+function isSameAppRoutePopstateTarget(href: string): boolean {
+  if (!hasBrowserRouterState()) return false;
+
+  const target = new URL(href, window.location.origin);
+  const routerState = getBrowserRouterState();
+  const targetPathname = stripBasePath(target.pathname, __basePath);
+  const targetSearch = new URLSearchParams(target.search).toString();
+  const currentSearch = routerState.navigationSnapshot.searchParams.toString();
+
+  return (
+    targetPathname === routerState.navigationSnapshot.pathname && targetSearch === currentSearch
+  );
 }
 
 // Set on pagehide so the RSC navigation catch block can distinguish expected
@@ -1330,9 +1345,20 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // microtask-based deferral for compatibility with non-RSC navigation.
   // See: https://github.com/vercel/next.js/discussions/41934#discussioncomment-4602607
   window.addEventListener("popstate", (event) => {
-    notifyAppRouterTransitionStart(window.location.href, "traverse");
+    const href = window.location.href;
+    notifyAppRouterTransitionStart(href, "traverse");
+
+    // The browser has already applied the history entry by the time popstate
+    // fires. App Router state does not include hashes, so matching the
+    // committed pathname/search proves this traversal does not need a new RSC
+    // payload. This covers both /page#target -> /page and /page -> /page#target.
+    if (isSameAppRoutePopstateTarget(href)) {
+      restorePopstateScrollPosition(event.state);
+      return;
+    }
+
     const pendingNavigation =
-      window.__VINEXT_RSC_NAVIGATE__?.(window.location.href, 0, "traverse") ?? Promise.resolve();
+      window.__VINEXT_RSC_NAVIGATE__?.(href, 0, "traverse") ?? Promise.resolve();
     window.__VINEXT_RSC_PENDING__ = pendingNavigation;
     void pendingNavigation.finally(() => {
       restorePopstateScrollPosition(event.state);
