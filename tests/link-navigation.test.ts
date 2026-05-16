@@ -238,6 +238,25 @@ describe("Link prefetch pure decisions", () => {
         expected: null,
       },
       {
+        name: "mailto URL",
+        input: {
+          href: "mailto:hello@example.com",
+          basePath: "",
+          currentOrigin: "https://example.com",
+        },
+        expected: null,
+      },
+      {
+        name: "tel URL",
+        input: { href: "tel:+123456789", basePath: "", currentOrigin: "https://example.com" },
+        expected: null,
+      },
+      {
+        name: "sms URL",
+        input: { href: "sms:+123456789", basePath: "", currentOrigin: "https://example.com" },
+        expected: null,
+      },
+      {
         name: "same-origin with basePath",
         input: {
           href: "https://example.com/docs/path?tab=1#section",
@@ -353,6 +372,44 @@ describe("Link App Router navigation scheduling", () => {
     expect(navigate).toHaveBeenCalledWith("/target", 0, "navigate", "push", undefined, true);
     expect(transitionStates).toEqual([true]);
   });
+
+  it("lets the browser handle native URI schemes without app-router navigation", async () => {
+    const userOnClick = vi.fn();
+    const hrefs = ["mailto:hello@example.com", "tel:+123456789", "sms:+123456789"];
+
+    for (const href of hrefs) {
+      const result = await renderIsolatedLink({
+        href,
+        nodeEnv: "production",
+        props: { onClick: userOnClick, prefetch: false },
+        requireRef: false,
+      });
+
+      try {
+        const clickEvent = {
+          button: 0,
+          currentTarget: { target: "" },
+          defaultPrevented: false,
+          preventDefault() {
+            this.defaultPrevented = true;
+          },
+        };
+        const onClick = result.capturedAnchorProps.onClick;
+        expect(onClick).toBeTypeOf("function");
+        if (onClick === undefined) {
+          throw new Error("Expected rendered Link anchor to expose an onClick handler");
+        }
+
+        await onClick(clickEvent);
+
+        expect(userOnClick).toHaveBeenCalledWith(clickEvent);
+        expect(clickEvent.defaultPrevented).toBe(false);
+        expect(result.navigate).not.toHaveBeenCalled();
+      } finally {
+        result.restoreNodeEnv();
+      }
+    }
+  });
 });
 
 async function renderIsolatedLink(options: {
@@ -386,6 +443,7 @@ async function renderIsolatedLink(options: {
   });
 
   const fetch = vi.fn(() => Promise.resolve(new Response("")));
+  const navigate = vi.fn();
   const location = {
     href: "https://example.com/current",
     origin: "https://example.com",
@@ -393,7 +451,7 @@ async function renderIsolatedLink(options: {
 
   vi.stubGlobal("fetch", fetch);
   vi.stubGlobal("window", {
-    __VINEXT_RSC_NAVIGATE__: vi.fn(),
+    __VINEXT_RSC_NAVIGATE__: navigate,
     addEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
     history: {
@@ -437,6 +495,7 @@ async function renderIsolatedLink(options: {
       anchor,
       capturedAnchorProps,
       fetch,
+      navigate,
       restoreNodeEnv,
     };
   } catch (error) {
@@ -701,6 +760,22 @@ describe("Link App Router prefetch scheduling", () => {
       await flushPrefetchTasks();
 
       expect(userOnMouseEnter).toHaveBeenCalledTimes(1);
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not prefetch native URI schemes on production intent", async () => {
+    const result = await renderIsolatedLink({
+      href: "mailto:hello@example.com",
+      nodeEnv: "production",
+    });
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
       expect(result.fetch).not.toHaveBeenCalled();
     } finally {
       result.restoreNodeEnv();

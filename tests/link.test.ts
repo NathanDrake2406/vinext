@@ -30,6 +30,8 @@ import { runWithI18nState } from "../packages/vinext/src/shims/i18n-state.js";
 import { setI18nContext } from "../packages/vinext/src/shims/i18n-context.js";
 
 import {
+  isAbsoluteOrProtocolRelativeUrl,
+  isAbsoluteUrl,
   resolveRelativeHref,
   toBrowserNavigationHref,
   toSameOriginAppPath,
@@ -379,6 +381,17 @@ describe("Link locale handling", () => {
     expect(html).toContain('href="http://example.com/path"');
   });
 
+  it("locale does not mangle native URI schemes", () => {
+    const cases = ["mailto:hello@example.com", "tel:+123456789", "sms:+123456789"];
+
+    for (const href of cases) {
+      const html = ReactDOMServer.renderToString(
+        React.createElement(Link, { href, locale: "fr" } as any, "x"),
+      );
+      expect(html).toContain(`href="${href}"`);
+    }
+  });
+
   it("locale string uses configured locale domains for cross-domain links", () => {
     (globalThis as any).window = {
       __VINEXT_DEFAULT_LOCALE__: "en",
@@ -623,6 +636,25 @@ describe("toSameOriginPath", () => {
   });
 });
 
+describe("absolute URL classification", () => {
+  it("matches Next.js scheme classification for native URI schemes", () => {
+    expect(isAbsoluteUrl("mailto:hello@example.com")).toBe(true);
+    expect(isAbsoluteUrl("tel:+123456789")).toBe(true);
+    expect(isAbsoluteUrl("sms:+123456789")).toBe(true);
+    expect(isAbsoluteUrl("ftp://example.com/file")).toBe(true);
+    expect(isAbsoluteUrl("/local")).toBe(false);
+    expect(isAbsoluteUrl("?page=2")).toBe(false);
+    expect(isAbsoluteUrl("#section")).toBe(false);
+    expect(isAbsoluteUrl("//example.com/path")).toBe(false);
+  });
+
+  it("treats protocol-relative URLs as browser-owned absolute-like hrefs", () => {
+    expect(isAbsoluteOrProtocolRelativeUrl("//example.com/path")).toBe(true);
+    expect(isAbsoluteOrProtocolRelativeUrl("mailto:hello@example.com")).toBe(true);
+    expect(isAbsoluteOrProtocolRelativeUrl("/local")).toBe(false);
+  });
+});
+
 describe("resolveRelativeHref", () => {
   it("resolves relative search params against the current page", () => {
     expect(resolveRelativeHref("?page=2", "http://localhost:3000/posts/1")).toBe("/posts/1?page=2");
@@ -642,6 +674,12 @@ describe("resolveRelativeHref", () => {
 
   it("leaves absolute paths unchanged", () => {
     expect(resolveRelativeHref("/about", "http://localhost:3000/posts/1")).toBe("/about");
+  });
+
+  it("leaves native URI schemes unchanged", () => {
+    expect(resolveRelativeHref("mailto:hello@example.com", "http://localhost:3000/posts/1")).toBe(
+      "mailto:hello@example.com",
+    );
   });
 
   it("strips the current basePath before returning the app-relative href", () => {
