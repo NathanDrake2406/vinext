@@ -10331,6 +10331,79 @@ describe("Pages Router router helpers", () => {
     }
   });
 
+  it("updates dynamic route params from the URL after shallow navigation", async () => {
+    // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter: useCompatRouter } =
+      await import("../packages/vinext/src/shims/compat-router.js");
+    const routerModule = await import("../packages/vinext/src/shims/router.js");
+
+    const previousWindow = (globalThis as any).window;
+    const win = {
+      location: {
+        pathname: "/posts/42",
+        search: "",
+        hash: "",
+        href: "http://localhost/posts/42",
+        hostname: "localhost",
+        assign: vi.fn(),
+        replace: vi.fn(),
+        reload: vi.fn(),
+      },
+      history: {
+        state: null,
+        pushState: vi.fn((_state: unknown, _title: string, url: string) => {
+          const nextUrl = new URL(url, win.location.href);
+          win.location.pathname = nextUrl.pathname;
+          win.location.search = nextUrl.search;
+          win.location.hash = nextUrl.hash;
+          win.location.href = nextUrl.href;
+        }),
+        replaceState: vi.fn(),
+        back: vi.fn(),
+      },
+      dispatchEvent: vi.fn(),
+      scrollTo: vi.fn(),
+      scrollX: 0,
+      scrollY: 0,
+      __NEXT_DATA__: {
+        page: "/posts/[id]",
+        query: { id: "42" },
+        isFallback: false,
+      },
+      __VINEXT_LOCALE__: undefined,
+      __VINEXT_LOCALES__: undefined,
+      __VINEXT_DEFAULT_LOCALE__: undefined,
+    };
+    (globalThis as any).window = win;
+
+    try {
+      await routerModule.default.push("/posts/43", undefined, { shallow: true });
+
+      let captured: unknown = "NOT_SET";
+      function Probe() {
+        captured = useCompatRouter();
+        return React.createElement("div", null, "probe");
+      }
+
+      renderToStaticMarkup(routerModule.wrapWithRouterContext(React.createElement(Probe)));
+
+      expect(captured).not.toBeNull();
+      expect((captured as any).pathname).toBe("/posts/[id]");
+      expect((captured as any).asPath).toBe("/posts/43");
+      expect((captured as any).query).toEqual({ id: "43" });
+      expect(win.__NEXT_DATA__.query).toEqual({ id: "42" });
+    } finally {
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
   it("exposes beforePopState on both the Router singleton and wrapped router context", async () => {
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");

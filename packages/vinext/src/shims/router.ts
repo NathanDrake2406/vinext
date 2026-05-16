@@ -300,6 +300,117 @@ function extractRouteParamNames(pattern: string): string[] {
   return names;
 }
 
+type RoutePatternPart =
+  | { kind: "static"; value: string }
+  | { kind: "single"; key: string }
+  | { kind: "catchAll"; key: string; optional: boolean };
+
+type RouteQueryNextData = {
+  page?: string;
+  query?: Record<string, string | string[] | undefined>;
+};
+
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+function splitPathSegments(pathname: string): string[] {
+  return pathname.split("/").filter(Boolean);
+}
+
+function parseRoutePatternPart(segment: string): RoutePatternPart {
+  if (segment.startsWith("[[...") && segment.endsWith("]]") && segment.length > 7) {
+    return { kind: "catchAll", key: segment.slice(5, -2), optional: true };
+  }
+  if (segment.startsWith("[...") && segment.endsWith("]") && segment.length > 5) {
+    return { kind: "catchAll", key: segment.slice(4, -1), optional: false };
+  }
+  if (segment.startsWith("[") && segment.endsWith("]") && segment.length > 2) {
+    return { kind: "single", key: segment.slice(1, -1) };
+  }
+  if (segment.startsWith(":") && segment.length > 1) {
+    const marker = segment.at(-1);
+    if (marker === "+" || marker === "*") {
+      return { kind: "catchAll", key: segment.slice(1, -1), optional: marker === "*" };
+    }
+    return { kind: "single", key: segment.slice(1) };
+  }
+  return { kind: "static", value: segment };
+}
+
+function extractRouteParamsFromPath(
+  pattern: string,
+  pathname: string,
+): Record<string, string | string[]> | null {
+  const patternParts = splitPathSegments(pattern).map(parseRoutePatternPart);
+  const pathSegments = splitPathSegments(pathname);
+  const params: Record<string, string | string[]> = {};
+  let pathIndex = 0;
+
+  for (let patternIndex = 0; patternIndex < patternParts.length; patternIndex++) {
+    const part = patternParts[patternIndex];
+    const currentPathSegment = pathSegments[pathIndex];
+
+    if (part.kind === "static") {
+      if (
+        currentPathSegment === undefined ||
+        decodePathSegment(currentPathSegment) !== part.value
+      ) {
+        return null;
+      }
+      pathIndex++;
+      continue;
+    }
+
+    if (part.kind === "single") {
+      if (currentPathSegment === undefined) return null;
+      params[part.key] = decodePathSegment(currentPathSegment);
+      pathIndex++;
+      continue;
+    }
+
+    const remainingPatternParts = patternParts.length - patternIndex - 1;
+    const captureCount = pathSegments.length - pathIndex - remainingPatternParts;
+    if (captureCount < 0 || (!part.optional && captureCount === 0)) return null;
+    if (captureCount > 0) {
+      params[part.key] = pathSegments
+        .slice(pathIndex, pathIndex + captureCount)
+        .map(decodePathSegment);
+      pathIndex += captureCount;
+    }
+  }
+
+  return pathIndex === pathSegments.length ? params : null;
+}
+
+function getRouteQueryFromNextData(
+  nextData: RouteQueryNextData | undefined,
+  resolvedPath: string,
+): Record<string, string | string[]> {
+  const routeQuery: Record<string, string | string[]> = {};
+  if (!nextData?.query || !nextData.page) return routeQuery;
+
+  const routeParamNames = extractRouteParamNames(nextData.page);
+  if (routeParamNames.length === 0) return routeQuery;
+
+  const currentRouteParams = extractRouteParamsFromPath(nextData.page, resolvedPath);
+  if (currentRouteParams) return currentRouteParams;
+
+  for (const key of routeParamNames) {
+    const value = nextData.query[key];
+    if (typeof value === "string") {
+      routeQuery[key] = value;
+    } else if (Array.isArray(value)) {
+      routeQuery[key] = [...value];
+    }
+  }
+  return routeQuery;
+}
+
 function getPathnameAndQuery(): {
   pathname: string;
   query: Record<string, string | string[]>;
@@ -321,21 +432,8 @@ function getPathnameAndQuery(): {
   // not the resolved path ("/posts/42"). __NEXT_DATA__.page holds the route
   // pattern and is updated by navigateClient() on every client-side navigation.
   const pathname = window.__NEXT_DATA__?.page ?? resolvedPath;
-  const routeQuery: Record<string, string | string[]> = {};
-  // Include dynamic route params from __NEXT_DATA__ (e.g., { id: "42" } from /posts/[id]).
-  // Only include keys that are part of the route pattern (not stale query params).
   const nextData = window.__NEXT_DATA__;
-  if (nextData && nextData.query && nextData.page) {
-    const routeParamNames = extractRouteParamNames(nextData.page);
-    for (const key of routeParamNames) {
-      const value = nextData.query[key];
-      if (typeof value === "string") {
-        routeQuery[key] = value;
-      } else if (Array.isArray(value)) {
-        routeQuery[key] = [...value];
-      }
-    }
-  }
+  const routeQuery = getRouteQueryFromNextData(nextData, resolvedPath);
   // URL search params always reflect the current URL
   const searchQuery: Record<string, string | string[]> = {};
   const params = new URLSearchParams(window.location.search);
