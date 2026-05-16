@@ -40,15 +40,19 @@ import {
 import { createClientNavigationRenderSnapshot } from "../packages/vinext/src/shims/navigation.js";
 import * as navigationShim from "../packages/vinext/src/shims/navigation.js";
 import {
+  createHistoryStateWithNavigationMetadata,
   createHistoryStateWithPreviousNextUrl,
   createPendingNavigationCommit,
   readHistoryStatePreviousNextUrl,
+  readHistoryStateTraversalIndex,
   resolveInterceptionContextFromPreviousNextUrl,
+  resolveHistoryTraversalIntent,
   resolveServerActionRequestState,
   resolvePendingNavigationCommitDispositionDecision,
   type AppRouterState,
   type OperationLane,
 } from "../packages/vinext/src/server/app-browser-state.js";
+import { resolveRscRedirectLifecycleHop } from "../packages/vinext/src/server/app-browser-rsc-redirect.js";
 import {
   applyApprovedVisibleCommit,
   approveHmrVisibleCommit,
@@ -2916,6 +2920,60 @@ describe("app browser entry previousNextUrl helpers", () => {
     expect(resolveInterceptionContextFromPreviousNextUrl(null)).toBeNull();
   });
 
+  it("stores traversal index alongside existing history state", () => {
+    const state = createHistoryStateWithNavigationMetadata(
+      {
+        __vinext_scrollY: 120,
+      },
+      {
+        previousNextUrl: "/feed?tab=latest",
+        traversalIndex: 4,
+      },
+    );
+
+    expect(state).toEqual({
+      __vinext_historyIndex: 4,
+      __vinext_previousNextUrl: "/feed?tab=latest",
+      __vinext_scrollY: 120,
+    });
+    expect(readHistoryStateTraversalIndex(state)).toBe(4);
+  });
+
+  it("resolves back, forward, and unknown traversal intent from history state", () => {
+    expect(
+      resolveHistoryTraversalIntent({
+        currentHistoryIndex: 5,
+        historyState: { __vinext_historyIndex: 3 },
+      }).direction,
+    ).toBe("back");
+    expect(
+      resolveHistoryTraversalIntent({
+        currentHistoryIndex: 5,
+        historyState: { __vinext_historyIndex: 7 },
+      }).direction,
+    ).toBe("forward");
+    expect(
+      resolveHistoryTraversalIntent({
+        currentHistoryIndex: 5,
+        historyState: {},
+      }),
+    ).toEqual({
+      direction: "unknown",
+      historyState: {},
+      targetHistoryIndex: null,
+    });
+    expect(
+      resolveHistoryTraversalIntent({
+        currentHistoryIndex: null,
+        historyState: { __vinext_historyIndex: 7 },
+      }),
+    ).toEqual({
+      direction: "unknown",
+      historyState: { __vinext_historyIndex: 7 },
+      targetHistoryIndex: 7,
+    });
+  });
+
   it("classifies pending commits in one step for same-url payloads", async () => {
     const currentState = createState({
       rootLayoutTreePath: "/(marketing)",
@@ -3370,6 +3428,99 @@ describe("createPopstateRestoreHandler", () => {
 
     expect(restoreCalls).toEqual([]);
     expect(window.__VINEXT_RSC_PENDING__).toBeNull();
+  });
+});
+
+describe("app browser RSC redirect lifecycle", () => {
+  it("keeps RSC redirect hops in the initiating lifecycle and preserves push history intent", () => {
+    const decision = resolveRscRedirectLifecycleHop({
+      currentHref: "https://example.com/start",
+      historyUpdateMode: "push",
+      origin: "https://example.com",
+      redirectDepth: 0,
+      requestPreviousNextUrl: "/feed",
+      responseUrl: "https://example.com/target.rsc?tab=1&_rsc=abc",
+    });
+
+    expect(decision).toEqual({
+      href: "/target?tab=1",
+      historyUpdateMode: "push",
+      kind: "follow",
+      previousNextUrl: "/feed",
+      redirectDepth: 1,
+    });
+  });
+
+  it("treats same-path search changes as RSC redirects", () => {
+    const decision = resolveRscRedirectLifecycleHop({
+      currentHref: "https://example.com/items?sort=old",
+      historyUpdateMode: "replace",
+      origin: "https://example.com",
+      redirectDepth: 2,
+      requestPreviousNextUrl: null,
+      responseUrl: "https://example.com/items.rsc?sort=new&_rsc=abc",
+    });
+
+    expect(decision).toMatchObject({
+      href: "/items?sort=new",
+      historyUpdateMode: "replace",
+      kind: "follow",
+      redirectDepth: 3,
+    });
+  });
+
+  it("allows callers to model terminal traverse/refresh redirects as replace commits", () => {
+    const decision = resolveRscRedirectLifecycleHop({
+      currentHref: "https://example.com/old",
+      historyUpdateMode: "replace",
+      origin: "https://example.com",
+      redirectDepth: 0,
+      requestPreviousNextUrl: null,
+      responseUrl: "https://example.com/new.rsc?_rsc=abc",
+    });
+
+    expect(decision).toMatchObject({
+      href: "/new",
+      historyUpdateMode: "replace",
+      kind: "follow",
+    });
+  });
+
+  it("turns external RSC redirects into terminal hard navigations", () => {
+    const decision = resolveRscRedirectLifecycleHop({
+      currentHref: "https://example.com/account",
+      historyUpdateMode: "push",
+      origin: "https://example.com",
+      redirectDepth: 0,
+      requestPreviousNextUrl: null,
+      responseUrl: "https://idp.example/login",
+    });
+
+    expect(decision).toEqual({
+      href: "https://idp.example/login",
+      kind: "terminal-hard-navigation",
+      reason: "externalRedirect",
+      redirectDepth: 0,
+    });
+  });
+
+  it("turns an over-budget redirect chain into a terminal hard navigation", () => {
+    const decision = resolveRscRedirectLifecycleHop({
+      currentHref: "https://example.com/a",
+      historyUpdateMode: "push",
+      maxRedirectDepth: 2,
+      origin: "https://example.com",
+      redirectDepth: 2,
+      requestPreviousNextUrl: null,
+      responseUrl: "https://example.com/b.rsc?_rsc=abc",
+    });
+
+    expect(decision).toEqual({
+      href: "/b",
+      kind: "terminal-hard-navigation",
+      reason: "maxRedirectsExceeded",
+      redirectDepth: 2,
+    });
   });
 });
 

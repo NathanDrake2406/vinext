@@ -33,8 +33,12 @@ import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
 import { normalizePathnameForRouteMatch } from "../routing/utils.js";
 import { normalizePath } from "./normalize-path.js";
 export {
+  createHistoryStateWithNavigationMetadata,
   createHistoryStateWithPreviousNextUrl,
   readHistoryStatePreviousNextUrl,
+  readHistoryStateTraversalIndex,
+  resolveHistoryTraversalIntent,
+  type HistoryTraversalIntent,
 } from "./app-history-state.js";
 
 export type { OperationLane } from "./navigation-planner.js";
@@ -113,7 +117,6 @@ type NonDispatchPendingNavigationCommitDispositionDecision = {
 type PendingNavigationCommitDispositionDecision =
   | DispatchPendingNavigationCommitDispositionDecision
   | NonDispatchPendingNavigationCommitDispositionDecision;
-
 function createOperationRecord(options: {
   id: number;
   lane: OperationLane;

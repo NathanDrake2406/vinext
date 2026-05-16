@@ -58,7 +58,8 @@ export type NavigationTraceFieldName =
   | "pendingOperationId"
   | "startedVisibleCommitVersion"
   | "startedNavigationId"
-  | "targetHref";
+  | "targetHref"
+  | "traverseDirection";
 
 export type NavigationTraceFieldValue = string | number | boolean | null;
 

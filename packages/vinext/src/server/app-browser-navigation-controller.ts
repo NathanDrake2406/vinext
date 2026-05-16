@@ -39,6 +39,7 @@ type BrowserNavigationCommitEffectFactory = (options: {
   navId: number;
   params: Record<string, string | string[]>;
   previousNextUrl: string | null;
+  targetHistoryIndex?: number | null;
 }) => () => void;
 
 type BrowserRouterStateRef = {
@@ -81,6 +82,7 @@ type BrowserNavigationController = {
     params: Record<string, string | string[]>;
     pendingRouterState: PendingBrowserRouterState | null;
     previousNextUrl: string | null;
+    targetHistoryIndex?: number | null;
     targetHref: string;
     navId: number;
   }): Promise<NavigationPayloadOutcome>;
@@ -490,6 +492,7 @@ export function createAppBrowserNavigationController(
     params: Record<string, string | string[]>;
     pendingRouterState: PendingBrowserRouterState | null;
     previousNextUrl: string | null;
+    targetHistoryIndex?: number | null;
     targetHref: string;
     navId: number;
   }): Promise<NavigationPayloadOutcome> {
@@ -547,6 +550,7 @@ export function createAppBrowserNavigationController(
           navId: options.navId,
           params: options.params,
           previousNextUrl: approvedCommit.previousNextUrl,
+          targetHistoryIndex: options.targetHistoryIndex,
         }),
       );
       activateNavigationSnapshot();

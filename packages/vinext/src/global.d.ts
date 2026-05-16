@@ -92,6 +92,7 @@ declare global {
      * @param redirectDepth - Internal parameter used to detect redirect loops.
      * @param navigationKind - Internal hint for traversal vs regular navigation.
      * @param historyUpdateMode - Internal hint for when history should publish.
+     * @param traversalIntent - Internal popstate direction/history metadata.
      */
     __VINEXT_RSC_NAVIGATE__:
       | ((
@@ -101,6 +102,11 @@ declare global {
           historyUpdateMode?: "push" | "replace",
           previousNextUrlOverride?: string | null,
           programmaticTransition?: boolean,
+          traversalIntent?: {
+            direction: "back" | "forward" | "unknown";
+            historyState: unknown;
+            targetHistoryIndex: number | null;
+          },
         ) => Promise<void>)
       | undefined;
 

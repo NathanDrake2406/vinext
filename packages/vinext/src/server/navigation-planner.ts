@@ -75,17 +75,18 @@ export type NavigationPlannerStateV0 = {
 };
 
 export type RefreshScope = "visible";
+export type TraverseDirection = "back" | "forward" | "unknown";
 
 export type NavigationEvent =
   | { kind: "navigate"; href: string; mode: "push" | "replace" }
   | { kind: "refresh"; scope: RefreshScope }
-  | { kind: "traverse"; direction: "back" | "forward"; historyState: unknown }
+  | { kind: "traverse"; direction: TraverseDirection; historyState: unknown }
   | { kind: "prefetch"; href: string }
   | { kind: "flightResponseArrived"; token: OperationToken; result: FlightResultV0 };
 
 export type RequestedWork =
   | { kind: "flight"; href: string; mode: "push" | "replace" | "refresh" }
-  | { direction: "back" | "forward"; historyState: unknown; kind: "traverseFlight" }
+  | { direction: TraverseDirection; historyState: unknown; kind: "traverseFlight" }
   | { kind: "prefetch"; href: string };
 
 export type CommitProposal = {
@@ -149,6 +150,8 @@ function createRequestWorkDecision(options: {
   state: NavigationPlannerStateV0;
   work: RequestedWork;
 }): NavigationDecisionV0 {
+  const traverseFields =
+    options.work.kind === "traverseFlight" ? { traverseDirection: options.work.direction } : {};
   return {
     kind: "requestWork",
     token: options.state.nextOperationToken,
@@ -156,6 +159,7 @@ function createRequestWorkDecision(options: {
     trace: createNavigationTrace(NavigationTraceReasonCodes.requestWork, {
       eventKind: options.eventKind,
       targetHref: getRequestedWorkTargetHref(options.work),
+      ...traverseFields,
     }),
   };
 }

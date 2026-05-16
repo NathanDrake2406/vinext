@@ -925,5 +925,35 @@ describe("navigationPlanner root-boundary decisions", () => {
       kind: "traverseFlight",
     });
     expect(decision.trace.entries[0]?.fields.targetHref).toBeNull();
+    expect(decision.trace.entries[0]?.fields.traverseDirection).toBe("back");
+  });
+
+  it("keeps unknown traversal direction explicit instead of guessing", () => {
+    const token = createOperationToken();
+    const historyState = { key: "external-entry" };
+    const decision = navigationPlanner.plan({
+      routeManifest: null,
+      state: {
+        nextOperationToken: token,
+        visibleCommitVersion: 2,
+        visibleSnapshot: createRouteSnapshot("/"),
+      },
+      event: {
+        direction: "unknown",
+        historyState,
+        kind: "traverse",
+      },
+    });
+
+    expect(decision.kind).toBe("requestWork");
+    if (decision.kind !== "requestWork") {
+      throw new Error("Expected requestWork decision");
+    }
+    expect(decision.work).toEqual({
+      direction: "unknown",
+      historyState,
+      kind: "traverseFlight",
+    });
+    expect(decision.trace.entries[0]?.fields.traverseDirection).toBe("unknown");
   });
 });
