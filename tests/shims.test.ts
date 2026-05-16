@@ -10915,6 +10915,90 @@ describe("Pages Router concurrent navigation", () => {
     });
   });
 
+  it("scrolls hash-only pushes to URI-decoded id targets", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    (globalThis as any).window = win;
+
+    const target = { scrollIntoView: vi.fn() };
+    const getElementById = vi.fn((id: string) => (id === "hello world" ? target : null));
+    const getElementsByName = vi.fn(() => []);
+    (globalThis as any).document = { getElementById, getElementsByName };
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("hash-only navigations must not fetch page HTML");
+    });
+    vi.resetModules();
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push("#hello%20world");
+
+      expect(result).toBe(true);
+      expect(getElementById).toHaveBeenCalledWith("hello world");
+      expect(getElementsByName).not.toHaveBeenCalled();
+      expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto" });
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("scrolls hash-only pushes to named anchors when no id matches", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    (globalThis as any).window = win;
+
+    const target = { scrollIntoView: vi.fn() };
+    const getElementById = vi.fn(() => null);
+    const getElementsByName = vi.fn((name: string) => (name === "legacy-anchor" ? [target] : []));
+    (globalThis as any).document = { getElementById, getElementsByName };
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("hash-only navigations must not fetch page HTML");
+    });
+    vi.resetModules();
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push("#legacy-anchor");
+
+      expect(result).toBe(true);
+      expect(getElementById).toHaveBeenCalledWith("legacy-anchor");
+      expect(getElementsByName).toHaveBeenCalledWith("legacy-anchor");
+      expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto" });
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("does not strip app-relative targets that start with the basePath segment", async () => {
     await expectBasePathHashOnlyPush({
       browserPath: "/app/app/foo",
