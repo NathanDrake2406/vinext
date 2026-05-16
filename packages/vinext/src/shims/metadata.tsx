@@ -343,6 +343,29 @@ function resolveStringTitle(title: Metadata["title"]): string | undefined {
   return undefined;
 }
 
+function applyTitleTemplate(template: string | undefined, title: string): string {
+  return template ? template.replace(/%s/g, title) : title;
+}
+
+function resolveTitle(title: Metadata["title"], stashedTemplate: string | undefined) {
+  if (typeof title === "string") {
+    return applyTitleTemplate(stashedTemplate, title);
+  }
+
+  if (title && typeof title === "object") {
+    let resolved =
+      title.default === undefined ? undefined : applyTitleTemplate(stashedTemplate, title.default);
+
+    if (title.absolute) {
+      resolved = title.absolute;
+    }
+
+    return resolved;
+  }
+
+  return undefined;
+}
+
 /**
  * Post-process merged metadata to cross-fill openGraph and Twitter fields.
  *
@@ -400,7 +423,7 @@ export function postProcessMetadata(merged: Metadata): Metadata {
     if (!hasTwDescription) {
       autoFill.description = result.openGraph.description || result.description || undefined;
     }
-    if (!hasTwImages) {
+    if (!hasTwImages && result.openGraph.images !== undefined) {
       autoFill.images = result.openGraph.images;
     }
 
@@ -456,24 +479,13 @@ export function mergeMetadataEntries(entries: readonly MetadataMergeEntry[]): Me
 
   const merged: Metadata = {};
 
-  // Track the most recent title template from LAYOUTS (not from page).
+  // Track the most recent ancestor title template from layouts (not from page).
   let parentTemplate: string | undefined;
 
   for (const entry of entries) {
     const meta = entry.metadata;
     const isPage = Boolean(entry.isPage);
     const contributesTitle = entry.contributesTitle !== false;
-
-    // Collect template from layouts only (page templates are ignored per Next.js spec)
-    if (
-      contributesTitle &&
-      !isPage &&
-      meta.title &&
-      typeof meta.title === "object" &&
-      meta.title.template
-    ) {
-      parentTemplate = meta.title.template;
-    }
 
     // Merge non-title keys
     for (const key of Object.keys(meta)) {
@@ -492,30 +504,19 @@ export function mergeMetadataEntries(entries: readonly MetadataMergeEntry[]): Me
 
     // Title resolution
     if (contributesTitle && meta.title !== undefined) {
-      merged.title = meta.title;
+      merged.title = resolveTitle(meta.title, parentTemplate);
     }
-  }
 
-  // Now resolve the final title, applying the parent template if applicable
-  const finalTitle = merged.title;
-  if (finalTitle) {
-    if (typeof finalTitle === "string") {
-      // Simple string title — apply parent template
-      if (parentTemplate) {
-        merged.title = parentTemplate.replace("%s", finalTitle);
-      }
-    } else if (typeof finalTitle === "object") {
-      if (finalTitle.absolute) {
-        // Absolute title — skip all templates
-        merged.title = finalTitle.absolute;
-      } else if (finalTitle.default) {
-        // Title object with default — this is used when the segment IS the
-        // defining layout (its own default doesn't get template-wrapped)
-        merged.title = finalTitle.default;
-      } else if (finalTitle.template && !finalTitle.default && !finalTitle.absolute) {
-        // Template only with no default — no title to render
-        merged.title = undefined;
-      }
+    // Collect the current layout template after resolving its own title so
+    // title.default is wrapped by the ancestor template, not by its own template.
+    if (
+      contributesTitle &&
+      !isPage &&
+      meta.title &&
+      typeof meta.title === "object" &&
+      meta.title.template
+    ) {
+      parentTemplate = meta.title.template;
     }
   }
 

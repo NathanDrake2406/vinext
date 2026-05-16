@@ -27,6 +27,7 @@ import {
 } from "./html.js";
 import { createRscEmbedTransform, createTickBufferedTransform } from "./app-ssr-stream.js";
 import { deferUntilStreamConsumed } from "./app-page-stream.js";
+import { createSsrErrorMetaRenderer } from "./app-ssr-error-meta.js";
 import { AppElementsWire, type AppWireElements } from "./app-elements.js";
 import { ElementsContext, Slot } from "vinext/shims/slot";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
@@ -169,6 +170,7 @@ export async function handleSsr(
     /** Out-parameter: filled with accumulated raw RSC bytes when sideStream is consumed. */
     capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
     formState?: ReactFormState | null;
+    basePath?: string;
     /** When true, wait for the full React tree (including Suspense boundaries)
      *  to resolve before returning the HTML stream. Used for static prerender
      *  and ISR cache writes to avoid caching fallback content. */
@@ -242,12 +244,17 @@ export async function handleSsr(
       const ssrRoot = withScriptNonce(ssrTree, options?.scriptNonce);
 
       const bootstrapScriptContent = await import.meta.viteRsc.loadBootstrapScriptContent("index");
+      const errorMetaRenderer = createSsrErrorMetaRenderer({
+        basePath: options?.basePath,
+      });
 
       const htmlStream = await renderToReadableStream(ssrRoot, {
         bootstrapScriptContent,
         formState: options?.formState ?? null,
         nonce: options?.scriptNonce,
         onError(error) {
+          errorMetaRenderer.capture(error);
+
           if (error && typeof error === "object" && "digest" in error) {
             return String(error.digest);
           }
@@ -274,14 +281,15 @@ export async function handleSsr(
       let didInjectHeadHTML = false;
       const getInsertedHTML = (): string => {
         const insertedHTML = renderInsertedHtml(renderServerInsertedHTML());
-        if (didInjectHeadHTML) return insertedHTML;
+        const errorMetaHTML = errorMetaRenderer.flush();
+        if (didInjectHeadHTML) return insertedHTML + errorMetaHTML;
 
         didInjectHeadHTML = true;
         return buildHeadInjectionHtml(
           navContext,
           bootstrapScriptContent,
           options?.formState ?? null,
-          insertedHTML,
+          insertedHTML + errorMetaHTML,
           fontHTML,
           options?.scriptNonce,
         );
