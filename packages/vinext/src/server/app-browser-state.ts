@@ -30,6 +30,8 @@ import {
   type RouteSnapshotV0,
 } from "./navigation-planner.js";
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
+import { normalizePathnameForRouteMatch } from "../routing/utils.js";
+import { normalizePath } from "./normalize-path.js";
 export {
   createHistoryStateWithPreviousNextUrl,
   readHistoryStatePreviousNextUrl,
@@ -123,6 +125,10 @@ function createOperationRecord(options: {
     startedVisibleCommitVersion: options.startedVisibleCommitVersion,
     state: "pending",
   };
+}
+
+function normalizeNavigationSnapshotMatchedUrl(pathname: string): string {
+  return normalizePath(normalizePathnameForRouteMatch(pathname));
 }
 
 export function resolveInterceptionContextFromPreviousNextUrl(
@@ -254,15 +260,17 @@ function createMountedParallelSlotSnapshots(
 
 function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
   const displayUrl = createNavigationSnapshotUrl(state.navigationSnapshot);
+  const matchedUrl = normalizeNavigationSnapshotMatchedUrl(state.navigationSnapshot.pathname);
   return {
     displayUrl,
     interception: state.interception,
     interceptionContext: state.interceptionContext,
     layoutIds: state.layoutIds,
-    // `displayUrl` preserves the browser-visible query string for decisions and
-    // traces. `matchedUrl` stays path-only because route matching has already
-    // consumed query params before AppElements metadata reaches this boundary.
-    matchedUrl: state.navigationSnapshot.pathname,
+    // `displayUrl` preserves the browser-visible URL for decisions and traces.
+    // `matchedUrl` uses the route-state canonical pathname, matching the
+    // server's segment-decoded representation without changing user-facing
+    // navigation state such as usePathname().
+    matchedUrl,
     mountedParallelSlots: createMountedParallelSlotSnapshots(state.elements),
     rootBoundaryId: state.rootLayoutTreePath,
     routeId: state.routeId,
@@ -272,6 +280,9 @@ function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
 
 function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnapshotV0 {
   const displayUrl = createNavigationSnapshotUrl(pending.action.navigationSnapshot);
+  const matchedUrl = normalizeNavigationSnapshotMatchedUrl(
+    pending.action.navigationSnapshot.pathname,
+  );
   return {
     displayUrl,
     interception: pending.action.interception,
@@ -279,7 +290,7 @@ function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnap
     layoutIds: pending.action.layoutIds,
     // See createVisibleRouteSnapshot: matchedUrl intentionally models the route
     // identity, not the address bar URL.
-    matchedUrl: pending.action.navigationSnapshot.pathname,
+    matchedUrl,
     mountedParallelSlots: createMountedParallelSlotSnapshots(pending.action.elements),
     rootBoundaryId: pending.rootLayoutTreePath,
     routeId: pending.routeId,

@@ -1033,6 +1033,72 @@ describe("app browser entry state helpers", () => {
     ]);
   });
 
+  it("normalizes encoded route-state paths before validating interception proof", async () => {
+    const slotId = AppElementsWire.encodeSlotId("modal", "/café");
+    const currentState = createState({
+      layoutIds: [AppElementsWire.encodeLayoutId("/"), AppElementsWire.encodeLayoutId("/café")],
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/caf%C3%A9", {}),
+      rootLayoutTreePath: "/",
+      routeId: AppElementsWire.encodeRouteId("/café", null),
+      slotBindings: [
+        {
+          ownerLayoutId: AppElementsWire.encodeLayoutId("/café"),
+          slotId,
+          state: "default",
+        },
+      ],
+    });
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements(
+          AppElementsWire.encodeRouteId("/photos/café", "/caf%C3%A9"),
+          "/",
+          "/caf%C3%A9",
+          {
+            "page:/photos/café": React.createElement("main", null, "photo"),
+          },
+          [AppElementsWire.encodeLayoutId("/"), AppElementsWire.encodeLayoutId("/café")],
+          [
+            {
+              ownerLayoutId: AppElementsWire.encodeLayoutId("/café"),
+              slotId,
+              state: "active",
+            },
+          ],
+          createInterceptionProof("/café", "/photos/café", slotId),
+        ),
+      ),
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/photos/caf%C3%A9",
+        {},
+      ),
+      operationLane: "navigation",
+      previousNextUrl: "/caf%C3%A9",
+      renderId: 1,
+      type: "navigate",
+    });
+
+    const decision = resolvePendingNavigationCommitDispositionDecision({
+      activeNavigationId: 1,
+      currentState,
+      pending,
+      startedNavigationId: 1,
+    });
+
+    expect(decision.disposition).toBe("dispatch");
+    if (decision.disposition !== "dispatch") {
+      throw new Error("Expected dispatch decision");
+    }
+    expect(decision.preserveElementIds).toEqual([
+      AppElementsWire.encodeLayoutId("/"),
+      AppElementsWire.encodeLayoutId("/café"),
+    ]);
+    expect(decision.trace.entries[0]?.code).toBe(
+      NavigationTraceReasonCodes.interceptedCommitCurrent,
+    );
+  });
+
   it("builds a merge commit for refresh and server-action payloads", async () => {
     const refreshCommit = await createPendingNavigationCommit({
       currentState: createState(),

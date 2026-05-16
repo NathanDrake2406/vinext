@@ -13,8 +13,10 @@ import {
 import { AppElementsWire, type AppElements, type AppElementsInterception } from "./app-elements.js";
 import type { AppPageParams } from "./app-page-boundary.js";
 import { matchRoutePattern } from "../routing/route-pattern.js";
+import { normalizePathnameForRouteMatch } from "../routing/utils.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
 import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
+import { normalizePath } from "./normalize-path.js";
 
 export type { AppPageErrorModule, AppPageRouteWiringRoute } from "./app-page-route-wiring.js";
 
@@ -212,17 +214,35 @@ function createAppPageInterceptionProof<TModule extends AppPageModule>(
   routePath: string,
   opts?: AppPageInterceptOptions<TModule> | null,
 ): AppElementsInterception | null {
-  const sourceMatchedUrl = opts?.interceptSourceMatchedUrl ?? null;
+  const sourceMatchedUrl = normalizeInterceptionProofMatchedUrl(
+    opts?.interceptSourceMatchedUrl ?? null,
+  );
+  const targetMatchedUrl = normalizeInterceptionProofMatchedUrl(routePath);
   const slotId = opts?.interceptSlotId ?? null;
-  if (sourceMatchedUrl === null || slotId === null) return null;
+  if (sourceMatchedUrl === null || targetMatchedUrl === null || slotId === null) return null;
 
   return {
     sourceMatchedUrl,
     sourceRouteId: AppElementsWire.encodeRouteId(sourceMatchedUrl, null),
     slotId,
-    targetMatchedUrl: routePath,
-    targetRouteId: AppElementsWire.encodeRouteId(routePath, null),
+    targetMatchedUrl,
+    targetRouteId: AppElementsWire.encodeRouteId(targetMatchedUrl, null),
   };
+}
+
+function normalizeInterceptionProofMatchedUrl(value: string | null): string | null {
+  if (
+    value === null ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("?") ||
+    value.includes("#") ||
+    value.includes("\0")
+  ) {
+    return null;
+  }
+
+  return normalizePath(normalizePathnameForRouteMatch(value));
 }
 
 /**
