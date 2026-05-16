@@ -3890,20 +3890,6 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain("matchRoute,");
   });
 
-  it("forwards progressive action failures from the generated RSC handler into page dispatch", () => {
-    const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false);
-
-    expect(code).toContain(`dispatchMatchedPage({
-    cleanPathname,
-    formState,
-    actionError,
-    actionFailed,`);
-    expect(code).toContain(`formState,
-      actionError,
-      actionFailed,
-      isProgressiveActionRender,`);
-  });
-
   it("describes beforeFiles rewrites in the generated app shape", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
       rewrites: {
