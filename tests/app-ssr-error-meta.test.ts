@@ -53,6 +53,20 @@ describe("App SSR error meta tags", () => {
     ).toBe(
       '<meta id="__next-page-redirect" http-equiv="refresh" content="1;url=https://example.com" />',
     );
+
+    expect(
+      renderSsrErrorMetaTags([digestError("NEXT_REDIRECT;replace;/docs%3Ffrom%3Dcheckout;307")], {
+        basePath: "/docs",
+      }),
+    ).toBe(
+      '<meta id="__next-page-redirect" http-equiv="refresh" content="1;url=/docs?from=checkout" />',
+    );
+
+    expect(
+      renderSsrErrorMetaTags([digestError("NEXT_REDIRECT;replace;/docs%23top;307")], {
+        basePath: "/docs",
+      }),
+    ).toBe('<meta id="__next-page-redirect" http-equiv="refresh" content="1;url=/docs#top" />');
   });
 
   it("escapes redirect meta URLs before inserting them into HTML", () => {

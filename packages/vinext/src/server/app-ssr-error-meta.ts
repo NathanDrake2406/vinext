@@ -1,4 +1,4 @@
-import { hasBasePath } from "../utils/base-path.js";
+import { addBasePathToPathname } from "../utils/base-path.js";
 import { escapeHtmlAttr } from "./html.js";
 import {
   getNextErrorDigest,
@@ -19,11 +19,23 @@ type SsrErrorMetaRenderer = {
 const PERMANENT_REDIRECT_STATUS = 308;
 
 function prefixRedirectLocation(location: string, basePath?: string): string {
-  if (!basePath || !location.startsWith("/") || hasBasePath(location, basePath)) {
+  if (!basePath || !location.startsWith("/")) {
     return location;
   }
 
-  return `${basePath}${location}`;
+  const hashIndex = location.indexOf("#");
+  const queryIndex = location.indexOf("?");
+  const pathnameEnd =
+    queryIndex === -1
+      ? hashIndex === -1
+        ? location.length
+        : hashIndex
+      : hashIndex === -1
+        ? queryIndex
+        : Math.min(queryIndex, hashIndex);
+  const pathname = location.slice(0, pathnameEnd);
+
+  return addBasePathToPathname(pathname, basePath) + location.slice(pathnameEnd);
 }
 
 function renderSsrErrorMetaTag(error: unknown, options: SsrErrorMetaRenderOptions): string {
