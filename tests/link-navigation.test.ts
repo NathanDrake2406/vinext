@@ -15,7 +15,7 @@ type CapturedClickEvent = {
   altKey?: boolean;
   button: number;
   ctrlKey?: boolean;
-  currentTarget: { target: string };
+  currentTarget: { hasAttribute(name: string): boolean; target: string };
   defaultPrevented: boolean;
   metaKey?: boolean;
   preventDefault(): void;
@@ -335,7 +335,7 @@ describe("Link App Router navigation scheduling", () => {
 
     const clickEvent = {
       button: 0,
-      currentTarget: { target: "" },
+      currentTarget: { hasAttribute: () => false, target: "" },
       defaultPrevented: false,
       preventDefault() {
         this.defaultPrevented = true;
@@ -352,6 +352,77 @@ describe("Link App Router navigation scheduling", () => {
     expect(startTransition).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith("/target", 0, "navigate", "push", undefined, true);
     expect(transitionStates).toEqual([true]);
+  });
+
+  it("lets the browser handle download links without app-router navigation", async () => {
+    vi.resetModules();
+
+    let capturedAnchorProps: CapturedAnchorProps | undefined;
+    const startTransition = vi.fn((callback: () => void) => {
+      callback();
+    });
+
+    const captureAnchor = (type: unknown, props: unknown) => {
+      if (type === "a" && props !== null && typeof props === "object") {
+        capturedAnchorProps = props;
+      }
+    };
+
+    mockReactAnchorCaptureForLinkOnly_DO_NOT_REUSE({ captureAnchor, startTransition });
+
+    const navigate = vi.fn(async () => {});
+    vi.stubGlobal("window", {
+      __VINEXT_RSC_NAVIGATE__: navigate,
+      addEventListener: vi.fn(),
+      history: {
+        pushState: vi.fn(),
+        replaceState: vi.fn(),
+      },
+      location: {
+        href: "https://example.com/current",
+        origin: "https://example.com",
+      },
+      scrollTo: vi.fn(),
+    });
+
+    const { default: IsolatedLink } = await import("../packages/vinext/src/shims/link.js");
+    const React = await vi.importActual<typeof import("react")>("react");
+    const onClick = vi.fn();
+    const onNavigate = vi.fn();
+
+    // Ported from Next.js: test/e2e/link-on-navigate-prop/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/link-on-navigate-prop/index.test.ts
+    ReactDOMServer.renderToString(
+      React.createElement(
+        IsolatedLink,
+        { download: true, href: "/file.pdf", onClick, onNavigate, prefetch: false },
+        "download",
+      ),
+    );
+
+    const clickEvent = {
+      button: 0,
+      currentTarget: {
+        hasAttribute: (name: string) => name === "download",
+        target: "",
+      },
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+    };
+    const linkOnClick = capturedAnchorProps?.onClick;
+    expect(linkOnClick).toBeTypeOf("function");
+    if (linkOnClick === undefined) {
+      throw new Error("Expected rendered Link anchor to expose an onClick handler");
+    }
+    await linkOnClick(clickEvent);
+
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(clickEvent.defaultPrevented).toBe(false);
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(startTransition).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

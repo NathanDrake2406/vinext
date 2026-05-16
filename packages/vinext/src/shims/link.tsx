@@ -442,6 +442,11 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     if (onClick) onClick(e);
     if (e.defaultPrevented) return;
 
+    // Native download links must keep the browser's default behavior.
+    if (e.currentTarget.hasAttribute("download")) {
+      return;
+    }
+
     // Only intercept left clicks without modifiers (standard link behavior)
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
       return;
