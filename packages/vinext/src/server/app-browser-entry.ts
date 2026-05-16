@@ -1331,10 +1331,18 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // See: https://github.com/vercel/next.js/discussions/41934#discussioncomment-4602607
   window.addEventListener("popstate", (event) => {
     notifyAppRouterTransitionStart(window.location.href, "traverse");
+    const navigateRsc = window.__VINEXT_RSC_NAVIGATE__;
     const pendingNavigation =
-      window.__VINEXT_RSC_NAVIGATE__?.(window.location.href, 0, "traverse") ?? Promise.resolve();
+      navigateRsc?.(window.location.href, 0, "traverse") ?? Promise.resolve();
+    const popstateNavId = navigateRsc ? browserNavigationController.getActiveNavigationId() : null;
     window.__VINEXT_RSC_PENDING__ = pendingNavigation;
     void pendingNavigation.finally(() => {
+      if (
+        popstateNavId !== null &&
+        !browserNavigationController.isCurrentNavigation(popstateNavId)
+      ) {
+        return;
+      }
       restorePopstateScrollPosition(event.state);
       if (window.__VINEXT_RSC_PENDING__ === pendingNavigation) {
         window.__VINEXT_RSC_PENDING__ = null;
