@@ -512,8 +512,38 @@ describe("Link App Router prefetch scheduling", () => {
       observer.dispatchIntersectingEntry(result.anchor);
       await flushPrefetchTasks();
 
-      expect(observer.unobserve).toHaveBeenCalledWith(result.anchor);
+      expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
       expect(result.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/viewport-prefetch-target.rsc"),
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("re-prefetches visible links after the prefetch cache is invalidated", async () => {
+    const observer = stubIntersectionObserver();
+
+    const result = await renderIsolatedLink({
+      href: "/viewport-prefetch-target",
+      nodeEnv: "production",
+    });
+    const { invalidatePrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+      expect(result.fetch).toHaveBeenCalledTimes(1);
+
+      invalidatePrefetchCache();
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledTimes(2);
+      expect(result.fetch).toHaveBeenLastCalledWith(
         expect.stringContaining("/viewport-prefetch-target.rsc"),
         expect.objectContaining({
           credentials: "include",
@@ -538,7 +568,7 @@ describe("Link App Router prefetch scheduling", () => {
       observer.dispatchIntersectingEntry(result.anchor);
       await flushPrefetchTasks();
 
-      expect(observer.unobserve).toHaveBeenCalledWith(result.anchor);
+      expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
       expect(result.fetch).not.toHaveBeenCalled();
     } finally {
       result.restoreNodeEnv();
@@ -559,7 +589,7 @@ describe("Link App Router prefetch scheduling", () => {
       observer.dispatchIntersectingEntry(result.anchor);
       await flushPrefetchTasks();
 
-      expect(observer.unobserve).toHaveBeenCalledWith(result.anchor);
+      expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
       expect(result.fetch).toHaveBeenCalledWith(
         expect.stringContaining("/blog/hello.rsc"),
         expect.objectContaining({
@@ -655,6 +685,47 @@ describe("Link App Router prefetch scheduling", () => {
         expect.objectContaining({
           credentials: "include",
           priority: "high",
+        }),
+      );
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("upgrades automatic dynamic links to full prefetch on unstable_dynamicOnHover intent", async () => {
+    const observer = stubIntersectionObserver();
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+      props: { unstable_dynamicOnHover: true },
+    });
+    const { invalidatePrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
+
+    try {
+      observer.dispatchIntersectingEntry(result.anchor);
+      await flushPrefetchTasks();
+      expect(result.fetch).not.toHaveBeenCalled();
+
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/blog/hello.rsc"),
+        expect.objectContaining({
+          credentials: "include",
+          priority: "high",
+        }),
+      );
+
+      invalidatePrefetchCache();
+      await flushPrefetchTasks();
+
+      expect(result.fetch).toHaveBeenCalledTimes(2);
+      expect(result.fetch).toHaveBeenLastCalledWith(
+        expect.stringContaining("/blog/hello.rsc"),
+        expect.objectContaining({
+          credentials: "include",
+          priority: "low",
         }),
       );
     } finally {

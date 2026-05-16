@@ -473,6 +473,9 @@ export function invalidatePrefetchCache(): void {
     deletePrefetchCacheEntry(cache, prefetched, cacheKey, entry, true);
   }
   prefetched.clear();
+  if (!isServer) {
+    window.__VINEXT_PING_VISIBLE_LINKS__?.();
+  }
 }
 
 /**
@@ -1182,6 +1185,7 @@ export function commitClientNavigationState(
 
   if (shouldNotify) {
     notifyNavigationListeners();
+    window.__VINEXT_PING_VISIBLE_LINKS__?.();
   }
 }
 

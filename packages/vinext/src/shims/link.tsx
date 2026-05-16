@@ -62,6 +62,11 @@ type LinkProps = {
   replace?: boolean;
   /** Prefetch the page in the background (App Router default: auto, Pages Router default: true) */
   prefetch?: boolean | "auto" | null;
+  /**
+   * Unstable App Router option matching Next.js canary: an automatic prefetch
+   * is upgraded to a full prefetch when the user shows navigation intent.
+   */
+  unstable_dynamicOnHover?: boolean;
   /** Whether to pass the href to the child element */
   passHref?: boolean;
   /** Scroll to top on navigation (default: true) */
@@ -241,7 +246,37 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
  * All Link elements use the same observer to minimize resource usage.
  */
 let sharedObserver: IntersectionObserver | null = null;
-const observerCallbacks = new WeakMap<Element, () => void>();
+type LinkPrefetchInstance = {
+  href: string;
+  mode: LinkPrefetchMode;
+  isVisible: boolean;
+};
+
+const observedLinkPrefetches = new WeakMap<Element, LinkPrefetchInstance>();
+const visibleLinkPrefetches = new Set<LinkPrefetchInstance>();
+
+function setVisibleLinkPrefetch(instance: LinkPrefetchInstance, isVisible: boolean): void {
+  instance.isVisible = isVisible;
+  if (isVisible) {
+    visibleLinkPrefetches.add(instance);
+    prefetchUrl(instance.href, instance.mode, "low");
+  } else {
+    visibleLinkPrefetches.delete(instance);
+  }
+}
+
+function registerVisibleLinkPing(): void {
+  if (typeof window === "undefined") return;
+  window.__VINEXT_PING_VISIBLE_LINKS__ = pingVisibleLinkPrefetches;
+}
+
+function pingVisibleLinkPrefetches(): void {
+  for (const instance of visibleLinkPrefetches) {
+    if (instance.isVisible) {
+      prefetchUrl(instance.href, instance.mode, "low");
+    }
+  }
+}
 
 function getSharedObserver(): IntersectionObserver | null {
   if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") return null;
@@ -250,15 +285,9 @@ function getSharedObserver(): IntersectionObserver | null {
   sharedObserver = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
-        if (entry.isIntersecting) {
-          const callback = observerCallbacks.get(entry.target);
-          if (callback) {
-            callback();
-            // Unobserve after prefetching — only prefetch once
-            sharedObserver?.unobserve(entry.target);
-            observerCallbacks.delete(entry.target);
-          }
-        }
+        const instance = observedLinkPrefetches.get(entry.target);
+        if (!instance) continue;
+        setVisibleLinkPrefetch(instance, entry.isIntersecting || entry.intersectionRatio > 0);
       }
     },
     {
@@ -343,6 +372,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     onMouseEnter,
     onTouchStart,
     onNavigate,
+    unstable_dynamicOnHover = false,
     ...rest
   },
   forwardedRef,
@@ -408,19 +438,33 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     const observer = getSharedObserver();
     if (!observer) return;
 
-    observerCallbacks.set(node, () => prefetchUrl(hrefToPrefetch, prefetchMode, "low"));
+    registerVisibleLinkPing();
+    const instance: LinkPrefetchInstance = {
+      href: hrefToPrefetch,
+      mode: prefetchMode,
+      isVisible: false,
+    };
+    observedLinkPrefetches.set(node, instance);
     observer.observe(node);
 
     return () => {
       observer.unobserve(node);
-      observerCallbacks.delete(node);
+      observedLinkPrefetches.delete(node);
+      visibleLinkPrefetches.delete(instance);
     };
   }, [shouldPrefetch, prefetchMode, localizedHref]);
 
   const prefetchOnIntent = useCallback(() => {
     if (!shouldPrefetch) return;
-    prefetchUrl(localizedHref, prefetchMode, "high");
-  }, [shouldPrefetch, prefetchMode, localizedHref]);
+    const intentMode = unstable_dynamicOnHover ? "full" : prefetchMode;
+    if (unstable_dynamicOnHover && internalRef.current) {
+      const instance = observedLinkPrefetches.get(internalRef.current);
+      if (instance) {
+        instance.mode = "full";
+      }
+    }
+    prefetchUrl(localizedHref, intentMode, "high");
+  }, [shouldPrefetch, prefetchMode, localizedHref, unstable_dynamicOnHover]);
 
   const handleMouseEnter = useCallback(
     (e: MouseEvent<HTMLAnchorElement>) => {
