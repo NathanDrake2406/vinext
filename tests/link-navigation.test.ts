@@ -407,7 +407,7 @@ describe("Link App Router navigation scheduling", () => {
       try {
         const clickEvent = {
           button: 0,
-          currentTarget: { target: "" },
+          currentTarget: { hasAttribute: () => false, target: "" },
           defaultPrevented: false,
           preventDefault() {
             this.defaultPrevented = true;
