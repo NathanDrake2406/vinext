@@ -226,6 +226,80 @@ describe("next/navigation shim", () => {
     }
   });
 
+  it("preserves App Router history metadata when external history calls provide caller state", async () => {
+    // Matches Next.js' external History API wrapper behavior:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/app-router.tsx#L114-L127
+    // Covered by Next.js shallow-routing tests for object, null, and undefined state:
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/shallow-routing/shallow-routing.test.ts
+    const previousWindow = (globalThis as any).window;
+    const historyMetadataKey = "__vinext_previousNextUrl";
+    const win = {
+      location: {
+        pathname: "/photo/1",
+        search: "",
+        hash: "",
+        href: "http://localhost/photo/1",
+        origin: "http://localhost",
+      },
+      history: {
+        state: { [historyMetadataKey]: "/feed" } as unknown,
+        pushState(data: unknown, _unused: string, url?: string | URL | null) {
+          this.state = data;
+          if (!url) return;
+          const parsed = new URL(url, win.location.href);
+          win.location.pathname = parsed.pathname;
+          win.location.search = parsed.search;
+          win.location.hash = parsed.hash;
+          win.location.href = parsed.href;
+        },
+        replaceState(data: unknown, _unused: string, url?: string | URL | null) {
+          this.state = data;
+          if (!url) return;
+          const parsed = new URL(url, win.location.href);
+          win.location.pathname = parsed.pathname;
+          win.location.search = parsed.search;
+          win.location.hash = parsed.hash;
+          win.location.href = parsed.href;
+        },
+      },
+      addEventListener: vi.fn(),
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      await import("../packages/vinext/src/shims/navigation.js");
+
+      win.history.pushState({ myData: { foo: "bar" } }, "", "/photo/1?filter=active");
+      expect(win.history.state).toEqual({
+        myData: { foo: "bar" },
+        [historyMetadataKey]: "/feed",
+      });
+
+      win.history.pushState(null, "", "/photo/1?filter=pending");
+      expect(win.history.state).toEqual({
+        [historyMetadataKey]: "/feed",
+      });
+
+      win.history.replaceState(null, "", "/photo/1?filter=archived");
+      expect(win.history.state).toEqual({
+        [historyMetadataKey]: "/feed",
+      });
+
+      win.history.replaceState(undefined, "", "/photo/1?filter=all");
+      expect(win.history.state).toEqual({
+        [historyMetadataKey]: "/feed",
+      });
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
   it("exports redirect, notFound, permanentRedirect", async () => {
     const nav = await import("../packages/vinext/src/shims/navigation.js");
     expect(typeof nav.redirect).toBe("function");
@@ -11047,6 +11121,132 @@ describe("Pages Router concurrent navigation", () => {
       expectedBrowserUrl: "/app/router-events-test#section-1",
       expectedEventUrl: "/router-events-test#section-1",
     });
+  });
+
+  it("scrolls hash-only pushes to URI-decoded id targets", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    (globalThis as any).window = win;
+
+    const target = { scrollIntoView: vi.fn() };
+    const getElementById = vi.fn((id: string) => (id === "hello world" ? target : null));
+    const getElementsByName = vi.fn(() => []);
+    (globalThis as any).document = { getElementById, getElementsByName };
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("hash-only navigations must not fetch page HTML");
+    });
+    vi.resetModules();
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push("#hello%20world");
+
+      expect(result).toBe(true);
+      expect(getElementById).toHaveBeenCalledWith("hello world");
+      expect(getElementsByName).not.toHaveBeenCalled();
+      expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto" });
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("scrolls hash-only pushes to named anchors when no id matches", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    (globalThis as any).window = win;
+
+    const target = { scrollIntoView: vi.fn() };
+    const getElementById = vi.fn(() => null);
+    const getElementsByName = vi.fn((name: string) => (name === "legacy-anchor" ? [target] : []));
+    (globalThis as any).document = { getElementById, getElementsByName };
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("hash-only navigations must not fetch page HTML");
+    });
+    vi.resetModules();
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push("#legacy-anchor");
+
+      expect(result).toBe(true);
+      expect(getElementById).toHaveBeenCalledWith("legacy-anchor");
+      expect(getElementsByName).toHaveBeenCalledWith("legacy-anchor");
+      expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto" });
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not scroll hash-only pushes when scroll is false", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    (globalThis as any).window = win;
+
+    const target = { scrollIntoView: vi.fn() };
+    const getElementById = vi.fn(() => target);
+    const getElementsByName = vi.fn(() => []);
+    (globalThis as any).document = { getElementById, getElementsByName };
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("hash-only navigations must not fetch page HTML");
+    });
+    vi.resetModules();
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push("#legacy-anchor", undefined, { scroll: false });
+
+      expect(result).toBe(true);
+      expect(getElementById).not.toHaveBeenCalled();
+      expect(getElementsByName).not.toHaveBeenCalled();
+      expect(target.scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
+      }
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("does not strip app-relative targets that start with the basePath segment", async () => {
