@@ -14,5 +14,13 @@
       "vinext/shims/*": ["./packages/vinext/src/shims/*"]
     }
   },
+  "include": [
+    "*.ts",
+    "*.tsx",
+    "packages/vinext/src/**/*.ts",
+    "packages/vinext/src/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx"
+  ],
   "exclude": ["node_modules", "dist", "fixtures", "tests/fixtures", "benchmarks", "examples"]
 }
