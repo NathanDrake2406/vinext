@@ -253,7 +253,7 @@ function stubWindow(href: string) {
 }
 
 function createDeferred(): { resolve: () => void; promise: Promise<void> } {
-  let resolve = () => {
+  let resolve: () => void = () => {
     throw new Error("Promise was not initialized");
   };
   const promise = new Promise<void>((resolveInner) => {
@@ -3026,7 +3026,7 @@ describe("createPopstateRestoreHandler", () => {
       getActiveNavigationId: () => activeNavigationId,
       getNavigate: () => {
         activeNavigationId += 1;
-        return (href: string) => popstate();
+        return () => popstate();
       },
       getPendingNavigation: () => window.__VINEXT_RSC_PENDING__,
       isCurrentNavigation: (navId) => navId === activeNavigationId,

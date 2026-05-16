@@ -458,66 +458,65 @@ describe("app server action execution helpers", () => {
     expect((await request.formData()).get("field")).toBe("value");
   });
 
-  it("passes HTTP fallback errors as actionError to be rendered by error boundaries", async () => {
-    for (const digest of ["NEXT_NOT_FOUND", "NEXT_HTTP_ERROR_FALLBACK;403"]) {
+  it("maps action HTTP fallback errors to status responses", async () => {
+    for (const [digest, statusCode] of [
+      ["NEXT_NOT_FOUND", 404],
+      ["NEXT_HTTP_ERROR_FALLBACK;403", 403],
+    ]) {
       const clearContext = vi.fn();
       const reportedErrors: Error[] = [];
 
-      const result = await handleProgressiveServerActionRequest(
-        createOptions({
-          clearRequestContext: clearContext,
-          async decodeAction() {
-            return () => {
-              throw { digest };
-            };
-          },
-          reportRequestError(error) {
-            reportedErrors.push(error);
-          },
-        }),
+      const response = requireProgressiveActionResponse(
+        await handleProgressiveServerActionRequest(
+          createOptions({
+            clearRequestContext: clearContext,
+            async decodeAction() {
+              return () => {
+                throw { digest };
+              };
+            },
+            reportRequestError(error) {
+              reportedErrors.push(error);
+            },
+          }),
+        ),
       );
 
-      expect(result).toEqual({
-        kind: "form-state",
-        formState: null,
-        actionError: { digest },
-      });
+      expect(response.status).toBe(statusCode);
       expect(reportedErrors).toEqual([]);
-      expect(clearContext).not.toHaveBeenCalled(); // Let app-rsc-handler clear it after render
+      expect(clearContext).toHaveBeenCalledTimes(1);
     }
   });
 
-  it("passes action execution failures as actionError to be rendered by error boundaries", async () => {
+  it("reports action execution failures and clears pending cookies", async () => {
     const reportedErrors: Error[] = [];
     const clearedCookies = vi.fn(() => ["session=1; Path=/"]);
     const clearContext = vi.fn();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const error = new Error("boom");
-    const result = await handleProgressiveServerActionRequest(
-      createOptions({
-        cleanPathname: "/action-source",
-        clearRequestContext: clearContext,
-        async decodeAction() {
-          return () => {
-            throw error;
-          };
-        },
-        getAndClearPendingCookies: clearedCookies,
-        reportRequestError(err) {
-          reportedErrors.push(err);
-        },
-      }),
+    const response = requireProgressiveActionResponse(
+      await handleProgressiveServerActionRequest(
+        createOptions({
+          cleanPathname: "/action-source",
+          clearRequestContext: clearContext,
+          async decodeAction() {
+            return () => {
+              throw new Error("boom");
+            };
+          },
+          getAndClearPendingCookies: clearedCookies,
+          reportRequestError(error) {
+            reportedErrors.push(error);
+          },
+        }),
+      ),
     );
 
-    expect(result).toEqual({
-      kind: "form-state",
-      formState: null,
-      actionError: error,
-    });
-    expect(reportedErrors.map((e) => e.message)).toEqual(["boom"]);
-    expect(clearedCookies).not.toHaveBeenCalled(); // Only cleared if response is rendered here
-    expect(clearContext).not.toHaveBeenCalled(); // Handled by app-rsc-handler
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("Server action failed: boom");
+    expect(reportedErrors.map((error) => error.message)).toEqual(["boom"]);
+    expect(clearedCookies).toHaveBeenCalledTimes(1);
+    expect(clearContext).toHaveBeenCalledTimes(1);
 
     errorSpy.mockRestore();
   });
