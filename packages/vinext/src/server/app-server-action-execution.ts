@@ -73,12 +73,17 @@ type AppServerActionRoute = {
   pattern: string;
 };
 
-type ProgressiveServerActionResult = {
-  actionError?: unknown;
-  actionFailed?: boolean;
-  formState: ReactFormState | null;
-  kind: "form-state";
-};
+type ProgressiveServerActionResult =
+  | {
+      formState: ReactFormState | null;
+      kind: "form-state";
+    }
+  | {
+      actionError: unknown;
+      actionFailed: true;
+      formState: null;
+      kind: "form-state";
+    };
 
 type AppServerActionMatch<TRoute extends AppServerActionRoute> = {
   params: AppPageParams;

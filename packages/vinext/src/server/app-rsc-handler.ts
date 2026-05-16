@@ -118,6 +118,18 @@ type HandleProgressiveActionRequestOptions = {
   request: Request;
 };
 
+type ProgressiveActionFormStateResult =
+  | {
+      formState: ReactFormState | null;
+      kind: "form-state";
+    }
+  | {
+      actionError: unknown;
+      actionFailed: true;
+      formState: null;
+      kind: "form-state";
+    };
+
 type HandleServerActionRequestOptions = {
   actionId: string | null;
   cleanPathname: string;
@@ -167,16 +179,9 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
     options: DispatchMatchedRouteHandlerOptions<TRoute>,
   ) => Promise<Response>;
   ensureInstrumentation?: () => Promise<void>;
-  handleProgressiveActionRequest: (options: HandleProgressiveActionRequestOptions) => Promise<
-    | Response
-    | {
-        actionError?: unknown;
-        actionFailed?: boolean;
-        formState: ReactFormState | null;
-        kind: "form-state";
-      }
-    | null
-  >;
+  handleProgressiveActionRequest: (
+    options: HandleProgressiveActionRequestOptions,
+  ) => Promise<Response | ProgressiveActionFormStateResult | null>;
   handleServerActionRequest: (
     options: HandleServerActionRequestOptions,
   ) => Promise<Response | null>;
@@ -429,8 +434,12 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   if (progressiveActionResult instanceof Response) return progressiveActionResult;
   const isProgressiveActionRender = progressiveActionResult?.kind === "form-state";
   const formState = isProgressiveActionRender ? progressiveActionResult.formState : null;
-  const actionError = isProgressiveActionRender ? progressiveActionResult.actionError : undefined;
-  const actionFailed = isProgressiveActionRender && progressiveActionResult.actionFailed === true;
+  const failedProgressiveActionResult =
+    isProgressiveActionRender && "actionFailed" in progressiveActionResult
+      ? progressiveActionResult
+      : null;
+  const actionFailed = failedProgressiveActionResult !== null;
+  const actionError = failedProgressiveActionResult?.actionError;
 
   const serverActionResponse = await options.handleServerActionRequest({
     actionId,
