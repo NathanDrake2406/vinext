@@ -6,6 +6,7 @@ import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/ro
 import { isValidModulePath } from "../packages/vinext/src/client/validate-module-path.js";
 import vinext from "../packages/vinext/src/index.js";
 import type { Plugin } from "vite-plus";
+import type { NextRouter } from "../packages/vinext/src/shims/router.js";
 import type {
   CacheHandler,
   CacheHandlerValue,
@@ -1518,6 +1519,31 @@ describe("window.next debug global", () => {
 describe("next/router withRouter HOC", () => {
   let previousWindow: unknown;
 
+  function createTestRouter(overrides: Partial<NextRouter> = {}): NextRouter {
+    const router: NextRouter = {
+      pathname: "/provided",
+      route: "/provided",
+      query: {},
+      asPath: "/provided",
+      basePath: "",
+      isReady: true,
+      isPreview: false,
+      isFallback: false,
+      push: vi.fn(async () => true),
+      replace: vi.fn(async () => true),
+      back: vi.fn(),
+      reload: vi.fn(),
+      prefetch: vi.fn(async () => {}),
+      beforePopState: vi.fn(),
+      events: {
+        on: vi.fn(),
+        off: vi.fn(),
+        emit: vi.fn(),
+      },
+    };
+    return { ...router, ...overrides };
+  }
+
   beforeEach(() => {
     previousWindow = (globalThis as any).window;
     (globalThis as any).window = {
@@ -1538,6 +1564,107 @@ describe("next/router withRouter HOC", () => {
     expect(typeof withRouter).toBe("function");
   });
 
+  it("next/router useRouter reads the mounted RouterContext value", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter } = await import("../packages/vinext/src/shims/router.js");
+    const { RouterContext } =
+      await import("../packages/vinext/src/shims/internal/router-context.js");
+
+    const providedRouter = createTestRouter({ pathname: "/from-context" });
+    let captured: NextRouter | null = null;
+
+    function Probe() {
+      captured = useRouter();
+      return React.createElement("span", null, "ok");
+    }
+
+    renderToStaticMarkup(
+      React.createElement(
+        RouterContext.Provider,
+        { value: providedRouter },
+        React.createElement(Probe),
+      ),
+    );
+
+    expect(captured).toBe(providedRouter);
+  });
+
+  it("next/router useRouter throws when the Pages Router context is not mounted", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter } = await import("../packages/vinext/src/shims/router.js");
+
+    function Probe() {
+      useRouter();
+      return React.createElement("span", null, "ok");
+    }
+
+    expect(() => renderToStaticMarkup(React.createElement(Probe))).toThrow(
+      "NextRouter was not mounted",
+    );
+  });
+
+  it("next/router useRouter does not subscribe once per hook call", async () => {
+    const previousWindowForMock = (globalThis as any).window;
+    const addEventListener = vi.fn();
+    const providedRouter = createTestRouter();
+
+    (globalThis as any).window = {
+      location: { pathname: "/", search: "", hash: "", href: "http://localhost/" },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener,
+      removeEventListener: vi.fn(),
+      __NEXT_DATA__: { page: "/", query: {}, isFallback: false },
+    };
+
+    vi.resetModules();
+    vi.doMock("react", () => {
+      const react = {
+        createContext(defaultValue: unknown) {
+          return { Provider: "Provider", Consumer: "Consumer", defaultValue };
+        },
+        createElement(type: unknown, props: unknown, ...children: unknown[]) {
+          return { type, props, children };
+        },
+        useContext() {
+          return providedRouter;
+        },
+        useState(initialValue: unknown) {
+          return [typeof initialValue === "function" ? initialValue() : initialValue, vi.fn()];
+        },
+        useEffect(effect: () => void | (() => void)) {
+          effect();
+        },
+        useMemo(factory: () => unknown) {
+          return factory();
+        },
+      };
+      return { ...react, default: react };
+    });
+
+    try {
+      const { useRouter } = await import("../packages/vinext/src/shims/router.js");
+
+      expect(useRouter()).toBe(providedRouter);
+      expect(useRouter()).toBe(providedRouter);
+      expect(useRouter()).toBe(providedRouter);
+
+      const navigateListenerCalls = addEventListener.mock.calls.filter(
+        (call) => call[0] === "vinext:navigate",
+      );
+      expect(navigateListenerCalls).toHaveLength(0);
+    } finally {
+      vi.doUnmock("react");
+      if (previousWindowForMock === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindowForMock;
+      }
+      vi.resetModules();
+    }
+  });
+
   it("withRouter wraps a component and forwards static props", async () => {
     const { withRouter } = await import("../packages/vinext/src/shims/router.js");
     const React = await import("react");
@@ -1554,7 +1681,8 @@ describe("next/router withRouter HOC", () => {
   });
 
   it("withRouter injects a router prop into the wrapped component", async () => {
-    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    const { withRouter, wrapWithRouterContext } =
+      await import("../packages/vinext/src/shims/router.js");
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
 
@@ -1567,7 +1695,9 @@ describe("next/router withRouter HOC", () => {
     };
 
     const Wrapped = withRouter(Inner);
-    const html = renderToStaticMarkup(React.createElement(Wrapped as any, { label: "hi" }));
+    const html = renderToStaticMarkup(
+      wrapWithRouterContext(React.createElement(Wrapped, { label: "hi" })),
+    );
     expect(html).toBe("<span>ok</span>");
     expect(receivedLabel).toBe("hi");
     // router must be the NextRouter shape (push/replace/back/...).
@@ -1587,7 +1717,8 @@ describe("next/router withRouter HOC", () => {
   // so a user-passed `router` prop overrides the HOC-injected one. If the
   // spread order is ever inverted in the shim, this test fails.
   it("user-passed router prop overrides the HOC-injected router (Next.js spread order)", async () => {
-    const { withRouter } = await import("../packages/vinext/src/shims/router.js");
+    const { withRouter, wrapWithRouterContext } =
+      await import("../packages/vinext/src/shims/router.js");
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
 
@@ -1599,7 +1730,10 @@ describe("next/router withRouter HOC", () => {
 
     const Wrapped = withRouter(Inner);
     const userRouter = { sentinel: "user-provided" };
-    renderToStaticMarkup(React.createElement(Wrapped as any, { router: userRouter }));
+    const WrappedWithOverride = Wrapped as React.ComponentType<{ router: unknown }>;
+    renderToStaticMarkup(
+      wrapWithRouterContext(React.createElement(WrappedWithOverride, { router: userRouter })),
+    );
     // Last spread wins: the user-passed router survives.
     expect(receivedRouter).toBe(userRouter);
   });
@@ -10396,6 +10530,79 @@ describe("Pages Router router helpers", () => {
         "",
         "/search?page=2&draft=false&empty=&missing=&tag=a&tag=b",
       );
+    } finally {
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+
+  it("updates dynamic route params from the URL after shallow navigation", async () => {
+    // Ported from Next.js: test/e2e/middleware-rewrites/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-rewrites/test/index.test.ts
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter: useCompatRouter } =
+      await import("../packages/vinext/src/shims/compat-router.js");
+    const routerModule = await import("../packages/vinext/src/shims/router.js");
+
+    const previousWindow = (globalThis as any).window;
+    const win = {
+      location: {
+        pathname: "/posts/42",
+        search: "",
+        hash: "",
+        href: "http://localhost/posts/42",
+        hostname: "localhost",
+        assign: vi.fn(),
+        replace: vi.fn(),
+        reload: vi.fn(),
+      },
+      history: {
+        state: null,
+        pushState: vi.fn((_state: unknown, _title: string, url: string) => {
+          const nextUrl = new URL(url, win.location.href);
+          win.location.pathname = nextUrl.pathname;
+          win.location.search = nextUrl.search;
+          win.location.hash = nextUrl.hash;
+          win.location.href = nextUrl.href;
+        }),
+        replaceState: vi.fn(),
+        back: vi.fn(),
+      },
+      dispatchEvent: vi.fn(),
+      scrollTo: vi.fn(),
+      scrollX: 0,
+      scrollY: 0,
+      __NEXT_DATA__: {
+        page: "/posts/[id]",
+        query: { id: "42" },
+        isFallback: false,
+      },
+      __VINEXT_LOCALE__: undefined,
+      __VINEXT_LOCALES__: undefined,
+      __VINEXT_DEFAULT_LOCALE__: undefined,
+    };
+    (globalThis as any).window = win;
+
+    try {
+      await routerModule.default.push("/posts/43", undefined, { shallow: true });
+
+      let captured: unknown = "NOT_SET";
+      function Probe() {
+        captured = useCompatRouter();
+        return React.createElement("div", null, "probe");
+      }
+
+      renderToStaticMarkup(routerModule.wrapWithRouterContext(React.createElement(Probe)));
+
+      expect(captured).not.toBeNull();
+      expect((captured as any).pathname).toBe("/posts/[id]");
+      expect((captured as any).asPath).toBe("/posts/43");
+      expect((captured as any).query).toEqual({ id: "43" });
+      expect(win.__NEXT_DATA__.query).toEqual({ id: "42" });
     } finally {
       if (previousWindow === undefined) {
         delete (globalThis as any).window;
