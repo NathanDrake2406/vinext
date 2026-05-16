@@ -32,7 +32,12 @@ import { AppElementsWire } from "../server/app-elements.js";
 import { createRscRequestHeaders, createRscRequestUrl } from "../server/app-rsc-cache-busting.js";
 import { VINEXT_MOUNTED_SLOTS_HEADER } from "../server/headers.js";
 import { isDangerousScheme } from "./url-safety.js";
-import { canLinkPrefetch, getLinkPrefetchHref } from "./link-prefetch.js";
+import {
+  canLinkIntentPrefetch,
+  canLinkPrefetch,
+  getLinkPrefetchHref,
+  type LinkPrefetchRouterMode,
+} from "./link-prefetch.js";
 import {
   resolveRelativeHref,
   toBrowserNavigationHref,
@@ -146,6 +151,12 @@ function toSameOriginRouteHref(href: string): string | null {
   return `${stripBasePath(url.pathname, __basePath)}${url.search}`;
 }
 
+function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
+  return typeof window !== "undefined" && typeof window.__VINEXT_RSC_NAVIGATE__ === "function"
+    ? "app"
+    : "pages";
+}
+
 export function canAutoPrefetchFullAppRoute(href: string): boolean {
   if (typeof window === "undefined") return false;
 
@@ -248,8 +259,10 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
 let sharedObserver: IntersectionObserver | null = null;
 type LinkPrefetchInstance = {
   href: string;
-  mode: LinkPrefetchMode;
   isVisible: boolean;
+  mode: LinkPrefetchMode;
+  routerMode: LinkPrefetchRouterMode;
+  viewportPrefetched: boolean;
 };
 
 const observedLinkPrefetches = new WeakMap<Element, LinkPrefetchInstance>();
@@ -259,7 +272,9 @@ function setVisibleLinkPrefetch(instance: LinkPrefetchInstance, isVisible: boole
   instance.isVisible = isVisible;
   if (isVisible) {
     visibleLinkPrefetches.add(instance);
+    if (instance.routerMode === "pages" && instance.viewportPrefetched) return;
     prefetchUrl(instance.href, instance.mode, "low");
+    instance.viewportPrefetched = true;
   } else {
     visibleLinkPrefetches.delete(instance);
   }
@@ -272,7 +287,7 @@ function registerVisibleLinkPing(): void {
 
 function pingVisibleLinkPrefetches(): void {
   for (const instance of visibleLinkPrefetches) {
-    if (instance.isVisible) {
+    if (instance.isVisible && instance.routerMode === "app") {
       prefetchUrl(instance.href, instance.mode, "low");
     }
   }
@@ -407,7 +422,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   // into a full RSC prefetch, matching Next.js's public prefetch contract.
   const internalRef = useRef<HTMLAnchorElement | null>(null);
   const prefetchMode = resolveLinkPrefetchMode(prefetchProp, isDangerous);
-  const shouldPrefetch = canLinkPrefetch({
+  const shouldViewportPrefetch = canLinkPrefetch({
     nodeEnv: process.env.NODE_ENV,
     prefetch: prefetchProp,
     isDangerous,
@@ -424,7 +439,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   );
 
   useEffect(() => {
-    if (!shouldPrefetch || typeof window === "undefined") return;
+    if (!shouldViewportPrefetch || typeof window === "undefined") return;
     const node = internalRef.current;
     if (!node) return;
 
@@ -441,8 +456,10 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     registerVisibleLinkPing();
     const instance: LinkPrefetchInstance = {
       href: hrefToPrefetch,
-      mode: prefetchMode,
       isVisible: false,
+      mode: prefetchMode,
+      routerMode: getLinkPrefetchRouterMode(),
+      viewportPrefetched: false,
     };
     observedLinkPrefetches.set(node, instance);
     observer.observe(node);
@@ -452,10 +469,19 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       observedLinkPrefetches.delete(node);
       visibleLinkPrefetches.delete(instance);
     };
-  }, [shouldPrefetch, prefetchMode, localizedHref]);
+  }, [shouldViewportPrefetch, prefetchMode, localizedHref]);
 
   const prefetchOnIntent = useCallback(() => {
-    if (!shouldPrefetch) return;
+    if (
+      !canLinkIntentPrefetch({
+        nodeEnv: process.env.NODE_ENV,
+        prefetch: prefetchProp,
+        isDangerous,
+        routerMode: getLinkPrefetchRouterMode(),
+      })
+    ) {
+      return;
+    }
     const intentMode = unstable_dynamicOnHover ? "full" : prefetchMode;
     if (unstable_dynamicOnHover && internalRef.current) {
       const instance = observedLinkPrefetches.get(internalRef.current);
@@ -464,7 +490,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       }
     }
     prefetchUrl(localizedHref, intentMode, "high");
-  }, [shouldPrefetch, prefetchMode, localizedHref, unstable_dynamicOnHover]);
+  }, [prefetchProp, isDangerous, prefetchMode, localizedHref, unstable_dynamicOnHover]);
 
   const handleMouseEnter = useCallback(
     (e: MouseEvent<HTMLAnchorElement>) => {
