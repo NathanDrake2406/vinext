@@ -4,6 +4,7 @@ import {
   getMountedSlotIds,
   getMountedSlotIdsHeader,
   type AppElements,
+  type AppElementsInterception,
   type AppElementsSlotBinding,
   type LayoutFlags,
 } from "./app-elements.js";
@@ -56,6 +57,7 @@ export type OperationRecord = PendingOperationRecord | CommittedOperationRecord;
 export type AppRouterState = {
   activeOperation: OperationRecord | null;
   elements: AppElements;
+  interception: AppElementsInterception | null;
   interceptionContext: string | null;
   layoutFlags: LayoutFlags;
   layoutIds: readonly string[];
@@ -70,6 +72,7 @@ export type AppRouterState = {
 
 export type AppRouterAction = {
   elements: AppElements;
+  interception: AppElementsInterception | null;
   interceptionContext: string | null;
   layoutFlags: LayoutFlags;
   layoutIds: readonly string[];
@@ -85,6 +88,7 @@ export type AppRouterAction = {
 
 export type PendingNavigationCommit = {
   action: AppRouterAction;
+  interception: AppElementsInterception | null;
   interceptionContext: string | null;
   previousNextUrl: string | null;
   rootLayoutTreePath: string | null;
@@ -252,6 +256,8 @@ function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
   const displayUrl = createNavigationSnapshotUrl(state.navigationSnapshot);
   return {
     displayUrl,
+    interception: state.interception,
+    interceptionContext: state.interceptionContext,
     layoutIds: state.layoutIds,
     // `displayUrl` preserves the browser-visible query string for decisions and
     // traces. `matchedUrl` stays path-only because route matching has already
@@ -268,6 +274,8 @@ function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnap
   const displayUrl = createNavigationSnapshotUrl(pending.action.navigationSnapshot);
   return {
     displayUrl,
+    interception: pending.action.interception,
+    interceptionContext: pending.action.interceptionContext,
     layoutIds: pending.action.layoutIds,
     // See createVisibleRouteSnapshot: matchedUrl intentionally models the route
     // identity, not the address bar URL.
@@ -375,14 +383,16 @@ export async function createPendingNavigationCommit(options: {
 }): Promise<PendingNavigationCommit> {
   const elements = await options.nextElements;
   const metadata = AppElementsWire.readMetadata(elements);
-  const previousNextUrl =
+  const requestedPreviousNextUrl =
     options.previousNextUrl !== undefined
       ? options.previousNextUrl
       : options.currentState.previousNextUrl;
+  const previousNextUrl = metadata.interception === null ? null : requestedPreviousNextUrl;
 
   return {
     action: {
       elements,
+      interception: metadata.interception,
       interceptionContext: metadata.interceptionContext,
       layoutIds: metadata.layoutIds,
       layoutFlags: metadata.layoutFlags,
@@ -400,6 +410,7 @@ export async function createPendingNavigationCommit(options: {
       type: options.type,
     },
     // Convenience aliases — always equal action.interceptionContext / action.rootLayoutTreePath / action.routeId.
+    interception: metadata.interception,
     interceptionContext: metadata.interceptionContext,
     previousNextUrl,
     rootLayoutTreePath: metadata.rootLayoutTreePath,

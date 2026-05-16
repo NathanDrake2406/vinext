@@ -10,7 +10,7 @@ import {
   type AppPageRouteWiringRoute,
   type AppPageSlotOverride,
 } from "./app-page-route-wiring.js";
-import { AppElementsWire, type AppElements } from "./app-elements.js";
+import { AppElementsWire, type AppElements, type AppElementsInterception } from "./app-elements.js";
 import type { AppPageParams } from "./app-page-boundary.js";
 import { matchRoutePattern } from "../routing/route-pattern.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
@@ -38,7 +38,9 @@ export type AppPageInterceptOptions<TModule extends AppPageModule = AppPageModul
   interceptLayouts?: readonly (TModule | null | undefined)[] | null;
   interceptPage?: TModule | null;
   interceptParams?: AppPageParams | null;
+  interceptSlotId?: string | null;
   interceptSlotKey?: string | null;
+  interceptSourceMatchedUrl?: string | null;
 };
 
 export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = {
@@ -118,6 +120,7 @@ export async function buildPageElements<
   const pageModule: AppPageModule | null | undefined = route.page;
   const PageComponent = pageModule?.default;
   const hasPageModule = !!pageModule;
+  const interception = createAppPageInterceptionProof(routePath, opts);
 
   if (hasPageModule && !PageComponent) {
     const interceptionContext = opts?.interceptionContext ?? null;
@@ -136,6 +139,7 @@ export async function buildPageElements<
     }
     return {
       ...AppElementsWire.createMetadataEntries({
+        interception,
         interceptionContext,
         layoutIds: noExportLayoutIds,
         rootLayoutTreePath: noExportRootLayout,
@@ -193,6 +197,7 @@ export async function buildPageElements<
     resolvedMetadata,
     resolvedViewport,
     interceptionContext: opts?.interceptionContext ?? null,
+    interception,
     routePath,
     rootNotFoundModule: rootNotFoundModule ?? null,
     rootForbiddenModule: rootForbiddenModule ?? null,
@@ -201,6 +206,23 @@ export async function buildPageElements<
     slotOverrides,
     renderMode,
   });
+}
+
+function createAppPageInterceptionProof<TModule extends AppPageModule>(
+  routePath: string,
+  opts?: AppPageInterceptOptions<TModule> | null,
+): AppElementsInterception | null {
+  const sourceMatchedUrl = opts?.interceptSourceMatchedUrl ?? null;
+  const slotId = opts?.interceptSlotId ?? null;
+  if (sourceMatchedUrl === null || slotId === null) return null;
+
+  return {
+    sourceMatchedUrl,
+    sourceRouteId: AppElementsWire.encodeRouteId(sourceMatchedUrl, null),
+    slotId,
+    targetMatchedUrl: routePath,
+    targetRouteId: AppElementsWire.encodeRouteId(routePath, null),
+  };
 }
 
 /**

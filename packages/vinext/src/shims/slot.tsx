@@ -6,6 +6,7 @@ import {
   UNMATCHED_SLOT,
   type AppElementValue,
   type AppElements,
+  type AppElementsInterception,
   type AppElementsSlotBinding,
   type LayoutFlags,
 } from "../server/app-elements.js";
@@ -71,12 +72,28 @@ function isSlotBindingListValue(value: unknown): value is readonly AppElementsSl
   return Array.isArray(value) && value.length > 0 && value.every(isSlotBindingValue);
 }
 
+function isInterceptionMetadataValue(value: unknown): value is AppElementsInterception {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return (
+    "sourceMatchedUrl" in value &&
+    "sourceRouteId" in value &&
+    "slotId" in value &&
+    "targetMatchedUrl" in value &&
+    "targetRouteId" in value
+  );
+}
+
 function isTransportMetadataValue(
   value: AppElementValue | undefined,
-): value is LayoutFlags | ArtifactCompatibilityEnvelope | readonly AppElementsSlotBinding[] {
+): value is
+  | LayoutFlags
+  | ArtifactCompatibilityEnvelope
+  | AppElementsInterception
+  | readonly AppElementsSlotBinding[] {
   return (
     isLayoutFlagsValue(value) ||
     isArtifactCompatibilityEnvelopeValue(value) ||
+    isInterceptionMetadataValue(value) ||
     isSlotBindingListValue(value)
   );
 }

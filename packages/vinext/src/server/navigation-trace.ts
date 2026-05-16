@@ -4,6 +4,11 @@ export type NavigationTraceSchemaVersion = 0;
 
 export const NavigationTraceReasonCodes = {
   commitCurrent: "NC_COMMIT",
+  interceptedCommitCurrent: "NC_INTERCEPT_COMMIT",
+  interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT",
+  interceptedRejectedMissingProof: "NC_INTERCEPT_REJECT_MISSING_PROOF",
+  interceptedRejectedMissingSlotProof: "NC_INTERCEPT_REJECT_SLOT",
+  interceptedRejectedUnknownSource: "NC_INTERCEPT_REJECT_SOURCE",
   prefetchOnly: "NC_PREFETCH_ONLY",
   requestWork: "NC_REQUEST",
   rootBoundaryChanged: "NC_ROOT",
@@ -11,6 +16,11 @@ export const NavigationTraceReasonCodes = {
   staleOperation: "NC_STALE",
 } satisfies Readonly<{
   commitCurrent: "NC_COMMIT";
+  interceptedCommitCurrent: "NC_INTERCEPT_COMMIT";
+  interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT";
+  interceptedRejectedMissingProof: "NC_INTERCEPT_REJECT_MISSING_PROOF";
+  interceptedRejectedMissingSlotProof: "NC_INTERCEPT_REJECT_SLOT";
+  interceptedRejectedUnknownSource: "NC_INTERCEPT_REJECT_SOURCE";
   prefetchOnly: "NC_PREFETCH_ONLY";
   requestWork: "NC_REQUEST";
   rootBoundaryChanged: "NC_ROOT";
