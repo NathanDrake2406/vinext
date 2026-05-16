@@ -137,6 +137,14 @@ declare global {
      */
     __VINEXT_RSC_PREFETCHED_URLS__: Set<string> | undefined;
 
+    /**
+     * Re-prefetches currently visible App Router links after cache invalidation
+     * or router-state changes. Installed by `next/link` when Link is loaded on
+     * the client; called opportunistically by navigation/cache owners without a
+     * direct import to avoid a circular dependency.
+     */
+    __VINEXT_PING_VISIBLE_LINKS__: (() => void) | undefined;
+
     // ── Next.js conventional globals ────────────────────────────────────────
     //
     // `__NEXT_DATA__` is already declared by `next/dist/client/index.d.ts` as
@@ -156,14 +164,16 @@ declare global {
   // compatibility with Web Workers (where `window` is undefined).
 
   /**
-   * Array of RSC Flight protocol text chunks streamed progressively by the
-   * server via inline `<script>` tags.
+   * Array of RSC Flight protocol chunks streamed progressively by the server
+   * via inline `<script>` tags. Text chunks are stored directly; non-UTF-8
+   * chunks are stored as `[3, base64]` binary chunks, matching Next.js'
+   * inlined Flight payload kind.
    * Each `<script>` calls `self.__VINEXT_RSC_CHUNKS__.push(chunk)`.
    * The browser RSC entry monkey-patches this array's `push` method to feed a
    * `ReadableStream` that is consumed by `react-server-dom-webpack`.
    */
   // oxlint-disable-next-line no-var
-  var __VINEXT_RSC_CHUNKS__: string[] | undefined;
+  var __VINEXT_RSC_CHUNKS__: (string | [3, string])[] | undefined;
 
   /**
    * Set to `true` by a final inline `<script>` when the server has finished
@@ -203,7 +213,9 @@ declare global {
    *   `__VINEXT_RSC_PARAMS__` instead.
    */
   // oxlint-disable-next-line no-var
-  var __VINEXT_RSC__: { rsc: string[]; params: Record<string, string | string[]> } | undefined;
+  var __VINEXT_RSC__:
+    | { rsc: (string | [3, string])[]; params: Record<string, string | string[]> }
+    | undefined;
 
   // ── globalThis globals — server-side / Cloudflare Workers ─────────────────
   //

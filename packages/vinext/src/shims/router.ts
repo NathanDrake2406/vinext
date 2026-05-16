@@ -32,6 +32,7 @@ import {
   type UrlQuery,
   urlQueryToSearchParams,
 } from "../utils/query.js";
+import { scrollToHashTarget } from "./hash-scroll.js";
 
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
@@ -204,16 +205,6 @@ export function isHashOnlyChange(href: string): boolean {
   if (href.startsWith("#")) return true;
   if (typeof window === "undefined") return false;
   return isHashOnlyBrowserUrlChange(href, window.location.href, __basePath);
-}
-
-/** Scroll to hash target element, or top if no hash */
-function scrollToHash(hash: string): void {
-  if (!hash || hash === "#") {
-    window.scrollTo(0, 0);
-    return;
-  }
-  const el = document.getElementById(hash.slice(1));
-  if (el) el.scrollIntoView({ behavior: "auto" });
 }
 
 /** Save current scroll position into history state for back/forward restoration */
@@ -644,6 +635,106 @@ function buildRouterValue(
   };
 }
 
+/** Extract the hash fragment from a URL, including the leading `#`. */
+function extractHash(url: string): string {
+  const i = url.indexOf("#");
+  return i === -1 ? "" : url.slice(i);
+}
+
+/** Notify in-page listeners (e.g. useRouter hooks) that navigation occurred. */
+function dispatchNavigateEvent(): void {
+  window.dispatchEvent(new CustomEvent("vinext:navigate"));
+}
+
+/**
+ * Update history with the new URL and refresh the hash-only-detection tracker.
+ * Centralises the `pushState`/`replaceState` branch so callers don't repeat it.
+ */
+function updateHistory(mode: "push" | "replace", url: string): void {
+  if (mode === "push") window.history.pushState({}, "", url);
+  else window.history.replaceState({}, "", url);
+  _lastPathnameAndSearch = window.location.pathname + window.location.search;
+}
+
+/**
+ * Shared client-side navigation flow used by both `useRouter()` and the
+ * `Router` singleton. The only differences between push/replace are the
+ * history method (`pushState` vs `replaceState`), the external-URL fallback
+ * (`assign` vs `replace`), and the fact that push saves scroll position for
+ * back/forward restoration while replace does not.
+ *
+ * `onStateUpdate` lets the hook trigger a `setState` re-render at the same
+ * point that hashChangeComplete/routeChangeComplete fires; the singleton
+ * passes no callback.
+ */
+async function performNavigation(
+  url: string | UrlObject,
+  as: string | undefined,
+  options: TransitionOptions | undefined,
+  mode: "push" | "replace",
+  onStateUpdate?: () => void,
+): Promise<boolean> {
+  let resolved = resolveNavigationTarget(url, as, options?.locale);
+
+  // External URLs — delegate to browser (unless same-origin)
+  if (isExternalUrl(resolved)) {
+    const localPath = toSameOriginAppPath(resolved, __basePath);
+    if (localPath == null) {
+      if (mode === "push") window.location.assign(resolved);
+      else window.location.replace(resolved);
+      return true;
+    }
+    resolved = localPath;
+  }
+
+  const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
+  const shallow = options?.shallow ?? false;
+  const doScroll = options?.scroll !== false;
+
+  // Hash-only change — no page fetch needed
+  if (isHashOnlyChange(full)) {
+    const eventUrl = resolveHashUrl(full);
+    routerEvents.emit("hashChangeStart", eventUrl, { shallow });
+    updateHistory(mode, resolved.startsWith("#") ? resolved : full);
+    if (doScroll) scrollToHashTarget(extractHash(resolved));
+    onStateUpdate?.();
+    routerEvents.emit("hashChangeComplete", eventUrl, { shallow });
+    dispatchNavigateEvent();
+    return true;
+  }
+
+  if (mode === "push") saveScrollPosition();
+  routerEvents.emit("routeChangeStart", resolved, { shallow });
+  routerEvents.emit("beforeHistoryChange", resolved, { shallow });
+  updateHistory(mode, full);
+  if (!shallow) {
+    const result = await runNavigateClient(full, resolved);
+    if (result === "cancelled") return true;
+    if (result === "failed") return false;
+  }
+  onStateUpdate?.();
+  routerEvents.emit("routeChangeComplete", resolved, { shallow });
+
+  const hash = extractHash(resolved);
+  if (doScroll) {
+    if (hash) scrollToHashTarget(hash);
+    else window.scrollTo(0, 0);
+  }
+  dispatchNavigateEvent();
+  return true;
+}
+
+/** Inject a `<link rel="prefetch">` for the target page. */
+async function prefetchUrl(url: string): Promise<void> {
+  if (typeof document !== "undefined") {
+    const link = document.createElement("link");
+    link.rel = "prefetch";
+    link.href = url;
+    link.as = "document";
+    document.head.appendChild(link);
+  }
+}
+
 /**
  * useRouter hook - Pages Router compatible.
  */
@@ -661,121 +752,14 @@ export function useRouter(): NextRouter {
   }, []);
 
   const push = useCallback(
-    async (url: string | UrlObject, as?: string, options?: TransitionOptions): Promise<boolean> => {
-      let resolved = resolveNavigationTarget(url, as, options?.locale);
-
-      // External URLs — delegate to browser (unless same-origin)
-      if (isExternalUrl(resolved)) {
-        const localPath = toSameOriginAppPath(resolved, __basePath);
-        if (localPath == null) {
-          window.location.assign(resolved);
-          return true;
-        }
-        resolved = localPath;
-      }
-
-      const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
-
-      // Hash-only change — no page fetch needed
-      if (isHashOnlyChange(full)) {
-        const eventUrl = resolveHashUrl(full);
-        routerEvents.emit("hashChangeStart", eventUrl, {
-          shallow: options?.shallow ?? false,
-        });
-        const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-        window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
-        _lastPathnameAndSearch = window.location.pathname + window.location.search;
-        scrollToHash(hash);
-        setState(getPathnameAndQuery());
-        routerEvents.emit("hashChangeComplete", eventUrl, {
-          shallow: options?.shallow ?? false,
-        });
-        window.dispatchEvent(new CustomEvent("vinext:navigate"));
-        return true;
-      }
-
-      saveScrollPosition();
-      routerEvents.emit("routeChangeStart", resolved, { shallow: options?.shallow ?? false });
-      routerEvents.emit("beforeHistoryChange", resolved, { shallow: options?.shallow ?? false });
-      window.history.pushState({}, "", full);
-      _lastPathnameAndSearch = window.location.pathname + window.location.search;
-      if (!options?.shallow) {
-        const result = await runNavigateClient(full, resolved);
-        if (result === "cancelled") return true;
-        if (result === "failed") return false;
-      }
-      setState(getPathnameAndQuery());
-      routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
-
-      // Scroll: handle hash target, else scroll to top unless scroll:false
-      const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-      if (hash) {
-        scrollToHash(hash);
-      } else if (options?.scroll !== false) {
-        window.scrollTo(0, 0);
-      }
-      window.dispatchEvent(new CustomEvent("vinext:navigate"));
-      return true;
-    },
+    (url: string | UrlObject, as?: string, options?: TransitionOptions): Promise<boolean> =>
+      performNavigation(url, as, options, "push", () => setState(getPathnameAndQuery())),
     [],
   );
 
   const replace = useCallback(
-    async (url: string | UrlObject, as?: string, options?: TransitionOptions): Promise<boolean> => {
-      let resolved = resolveNavigationTarget(url, as, options?.locale);
-
-      // External URLs — delegate to browser (unless same-origin)
-      if (isExternalUrl(resolved)) {
-        const localPath = toSameOriginAppPath(resolved, __basePath);
-        if (localPath == null) {
-          window.location.replace(resolved);
-          return true;
-        }
-        resolved = localPath;
-      }
-
-      const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
-
-      // Hash-only change — no page fetch needed
-      if (isHashOnlyChange(full)) {
-        const eventUrl = resolveHashUrl(full);
-        routerEvents.emit("hashChangeStart", eventUrl, {
-          shallow: options?.shallow ?? false,
-        });
-        const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-        window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
-        _lastPathnameAndSearch = window.location.pathname + window.location.search;
-        scrollToHash(hash);
-        setState(getPathnameAndQuery());
-        routerEvents.emit("hashChangeComplete", eventUrl, {
-          shallow: options?.shallow ?? false,
-        });
-        window.dispatchEvent(new CustomEvent("vinext:navigate"));
-        return true;
-      }
-
-      routerEvents.emit("routeChangeStart", resolved, { shallow: options?.shallow ?? false });
-      routerEvents.emit("beforeHistoryChange", resolved, { shallow: options?.shallow ?? false });
-      window.history.replaceState({}, "", full);
-      _lastPathnameAndSearch = window.location.pathname + window.location.search;
-      if (!options?.shallow) {
-        const result = await runNavigateClient(full, resolved);
-        if (result === "cancelled") return true;
-        if (result === "failed") return false;
-      }
-      setState(getPathnameAndQuery());
-      routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
-
-      // Scroll: handle hash target, else scroll to top unless scroll:false
-      const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-      if (hash) {
-        scrollToHash(hash);
-      } else if (options?.scroll !== false) {
-        window.scrollTo(0, 0);
-      }
-      window.dispatchEvent(new CustomEvent("vinext:navigate"));
-      return true;
-    },
+    (url: string | UrlObject, as?: string, options?: TransitionOptions): Promise<boolean> =>
+      performNavigation(url, as, options, "replace", () => setState(getPathnameAndQuery())),
     [],
   );
 
@@ -787,16 +771,7 @@ export function useRouter(): NextRouter {
     window.location.reload();
   }, []);
 
-  const prefetch = useCallback(async (url: string): Promise<void> => {
-    // Inject a <link rel="prefetch"> for the target page
-    if (typeof document !== "undefined") {
-      const link = document.createElement("link");
-      link.rel = "prefetch";
-      link.href = url;
-      link.as = "document";
-      document.head.appendChild(link);
-    }
-  }, []);
+  const prefetch = useCallback(prefetchUrl, []);
 
   const router = useMemo(
     (): NextRouter =>
@@ -856,9 +831,9 @@ if (typeof window !== "undefined") {
       // Hash-only back/forward — no page fetch needed
       const hashUrl = appUrl + window.location.hash;
       routerEvents.emit("hashChangeStart", hashUrl, { shallow: false });
-      scrollToHash(window.location.hash);
+      scrollToHashTarget(window.location.hash);
       routerEvents.emit("hashChangeComplete", hashUrl, { shallow: false });
-      window.dispatchEvent(new CustomEvent("vinext:navigate"));
+      dispatchNavigateEvent();
       return;
     }
 
@@ -875,7 +850,7 @@ if (typeof window !== "undefined") {
       if (result === "completed") {
         routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: false });
         restoreScrollPosition(e.state);
-        window.dispatchEvent(new CustomEvent("vinext:navigate"));
+        dispatchNavigateEvent();
       }
       // "cancelled": superseded by a newer navigation, so this popstate no longer wins.
       // "failed": runNavigateClient already scheduled the hard-navigation fallback.
@@ -986,122 +961,13 @@ export function withRouter<P extends WithRouterProps>(
 
 // Also export a default Router singleton for `import Router from 'next/router'`
 const Router = {
-  push: async (url: string | UrlObject, as?: string, options?: TransitionOptions) => {
-    let resolved = resolveNavigationTarget(url, as, options?.locale);
-
-    // External URLs (unless same-origin)
-    if (isExternalUrl(resolved)) {
-      const localPath = toSameOriginAppPath(resolved, __basePath);
-      if (localPath == null) {
-        window.location.assign(resolved);
-        return true;
-      }
-      resolved = localPath;
-    }
-
-    const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
-
-    // Hash-only change
-    if (isHashOnlyChange(full)) {
-      const eventUrl = resolveHashUrl(full);
-      routerEvents.emit("hashChangeStart", eventUrl, {
-        shallow: options?.shallow ?? false,
-      });
-      const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-      window.history.pushState({}, "", resolved.startsWith("#") ? resolved : full);
-      _lastPathnameAndSearch = window.location.pathname + window.location.search;
-      scrollToHash(hash);
-      routerEvents.emit("hashChangeComplete", eventUrl, {
-        shallow: options?.shallow ?? false,
-      });
-      window.dispatchEvent(new CustomEvent("vinext:navigate"));
-      return true;
-    }
-
-    saveScrollPosition();
-    routerEvents.emit("routeChangeStart", resolved, { shallow: options?.shallow ?? false });
-    routerEvents.emit("beforeHistoryChange", resolved, { shallow: options?.shallow ?? false });
-    window.history.pushState({}, "", full);
-    _lastPathnameAndSearch = window.location.pathname + window.location.search;
-    if (!options?.shallow) {
-      const result = await runNavigateClient(full, resolved);
-      if (result === "cancelled") return true;
-      if (result === "failed") return false;
-    }
-    routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
-
-    const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-    if (hash) {
-      scrollToHash(hash);
-    } else if (options?.scroll !== false) {
-      window.scrollTo(0, 0);
-    }
-    window.dispatchEvent(new CustomEvent("vinext:navigate"));
-    return true;
-  },
-  replace: async (url: string | UrlObject, as?: string, options?: TransitionOptions) => {
-    let resolved = resolveNavigationTarget(url, as, options?.locale);
-
-    // External URLs (unless same-origin)
-    if (isExternalUrl(resolved)) {
-      const localPath = toSameOriginAppPath(resolved, __basePath);
-      if (localPath == null) {
-        window.location.replace(resolved);
-        return true;
-      }
-      resolved = localPath;
-    }
-
-    const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
-
-    // Hash-only change
-    if (isHashOnlyChange(full)) {
-      const eventUrl = resolveHashUrl(full);
-      routerEvents.emit("hashChangeStart", eventUrl, {
-        shallow: options?.shallow ?? false,
-      });
-      const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-      window.history.replaceState({}, "", resolved.startsWith("#") ? resolved : full);
-      _lastPathnameAndSearch = window.location.pathname + window.location.search;
-      scrollToHash(hash);
-      routerEvents.emit("hashChangeComplete", eventUrl, {
-        shallow: options?.shallow ?? false,
-      });
-      window.dispatchEvent(new CustomEvent("vinext:navigate"));
-      return true;
-    }
-
-    routerEvents.emit("routeChangeStart", resolved, { shallow: options?.shallow ?? false });
-    routerEvents.emit("beforeHistoryChange", resolved, { shallow: options?.shallow ?? false });
-    window.history.replaceState({}, "", full);
-    _lastPathnameAndSearch = window.location.pathname + window.location.search;
-    if (!options?.shallow) {
-      const result = await runNavigateClient(full, resolved);
-      if (result === "cancelled") return true;
-      if (result === "failed") return false;
-    }
-    routerEvents.emit("routeChangeComplete", resolved, { shallow: options?.shallow ?? false });
-
-    const hash = resolved.includes("#") ? resolved.slice(resolved.indexOf("#")) : "";
-    if (hash) {
-      scrollToHash(hash);
-    } else if (options?.scroll !== false) {
-      window.scrollTo(0, 0);
-    }
-    window.dispatchEvent(new CustomEvent("vinext:navigate"));
-    return true;
-  },
+  push: (url: string | UrlObject, as?: string, options?: TransitionOptions) =>
+    performNavigation(url, as, options, "push"),
+  replace: (url: string | UrlObject, as?: string, options?: TransitionOptions) =>
+    performNavigation(url, as, options, "replace"),
   back: () => window.history.back(),
   reload: () => window.location.reload(),
-  prefetch: async (url: string) => {
-    if (typeof document !== "undefined") {
-      const link = document.createElement("link");
-      link.rel = "prefetch";
-      link.href = url;
-      link.as = "document";
-      document.head.appendChild(link);
-    }
-  },
+  prefetch: prefetchUrl,
   beforePopState: (cb: BeforePopStateCallback) => {
     _beforePopStateCb = cb;
   },
