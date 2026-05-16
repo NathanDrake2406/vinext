@@ -2133,6 +2133,21 @@ describe("metadata title templates", () => {
     expect(result.title).toBe("My Site");
   });
 
+  it("applies ancestor title template to child layout default title", () => {
+    // Next.js resolveTitle() applies the stashed ancestor template to title.default:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/metadata/resolvers/resolve-title.ts
+    const result = mergeMetadataEntries([
+      {
+        metadata: { title: { template: "%s | Site", default: "Site" } },
+      },
+      {
+        metadata: { title: { default: "Blog" } },
+      },
+    ]);
+
+    expect(result.title).toBe("Blog | Site");
+  });
+
   it("title.absolute skips all templates", () => {
     const result = mergeMetadata([
       { title: { template: "%s | My Site", default: "My Site" } },
@@ -2150,16 +2165,19 @@ describe("metadata title templates", () => {
     expect(result.title).toBe("Hello World - Blog");
   });
 
-  it("page template has no effect (page is terminal)", () => {
-    // If the page defines a template, it should be ignored
-    // Only layouts define templates, and page is always the last entry
+  it("applies ancestor template to page default while ignoring page template", () => {
     const result = mergeMetadata([
       { title: { template: "%s | Site", default: "Site" } },
       { title: { template: "%s - Page Template", default: "Page Default" } },
     ]);
-    // The page's template should be ignored; the page's default is used
-    // because the page has a title object (not a string), so we use its default
-    expect(result.title).toBe("Page Default");
+
+    expect(result.title).toBe("Page Default | Site");
+  });
+
+  it("does not apply a page template to the page's own default title", () => {
+    const result = mergeMetadata([{ title: { template: "%s | Page", default: "Page" } }]);
+
+    expect(result.title).toBe("Page");
   });
 
   it("preserves non-title metadata during merge", () => {
@@ -2218,7 +2236,7 @@ describe("metadata title templates", () => {
     expect(result).toEqual({
       description: "Page",
       openGraph: { title: "Slot OG title" },
-      title: "Page",
+      title: "Page | Root",
     });
   });
 });

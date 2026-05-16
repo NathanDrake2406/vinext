@@ -299,6 +299,17 @@ export type ResolvedNextConfig = {
    * change without modifying source — useful for cache-busting after CDN poisoning.
    */
   hashSalt: string;
+  /**
+   * Raw `sassOptions` object from next.config (or `null` when unset). vinext
+   * passes the relevant keys through to Vite's `css.preprocessorOptions.scss`
+   * so SCSS variables defined via `additionalData` / `prependData`, partials
+   * resolved via `includePaths` / `loadPaths`, and a custom `implementation`
+   * all behave the same as in Next.js.
+   *
+   * Kept loose (`Record<string, unknown> | null`) to match Next.js's typing —
+   * the object is forwarded to Sass and may contain any modern Sass option.
+   */
+  sassOptions: Record<string, unknown> | null;
 };
 
 const CONFIG_FILES = ["next.config.ts", "next.config.mjs", "next.config.js", "next.config.cjs"];
@@ -397,13 +408,62 @@ export async function resolveNextConfigInput(
 }
 
 /**
+ * Load a CJS-flavoured next.config.{js,cjs} via createRequire.
+ *
+ * For `.cjs` (or `.js` in a non-type-module package) Node's loader picks the
+ * right format automatically and `require()` just works. For `.js` in a
+ * `"type": "module"` package, Node infers ESM from package.json and the file
+ * fails with `require is not defined`. In that case we copy the source to a
+ * sibling temp `.cjs` (where the explicit extension forces CJS regardless of
+ * the parent type field) and require *that*. Relative imports inside the
+ * config still resolve against the original directory.
+ */
+async function loadConfigViaRequire(
+  configPath: string,
+  root: string,
+  phase: string,
+): Promise<NextConfig> {
+  const require = createRequire(path.join(root, "package.json"));
+  try {
+    return await unwrapConfig(require(configPath), phase);
+  } catch (e) {
+    if (!isCjsError(e) || !configPath.endsWith(".js")) throw e;
+    return await loadConfigViaCjsTempCopy(configPath, root, phase);
+  }
+}
+
+async function loadConfigViaCjsTempCopy(
+  configPath: string,
+  root: string,
+  phase: string,
+): Promise<NextConfig> {
+  const dir = path.dirname(configPath);
+  // Hidden + uniquely-named to avoid clashing with user files or being picked
+  // up by next.js's own config scanner if a concurrent next dev is running.
+  const tmpPath = path.join(dir, `.vinext-next-config.${process.pid}.${Date.now()}.cjs`);
+  fs.copyFileSync(configPath, tmpPath);
+  try {
+    const require = createRequire(path.join(root, "package.json"));
+    return await unwrapConfig(require(tmpPath), phase);
+  } finally {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // Best-effort cleanup; a stray tmp file is harmless.
+    }
+  }
+}
+
+/**
  * Find and load the next.config file from the project root.
  * Returns null if no config file is found.
  *
  * Attempts Vite's module runner first so TS configs and extensionless local
  * imports (e.g. `import "./env"`) resolve consistently. If loading fails due
  * to CJS constructs (`require`, `module.exports`), falls back to `createRequire`
- * so common CJS plugin wrappers (nextra, @next/mdx, etc.) still work.
+ * so common CJS plugin wrappers (nextra, @next/mdx, etc.) still work, including
+ * `next.config.js` files written in CJS syntax inside a `"type": "module"`
+ * package (the common shape after `vinext init`).
  */
 export async function loadNextConfig(
   root: string,
@@ -438,9 +498,7 @@ export async function loadNextConfig(
     // createRequire which provides a proper CommonJS environment.
     if (isCjsError(e) && (filename.endsWith(".js") || filename.endsWith(".cjs"))) {
       try {
-        const require = createRequire(path.join(root, "package.json"));
-        const mod = require(configPath);
-        return await unwrapConfig(mod, phase);
+        return await loadConfigViaRequire(configPath, root, phase);
       } catch (e2) {
         warnConfigLoadFailure(filename, e2 as Error);
         throw e2;
@@ -565,6 +623,7 @@ export async function resolveNextConfig(
       hashSalt: process.env.NEXT_HASH_SALT ?? "",
       buildId,
       deploymentId,
+      sassOptions: null,
     };
     detectNextIntlConfig(root, resolved);
     return resolved;
@@ -747,6 +806,10 @@ export async function resolveNextConfig(
     hashSalt,
     buildId,
     deploymentId,
+    sassOptions:
+      config.sassOptions && typeof config.sassOptions === "object"
+        ? (config.sassOptions as Record<string, unknown>)
+        : null,
   };
 
   // Auto-detect next-intl (lowest priority — explicit aliases from

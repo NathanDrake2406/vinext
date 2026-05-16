@@ -85,6 +85,8 @@ type AppRscRouteMatch<TRoute> = {
 type DispatchMatchedPageOptions<TRoute> = {
   cleanPathname: string;
   formState: ReactFormState | null;
+  actionError?: unknown;
+  actionFailed?: boolean;
   handlerStart: number;
   interceptionContext: string | null;
   isProgressiveActionRender: boolean;
@@ -115,6 +117,18 @@ type HandleProgressiveActionRequestOptions = {
   middlewareContext: AppRscMiddlewareContext;
   request: Request;
 };
+
+type ProgressiveActionFormStateResult =
+  | {
+      formState: ReactFormState | null;
+      kind: "form-state";
+    }
+  | {
+      actionError: unknown;
+      actionFailed: true;
+      formState: null;
+      kind: "form-state";
+    };
 
 type HandleServerActionRequestOptions = {
   actionId: string | null;
@@ -167,7 +181,7 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   ensureInstrumentation?: () => Promise<void>;
   handleProgressiveActionRequest: (
     options: HandleProgressiveActionRequestOptions,
-  ) => Promise<Response | { formState: ReactFormState | null; kind: "form-state" } | null>;
+  ) => Promise<Response | ProgressiveActionFormStateResult | null>;
   handleServerActionRequest: (
     options: HandleServerActionRequestOptions,
   ) => Promise<Response | null>;
@@ -420,6 +434,12 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   if (progressiveActionResult instanceof Response) return progressiveActionResult;
   const isProgressiveActionRender = progressiveActionResult?.kind === "form-state";
   const formState = isProgressiveActionRender ? progressiveActionResult.formState : null;
+  const failedProgressiveActionResult =
+    isProgressiveActionRender && "actionFailed" in progressiveActionResult
+      ? progressiveActionResult
+      : null;
+  const actionFailed = failedProgressiveActionResult !== null;
+  const actionError = failedProgressiveActionResult?.actionError;
 
   const serverActionResponse = await options.handleServerActionRequest({
     actionId,
@@ -521,6 +541,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   return options.dispatchMatchedPage({
     cleanPathname,
     formState,
+    actionError,
+    actionFailed,
     handlerStart,
     interceptionContext: interceptionContextHeader,
     isProgressiveActionRender,

@@ -447,6 +447,8 @@ export default __createAppRscHandler({
   dispatchMatchedPage({
     cleanPathname,
     formState,
+    actionError,
+    actionFailed,
     handlerStart,
     interceptionContext,
     isProgressiveActionRender,
@@ -513,6 +515,8 @@ export default __createAppRscHandler({
       interceptionContext,
       expireSeconds: __expireTime,
       formState,
+      actionError,
+      actionFailed,
       isProgressiveActionRender,
       isProduction: process.env.NODE_ENV === "production",
       isRscRequest,
