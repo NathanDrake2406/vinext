@@ -164,6 +164,38 @@ describe("app page execution helpers", () => {
 
     expect(alreadyPrefixed.headers.get("location")).toBe("https://example.com/blog/about");
 
+    const alreadyPrefixedRootWithQuery = await buildAppPageSpecialErrorResponse({
+      basePath: "/blog",
+      clearRequestContext,
+      isRscRequest: false,
+      request: new Request("https://example.com/blog/protected"),
+      specialError: {
+        kind: "redirect",
+        location: "/blog?from=checkout",
+        statusCode: 307,
+      },
+    });
+
+    expect(alreadyPrefixedRootWithQuery.headers.get("location")).toBe(
+      "https://example.com/blog?from=checkout",
+    );
+
+    const alreadyPrefixedRootWithHash = await buildAppPageSpecialErrorResponse({
+      basePath: "/blog",
+      clearRequestContext,
+      isRscRequest: false,
+      request: new Request("https://example.com/blog/protected"),
+      specialError: {
+        kind: "redirect",
+        location: "/blog#top",
+        statusCode: 307,
+      },
+    });
+
+    expect(alreadyPrefixedRootWithHash.headers.get("location")).toBe(
+      "https://example.com/blog#top",
+    );
+
     // No basePath configured → behavior unchanged (resolves against the
     // request URL as before).
     const unconfigured = await buildAppPageSpecialErrorResponse({
