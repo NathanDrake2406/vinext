@@ -315,6 +315,50 @@ describe("createPopstateRestoreHandler", () => {
     expect(restoredStates).toEqual([{ __vinext_scrollY: 20 }]);
     expect(window.__VINEXT_RSC_PENDING__).toBeNull();
   });
+
+  it("clears pending popstate navigation state when an older popstate navigation becomes stale", async () => {
+    stubWindow("https://example.com/page");
+    const first = createDeferred<void>();
+    let activeNavId = 0;
+    let navigationCalls = 0;
+    let restoreCalls = 0;
+
+    window.__VINEXT_RSC_PENDING__ = null;
+
+    const handler = createPopstateRestoreHandler({
+      getActiveNavigationId: () => activeNavId,
+      getNavigate: () => {
+        if (navigationCalls > 0) return null;
+        navigationCalls += 1;
+        return async () => {
+          activeNavId += 1;
+          return first.promise;
+        };
+      },
+      getPendingNavigation: () => window.__VINEXT_RSC_PENDING__ as Promise<void> | null,
+      isCurrentNavigation: (navId) => navId === activeNavId,
+      restorePopstateScrollPosition: () => {
+        restoreCalls += 1;
+      },
+      setPendingNavigation: (pending) => {
+        window.__VINEXT_RSC_PENDING__ = pending;
+      },
+    });
+
+    handler({ state: { __vinext_scrollY: 10 } } as PopStateEvent);
+    expect(window.__VINEXT_RSC_PENDING__).toBe(first.promise);
+
+    // Simulate a superseding programmatic navigation that does not set a pending
+    // popstate marker.
+    activeNavId += 1;
+
+    first.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(restoreCalls).toBe(0);
+    expect(window.__VINEXT_RSC_PENDING__).toBeNull();
+  });
 });
 
 afterEach(() => {

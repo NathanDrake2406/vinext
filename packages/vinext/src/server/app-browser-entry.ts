@@ -682,10 +682,9 @@ export function createPopstateRestoreHandler({
     const popstateNavId = navigateRsc ? getActiveNavigationId() : null;
     setPendingNavigation(pendingNavigation);
     void pendingNavigation.finally(() => {
-      if (popstateNavId !== null && !isCurrentNavigation(popstateNavId)) {
-        return;
+      if (popstateNavId === null || isCurrentNavigation(popstateNavId)) {
+        restore(event.state);
       }
-      restore(event.state);
       if (getPendingNavigation() === pendingNavigation) {
         setPendingNavigation(null);
       }
