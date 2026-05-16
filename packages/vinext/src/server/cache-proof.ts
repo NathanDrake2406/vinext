@@ -272,8 +272,8 @@ export type CacheProofDowngradeReason =
     }>;
 
 export type CacheProofDowngradeClassification = Readonly<{
-  canPublishPublicCache: boolean;
   fallback: CacheProofBreakerFallback | null;
+  isPublicCacheCandidate: boolean;
   reasons: readonly CacheProofDowngradeReason[];
   target: CacheProofDowngradeTarget;
 }>;
@@ -1009,7 +1009,7 @@ export function classifyRenderObservationDowngrade(
     target,
     reasons,
     fallback: createDowngradeFallback(target, reasons),
-    canPublishPublicCache: target === "public" || target === "publicVariant",
+    isPublicCacheCandidate: target === "public" || target === "publicVariant",
   };
 }
 

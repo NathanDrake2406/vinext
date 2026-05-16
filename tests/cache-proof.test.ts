@@ -398,7 +398,7 @@ describe("disabled cache proof model", () => {
 
     expect(observation.downgrade).toEqual(classifyRenderObservationDowngrade(observation));
     expect(observation.downgrade).toMatchObject({
-      canPublishPublicCache: true,
+      isPublicCacheCandidate: true,
       target: "publicVariant",
       fallback: null,
     });
@@ -466,7 +466,7 @@ describe("disabled cache proof model", () => {
     });
 
     expect(observation.downgrade).toMatchObject({
-      canPublishPublicCache: false,
+      isPublicCacheCandidate: false,
       target: "privateUncacheable",
       fallback: {
         code: "CP_PRIVATE_DYNAMIC_DOWNGRADE",
@@ -512,7 +512,7 @@ describe("disabled cache proof model", () => {
     });
 
     expect(observation.downgrade).toMatchObject({
-      canPublishPublicCache: false,
+      isPublicCacheCandidate: false,
       target: "freshRender",
       fallback: {
         code: "CP_PRIVATE_DYNAMIC_DOWNGRADE",
