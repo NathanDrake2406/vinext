@@ -1218,7 +1218,7 @@ export function hasCompleteNegativeRequestApiProof(
   if (observation.completeness !== "complete") return false;
 
   const statuses = new Map<RenderRequestApiKind, RenderRequestApiStatus>();
-  for (const requestApi of observation.requestApis) {
+  for (const requestApi of normalizeRequestApiObservations(observation.requestApis)) {
     statuses.set(requestApi.kind, requestApi.status);
   }
 
@@ -1246,13 +1246,19 @@ function rejectStaticLayoutReuseProof(
 }
 
 function getRequestApiStatus(
-  observation: RenderObservation,
+  observations: readonly RenderRequestApiObservation[],
   kind: RenderRequestApiKind,
 ): RenderRequestApiStatus | "missing" {
-  for (const requestApi of observation.requestApis) {
-    if (requestApi.kind === kind) return requestApi.status;
+  let status: RenderRequestApiStatus | null = null;
+
+  for (const requestApi of observations) {
+    if (requestApi.kind !== kind) continue;
+    if (status === null || requestApiStatusRank(requestApi.status) > requestApiStatusRank(status)) {
+      status = requestApi.status;
+    }
   }
-  return "missing";
+
+  return status ?? "missing";
 }
 
 function createStaticLayoutDowngradeFallback(
@@ -1328,6 +1334,17 @@ export function buildStaticLayoutReuseProof(
   const currentOutput = input.currentOutput;
   const candidateOutput = input.candidateVariant.output;
   const observationOutput = input.candidateObservation.output;
+  const requestApis = normalizeRequestApiObservations(input.candidateObservation.requestApis);
+  const candidateObservation = {
+    ...input.candidateObservation,
+    requestApis,
+    downgrade: classifyRenderObservationDowngrade({
+      cacheability: input.candidateObservation.cacheability,
+      completeness: input.candidateObservation.completeness,
+      dynamicFetches: input.candidateObservation.dynamicFetches,
+      requestApis,
+    }),
+  } satisfies RenderObservation;
   const observedOutputMismatch = outputFieldMismatch(candidateOutput, observationOutput);
   if (observedOutputMismatch) {
     return rejectStaticLayoutReuseProof("CP_STATIC_LAYOUT_OBSERVATION_OUTPUT_MISMATCH", {
@@ -1363,7 +1380,7 @@ export function buildStaticLayoutReuseProof(
   }
 
   const boundaryCompatibility = buildBoundaryOutcomeCompatibility({
-    candidate: input.candidateObservation.boundaryOutcome,
+    candidate: candidateObservation.boundaryOutcome,
     expected: { kind: "success" },
   });
   if (boundaryCompatibility.kind === "incompatible") {
@@ -1383,16 +1400,16 @@ export function buildStaticLayoutReuseProof(
     }
   }
 
-  if (!input.candidateObservation.downgrade.isPublicCacheCandidate) {
+  if (!candidateObservation.downgrade.isPublicCacheCandidate) {
     return {
       kind: "rejected",
-      fallback: createStaticLayoutDowngradeFallback(input.candidateObservation.downgrade),
+      fallback: createStaticLayoutDowngradeFallback(candidateObservation.downgrade),
     };
   }
 
   const requiredNegativeRequestApis = ALL_RENDER_REQUEST_API_KINDS;
   for (const api of requiredNegativeRequestApis) {
-    const status = getRequestApiStatus(input.candidateObservation, api);
+    const status = getRequestApiStatus(candidateObservation.requestApis, api);
     if (status === "notObserved") continue;
 
     return rejectStaticLayoutReuseProof(
@@ -1419,7 +1436,7 @@ export function buildStaticLayoutReuseProof(
         layoutId: currentOutput.layoutId,
         rootBoundaryId: currentOutput.rootBoundaryId,
       },
-      observation: input.candidateObservation,
+      observation: candidateObservation,
       requiredNegativeRequestApis: [...requiredNegativeRequestApis],
       reuseClass: "static-layout",
       variant: input.candidateVariant,

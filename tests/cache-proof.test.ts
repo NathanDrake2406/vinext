@@ -17,6 +17,7 @@ import {
   type BoundaryOutcome,
   type CacheProofBreakerFallback,
   type CacheProofOutputScope,
+  type CacheProofRejectionCode,
   type CacheVariant,
   type CacheVariantDimensionInput,
   type RenderCacheability,
@@ -102,6 +103,18 @@ function buildLayoutObservation(options: {
         observed: [],
       }),
   });
+}
+
+function expectStaticLayoutProofRejection(
+  result: ReturnType<typeof buildStaticLayoutReuseProof>,
+  code: CacheProofRejectionCode,
+): CacheProofBreakerFallback {
+  expect(result.kind).toBe("rejected");
+  if (result.kind !== "rejected") {
+    throw new Error("Expected static layout proof to be rejected");
+  }
+  expect(result.fallback.code).toBe(code);
+  return result.fallback;
 }
 
 describe("disabled cache proof model", () => {
@@ -407,6 +420,86 @@ describe("disabled cache proof model", () => {
     expect(JSON.stringify(fallback.fields)).not.toContain("charlie");
   });
 
+  it("rejects route variant budgets owned by a different route", () => {
+    const output = {
+      kind: "layout",
+      layoutId: "layout:/[tenant]",
+      rootBoundaryId: "layout:/",
+      routeId: "route:/:tenant",
+    } satisfies CacheProofOutputScope;
+
+    const result = buildCacheVariantWithRouteBudget({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [],
+      routeBudget: {
+        routeId: "route:/other",
+        variantCacheKeys: ["cp1:existing"],
+      },
+      output,
+    });
+
+    const fallback = expectBreakerReason(result, "CP_ROUTE_VARIANT_BUDGET_ROUTE_MISMATCH");
+    expect(fallback).toMatchObject({
+      mode: "privateUncacheable",
+      scope: "route",
+      fields: {
+        budgetRouteId: "route:/other",
+        routeId: "route:/:tenant",
+      },
+    });
+  });
+
+  it("rejects known duplicate route variants when the existing route budget is already over ceiling", () => {
+    const budget = {
+      ...DEFAULT_CACHE_VARIANT_BUDGET,
+      maxVariantsPerRoute: 1,
+    };
+    const output = {
+      kind: "layout",
+      layoutId: "layout:/[tenant]",
+      rootBoundaryId: "layout:/",
+      routeId: "route:/:tenant",
+    } satisfies CacheProofOutputScope;
+    const dimensions = [
+      {
+        name: "tenant",
+        privacy: "public",
+        source: "params",
+        values: ["alpha"],
+      },
+    ] satisfies readonly CacheVariantDimensionInput[];
+    const seed = buildCacheVariant({
+      budget,
+      dimensions,
+      output,
+    });
+    expect(seed.kind).toBe("variant");
+    if (seed.kind !== "variant") {
+      throw new Error("Expected seed route variant to be admitted");
+    }
+
+    const duplicate = buildCacheVariantWithRouteBudget({
+      budget,
+      dimensions,
+      routeBudget: {
+        routeId: output.routeId,
+        variantCacheKeys: [seed.variant.cacheKey, "cp1:other-known-variant"],
+      },
+      output,
+    });
+
+    const fallback = expectBreakerReason(duplicate, "CP_ROUTE_VARIANT_CEILING_EXCEEDED");
+    expect(fallback).toMatchObject({
+      mode: "privateUncacheable",
+      scope: "route",
+      fields: {
+        existingVariantCount: 2,
+        maxVariantsPerRoute: 1,
+        routeId: "route:/:tenant",
+      },
+    });
+  });
+
   it("requires complete negative request-api observations before absence is proof", () => {
     const complete = buildRenderObservation({
       boundaryOutcome: { kind: "success" },
@@ -441,11 +534,22 @@ describe("disabled cache proof model", () => {
       ...complete,
       requestApis: [{ kind: "cookies", status: "notObserved" }],
     });
+    const duplicateApiKind = {
+      ...complete,
+      requestApis: [
+        { kind: "headers", status: "observed" },
+        { kind: "headers", status: "notObserved" },
+        { kind: "cookies", status: "notObserved" },
+      ],
+    } satisfies RenderObservation;
 
     expect(hasCompleteNegativeRequestApiProof(complete, ["headers", "cookies"])).toBe(true);
     expect(hasCompleteNegativeRequestApiProof(partial, ["headers", "cookies"])).toBe(false);
     expect(hasCompleteNegativeRequestApiProof(observed, ["headers", "cookies"])).toBe(false);
     expect(hasCompleteNegativeRequestApiProof(missingApiKind, ["headers", "cookies"])).toBe(false);
+    expect(hasCompleteNegativeRequestApiProof(duplicateApiKind, ["headers", "cookies"])).toBe(
+      false,
+    );
     expect(complete.cacheTags).toEqual(["posts"]);
     expect(JSON.stringify(complete.dynamicFetches)).not.toContain("secret");
   });
@@ -770,6 +874,78 @@ describe("disabled cache proof model", () => {
     });
   });
 
+  it("rejects stale render-observation downgrade during static layout proof", () => {
+    const output = createLayoutOutput();
+    const variant = buildLayoutVariant({ output });
+    const staleObservation = {
+      ...buildLayoutObservation({ output }),
+      downgrade: {
+        fallback: null,
+        isPublicCacheCandidate: true,
+        reasons: [],
+        target: "public",
+      },
+      dynamicFetches: ["https://api.example.test/live?token=secret"],
+    } satisfies RenderObservation;
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: staleObservation,
+      candidateVariant: variant,
+      currentOutput: output,
+    });
+
+    const fallback = expectStaticLayoutProofRejection(
+      proof,
+      "CP_STATIC_LAYOUT_PRIVATE_DYNAMIC_DOWNGRADE",
+    );
+    expect(fallback).toMatchObject({
+      fields: {
+        reasonCodes: ["CP_DOWNGRADE_DYNAMIC_FETCH"],
+        target: "freshRender",
+      },
+      mode: "renderFresh",
+    });
+    expect(JSON.stringify(fallback)).not.toContain("secret");
+  });
+
+  it("rejects duplicated request-api observations using the most restrictive status", () => {
+    const output = createLayoutOutput();
+    const variant = buildLayoutVariant({ output });
+    const duplicateRequestApiObservation = {
+      ...buildLayoutObservation({ output }),
+      downgrade: {
+        fallback: null,
+        isPublicCacheCandidate: true,
+        reasons: [],
+        target: "public",
+      },
+      requestApis: [
+        { kind: "connection", status: "notObserved" },
+        { kind: "cookies", status: "notObserved" },
+        { kind: "draftMode", status: "notObserved" },
+        { kind: "headers", status: "notObserved" },
+        { kind: "params", status: "notObserved" },
+        { kind: "params", status: "observed" },
+        { kind: "searchParams", status: "notObserved" },
+      ],
+    } satisfies RenderObservation;
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: duplicateRequestApiObservation,
+      candidateVariant: variant,
+      currentOutput: output,
+    });
+
+    const fallback = expectStaticLayoutProofRejection(
+      proof,
+      "CP_STATIC_LAYOUT_REQUEST_API_OBSERVED",
+    );
+    expect(fallback.fields).toEqual({
+      requestApi: "params",
+      status: "observed",
+    });
+  });
+
   it("rejects private and dynamic static layout observations before reuse proof", () => {
     const output = createLayoutOutput();
     const variant = buildLayoutVariant({ output });
@@ -853,6 +1029,179 @@ describe("disabled cache proof model", () => {
       },
     });
     expect(JSON.stringify(proof)).not.toContain("secret-session");
+  });
+
+  it("rejects non-layout current output scope for static layout proof", () => {
+    const output = createLayoutOutput();
+    const variant = buildLayoutVariant({ output });
+    const observation = buildLayoutObservation({ output });
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: observation,
+      candidateVariant: variant,
+      currentOutput: {
+        kind: "page",
+        pageId: "page:/dashboard",
+        rootBoundaryId: "layout:/",
+        routeId: output.routeId,
+      },
+    });
+
+    const fallback = expectStaticLayoutProofRejection(
+      proof,
+      "CP_STATIC_LAYOUT_CURRENT_OUTPUT_KIND",
+    );
+    expect(fallback.fields).toEqual({
+      currentOutputKind: "page",
+    });
+  });
+
+  it("rejects non-layout candidate variant output scope for static layout proof", () => {
+    const currentOutput = createLayoutOutput();
+    const observation = buildLayoutObservation({ output: currentOutput });
+    const variantResult = buildCacheVariant({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [],
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: currentOutput.rootBoundaryId,
+        routeId: currentOutput.routeId,
+      },
+    });
+    expect(variantResult.kind).toBe("variant");
+    if (variantResult.kind !== "variant") {
+      throw new Error("Expected non-layout candidate variant construction to succeed");
+    }
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: observation,
+      candidateVariant: variantResult.variant,
+      currentOutput,
+    });
+
+    const fallback = expectStaticLayoutProofRejection(
+      proof,
+      "CP_STATIC_LAYOUT_CANDIDATE_OUTPUT_KIND",
+    );
+    expect(fallback.fields).toEqual({
+      candidateOutputKind: "app-rsc",
+    });
+  });
+
+  it("rejects non-layout observation output scope for static layout proof", () => {
+    const output = createLayoutOutput();
+    const variant = buildLayoutVariant({ output });
+    const observation = buildRenderObservation({
+      boundaryOutcome: { kind: "success" },
+      cacheability: "public",
+      cacheTags: ["dashboard"],
+      completeness: "complete",
+      dynamicFetches: [],
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: output.rootBoundaryId,
+        routeId: output.routeId,
+      },
+      pathTags: ["/dashboard"],
+      requestApis: buildRenderRequestApiObservations({
+        completeness: "complete",
+        observed: [],
+      }),
+    });
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: observation,
+      candidateVariant: variant,
+      currentOutput: output,
+    });
+
+    const fallback = expectStaticLayoutProofRejection(
+      proof,
+      "CP_STATIC_LAYOUT_OBSERVATION_OUTPUT_KIND",
+    );
+    expect(fallback.fields).toEqual({
+      observationOutputKind: "app-rsc",
+    });
+  });
+
+  it("rejects static layout observation output mismatch", () => {
+    const candidateOutput = createLayoutOutput({
+      routeId: "route:/dashboard/settings",
+    });
+    const observationOutput = createLayoutOutput({
+      routeId: "route:/dashboard/profile",
+    });
+    const variant = buildLayoutVariant({ output: candidateOutput });
+    const observation = buildLayoutObservation({ output: observationOutput });
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: observation,
+      candidateVariant: variant,
+      currentOutput: candidateOutput,
+    });
+
+    const fallback = expectStaticLayoutProofRejection(
+      proof,
+      "CP_STATIC_LAYOUT_OBSERVATION_OUTPUT_MISMATCH",
+    );
+    expect(fallback.fields).toMatchObject({
+      candidateRouteId: "route:/dashboard/settings",
+      field: "routeId",
+      observationRouteId: "route:/dashboard/profile",
+    });
+  });
+
+  it("rejects static layout identity mismatch", () => {
+    const currentOutput = createLayoutOutput({
+      layoutId: "layout:/dashboard",
+    });
+    const candidateOutput = createLayoutOutput({
+      layoutId: "layout:/dashboard/settings",
+    });
+    const variant = buildLayoutVariant({ output: candidateOutput });
+    const observation = buildLayoutObservation({ output: candidateOutput });
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: observation,
+      candidateVariant: variant,
+      currentOutput,
+    });
+
+    const fallback = expectStaticLayoutProofRejection(proof, "CP_STATIC_LAYOUT_ID_MISMATCH");
+    expect(fallback.fields).toEqual({
+      candidateLayoutId: "layout:/dashboard/settings",
+      currentLayoutId: "layout:/dashboard",
+    });
+  });
+
+  it("rejects static layout root-boundary mismatch", () => {
+    const currentOutput = createLayoutOutput({
+      rootBoundaryId: "layout:/root-a",
+    });
+    const candidateOutput = createLayoutOutput({
+      rootBoundaryId: "layout:/root-b",
+    });
+    const variant = buildLayoutVariant({ output: candidateOutput });
+    const observation = buildLayoutObservation({ output: candidateOutput });
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: observation,
+      candidateVariant: variant,
+      currentOutput,
+    });
+
+    const fallback = expectStaticLayoutProofRejection(
+      proof,
+      "CP_STATIC_LAYOUT_ROOT_BOUNDARY_MISMATCH",
+    );
+    expect(fallback.fields).toEqual({
+      candidateRootBoundaryId: "layout:/root-b",
+      currentRootBoundaryId: "layout:/root-a",
+    });
   });
 
   it("rejects unknown root-boundary identity instead of treating it as proof", () => {
