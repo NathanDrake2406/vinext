@@ -18,16 +18,6 @@ import { Image as UnpicImage } from "@unpic/react";
 import { hasRemoteMatch, isPrivateIp, type RemotePattern } from "./image-config.js";
 import { useMergedRef } from "./use-merged-ref.js";
 
-type StyleableUnpicImageProps = React.ComponentPropsWithoutRef<typeof UnpicImage> & {
-  style?: React.CSSProperties;
-};
-
-// @unpic/react's runtime forwards incoming `style` through transformProps and
-// merges it with generated layout styles, but its public React type omits it.
-const StyleableUnpicImage = UnpicImage as React.ForwardRefExoticComponent<
-  StyleableUnpicImageProps & React.RefAttributes<HTMLImageElement>
->;
-
 export type StaticImageData = {
   src: string;
   height: number;
@@ -565,6 +555,10 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
     }
     // constrained layout requires width+height or aspectRatio
     if (imgWidth && imgHeight) {
+      // @unpic/react forwards additional image props through transformProps and
+      // merges `style` with generated layout styles at runtime, but its public
+      // React type omits `style`.
+      const unpicRuntimeStyleProps: { style?: React.CSSProperties } = { style };
       preloadImageResource({
         shouldPreload,
         src,
@@ -572,7 +566,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         fetchPriority: priorityFetchPriority,
       });
       return (
-        <StyleableUnpicImage
+        <UnpicImage
           src={src}
           alt={alt}
           width={imgWidth}
@@ -583,7 +577,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
           fetchPriority={priorityFetchPriority}
           sizes={sizes}
           className={className}
-          style={style}
+          {...unpicRuntimeStyleProps}
           background={bg}
           onLoad={handleLoad}
           onError={handleError}
