@@ -131,6 +131,22 @@ function normalizeNavigationSnapshotMatchedUrl(pathname: string): string {
   return normalizePath(normalizePathnameForRouteMatch(pathname));
 }
 
+function createRouteSnapshotRouteId(options: {
+  interception: AppElementsInterception | null;
+  routeId: string;
+}): string {
+  if (options.interception !== null) return options.routeId;
+
+  const parsed = AppElementsWire.parseElementKey(options.routeId);
+  if (parsed?.kind !== "route" || parsed.interceptionContext === null) {
+    return options.routeId;
+  }
+
+  // A context suffix keeps AppElements render keys partitioned, but without
+  // explicit interception proof it is not semantic route authority.
+  return AppElementsWire.encodeRouteId(parsed.path, null);
+}
+
 export function resolveInterceptionContextFromPreviousNextUrl(
   previousNextUrl: string | null,
   basePath: string = "",
@@ -273,7 +289,10 @@ function createVisibleRouteSnapshot(state: AppRouterState): RouteSnapshotV0 {
     matchedUrl,
     mountedParallelSlots: createMountedParallelSlotSnapshots(state.elements),
     rootBoundaryId: state.rootLayoutTreePath,
-    routeId: state.routeId,
+    routeId: createRouteSnapshotRouteId({
+      interception: state.interception,
+      routeId: state.routeId,
+    }),
     slotBindings: state.slotBindings,
   };
 }
@@ -293,7 +312,10 @@ function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnap
     matchedUrl,
     mountedParallelSlots: createMountedParallelSlotSnapshots(pending.action.elements),
     rootBoundaryId: pending.rootLayoutTreePath,
-    routeId: pending.routeId,
+    routeId: createRouteSnapshotRouteId({
+      interception: pending.action.interception,
+      routeId: pending.routeId,
+    }),
     slotBindings: pending.action.slotBindings,
   };
 }

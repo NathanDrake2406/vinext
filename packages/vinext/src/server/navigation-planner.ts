@@ -476,13 +476,10 @@ function planFlightResponseArrived(options: {
   }
 
   const targetSnapshot = options.event.result.targetSnapshot;
-  // A payload with legacy interceptionContext (no __interception proof metadata)
-  // enters validation but gets rejected with interceptedRejectedMissingProof →
-  // hard navigation. This fences legacy cached RSC payloads from before this
-  // deploy. The cache is busted by the deploy (different build), so no stale
-  // artifact should persist across deploys.
-  const hasInterceptedPayload =
-    targetSnapshot.interception !== null || targetSnapshot.interceptionContext !== null;
+  // interceptionContext is transport evidence, not authority. Normal payloads
+  // can carry it when a request was sent from an intercepted visible world, so
+  // only explicit __interception proof enters the preservation branch.
+  const hasInterceptedPayload = targetSnapshot.interception !== null;
   if (hasInterceptedPayload) {
     const validation = validateInterceptedPreservation({
       currentSnapshot: options.state.visibleSnapshot,

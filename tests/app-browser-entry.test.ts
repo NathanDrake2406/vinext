@@ -1116,6 +1116,120 @@ describe("app browser entry state helpers", () => {
     expect(refreshCommit.previousNextUrl).toBeNull();
   });
 
+  it("commits non-intercepted context-only payloads without preserving stale interception state", async () => {
+    const currentState = createState({
+      interception: createInterceptionProof("/feed", "/photos/42"),
+      interceptionContext: "/feed",
+      layoutIds: [AppElementsWire.encodeLayoutId("/"), AppElementsWire.encodeLayoutId("/feed")],
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/photos/42", {}),
+      previousNextUrl: "/feed",
+      rootLayoutTreePath: "/",
+      routeId: AppElementsWire.encodeRouteId("/photos/42", "/feed"),
+    });
+
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements(
+          AppElementsWire.encodeRouteId("/feed", "/feed"),
+          "/",
+          "/feed",
+          {
+            [AppElementsWire.encodePageId("/feed", "/feed")]: React.createElement(
+              "main",
+              null,
+              "feed",
+            ),
+          },
+          [AppElementsWire.encodeLayoutId("/"), AppElementsWire.encodeLayoutId("/feed")],
+        ),
+      ),
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/feed", {}),
+      operationLane: "refresh",
+      previousNextUrl: "/feed",
+      renderId: 1,
+      type: "navigate",
+    });
+
+    const decision = resolvePendingNavigationCommitDispositionDecision({
+      activeNavigationId: 1,
+      currentState,
+      pending,
+      startedNavigationId: 1,
+    });
+
+    expect(pending.interception).toBeNull();
+    expect(pending.interceptionContext).toBe("/feed");
+    expect(pending.previousNextUrl).toBeNull();
+    expect(decision.disposition).toBe("dispatch");
+    expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.commitCurrent);
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 1,
+      currentState,
+      pending,
+      startedNavigationId: 1,
+      targetHref: "https://example.com/feed",
+    });
+    if (approval.approvedCommit === null) {
+      throw new Error("Expected context-only payload to commit");
+    }
+    const contextOnlyState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
+    expect(contextOnlyState.interception).toBeNull();
+    expect(contextOnlyState.previousNextUrl).toBeNull();
+    expect(contextOnlyState.routeId).toBe(AppElementsWire.encodeRouteId("/feed", "/feed"));
+
+    const interceptedPending = await createPendingNavigationCommit({
+      currentState: contextOnlyState,
+      nextElements: Promise.resolve(
+        createResolvedElements(
+          AppElementsWire.encodeRouteId("/photos/42", "/feed"),
+          "/",
+          "/feed",
+          {
+            [AppElementsWire.encodeRouteId("/photos/42", "/feed")]: React.createElement(
+              "main",
+              null,
+              "photo",
+            ),
+            [AppElementsWire.encodeSlotId("modal", "/feed")]: React.createElement(
+              "div",
+              null,
+              "modal",
+            ),
+          },
+          [AppElementsWire.encodeLayoutId("/"), AppElementsWire.encodeLayoutId("/feed")],
+          [
+            {
+              ownerLayoutId: AppElementsWire.encodeLayoutId("/feed"),
+              slotId: AppElementsWire.encodeSlotId("modal", "/feed"),
+              state: "active",
+            },
+          ],
+          createInterceptionProof("/feed", "/photos/42"),
+        ),
+      ),
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/photos/42", {}),
+      operationLane: "navigation",
+      previousNextUrl: "/feed",
+      renderId: 2,
+      type: "navigate",
+    });
+
+    const interceptedApproval = approvePendingNavigationCommit({
+      activeNavigationId: 2,
+      currentState: contextOnlyState,
+      pending: interceptedPending,
+      startedNavigationId: 2,
+      targetHref: "https://example.com/photos/42",
+    });
+
+    expect(interceptedApproval.decision.disposition).toBe("commit");
+    expect(interceptedApproval.decision.trace.entries[1]?.code).toBe(
+      NavigationTraceReasonCodes.interceptedCommitCurrent,
+    );
+  });
+
   it("creates an approved visible commit only after the current operation decision allows mutation", async () => {
     const currentState = createState();
     const pending = await createPendingNavigationCommit({

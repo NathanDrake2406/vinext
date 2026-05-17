@@ -600,7 +600,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     );
   });
 
-  it("rejects intercepted payloads that only carry legacy context metadata", () => {
+  it("does not treat legacy context-only payloads as intercepted preservation proof", () => {
     const currentSnapshot: RouteSnapshotV0 = {
       ...createRouteSnapshot("/", ["layout:/", "layout:/feed"]),
       matchedUrl: "/feed",
@@ -616,14 +616,14 @@ describe("navigationPlanner root-boundary decisions", () => {
 
     const decision = planFlightResponseFromSnapshots({ currentSnapshot, targetSnapshot });
 
-    expect(decision.kind).toBe("hardNavigate");
-    if (decision.kind !== "hardNavigate") {
-      throw new Error("Expected hardNavigate decision");
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
     }
-    expect(decision.reason).toBe("interceptionProofRejected");
-    expect(decision.trace.entries[0]?.code).toBe(
-      NavigationTraceReasonCodes.interceptedRejectedMissingProof,
-    );
+    expect(decision.proposal.reason).toBe("currentRootBoundary");
+    expect(decision.proposal.preserveElementIds).toEqual(["layout:/", "layout:/feed"]);
+    expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
+    expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.commitCurrent);
   });
 
   it("rejects intercepted preservation when the visible source route is stale", () => {
