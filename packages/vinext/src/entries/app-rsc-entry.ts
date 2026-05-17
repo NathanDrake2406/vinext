@@ -79,6 +79,7 @@ const appHookWarningSuppressionPath = resolveEntryPath(
   "../server/app-hook-warning-suppression.js",
   import.meta.url,
 );
+const serverGlobalsPath = resolveEntryPath("../server/server-globals.js", import.meta.url);
 
 /**
  * Resolved config options relevant to App Router request handling.
@@ -166,6 +167,7 @@ async function __loadPrerenderPagesRoutes() {
     : "";
 
   return `
+import ${JSON.stringify(serverGlobalsPath)};
 import {
   renderToReadableStream as _renderToReadableStream,
   decodeAction,
