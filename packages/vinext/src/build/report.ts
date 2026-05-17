@@ -21,21 +21,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { parseSync } from "oxc-parser";
-import type {
-  ArrowFunctionExpression,
-  BindingPattern,
-  BlockStatement,
-  Expression,
-  Function as OxcFunction,
-  FunctionBody,
-  ModuleExportName,
-  ObjectExpression,
-  PropertyKey,
-  Program,
-  Statement,
-  VariableDeclarator,
-} from "oxc-parser";
+import { parseSync } from "vite";
+import type { ESTree } from "vite";
 import type { Route } from "../routing/pages-router.js";
 import type { AppRoute } from "../routing/app-router.js";
 import type { LayoutBuildClassification } from "./layout-classification-types.js";
@@ -59,6 +46,18 @@ export type RouteRow = {
 };
 
 type AppRouteRenderEntry = Pick<AppRoute, "pagePath" | "routePath" | "parallelSlots">;
+type ArrowFunctionExpression = ESTree.ArrowFunctionExpression;
+type BindingPattern = ESTree.BindingPattern;
+type BlockStatement = ESTree.BlockStatement;
+type Expression = ESTree.Expression;
+type FunctionBody = ESTree.FunctionBody;
+type FunctionLike = ESTree.Function | ArrowFunctionExpression;
+type ModuleExportName = ESTree.ModuleExportName;
+type ObjectExpression = ESTree.ObjectExpression;
+type Program = ESTree.Program;
+type PropertyKey = ESTree.PropertyKey;
+type Statement = ESTree.Statement;
+type VariableDeclarator = ESTree.VariableDeclarator;
 
 export function getAppRouteRenderEntryPath(route: AppRouteRenderEntry): string | null {
   if (route.pagePath) return route.pagePath;
@@ -77,7 +76,6 @@ export function getAppRouteRenderEntryPath(route: AppRouteRenderEntry): string |
 
 // ─── Static export analysis ──────────────────────────────────────────────────
 
-type FunctionLike = OxcFunction | ArrowFunctionExpression;
 type StaticNumberValue = number | false;
 
 function parseRouteModuleWithLang(code: string, lang: "ts" | "tsx"): Program | null {
