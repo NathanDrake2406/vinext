@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildBoundaryOutcomeCompatibility,
   buildCacheVariant,
+  buildCacheVariantWithRouteBudget,
   buildRenderObservation,
   buildRenderRequestApiObservations,
   buildStaticLayoutReuseProof,
@@ -24,8 +25,12 @@ import {
   type RenderRequestApiObservation,
 } from "../packages/vinext/src/server/cache-proof.js";
 
+type CacheVariantBuildResultForTest =
+  | ReturnType<typeof buildCacheVariant>
+  | ReturnType<typeof buildCacheVariantWithRouteBudget>;
+
 function expectBreakerReason(
-  result: ReturnType<typeof buildCacheVariant>,
+  result: CacheVariantBuildResultForTest,
   code: CacheProofBreakerFallback["code"],
 ): CacheProofBreakerFallback {
   expect(result.kind).toBe("breakerFallback");
@@ -65,7 +70,6 @@ function buildLayoutVariant(options: {
   const result = buildCacheVariant({
     budget: DEFAULT_CACHE_VARIANT_BUDGET,
     dimensions: options.dimensions ?? [],
-    existingVariantCount: 0,
     output: options.output,
   });
   expect(result.kind).toBe("variant");
@@ -153,7 +157,6 @@ describe("disabled cache proof model", () => {
           values: ["super-secret-token"],
         },
       ],
-      existingVariantCount: 0,
       output: {
         kind: "app-rsc",
         mountedSlotsFingerprint: "slots:main",
@@ -178,7 +181,6 @@ describe("disabled cache proof model", () => {
           values: ["asc", "desc"],
         },
       ],
-      existingVariantCount: 0,
       output: {
         kind: "app-rsc",
         mountedSlotsFingerprint: "slots:main",
@@ -211,7 +213,6 @@ describe("disabled cache proof model", () => {
     const absentEpoch = buildCacheVariant({
       budget: DEFAULT_CACHE_VARIANT_BUDGET,
       dimensions: [],
-      existingVariantCount: 0,
       output: {
         kind: "app-html",
         renderEpoch: null,
@@ -222,7 +223,6 @@ describe("disabled cache proof model", () => {
     const emptyEpoch = buildCacheVariant({
       budget: DEFAULT_CACHE_VARIANT_BUDGET,
       dimensions: [],
-      existingVariantCount: 0,
       output: {
         kind: "app-html",
         renderEpoch: "",
@@ -251,7 +251,6 @@ describe("disabled cache proof model", () => {
           values: ["abc"],
         },
       ],
-      existingVariantCount: 0,
       output: {
         kind: "layout",
         layoutId: "layout:/account",
@@ -277,7 +276,6 @@ describe("disabled cache proof model", () => {
             values: ["customer-a"],
           },
         ],
-        existingVariantCount: 0,
         output: {
           kind: "layout",
           layoutId: "layout:/[tenant]",
@@ -288,38 +286,12 @@ describe("disabled cache proof model", () => {
       "CP_DIMENSION_VALUE_TOO_LONG",
     );
 
-    expectBreakerReason(
-      buildCacheVariant({
-        budget: {
-          ...DEFAULT_CACHE_VARIANT_BUDGET,
-          maxVariantsPerRoute: 2,
-        },
-        dimensions: [
-          {
-            name: "tenant",
-            privacy: "public",
-            source: "params",
-            values: ["a"],
-          },
-        ],
-        existingVariantCount: 2,
-        output: {
-          kind: "layout",
-          layoutId: "layout:/[tenant]",
-          rootBoundaryId: "layout:/",
-          routeId: "route:/:tenant",
-        },
-      }),
-      "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
-    );
-
     const invalidBudget = buildCacheVariant({
       budget: {
         ...DEFAULT_CACHE_VARIANT_BUDGET,
         maxEncodedLength: -1,
       },
       dimensions: [],
-      existingVariantCount: 0,
       output: {
         kind: "layout",
         layoutId: "layout:/[tenant]",
@@ -335,6 +307,104 @@ describe("disabled cache proof model", () => {
       code: "CP_INVALID_VARIANT_BUDGET",
       fields: { budgetField: "maxEncodedLength" },
     });
+  });
+
+  it("enforces per-route variant cardinality without charging duplicate variants", () => {
+    const budget = {
+      ...DEFAULT_CACHE_VARIANT_BUDGET,
+      maxVariantsPerRoute: 2,
+    };
+    const output = {
+      kind: "layout",
+      layoutId: "layout:/[tenant]",
+      rootBoundaryId: "layout:/",
+      routeId: "route:/:tenant",
+    } satisfies CacheProofOutputScope;
+
+    const first = buildCacheVariantWithRouteBudget({
+      budget,
+      dimensions: [
+        {
+          name: "tenant",
+          privacy: "public",
+          source: "params",
+          values: ["alpha"],
+        },
+      ],
+      routeBudget: null,
+      output,
+    });
+    expect(first.kind).toBe("variant");
+    if (first.kind !== "variant") {
+      throw new Error("Expected first route variant to be admitted");
+    }
+    expect(first.routeBudget.variantCacheKeys).toHaveLength(1);
+    expect(first.didConsumeRouteVariantBudget).toBe(true);
+
+    const duplicate = buildCacheVariantWithRouteBudget({
+      budget,
+      dimensions: [
+        {
+          name: "tenant",
+          privacy: "public",
+          source: "params",
+          values: ["alpha"],
+        },
+      ],
+      routeBudget: first.routeBudget,
+      output,
+    });
+    expect(duplicate.kind).toBe("variant");
+    if (duplicate.kind !== "variant") {
+      throw new Error("Expected duplicate route variant to be admitted");
+    }
+    expect(duplicate.routeBudget.variantCacheKeys).toEqual(first.routeBudget.variantCacheKeys);
+    expect(duplicate.didConsumeRouteVariantBudget).toBe(false);
+
+    const second = buildCacheVariantWithRouteBudget({
+      budget,
+      dimensions: [
+        {
+          name: "tenant",
+          privacy: "public",
+          source: "params",
+          values: ["bravo"],
+        },
+      ],
+      routeBudget: duplicate.routeBudget,
+      output,
+    });
+    expect(second.kind).toBe("variant");
+    if (second.kind !== "variant") {
+      throw new Error("Expected second route variant to be admitted");
+    }
+    expect(second.routeBudget.variantCacheKeys).toHaveLength(2);
+    expect(second.didConsumeRouteVariantBudget).toBe(true);
+
+    const overBudget = buildCacheVariantWithRouteBudget({
+      budget,
+      dimensions: [
+        {
+          name: "tenant",
+          privacy: "public",
+          source: "params",
+          values: ["charlie"],
+        },
+      ],
+      routeBudget: second.routeBudget,
+      output,
+    });
+    const fallback = expectBreakerReason(overBudget, "CP_ROUTE_VARIANT_CEILING_EXCEEDED");
+    expect(fallback).toMatchObject({
+      mode: "privateUncacheable",
+      scope: "route",
+      fields: {
+        existingVariantCount: 2,
+        maxVariantsPerRoute: 2,
+        routeId: "route:/:tenant",
+      },
+    });
+    expect(JSON.stringify(fallback.fields)).not.toContain("charlie");
   });
 
   it("requires complete negative request-api observations before absence is proof", () => {
@@ -411,7 +481,6 @@ describe("disabled cache proof model", () => {
     const variant = buildCacheVariant({
       budget: DEFAULT_CACHE_VARIANT_BUDGET,
       dimensions: [],
-      existingVariantCount: 0,
       output: {
         kind: "app-html",
         renderEpoch: null,

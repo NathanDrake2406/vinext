@@ -14,6 +14,7 @@ export type CacheProofRejectionCode =
   | "CP_DIMENSION_VALUES_MISSING"
   | "CP_ENCODED_VARIANT_TOO_LONG"
   | "CP_INVALID_VARIANT_BUDGET"
+  | "CP_ROUTE_VARIANT_BUDGET_ROUTE_MISMATCH"
   | "CP_ROUTE_VARIANT_CEILING_EXCEEDED"
   | "CP_UNSAFE_PUBLIC_DIMENSION"
   | "CP_BOUNDARY_OUTCOME_MISMATCH"
@@ -157,13 +158,37 @@ export type CacheVariant = Readonly<{
 export type BuildCacheVariantInput = Readonly<{
   budget: CacheVariantBudget;
   dimensions: readonly CacheVariantDimensionInput[];
-  existingVariantCount: number;
   output: CacheProofOutputScope;
 }>;
 
 export type BuildCacheVariantResult =
   | Readonly<{ kind: "variant"; variant: CacheVariant }>
   | Readonly<{ kind: "breakerFallback"; fallback: CacheProofBreakerFallback }>;
+
+export type CacheVariantRouteBudget = Readonly<{
+  routeId: string;
+  variantCacheKeys: readonly string[];
+}>;
+
+export type CacheVariantRouteBudgetAdmission =
+  | Readonly<{
+      didConsumeRouteVariantBudget: boolean;
+      kind: "variant";
+      routeBudget: CacheVariantRouteBudget;
+      variant: CacheVariant;
+    }>
+  | Readonly<{
+      fallback: CacheProofBreakerFallback;
+      kind: "breakerFallback";
+      routeBudget: CacheVariantRouteBudget | null;
+    }>;
+
+export type BuildCacheVariantWithRouteBudgetInput = BuildCacheVariantInput &
+  Readonly<{
+    routeBudget: CacheVariantRouteBudget | null;
+  }>;
+
+export type BuildCacheVariantWithRouteBudgetResult = CacheVariantRouteBudgetAdmission;
 
 export type AppRouteCacheProofGraphScopeInput = Readonly<{
   ids: AppRouteSemanticIds;
@@ -654,21 +679,6 @@ export function buildCacheVariant(input: BuildCacheVariantInput): BuildCacheVari
       fallback: budgetFallback,
     };
   }
-  if (input.existingVariantCount >= input.budget.maxVariantsPerRoute) {
-    return {
-      kind: "breakerFallback",
-      fallback: buildBreakerFallback(
-        "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
-        {
-          existingVariantCount: input.existingVariantCount,
-          maxVariantsPerRoute: input.budget.maxVariantsPerRoute,
-          routeId: input.output.routeId,
-        },
-        "privateUncacheable",
-        "route",
-      ),
-    };
-  }
   const dimensionInputs = mergeDimensionInputs(input.dimensions);
   if (dimensionInputs.length > input.budget.maxDimensionCount) {
     return {
@@ -723,6 +733,117 @@ export function buildCacheVariant(input: BuildCacheVariantInput): BuildCacheVari
       budget: { ...input.budget },
     },
   };
+}
+
+function normalizeRouteBudget(input: CacheVariantRouteBudget): CacheVariantRouteBudget {
+  return {
+    routeId: input.routeId,
+    variantCacheKeys: sortedUnique(input.variantCacheKeys),
+  };
+}
+
+function buildRouteVariantCeilingFallback(
+  variant: CacheVariant,
+  existingVariantCount: number,
+): CacheProofBreakerFallback {
+  return buildBreakerFallback(
+    "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
+    {
+      existingVariantCount,
+      maxVariantsPerRoute: variant.budget.maxVariantsPerRoute,
+      routeId: variant.output.routeId,
+    },
+    "privateUncacheable",
+    "route",
+  );
+}
+
+export function enforceCacheVariantRouteBudget(input: {
+  routeBudget: CacheVariantRouteBudget | null;
+  variant: CacheVariant;
+}): CacheVariantRouteBudgetAdmission {
+  if (input.routeBudget && input.routeBudget.routeId !== input.variant.output.routeId) {
+    return {
+      kind: "breakerFallback",
+      routeBudget: normalizeRouteBudget(input.routeBudget),
+      fallback: buildBreakerFallback(
+        "CP_ROUTE_VARIANT_BUDGET_ROUTE_MISMATCH",
+        {
+          budgetRouteId: input.routeBudget.routeId,
+          routeId: input.variant.output.routeId,
+        },
+        "privateUncacheable",
+        "route",
+      ),
+    };
+  }
+
+  const routeBudget = normalizeRouteBudget(
+    input.routeBudget ?? {
+      routeId: input.variant.output.routeId,
+      variantCacheKeys: [],
+    },
+  );
+  const existingVariantCount = routeBudget.variantCacheKeys.length;
+  const isKnownVariant = routeBudget.variantCacheKeys.includes(input.variant.cacheKey);
+
+  if (existingVariantCount > input.variant.budget.maxVariantsPerRoute) {
+    return {
+      kind: "breakerFallback",
+      routeBudget,
+      fallback: buildRouteVariantCeilingFallback(input.variant, existingVariantCount),
+    };
+  }
+
+  if (isKnownVariant) {
+    return {
+      kind: "variant",
+      variant: input.variant,
+      routeBudget,
+      didConsumeRouteVariantBudget: false,
+    };
+  }
+
+  if (existingVariantCount >= input.variant.budget.maxVariantsPerRoute) {
+    return {
+      kind: "breakerFallback",
+      routeBudget,
+      fallback: buildRouteVariantCeilingFallback(input.variant, existingVariantCount),
+    };
+  }
+
+  return {
+    kind: "variant",
+    variant: input.variant,
+    routeBudget: {
+      routeId: routeBudget.routeId,
+      variantCacheKeys: sortedUnique([...routeBudget.variantCacheKeys, input.variant.cacheKey]),
+    },
+    didConsumeRouteVariantBudget: true,
+  };
+}
+
+export function buildCacheVariantWithRouteBudget(
+  input: BuildCacheVariantWithRouteBudgetInput,
+): BuildCacheVariantWithRouteBudgetResult {
+  const variantResult = buildCacheVariant({
+    budget: input.budget,
+    dimensions: input.dimensions,
+    output: input.output,
+  });
+
+  if (variantResult.kind === "breakerFallback") {
+    return {
+      kind: "breakerFallback",
+      routeBudget: input.routeBudget ? normalizeRouteBudget(input.routeBudget) : null,
+      fallback: variantResult.fallback,
+    };
+  }
+
+  return enforceCacheVariantRouteBudget({
+    routeBudget: input.routeBudget,
+    variant: variantResult.variant,
+  });
 }
 
 function boundaryOutcomesMatch(expected: BoundaryOutcome, candidate: BoundaryOutcome): boolean {
