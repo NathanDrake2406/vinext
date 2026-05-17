@@ -114,6 +114,30 @@ describe("app page stream helpers", () => {
     );
   });
 
+  it("forwards basePath to the SSR handler", async () => {
+    const ssrHandler = vi.fn(async () => createStream(["<html>base-path</html>"]));
+
+    const htmlStream = await renderAppPageHtmlStream({
+      basePath: "/docs",
+      fontData: createAppPageFontData({
+        getLinks: () => [],
+        getPreloads: () => [],
+        getStyles: () => [],
+      }),
+      navigationContext: null,
+      rscStream: createStream(["flight"]),
+      ssrHandler: { handleSsr: ssrHandler },
+    });
+
+    await expect(new Response(htmlStream).text()).resolves.toBe("<html>base-path</html>");
+    expect(ssrHandler).toHaveBeenCalledWith(
+      expect.anything(),
+      null,
+      expect.anything(),
+      expect.objectContaining({ basePath: "/docs" }),
+    );
+  });
+
   it("defers clearRequestContext until the HTML stream body is fully consumed", async () => {
     // Regression test for issue #660: clearRequestContext() must not race the
     // lazy RSC/SSR stream pipeline. It should be called only after the HTTP

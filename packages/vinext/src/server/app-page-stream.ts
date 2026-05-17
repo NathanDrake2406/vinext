@@ -23,6 +23,7 @@ export type AppPageSsrHandler = {
     options?: {
       formState?: ReactFormState | null;
       scriptNonce?: string;
+      basePath?: string;
       sideStream?: ReadableStream<Uint8Array>;
       capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
       /** When true, wait for the full React tree before emitting bytes. */
@@ -37,6 +38,7 @@ type RenderAppPageHtmlStreamOptions = {
   navigationContext: unknown;
   rscStream: ReadableStream<Uint8Array>;
   scriptNonce?: string;
+  basePath?: string;
   ssrHandler: AppPageSsrHandler;
   /** Pre-split side stream for fused embed+capture (#981). When set,
    *  handleSsr skips its internal tee and accumulates raw RSC bytes. */
@@ -98,6 +100,7 @@ export async function renderAppPageHtmlStream(
   const ssrOptions = {
     formState: options.formState ?? null,
     scriptNonce: options.scriptNonce,
+    basePath: options.basePath,
     sideStream: options.sideStream,
     capturedRscDataRef: options.capturedRscDataRef,
     waitForAllReady: options.waitForAllReady,

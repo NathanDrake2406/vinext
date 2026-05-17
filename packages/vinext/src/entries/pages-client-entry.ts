@@ -95,7 +95,7 @@ async function hydrate() {
   `
   }
 
-  // Wrap with RouterContext.Provider so next/compat/router works during hydration
+  // Wrap with RouterContext.Provider so next/router and next/compat/router work during hydration.
   const { wrapWithRouterContext } = await import("next/router");
   element = wrapWithRouterContext(element);
 
