@@ -383,7 +383,7 @@ describe("app page head resolution", () => {
         description: "Primary page",
         title: "Slot OG title",
       },
-      title: "Page",
+      title: "Page | Root",
       twitter: {
         card: "summary",
         description: "Primary page",

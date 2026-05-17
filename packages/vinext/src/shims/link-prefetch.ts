@@ -1,7 +1,9 @@
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
+import { isAbsoluteOrProtocolRelativeUrl } from "./url-utils.js";
 
 export type LinkPrefetchIntent = "viewport" | "intent";
 export type LinkPrefetchPriority = "low" | "high";
+export type LinkPrefetchRouterMode = "app" | "pages";
 
 export type LinkPrefetchDecision =
   | {
@@ -20,13 +22,31 @@ export function canLinkPrefetch(input: {
   return input.nodeEnv === "production" && input.prefetch !== false && !input.isDangerous;
 }
 
+export function canLinkIntentPrefetch(input: {
+  nodeEnv: string | undefined;
+  prefetch: boolean | "auto" | null | undefined;
+  isDangerous: boolean;
+  routerMode: LinkPrefetchRouterMode;
+}): boolean {
+  if (input.nodeEnv !== "production" || input.isDangerous) return false;
+  return input.routerMode === "pages" || input.prefetch !== false;
+}
+
 export function getLinkPrefetchDecision(input: {
   nodeEnv: string | undefined;
   prefetch: boolean | "auto" | null | undefined;
   isDangerous: boolean;
   intent: LinkPrefetchIntent;
+  routerMode?: LinkPrefetchRouterMode;
 }): LinkPrefetchDecision {
-  if (!canLinkPrefetch(input)) return { shouldPrefetch: false };
+  const shouldPrefetch =
+    input.intent === "intent"
+      ? canLinkIntentPrefetch({
+          ...input,
+          routerMode: input.routerMode ?? "app",
+        })
+      : canLinkPrefetch(input);
+  if (!shouldPrefetch) return { shouldPrefetch: false };
 
   return {
     shouldPrefetch: true,
@@ -46,7 +66,7 @@ export function getLinkPrefetchHref(input: {
   currentOrigin: string | undefined;
 }): string | null {
   const { href, basePath, currentOrigin } = input;
-  if (!isAbsoluteOrProtocolRelative(href)) return href;
+  if (!isAbsoluteOrProtocolRelativeUrl(href)) return href;
   if (currentOrigin === undefined) return null;
 
   try {
@@ -66,8 +86,4 @@ export function getLinkPrefetchHref(input: {
   } catch {
     return null;
   }
-}
-
-function isAbsoluteOrProtocolRelative(href: string): boolean {
-  return href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//");
 }

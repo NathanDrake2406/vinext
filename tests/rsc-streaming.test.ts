@@ -16,6 +16,7 @@ import {
   createRscEmbedTransform,
   createTickBufferedTransform,
 } from "../packages/vinext/src/server/app-ssr-stream.js";
+import { createSsrErrorMetaRenderer } from "../packages/vinext/src/server/app-ssr-error-meta.js";
 
 /**
  * Create a ReadableStream from an array of string chunks, with optional
@@ -415,6 +416,45 @@ describe("Tick-buffered RSC streaming (behavioral)", () => {
     expect(shellStylePos).toBeGreaterThan(-1);
     expect(trailingStylePos).toBeGreaterThan(shellStylePos);
     expect(trailingStylePos).toBeLessThan(donePos);
+  });
+
+  it("emits SSR-captured redirect meta tags after the shell has already flushed", async () => {
+    // Ported from Next.js: test/e2e/app-dir/navigation/navigation.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/navigation/navigation.test.ts
+    const rsc = createMockRscStream();
+    rsc.close();
+
+    const rscEmbed = createRscEmbedTransform(rsc.stream);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const errorMetaRenderer = createSsrErrorMetaRenderer();
+    const encoder = new TextEncoder();
+    const htmlStream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(encoder.encode("<html><head></head><body><main>shell</main>"));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        errorMetaRenderer.capture(
+          Object.assign(new Error("NEXT_REDIRECT"), {
+            digest: "NEXT_REDIRECT;replace;/redirect/result;307",
+          }),
+        );
+        controller.enqueue(encoder.encode("<template>resolved boundary</template></body></html>"));
+        controller.close();
+      },
+    });
+
+    const transform = createTickBufferedTransform(rscEmbed, () => errorMetaRenderer.flush());
+    const output = await collectStream(htmlStream.pipeThrough(transform));
+
+    const shellPos = output.indexOf("<main>shell</main>");
+    const redirectMetaPos = output.indexOf(
+      '<meta id="__next-page-redirect" http-equiv="refresh" content="1;url=/redirect/result" />',
+    );
+    const boundaryPos = output.indexOf("<template>resolved boundary</template>");
+
+    expect(shellPos).toBeGreaterThan(-1);
+    expect(redirectMetaPos).toBeGreaterThan(shellPos);
+    expect(redirectMetaPos).toBeLessThan(boundaryPos);
   });
 
   it("still injects head content even without </head> in stream", async () => {

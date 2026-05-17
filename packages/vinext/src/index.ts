@@ -103,6 +103,7 @@ import { hasWranglerConfig, formatMissingCloudflarePluginError } from "./deploy.
 import { computeLazyChunks } from "./utils/lazy-chunks.js";
 import { isRecord } from "./utils/is-record.js";
 import { resolveCssConfigCompatibility } from "./plugins/css-config-compat.js";
+import { buildSassPreprocessorOptions } from "./plugins/sass.js";
 import type { DevCssImportsCache } from "./server/dev-css-imports.js";
 import {
   buildDevRouteAssetManifest,
@@ -964,6 +965,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         }
         // Expose basePath to client-side code
         defines["process.env.__NEXT_ROUTER_BASEPATH"] = JSON.stringify(nextConfig.basePath);
+        // Expose trailingSlash to client-side code so <Link> can render hrefs
+        // in the canonical form and avoid an unnecessary 308 redirect bounce.
+        defines["process.env.__VINEXT_TRAILING_SLASH"] = JSON.stringify(
+          nextConfig.trailingSlash ? "true" : "false",
+        );
         // Expose image remote patterns for validation in next/image shim
         defines["process.env.__VINEXT_IMAGE_REMOTE_PATTERNS"] = JSON.stringify(
           JSON.stringify(nextConfig.images?.remotePatterns ?? []),
@@ -1173,6 +1179,39 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           configuredPlugins: pluginsFlat,
         });
 
+        // Translate `sassOptions` from next.config into Vite's
+        // `css.preprocessorOptions.scss` / `.sass` shape so SCSS variables
+        // defined via `additionalData` / `prependData`, partials resolved
+        // via `includePaths` / `loadPaths`, and a custom `implementation`
+        // all behave the same as in Next.js. Next.js destructures these
+        // keys before forwarding the rest to sass-loader; we mirror that
+        // mapping so users who configured SCSS in next.config don't have
+        // to duplicate it in vite.config.
+        //
+        // Reference: packages/next/src/build/webpack/config/blocks/css/index.ts
+        const sassPreprocessorOptions = buildSassPreprocessorOptions(nextConfig.sassOptions);
+        const cssConfig =
+          cssCompatConfig.css || sassPreprocessorOptions
+            ? {
+                css: {
+                  ...cssCompatConfig.css,
+                  ...(sassPreprocessorOptions
+                    ? {
+                        preprocessorOptions: {
+                          ...cssCompatConfig.css?.preprocessorOptions,
+                          // Apply the same options to both `.scss` and `.sass`
+                          // entry points. Next.js's sass-loader rule matches
+                          // /\.s[ca]ss$/, so a single `sassOptions` block
+                          // covers both syntaxes there too.
+                          scss: sassPreprocessorOptions,
+                          sass: sassPreprocessorOptions,
+                        },
+                      }
+                    : {}),
+                },
+              }
+            : {};
+
         // Auto-inject @mdx-js/rollup when MDX files exist and no MDX plugin is
         // already configured. Applies remark/rehype plugins from next.config.
         hasUserMdxPlugin = pluginsFlat.some(
@@ -1363,8 +1402,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // Set base path if configured
           ...(nextConfig.basePath ? { base: nextConfig.basePath + "/" } : {}),
           // Inject CSS config shapes that Next.js supports but Vite does not
-          // discover or normalize on its own.
-          ...cssCompatConfig,
+          // discover or normalize on its own, plus sassOptions translated from
+          // next.config into Vite's preprocessorOptions shape.
+          ...cssConfig,
         };
 
         // Collect user-provided ssr.external so we can propagate it into

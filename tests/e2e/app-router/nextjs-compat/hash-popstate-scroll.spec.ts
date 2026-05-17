@@ -58,6 +58,52 @@ test.describe("Next.js compat: hash popstate scroll", () => {
     await expect(page.locator("#content")).toBeInViewport();
   });
 
+  // Next.js App Router handles popstate with ACTION_RESTORE and classifies
+  // same-path/search fragment changes as onlyHashChange in segment-cache
+  // navigation, avoiding a new RSC payload for hash-only traversal.
+  // Source:
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/app-router.tsx
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/segment-cache/navigation.ts
+  test("back/forward traversal between hash entries skips RSC navigation", async ({ page }) => {
+    await page.goto(`${BASE}/nextjs-compat/hash-popstate-scroll`);
+    await waitForAppRouterHydration(page);
+
+    await page.click("#hash-link");
+    await expect(page).toHaveURL(`${BASE}/nextjs-compat/hash-popstate-scroll#content`);
+
+    await page.evaluate(() => {
+      const testWindow = window as Window & { __vinextHashPopstateRscCalls?: number };
+      const originalNavigate = window.__VINEXT_RSC_NAVIGATE__;
+      if (typeof originalNavigate !== "function") {
+        throw new Error("__VINEXT_RSC_NAVIGATE__ is not installed");
+      }
+      window.__VINEXT_RSC_NAVIGATE__ = async (...args) => {
+        testWindow.__vinextHashPopstateRscCalls =
+          (testWindow.__vinextHashPopstateRscCalls ?? 0) + 1;
+        return originalNavigate(...args);
+      };
+      testWindow.__vinextHashPopstateRscCalls = 0;
+    });
+
+    await page.goBack();
+    await expect(page).toHaveURL(`${BASE}/nextjs-compat/hash-popstate-scroll`);
+    await expectScrollY(page, 0);
+
+    await page.goForward();
+    await expect(page).toHaveURL(`${BASE}/nextjs-compat/hash-popstate-scroll#content`);
+    await expect(page.locator("#content")).toBeInViewport();
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as Window & { __vinextHashPopstateRscCalls?: number })
+              .__vinextHashPopstateRscCalls ?? 0,
+        ),
+      )
+      .toBe(0);
+  });
+
   test("forward traversal decodes non-latin hash fragments", async ({ page }) => {
     await expectHashForwardTraversal(page, "#encoded-link", "#caf%C3%A9", '[id="café"]');
   });

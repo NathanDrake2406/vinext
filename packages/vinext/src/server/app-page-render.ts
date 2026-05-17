@@ -68,6 +68,7 @@ type AppPageRequestCacheLife = {
 };
 
 type RenderAppPageLifecycleOptions = {
+  basePath?: string;
   cleanPathname: string;
   clearRequestContext: () => void;
   consumeDynamicUsage: () => boolean;
@@ -492,6 +493,7 @@ export async function renderAppPageLifecycle(
         capturedRscDataRef,
         fontData,
         navigationContext: options.getNavigationContext(),
+        basePath: options.basePath,
         formState: options.formState ?? null,
         rscStream: rscForResponse,
         scriptNonce: options.scriptNonce,
