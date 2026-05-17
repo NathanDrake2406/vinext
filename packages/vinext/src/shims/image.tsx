@@ -18,6 +18,16 @@ import { Image as UnpicImage } from "@unpic/react";
 import { hasRemoteMatch, isPrivateIp, type RemotePattern } from "./image-config.js";
 import { useMergedRef } from "./use-merged-ref.js";
 
+type StyleableUnpicImageProps = React.ComponentPropsWithoutRef<typeof UnpicImage> & {
+  style?: React.CSSProperties;
+};
+
+// @unpic/react's runtime forwards incoming `style` through transformProps and
+// merges it with generated layout styles, but its public React type omits it.
+const StyleableUnpicImage = UnpicImage as React.ForwardRefExoticComponent<
+  StyleableUnpicImageProps & React.RefAttributes<HTMLImageElement>
+>;
+
 export type StaticImageData = {
   src: string;
   height: number;
@@ -562,7 +572,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         fetchPriority: priorityFetchPriority,
       });
       return (
-        <UnpicImage
+        <StyleableUnpicImage
           src={src}
           alt={alt}
           width={imgWidth}
@@ -573,6 +583,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
           fetchPriority={priorityFetchPriority}
           sizes={sizes}
           className={className}
+          style={style}
           background={bg}
           onLoad={handleLoad}
           onError={handleError}
