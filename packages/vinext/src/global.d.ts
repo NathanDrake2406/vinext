@@ -127,7 +127,7 @@ declare global {
      * history metadata/index allocator as approved RSC commits.
      */
     __VINEXT_RSC_COMMIT_HASH_NAVIGATION__:
-      | ((href: string, historyUpdateMode: "push" | "replace") => void)
+      | ((href: string, historyUpdateMode: "push" | "replace", scroll: boolean) => void)
       | undefined;
 
     /**

@@ -1214,10 +1214,10 @@ function saveScrollPosition(): void {
   );
 }
 
-function commitHashOnlyHistoryState(href: string, mode: "push" | "replace"): void {
+function commitHashOnlyHistoryState(href: string, mode: "push" | "replace", scroll: boolean): void {
   const commitAppRouterHashNavigation = window.__VINEXT_RSC_COMMIT_HASH_NAVIGATION__;
   if (commitAppRouterHashNavigation) {
-    commitAppRouterHashNavigation(href, mode);
+    commitAppRouterHashNavigation(href, mode, scroll);
     return;
   }
 
@@ -1311,7 +1311,7 @@ export async function navigateClientSide(
   // Hash-only change: update URL and scroll to target, skip RSC fetch
   if (isHashOnlyChange(fullHref)) {
     const hash = fullHref.includes("#") ? fullHref.slice(fullHref.indexOf("#")) : "";
-    commitHashOnlyHistoryState(fullHref, mode);
+    commitHashOnlyHistoryState(fullHref, mode, scroll);
     commitClientNavigationState();
     if (scroll) {
       scrollToHashTarget(hash);

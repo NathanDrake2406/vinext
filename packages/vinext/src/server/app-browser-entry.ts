@@ -229,14 +229,14 @@ function commitHistoryTraversalIndex(index: number | null): void {
 function commitHashOnlyNavigation(
   href: string,
   historyUpdateMode: Exclude<HistoryUpdateMode, undefined>,
+  scroll: boolean,
 ): void {
-  const preserveExistingState = historyUpdateMode === "replace";
   const navigationHistoryIndex = allocateNavigationHistoryTraversalIndex(historyUpdateMode);
   const previousNextUrl = hasBrowserRouterState()
     ? getBrowserRouterState().previousNextUrl
     : readHistoryStatePreviousNextUrl(window.history.state);
   const historyState = createHistoryStateWithNavigationMetadata(
-    preserveExistingState ? window.history.state : null,
+    createHashOnlyNavigationBaseHistoryState(historyUpdateMode, scroll),
     {
       previousNextUrl,
       traversalIndex: navigationHistoryIndex,
@@ -249,6 +249,32 @@ function commitHashOnlyNavigation(
     pushHistoryStateWithoutNotify(historyState, "", href);
   }
   commitHistoryTraversalIndex(navigationHistoryIndex);
+}
+
+function createHashOnlyNavigationBaseHistoryState(
+  historyUpdateMode: Exclude<HistoryUpdateMode, undefined>,
+  scroll: boolean,
+): unknown {
+  if (historyUpdateMode !== "replace") {
+    return null;
+  }
+  return scroll ? stripVinextScrollState(window.history.state) : window.history.state;
+}
+
+function stripVinextScrollState(state: unknown): unknown {
+  if (!state || typeof state !== "object") {
+    return state;
+  }
+
+  const nextState: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(state)) {
+    if (key === "__vinext_scrollX" || key === "__vinext_scrollY") {
+      continue;
+    }
+    nextState[key] = value;
+  }
+
+  return Object.keys(nextState).length > 0 ? nextState : null;
 }
 
 function commitTraversalIndexFromHistoryState(historyState: unknown): void {
