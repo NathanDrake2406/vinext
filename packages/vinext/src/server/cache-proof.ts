@@ -1407,6 +1407,7 @@ export function buildStaticLayoutReuseProof(
     };
   }
 
+  // The loop can use the shared readonly registry; the proof stores a detached evidence copy.
   const requiredNegativeRequestApis = ALL_RENDER_REQUEST_API_KINDS;
   for (const api of requiredNegativeRequestApis) {
     const status = getRequestApiStatus(candidateObservation.requestApis, api);
