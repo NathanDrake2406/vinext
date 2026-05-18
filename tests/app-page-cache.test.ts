@@ -300,6 +300,42 @@ describe("app page cache helpers", () => {
     ]);
   });
 
+  it("returns cached HIT responses when the cache outcome recorder throws", async () => {
+    let didClearRequestContext = false;
+
+    const response = await readAppPageCacheResponse({
+      cleanPathname: "/cached",
+      clearRequestContext() {
+        didClearRequestContext = true;
+      },
+      isRscRequest: false,
+      async isrGet() {
+        return buildISRCacheEntry(buildCachedAppPageValue("<h1>cached</h1>"));
+      },
+      isrHtmlKey(pathname) {
+        return "html:" + pathname;
+      },
+      isrRscKey(pathname) {
+        return "rsc:" + pathname;
+      },
+      async isrSet() {},
+      recordCacheOutcome() {
+        throw new Error("metrics sink unavailable");
+      },
+      revalidateSeconds: 60,
+      async renderFreshPageForCache() {
+        throw new Error("should not render");
+      },
+      scheduleBackgroundRegeneration() {
+        throw new Error("should not schedule regeneration");
+      },
+    });
+
+    expect(response?.headers.get("x-vinext-cache")).toBe("HIT");
+    await expect(response?.text()).resolves.toBe("<h1>cached</h1>");
+    expect(didClearRequestContext).toBe(true);
+  });
+
   it("keys RSC cache reads by mounted-slot header and echoes the variant header", async () => {
     const response = await readAppPageCacheResponse({
       cleanPathname: "/cached",

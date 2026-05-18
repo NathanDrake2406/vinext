@@ -32,11 +32,11 @@ export type CacheProofRejectionCode =
   | "CP_STATIC_LAYOUT_OBSERVATION_OUTPUT_KIND"
   | "CP_STATIC_LAYOUT_OBSERVATION_OUTPUT_MISMATCH"
   | "CP_STATIC_LAYOUT_PRIVATE_DYNAMIC_DOWNGRADE"
-  | "CP_STATIC_LAYOUT_PRIVATE_VARIANT_DIMENSION"
   | "CP_STATIC_LAYOUT_REQUEST_API_OBSERVED"
   | "CP_STATIC_LAYOUT_REQUEST_API_UNKNOWN"
   | "CP_STATIC_LAYOUT_ROOT_BOUNDARY_MISMATCH"
-  | "CP_STATIC_LAYOUT_ROOT_BOUNDARY_UNKNOWN";
+  | "CP_STATIC_LAYOUT_ROOT_BOUNDARY_UNKNOWN"
+  | "CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN";
 
 export type CacheProofAcceptanceCode = "CP_STATIC_LAYOUT_REUSE_PROVEN";
 export type CacheProofTraceCode = CacheProofAcceptanceCode | CacheProofRejectionCode;
@@ -1189,30 +1189,6 @@ function createStaticLayoutDowngradeFallback(
   );
 }
 
-function createPrivateVariantDimensionFallback(
-  dimension: CacheVariantDimension,
-): CacheProofBreakerFallback | null {
-  const downgrade = classifyCacheVariantDimensionDowngrade({ source: dimension.source });
-  if (!downgrade && dimension.privacy !== "private") {
-    return null;
-  }
-
-  const target = downgrade?.target ?? "private";
-  const mode: CacheProofBreakerFallbackMode =
-    target === "privateUncacheable" ? "privateUncacheable" : "renderFresh";
-  return buildBreakerFallback(
-    "CP_STATIC_LAYOUT_PRIVATE_VARIANT_DIMENSION",
-    {
-      dimension: dimension.name,
-      privacy: dimension.privacy,
-      reasonCode: downgrade?.code ?? null,
-      source: dimension.source,
-      target,
-    },
-    mode,
-  );
-}
-
 function outputFieldMismatch(
   candidate: StaticLayoutCacheProofOutputScope,
   observation: StaticLayoutCacheProofOutputScope,
@@ -1304,14 +1280,11 @@ export function buildStaticLayoutReuseProof(
     };
   }
 
-  for (const dimension of input.candidateVariant.dimensions) {
-    const fallback = createPrivateVariantDimensionFallback(dimension);
-    if (fallback) {
-      return {
-        kind: "rejected",
-        fallback,
-      };
-    }
+  if (input.candidateVariant.dimensions.length > 0) {
+    return rejectStaticLayoutReuseProof("CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN", {
+      dimensionCount: input.candidateVariant.dimensions.length,
+      sources: input.candidateVariant.dimensions.map((dimension) => dimension.source),
+    });
   }
 
   if (!candidateObservation.downgrade.isPublicCacheCandidate) {

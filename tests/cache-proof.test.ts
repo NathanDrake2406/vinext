@@ -672,6 +672,57 @@ describe("disabled cache proof model", () => {
     });
   });
 
+  it("rejects static layout proof for public variant dimensions without current dimension proof", () => {
+    const currentOutput = createLayoutOutput({
+      routeId: "route:/dashboard/profile",
+    });
+    const candidateOutput = createLayoutOutput({
+      routeId: "route:/dashboard/settings",
+    });
+    const candidateVariant = expectLayoutVariant({
+      dimensions: [
+        {
+          name: "route",
+          privacy: "public",
+          source: "route",
+          values: ["/dashboard/settings"],
+        },
+        {
+          name: "tab",
+          privacy: "public",
+          source: "search",
+          values: ["settings"],
+        },
+        {
+          name: "team",
+          privacy: "public",
+          source: "params",
+          values: ["alpha"],
+        },
+      ],
+      output: candidateOutput,
+    });
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: buildLayoutObservation({ output: candidateOutput }),
+      candidateVariant,
+      currentOutput,
+    });
+
+    expect(proof).toMatchObject({
+      kind: "rejected",
+      fallback: {
+        code: "CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN",
+        fields: {
+          dimensionCount: 3,
+          sources: ["params", "route", "search"],
+        },
+      },
+    });
+    expect(JSON.stringify(proof)).not.toContain("/dashboard/settings");
+    expect(JSON.stringify(proof)).not.toContain("alpha");
+  });
+
   it("falls back to render when artifact compatibility is unknown or incompatible", () => {
     const output = createLayoutOutput();
     const candidateVariant = buildLayoutVariantResult({ output });
@@ -881,7 +932,7 @@ describe("disabled cache proof model", () => {
     expect(JSON.stringify(dynamicProof)).not.toContain("secret");
   });
 
-  it("rejects private variant dimensions and static layout identity mismatches", () => {
+  it("rejects unproven variant dimensions and static layout identity mismatches", () => {
     const currentOutput = createLayoutOutput({
       layoutId: "layout:/dashboard",
     });
@@ -915,12 +966,10 @@ describe("disabled cache proof model", () => {
     expect(privateProof).toMatchObject({
       kind: "rejected",
       fallback: {
-        code: "CP_STATIC_LAYOUT_PRIVATE_VARIANT_DIMENSION",
+        code: "CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN",
         fields: {
-          dimension: "session",
-          reasonCode: "CP_DOWNGRADE_PRIVATE_DIMENSION",
-          source: "cookie",
-          target: "private",
+          dimensionCount: 1,
+          sources: ["cookie"],
         },
       },
     });

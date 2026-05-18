@@ -148,7 +148,11 @@ function recordAppPageCacheOutcome(
   recordCacheOutcome: AppPageCacheOutcomeRecorder | undefined,
   input: AppPageCacheOutcomeMetric,
 ): void {
-  recordCacheOutcome?.(input);
+  try {
+    recordCacheOutcome?.(input);
+  } catch {
+    // Metrics are observational only; telemetry failures must not alter cache serving behavior.
+  }
 }
 
 export function buildAppPageCacheTags(pathname: string, extraTags: readonly string[]): string[] {
