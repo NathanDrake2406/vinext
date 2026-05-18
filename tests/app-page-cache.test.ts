@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+  type AppPageCacheOutcomeMetric,
   buildAppPageCacheTags,
   buildAppPageCachedResponse,
   finalizeAppPageHtmlCacheResponse,
@@ -252,6 +253,7 @@ describe("app page cache helpers", () => {
   it("returns cached HIT responses and clears request state", async () => {
     let didClearRequestContext = false;
     const middlewareHeaders = new Headers({ "X-From-Middleware": "hit" });
+    const cacheOutcomes: AppPageCacheOutcomeMetric[] = [];
 
     const response = await readAppPageCacheResponse({
       cleanPathname: "/cached",
@@ -271,6 +273,9 @@ describe("app page cache helpers", () => {
       async isrSet() {},
       middlewareHeaders,
       middlewareStatus: 203,
+      recordCacheOutcome(metric) {
+        cacheOutcomes.push(metric);
+      },
       revalidateSeconds: 60,
       async renderFreshPageForCache() {
         throw new Error("should not render");
@@ -285,6 +290,14 @@ describe("app page cache helpers", () => {
     expect(response?.status).toBe(203);
     await expect(response?.text()).resolves.toBe("<h1>cached</h1>");
     expect(didClearRequestContext).toBe(true);
+    expect(cacheOutcomes).toEqual([
+      {
+        artifact: "html",
+        cacheKey: "html:/cached",
+        outcome: "hit",
+        reason: "served",
+      },
+    ]);
   });
 
   it("keys RSC cache reads by mounted-slot header and echoes the variant header", async () => {
@@ -517,6 +530,7 @@ describe("app page cache helpers", () => {
 
   it("falls through and logs on cache read errors", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cacheOutcomes: AppPageCacheOutcomeMetric[] = [];
 
     const response = await readAppPageCacheResponse({
       cleanPathname: "/broken",
@@ -532,6 +546,9 @@ describe("app page cache helpers", () => {
         return "rsc:" + pathname;
       },
       async isrSet() {},
+      recordCacheOutcome(metric) {
+        cacheOutcomes.push(metric);
+      },
       revalidateSeconds: 60,
       async renderFreshPageForCache() {
         throw new Error("should not render");
@@ -540,8 +557,67 @@ describe("app page cache helpers", () => {
     });
 
     expect(response).toBeNull();
+    expect(cacheOutcomes).toEqual([
+      {
+        artifact: "html",
+        cacheKey: "html:/broken",
+        outcome: "miss",
+        reason: "read-error",
+      },
+    ]);
     expect(errorSpy).toHaveBeenCalledOnce();
     errorSpy.mockRestore();
+  });
+
+  it("records a miss when a cache key contains a non-app-page value", async () => {
+    const cacheOutcomes: AppPageCacheOutcomeMetric[] = [];
+
+    const response = await readAppPageCacheResponse({
+      cleanPathname: "/wrong-kind",
+      clearRequestContext() {
+        throw new Error("should not clear request context when falling through");
+      },
+      isRscRequest: false,
+      async isrGet() {
+        return {
+          isStale: false,
+          value: {
+            lastModified: Date.now(),
+            value: {
+              kind: "REDIRECT",
+              props: {},
+            },
+          },
+        };
+      },
+      isrHtmlKey(pathname) {
+        return "html:" + pathname;
+      },
+      isrRscKey(pathname) {
+        return "rsc:" + pathname;
+      },
+      async isrSet() {},
+      recordCacheOutcome(metric) {
+        cacheOutcomes.push(metric);
+      },
+      revalidateSeconds: 60,
+      async renderFreshPageForCache() {
+        throw new Error("should not render");
+      },
+      scheduleBackgroundRegeneration() {
+        throw new Error("should not schedule regeneration");
+      },
+    });
+
+    expect(response).toBeNull();
+    expect(cacheOutcomes).toEqual([
+      {
+        artifact: "html",
+        cacheKey: "html:/wrong-kind",
+        outcome: "miss",
+        reason: "non-app-page-entry",
+      },
+    ]);
   });
 
   it("finalizes HTML responses by teeing the stream and writing HTML and RSC cache keys", async () => {

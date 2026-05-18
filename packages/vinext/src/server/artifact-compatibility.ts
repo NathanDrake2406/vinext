@@ -25,16 +25,16 @@ type ArtifactCompatibilityEnvelopeInput = Readonly<{
   renderEpoch?: string | null;
 }>;
 
-type ArtifactCompatibilitySet = readonly [string, string, ...string[]];
+export type ArtifactCompatibilitySet = readonly [string, string, ...string[]];
 
-type ArtifactCompatibilityMap = Readonly<{
+export type ArtifactCompatibilityMap = Readonly<{
   graphVersions?: readonly ArtifactCompatibilitySet[];
   deploymentVersions?: readonly ArtifactCompatibilitySet[];
   rootBoundaryIds?: readonly ArtifactCompatibilitySet[];
   renderEpochs?: readonly ArtifactCompatibilitySet[];
 }>;
 
-type ArtifactCompatibilityEvaluationOptions = Readonly<{
+export type ArtifactCompatibilityEvaluationOptions = Readonly<{
   compatibilityMap?: ArtifactCompatibilityMap;
 }>;
 

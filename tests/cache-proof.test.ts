@@ -3,16 +3,28 @@ import {
   buildBoundaryOutcomeCompatibility,
   buildCacheVariant,
   buildRenderObservation,
+  buildRenderRequestApiObservations,
+  buildStaticLayoutReuseProof,
   CACHE_PROOF_MODEL_SCHEMA_VERSION,
   classifyCacheVariantDimensionDowngrade,
   classifyRenderObservationDowngrade,
   createAppRouteCacheProofGraphScope,
   createDisabledCacheProofDecision,
+  createStaticLayoutArtifactReuseDecision,
   DEFAULT_CACHE_VARIANT_BUDGET,
   hasCompleteNegativeRequestApiProof,
   type AppRouteCacheProofGraphScopeInput,
+  type BoundaryOutcome,
   type CacheProofBreakerFallback,
+  type CacheProofOutputScope,
+  type CacheProofRejectionCode,
+  type CacheVariantDimensionInput,
+  type RenderCacheability,
+  type RenderObservation,
+  type RenderObservationCompleteness,
+  type RenderRequestApiObservation,
 } from "../packages/vinext/src/server/cache-proof.js";
+import { createArtifactCompatibilityEnvelope } from "../packages/vinext/src/server/artifact-compatibility.js";
 
 function expectBreakerReason(
   result: ReturnType<typeof buildCacheVariant>,
@@ -21,6 +33,91 @@ function expectBreakerReason(
   expect(result.kind).toBe("breakerFallback");
   if (result.kind !== "breakerFallback") {
     throw new Error("Expected cache variant construction to return a breaker fallback");
+  }
+  expect(result.fallback.code).toBe(code);
+  return result.fallback;
+}
+
+type LayoutOutputScope = Extract<CacheProofOutputScope, { kind: "layout" }>;
+
+function createLayoutOutput(
+  options: {
+    layoutId?: string;
+    rootBoundaryId?: string | null;
+    routeId?: string;
+  } = {},
+): LayoutOutputScope {
+  const rootBoundaryId =
+    "rootBoundaryId" in options && options.rootBoundaryId !== undefined
+      ? options.rootBoundaryId
+      : "layout:/";
+
+  return {
+    kind: "layout",
+    layoutId: options.layoutId ?? "layout:/dashboard",
+    rootBoundaryId,
+    routeId: options.routeId ?? "route:/dashboard/settings",
+  };
+}
+
+function buildLayoutVariantResult(options: {
+  budget?: typeof DEFAULT_CACHE_VARIANT_BUDGET;
+  dimensions?: readonly CacheVariantDimensionInput[];
+  existingVariantCount?: number;
+  output: LayoutOutputScope;
+}): ReturnType<typeof buildCacheVariant> {
+  return buildCacheVariant({
+    budget: options.budget ?? DEFAULT_CACHE_VARIANT_BUDGET,
+    dimensions: options.dimensions ?? [],
+    existingVariantCount: options.existingVariantCount ?? 0,
+    output: options.output,
+  });
+}
+
+function expectLayoutVariant(options: {
+  dimensions?: readonly CacheVariantDimensionInput[];
+  output: LayoutOutputScope;
+}) {
+  const result = buildLayoutVariantResult(options);
+  expect(result.kind).toBe("variant");
+  if (result.kind !== "variant") {
+    throw new Error("Expected cache variant construction to succeed");
+  }
+  return result.variant;
+}
+
+function buildLayoutObservation(options: {
+  boundaryOutcome?: BoundaryOutcome;
+  cacheability?: RenderCacheability;
+  completeness?: RenderObservationCompleteness;
+  dynamicFetches?: readonly string[];
+  output: LayoutOutputScope;
+  requestApis?: readonly RenderRequestApiObservation[];
+}): RenderObservation {
+  return buildRenderObservation({
+    boundaryOutcome: options.boundaryOutcome ?? { kind: "success" },
+    cacheability: options.cacheability ?? "public",
+    cacheTags: ["dashboard"],
+    completeness: options.completeness ?? "complete",
+    dynamicFetches: options.dynamicFetches ?? [],
+    output: options.output,
+    pathTags: ["/dashboard"],
+    requestApis:
+      options.requestApis ??
+      buildRenderRequestApiObservations({
+        completeness: options.completeness ?? "complete",
+        observed: [],
+      }),
+  });
+}
+
+function expectStaticLayoutProofRejection(
+  result: ReturnType<typeof buildStaticLayoutReuseProof>,
+  code: CacheProofRejectionCode,
+): CacheProofBreakerFallback {
+  expect(result.kind).toBe("rejected");
+  if (result.kind !== "rejected") {
+    throw new Error("Expected static layout proof to be rejected");
   }
   expect(result.fallback.code).toBe(code);
   return result.fallback;
@@ -527,5 +624,307 @@ describe("disabled cache proof model", () => {
       "CP_DOWNGRADE_DYNAMIC_REQUEST_API",
     ]);
     expect(JSON.stringify(observation.downgrade)).not.toContain("secret");
+  });
+
+  it("authorizes proven static layout artifact reuse with metric evidence", () => {
+    const currentOutput = createLayoutOutput({
+      routeId: "route:/dashboard/profile",
+    });
+    const candidateOutput = createLayoutOutput({
+      routeId: "route:/dashboard/settings",
+    });
+    const currentArtifactCompatibility = createArtifactCompatibilityEnvelope({
+      deploymentVersion: "deploy-a",
+      graphVersion: "graph-a",
+      rootBoundaryId: "layout:/",
+      renderEpoch: "epoch-a",
+    });
+    const candidateVariant = buildLayoutVariantResult({ output: candidateOutput });
+    const candidateObservation = buildLayoutObservation({ output: candidateOutput });
+
+    const decision = createStaticLayoutArtifactReuseDecision({
+      currentArtifactCompatibility,
+      candidateArtifactCompatibility: currentArtifactCompatibility,
+      candidateObservation,
+      candidateVariant,
+      currentOutput,
+    });
+
+    expect(decision).toMatchObject({
+      canReuse: true,
+      kind: "reuse",
+      metric: {
+        code: "CP_STATIC_LAYOUT_REUSE_PROVEN",
+        name: "vinext.cache.static_layout_artifact_reuse",
+        outcome: "reuse",
+      },
+      proof: {
+        authorizesRuntimeReuse: true,
+        code: "CP_STATIC_LAYOUT_REUSE_PROVEN",
+        reuseClass: "static-layout",
+        fields: {
+          candidateRouteId: "route:/dashboard/settings",
+          currentRouteId: "route:/dashboard/profile",
+          layoutId: "layout:/dashboard",
+          rootBoundaryId: "layout:/",
+        },
+      },
+    });
+  });
+
+  it("falls back to render when artifact compatibility is unknown or incompatible", () => {
+    const output = createLayoutOutput();
+    const candidateVariant = buildLayoutVariantResult({ output });
+    const candidateObservation = buildLayoutObservation({ output });
+    const currentArtifactCompatibility = createArtifactCompatibilityEnvelope({
+      deploymentVersion: "deploy-a",
+      graphVersion: "graph-a",
+      rootBoundaryId: "layout:/",
+      renderEpoch: "epoch-a",
+    });
+
+    const unknown = createStaticLayoutArtifactReuseDecision({
+      currentArtifactCompatibility,
+      candidateArtifactCompatibility: createArtifactCompatibilityEnvelope({
+        deploymentVersion: "deploy-a",
+        graphVersion: null,
+        rootBoundaryId: "layout:/",
+        renderEpoch: "epoch-a",
+      }),
+      candidateObservation,
+      candidateVariant,
+      currentOutput: output,
+    });
+    const incompatible = createStaticLayoutArtifactReuseDecision({
+      currentArtifactCompatibility,
+      candidateArtifactCompatibility: createArtifactCompatibilityEnvelope({
+        deploymentVersion: "deploy-b",
+        graphVersion: "graph-a",
+        rootBoundaryId: "layout:/",
+        renderEpoch: "epoch-a",
+      }),
+      candidateObservation,
+      candidateVariant,
+      currentOutput: output,
+    });
+
+    expect(unknown).toMatchObject({
+      canReuse: false,
+      fallback: {
+        code: "CP_ARTIFACT_COMPATIBILITY_UNKNOWN",
+        mode: "renderFresh",
+      },
+      metric: {
+        code: "CP_ARTIFACT_COMPATIBILITY_UNKNOWN",
+        outcome: "fallback",
+      },
+    });
+    expect(incompatible).toMatchObject({
+      canReuse: false,
+      fallback: {
+        code: "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE",
+        fields: {
+          reason: "deploymentVersionMismatch",
+        },
+      },
+    });
+  });
+
+  it("falls back to render when the route variant budget rejects the candidate", () => {
+    const output = createLayoutOutput();
+    const overBudgetVariant = buildLayoutVariantResult({
+      budget: {
+        ...DEFAULT_CACHE_VARIANT_BUDGET,
+        maxVariantsPerRoute: 1,
+      },
+      existingVariantCount: 1,
+      output,
+    });
+
+    const decision = createStaticLayoutArtifactReuseDecision({
+      currentArtifactCompatibility: createArtifactCompatibilityEnvelope({
+        deploymentVersion: "deploy-a",
+        graphVersion: "graph-a",
+        rootBoundaryId: "layout:/",
+        renderEpoch: "epoch-a",
+      }),
+      candidateArtifactCompatibility: createArtifactCompatibilityEnvelope({
+        deploymentVersion: "deploy-a",
+        graphVersion: "graph-a",
+        rootBoundaryId: "layout:/",
+        renderEpoch: "epoch-a",
+      }),
+      candidateObservation: buildLayoutObservation({ output }),
+      candidateVariant: overBudgetVariant,
+      currentOutput: output,
+    });
+
+    expect(decision).toMatchObject({
+      canReuse: false,
+      fallback: {
+        code: "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
+        mode: "privateUncacheable",
+        scope: "route",
+      },
+      metric: {
+        code: "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
+        outcome: "fallback",
+      },
+    });
+  });
+
+  it("rejects static layout proof when request API absence is not complete", () => {
+    const output = createLayoutOutput();
+    const candidateVariant = expectLayoutVariant({ output });
+    const observedParams = buildLayoutObservation({
+      output,
+      requestApis: buildRenderRequestApiObservations({
+        completeness: "complete",
+        observed: ["params"],
+      }),
+    });
+    const missingKinds = buildLayoutObservation({
+      output,
+      requestApis: [{ kind: "headers", status: "notObserved" }],
+    });
+
+    const observedProof = buildStaticLayoutReuseProof({
+      candidateObservation: observedParams,
+      candidateVariant,
+      currentOutput: output,
+    });
+    const missingProof = buildStaticLayoutReuseProof({
+      candidateObservation: missingKinds,
+      candidateVariant,
+      currentOutput: output,
+    });
+
+    expect(observedProof).toMatchObject({
+      kind: "rejected",
+      fallback: {
+        code: "CP_STATIC_LAYOUT_REQUEST_API_OBSERVED",
+        fields: {
+          requestApi: "params",
+          status: "observed",
+        },
+      },
+    });
+    expect(missingProof).toMatchObject({
+      kind: "rejected",
+      fallback: {
+        code: "CP_STATIC_LAYOUT_REQUEST_API_UNKNOWN",
+        fields: {
+          requestApi: "connection",
+          status: "missing",
+        },
+      },
+    });
+  });
+
+  it("rejects private dynamic and non-layout candidates for static layout artifact reuse", () => {
+    const output = createLayoutOutput();
+    const candidateVariant = expectLayoutVariant({ output });
+    const privateObservation = buildLayoutObservation({
+      output,
+      requestApis: buildRenderRequestApiObservations({
+        completeness: "complete",
+        observed: ["cookies"],
+      }),
+    });
+    const dynamicObservation = buildLayoutObservation({
+      dynamicFetches: ["https://api.example.test/dashboard?token=secret"],
+      output,
+    });
+
+    const privateProof = buildStaticLayoutReuseProof({
+      candidateObservation: privateObservation,
+      candidateVariant,
+      currentOutput: output,
+    });
+    const dynamicProof = buildStaticLayoutReuseProof({
+      candidateObservation: dynamicObservation,
+      candidateVariant,
+      currentOutput: output,
+    });
+    const nonLayoutProof = buildStaticLayoutReuseProof({
+      candidateObservation: buildLayoutObservation({ output }),
+      candidateVariant,
+      currentOutput: {
+        kind: "page",
+        pageId: "page:/dashboard",
+        rootBoundaryId: "layout:/",
+        routeId: output.routeId,
+      },
+    });
+
+    expect(privateProof).toMatchObject({
+      kind: "rejected",
+      fallback: {
+        code: "CP_STATIC_LAYOUT_PRIVATE_DYNAMIC_DOWNGRADE",
+        fields: {
+          reasonCodes: ["CP_DOWNGRADE_PRIVATE_REQUEST_API"],
+          target: "private",
+        },
+      },
+    });
+    expect(dynamicProof).toMatchObject({
+      kind: "rejected",
+      fallback: {
+        code: "CP_STATIC_LAYOUT_PRIVATE_DYNAMIC_DOWNGRADE",
+        fields: {
+          reasonCodes: ["CP_DOWNGRADE_DYNAMIC_FETCH"],
+          target: "freshRender",
+        },
+      },
+    });
+    expectStaticLayoutProofRejection(nonLayoutProof, "CP_STATIC_LAYOUT_CURRENT_OUTPUT_KIND");
+    expect(JSON.stringify(dynamicProof)).not.toContain("secret");
+  });
+
+  it("rejects private variant dimensions and static layout identity mismatches", () => {
+    const currentOutput = createLayoutOutput({
+      layoutId: "layout:/dashboard",
+    });
+    const candidateOutput = createLayoutOutput({
+      layoutId: "layout:/dashboard/settings",
+    });
+    const privateVariant = expectLayoutVariant({
+      dimensions: [
+        {
+          name: "session",
+          privacy: "private",
+          source: "cookie",
+          values: ["secret-session"],
+        },
+      ],
+      output: currentOutput,
+    });
+    const identityMismatchVariant = expectLayoutVariant({ output: candidateOutput });
+
+    const privateProof = buildStaticLayoutReuseProof({
+      candidateObservation: buildLayoutObservation({ output: currentOutput }),
+      candidateVariant: privateVariant,
+      currentOutput,
+    });
+    const identityMismatchProof = buildStaticLayoutReuseProof({
+      candidateObservation: buildLayoutObservation({ output: candidateOutput }),
+      candidateVariant: identityMismatchVariant,
+      currentOutput,
+    });
+
+    expect(privateProof).toMatchObject({
+      kind: "rejected",
+      fallback: {
+        code: "CP_STATIC_LAYOUT_PRIVATE_VARIANT_DIMENSION",
+        fields: {
+          dimension: "session",
+          reasonCode: "CP_DOWNGRADE_PRIVATE_DIMENSION",
+          source: "cookie",
+          target: "private",
+        },
+      },
+    });
+    expectStaticLayoutProofRejection(identityMismatchProof, "CP_STATIC_LAYOUT_ID_MISMATCH");
+    expect(JSON.stringify(privateProof)).not.toContain("secret-session");
   });
 });
