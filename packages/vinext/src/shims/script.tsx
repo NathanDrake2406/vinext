@@ -99,11 +99,41 @@ function buildBeforeInteractiveScriptProps(options: {
   return scriptProps;
 }
 
+function setBooleanScriptAttribute(el: HTMLScriptElement, attr: string, value: unknown): boolean {
+  const enabled = value !== false && value !== "false" && Boolean(value);
+
+  switch (attr) {
+    case "async":
+      el.async = enabled;
+      break;
+    case "defer":
+      el.defer = enabled;
+      break;
+    case "noModule":
+    case "nomodule":
+      el.noModule = enabled;
+      break;
+    default:
+      return false;
+  }
+
+  if (!enabled) {
+    // Dynamic script elements start in the browser's force-async state.
+    // Setting and removing the attribute mirrors Next.js and clears that state.
+    el.setAttribute(attr, "");
+    el.removeAttribute(attr);
+  }
+
+  return true;
+}
+
 function setScriptAttributes(el: HTMLScriptElement, rest: Record<string, unknown>): void {
   for (const [attr, value] of Object.entries(rest)) {
     if (attr === "dangerouslySetInnerHTML") continue;
-    if (attr === "className") {
-      el.setAttribute("class", String(value));
+    if (value === undefined) continue;
+    if (setBooleanScriptAttribute(el, attr, value)) continue;
+    if (attr === "className" && typeof value === "string") {
+      el.setAttribute("class", value);
     } else if (typeof value === "string") {
       el.setAttribute(attr, value);
     } else if (typeof value === "boolean" && value) {
