@@ -399,7 +399,7 @@ export type StaticLayoutArtifactReuseDecision =
 export type CreateStaticLayoutArtifactReuseDecisionInput = Readonly<{
   candidateArtifactCompatibility: ArtifactCompatibilityEnvelope;
   candidateObservation: RenderObservation;
-  candidateVariant: BuildCacheVariantResult | BuildCacheVariantWithRouteBudgetResult;
+  candidateVariant: BuildCacheVariantWithRouteBudgetResult;
   currentArtifactCompatibility: ArtifactCompatibilityEnvelope;
   currentOutput: CacheProofOutputScope;
 }> &

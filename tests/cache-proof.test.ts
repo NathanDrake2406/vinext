@@ -899,6 +899,34 @@ describe("disabled cache proof model", () => {
     });
   });
 
+  it("requires route-budget admission before static layout artifact reuse can be authorized", () => {
+    const output = createLayoutOutput();
+    const rawVariant = buildCacheVariant({
+      budget: DEFAULT_CACHE_VARIANT_BUDGET,
+      dimensions: [],
+      output,
+    });
+    const artifactCompatibility = createArtifactCompatibilityEnvelope({
+      deploymentVersion: "deploy-a",
+      graphVersion: "graph-a",
+      rootBoundaryId: "layout:/",
+      renderEpoch: "epoch-a",
+    });
+    const candidateObservation = buildLayoutObservation({ output });
+
+    expect(rawVariant.kind).toBe("variant");
+    if (process.env.VINEXT_CACHE_PROOF_TYPECHECK_ONLY === "1") {
+      createStaticLayoutArtifactReuseDecision({
+        currentArtifactCompatibility: artifactCompatibility,
+        candidateArtifactCompatibility: artifactCompatibility,
+        candidateObservation,
+        // @ts-expect-error raw variants have not proven route-budget admission.
+        candidateVariant: rawVariant,
+        currentOutput: output,
+      });
+    }
+  });
+
   it("rejects static layout proof for public variant dimensions without current dimension proof", () => {
     const currentOutput = createLayoutOutput({
       routeId: "route:/dashboard/profile",
