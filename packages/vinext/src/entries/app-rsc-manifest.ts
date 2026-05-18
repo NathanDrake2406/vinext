@@ -14,6 +14,7 @@ type AppRscManifestCode = {
   rootUnauthorizedVar: string | null;
   rootLayoutVars: string[];
   globalErrorVar: string | null;
+  globalNotFoundVar: string | null;
 };
 
 type BuildAppRscManifestCodeOptions = {
@@ -21,6 +22,14 @@ type BuildAppRscManifestCodeOptions = {
   metadataRoutes?: MetadataFileRoute[];
   globalErrorPath?: string | null;
   devCssStylesByRoute?: readonly (readonly string[])[];
+  /**
+   * Optional `app/global-not-found.tsx` path. When present, route-miss 404s
+   * render this module standalone (it provides its own <html>/<body>) instead
+   * of wrapping the regular not-found boundary inside the root layout.
+   * Mirrors Next.js 16's `experimental.globalNotFound` behavior.
+   * @see https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/app-render.tsx
+   */
+  globalNotFoundPath?: string | null;
 };
 
 type ImportAllocator = {
@@ -80,6 +89,7 @@ function buildRouteEntry(
       (ir) => `        {
           convention: ${JSON.stringify(ir.convention)},
           targetPattern: ${JSON.stringify(ir.targetPattern)},
+          sourceMatchPattern: ${JSON.stringify(ir.sourceMatchPattern)},
           interceptLayouts: [${ir.layoutPaths.map((layoutPath) => imports.getImportVar(layoutPath)).join(", ")}],
           page: ${imports.getImportVar(ir.pagePath)},
           params: ${JSON.stringify(ir.params)},
@@ -181,6 +191,9 @@ function completeAppRscManifestCode(
   const globalErrorVar = options.globalErrorPath
     ? imports.getImportVar(options.globalErrorPath)
     : null;
+  const globalNotFoundVar = options.globalNotFoundPath
+    ? imports.getImportVar(options.globalNotFoundPath)
+    : null;
 
   const dynamicMetadataRoutes = metadataRoutes.filter((r) => r.isDynamic);
   for (const route of dynamicMetadataRoutes) {
@@ -197,6 +210,7 @@ function completeAppRscManifestCode(
     rootUnauthorizedVar,
     rootLayoutVars,
     globalErrorVar,
+    globalNotFoundVar,
   };
 }
 
