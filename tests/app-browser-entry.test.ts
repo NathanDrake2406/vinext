@@ -181,6 +181,7 @@ function createTestRouteManifest(routes: readonly TestRouteManifestRoute[]): Rou
   const segmentGraph: StaticSegmentGraph = {
     boundaries: new Map(),
     defaults: new Map(),
+    interceptions: new Map(),
     layouts: new Map(),
     pages: new Map(),
     rootBoundaries,

@@ -1,5 +1,9 @@
 import { buildRouteTrie, trieMatch } from "../routing/route-trie.js";
-import { matchRoutePattern, type RoutePatternParams } from "../routing/route-pattern.js";
+import {
+  matchRoutePattern,
+  matchRoutePatternPrefix,
+  type RoutePatternParams,
+} from "../routing/route-pattern.js";
 import { normalizePathnameForRouteMatch } from "../routing/utils.js";
 
 type AppRscRouteParams = RoutePatternParams;
@@ -142,47 +146,7 @@ function matchInterceptSource(sourceParts: string[], entry: AppRscInterceptLooku
   if (!patternParts) return true;
   // Root pattern (`/`) matches any source.
   if (patternParts.length === 0) return true;
-  return matchPathPrefix(sourceParts, patternParts);
-}
-
-/**
- * True when `pathParts` matches `patternParts` from index 0 and all pattern
- * segments are satisfied. Trailing path segments beyond the pattern are
- * allowed (to mirror Next.js' `(?:/.*)?` tail on intercepting-route headers).
- *
- * Supports the same segment syntax as the route trie:
- *   - `:name`   — dynamic, exactly one segment
- *   - `:name+`  — catch-all, 1+ segments (must be terminal in the pattern)
- *   - `:name*`  — optional catch-all, 0+ segments (must be terminal)
- *   - anything else — literal segment
- */
-function matchPathPrefix(pathParts: string[], patternParts: string[]): boolean {
-  let pi = 0;
-  for (let i = 0; i < patternParts.length; i++) {
-    const part = patternParts[i];
-    const isTerminal = i === patternParts.length - 1;
-
-    if (part.startsWith(":") && part.endsWith("+")) {
-      if (!isTerminal) return false;
-      // Catch-all must consume at least one remaining segment.
-      return pathParts.length - pi >= 1;
-    }
-    if (part.startsWith(":") && part.endsWith("*")) {
-      if (!isTerminal) return false;
-      // Optional catch-all accepts any tail (including empty).
-      return true;
-    }
-    if (pi >= pathParts.length) return false;
-    if (part.startsWith(":")) {
-      // Dynamic single-segment — any non-empty value matches.
-      pi++;
-      continue;
-    }
-    if (pathParts[pi] !== part) return false;
-    pi++;
-  }
-  // Pattern fully consumed; any extra path segments are descendants and OK.
-  return true;
+  return matchRoutePatternPrefix(sourceParts, patternParts);
 }
 
 function createInterceptLookup<Route extends AppRscRouteForMatching>(

@@ -22,6 +22,7 @@ import type {
   GraphVersion,
   RootBoundaryId,
   RouteManifest,
+  RouteManifestInterception,
   RouteManifestRoute,
   RouteManifestRootBoundary,
   RouteManifestSlotBinding,
@@ -35,6 +36,14 @@ type TestManifestRoute = {
   patternParts?: readonly string[];
   rootBoundaryId: string | null;
   slotBindings?: readonly ParallelSlotBindingSnapshotV0[];
+  interceptions?: readonly TestManifestInterception[];
+};
+
+type TestManifestInterception = {
+  sourcePattern: string;
+  targetPattern: string;
+  slotId: string;
+  ownerLayoutId: string | null;
 };
 
 function createRouteSnapshot(
@@ -80,10 +89,14 @@ function createSlotBinding(
 function createTestRouteManifest(routes: readonly TestManifestRoute[]): RouteManifest {
   const manifestRoutes = new Map<string, RouteManifestRoute>();
   const slotBindings = new Map<string, RouteManifestSlotBinding>();
+  const interceptions = new Map<string, RouteManifestInterception>();
   const rootBoundaries = new Map<RootBoundaryId, RouteManifestRootBoundary>();
+  const routeIdByPattern = new Map(
+    routes.map((route) => [route.pattern, route.id ?? `route:${route.pattern}`]),
+  );
 
   for (const route of routes) {
-    const routeId = route.id ?? `route:${route.pattern}`;
+    const routeId = routeIdByPattern.get(route.pattern) ?? `route:${route.pattern}`;
     const rootBoundaryId =
       route.rootBoundaryId === null ? null : (route.rootBoundaryId as RootBoundaryId);
     const routeSlotBindings = route.slotBindings ?? [];
@@ -119,6 +132,26 @@ function createTestRouteManifest(routes: readonly TestManifestRoute[]): RouteMan
       });
     }
 
+    for (const interception of route.interceptions ?? []) {
+      const targetPatternParts = interception.targetPattern
+        .split("/")
+        .filter((segment) => segment.length > 0);
+      const id = `interception:${interception.slotId}:${interception.sourcePattern}->${interception.targetPattern}`;
+      interceptions.set(id, {
+        id,
+        interceptingRouteId: routeIdByPattern.get(interception.sourcePattern) ?? null,
+        ownerLayoutId: interception.ownerLayoutId,
+        slotId: interception.slotId,
+        sourcePattern: interception.sourcePattern,
+        sourcePatternParts: interception.sourcePattern
+          .split("/")
+          .filter((segment) => segment.length > 0),
+        targetPattern: interception.targetPattern,
+        targetPatternParts,
+        targetRouteId: routeIdByPattern.get(interception.targetPattern) ?? null,
+      });
+    }
+
     const rootLayoutId = route.layoutIds[0];
     if (rootBoundaryId !== null && rootLayoutId !== undefined) {
       rootBoundaries.set(rootBoundaryId, {
@@ -132,6 +165,7 @@ function createTestRouteManifest(routes: readonly TestManifestRoute[]): RouteMan
   const segmentGraph: StaticSegmentGraph = {
     boundaries: new Map(),
     defaults: new Map(),
+    interceptions,
     layouts: new Map(),
     pages: new Map(),
     rootBoundaries,
@@ -904,6 +938,14 @@ describe("navigationPlanner root-boundary decisions", () => {
         layoutIds: ["layout:/", "layout:/feed"],
         pattern: "/feed",
         rootBoundaryId: "root-boundary:/",
+        interceptions: [
+          {
+            ownerLayoutId: "layout:/feed",
+            slotId: "slot:modal:/feed",
+            sourcePattern: "/feed",
+            targetPattern: "/photos/:id",
+          },
+        ],
       },
       {
         layoutIds: ["layout:/photos", "layout:/photos/photo"],
@@ -942,6 +984,174 @@ describe("navigationPlanner root-boundary decisions", () => {
     }
     expect(decision.proposal.reason).toBe("interceptedCurrentRootBoundary");
     expect(decision.proposal.preserveElementIds).toEqual(["layout:/", "layout:/feed"]);
+  });
+
+  it("approves manifest-declared dynamic interception topology", () => {
+    const routeManifest = createTestRouteManifest([
+      {
+        layoutIds: ["layout:/", "layout:/[locale]", "layout:/[locale]/feed"],
+        pattern: "/:locale/feed",
+        rootBoundaryId: "root-boundary:/",
+        interceptions: [
+          {
+            ownerLayoutId: "layout:/[locale]/feed",
+            slotId: "slot:modal:/[locale]/feed",
+            sourcePattern: "/:locale/feed",
+            targetPattern: "/:locale/photos/:id",
+          },
+        ],
+      },
+      {
+        layoutIds: ["layout:/", "layout:/[locale]", "layout:/[locale]/photos"],
+        pattern: "/:locale/photos/:id",
+        rootBoundaryId: "root-boundary:/",
+      },
+    ]);
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(null, []),
+      matchedUrl: "/en/feed",
+      routeId: "route:/:locale/feed",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(
+        null,
+        [],
+        [],
+        [createSlotBinding("slot:modal:/[locale]/feed", "layout:/[locale]/feed", "active")],
+      ),
+      displayUrl: "https://example.com/en/photos/42",
+      interception: createInterceptionSnapshot({
+        sourceMatchedUrl: "/en/feed",
+        sourceRouteId: "route:/:locale/feed",
+        slotId: "slot:modal:/[locale]/feed",
+        targetMatchedUrl: "/en/photos/42",
+        targetRouteId: "route:/:locale/photos/:id",
+      }),
+      interceptionContext: "/en/feed",
+      matchedUrl: "/en/photos/42",
+      routeId: "route:/:locale/photos/:id\u0000/en/feed",
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      currentSnapshot,
+      routeManifest,
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.reason).toBe("interceptedCurrentRootBoundary");
+    expect(decision.proposal.preserveElementIds).toEqual([
+      "layout:/",
+      "layout:/[locale]",
+      "layout:/[locale]/feed",
+    ]);
+  });
+
+  it("rejects intercepted preservation when RouteManifest does not declare the topology", () => {
+    const routeManifest = createTestRouteManifest([
+      {
+        layoutIds: ["layout:/", "layout:/feed"],
+        pattern: "/feed",
+        rootBoundaryId: "root-boundary:/",
+      },
+      {
+        layoutIds: ["layout:/", "layout:/photos"],
+        pattern: "/photos/:id",
+        rootBoundaryId: "root-boundary:/",
+      },
+    ]);
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(null, []),
+      matchedUrl: "/feed",
+      routeId: "route:/feed",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(
+        null,
+        [],
+        [],
+        [createSlotBinding("slot:modal:/feed", "layout:/feed", "active")],
+      ),
+      displayUrl: "https://example.com/photos/42",
+      interception: createInterceptionSnapshot(),
+      interceptionContext: "/feed",
+      matchedUrl: "/photos/42",
+      routeId: "route:/photos/42\u0000/feed",
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      currentSnapshot,
+      routeManifest,
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("hardNavigate");
+    if (decision.kind !== "hardNavigate") {
+      throw new Error("Expected hardNavigate decision");
+    }
+    expect(decision.reason).toBe("interceptionProofRejected");
+    expect(decision.trace.entries[0]?.code).toBe(
+      NavigationTraceReasonCodes.interceptedRejectedUndeclaredTopology,
+    );
+  });
+
+  it("rejects intercepted preservation when RouteManifest declares a different slot owner", () => {
+    const routeManifest = createTestRouteManifest([
+      {
+        layoutIds: ["layout:/", "layout:/feed", "layout:/other"],
+        pattern: "/feed",
+        rootBoundaryId: "root-boundary:/",
+        interceptions: [
+          {
+            ownerLayoutId: "layout:/feed",
+            slotId: "slot:modal:/feed",
+            sourcePattern: "/feed",
+            targetPattern: "/photos/:id",
+          },
+        ],
+      },
+      {
+        layoutIds: ["layout:/", "layout:/photos"],
+        pattern: "/photos/:id",
+        rootBoundaryId: "root-boundary:/",
+      },
+    ]);
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(null, []),
+      matchedUrl: "/feed",
+      routeId: "route:/feed",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(
+        null,
+        [],
+        [],
+        [createSlotBinding("slot:modal:/feed", "layout:/other", "active")],
+      ),
+      displayUrl: "https://example.com/photos/42",
+      interception: createInterceptionSnapshot(),
+      interceptionContext: "/feed",
+      matchedUrl: "/photos/42",
+      routeId: "route:/photos/42\u0000/feed",
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      currentSnapshot,
+      routeManifest,
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("hardNavigate");
+    if (decision.kind !== "hardNavigate") {
+      throw new Error("Expected hardNavigate decision");
+    }
+    expect(decision.reason).toBe("interceptionProofRejected");
+    expect(decision.trace.entries[0]?.code).toBe(
+      NavigationTraceReasonCodes.interceptedRejectedUndeclaredTopology,
+    );
   });
 
   it("approves intercepted preservation only from explicit source and slot proof", () => {

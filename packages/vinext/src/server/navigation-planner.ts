@@ -1,6 +1,10 @@
-import { matchRoutePattern } from "../routing/route-pattern.js";
+import { matchRoutePattern, matchRoutePatternPrefix } from "../routing/route-pattern.js";
 import { normalizePathnameForRouteMatch } from "../routing/utils.js";
-import type { RouteManifest, RouteManifestRoute } from "../routing/app-route-graph.js";
+import type {
+  RouteManifest,
+  RouteManifestInterception,
+  RouteManifestRoute,
+} from "../routing/app-route-graph.js";
 import { compareAppElementsSlotIds, type AppElementsSlotBinding } from "./app-elements.js";
 import {
   NavigationTraceReasonCodes,
@@ -330,6 +334,35 @@ function resolveRouteTopologySnapshot(options: {
   };
 }
 
+function findRouteManifestInterceptionForProof(
+  routeManifest: RouteManifest,
+  proof: InterceptionSnapshotV0,
+): RouteManifestInterception | null {
+  const sourceParts = splitMatchedUrlIntoRouteParts(proof.sourceMatchedUrl);
+  const targetParts = splitMatchedUrlIntoRouteParts(proof.targetMatchedUrl);
+  const targetRoute = findRouteManifestRouteByIdOrMatchedUrl({
+    matchedUrl: proof.targetMatchedUrl,
+    routeId: proof.targetRouteId,
+    routeManifest,
+  });
+  const interceptions = routeManifest.segmentGraph.interceptions;
+  if (!interceptions) return null;
+
+  for (const interception of interceptions.values()) {
+    if (interception.slotId !== proof.slotId) continue;
+    if (!matchRoutePatternPrefix(sourceParts, interception.sourcePatternParts)) {
+      continue;
+    }
+    if (matchRoutePattern(targetParts, interception.targetPatternParts) === null) continue;
+    if (interception.targetRouteId !== null && targetRoute?.id !== interception.targetRouteId) {
+      continue;
+    }
+    return interception;
+  }
+
+  return null;
+}
+
 function createRootBoundaryTraceFields(options: {
   currentRootLayoutTreePath: string | null;
   event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
@@ -568,6 +601,7 @@ function createInterceptionProofRejectedDecision(options: {
 function validateInterceptedPreservation(options: {
   currentSnapshot: RouteSnapshotV0;
   currentTopology: RouteTopologySnapshot;
+  routeManifest: RouteManifest | null;
   targetSnapshot: RouteSnapshotV0;
   targetTopology: RouteTopologySnapshot;
 }): InterceptedPreservationValidation {
@@ -597,6 +631,17 @@ function validateInterceptedPreservation(options: {
     };
   }
 
+  const declaredInterception =
+    options.routeManifest === null
+      ? null
+      : findRouteManifestInterceptionForProof(options.routeManifest, proof);
+  if (options.routeManifest !== null && declaredInterception === null) {
+    return {
+      kind: "rejected",
+      reasonCode: NavigationTraceReasonCodes.interceptedRejectedUndeclaredTopology,
+    };
+  }
+
   const preservedLayoutIds = resolveSameLayoutAncestorPersistenceForTopologies(
     options.currentTopology,
     options.targetTopology,
@@ -621,6 +666,15 @@ function validateInterceptedPreservation(options: {
     return {
       kind: "rejected",
       reasonCode: NavigationTraceReasonCodes.interceptedRejectedMissingSlotProof,
+    };
+  }
+  if (
+    declaredInterception !== null &&
+    targetSlotBinding.ownerLayoutId !== declaredInterception.ownerLayoutId
+  ) {
+    return {
+      kind: "rejected",
+      reasonCode: NavigationTraceReasonCodes.interceptedRejectedUndeclaredTopology,
     };
   }
 
@@ -677,6 +731,7 @@ function planFlightResponseArrived(options: {
     const validation = validateInterceptedPreservation({
       currentSnapshot: options.state.visibleSnapshot,
       currentTopology,
+      routeManifest: options.routeManifest,
       targetSnapshot,
       targetTopology,
     });
