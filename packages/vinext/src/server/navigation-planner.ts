@@ -215,14 +215,21 @@ function getMatchedUrlPathname(matchedUrl: string): string {
   }
 }
 
+function splitMatchedUrlIntoRouteParts(matchedUrl: string): string[] {
+  return normalizePathnameForRouteMatch(getMatchedUrlPathname(matchedUrl))
+    .split("/")
+    .filter((part) => part.length > 0);
+}
+
 function findRouteManifestRouteByMatchedUrl(
   routeManifest: RouteManifest,
   matchedUrl: string,
 ): RouteManifestRoute | null {
-  const urlParts = normalizePathnameForRouteMatch(getMatchedUrlPathname(matchedUrl))
-    .split("/")
-    .filter((part) => part.length > 0);
+  const urlParts = splitMatchedUrlIntoRouteParts(matchedUrl);
 
+  // RouteManifest preserves buildAppRouteGraph's compareRoutes() order, so the
+  // first pattern match follows the same static/dynamic/catch-all precedence as
+  // request-time route matching instead of raw filesystem scan order.
   for (const route of routeManifest.segmentGraph.routes.values()) {
     if (matchRoutePattern(urlParts, route.patternParts) !== null) {
       return route;
@@ -233,10 +240,7 @@ function findRouteManifestRouteByMatchedUrl(
 }
 
 function routeManifestRouteMatchesUrl(route: RouteManifestRoute, matchedUrl: string): boolean {
-  const urlParts = normalizePathnameForRouteMatch(getMatchedUrlPathname(matchedUrl))
-    .split("/")
-    .filter((part) => part.length > 0);
-  return matchRoutePattern(urlParts, route.patternParts) !== null;
+  return matchRoutePattern(splitMatchedUrlIntoRouteParts(matchedUrl), route.patternParts) !== null;
 }
 
 function findRouteManifestRouteByIdOrMatchedUrl(options: {
@@ -311,6 +315,8 @@ function resolveRouteTopologySnapshot(options: {
     return createSnapshotRouteTopology(options.snapshot);
   }
 
+  // Intercepted targets carry the source route's tree topology, not the direct
+  // target route's, so direct-target manifest slot bindings do not apply.
   const shouldUseManifestSlotBindings =
     options.slotBindingSource === "manifestTarget" && options.snapshot.interception === null;
 
