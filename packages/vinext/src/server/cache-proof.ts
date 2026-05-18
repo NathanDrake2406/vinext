@@ -1,5 +1,6 @@
 import type { AppRouteSemanticIds } from "../routing/app-route-graph.js";
 import { fnv1a64 } from "../utils/hash.js";
+import { findSortedStringPosition } from "../utils/sorted-array.js";
 
 export const CACHE_PROOF_MODEL_SCHEMA_VERSION = 1;
 export type CacheProofModelSchemaVersion = 1;
@@ -740,28 +741,6 @@ function normalizeRouteBudget(input: CacheVariantRouteBudget): CacheVariantRoute
     routeId: input.routeId,
     variantCacheKeys: sortedUnique(input.variantCacheKeys),
   };
-}
-
-function findSortedStringPosition(
-  values: readonly string[],
-  candidate: string,
-): { found: boolean; index: number } {
-  let lower = 0;
-  let upper = values.length;
-
-  while (lower < upper) {
-    const middle = lower + Math.floor((upper - lower) / 2);
-    if (values[middle] === candidate) {
-      return { found: true, index: middle };
-    }
-    if (values[middle] < candidate) {
-      lower = middle + 1;
-    } else {
-      upper = middle;
-    }
-  }
-
-  return { found: false, index: lower };
 }
 
 function buildRouteVariantCeilingFallback(
