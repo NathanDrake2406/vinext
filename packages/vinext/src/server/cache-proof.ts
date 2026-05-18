@@ -742,6 +742,28 @@ function normalizeRouteBudget(input: CacheVariantRouteBudget): CacheVariantRoute
   };
 }
 
+function findSortedStringPosition(
+  values: readonly string[],
+  candidate: string,
+): { found: boolean; index: number } {
+  let lower = 0;
+  let upper = values.length;
+
+  while (lower < upper) {
+    const middle = lower + Math.floor((upper - lower) / 2);
+    if (values[middle] === candidate) {
+      return { found: true, index: middle };
+    }
+    if (values[middle] < candidate) {
+      lower = middle + 1;
+    } else {
+      upper = middle;
+    }
+  }
+
+  return { found: false, index: lower };
+}
+
 function buildRouteVariantCeilingFallback(
   variant: CacheVariant,
   existingVariantCount: number,
@@ -785,7 +807,10 @@ export function enforceCacheVariantRouteBudget(input: {
     },
   );
   const existingVariantCount = routeBudget.variantCacheKeys.length;
-  const isKnownVariant = routeBudget.variantCacheKeys.includes(input.variant.cacheKey);
+  const variantKeyPosition = findSortedStringPosition(
+    routeBudget.variantCacheKeys,
+    input.variant.cacheKey,
+  );
 
   if (existingVariantCount > input.variant.budget.maxVariantsPerRoute) {
     return {
@@ -795,7 +820,7 @@ export function enforceCacheVariantRouteBudget(input: {
     };
   }
 
-  if (isKnownVariant) {
+  if (variantKeyPosition.found) {
     return {
       kind: "variant",
       variant: input.variant,
@@ -817,7 +842,11 @@ export function enforceCacheVariantRouteBudget(input: {
     variant: input.variant,
     routeBudget: {
       routeId: routeBudget.routeId,
-      variantCacheKeys: sortedUnique([...routeBudget.variantCacheKeys, input.variant.cacheKey]),
+      variantCacheKeys: [
+        ...routeBudget.variantCacheKeys.slice(0, variantKeyPosition.index),
+        input.variant.cacheKey,
+        ...routeBudget.variantCacheKeys.slice(variantKeyPosition.index),
+      ],
     },
     didConsumeRouteVariantBudget: true,
   };

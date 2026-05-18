@@ -392,6 +392,9 @@ describe("disabled cache proof model", () => {
       throw new Error("Expected second route variant to be admitted");
     }
     expect(second.routeBudget.variantCacheKeys).toHaveLength(2);
+    expect(second.routeBudget.variantCacheKeys).toEqual(
+      [...second.routeBudget.variantCacheKeys].sort(),
+    );
     expect(second.didConsumeRouteVariantBudget).toBe(true);
 
     const overBudget = buildCacheVariantWithRouteBudget({
