@@ -226,6 +226,35 @@ function commitHistoryTraversalIndex(index: number | null): void {
   }
 }
 
+function commitHashOnlyNavigation(
+  href: string,
+  historyUpdateMode: Exclude<HistoryUpdateMode, undefined>,
+): void {
+  const preserveExistingState = historyUpdateMode === "replace";
+  const navigationHistoryIndex = allocateNavigationHistoryTraversalIndex(historyUpdateMode);
+  const previousNextUrl = hasBrowserRouterState()
+    ? getBrowserRouterState().previousNextUrl
+    : readHistoryStatePreviousNextUrl(window.history.state);
+  const historyState = createHistoryStateWithNavigationMetadata(
+    preserveExistingState ? window.history.state : null,
+    {
+      previousNextUrl,
+      traversalIndex: navigationHistoryIndex,
+    },
+  );
+
+  if (historyUpdateMode === "replace") {
+    replaceHistoryStateWithoutNotify(historyState, "", href);
+  } else {
+    pushHistoryStateWithoutNotify(historyState, "", href);
+  }
+  commitHistoryTraversalIndex(navigationHistoryIndex);
+}
+
+function commitTraversalIndexFromHistoryState(historyState: unknown): void {
+  commitHistoryTraversalIndex(readHistoryStateTraversalIndex(historyState));
+}
+
 function getBrowserRouterState(): AppRouterState {
   return browserNavigationController.getBrowserRouterState();
 }
@@ -1113,6 +1142,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // header comment: "the segment cache contains the actual RSC data which
   // needs to be re-fetched."
   window.__VINEXT_CLEAR_NAV_CACHES__ = clearClientNavigationCaches;
+  window.__VINEXT_RSC_COMMIT_HASH_NAVIGATION__ = commitHashOnlyNavigation;
 
   window.__VINEXT_RSC_NAVIGATE__ = async function navigateRsc(
     href: string,
@@ -1475,6 +1505,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     const href = window.location.href;
     if (isSameAppRoutePopstateTarget(href)) {
       notifyAppRouterTransitionStart(href, "traverse");
+      commitTraversalIndexFromHistoryState(event.state);
       restorePopstateScrollPosition(event.state);
       return;
     }
