@@ -551,12 +551,12 @@ function planFlightResponseArrived(options: {
       preserveElementIds: resolveCurrentRootBoundaryCommitElementPersistence({
         currentSnapshot: options.state.visibleSnapshot,
         lane: options.event.token.lane,
-        targetSnapshot: options.event.result.targetSnapshot,
+        targetSnapshot,
       }),
       preservePreviousSlotIds: resolveCurrentRootBoundaryCommitSlotPersistence({
         currentSnapshot: options.state.visibleSnapshot,
         lane: options.event.token.lane,
-        targetSnapshot: options.event.result.targetSnapshot,
+        targetSnapshot,
       }),
       reason: "currentRootBoundary",
       targetSnapshot,

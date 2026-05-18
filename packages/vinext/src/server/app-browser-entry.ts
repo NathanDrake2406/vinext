@@ -882,6 +882,8 @@ function registerServerActionCallback(): void {
     // which sends `Next-URL` on action POSTs when the current tree contains
     // an interception route.
     const actionInitiation = createActionInitiationSnapshot();
+    // Keep history aligned with the captured snapshot. Action POST headers
+    // read from actionInitiation, not from history, after this point.
     syncCurrentHistoryStatePreviousNextUrl(actionInitiation.routerState.previousNextUrl);
     const body = await encodeReply(args, { temporaryReferences });
     const { headers } = resolveServerActionRequestState({

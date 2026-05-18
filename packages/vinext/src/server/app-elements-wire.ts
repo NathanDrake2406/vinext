@@ -323,17 +323,16 @@ function createAppElementsWireMetadataEntries(
   // Empty slot binding metadata is intentionally omitted. Missing
   // __slotBindings round-trips as [] and means "no route-state proof", so
   // default/unmatched slot preservation is not promoted for that payload.
-  const interceptionEntry = input.interception
-    ? { [APP_INTERCEPTION_KEY]: input.interception }
-    : {};
+  const entriesWithInterception = input.interception
+    ? { ...entries, [APP_INTERCEPTION_KEY]: input.interception }
+    : entries;
   if (input.slotBindings && input.slotBindings.length > 0) {
     return {
-      ...entries,
-      ...interceptionEntry,
+      ...entriesWithInterception,
       [APP_SLOT_BINDINGS_KEY]: normalizeAppElementsSlotBindings(input.slotBindings, { layoutIds }),
     };
   }
-  return { ...entries, ...interceptionEntry };
+  return entriesWithInterception;
 }
 
 export function normalizeAppElements(elements: AppWireElements): AppElements {

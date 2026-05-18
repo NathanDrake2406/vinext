@@ -658,6 +658,70 @@ describe("navigationPlanner root-boundary decisions", () => {
     );
   });
 
+  it("rejects intercepted preservation when proof target does not match the rendered route", () => {
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/", ["layout:/", "layout:/feed"]),
+      matchedUrl: "/feed",
+      routeId: "route:/feed",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(
+        "/",
+        ["layout:/", "layout:/feed"],
+        [],
+        [createSlotBinding("slot:modal:/feed", "layout:/feed", "active")],
+      ),
+      displayUrl: "https://example.com/photos/42",
+      interception: createInterceptionSnapshot({ targetMatchedUrl: "/photos/99" }),
+      interceptionContext: "/feed",
+      matchedUrl: "/photos/42",
+      routeId: "route:/photos/42\u0000/feed",
+    };
+
+    const decision = planFlightResponseFromSnapshots({ currentSnapshot, targetSnapshot });
+
+    expect(decision.kind).toBe("hardNavigate");
+    if (decision.kind !== "hardNavigate") {
+      throw new Error("Expected hardNavigate decision");
+    }
+    expect(decision.reason).toBe("interceptionProofRejected");
+    expect(decision.trace.entries[0]?.code).toBe(
+      NavigationTraceReasonCodes.interceptedRejectedTargetMismatch,
+    );
+  });
+
+  it("rejects intercepted preservation when source and target share no layout root", () => {
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/", ["layout:/", "layout:/feed"]),
+      matchedUrl: "/feed",
+      routeId: "route:/feed",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(
+        "/marketing",
+        ["layout:/marketing"],
+        [],
+        [createSlotBinding("slot:modal:/feed", "layout:/marketing", "active")],
+      ),
+      displayUrl: "https://example.com/photos/42",
+      interception: createInterceptionSnapshot(),
+      interceptionContext: "/feed",
+      matchedUrl: "/photos/42",
+      routeId: "route:/photos/42\u0000/feed",
+    };
+
+    const decision = planFlightResponseFromSnapshots({ currentSnapshot, targetSnapshot });
+
+    expect(decision.kind).toBe("hardNavigate");
+    if (decision.kind !== "hardNavigate") {
+      throw new Error("Expected hardNavigate decision");
+    }
+    expect(decision.reason).toBe("interceptionProofRejected");
+    expect(decision.trace.entries[0]?.code).toBe(
+      NavigationTraceReasonCodes.interceptedRejectedIncompatibleRoot,
+    );
+  });
+
   it("rejects intercepted preservation when the target slot is not proven active", () => {
     const currentSnapshot: RouteSnapshotV0 = {
       ...createRouteSnapshot("/", ["layout:/", "layout:/feed"]),

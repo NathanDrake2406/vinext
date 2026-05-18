@@ -410,6 +410,8 @@ export async function createPendingNavigationCommit(options: {
   nextElements: Promise<AppElements>;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   operationLane: OperationLane;
+  // Advisory: non-intercepted responses clear this even when callers pass the
+  // current visible previousNextUrl.
   previousNextUrl?: string | null;
   renderId: number;
   type: "navigate" | "replace" | "traverse";
