@@ -998,6 +998,27 @@ describe("disabled cache proof model", () => {
     expect(JSON.stringify(dynamicProof)).not.toContain("secret");
   });
 
+  it("rejects static layout proof when boundary outcome is not successful", () => {
+    const output = createLayoutOutput();
+    const variant = buildLayoutVariant({ output });
+    const observation = buildLayoutObservation({
+      boundaryOutcome: { kind: "error", digest: "ERR_TEST" },
+      output,
+    });
+
+    const proof = buildStaticLayoutReuseProof({
+      candidateObservation: observation,
+      candidateVariant: variant,
+      currentOutput: output,
+    });
+
+    const fallback = expectStaticLayoutProofRejection(proof, "CP_BOUNDARY_OUTCOME_MISMATCH");
+    expect(fallback.fields).toEqual({
+      candidateKind: "error",
+      expectedKind: "success",
+    });
+  });
+
   it("rejects private variant dimensions for static layout proof", () => {
     const output = createLayoutOutput();
     const variant = buildLayoutVariant({
