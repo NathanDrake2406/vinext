@@ -728,6 +728,46 @@ describe("navigationPlanner root-boundary decisions", () => {
     expect(decision.proposal.preserveElementIds).toEqual(["layout:/", "layout:/dashboard"]);
   });
 
+  it("does not let stale manifest route IDs override the matched URL", () => {
+    const routeManifest = createTestRouteManifest([
+      {
+        layoutIds: ["layout:/app"],
+        pattern: "/app",
+        rootBoundaryId: "root-boundary:/app",
+      },
+      {
+        layoutIds: ["layout:/marketing"],
+        pattern: "/marketing",
+        rootBoundaryId: "root-boundary:/marketing",
+      },
+    ]);
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(null, []),
+      displayUrl: "https://example.com/app",
+      matchedUrl: "/app",
+      routeId: "route:/app",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(null, []),
+      displayUrl: "https://example.com/app",
+      matchedUrl: "/app",
+      routeId: "route:/marketing",
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      currentSnapshot,
+      routeManifest,
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proposeCommit decision");
+    }
+    expect(decision.proposal.reason).toBe("currentRootBoundary");
+    expect(decision.proposal.preserveElementIds).toEqual(["layout:/app"]);
+  });
+
   it("matches concrete dynamic URLs to manifest route patterns", () => {
     const routeManifest = createTestRouteManifest([
       {

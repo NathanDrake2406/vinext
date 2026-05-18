@@ -232,16 +232,25 @@ function findRouteManifestRouteByMatchedUrl(
   return null;
 }
 
+function routeManifestRouteMatchesUrl(route: RouteManifestRoute, matchedUrl: string): boolean {
+  const urlParts = normalizePathnameForRouteMatch(getMatchedUrlPathname(matchedUrl))
+    .split("/")
+    .filter((part) => part.length > 0);
+  return matchRoutePattern(urlParts, route.patternParts) !== null;
+}
+
 function findRouteManifestRouteByIdOrMatchedUrl(options: {
   matchedUrl: string;
   routeId: string;
   routeManifest: RouteManifest;
 }): RouteManifestRoute | null {
   const routeId = stripInterceptionContextFromRouteId(options.routeId);
-  return (
-    options.routeManifest.segmentGraph.routes.get(routeId) ??
-    findRouteManifestRouteByMatchedUrl(options.routeManifest, options.matchedUrl)
-  );
+  const route = options.routeManifest.segmentGraph.routes.get(routeId);
+  if (route && routeManifestRouteMatchesUrl(route, options.matchedUrl)) {
+    return route;
+  }
+
+  return findRouteManifestRouteByMatchedUrl(options.routeManifest, options.matchedUrl);
 }
 
 function findRouteManifestRouteForSnapshot(

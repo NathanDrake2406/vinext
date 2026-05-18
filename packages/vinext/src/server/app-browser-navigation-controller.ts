@@ -57,7 +57,7 @@ type SameUrlServerActionLifecycleOptions = {
 type BrowserNavigationControllerDeps = {
   commitClientNavigationState?: typeof commitClientNavigationState;
   performHardNavigation?: (href: string, mode?: HardNavigationMode) => boolean;
-  routeManifest?: RouteManifest | null;
+  getRouteManifest?: () => RouteManifest | null;
   syncHistoryStatePreviousNextUrl?: (previousNextUrl: string | null) => void;
 };
 
@@ -195,7 +195,7 @@ export function createAppBrowserNavigationController(
   const commitClientNavigationStateImpl =
     deps.commitClientNavigationState ?? commitClientNavigationState;
   const performHardNavigation = deps.performHardNavigation ?? performHardNavigationWithLoopGuard;
-  const routeManifest = deps.routeManifest ?? null;
+  const getRouteManifest = deps.getRouteManifest ?? (() => null);
   const syncHistoryStatePreviousNextUrl = deps.syncHistoryStatePreviousNextUrl ?? (() => {});
 
   // These are plain module-level variables (inside the controller closure),
@@ -523,7 +523,7 @@ export function createAppBrowserNavigationController(
         activeNavigationId,
         currentState: getBrowserRouterState(),
         pending,
-        routeManifest,
+        routeManifest: getRouteManifest(),
         startedNavigationId: options.navId,
         targetHref: options.targetHref,
       });
@@ -602,7 +602,7 @@ export function createAppBrowserNavigationController(
       renderId: allocateRenderId(),
       operationLane: "server-action",
       startedNavigationId,
-      routeManifest,
+      routeManifest: getRouteManifest(),
       targetHref,
       type: "navigate",
     });
@@ -622,7 +622,7 @@ export function createAppBrowserNavigationController(
         activeNavigationId,
         currentState: getBrowserRouterState(),
         pending,
-        routeManifest,
+        routeManifest: getRouteManifest(),
         startedNavigationId,
         targetHref,
       });

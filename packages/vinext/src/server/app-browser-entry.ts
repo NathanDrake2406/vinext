@@ -156,7 +156,7 @@ function getBrowserRouteManifest(): RouteManifest | null {
 }
 
 const browserNavigationController = createAppBrowserNavigationController({
-  routeManifest: getBrowserRouteManifest(),
+  getRouteManifest: getBrowserRouteManifest,
   syncHistoryStatePreviousNextUrl: syncCurrentHistoryStatePreviousNextUrl,
 });
 const discardedServerActionRefreshScheduler = createDiscardedServerActionRefreshScheduler({
