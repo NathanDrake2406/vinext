@@ -832,7 +832,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
 
   // Check beforePopState callback
   if (_beforePopStateCb !== undefined) {
-    const shouldContinue = (_beforePopStateCb as BeforePopStateCallback)({
+    const shouldContinue = _beforePopStateCb({
       url: appUrl,
       as: appUrl,
       options: { shallow: false },
