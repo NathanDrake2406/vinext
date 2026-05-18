@@ -198,4 +198,58 @@ describe("Script SSR rendering", () => {
     expect(appendedScripts).toHaveLength(1);
     expect(appendedScripts[0]!.attrs.nonce).toBe("property-nonce");
   });
+
+  it("clears forced async execution when async is explicitly false", () => {
+    type MockScript = {
+      async: boolean;
+      attrs: Record<string, string>;
+      src: string;
+      setAttribute(name: string, value: string): void;
+      removeAttribute(name: string): void;
+      getAttribute(name: string): string | null;
+      addEventListener(): void;
+    };
+
+    const appendedScripts: MockScript[] = [];
+    class MockHTMLElement {}
+
+    const createdScript: MockScript = {
+      async: true,
+      attrs: {},
+      src: "",
+      setAttribute(name: string, value: string) {
+        this.attrs[name] = value;
+      },
+      removeAttribute(name: string) {
+        Reflect.deleteProperty(this.attrs, name);
+      },
+      getAttribute(name: string): string | null {
+        return this.attrs[name] ?? null;
+      },
+      addEventListener() {},
+    };
+
+    setGlobalValue("HTMLElement", MockHTMLElement);
+    setGlobalValue("window", {});
+    setGlobalValue("document", {
+      querySelector() {
+        return null;
+      },
+      createElement(tagName: string) {
+        expect(tagName).toBe("script");
+        return createdScript;
+      },
+      body: {
+        appendChild(element: unknown) {
+          appendedScripts.push(element as typeof createdScript);
+        },
+      },
+    });
+
+    handleClientScriptLoad({ src: "/ordered-script.js", async: false });
+
+    expect(appendedScripts).toHaveLength(1);
+    expect(appendedScripts[0]!.async).toBe(false);
+    expect(appendedScripts[0]!.attrs).not.toHaveProperty("async");
+  });
 });
