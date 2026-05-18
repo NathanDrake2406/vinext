@@ -16,7 +16,7 @@ import { matchRoutePattern } from "../routing/route-pattern.js";
 import { normalizePathnameForRouteMatch } from "../routing/utils.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
 import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
-import { normalizePath } from "./normalize-path.js";
+import { isInterceptionMatchedUrlPath, normalizePath } from "./normalize-path.js";
 
 export type { AppPageErrorModule, AppPageRouteWiringRoute } from "./app-page-route-wiring.js";
 
@@ -78,6 +78,11 @@ export type BuildPageElementsOptions<
   rootUnauthorizedModule?: TModule | null;
   /** File-based metadata routes (favicon, manifest, sitemap, etc.). */
   metadataRoutes: readonly MetadataFileRoute[];
+  /**
+   * Configured next.config `basePath`. Threaded through `resolveAppPageHead`
+   * so file-based metadata route URLs emitted in <head> are prefixed.
+   */
+  basePath?: string;
 };
 
 /**
@@ -157,6 +162,7 @@ export async function buildPageElements<
     pageSearchParams,
     viewport: resolvedViewport,
   } = await resolveAppPageHead({
+    basePath: options.basePath ?? "",
     layoutModules: route.layouts,
     layoutTreePositions: route.layoutTreePositions,
     metadataRoutes,
@@ -231,16 +237,7 @@ function createAppPageInterceptionProof<TModule extends AppPageModule>(
 }
 
 function normalizeInterceptionProofMatchedUrl(value: string | null): string | null {
-  if (
-    value === null ||
-    !value.startsWith("/") ||
-    value.startsWith("//") ||
-    value.includes("?") ||
-    value.includes("#") ||
-    value.includes("\0")
-  ) {
-    return null;
-  }
+  if (value === null || !isInterceptionMatchedUrlPath(value)) return null;
 
   return normalizePath(normalizePathnameForRouteMatch(value));
 }
