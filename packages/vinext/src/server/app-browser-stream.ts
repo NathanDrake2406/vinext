@@ -1,25 +1,14 @@
 import type { ReactFormState } from "react-dom/client";
+import type { NavigationRuntimeSnapshot } from "../client/navigation-runtime.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 import { decodeRscEmbeddedChunk, type RscEmbeddedChunk } from "./app-rsc-embedded-chunks.js";
 
-type NavigationSnapshot = {
-  pathname: string;
-  searchParams: [string, string][];
-};
-
-type LegacyRscEmbedData = {
-  rsc: RscEmbeddedChunk[];
-  params?: Record<string, string | string[]>;
-  nav?: NavigationSnapshot;
-};
-
 type VinextBrowserGlobals = {
-  __VINEXT_RSC__?: LegacyRscEmbedData;
   __VINEXT_RSC_CHUNKS__?: RscEmbeddedChunk[];
   __VINEXT_RSC_DONE__?: boolean;
   [RSC_FORM_STATE_GLOBAL]?: ReactFormState;
   __VINEXT_RSC_PARAMS__?: Record<string, string | string[]>;
-  __VINEXT_RSC_NAV__?: NavigationSnapshot;
+  __VINEXT_RSC_NAV__?: NavigationRuntimeSnapshot;
 };
 
 export function getVinextBrowserGlobal(): typeof globalThis & VinextBrowserGlobals {

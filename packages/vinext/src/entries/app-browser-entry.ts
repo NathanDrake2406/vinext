@@ -1,4 +1,4 @@
-import { resolveRuntimeEntryModule } from "./runtime-entry-module.js";
+import { resolveClientRuntimeModule, resolveRuntimeEntryModule } from "./runtime-entry-module.js";
 import type { VinextLinkPrefetchRoute } from "../client/vinext-next-data.js";
 import type { AppRoute } from "../routing/app-router.js";
 import type { RouteManifest } from "../routing/app-route-graph.js";
@@ -15,6 +15,7 @@ export function generateBrowserEntry(
   routeManifest: RouteManifest | null = null,
 ): string {
   const entryPath = resolveRuntimeEntryModule("app-browser-entry");
+  const navigationRuntimePath = resolveClientRuntimeModule("navigation-runtime");
   const prefetchRoutes: VinextLinkPrefetchRoute[] = routes
     .filter((route) => isLinkPrefetchRoute(route))
     .map((route) => ({
@@ -22,8 +23,12 @@ export function generateBrowserEntry(
       isDynamic: route.isDynamic,
     }));
 
-  return `window.__VINEXT_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(prefetchRoutes)};
-window.__VINEXT_ROUTE_MANIFEST__ = ${buildRouteManifestExpression(routeManifest)};
+  return `import { registerNavigationRuntimeBootstrap } from ${JSON.stringify(navigationRuntimePath)};
+
+window.__VINEXT_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(prefetchRoutes)};
+registerNavigationRuntimeBootstrap({
+    routeManifest: ${buildRouteManifestExpression(routeManifest)}
+});
 import ${JSON.stringify(entryPath)};`;
 }
 

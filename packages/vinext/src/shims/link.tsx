@@ -19,6 +19,11 @@ import React, {
   type MouseEvent,
   type TouchEvent,
 } from "react";
+import {
+  getNavigationRuntime,
+  hasAppNavigationRuntime,
+  registerNavigationRuntimeFunctions,
+} from "../client/navigation-runtime.js";
 // Import shared RSC prefetch utilities from navigation shim (relative path
 // so this resolves both via the Vite plugin and in direct vitest imports)
 import {
@@ -156,9 +161,7 @@ function toSameOriginRouteHref(href: string): string | null {
 }
 
 function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
-  return typeof window !== "undefined" && typeof window.__VINEXT_RSC_NAVIGATE__ === "function"
-    ? "app"
-    : "pages";
+  return hasAppNavigationRuntime() ? "app" : "pages";
 }
 
 export function canAutoPrefetchFullAppRoute(href: string): boolean {
@@ -206,7 +209,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
 
   schedule(() => {
     void (async () => {
-      if (typeof window.__VINEXT_RSC_NAVIGATE__ === "function") {
+      if (hasAppNavigationRuntime()) {
         // `auto`/`null`/undefined should not behave like `prefetch={true}` for
         // App Router dynamic routes. Next.js may prefetch a loading-boundary
         // shell for dynamic routes, but vinext's current client cache stores
@@ -286,7 +289,7 @@ function setVisibleLinkPrefetch(instance: LinkPrefetchInstance, isVisible: boole
 
 function registerVisibleLinkPing(): void {
   if (typeof window === "undefined") return;
-  window.__VINEXT_PING_VISIBLE_LINKS__ = pingVisibleLinkPrefetches;
+  registerNavigationRuntimeFunctions({ pingVisibleLinks: pingVisibleLinkPrefetches });
 }
 
 function pingVisibleLinkPrefetches(): void {
@@ -591,7 +594,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
 
     // App Router: delegate to navigateClientSide which handles scroll save,
     // hash-only changes, RSC fetch, and two-phase URL commit.
-    if (typeof window.__VINEXT_RSC_NAVIGATE__ === "function") {
+    if (getNavigationRuntime()?.functions.navigate) {
       setPending(true);
       React.startTransition(() => {
         void navigateClientSide(navigateHref, replace ? "replace" : "push", scroll, true).finally(

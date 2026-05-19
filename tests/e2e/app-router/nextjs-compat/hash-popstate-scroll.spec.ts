@@ -149,12 +149,26 @@ test.describe("Next.js compat: hash popstate scroll", () => {
     await expect(page).toHaveURL(`${BASE}/nextjs-compat/hash-popstate-scroll#content`);
 
     await page.evaluate(() => {
+      type TestNavigate = (
+        href: string,
+        redirectDepth?: number,
+        navigationKind?: "navigate" | "refresh" | "prefetch",
+        historyUpdateMode?: "push" | "replace",
+        previousNextUrlOverride?: string | null,
+        programmaticTransition?: boolean,
+      ) => Promise<unknown>;
       const testWindow = window as Window & { __vinextHashPopstateRscCalls?: number };
-      const originalNavigate = window.__VINEXT_RSC_NAVIGATE__;
+      const runtime = Reflect.get(window, Symbol.for("vinext.navigationRuntime")) as
+        | { functions?: { navigate?: TestNavigate } }
+        | undefined;
+      const originalNavigate = runtime?.functions?.navigate ?? null;
       if (typeof originalNavigate !== "function") {
-        throw new Error("__VINEXT_RSC_NAVIGATE__ is not installed");
+        throw new Error("App Router navigation runtime is not installed");
       }
-      window.__VINEXT_RSC_NAVIGATE__ = async (...args) => {
+      if (!runtime?.functions) {
+        throw new Error("App Router navigation runtime functions are not installed");
+      }
+      runtime.functions.navigate = async (...args: Parameters<TestNavigate>) => {
         testWindow.__vinextHashPopstateRscCalls =
           (testWindow.__vinextHashPopstateRscCalls ?? 0) + 1;
         return originalNavigate(...args);

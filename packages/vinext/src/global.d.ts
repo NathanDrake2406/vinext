@@ -18,7 +18,6 @@
 
 import type { Root } from "react-dom/client";
 import type { OnRequestErrorHandler } from "./server/instrumentation";
-import type { RouteManifest } from "./routing/app-route-graph";
 import type { CachedRscResponse, PrefetchCacheEntry } from "vinext/shims/navigation";
 
 // `window.next` is declared inline in `./client/window-next.ts` (mirroring
@@ -85,60 +84,6 @@ declare global {
     __VINEXT_RSC_ROOT__: Root | undefined;
 
     /**
-     * The client-side RSC navigation function for App Router.
-     * Registered by the browser RSC entry on `window` so that the navigation
-     * shim, Link, and Form can trigger RSC re-fetches without a direct import.
-     *
-     * @param href - The destination URL (may be absolute or relative).
-     * @param redirectDepth - Internal parameter used to detect redirect loops.
-     * @param navigationKind - Internal hint for traversal vs regular navigation.
-     * @param historyUpdateMode - Internal hint for when history should publish.
-     * @param traversalIntent - Internal popstate direction/history metadata.
-     */
-    __VINEXT_RSC_NAVIGATE__:
-      | ((
-          href: string,
-          redirectDepth?: number,
-          navigationKind?: "navigate" | "traverse" | "refresh",
-          historyUpdateMode?: "push" | "replace",
-          previousNextUrlOverride?: string | null,
-          programmaticTransition?: boolean,
-          traversalIntent?: {
-            direction: "back" | "forward" | "unknown";
-            historyState: unknown;
-            targetHistoryIndex: number | null;
-          },
-        ) => Promise<void>)
-      | undefined;
-
-    /**
-     * Invalidates the client-side RSC navigation caches (visited-response +
-     * prefetch). Installed by the browser RSC entry so that `router.refresh()`
-     * in the navigation shim can drop stale RSC payloads for routes other
-     * than the current one — required for Next.js parity, since refresh is
-     * specified to invalidate the entire segment cache (see
-     * Next.js refresh-reducer.ts).
-     */
-    __VINEXT_CLEAR_NAV_CACHES__: (() => void) | undefined;
-
-    /**
-     * Static App Router route graph read model embedded by the generated
-     * browser entry. Navigation planning uses it as the semantic authority
-     * for root-boundary, layout, and target parallel-slot facts.
-     */
-    __VINEXT_ROUTE_MANIFEST__: RouteManifest | null | undefined;
-
-    /**
-     * Commits an App Router hash-only navigation without fetching RSC data.
-     * Installed by the browser RSC entry so `next/navigation` and `next/link`
-     * can route app-owned hash-only history writes through the same vinext
-     * history metadata/index allocator as approved RSC commits.
-     */
-    __VINEXT_RSC_COMMIT_HASH_NAVIGATION__:
-      | ((href: string, historyUpdateMode: "push" | "replace", scroll: boolean) => void)
-      | undefined;
-
-    /**
      * A Promise that resolves when the current in-flight popstate RSC navigation
      * finishes rendering.
      * Set by the popstate handler in the browser RSC entry; read by
@@ -160,14 +105,6 @@ declare global {
      * Prevents duplicate prefetch requests for the same URL.
      */
     __VINEXT_RSC_PREFETCHED_URLS__: Set<string> | undefined;
-
-    /**
-     * Re-prefetches currently visible App Router links after cache invalidation
-     * or router-state changes. Installed by `next/link` when Link is loaded on
-     * the client; called opportunistically by navigation/cache owners without a
-     * direct import to avoid a circular dependency.
-     */
-    __VINEXT_PING_VISIBLE_LINKS__: (() => void) | undefined;
 
     // ── Next.js conventional globals ────────────────────────────────────────
     //
@@ -225,21 +162,6 @@ declare global {
    */
   // oxlint-disable-next-line no-var
   var __VINEXT_RSC_NAV__: { pathname: string; searchParams: [string, string][] } | undefined;
-
-  /**
-   * Legacy RSC embed format (pre-progressive-streaming).
-   * A single object containing all RSC chunks and the route params, embedded
-   * in a single `<script>` block.
-   * Still read by the browser entry for backwards compatibility with older
-   * cached HTML responses.
-   *
-   * @deprecated Use `__VINEXT_RSC_CHUNKS__` / `__VINEXT_RSC_DONE__` /
-   *   `__VINEXT_RSC_PARAMS__` instead.
-   */
-  // oxlint-disable-next-line no-var
-  var __VINEXT_RSC__:
-    | { rsc: (string | [3, string])[]; params: Record<string, string | string[]> }
-    | undefined;
 
   // ── globalThis globals — server-side / Cloudflare Workers ─────────────────
   //

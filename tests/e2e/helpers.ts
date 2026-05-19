@@ -18,12 +18,22 @@ export async function waitForHydration(page: Page): Promise<void> {
  */
 export async function waitForAppRouterHydration(page: Page): Promise<void> {
   await expect(async () => {
-    const ready = await page.evaluate(
-      () =>
+    const ready = await page.evaluate(() => {
+      const runtime = Reflect.get(window, Symbol.for("vinext.navigationRuntime"));
+      const hasNavigate =
+        typeof runtime === "object" &&
+        runtime !== null &&
+        "functions" in runtime &&
+        typeof runtime.functions === "object" &&
+        runtime.functions !== null &&
+        "navigate" in runtime.functions &&
+        typeof runtime.functions.navigate === "function";
+      return (
         Boolean(window.__VINEXT_RSC_ROOT__) &&
-        typeof window.__VINEXT_RSC_NAVIGATE__ === "function" &&
-        typeof window.__VINEXT_HYDRATED_AT === "number",
-    );
+        hasNavigate &&
+        typeof window.__VINEXT_HYDRATED_AT === "number"
+      );
+    });
     expect(ready).toBe(true);
   }).toPass({ timeout: 10_000 });
   await page.evaluate(

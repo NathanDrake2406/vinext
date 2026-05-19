@@ -197,7 +197,17 @@ test.describe("Intercepting Routes", () => {
       .toBe("/feed");
 
     await page.evaluate(async () => {
-      const navigate = Reflect.get(window, "__VINEXT_RSC_NAVIGATE__");
+      const runtime = Reflect.get(window, Symbol.for("vinext.navigationRuntime"));
+      const navigate =
+        typeof runtime === "object" &&
+        runtime !== null &&
+        "functions" in runtime &&
+        typeof runtime.functions === "object" &&
+        runtime.functions !== null &&
+        "navigate" in runtime.functions &&
+        typeof runtime.functions.navigate === "function"
+          ? runtime.functions.navigate
+          : null;
       if (typeof navigate !== "function") {
         throw new Error("Expected Vinext RSC navigation executor to be installed");
       }

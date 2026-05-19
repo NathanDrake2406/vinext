@@ -17,12 +17,23 @@ async function pushAppRoute(page: Page, pathname: string): Promise<void> {
 
 async function captureRscNavigationPromises(page: Page): Promise<void> {
   await page.evaluate((marker) => {
-    const navigate = window.__VINEXT_RSC_NAVIGATE__;
+    type TestNavigate = (
+      href: string,
+      redirectDepth?: number,
+      navigationKind?: "navigate" | "refresh" | "prefetch",
+      historyUpdateMode?: "push" | "replace",
+      previousNextUrlOverride?: string | null,
+      programmaticTransition?: boolean,
+    ) => Promise<unknown>;
+    const runtime = Reflect.get(window, Symbol.for("vinext.navigationRuntime")) as
+      | { functions?: { navigate?: TestNavigate } }
+      | undefined;
+    const navigate = runtime?.functions?.navigate ?? null;
     if (typeof navigate !== "function") {
-      throw new Error("window.__VINEXT_RSC_NAVIGATE__ is not installed");
+      throw new Error("App Router navigation runtime is not installed");
     }
 
-    const wrappedNavigate: typeof navigate = (
+    const wrappedNavigate: TestNavigate = (
       href,
       redirectDepth,
       navigationKind,
@@ -42,7 +53,10 @@ async function captureRscNavigationPromises(page: Page): Promise<void> {
       return pendingNavigation;
     };
 
-    window.__VINEXT_RSC_NAVIGATE__ = wrappedNavigate;
+    if (!runtime?.functions) {
+      throw new Error("App Router navigation runtime functions are not installed");
+    }
+    runtime.functions.navigate = wrappedNavigate;
   }, RSC_NAVIGATION_PROMISE_MARKER);
 }
 

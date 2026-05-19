@@ -169,8 +169,10 @@ describe("App Router generated manifest construction", () => {
       },
     ]);
 
+    expect(code).toContain("import { registerNavigationRuntimeBootstrap } from ");
     expect(code).toContain("window.__VINEXT_LINK_PREFETCH_ROUTES__ = ");
-    expect(code).toContain("window.__VINEXT_ROUTE_MANIFEST__ = null;");
+    expect(code).toContain("registerNavigationRuntimeBootstrap({");
+    expect(code).toContain("routeManifest: null");
     expect(code).toContain('{"patternParts":["about"],"isDynamic":false}');
     expect(code).toContain('{"patternParts":["blog",":slug"],"isDynamic":true}');
     expect(code).toContain('{"patternParts":["modal-host"],"isDynamic":false}');
@@ -192,7 +194,7 @@ describe("App Router generated manifest construction", () => {
       const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
       const code = generateBrowserEntry(graph.routes, graph.routeManifest);
 
-      expect(code).toContain("window.__VINEXT_ROUTE_MANIFEST__ = {");
+      expect(code).toContain("registerNavigationRuntimeBootstrap({");
       expect(code).toContain("graphVersion:");
       expect(code).toContain("routes: new Map(");
       expect(code).toContain("rootBoundaries: new Map(");

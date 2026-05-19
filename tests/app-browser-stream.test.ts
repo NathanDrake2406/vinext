@@ -9,7 +9,6 @@ const originalDocument = globalThis.document;
 const vinext = getVinextBrowserGlobal();
 
 function resetBrowserGlobals(): void {
-  delete vinext.__VINEXT_RSC__;
   delete vinext.__VINEXT_RSC_CHUNKS__;
   delete vinext.__VINEXT_RSC_DONE__;
   delete vinext.__VINEXT_RSC_PARAMS__;
