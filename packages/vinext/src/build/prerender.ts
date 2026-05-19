@@ -41,6 +41,7 @@ import { runWithHeadersContext, headersContextFromRequest } from "vinext/shims/h
 import { createValidFileMatcher, findFileWithExtensions } from "../routing/file-matcher.js";
 import { normalizeStaticPathsEntry, type StaticPathsEntry } from "../routing/route-pattern.js";
 import { VINEXT_PRERENDER_SECRET_HEADER } from "../server/headers.js";
+import { safeJsonStringify } from "../server/html.js";
 import { startProdServer } from "../server/prod-server.js";
 import { readPrerenderSecret } from "./server-manifest.js";
 export { readPrerenderSecret } from "./server-manifest.js";
@@ -193,7 +194,7 @@ const RSC_LEGACY_DONE_SCRIPT = "self.__VINEXT_RSC_DONE__=true";
 // safeJsonStringify(chunk) argument. Keep these in sync with the writer in
 // packages/vinext/src/server/app-ssr-stream.ts.
 const RSC_LEGACY_CHUNK_FULL_PREFIX = `${RSC_LEGACY_CHUNK_SCRIPT_PREFIX}self.__VINEXT_RSC_CHUNKS__.push(`;
-const RSC_RUNTIME_BOOTSTRAP_EXPRESSION = `((self[Symbol.for(${JSON.stringify(
+const RSC_RUNTIME_BOOTSTRAP_EXPRESSION = `((self[Symbol.for(${safeJsonStringify(
   NAVIGATION_RUNTIME_SYMBOL_DESCRIPTION,
 )})]??={bootstrap:{routeManifest:null},functions:{}}).bootstrap.rsc??={rsc:[]})`;
 const RSC_RUNTIME_CHUNK_FULL_PREFIX = `${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.rsc.push(`;

@@ -138,6 +138,8 @@ function isNavigationRuntimeRscBootstrap(value: unknown): value is NavigationRun
   const nav = Reflect.get(value, "nav");
   const params = Reflect.get(value, "params");
   const rsc = Reflect.get(value, "rsc");
+  // RSC chunks are trusted inline-script payloads, but the public runtime seam
+  // still rejects malformed ambient state before hydration consumes it.
   return (
     (done === undefined || typeof done === "boolean") &&
     (nav === undefined || isNavigationRuntimeSnapshot(nav)) &&
@@ -183,15 +185,23 @@ function isNavigationRuntimeRouteManifest(value: unknown): value is RouteManifes
   if (typeof graphVersion !== "string" || !isUnknownRecord(segmentGraph)) return false;
   const interceptions = Reflect.get(segmentGraph, "interceptions");
   const interceptionsBySlotId = Reflect.get(segmentGraph, "interceptionsBySlotId");
-  return (
-    ROUTE_MANIFEST_SEGMENT_GRAPH_MAP_KEYS.every(
+  if (
+    !ROUTE_MANIFEST_SEGMENT_GRAPH_MAP_KEYS.every(
       (key) => Reflect.get(segmentGraph, key) instanceof Map,
-    ) &&
-    interceptions instanceof Map &&
-    Array.from(interceptions.values()).every(isNavigationRuntimeInterception) &&
-    interceptionsBySlotId instanceof Map &&
-    Array.from(interceptionsBySlotId.values()).every(isNavigationRuntimeInterceptionArray)
-  );
+    ) ||
+    !(interceptions instanceof Map) ||
+    !(interceptionsBySlotId instanceof Map)
+  ) {
+    return false;
+  }
+
+  for (const interception of interceptions.values()) {
+    if (!isNavigationRuntimeInterception(interception)) return false;
+  }
+  for (const slotInterceptions of interceptionsBySlotId.values()) {
+    if (!isNavigationRuntimeInterceptionArray(slotInterceptions)) return false;
+  }
+  return true;
 }
 
 function isNavigationRuntimeBootstrap(value: unknown): value is NavigationRuntimeBootstrap {

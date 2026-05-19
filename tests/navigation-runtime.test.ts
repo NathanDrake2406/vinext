@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   NAVIGATION_RUNTIME_KEY,
   getNavigationRuntime,
+  hasAppNavigationRuntime,
   registerNavigationRuntimeBootstrap,
+  registerNavigationRuntimeFunctions,
   subscribeNavigationRuntimeRscChunk,
   type NavigationRuntime,
   type NavigationRuntimeBootstrap,
@@ -46,6 +48,27 @@ describe("navigation runtime contract", () => {
     subscribeNavigationRuntimeRscChunk("chunk");
 
     expect(getNavigationRuntime()?.bootstrap.rsc?.rsc).toEqual(["chunk"]);
+  });
+
+  it("reports app navigation availability from the registered navigate slot", () => {
+    Reflect.set(globalThis, "window", {});
+
+    expect(hasAppNavigationRuntime()).toBe(false);
+
+    registerNavigationRuntimeFunctions({
+      navigate: () => Promise.resolve(),
+    });
+
+    expect(hasAppNavigationRuntime()).toBe(true);
+  });
+
+  it("keeps server-side runtime creation detached from the window contract", () => {
+    Reflect.deleteProperty(globalThis, "window");
+
+    const runtime = subscribeNavigationRuntimeRscChunk("server-chunk");
+
+    expect(runtime.bootstrap.rsc?.rsc).toEqual(["server-chunk"]);
+    expect(getNavigationRuntime()).toBeNull();
   });
 
   it("rejects runtime objects with non-function capability slots", () => {
