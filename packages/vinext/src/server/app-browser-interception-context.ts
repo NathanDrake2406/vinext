@@ -17,6 +17,9 @@ type ResolveManifestNavigationInterceptionContextOptions = {
  * ask the server for an intercepted payload when the current URL is a declared
  * interception source for the target URL, without reintroducing snapshot
  * topology as route/layout/slot authority.
+ *
+ * When multiple manifest interceptions match, the first one wins. That order
+ * is owned by the deterministic route graph builder.
  */
 export function resolveManifestNavigationInterceptionContext(
   options: ResolveManifestNavigationInterceptionContextOptions,

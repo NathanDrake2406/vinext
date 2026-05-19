@@ -138,8 +138,9 @@ function isNavigationRuntimeRscBootstrap(value: unknown): value is NavigationRun
   const nav = Reflect.get(value, "nav");
   const params = Reflect.get(value, "params");
   const rsc = Reflect.get(value, "rsc");
-  // RSC chunks are trusted inline-script payloads, but the public runtime seam
-  // still rejects malformed ambient state before hydration consumes it.
+  // getNavigationRuntime() runs at bootstrap/read boundaries, not per chunk.
+  // Keep full validation here so malformed ambient state is rejected before
+  // hydration consumes it instead of caching a stale validation result.
   return (
     (done === undefined || typeof done === "boolean") &&
     (nav === undefined || isNavigationRuntimeSnapshot(nav)) &&
@@ -233,6 +234,11 @@ export function getNavigationRuntime(): NavigationRuntime | null {
   return isNavigationRuntime(runtime) ? runtime : null;
 }
 
+/**
+ * Returns the registered browser runtime, creating it when a window exists.
+ * Without a window, callers receive a detached runtime and must retain the
+ * returned reference themselves; server calls are intentionally not global.
+ */
 function ensureNavigationRuntime(): NavigationRuntime {
   const runtimeWindow = readRuntimeWindow();
   if (runtimeWindow === null) {

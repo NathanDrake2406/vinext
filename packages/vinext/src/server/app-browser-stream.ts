@@ -94,8 +94,9 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
       const liveRuntimeRsc =
         getNavigationRuntime() === null ? null : ensureNavigationRuntimeRscBootstrap();
       const arr = liveRuntimeRsc?.rsc ?? (vinext.__VINEXT_RSC_CHUNKS__ ??= []);
-      // Keep a stable reference to the bootstrap object that inline done
-      // scripts mutate. The runtime clears it only after done closes this stream.
+      // Capture the bootstrap object before it can be cleared. Inline done
+      // scripts mutate this same object, and clearing happens only after the
+      // stream has already been consumed or closed.
       arr.push = function (...chunks: RscEmbeddedChunk[]): number {
         const length = Array.prototype.push.apply(this, chunks);
 

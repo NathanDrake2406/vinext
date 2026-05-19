@@ -933,6 +933,8 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
         registerNavigationRuntimeBootstrap({ rsc: undefined });
         return chunksToReadableStream(runtimeRsc.rsc);
       }
+      // The progressive stream must capture this bootstrap object before any
+      // cleanup clears it from the runtime.
       return createProgressiveRscStream();
     }
 

@@ -62,6 +62,18 @@ describe("navigation runtime contract", () => {
     expect(hasAppNavigationRuntime()).toBe(true);
   });
 
+  it("merges registered function slots without clobbering existing capabilities", () => {
+    Reflect.set(globalThis, "window", {});
+    const navigate = () => Promise.resolve();
+    const pingVisibleLinks = () => {};
+
+    registerNavigationRuntimeFunctions({ navigate });
+    registerNavigationRuntimeFunctions({ pingVisibleLinks });
+
+    expect(getNavigationRuntime()?.functions.navigate).toBe(navigate);
+    expect(getNavigationRuntime()?.functions.pingVisibleLinks).toBe(pingVisibleLinks);
+  });
+
   it("keeps server-side runtime creation detached from the window contract", () => {
     Reflect.deleteProperty(globalThis, "window");
 

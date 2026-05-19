@@ -20,7 +20,7 @@ const NAVIGATION_RUNTIME_REFERENCE = `self[Symbol.for(${safeJsonStringify(
   NAVIGATION_RUNTIME_SYMBOL_DESCRIPTION,
 )})]`;
 
-function navigationRuntimeRscBootstrapExpression(): string {
+export function navigationRuntimeRscBootstrapExpression(): string {
   return `((${NAVIGATION_RUNTIME_REFERENCE}??={bootstrap:{routeManifest:null},functions:{}}).bootstrap.rsc??={rsc:[]})`;
 }
 
