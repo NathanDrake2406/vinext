@@ -198,7 +198,8 @@ function createRoutePatternPrefix(
   routeSegments: readonly string[],
   treePosition: number,
 ): RoutePatternPrefix | null {
-  const limit = Math.max(0, Math.min(treePosition, routeSegments.length));
+  // treePosition is always non-negative (represents tree depth).
+  const limit = Math.min(treePosition, routeSegments.length);
   const converted = convertSegmentsToRouteParts(routeSegments.slice(0, limit));
   if (!converted) return null;
 

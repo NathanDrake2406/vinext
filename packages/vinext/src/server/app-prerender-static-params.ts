@@ -15,7 +15,20 @@ export function createAppPrerenderStaticParamsResolver(
 ): GenerateStaticParamsFunction | null {
   const generateStaticParamsFns = sources.filter(isGenerateStaticParamsFunction);
   if (generateStaticParamsFns.length === 0) return null;
-  if (generateStaticParamsFns.length === 1) return generateStaticParamsFns[0];
+  if (generateStaticParamsFns.length === 1) {
+    const single = generateStaticParamsFns[0];
+    // Wrap the single source in the same non-array/non-object guards as the
+    // multi-source composition path so the contract is uniform regardless of
+    // how many sources were composed.
+    return async (input) => {
+      const result = await single(input);
+      if (!Array.isArray(result)) return [];
+      for (const item of result) {
+        if (!isRootParams(item)) return [];
+      }
+      return result;
+    };
+  }
 
   return async ({ params }) => {
     let paramSets: RootParams[] = [params];

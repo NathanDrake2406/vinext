@@ -425,6 +425,8 @@ export async function resolveParentParams(
 
     for (const parentParams of currentParams) {
       const results = await generateStaticParams({ params: parentParams });
+      // `null` is the CF Workers Proxy sentinel: the proxy has no
+      // generateStaticParams for this pattern. Skip and let later providers run.
       if (results === null) continue;
       if (!Array.isArray(results)) return [];
 
