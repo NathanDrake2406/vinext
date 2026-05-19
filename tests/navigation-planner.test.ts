@@ -986,7 +986,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     expect(decision.proposal.preserveElementIds).toEqual(["layout:/", "layout:/feed"]);
   });
 
-  it("approves manifest-declared dynamic interception topology", () => {
+  it("approves manifest-declared dynamic interception topology with concrete wire route ids", () => {
     const routeManifest = createTestRouteManifest([
       {
         layoutIds: ["layout:/", "layout:/[locale]", "layout:/[locale]/feed"],
@@ -1010,7 +1010,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     const currentSnapshot: RouteSnapshotV0 = {
       ...createRouteSnapshot(null, []),
       matchedUrl: "/en/feed",
-      routeId: "route:/:locale/feed",
+      routeId: "route:/en/feed",
     };
     const targetSnapshot: RouteSnapshotV0 = {
       ...createRouteSnapshot(
@@ -1022,14 +1022,14 @@ describe("navigationPlanner root-boundary decisions", () => {
       displayUrl: "https://example.com/en/photos/42",
       interception: createInterceptionSnapshot({
         sourceMatchedUrl: "/en/feed",
-        sourceRouteId: "route:/:locale/feed",
+        sourceRouteId: "route:/en/feed",
         slotId: "slot:modal:/[locale]/feed",
         targetMatchedUrl: "/en/photos/42",
-        targetRouteId: "route:/:locale/photos/:id",
+        targetRouteId: "route:/en/photos/42",
       }),
       interceptionContext: "/en/feed",
       matchedUrl: "/en/photos/42",
-      routeId: "route:/:locale/photos/:id\u0000/en/feed",
+      routeId: "route:/en/photos/42\u0000/en/feed",
     };
 
     const decision = planFlightResponseFromSnapshots({
