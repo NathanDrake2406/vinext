@@ -1,5 +1,5 @@
 import { matchRoutePattern, matchRoutePatternPrefix } from "../routing/route-pattern.js";
-import { normalizePathnameForRouteMatch } from "../routing/utils.js";
+import { splitPathnameForRouteMatch } from "../routing/utils.js";
 import type {
   RouteManifest,
   RouteManifestInterception,
@@ -229,9 +229,7 @@ function getMatchedUrlPathname(matchedUrl: string): string {
 }
 
 function splitMatchedUrlIntoRouteParts(matchedUrl: string): string[] {
-  return normalizePathnameForRouteMatch(getMatchedUrlPathname(matchedUrl))
-    .split("/")
-    .filter((part) => part.length > 0);
+  return splitPathnameForRouteMatch(getMatchedUrlPathname(matchedUrl));
 }
 
 function findRouteManifestRouteByMatchedUrl(

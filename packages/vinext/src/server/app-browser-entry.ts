@@ -36,6 +36,7 @@ import {
   registerNavigationRuntimeBootstrap,
   registerNavigationRuntimeFunctions,
   type NavigationRuntimeNavigate,
+  type NavigationRuntimeRscBootstrap,
 } from "../client/navigation-runtime.js";
 import { scrollToHashTargetOnNextFrame } from "vinext/shims/hash-scroll";
 import { installWindowNext } from "../client/window-next.js";
@@ -51,6 +52,7 @@ import {
   type NavigationPayloadOutcome,
   type PendingBrowserRouterState,
 } from "./app-browser-navigation-controller.js";
+import { resolveManifestNavigationInterceptionContext } from "./app-browser-interception-context.js";
 import {
   createDiscardedServerActionRefreshScheduler,
   createServerActionInitiationSnapshot,
@@ -573,6 +575,7 @@ type NavigationRequestState = {
 
 function getRequestState(
   navigationKind: NavigationKind,
+  targetPathname: string,
   previousNextUrlOverride?: string | null,
   traverseHistoryState?: unknown,
 ): NavigationRequestState {
@@ -586,12 +589,12 @@ function getRequestState(
     };
   }
 
-  // Two branches for "navigate":
+  // Three branches for "navigate":
   // 1. previousNextUrl !== null → a committed intercepted navigation set this
   //    in browser state (requires proof). This is the proven interception path.
-  // 2. previousNextUrl === null → send no interception context. This fires for
-  //    non-intercepted navigations (direct loads, normal client navs) where no
-  //    proven interception state exists.
+  // 2. route manifest declares current URL can intercept target URL → ask the
+  //    server for an intercepted payload using manifest route facts only.
+  // 3. otherwise, send no interception context.
   switch (navigationKind) {
     case "navigate": {
       const currentPreviousNextUrl = getBrowserRouterState().previousNextUrl;
@@ -602,6 +605,18 @@ function getRequestState(
             __basePath,
           ),
           previousNextUrl: currentPreviousNextUrl,
+        };
+      }
+      const manifestInterceptionContext = resolveManifestNavigationInterceptionContext({
+        basePath: __basePath,
+        currentPathname: window.location.pathname,
+        routeManifest: getBrowserRouteManifest(),
+        targetPathname,
+      });
+      if (manifestInterceptionContext !== null) {
+        return {
+          interceptionContext: manifestInterceptionContext,
+          previousNextUrl: window.location.pathname + window.location.search,
         };
       }
       return {
@@ -903,31 +918,22 @@ function recoverFromBadInitialRscResponse(reason: string): null {
 
 async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null> {
   const vinext = getVinextBrowserGlobal();
-  const embeddedRsc = getNavigationRuntime()?.bootstrap.rsc;
+  const runtimeRsc = getNavigationRuntime()?.bootstrap.rsc;
 
-  if (embeddedRsc || vinext.__VINEXT_RSC_CHUNKS__ || vinext.__VINEXT_RSC_DONE__) {
+  if (runtimeRsc || vinext.__VINEXT_RSC_CHUNKS__ || vinext.__VINEXT_RSC_DONE__) {
     // Reaching the embedded-RSC branch means the server successfully rendered
     // the page — any prior reload flag for this path is stale and must be
     // cleared so a future failure gets its own fresh recovery attempt.
     clearReloadFlag();
     clearHardNavigationLoopGuard();
 
-    if (embeddedRsc) {
-      registerNavigationRuntimeBootstrap({ rsc: undefined });
-
-      const params = embeddedRsc.params ?? {};
-      if (embeddedRsc.params) {
-        applyClientParams(embeddedRsc.params);
+    if (runtimeRsc) {
+      applyRuntimeRscBootstrap(runtimeRsc);
+      if (runtimeRsc.done) {
+        registerNavigationRuntimeBootstrap({ rsc: undefined });
+        return chunksToReadableStream(runtimeRsc.rsc);
       }
-      if (embeddedRsc.nav) {
-        restoreHydrationNavigationContext(
-          embeddedRsc.nav.pathname,
-          embeddedRsc.nav.searchParams,
-          params,
-        );
-      }
-
-      return chunksToReadableStream(embeddedRsc.rsc);
+      return createProgressiveRscStream();
     }
 
     const params = vinext.__VINEXT_RSC_PARAMS__ ?? {};
@@ -992,6 +998,16 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null
   restoreHydrationNavigationContext(window.location.pathname, window.location.search, params);
 
   return rscResponse.body;
+}
+
+function applyRuntimeRscBootstrap(rsc: NavigationRuntimeRscBootstrap): void {
+  const params = rsc.params ?? {};
+  if (rsc.params) {
+    applyClientParams(rsc.params);
+  }
+  if (rsc.nav) {
+    restoreHydrationNavigationContext(rsc.nav.pathname, rsc.nav.searchParams, params);
+  }
 }
 
 function registerServerActionCallback(): void {
@@ -1222,6 +1238,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         const url = new URL(currentHref, window.location.origin);
         const requestState = getRequestState(
           navigationKind,
+          url.pathname,
           currentPrevNextUrl,
           activeTraversalIntent?.historyState,
         );

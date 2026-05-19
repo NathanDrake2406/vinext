@@ -1,5 +1,10 @@
 import type { ReactFormState } from "react-dom/client";
-import type { NavigationRuntimeSnapshot } from "../client/navigation-runtime.js";
+import {
+  ensureNavigationRuntimeRscBootstrap,
+  getNavigationRuntime,
+  type NavigationRuntimeRscBootstrap,
+  type NavigationRuntimeSnapshot,
+} from "../client/navigation-runtime.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 import { decodeRscEmbeddedChunk, type RscEmbeddedChunk } from "./app-rsc-embedded-chunks.js";
 
@@ -37,24 +42,29 @@ export function chunksToReadableStream(
   });
 }
 
+function getNavigationRuntimeRscBootstrap(): NavigationRuntimeRscBootstrap | null {
+  return getNavigationRuntime()?.bootstrap.rsc ?? null;
+}
+
 /**
  * Create a ReadableStream from progressively-embedded RSC chunks.
  *
- * The server pushes chunks into `__VINEXT_RSC_CHUNKS__` via inline <script>
- * tags. We monkey-patch `push()` so new chunks stream to React immediately
- * instead of polling with setTimeout.
+ * The server pushes chunks into the typed navigation runtime via inline
+ * <script> tags. We monkey-patch `push()` so new chunks stream to React
+ * immediately instead of polling with setTimeout.
  */
 export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       const vinext = getVinextBrowserGlobal();
-      const initialChunks = vinext.__VINEXT_RSC_CHUNKS__ ?? [];
+      const runtimeRsc = getNavigationRuntimeRscBootstrap();
+      const initialChunks = runtimeRsc?.rsc ?? vinext.__VINEXT_RSC_CHUNKS__ ?? [];
 
       for (const chunk of initialChunks) {
         controller.enqueue(decodeRscEmbeddedChunk(chunk));
       }
 
-      if (vinext.__VINEXT_RSC_DONE__) {
+      if (runtimeRsc?.done || vinext.__VINEXT_RSC_DONE__) {
         controller.close();
         return;
       }
@@ -81,7 +91,9 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
         }
       };
 
-      const arr = (vinext.__VINEXT_RSC_CHUNKS__ ??= []);
+      const liveRuntimeRsc =
+        getNavigationRuntime() === null ? null : ensureNavigationRuntimeRscBootstrap();
+      const arr = liveRuntimeRsc?.rsc ?? (vinext.__VINEXT_RSC_CHUNKS__ ??= []);
       arr.push = function (...chunks: RscEmbeddedChunk[]): number {
         const length = Array.prototype.push.apply(this, chunks);
 
@@ -91,7 +103,7 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
           controller.enqueue(decodeRscEmbeddedChunk(chunk));
         }
 
-        if (vinext.__VINEXT_RSC_DONE__) {
+        if (liveRuntimeRsc?.done || vinext.__VINEXT_RSC_DONE__) {
           closeOnce();
         }
 

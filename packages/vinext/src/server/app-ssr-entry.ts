@@ -26,7 +26,11 @@ import {
   escapeHtmlAttr,
   safeJsonStringify,
 } from "./html.js";
-import { createRscEmbedTransform, createTickBufferedTransform } from "./app-ssr-stream.js";
+import {
+  createNavigationRuntimeRscMetadataScript,
+  createRscEmbedTransform,
+  createTickBufferedTransform,
+} from "./app-ssr-stream.js";
 import { deferUntilStreamConsumed } from "./app-page-stream.js";
 import { createSsrErrorMetaRenderer } from "./app-ssr-error-meta.js";
 import { AppElementsWire, type AppWireElements } from "./app-elements.js";
@@ -148,16 +152,12 @@ function buildHeadInjectionHtml(
   fontHTML: string,
   scriptNonce?: string,
 ): string {
-  const paramsScript = createInlineScriptTag(
-    "self.__VINEXT_RSC_PARAMS__=" + safeJsonStringify(navContext?.params ?? {}),
-    scriptNonce,
-  );
   const navPayload = {
     pathname: navContext?.pathname ?? "/",
     searchParams: navContext?.searchParams ? [...navContext.searchParams.entries()] : [],
   };
-  const navScript = createInlineScriptTag(
-    "self.__VINEXT_RSC_NAV__=" + safeJsonStringify(navPayload),
+  const rscMetadataScript = createInlineScriptTag(
+    createNavigationRuntimeRscMetadataScript(navContext?.params ?? {}, navPayload),
     scriptNonce,
   );
   const formStateScript =
@@ -169,8 +169,7 @@ function buildHeadInjectionHtml(
         );
 
   return (
-    paramsScript +
-    navScript +
+    rscMetadataScript +
     formStateScript +
     buildModulePreloadHtml(bootstrapModuleUrl, scriptNonce) +
     insertedHTML +

@@ -3,6 +3,7 @@ import {
   NAVIGATION_RUNTIME_KEY,
   getNavigationRuntime,
   registerNavigationRuntimeBootstrap,
+  subscribeNavigationRuntimeRscChunk,
   type NavigationRuntime,
   type NavigationRuntimeBootstrap,
   type NavigationRuntimeFunctions,
@@ -39,6 +40,14 @@ describe("navigation runtime contract", () => {
     expect(getNavigationRuntime()?.bootstrap.routeManifest).toBeNull();
   });
 
+  it("creates the RSC bootstrap buffer when subscribing the first chunk", () => {
+    Reflect.set(globalThis, "window", {});
+
+    subscribeNavigationRuntimeRscChunk("chunk");
+
+    expect(getNavigationRuntime()?.bootstrap.rsc?.rsc).toEqual(["chunk"]);
+  });
+
   it("rejects runtime objects with non-function capability slots", () => {
     const runtimeWindow = {};
     const functions: NavigationRuntimeFunctions = {};
@@ -59,6 +68,58 @@ describe("navigation runtime contract", () => {
       functions: {
         navigate: "not callable",
       },
+    });
+
+    expect(getNavigationRuntime()).toBeNull();
+  });
+
+  it("rejects route manifests without the map-backed segment graph contract", () => {
+    const runtimeWindow = {};
+    Reflect.set(globalThis, "window", runtimeWindow);
+    Reflect.set(runtimeWindow, NAVIGATION_RUNTIME_KEY, {
+      bootstrap: {
+        routeManifest: {
+          graphVersion: "test",
+          segmentGraph: {
+            interceptions: {
+              values: () => [],
+            },
+          },
+        },
+        rsc: undefined,
+      },
+      functions: {},
+    });
+
+    expect(getNavigationRuntime()).toBeNull();
+  });
+
+  it("rejects route manifests with malformed interception entries", () => {
+    const runtimeWindow = {};
+    const segmentGraphMaps = {
+      boundaries: new Map(),
+      defaults: new Map(),
+      interceptions: new Map([["bad", {}]]),
+      interceptionsBySlotId: new Map(),
+      layouts: new Map(),
+      pages: new Map(),
+      rootBoundaries: new Map(),
+      routeHandlers: new Map(),
+      routes: new Map(),
+      slotBindings: new Map(),
+      slots: new Map(),
+      templates: new Map(),
+    };
+    Reflect.set(globalThis, "window", runtimeWindow);
+    Reflect.set(runtimeWindow, NAVIGATION_RUNTIME_KEY, {
+      bootstrap: {
+        routeManifest: {
+          graphVersion: "test",
+          segmentGraph: segmentGraphMaps,
+        },
+        rsc: undefined,
+      },
+      functions: {},
     });
 
     expect(getNavigationRuntime()).toBeNull();

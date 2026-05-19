@@ -5,6 +5,7 @@ import {
   RSC_EMBEDDED_BINARY_CHUNK,
   type RscEmbeddedChunk,
 } from "./app-rsc-embedded-chunks.js";
+import { NAVIGATION_RUNTIME_SYMBOL_DESCRIPTION } from "../client/navigation-runtime.js";
 
 type RscEmbedTransform = {
   flush(): string;
@@ -14,6 +15,37 @@ type RscEmbedTransform = {
 };
 
 type HtmlInsertion = string | (() => string);
+
+const NAVIGATION_RUNTIME_REFERENCE = `self[Symbol.for(${safeJsonStringify(
+  NAVIGATION_RUNTIME_SYMBOL_DESCRIPTION,
+)})]`;
+
+function navigationRuntimeRscBootstrapExpression(): string {
+  return `((${NAVIGATION_RUNTIME_REFERENCE}??={bootstrap:{routeManifest:null},functions:{}}).bootstrap.rsc??={rsc:[]})`;
+}
+
+export function createNavigationRuntimeRscMetadataScript(
+  params: Record<string, string | string[]>,
+  nav: { pathname: string; searchParams: [string, string][] },
+): string {
+  return (
+    "Object.assign(" +
+    navigationRuntimeRscBootstrapExpression() +
+    ",{params:" +
+    safeJsonStringify(params) +
+    ",nav:" +
+    safeJsonStringify(nav) +
+    "})"
+  );
+}
+
+function createNavigationRuntimeRscChunkScript(chunk: RscEmbeddedChunk): string {
+  return navigationRuntimeRscBootstrapExpression() + ".rsc.push(" + safeJsonStringify(chunk) + ")";
+}
+
+function createNavigationRuntimeRscDoneScript(): string {
+  return navigationRuntimeRscBootstrapExpression() + ".done=true";
+}
 
 /**
  * Fix invalid preload "as" values in RSC Flight hint lines before they reach
@@ -79,12 +111,7 @@ export function createRscEmbedTransform(
 
       let scripts = "";
       for (const chunk of chunks) {
-        scripts += createInlineScriptTag(
-          "self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(" +
-            safeJsonStringify(chunk) +
-            ")",
-          scriptNonce,
-        );
+        scripts += createInlineScriptTag(createNavigationRuntimeRscChunkScript(chunk), scriptNonce);
       }
       return scripts;
     },
@@ -92,7 +119,7 @@ export function createRscEmbedTransform(
     async finalize(): Promise<string> {
       await pumpPromise;
       let scripts = this.flush();
-      scripts += createInlineScriptTag("self.__VINEXT_RSC_DONE__=true", scriptNonce);
+      scripts += createInlineScriptTag(createNavigationRuntimeRscDoneScript(), scriptNonce);
       return scripts;
     },
 

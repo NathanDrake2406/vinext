@@ -2204,7 +2204,9 @@ describe("App Router Production server (startProdServer)", () => {
       "script-src 'nonce-first' 'strict-dynamic';",
     );
     const firstHtml = await firstRes.text();
-    expect(firstHtml).toContain('<script nonce="first">self.__VINEXT_RSC_PARAMS__={}</script>');
+    expect(firstHtml).toContain(
+      '<script nonce="first">Object.assign(((self[Symbol.for("vinext.navigationRuntime")]',
+    );
 
     const secondRes = await fetch(`${baseUrl}/revalidate-test?csp-nonce=second`);
     expect(secondRes.status).toBe(200);
@@ -2213,7 +2215,9 @@ describe("App Router Production server (startProdServer)", () => {
       "script-src 'nonce-second' 'strict-dynamic';",
     );
     const secondHtml = await secondRes.text();
-    expect(secondHtml).toContain('<script nonce="second">self.__VINEXT_RSC_PARAMS__={}</script>');
+    expect(secondHtml).toContain(
+      '<script nonce="second">Object.assign(((self[Symbol.for("vinext.navigationRuntime")]',
+    );
     expect(secondHtml).not.toContain('nonce="first"');
   });
 

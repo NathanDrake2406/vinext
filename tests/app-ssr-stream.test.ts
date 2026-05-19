@@ -107,8 +107,10 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
 
     // Embed scripts still work
     const finalScripts = await transform.finalize();
-    expect(finalScripts).toContain("__VINEXT_RSC_DONE__");
-    expect(finalScripts).toContain("__VINEXT_RSC_CHUNKS__");
+    expect(finalScripts).toContain('Symbol.for("vinext.navigationRuntime")');
+    expect(finalScripts).toContain(".done=true");
+    expect(finalScripts).toContain('.rsc.push("chunk1")');
+    expect(finalScripts).toContain('.rsc.push("chunk2")');
   });
 
   it("rejects getRawBuffer when the stream errors (#1002)", async () => {
@@ -138,7 +140,7 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     // The fixed text "as=\"style\"" appears in the embed script after JSON escaping.
     // fixFlightHints turns "stylesheet" → "style" before the chunk is script-wrapped.
     expect(finalScripts).not.toContain("stylesheet");
-    expect(finalScripts).toContain("__VINEXT_RSC_DONE__");
+    expect(finalScripts).toContain(".done=true");
   });
 
   it("embeds non-UTF-8 RSC chunks as base64 binary chunks", async () => {
@@ -150,7 +152,7 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
 
     const finalScripts = await transform.finalize();
 
-    expect(finalScripts).toContain('self.__VINEXT_RSC_CHUNKS__.push([3,"/wABAgM="])');
+    expect(finalScripts).toContain('.rsc.push([3,"/wABAgM="])');
   });
 
   it("does not lose incomplete UTF-8 bytes before a binary chunk", async () => {
@@ -160,7 +162,7 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
 
     const finalScripts = await transform.finalize();
 
-    expect(finalScripts).toContain('self.__VINEXT_RSC_CHUNKS__.push([3,"QcM="])');
-    expect(finalScripts).toContain('self.__VINEXT_RSC_CHUNKS__.push([3,"/w=="])');
+    expect(finalScripts).toContain('.rsc.push([3,"QcM="])');
+    expect(finalScripts).toContain('.rsc.push([3,"/w=="])');
   });
 });
