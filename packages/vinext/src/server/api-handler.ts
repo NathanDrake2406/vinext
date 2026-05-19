@@ -176,6 +176,7 @@ function waitForWritableDrain(res: ServerResponse): Promise<void> {
     const cleanup = () => {
       res.off("drain", onDrain);
       res.off("error", onError);
+      res.off("close", onClose);
     };
     const onDrain = () => {
       cleanup();
@@ -185,8 +186,13 @@ function waitForWritableDrain(res: ServerResponse): Promise<void> {
       cleanup();
       reject(error);
     };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Response closed before writable drain"));
+    };
     res.once("drain", onDrain);
     res.once("error", onError);
+    res.once("close", onClose);
   });
 }
 
