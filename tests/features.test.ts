@@ -23,6 +23,7 @@ import {
   requestNodeServerWithHost,
   startFixtureServer,
 } from "./helpers.js";
+import { withEnvVar } from "./env-test-helpers.js";
 import { createValidFileMatcher } from "../packages/vinext/src/routing/file-matcher.js";
 
 const FIXTURE_DIR = PAGES_FIXTURE_DIR;
@@ -2677,6 +2678,71 @@ describe("MetadataHead rendering", () => {
     );
     expect(html).toContain('href="https://acme.com/about"');
     expect(html).toContain('content="https://acme.com/og.png"');
+  });
+
+  it("normalizes root canonical metadataBase URLs without a trailing slash", () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-dynamic-routes/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-dynamic-routes/index.test.ts
+    const html = renderToStaticMarkup(
+      React.createElement(MetadataHead, {
+        metadata: {
+          metadataBase: new URL("https://mydomain.com"),
+          alternates: { canonical: "./" },
+        },
+        pathname: "/",
+      }),
+    );
+
+    expect(html).toContain('rel="canonical"');
+    expect(html).toContain('href="https://mydomain.com"');
+  });
+
+  it("keeps manifest metadata routes relative when metadataBase is configured", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(MetadataHead, {
+        metadata: {
+          metadataBase: new URL("https://mydomain.com"),
+          manifest: "/manifest.webmanifest",
+        },
+      }),
+    );
+
+    expect(html).toContain('rel="manifest"');
+    expect(html).toContain('href="/manifest.webmanifest"');
+  });
+
+  it("uses social image fallback metadataBase for static metadata route images", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("PORT", "4567", () => {
+        withEnvVar("VERCEL_PROJECT_PRODUCTION_URL", undefined, () => {
+          const openGraphImage = { url: "/metadata-base/unset/opengraph-image2/100" };
+          const twitterImage = { url: "/metadata-base/unset/twitter-image.png" };
+          Object.defineProperty(openGraphImage, "metadataRoute", { value: true });
+          Object.defineProperty(twitterImage, "metadataRoute", { value: true });
+
+          const html = renderToStaticMarkup(
+            React.createElement(MetadataHead, {
+              metadata: {
+                metadataBase: null,
+                openGraph: {
+                  images: [openGraphImage],
+                },
+                twitter: {
+                  images: twitterImage,
+                },
+              },
+            }),
+          );
+
+          expect(html).toContain(
+            'content="http://localhost:4567/metadata-base/unset/opengraph-image2/100"',
+          );
+          expect(html).toContain(
+            'content="http://localhost:4567/metadata-base/unset/twitter-image.png"',
+          );
+        });
+      });
+    });
   });
 
   it("accepts URL objects for canonical and openGraph.url", () => {
