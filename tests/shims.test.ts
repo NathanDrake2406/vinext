@@ -11247,6 +11247,70 @@ describe("Pages Router concurrent navigation", () => {
     return assignments;
   }
 
+  async function expectPagesRouterPushTrailingSlashNormalization({
+    target,
+    expectedBrowserUrl,
+  }: {
+    target: string;
+    expectedBrowserUrl: string;
+  }): Promise<void> {
+    const previousWindow = (globalThis as any).window;
+    const previousTrailingSlash = process.env.__VINEXT_TRAILING_SLASH;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    (globalThis as any).window = win;
+    process.env.__VINEXT_TRAILING_SLASH = "true";
+    vi.resetModules();
+
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("shallow trailing-slash normalization test must not fetch page HTML");
+    });
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push(target, undefined, { shallow: true });
+
+      expect(result).toBe(true);
+      expect(win.history.pushState).toHaveBeenCalledWith({}, "", expectedBrowserUrl);
+    } finally {
+      if (previousTrailingSlash === undefined) {
+        delete process.env.__VINEXT_TRAILING_SLASH;
+      } else {
+        process.env.__VINEXT_TRAILING_SLASH = previousTrailingSlash;
+      }
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  it("Pages Router push normalizes query-bearing paths when trailingSlash is true", async () => {
+    await expectPagesRouterPushTrailingSlashNormalization({
+      target: "/about?hello=world",
+      expectedBrowserUrl: "/about/?hello=world",
+    });
+  });
+
+  it("Pages Router push preserves canonical query-bearing paths when trailingSlash is true", async () => {
+    await expectPagesRouterPushTrailingSlashNormalization({
+      target: "/about/?hello=world",
+      expectedBrowserUrl: "/about/?hello=world",
+    });
+  });
+
+  it("Pages Router push strips file-looking path slashes when trailingSlash is true", async () => {
+    await expectPagesRouterPushTrailingSlashNormalization({
+      target: "/catch-all/hello.world/",
+      expectedBrowserUrl: "/catch-all/hello.world",
+    });
+  });
+
   it("last push() wins when two overlap — superseded navigation does not render", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;

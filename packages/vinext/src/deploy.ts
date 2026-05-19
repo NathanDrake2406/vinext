@@ -543,6 +543,8 @@ import {
   applyConfigHeadersToHeaderRecord,
   cloneRequestWithHeaders,
   filterInternalHeaders,
+  isOpenRedirectShaped,
+  normalizeTrailingSlash,
 } from "vinext/server/request-pipeline";
 
 // @ts-expect-error -- virtual module resolved by vinext at build time
@@ -585,20 +587,6 @@ function hasBasePath(pathname: string, basePath: string): boolean {
 function stripBasePath(pathname: string, basePath: string): string {
   if (!hasBasePath(pathname, basePath)) return pathname;
   return pathname.slice(basePath.length) || "/";
-}
-
-// Mirror of isOpenRedirectShaped in server/request-pipeline.ts. Inlined here
-// because this worker runs in the Cloudflare Workers environment and can't
-// import from our local source at build time. Keep in sync.
-function isOpenRedirectShaped(rawPathname: string): boolean {
-  if (!rawPathname.startsWith("/")) return false;
-  const afterSlash = rawPathname.slice(1);
-  if (afterSlash.startsWith("/") || afterSlash.startsWith("\\")) return true;
-  if (afterSlash.length >= 3 && afterSlash[0] === "%") {
-    const encoded = afterSlash.slice(0, 3).toLowerCase();
-    if (encoded === "%5c" || encoded === "%2f") return true;
-  }
-  return false;
 }
 
 export default {
@@ -649,18 +637,15 @@ export default {
       }
 
       // ── 2. Trailing slash normalization ────────────────────────────
-      if (pathname !== "/" && pathname !== "/api" && !pathname.startsWith("/api/")) {
-        const hasTrailing = pathname.endsWith("/");
-        if (trailingSlash && !hasTrailing) {
-          return new Response(null, {
-            status: 308,
-            headers: { Location: basePath + pathname + "/" + url.search },
-          });
-        } else if (!trailingSlash && hasTrailing) {
-          return new Response(null, {
-            status: 308,
-            headers: { Location: basePath + pathname.replace(/\\/+$/, "") + url.search },
-          });
+      {
+        const trailingSlashRedirect = normalizeTrailingSlash(
+          pathname,
+          basePath,
+          trailingSlash,
+          url.search,
+        );
+        if (trailingSlashRedirect) {
+          return trailingSlashRedirect;
         }
       }
 

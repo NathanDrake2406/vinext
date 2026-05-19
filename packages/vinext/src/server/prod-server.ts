@@ -49,9 +49,10 @@ import {
   applyConfigHeadersToHeaderRecord,
   filterInternalHeaders,
   isOpenRedirectShaped,
+  normalizeTrailingSlash,
 } from "./request-pipeline.js";
 import { notFoundResponse } from "./http-error-responses.js";
-import { hasBasePath, stripBasePath, removeTrailingSlash } from "../utils/base-path.js";
+import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 import {
   ASSET_PREFIX_URL_DIR,
   assetPrefixPathname,
@@ -1532,16 +1533,15 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       }
 
       // ── 3. Trailing slash normalization ───────────────────────────
-      if (pathname !== "/" && pathname !== "/api" && !pathname.startsWith("/api/")) {
-        const hasTrailing = pathname.endsWith("/");
-        if (trailingSlash && !hasTrailing) {
-          const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-          res.writeHead(308, { Location: basePath + pathname + "/" + qs });
-          res.end();
-          return;
-        } else if (!trailingSlash && hasTrailing) {
-          const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-          res.writeHead(308, { Location: basePath + removeTrailingSlash(pathname) + qs });
+      {
+        const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+        const trailingSlashRedirect = normalizeTrailingSlash(pathname, basePath, trailingSlash, qs);
+        if (trailingSlashRedirect) {
+          const location = trailingSlashRedirect.headers.get("Location");
+          res.writeHead(
+            trailingSlashRedirect.status,
+            location ? { Location: location } : undefined,
+          );
           res.end();
           return;
         }

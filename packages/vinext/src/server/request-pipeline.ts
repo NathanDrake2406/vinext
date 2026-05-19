@@ -130,6 +130,12 @@ type ResolvePublicFileRouteOptions = {
   request: Request;
 };
 
+const FILE_LIKE_PATHNAME_RE = /\.[^/]+\/?$/;
+
+function isWellKnownPathname(pathname: string): boolean {
+  return pathname === "/.well-known" || pathname.startsWith("/.well-known/");
+}
+
 function findHeaderRecordKey(headers: HeaderRecord, lowerName: string): string | undefined {
   for (const key of Object.keys(headers)) {
     if (key.toLowerCase() === lowerName) return key;
@@ -240,6 +246,33 @@ export function resolvePublicFileRoute(options: ResolvePublicFileRouteOptions): 
   return createStaticFileSignal(options.cleanPathname, options.middlewareContext);
 }
 
+export function normalizeTrailingSlashPathname(
+  pathname: string,
+  trailingSlash: boolean,
+): string | null {
+  if (pathname === "/" || pathname === "/api" || pathname.startsWith("/api/")) {
+    return null;
+  }
+
+  const hasTrailing = pathname.endsWith("/");
+
+  if (trailingSlash) {
+    // Next.js emits two internal redirect rules for trailingSlash:true:
+    // file-looking paths lose a trailing slash, non-file paths gain one, and
+    // /.well-known stays untouched for RFC-defined discovery URLs.
+    if (isWellKnownPathname(pathname)) return null;
+    if (FILE_LIKE_PATHNAME_RE.test(pathname)) {
+      const normalized = removeTrailingSlash(pathname);
+      return normalized === pathname ? null : normalized;
+    }
+    if (!hasTrailing && !pathname.endsWith(".rsc")) return `${pathname}/`;
+    return null;
+  }
+
+  if (hasTrailing) return removeTrailingSlash(pathname);
+  return null;
+}
+
 /**
  * Check if the pathname needs a trailing slash redirect, and return the
  * redirect Response if so.
@@ -248,6 +281,8 @@ export function resolvePublicFileRoute(options: ResolvePublicFileRouteOptions): 
  * - `/api` routes are never redirected
  * - The root path `/` is never redirected
  * - If `trailingSlash` is true, redirect `/about` → `/about/`
+ * - If `trailingSlash` is true, redirect file-looking `/file.ext/` → `/file.ext`
+ * - If `trailingSlash` is true, do not redirect `/.well-known/*`
  * - If `trailingSlash` is false (default), redirect `/about/` → `/about`
  *
  * @param pathname - The basePath-stripped pathname
@@ -272,22 +307,12 @@ export function normalizeTrailingSlash(
   if (isOpenRedirectShaped(pathname)) {
     return notFoundResponse();
   }
-  const hasTrailing = pathname.endsWith("/");
-  // RSC (client-side navigation) requests arrive as /path.rsc — don't
-  // redirect those to /path.rsc/ when trailingSlash is enabled.
-  if (trailingSlash && !hasTrailing && !pathname.endsWith(".rsc")) {
-    return new Response(null, {
-      status: 308,
-      headers: { Location: basePath + pathname + "/" + search },
-    });
-  }
-  if (!trailingSlash && hasTrailing) {
-    return new Response(null, {
-      status: 308,
-      headers: { Location: basePath + removeTrailingSlash(pathname) + search },
-    });
-  }
-  return null;
+  const normalizedPathname = normalizeTrailingSlashPathname(pathname, trailingSlash);
+  if (normalizedPathname === null) return null;
+  return new Response(null, {
+    status: 308,
+    headers: { Location: basePath + normalizedPathname + search },
+  });
 }
 
 /**

@@ -620,7 +620,8 @@ describe("generatePagesRouterWorkerEntry", () => {
   it("handles trailing slash normalization", () => {
     const content = generatePagesRouterWorkerEntry();
     expect(content).toContain("trailingSlash");
-    expect(content).toContain("hasTrailing");
+    expect(content).toContain("normalizeTrailingSlash");
+    expect(content).toContain('from "vinext/server/request-pipeline"');
   });
 
   it("routes /api/ to handleApiRoute using resolved URL", () => {
@@ -650,12 +651,8 @@ describe("generatePagesRouterWorkerEntry", () => {
 
   it("includes an open-redirect guard that rejects encoded backslash and slash", () => {
     const content = generatePagesRouterWorkerEntry();
-    // The generated worker inlines isOpenRedirectShaped. Regression for
-    // VULN-126915 — the guard must handle both literal (\\, //) and
-    // percent-encoded (%5C, %2F) variants in the leading segment.
-    expect(content).toContain("function isOpenRedirectShaped");
-    expect(content).toContain('"%5c"');
-    expect(content).toContain('"%2f"');
+    expect(content).toContain("isOpenRedirectShaped");
+    expect(content).toContain('from "vinext/server/request-pipeline"');
     expect(content).toContain("isOpenRedirectShaped(pathname)");
   });
 

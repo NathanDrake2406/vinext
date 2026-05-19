@@ -22,6 +22,7 @@ import { installWindowNext, type PagesRouterPublicInstance } from "../client/win
 import {
   isAbsoluteOrProtocolRelativeUrl,
   isHashOnlyBrowserUrlChange,
+  normalizePathTrailingSlash,
   toBrowserNavigationHref,
   toSameOriginAppPath,
 } from "./url-utils.js";
@@ -39,6 +40,8 @@ import { setPagesRouterPopStateHandler } from "./pages-router-runtime.js";
 
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
+/** trailingSlash from next.config.js, injected by the plugin at build time */
+const __trailingSlash: boolean = process.env.__VINEXT_TRAILING_SLASH === "true";
 
 type BeforePopStateCallback = (state: {
   url: string;
@@ -796,7 +799,11 @@ async function performNavigation(
     resolved = localPath;
   }
 
-  const full = toBrowserNavigationHref(resolved, window.location.href, __basePath);
+  resolved = normalizePathTrailingSlash(resolved, __trailingSlash);
+  const full = normalizePathTrailingSlash(
+    toBrowserNavigationHref(resolved, window.location.href, __basePath),
+    __trailingSlash,
+  );
   const shallow = options?.shallow ?? false;
   const doScroll = options?.scroll !== false;
 

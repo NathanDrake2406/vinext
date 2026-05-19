@@ -2066,6 +2066,14 @@ describe("basePath + trailingSlash interaction", () => {
 }`,
     );
 
+    await fsp.mkdir(path.join(tmpDir, "pages", "catch-all"), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "pages", "catch-all", "[...slug].tsx"),
+      `export default function CatchAll() {
+  return <h1>TrailingSlash CatchAll</h1>;
+}`,
+    );
+
     const plugins: any[] = [vinext()];
     tsServer = await createServer({
       root: tmpDir,
@@ -2105,6 +2113,14 @@ describe("basePath + trailingSlash interaction", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("TrailingSlash About");
+  });
+
+  it("GET /app/catch-all/hello.world/ redirects to the file-looking canonical path", async () => {
+    const res = await fetch(`${tsBaseUrl}/app/catch-all/hello.world/`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("/app/catch-all/hello.world");
   });
 });
 

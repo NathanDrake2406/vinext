@@ -55,6 +55,7 @@ import {
   filterInternalHeaders,
   INTERNAL_HEADERS,
   isOpenRedirectShaped,
+  normalizeTrailingSlash,
 } from "./server/request-pipeline.js";
 import {
   findInstrumentationClientFile,
@@ -78,7 +79,7 @@ import { scanMetadataFiles } from "./server/metadata-routes.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "./server/middleware-request-headers.js";
 import { detectPackageManager } from "./utils/project.js";
 import { manifestFileWithBase, manifestFilesWithBase } from "./utils/manifest-paths.js";
-import { hasBasePath, removeTrailingSlash } from "./utils/base-path.js";
+import { hasBasePath } from "./utils/base-path.js";
 import {
   ASSET_PREFIX_URL_DIR,
   resolveAssetUrlPrefix,
@@ -2739,11 +2740,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 url = url.replace(/\.html(?=\?|$)/, "");
               }
 
-              // Skip requests for files with extensions (static assets)
               let pathname = url.split("?")[0];
-              if (pathname.includes(".") && !pathname.endsWith(".html")) {
-                return next();
-              }
 
               // Guard against protocol-relative URL open redirects.
               // Check the RAW pathname before decode/normalize so both literal
@@ -2786,30 +2783,30 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 pathname = stripped;
               }
 
-              // Normalize trailing slash based on next.config.js trailingSlash setting.
-              // Redirect to the canonical form if needed.
-              if (
-                nextConfig &&
-                pathname !== "/" &&
-                pathname !== "/api" &&
-                !pathname.startsWith("/api/")
-              ) {
-                const hasTrailing = pathname.endsWith("/");
-                if (nextConfig.trailingSlash && !hasTrailing) {
-                  // trailingSlash: true — redirect /about → /about/
-                  const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-                  const dest = bp + pathname + "/" + qs;
-                  res.writeHead(308, { Location: dest });
-                  res.end();
-                  return;
-                } else if (!nextConfig.trailingSlash && hasTrailing) {
-                  // trailingSlash: false (default) — redirect /about/ → /about
-                  const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-                  const dest = bp + removeTrailingSlash(pathname) + qs;
-                  res.writeHead(308, { Location: dest });
+              if (nextConfig) {
+                const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+                const trailingSlashRedirect = normalizeTrailingSlash(
+                  pathname,
+                  bp,
+                  nextConfig.trailingSlash,
+                  qs,
+                );
+                if (trailingSlashRedirect) {
+                  const location = trailingSlashRedirect.headers.get("Location");
+                  res.writeHead(
+                    trailingSlashRedirect.status,
+                    location ? { Location: location } : undefined,
+                  );
                   res.end();
                   return;
                 }
+              }
+
+              // Skip requests for files with extensions (static assets) after
+              // trailing-slash canonicalization so file-looking dynamic routes
+              // like /catch-all/hello.world/ still get the Next.js redirect.
+              if (pathname.includes(".") && !pathname.endsWith(".html")) {
+                return next();
               }
 
               // When @cloudflare/vite-plugin is present, delegate the entire
