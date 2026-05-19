@@ -11,6 +11,7 @@
  * ViteDevServer.
  */
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { PassThrough } from "node:stream";
 import http from "node:http";
 import { handleApiRoute } from "../packages/vinext/src/server/api-handler.js";
@@ -80,18 +81,18 @@ function mockReq(
  */
 function mockRes(): http.ServerResponse & {
   _body: string | Buffer;
-  _headers: Record<string, string>;
+  _headers: Record<string, string | string[]>;
   _statusCode: number;
   _ended: boolean;
 } {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string | string[]> = {};
   const res = {
     statusCode: 200,
     _body: "",
     _headers: headers,
     _statusCode: 200,
     _ended: false,
-    setHeader(name: string, value: string) {
+    setHeader(name: string, value: string | string[]) {
       headers[name.toLowerCase()] = value;
     },
     getHeader(name: string) {
@@ -115,7 +116,7 @@ function mockRes(): http.ServerResponse & {
     },
   } as unknown as http.ServerResponse & {
     _body: string | Buffer;
-    _headers: Record<string, string>;
+    _headers: Record<string, string | string[]>;
     _statusCode: number;
     _ended: boolean;
   };
@@ -764,6 +765,63 @@ describe("handleApiRoute", () => {
       await handleApiRoute(server, req, res, "/api/users", [route("/api/users")]);
 
       expect(capturedQuery).toEqual({});
+    });
+  });
+
+  // ── Edge runtime ───────────────────────────────────────────────────
+
+  describe("edge runtime", () => {
+    it("calls edge API route handlers with a Fetch Request and writes their Response", async () => {
+      // Ported from Next.js: test/e2e/edge-async-local-storage/index.test.ts
+      // https://github.com/vercel/next.js/blob/canary/test/e2e/edge-async-local-storage/index.test.ts
+      const storage = new AsyncLocalStorage<{ id: string }>();
+      const handler = vi.fn((request: Request) => {
+        const id = request.headers.get("req-id") ?? "";
+        return storage.run({ id }, async () => {
+          await Promise.resolve();
+          return Response.json(storage.getStore());
+        });
+      });
+      const server = mockServer({
+        config: { runtime: "edge" },
+        default: handler,
+      });
+      const req = mockReq("GET", "/api/users", undefined, {
+        host: "example.com",
+        "req-id": "req-42",
+      });
+      const res = mockRes();
+
+      const handled = await handleApiRoute(server, req, res, "/api/users", [route("/api/users")]);
+
+      expect(handled).toBe(true);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(res._statusCode).toBe(200);
+      expect(res._headers["content-type"]).toBe("application/json");
+      expect(res._body.toString()).toBe(JSON.stringify({ id: "req-42" }));
+    });
+
+    it("preserves multiple Set-Cookie headers from edge API responses", async () => {
+      const handler = vi.fn(() => {
+        const headers = new Headers();
+        headers.append("set-cookie", "one=1; Path=/");
+        headers.append("set-cookie", "two=2; Path=/");
+        return new Response("ok", { headers });
+      });
+      const server = mockServer({
+        config: { runtime: "edge" },
+        default: handler,
+      });
+      const req = mockReq("GET", "/api/users", undefined, {
+        host: "example.com",
+      });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/users", [route("/api/users")]);
+
+      expect(res._statusCode).toBe(200);
+      expect(res._headers["set-cookie"]).toEqual(["one=1; Path=/", "two=2; Path=/"]);
+      expect(res._body.toString()).toBe("ok");
     });
   });
 

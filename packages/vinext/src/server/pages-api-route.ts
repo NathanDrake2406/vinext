@@ -11,8 +11,20 @@ import {
 } from "./pages-node-compat.js";
 import { internalServerErrorResponse } from "./http-error-responses.js";
 
+type PagesApiRouteConfig = {
+  runtime?: string;
+};
+
+type PagesNodeApiRouteHandler = (
+  req: PagesReqResRequest,
+  res: PagesReqResResponse,
+) => void | Promise<void>;
+
+type PagesEdgeApiRouteHandler = (request: Request) => Response | Promise<Response>;
+
 type PagesApiRouteModule = {
-  default?: (req: PagesReqResRequest, res: PagesReqResResponse) => void | Promise<void>;
+  config?: PagesApiRouteConfig;
+  default?: PagesNodeApiRouteHandler | PagesEdgeApiRouteHandler;
 };
 
 export type PagesApiRouteMatch = {
@@ -33,6 +45,24 @@ function buildPagesApiQuery(url: string, params: PagesRequestQuery): PagesReques
   return mergeRouteParamsIntoQuery(parseQueryString(url), params);
 }
 
+function isEdgeApiRuntime(runtime: string | undefined): boolean {
+  return runtime === "edge" || runtime === "experimental-edge";
+}
+
+function isEdgeApiRouteHandler(
+  handler: PagesApiRouteModule["default"],
+  module: PagesApiRouteModule,
+): handler is PagesEdgeApiRouteHandler {
+  return typeof handler === "function" && isEdgeApiRuntime(module.config?.runtime);
+}
+
+function isNodeApiRouteHandler(
+  handler: PagesApiRouteModule["default"],
+  module: PagesApiRouteModule,
+): handler is PagesNodeApiRouteHandler {
+  return typeof handler === "function" && !isEdgeApiRuntime(module.config?.runtime);
+}
+
 export async function handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promise<Response> {
   if (!options.match) {
     return new Response("404 - API route not found", { status: 404 });
@@ -45,6 +75,19 @@ export async function handlePagesApiRoute(options: HandlePagesApiRouteOptions): 
   }
 
   try {
+    if (isEdgeApiRouteHandler(handler, route.module)) {
+      const response = await handler(options.request);
+      if (response instanceof Response) {
+        return response;
+      }
+
+      throw new Error("Edge API route did not return a Response");
+    }
+
+    if (!isNodeApiRouteHandler(handler, route.module)) {
+      throw new Error("Unsupported API route runtime");
+    }
+
     const query = buildPagesApiQuery(options.url, params);
     const body = await parsePagesApiBody(options.request);
     const { req, res, responsePromise } = createPagesReqRes({

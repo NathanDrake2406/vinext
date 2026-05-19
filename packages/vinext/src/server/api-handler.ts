@@ -7,8 +7,10 @@
  * The req/res objects are Node.js IncomingMessage/ServerResponse with
  * Next.js extensions: req.query, req.body, res.json(), res.status(), etc.
  */
+import "./server-globals.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { decode as decodeQueryString } from "node:querystring";
+import { Buffer } from "node:buffer";
 import { type Route, matchRoute } from "../routing/pages-router.js";
 import { reportRequestError, importModule, type ModuleImporter } from "./instrumentation.js";
 import { mergeRouteParamsIntoQuery, parseQueryString } from "../utils/query.js";
@@ -32,6 +34,13 @@ type NextApiResponse = {
   send(data: unknown): void;
   redirect(statusOrUrl: number | string, url?: string): void;
 } & ServerResponse;
+
+type EdgeApiRouteModule = {
+  config?: {
+    runtime?: string;
+  };
+  default: (request: Request) => Response | Promise<Response>;
+};
 
 /**
  * Maximum request body size (1 MB). Matches Next.js default bodyParser sizeLimit.
@@ -108,6 +117,58 @@ function parseCookies(req: IncomingMessage): Record<string, string> {
     }
   }
   return cookies;
+}
+
+function isEdgeApiRuntime(runtime: string | undefined): boolean {
+  return runtime === "edge" || runtime === "experimental-edge";
+}
+
+function isEdgeApiRouteModule(module: Record<string, unknown>): module is EdgeApiRouteModule {
+  const config = module.config;
+  if (!config || typeof config !== "object") return false;
+  const runtime = "runtime" in config ? config.runtime : undefined;
+  return (
+    typeof module.default === "function" && typeof runtime === "string" && isEdgeApiRuntime(runtime)
+  );
+}
+
+async function readEdgeRequestBody(req: IncomingMessage): Promise<Blob | undefined> {
+  if (req.method === "GET" || req.method === "HEAD") return undefined;
+
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of req) {
+    if (typeof chunk === "string") {
+      chunks.push(Buffer.from(chunk));
+    } else if (chunk instanceof Uint8Array) {
+      chunks.push(chunk);
+    } else {
+      chunks.push(Buffer.from(String(chunk)));
+    }
+  }
+
+  return new Blob([Buffer.concat(chunks)]);
+}
+
+async function createEdgeApiRequest(req: IncomingMessage, url: string): Promise<Request> {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(name, item);
+    } else if (value !== undefined) {
+      headers.set(name, value);
+    }
+  }
+
+  const forwardedProto = headers.get("x-forwarded-proto") ?? "http";
+  const host = headers.get("host") ?? "localhost";
+  const requestUrl = new URL(url, `${forwardedProto}://${host}`);
+  const body = await readEdgeRequestBody(req);
+
+  return new Request(requestUrl, {
+    body,
+    headers,
+    method: req.method,
+  });
 }
 
 /**
@@ -194,6 +255,25 @@ export async function handleApiRoute(
       console.error(`[vinext] API route ${route.filePath} does not export a default function`);
       res.statusCode = 500;
       res.end("API route does not export a default function");
+      return true;
+    }
+
+    if (isEdgeApiRouteModule(apiModule)) {
+      const response = await apiModule.default(await createEdgeApiRequest(req, url));
+      if (!(response instanceof Response)) {
+        throw new Error("Edge API route did not return a Response");
+      }
+
+      res.statusCode = response.status;
+      res.statusMessage = response.statusText;
+      const setCookieHeaders = response.headers.getSetCookie();
+      response.headers.forEach((value, name) => {
+        if (name !== "set-cookie") res.setHeader(name, value);
+      });
+      if (setCookieHeaders.length) {
+        res.setHeader("set-cookie", setCookieHeaders);
+      }
+      res.end(Buffer.from(await response.arrayBuffer()));
       return true;
     }
 
