@@ -369,11 +369,7 @@ export function getOutputPath(urlPath: string, trailingSlash: boolean): string {
 /** Map of route patterns to generateStaticParams functions (or null/undefined). */
 export type StaticParamsMap = Record<
   string,
-  | ((opts: {
-      params: Record<string, string | string[]>;
-    }) => Promise<Record<string, string | string[]>[]>)
-  | null
-  | undefined
+  ((opts: { params: Record<string, string | string[]> }) => Promise<unknown>) | null | undefined
 >;
 
 /**
@@ -385,7 +381,6 @@ export type StaticParamsMap = Record<
  */
 export async function resolveParentParams(
   childRoute: AppRoute,
-  routeIndex: ReadonlyMap<string, AppRoute>,
   staticParamsMap: StaticParamsMap,
 ): Promise<Record<string, string | string[]>[]> {
   const { patternParts } = childRoute;
@@ -403,7 +398,7 @@ export async function resolveParentParams(
 
   type GenerateStaticParamsFn = (opts: {
     params: Record<string, string | string[]>;
-  }) => Promise<Record<string, string | string[]>[]>;
+  }) => Promise<unknown>;
 
   const parentSegments: GenerateStaticParamsFn[] = [];
 
@@ -413,38 +408,39 @@ export async function resolveParentParams(
     prefixPattern += "/" + part;
     if (!part.startsWith(":")) continue;
 
-    const parentRoute = routeIndex.get(prefixPattern);
-    // TODO: layout-level generateStaticParams — a layout segment can define
-    // generateStaticParams without a corresponding page file, so parentRoute
-    // may be undefined here even though the layout exports generateStaticParams.
-    // resolveParentParams currently only looks up routes that have a pagePath
-    // (i.e. leaf pages), missing layout-level providers. Fix requires scanning
-    // layout files in addition to page files during route collection.
-    if (parentRoute?.pagePath) {
-      const fn = staticParamsMap[prefixPattern];
-      if (typeof fn === "function") {
-        parentSegments.push(fn);
-      }
+    const fn = staticParamsMap[prefixPattern];
+    if (typeof fn === "function") {
+      parentSegments.push(fn);
     }
   }
 
   if (parentSegments.length === 0) return [];
 
   let currentParams: Record<string, string | string[]>[] = [{}];
+  let resolvedAnyParent = false;
+
   for (const generateStaticParams of parentSegments) {
     const nextParams: Record<string, string | string[]>[] = [];
+    let resolvedThisParent = false;
+
     for (const parentParams of currentParams) {
       const results = await generateStaticParams({ params: parentParams });
-      if (Array.isArray(results)) {
-        for (const result of results) {
-          nextParams.push({ ...parentParams, ...result });
-        }
+      if (results === null) continue;
+      if (!Array.isArray(results)) return [];
+
+      resolvedThisParent = true;
+      resolvedAnyParent = true;
+      for (const result of results) {
+        nextParams.push({ ...parentParams, ...result });
       }
     }
-    currentParams = nextParams;
+
+    if (resolvedThisParent) {
+      currentParams = nextParams;
+    }
   }
 
-  return currentParams;
+  return resolvedAnyParent ? currentParams : [];
 }
 
 // ─── Pages Router Prerender ───────────────────────────────────────────────────
@@ -962,8 +958,6 @@ export async function prerenderApp({
       },
     });
 
-    const routeIndex = new Map(routes.map((r) => [r.pattern, r]));
-
     // ── Collect URLs to render ────────────────────────────────────────────────
     type UrlToRender = {
       urlPath: string;
@@ -1048,7 +1042,7 @@ export async function prerenderApp({
             continue;
           }
 
-          const parentParamSets = await resolveParentParams(route, routeIndex, staticParamsMap);
+          const parentParamSets = await resolveParentParams(route, staticParamsMap);
           let paramSets: Record<string, string | string[]>[] | null;
 
           if (parentParamSets.length > 0) {
@@ -1067,10 +1061,14 @@ export async function prerenderApp({
                     ...childParams,
                   });
                 }
+              } else {
+                paramSets = [];
+                break;
               }
             }
           } else {
-            paramSets = await generateStaticParamsFn({ params: {} });
+            const results = await generateStaticParamsFn({ params: {} });
+            paramSets = Array.isArray(results) || results === null ? results : [];
           }
 
           // null: route has no generateStaticParams (CF Workers Proxy returned null)

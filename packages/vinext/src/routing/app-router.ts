@@ -22,7 +22,7 @@ import {
   type RouteManifest,
 } from "./app-route-graph.js";
 export type { AppRoute } from "./app-route-graph.js";
-export { computeRootParamNames } from "./app-route-graph.js";
+export { computeRootParamNames, convertSegmentsToRouteParts } from "./app-route-graph.js";
 
 type AppRouteGraph = {
   routes: AppRouteGraphRoute[];

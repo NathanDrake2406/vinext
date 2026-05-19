@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { handleAppPrerenderEndpoint } from "../packages/vinext/src/server/app-prerender-endpoints.js";
+import { createAppPrerenderStaticParamsResolver } from "../packages/vinext/src/server/app-prerender-static-params.js";
 import { getRootParam } from "../packages/vinext/src/shims/root-params.js";
 
 type TestPageRoute = {
@@ -10,6 +11,43 @@ type TestPageRoute = {
 };
 
 describe("App prerender endpoint helpers", () => {
+  it("composes layout and page generateStaticParams sources top-down", async () => {
+    // Ported from Next.js: test/e2e/app-dir/app-root-params-getters/generate-static-params.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-root-params-getters/generate-static-params.test.ts
+    const layoutGenerateStaticParams = vi.fn(() => [
+      { lang: "en", locale: "us" },
+      { lang: "es", locale: "es" },
+    ]);
+    const pageGenerateStaticParams = vi.fn(({ params }) => [{ slug: `${params.lang}-post` }]);
+    const resolveStaticParams = createAppPrerenderStaticParamsResolver([
+      layoutGenerateStaticParams,
+      pageGenerateStaticParams,
+    ]);
+
+    await expect(resolveStaticParams?.({ params: {} })).resolves.toEqual([
+      { lang: "en", locale: "us", slug: "en-post" },
+      { lang: "es", locale: "es", slug: "es-post" },
+    ]);
+    expect(pageGenerateStaticParams).toHaveBeenCalledWith({
+      params: { lang: "en", locale: "us" },
+    });
+    expect(pageGenerateStaticParams).toHaveBeenCalledWith({
+      params: { lang: "es", locale: "es" },
+    });
+  });
+
+  it("bails out of composed generateStaticParams when a source returns a non-array", async () => {
+    const malformedLayoutGenerateStaticParams = vi.fn(() => undefined);
+    const pageGenerateStaticParams = vi.fn(() => [{ slug: "unused" }]);
+    const resolveStaticParams = createAppPrerenderStaticParamsResolver([
+      malformedLayoutGenerateStaticParams,
+      pageGenerateStaticParams,
+    ]);
+
+    await expect(resolveStaticParams?.({ params: {} })).resolves.toEqual([]);
+    expect(pageGenerateStaticParams).not.toHaveBeenCalled();
+  });
+
   it("falls through for non-prerender requests", async () => {
     const response = await handleAppPrerenderEndpoint(new Request("http://localhost/blog/post"), {
       isPrerenderEnabled: () => true,

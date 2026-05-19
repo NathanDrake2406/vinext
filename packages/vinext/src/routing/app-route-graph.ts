@@ -2072,8 +2072,8 @@ function findFile(dir: string, name: string, matcher: ValidFileMatcher): string 
  * (route groups, @slots, ".") and converting dynamic segment syntax to Express-style
  * patterns (e.g. "[id]" → ":id", "[...slug]" → ":slug+").
  */
-function convertSegmentsToRouteParts(
-  segments: string[],
+export function convertSegmentsToRouteParts(
+  segments: readonly string[],
 ): { urlSegments: string[]; params: string[]; isDynamic: boolean } | null {
   const urlSegments: string[] = [];
   const params: string[] = [];
@@ -2125,7 +2125,7 @@ function convertSegmentsToRouteParts(
   return { urlSegments, params, isDynamic };
 }
 
-function hasRemainingVisibleSegments(segments: string[], startIndex: number): boolean {
+function hasRemainingVisibleSegments(segments: readonly string[], startIndex: number): boolean {
   for (let i = startIndex; i < segments.length; i++) {
     if (!isInvisibleSegment(segments[i])) return true;
   }

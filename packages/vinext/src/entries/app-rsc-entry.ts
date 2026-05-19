@@ -75,6 +75,10 @@ const appRscErrorHandlerPath = resolveEntryPath(
   import.meta.url,
 );
 const appRequestContextPath = resolveEntryPath("../server/app-request-context.js", import.meta.url);
+const appPrerenderStaticParamsPath = resolveEntryPath(
+  "../server/app-prerender-static-params.js",
+  import.meta.url,
+);
 const appHookWarningSuppressionPath = resolveEntryPath(
   "../server/app-hook-warning-suppression.js",
   import.meta.url,
@@ -165,6 +169,7 @@ export function generateRscEntry(
     routeEntries,
     metaRouteEntries,
     generateStaticParamsEntries,
+    rootParamNameEntries,
     rootNotFoundVar,
     rootForbiddenVar,
     rootUnauthorizedVar,
@@ -276,6 +281,7 @@ ${hasPagesDir ? `// Pages Router routes are loaded lazily from the SSR environme
 // so per-route dispatch can opt into suppression via .run(true, ...).
 import { suppressHookWarningAls } from ${JSON.stringify(appHookWarningSuppressionPath)};
 import { clearAppRequestContext as __clearRequestContext, setAppNavigationContext as setNavigationContext } from ${JSON.stringify(appRequestContextPath)};
+import { createAppPrerenderStaticParamsResolver as __createAppPrerenderStaticParamsResolver } from ${JSON.stringify(appPrerenderStaticParamsPath)};
 
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -451,18 +457,10 @@ var __MAX_ACTION_BODY_SIZE = ${JSON.stringify(bodySizeLimit)};
 // Used by the prerender phase to enumerate dynamic route URLs without
 // loading route modules via the dev server.
 export const generateStaticParamsMap = {
-// TODO: layout-level generateStaticParams — this map only includes routes that
-// have a pagePath (leaf pages). Layout segments can also export generateStaticParams
-// to provide parent params for nested dynamic routes, but they don't have a pagePath
-// so they are excluded here. Supporting layout-level generateStaticParams requires
-// scanning layout.tsx files separately and including them in this map.
 ${generateStaticParamsEntries.join("\n")}
 };${loadPrerenderPagesRoutesCode}
 const rootParamNamesMap = {
-${routes
-  .filter((r) => r.isDynamic && r.pagePath && r.rootParamNames && r.rootParamNames.length > 0)
-  .map((r) => `  ${JSON.stringify(r.pattern)}: ${JSON.stringify(r.rootParamNames)},`)
-  .join("\n")}
+${rootParamNameEntries.join("\n")}
 };
 
 export default __createAppRscHandler({

@@ -1208,53 +1208,86 @@ function mockRoute(pattern: string, opts: { pagePath?: string | null } = {}): Ap
   };
 }
 
-function routeIndexFrom(routes: AppRoute[]): ReadonlyMap<string, AppRoute> {
-  return new Map(routes.map((r) => [r.pattern, r]));
-}
-
 describe("resolveParentParams", () => {
   it("returns empty array when route has no parent dynamic segments", async () => {
     const route = mockRoute("/blog/:slug");
-    const result = await resolveParentParams(route, routeIndexFrom([route]), {});
+    const result = await resolveParentParams(route, {});
     expect(result).toEqual([]);
   });
 
-  it("returns empty array when parent route has no pagePath", async () => {
-    const parent = mockRoute("/shop/:category", { pagePath: null });
+  it("returns empty array when no parent generateStaticParams is registered", async () => {
     const child = mockRoute("/shop/:category/:item");
-    const result = await resolveParentParams(child, routeIndexFrom([parent, child]), {});
+    const result = await resolveParentParams(child, {});
     expect(result).toEqual([]);
+  });
+
+  it("resolves layout-level parent generateStaticParams without requiring a parent page", async () => {
+    // Ported from Next.js: test/e2e/app-dir/app-root-params-getters/generate-static-params.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-root-params-getters/generate-static-params.test.ts
+    const child = mockRoute("/:lang/:locale/other/:slug");
+    const staticParamsMap: StaticParamsMap = {
+      "/:lang/:locale": async () => [
+        { lang: "en", locale: "us" },
+        { lang: "es", locale: "es" },
+      ],
+    };
+
+    const result = await resolveParentParams(child, staticParamsMap);
+
+    expect(result).toEqual([
+      { lang: "en", locale: "us" },
+      { lang: "es", locale: "es" },
+    ]);
   });
 
   it("returns empty array when parent has no generateStaticParams", async () => {
-    const parent = mockRoute("/shop/:category");
     const child = mockRoute("/shop/:category/:item");
     const staticParamsMap: StaticParamsMap = {};
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([]);
   });
 
+  it("skips missing parent providers but bails on malformed non-array results", async () => {
+    const child = mockRoute("/shop/:category/:item/:slug");
+    const calls: Record<string, string | string[]>[] = [];
+    const itemGenerateStaticParams = async ({
+      params,
+    }: {
+      params: Record<string, string | string[]>;
+    }) => {
+      calls.push(params);
+      return [{ item: "shoes" }];
+    };
+    const staticParamsMap: StaticParamsMap = {
+      "/shop/:category": async () => null,
+      "/shop/:category/:item": itemGenerateStaticParams,
+    };
+
+    const missingProviderResult = await resolveParentParams(child, staticParamsMap);
+
+    expect(missingProviderResult).toEqual([{ item: "shoes" }]);
+    expect(calls).toEqual([{}]);
+
+    calls.length = 0;
+    const malformedProviderResult = await resolveParentParams(child, {
+      "/shop/:category": async () => undefined,
+      "/shop/:category/:item": itemGenerateStaticParams,
+    });
+
+    expect(malformedProviderResult).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it("resolves single parent dynamic segment", async () => {
-    const parent = mockRoute("/shop/:category");
     const child = mockRoute("/shop/:category/:item");
     const staticParamsMap: StaticParamsMap = {
       "/shop/:category": async () => [{ category: "electronics" }, { category: "clothing" }],
     };
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([{ category: "electronics" }, { category: "clothing" }]);
   });
 
   it("resolves two levels of parent dynamic segments", async () => {
-    const grandparent = mockRoute("/a/:b");
-    const parent = mockRoute("/a/:b/c/:d");
     const child = mockRoute("/a/:b/c/:d/:e");
     const staticParamsMap: StaticParamsMap = {
       "/a/:b": async () => [{ b: "1" }, { b: "2" }],
@@ -1263,11 +1296,7 @@ describe("resolveParentParams", () => {
         return [{ d: "y" }, { d: "z" }];
       },
     };
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([grandparent, parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([
       { b: "1", d: "x" },
       { b: "2", d: "y" },
@@ -1276,42 +1305,32 @@ describe("resolveParentParams", () => {
   });
 
   it("skips static segments between dynamic parents", async () => {
-    const parent = mockRoute("/shop/:category");
     const child = mockRoute("/shop/:category/details/:item");
     const staticParamsMap: StaticParamsMap = {
       "/shop/:category": async () => [{ category: "shoes" }],
     };
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([{ category: "shoes" }]);
   });
 
   it("returns empty array for a fully static route", async () => {
     const route = mockRoute("/about/contact");
-    const result = await resolveParentParams(route, routeIndexFrom([route]), {});
+    const result = await resolveParentParams(route, {});
     expect(result).toEqual([]);
   });
 
   it("returns empty array for a single-segment dynamic route", async () => {
     const route = mockRoute("/:id");
-    const result = await resolveParentParams(route, routeIndexFrom([route]), {});
+    const result = await resolveParentParams(route, {});
     expect(result).toEqual([]);
   });
 
   it("resolves parent with catch-all child segment", async () => {
-    const parent = mockRoute("/shop/:category");
     const child = mockRoute("/shop/:category/:rest+");
     const staticParamsMap: StaticParamsMap = {
       "/shop/:category": async () => [{ category: "electronics" }],
     };
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([{ category: "electronics" }]);
   });
 });
