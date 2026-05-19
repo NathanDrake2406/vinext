@@ -15,6 +15,7 @@ import { type Route, matchRoute } from "../routing/pages-router.js";
 import { reportRequestError, importModule, type ModuleImporter } from "./instrumentation.js";
 import { mergeRouteParamsIntoQuery, parseQueryString } from "../utils/query.js";
 import { PagesBodyParseError, getMediaType, isJsonMediaType } from "./pages-media-type.js";
+import { isEdgeApiRuntime } from "./edge-api-runtime.js";
 
 /**
  * Extend the Node.js request with Next.js-style helpers.
@@ -119,10 +120,6 @@ function parseCookies(req: IncomingMessage): Record<string, string> {
   return cookies;
 }
 
-function isEdgeApiRuntime(runtime: string | undefined): boolean {
-  return runtime === "edge" || runtime === "experimental-edge";
-}
-
 function isEdgeApiRouteModule(module: Record<string, unknown>): module is EdgeApiRouteModule {
   const config = module.config;
   if (!config || typeof config !== "object") return false;
@@ -132,24 +129,20 @@ function isEdgeApiRouteModule(module: Record<string, unknown>): module is EdgeAp
   );
 }
 
-async function readEdgeRequestBody(req: IncomingMessage): Promise<Blob | undefined> {
+function readEdgeRequestBody(req: IncomingMessage): ReadableStream<Uint8Array> | undefined {
   if (req.method === "GET" || req.method === "HEAD") return undefined;
-
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of req) {
-    if (typeof chunk === "string") {
-      chunks.push(Buffer.from(chunk));
-    } else if (chunk instanceof Uint8Array) {
-      chunks.push(chunk);
-    } else {
-      chunks.push(Buffer.from(String(chunk)));
-    }
-  }
-
-  return new Blob([Buffer.concat(chunks)]);
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      req.on("data", (chunk: Buffer | string) => {
+        controller.enqueue(typeof chunk === "string" ? Buffer.from(chunk) : new Uint8Array(chunk));
+      });
+      req.on("end", () => controller.close());
+      req.on("error", (error) => controller.error(error));
+    },
+  });
 }
 
-async function createEdgeApiRequest(req: IncomingMessage, url: string): Promise<Request> {
+function createEdgeApiRequest(req: IncomingMessage, url: string): Request {
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
     if (Array.isArray(value)) {
@@ -159,16 +152,22 @@ async function createEdgeApiRequest(req: IncomingMessage, url: string): Promise<
     }
   }
 
-  const forwardedProto = headers.get("x-forwarded-proto") ?? "http";
+  const forwardedProto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "http";
   const host = headers.get("host") ?? "localhost";
   const requestUrl = new URL(url, `${forwardedProto}://${host}`);
-  const body = await readEdgeRequestBody(req);
+  const body = readEdgeRequestBody(req);
 
-  return new Request(requestUrl, {
-    body,
+  const init: RequestInit & { duplex?: "half" } = {
     headers,
     method: req.method,
-  });
+  };
+
+  if (body) {
+    init.body = body;
+    init.duplex = "half";
+  }
+
+  return new Request(requestUrl, init);
 }
 
 function waitForWritableDrain(res: ServerResponse): Promise<void> {
@@ -233,52 +232,53 @@ function enhanceApiObjects(
   query: Record<string, string | string[]>,
   body: unknown,
 ): { apiReq: NextApiRequest; apiRes: NextApiResponse } {
-  const apiReq = req as NextApiRequest;
-  apiReq.query = query;
-  apiReq.body = body;
-  apiReq.cookies = parseCookies(req);
+  const apiReq: NextApiRequest = Object.assign(req, {
+    body,
+    cookies: parseCookies(req),
+    query,
+  });
 
-  const apiRes = res as NextApiResponse;
+  const apiRes: NextApiResponse = Object.assign(res, {
+    status(this: NextApiResponse, code: number) {
+      this.statusCode = code;
+      return this;
+    },
 
-  apiRes.status = function (code: number) {
-    this.statusCode = code;
-    return this;
-  };
-
-  apiRes.json = function (data: unknown) {
-    this.setHeader("Content-Type", "application/json");
-    this.end(JSON.stringify(data));
-  };
-
-  apiRes.send = function (data: unknown) {
-    if (Buffer.isBuffer(data)) {
-      if (!this.getHeader("Content-Type")) {
-        this.setHeader("Content-Type", "application/octet-stream");
-      }
-      this.setHeader("Content-Length", String(data.length));
-      this.end(data);
-      return;
-    }
-
-    if (typeof data === "object" && data !== null) {
+    json(this: NextApiResponse, data: unknown) {
       this.setHeader("Content-Type", "application/json");
       this.end(JSON.stringify(data));
-    } else {
-      if (!this.getHeader("Content-Type")) {
-        this.setHeader("Content-Type", "text/plain");
-      }
-      this.end(String(data));
-    }
-  };
+    },
 
-  apiRes.redirect = function (statusOrUrl: number | string, url?: string) {
-    if (typeof statusOrUrl === "string") {
-      this.writeHead(307, { Location: statusOrUrl });
-    } else {
-      this.writeHead(statusOrUrl, { Location: url! });
-    }
-    this.end();
-  };
+    send(this: NextApiResponse, data: unknown) {
+      if (Buffer.isBuffer(data)) {
+        if (!this.getHeader("Content-Type")) {
+          this.setHeader("Content-Type", "application/octet-stream");
+        }
+        this.setHeader("Content-Length", String(data.length));
+        this.end(data);
+        return;
+      }
+
+      if (typeof data === "object" && data !== null) {
+        this.setHeader("Content-Type", "application/json");
+        this.end(JSON.stringify(data));
+      } else {
+        if (!this.getHeader("Content-Type")) {
+          this.setHeader("Content-Type", "text/plain");
+        }
+        this.end(String(data));
+      }
+    },
+
+    redirect(this: NextApiResponse, statusOrUrl: number | string, url?: string) {
+      if (typeof statusOrUrl === "string") {
+        this.writeHead(307, { Location: statusOrUrl });
+      } else {
+        this.writeHead(statusOrUrl, { Location: url ?? "" });
+      }
+      this.end();
+    },
+  });
 
   return { apiReq, apiRes };
 }
@@ -312,7 +312,7 @@ export async function handleApiRoute(
     }
 
     if (isEdgeApiRouteModule(apiModule)) {
-      const response = await apiModule.default(await createEdgeApiRequest(req, url));
+      const response = await apiModule.default(createEdgeApiRequest(req, url));
       if (!(response instanceof Response)) {
         throw new Error("Edge API route did not return a Response");
       }

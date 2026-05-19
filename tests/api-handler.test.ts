@@ -824,6 +824,27 @@ describe("handleApiRoute", () => {
       expect(res._body.toString()).toBe(JSON.stringify({ id: "req-42" }));
     });
 
+    it("uses the first x-forwarded-proto value for edge API request URLs", async () => {
+      let capturedUrl = "";
+      const handler = vi.fn((request: Request) => {
+        capturedUrl = request.url;
+        return Response.json({ ok: true });
+      });
+      const server = mockServer({
+        config: { runtime: "edge" },
+        default: handler,
+      });
+      const req = mockReq("GET", "/api/users", undefined, {
+        host: "example.com",
+        "x-forwarded-proto": "https, http",
+      });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/users?name=alice", [route("/api/users")]);
+
+      expect(capturedUrl).toBe("https://example.com/api/users?name=alice");
+    });
+
     it("preserves multiple Set-Cookie headers from edge API responses", async () => {
       const handler = vi.fn(() => {
         const headers = new Headers();
@@ -868,7 +889,14 @@ describe("handleApiRoute", () => {
         default: handler,
       });
       const nodeServer = http.createServer((req, res) => {
-        void handleApiRoute(server, req, res, req.url ?? "/", [route("/api/users")]);
+        handleApiRoute(server, req, res, req.url ?? "/", [route("/api/users")]).catch((error) => {
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end(error instanceof Error ? error.message : String(error));
+            return;
+          }
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        });
       });
 
       try {
@@ -890,6 +918,74 @@ describe("handleApiRoute", () => {
         expect(second.done).toBe(false);
         expect(new TextDecoder().decode(second.value)).toBe("-second");
         expect(done.done).toBe(true);
+      } finally {
+        nodeServer.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          nodeServer.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    });
+
+    it("streams edge API request bodies into the handler before the client finishes sending", async () => {
+      const decoder = new TextDecoder();
+      const handler = vi.fn(async (request: Request) => {
+        const reader = request.body?.getReader();
+        if (!reader) return new Response("missing body", { status: 400 });
+        const first = await reader.read();
+        return new Response(first.done ? "done" : decoder.decode(first.value));
+      });
+      const server = mockServer({
+        config: { runtime: "edge" },
+        default: handler,
+      });
+      const nodeServer = http.createServer((req, res) => {
+        handleApiRoute(server, req, res, req.url ?? "/", [route("/api/users")]).catch((error) => {
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end(error instanceof Error ? error.message : String(error));
+            return;
+          }
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        });
+      });
+
+      try {
+        await new Promise<void>((resolve) => nodeServer.listen(0, resolve));
+        const address = nodeServer.address() as AddressInfo;
+        const req = http.request({
+          headers: { "content-type": "text/plain", "transfer-encoding": "chunked" },
+          host: "127.0.0.1",
+          method: "POST",
+          path: "/api/users",
+          port: address.port,
+        });
+
+        const responseBody = await new Promise<string>((resolve, reject) => {
+          const timeout = setTimeout(
+            () => reject(new Error("Timed out waiting for streamed request body response")),
+            1000,
+          );
+          req.on("error", (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          });
+          req.on("response", (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk: Buffer) => chunks.push(chunk));
+            response.on("error", (error) => {
+              clearTimeout(timeout);
+              reject(error);
+            });
+            response.on("end", () => {
+              clearTimeout(timeout);
+              resolve(Buffer.concat(chunks).toString("utf-8"));
+            });
+          });
+          req.write("first");
+        });
+
+        req.end("-second");
+        expect(responseBody).toBe("first");
       } finally {
         nodeServer.closeAllConnections();
         await new Promise<void>((resolve, reject) => {

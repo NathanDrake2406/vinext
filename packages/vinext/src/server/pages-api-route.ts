@@ -10,6 +10,7 @@ import {
   PagesApiBodyParseError,
 } from "./pages-node-compat.js";
 import { internalServerErrorResponse } from "./http-error-responses.js";
+import { isEdgeApiRuntime } from "./edge-api-runtime.js";
 
 type PagesApiRouteConfig = {
   runtime?: string;
@@ -45,22 +46,16 @@ function buildPagesApiQuery(url: string, params: PagesRequestQuery): PagesReques
   return mergeRouteParamsIntoQuery(parseQueryString(url), params);
 }
 
-function isEdgeApiRuntime(runtime: string | undefined): boolean {
-  return runtime === "edge" || runtime === "experimental-edge";
+function isEdgeApiRouteModule(
+  module: PagesApiRouteModule,
+): module is PagesApiRouteModule & { default: PagesEdgeApiRouteHandler } {
+  return typeof module.default === "function" && isEdgeApiRuntime(module.config?.runtime);
 }
 
-function isEdgeApiRouteHandler(
-  handler: PagesApiRouteModule["default"],
+function isNodeApiRouteModule(
   module: PagesApiRouteModule,
-): handler is PagesEdgeApiRouteHandler {
-  return typeof handler === "function" && isEdgeApiRuntime(module.config?.runtime);
-}
-
-function isNodeApiRouteHandler(
-  handler: PagesApiRouteModule["default"],
-  module: PagesApiRouteModule,
-): handler is PagesNodeApiRouteHandler {
-  return typeof handler === "function" && !isEdgeApiRuntime(module.config?.runtime);
+): module is PagesApiRouteModule & { default: PagesNodeApiRouteHandler } {
+  return typeof module.default === "function" && !isEdgeApiRuntime(module.config?.runtime);
 }
 
 export async function handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promise<Response> {
@@ -69,14 +64,10 @@ export async function handlePagesApiRoute(options: HandlePagesApiRouteOptions): 
   }
 
   const { route, params } = options.match;
-  const handler = route.module.default;
-  if (typeof handler !== "function") {
-    return new Response("API route does not export a default function", { status: 500 });
-  }
 
   try {
-    if (isEdgeApiRouteHandler(handler, route.module)) {
-      const response = await handler(options.request);
+    if (isEdgeApiRouteModule(route.module)) {
+      const response = await route.module.default(options.request);
       if (response instanceof Response) {
         return response;
       }
@@ -84,8 +75,8 @@ export async function handlePagesApiRoute(options: HandlePagesApiRouteOptions): 
       throw new Error("Edge API route did not return a Response");
     }
 
-    if (!isNodeApiRouteHandler(handler, route.module)) {
-      throw new Error("Unsupported API route runtime");
+    if (!isNodeApiRouteModule(route.module)) {
+      return new Response("API route does not export a default function", { status: 500 });
     }
 
     const query = buildPagesApiQuery(options.url, params);
@@ -97,7 +88,7 @@ export async function handlePagesApiRoute(options: HandlePagesApiRouteOptions): 
       url: options.url,
     });
 
-    await handler(req, res);
+    await route.module.default(req, res);
     res.end();
     return await responsePromise;
   } catch (error) {
