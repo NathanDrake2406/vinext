@@ -33,6 +33,7 @@ function createHandler(overrides: Partial<HandlerOptions> = {}) {
   const route = createPageRoute();
 
   return createAppRscHandler<TestRoute>({
+    assetPrefix: "",
     basePath: "/docs",
     clearRequestContext: overrides.clearRequestContext ?? (() => {}),
     configHeaders: overrides.configHeaders ?? [

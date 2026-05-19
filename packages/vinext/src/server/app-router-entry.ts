@@ -14,9 +14,10 @@
 
 import "./server-globals.js";
 // @ts-expect-error — virtual module resolved by vinext
-import rscHandler from "virtual:vinext-rsc-entry";
+import rscHandler, { vinextConfig } from "virtual:vinext-rsc-entry";
 import { runWithExecutionContext, type ExecutionContextLike } from "vinext/shims/request-context";
 import { resolveStaticAssetSignal } from "./worker-utils.js";
+import { stripAssetPrefixPathname } from "../utils/asset-prefix.js";
 import {
   cloneRequestWithHeaders,
   filterInternalHeaders,
@@ -78,6 +79,11 @@ async function handleRequest(
   // decodeURIComponent + normalizePath on the incoming URL. Decoding here
   // AND in the handler would double-decode, causing inconsistent path
   // matching between middleware and routing.
+
+  const assetLookupPath = stripAssetPrefixPathname(url.pathname, vinextConfig.assetPrefix);
+  if (assetLookupPath.startsWith("/assets/") && env?.ASSETS) {
+    return env.ASSETS.fetch(new Request(new URL(assetLookupPath, request.url)));
+  }
 
   // Delegate to RSC handler (which decodes + normalizes the pathname itself),
   // wrapping in the ExecutionContext ALS scope so downstream code can reach

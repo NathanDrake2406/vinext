@@ -130,6 +130,8 @@ export type NextConfig = {
   env?: Record<string, string>;
   /** Base URL path prefix */
   basePath?: string;
+  /** Prefix for generated static asset URLs */
+  assetPrefix?: string;
   /** Whether to add trailing slashes */
   trailingSlash?: boolean;
   /** Internationalization routing config */
@@ -244,6 +246,7 @@ export type NextConfigInput = NextConfig | NextConfigFactory;
 export type ResolvedNextConfig = {
   env: Record<string, string>;
   basePath: string;
+  assetPrefix: string;
   trailingSlash: boolean;
   output: "" | "export" | "standalone";
   pageExtensions: string[];
@@ -839,6 +842,7 @@ export async function resolveNextConfig(
     const resolved: ResolvedNextConfig = {
       env: {},
       basePath: "",
+      assetPrefix: "",
       trailingSlash: false,
       output: "",
       pageExtensions: normalizePageExtensions(),
@@ -1022,6 +1026,7 @@ export async function resolveNextConfig(
   const resolved: ResolvedNextConfig = {
     env: config.env ?? {},
     basePath: config.basePath ?? "",
+    assetPrefix: config.assetPrefix ?? "",
     trailingSlash: config.trailingSlash ?? false,
     output: output === "export" || output === "standalone" ? output : "",
     pageExtensions,

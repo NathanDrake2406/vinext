@@ -34,6 +34,7 @@ import { ElementsContext, Slot } from "vinext/shims/slot";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
+import { applyAssetPrefix } from "../utils/asset-prefix.js";
 
 export type FontPreload = {
   href: string;
@@ -109,6 +110,15 @@ function renderFontHtml(fontData?: FontData, nonce?: string): string {
   }
 
   return fontHTML;
+}
+
+const assetPrefix = process.env.__NEXT_ASSET_PREFIX ?? "";
+
+function prefixBootstrapScriptAssets(bootstrapScriptContent: string): string {
+  return bootstrapScriptContent.replaceAll(/import\("([^"]+)"\)/g, (match, pathname) => {
+    if (!pathname.startsWith("/assets/")) return match;
+    return `import("${applyAssetPrefix(pathname, assetPrefix)}")`;
+  });
 }
 
 function extractModulePreloadHtml(bootstrapScriptContent?: string, nonce?: string): string {
@@ -244,7 +254,9 @@ export async function handleSsr(
         : root;
       const ssrRoot = withScriptNonce(ssrTree, options?.scriptNonce);
 
-      const bootstrapScriptContent = await import.meta.viteRsc.loadBootstrapScriptContent("index");
+      const bootstrapScriptContent = prefixBootstrapScriptAssets(
+        await import.meta.viteRsc.loadBootstrapScriptContent("index"),
+      );
       const errorMetaRenderer = createSsrErrorMetaRenderer({
         basePath: options?.basePath,
       });

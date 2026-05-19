@@ -40,6 +40,7 @@ import {
   type NextRewrite,
   type NextHeader,
 } from "./config/next-config.js";
+import { normalizeAssetPrefix } from "./utils/asset-prefix.js";
 
 import { findMiddlewareFile, runMiddleware } from "./server/middleware.js";
 import {
@@ -1036,6 +1037,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         }
         // Expose basePath to client-side code
         defines["process.env.__NEXT_ROUTER_BASEPATH"] = JSON.stringify(nextConfig.basePath);
+        defines["process.env.__NEXT_ASSET_PREFIX"] = JSON.stringify(
+          normalizeAssetPrefix(nextConfig.assetPrefix),
+        );
         // Expose trailingSlash to client-side code so <Link> can render hrefs
         // in the canonical form and avoid an unnecessary 308 redirect bounce.
         defines["process.env.__VINEXT_TRAILING_SLASH"] = JSON.stringify(
@@ -2076,6 +2080,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               redirects: nextConfig?.redirects,
               rewrites: nextConfig?.rewrites,
               headers: nextConfig?.headers,
+              assetPrefix: nextConfig?.assetPrefix,
               allowedOrigins: nextConfig?.serverActionsAllowedOrigins,
               allowedDevOrigins: nextConfig?.allowedDevOrigins,
               bodySizeLimit: nextConfig?.serverActionsBodySizeLimit,

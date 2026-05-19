@@ -52,6 +52,7 @@ import {
 } from "./request-pipeline.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import { hasBasePath, stripBasePath, removeTrailingSlash } from "../utils/base-path.js";
+import { stripAssetPrefixPathname } from "../utils/asset-prefix.js";
 import { computeLazyChunks } from "../utils/lazy-chunks.js";
 import { manifestFileWithBase } from "../utils/manifest-paths.js";
 import { normalizePathnameForRouteMatchStrict } from "../routing/utils.js";
@@ -965,6 +966,13 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   const rscMtime = fs.statSync(rscEntryPath).mtimeMs;
   const rscModule = await import(`${pathToFileURL(rscEntryPath).href}?t=${rscMtime}`);
   const rscHandler = resolveAppRouterHandler(rscModule.default);
+  const appAssetPrefix =
+    typeof rscModule.vinextConfig === "object" &&
+    rscModule.vinextConfig !== null &&
+    "assetPrefix" in rscModule.vinextConfig &&
+    typeof rscModule.vinextConfig.assetPrefix === "string"
+      ? rscModule.vinextConfig.assetPrefix
+      : "";
 
   // Seed the memory cache with pre-rendered routes so the first request to
   // any pre-rendered page is a cache HIT instead of a full re-render.
@@ -1031,9 +1039,10 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     // Serve hashed build assets (Vite output in /assets/) directly.
     // Public directory files fall through to the RSC handler, which runs
     // middleware before serving them.
+    const assetLookupPath = stripAssetPrefixPathname(pathname, appAssetPrefix);
     if (
-      pathname.startsWith("/assets/") &&
-      (await tryServeStatic(req, res, clientDir, pathname, compress, staticCache))
+      assetLookupPath.startsWith("/assets/") &&
+      (await tryServeStatic(req, res, clientDir, assetLookupPath, compress, staticCache))
     ) {
       return;
     }

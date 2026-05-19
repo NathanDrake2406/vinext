@@ -2297,6 +2297,77 @@ describe("App Router Production server (startProdServer)", () => {
     expect(res.headers.get("cache-control")).toContain("immutable");
   });
 
+  it("serves App Router bundles through an absolute assetPrefix pathname", async () => {
+    // Ported from Next.js: test/e2e/app-dir/asset-prefix-absolute/asset-prefix-absolute.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/asset-prefix-absolute/asset-prefix-absolute.test.ts
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-app-asset-prefix-"));
+    const fixtureRoot = path.join(tmpDir, "fixture");
+    let assetPrefixServer: import("node:http").Server | undefined;
+
+    try {
+      fs.cpSync(APP_FIXTURE_DIR, fixtureRoot, { recursive: true });
+      const fixtureNodeModules = path.join(fixtureRoot, "node_modules");
+      if (!fs.existsSync(fixtureNodeModules)) {
+        fs.symlinkSync(
+          path.resolve(__dirname, "..", "node_modules"),
+          fixtureNodeModules,
+          "junction",
+        );
+      }
+
+      const builder = await createBuilder({
+        root: fixtureRoot,
+        configFile: false,
+        plugins: [
+          vinext({
+            appDir: fixtureRoot,
+            nextConfig: {
+              assetPrefix: "https://example.vercel.sh/custom-asset-prefix",
+            },
+          }),
+        ],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+      const assetOutDir = path.join(fixtureRoot, "dist");
+      fs.symlinkSync(
+        path.resolve(__dirname, "..", "node_modules"),
+        path.join(assetOutDir, "node_modules"),
+      );
+
+      const { startProdServer } = await import("../packages/vinext/src/server/prod-server.js");
+      ({ server: assetPrefixServer } = await startProdServer({
+        port: 0,
+        outDir: assetOutDir,
+        noCompression: true,
+      }));
+      const addr = assetPrefixServer.address();
+      const assetPrefixBaseUrl =
+        addr && typeof addr === "object" ? `http://localhost:${addr.port}` : null;
+      expect(assetPrefixBaseUrl).not.toBeNull();
+
+      const htmlRes = await fetch(`${assetPrefixBaseUrl}/`);
+      expect(htmlRes.status).toBe(200);
+      const html = await htmlRes.text();
+      const bundlePaths = [
+        ...html.matchAll(
+          /https:\/\/example\.vercel\.sh\/custom-asset-prefix\/assets\/[^"')]+\.js/g,
+        ),
+      ].map((match) => new URL(match[0]).pathname);
+
+      expect(bundlePaths.length).toBeGreaterThan(0);
+
+      for (const bundlePath of bundlePaths) {
+        const res = await fetch(`${assetPrefixBaseUrl}${bundlePath}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toContain("javascript");
+      }
+    } finally {
+      assetPrefixServer?.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("serves public files from the build output", async () => {
     // Ported from Next.js: test/production/export/index.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/production/export/index.test.ts

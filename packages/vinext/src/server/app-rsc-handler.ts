@@ -39,6 +39,7 @@ import {
   stripRscSuffix,
 } from "./app-rsc-cache-busting.js";
 import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
+import { stripAssetPrefixPathname } from "../utils/asset-prefix.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
@@ -52,6 +53,7 @@ import {
   cloneRequestWithHeaders,
   filterInternalHeaders,
   applyConfigHeadersToResponse,
+  createStaticFileSignal,
   normalizeTrailingSlash,
   resolvePublicFileRoute,
   validateImageUrl,
@@ -165,6 +167,7 @@ type NavigationContextValue = {
 };
 
 type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
+  assetPrefix: string;
   basePath: string;
   clearRequestContext: () => void;
   configHeaders: NextHeader[];
@@ -305,6 +308,11 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     staticParamsMap: options.staticParamsMap,
   });
   if (prerenderEndpointResponse) return prerenderEndpointResponse;
+
+  const assetPrefixPathname = stripAssetPrefixPathname(pathname, options.assetPrefix);
+  if (assetPrefixPathname.startsWith("/assets/")) {
+    return createStaticFileSignal(assetPrefixPathname, { headers: null, status: null });
+  }
 
   const trailingSlashRedirect = normalizeTrailingSlash(
     pathname,

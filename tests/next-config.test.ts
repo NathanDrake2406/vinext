@@ -857,6 +857,7 @@ describe("detectNextIntlConfig", () => {
     return {
       env: {},
       basePath: "",
+      assetPrefix: "",
       trailingSlash: false,
       output: "",
       pageExtensions: ["tsx", "ts", "jsx", "js"],

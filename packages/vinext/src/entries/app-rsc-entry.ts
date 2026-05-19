@@ -93,6 +93,8 @@ type AppRouterConfig = {
     fallback: NextRewrite[];
   };
   headers?: NextHeader[];
+  /** Configured next.config assetPrefix. Used for emitted bundle URLs and static asset aliases. */
+  assetPrefix?: string;
   /** Extra origins allowed for server action CSRF checks (from experimental.serverActions.allowedOrigins). */
   allowedOrigins?: string[];
   /** Extra origins allowed for dev server access (from allowedDevOrigins). */
@@ -148,6 +150,7 @@ export function generateRscEntry(
   const redirects = config?.redirects ?? [];
   const rewrites = config?.rewrites ?? { beforeFiles: [], afterFiles: [], fallback: [] };
   const headers = config?.headers ?? [];
+  const assetPrefix = config?.assetPrefix ?? "";
   const allowedOrigins = config?.allowedOrigins ?? [];
   const bodySizeLimit = config?.bodySizeLimit ?? 1 * 1024 * 1024;
   const expireTime = config?.expireTime ?? DEFAULT_EXPIRE_TIME;
@@ -352,6 +355,12 @@ ${metaRouteEntries.join(",\n")}
 // Hoisted ahead of __fallbackRenderer / buildPageElements so both can thread
 // the configured basePath through file-based metadata href emission.
 const __basePath = ${JSON.stringify(bp)};
+const __assetPrefix = ${JSON.stringify(assetPrefix)};
+
+export const vinextConfig = {
+  assetPrefix: __assetPrefix,
+  basePath: __basePath,
+};
 
 const rootNotFoundModule = ${rootNotFoundVar ? rootNotFoundVar : "null"};
 const rootForbiddenModule = ${rootForbiddenVar ? rootForbiddenVar : "null"};
@@ -466,6 +475,7 @@ ${routes
 };
 
 export default __createAppRscHandler({
+  assetPrefix: __assetPrefix,
   basePath: __basePath,
   clearRequestContext() {
     __clearRequestContext();
