@@ -152,7 +152,8 @@ function createEdgeApiRequest(req: IncomingMessage, url: string): Request {
     }
   }
 
-  const forwardedProto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "http";
+  const rawProto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const forwardedProto = rawProto === "https" || rawProto === "http" ? rawProto : "http";
   const host = headers.get("host") ?? "localhost";
   const requestUrl = new URL(url, `${forwardedProto}://${host}`);
   const body = readEdgeRequestBody(req);
@@ -302,15 +303,6 @@ export async function handleApiRoute(
   try {
     // Load the API route module through the ModuleRunner
     const apiModule = await importModule(runner, route.filePath);
-    const handler = apiModule.default;
-
-    if (typeof handler !== "function") {
-      console.error(`[vinext] API route ${route.filePath} does not export a default function`);
-      res.statusCode = 500;
-      res.end("API route does not export a default function");
-      return true;
-    }
-
     if (isEdgeApiRouteModule(apiModule)) {
       const response = await apiModule.default(createEdgeApiRequest(req, url));
       if (!(response instanceof Response)) {
@@ -327,6 +319,14 @@ export async function handleApiRoute(
         res.setHeader("set-cookie", setCookieHeaders);
       }
       await writeEdgeApiResponseBody(res, response.body);
+      return true;
+    }
+
+    const handler = apiModule.default;
+    if (typeof handler !== "function") {
+      console.error(`[vinext] API route ${route.filePath} does not export a default function`);
+      res.statusCode = 500;
+      res.end("API route does not export a default function");
       return true;
     }
 

@@ -845,6 +845,27 @@ describe("handleApiRoute", () => {
       expect(capturedUrl).toBe("https://example.com/api/users?name=alice");
     });
 
+    it("falls back to http for unsupported x-forwarded-proto values", async () => {
+      let capturedUrl = "";
+      const handler = vi.fn((request: Request) => {
+        capturedUrl = request.url;
+        return Response.json({ ok: true });
+      });
+      const server = mockServer({
+        config: { runtime: "edge" },
+        default: handler,
+      });
+      const req = mockReq("GET", "/api/users", undefined, {
+        host: "example.com",
+        "x-forwarded-proto": "ftp, https",
+      });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/users", [route("/api/users")]);
+
+      expect(capturedUrl).toBe("http://example.com/api/users");
+    });
+
     it("preserves multiple Set-Cookie headers from edge API responses", async () => {
       const handler = vi.fn(() => {
         const headers = new Headers();

@@ -75,6 +75,8 @@ export async function handlePagesApiRoute(options: HandlePagesApiRouteOptions): 
       throw new Error("Edge API route did not return a Response");
     }
 
+    // This is redundant at runtime after the edge branch for function exports, but it
+    // keeps the Node handler ABI narrowed without a production type assertion.
     if (!isNodeApiRouteModule(route.module)) {
       return new Response("API route does not export a default function", { status: 500 });
     }
