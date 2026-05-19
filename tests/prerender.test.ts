@@ -149,6 +149,17 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
     expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing RSC done marker/);
   });
 
+  it("ignores non-chunk runtime scripts that start with the bootstrap expression", () => {
+    const html =
+      "<html><body>" +
+      `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.metadata={}</script>` +
+      runtimeRscChunkScript("0:[]\n") +
+      runtimeRscDoneScript() +
+      "</body></html>";
+
+    expect(decodeExtractedPayload(html)).toBe("0:[]\n");
+  });
+
   it("rejects chunk scripts with trailing code after the payload push", () => {
     const html =
       "<html><body>" +

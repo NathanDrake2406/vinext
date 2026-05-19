@@ -234,12 +234,6 @@ export function extractRscPayloadFromPrerenderedHtml(html: string): Uint8Array |
       );
       continue;
     }
-    if (script.startsWith(RSC_RUNTIME_BOOTSTRAP_EXPRESSION)) {
-      chunks.push(
-        decodeRscEmbeddedChunk(parseRscChunkPushArgument(script, RSC_RUNTIME_CHUNK_FULL_PREFIX)),
-      );
-      continue;
-    }
 
     if (script.startsWith(RSC_LEGACY_CHUNK_SCRIPT_PREFIX)) {
       chunks.push(
