@@ -2492,6 +2492,28 @@ describe("MetadataHead rendering", () => {
     renderToStaticMarkup = (await import("react-dom/server")).renderToStaticMarkup;
   });
 
+  function metadataRouteImage(url: string): { url: string } {
+    const image = { url };
+    Object.defineProperty(image, "metadataRoute", { value: true });
+    return image;
+  }
+
+  function renderStaticSocialImagesMetadata(metadataBase: URL | null): string {
+    return renderToStaticMarkup(
+      React.createElement(MetadataHead, {
+        metadata: {
+          metadataBase,
+          openGraph: {
+            images: [metadataRouteImage("/metadata-base/unset/opengraph-image2/100")],
+          },
+          twitter: {
+            images: metadataRouteImage("/metadata-base/unset/twitter-image.png"),
+          },
+        },
+      }),
+    );
+  }
+
   it("renders generator meta tag", () => {
     const html = renderToStaticMarkup(
       React.createElement(MetadataHead, { metadata: { generator: "Next.js" } }),
@@ -2715,24 +2737,7 @@ describe("MetadataHead rendering", () => {
     withEnvVar("NODE_ENV", "production", () => {
       withEnvVar("PORT", "4567", () => {
         withEnvVar("VERCEL_PROJECT_PRODUCTION_URL", undefined, () => {
-          const openGraphImage = { url: "/metadata-base/unset/opengraph-image2/100" };
-          const twitterImage = { url: "/metadata-base/unset/twitter-image.png" };
-          Object.defineProperty(openGraphImage, "metadataRoute", { value: true });
-          Object.defineProperty(twitterImage, "metadataRoute", { value: true });
-
-          const html = renderToStaticMarkup(
-            React.createElement(MetadataHead, {
-              metadata: {
-                metadataBase: null,
-                openGraph: {
-                  images: [openGraphImage],
-                },
-                twitter: {
-                  images: twitterImage,
-                },
-              },
-            }),
-          );
+          const html = renderStaticSocialImagesMetadata(null);
 
           expect(html).toContain(
             'content="http://localhost:4567/metadata-base/unset/opengraph-image2/100"',
@@ -2740,6 +2745,68 @@ describe("MetadataHead rendering", () => {
           expect(html).toContain(
             'content="http://localhost:4567/metadata-base/unset/twitter-image.png"',
           );
+        });
+      });
+    });
+  });
+
+  it("lets configured metadataBase win over non-preview deployment urls for static metadata route images", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("VERCEL_URL", "my-deployment.vercel.app", () => {
+        withEnvVar("VERCEL_ENV", "production", () => {
+          const html = renderStaticSocialImagesMetadata(new URL("https://mydomain.com"));
+
+          expect(html).toContain(
+            'content="https://mydomain.com/metadata-base/unset/opengraph-image2/100"',
+          );
+          expect(html).not.toContain("my-deployment.vercel.app");
+        });
+      });
+    });
+  });
+
+  it("lets configured metadataBase win over deployment urls when VERCEL_ENV is unset", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("VERCEL_URL", "my-deployment.vercel.app", () => {
+        withEnvVar("VERCEL_ENV", undefined, () => {
+          const html = renderStaticSocialImagesMetadata(new URL("https://mydomain.com"));
+
+          expect(html).toContain(
+            'content="https://mydomain.com/metadata-base/unset/opengraph-image2/100"',
+          );
+          expect(html).not.toContain("my-deployment.vercel.app");
+        });
+      });
+    });
+  });
+
+  it("uses preview deployment urls for static metadata route images in Vercel preview", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("VERCEL_BRANCH_URL", "branch-preview.vercel.app", () => {
+        withEnvVar("VERCEL_ENV", "preview", () => {
+          const html = renderStaticSocialImagesMetadata(new URL("https://mydomain.com"));
+
+          expect(html).toContain(
+            'content="https://branch-preview.vercel.app/metadata-base/unset/opengraph-image2/100"',
+          );
+          expect(html).not.toContain("https://mydomain.com/metadata-base/unset");
+        });
+      });
+    });
+  });
+
+  it("uses production deployment urls as fallback when metadataBase is unset", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("VERCEL_PROJECT_PRODUCTION_URL", "project-production.vercel.app", () => {
+        withEnvVar("VERCEL_URL", "my-deployment.vercel.app", () => {
+          withEnvVar("VERCEL_ENV", "production", () => {
+            const html = renderStaticSocialImagesMetadata(null);
+
+            expect(html).toContain(
+              'content="https://project-production.vercel.app/metadata-base/unset/opengraph-image2/100"',
+            );
+            expect(html).not.toContain("my-deployment.vercel.app");
+          });
         });
       });
     });

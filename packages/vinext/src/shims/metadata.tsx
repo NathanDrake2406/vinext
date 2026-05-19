@@ -622,7 +622,11 @@ function getSocialImageMetadataBaseFallback(metadataBase: URL | null | undefined
     return defaultMetadataBase;
   }
 
-  if (previewDeploymentUrl) {
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.VERCEL_ENV === "preview" &&
+    previewDeploymentUrl
+  ) {
     return previewDeploymentUrl;
   }
 

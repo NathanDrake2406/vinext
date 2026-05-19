@@ -83,7 +83,7 @@ function isImageMetadataRoute(route: MetadataRuntimeRoute): boolean {
 }
 
 function metadataRouteCacheHeader(route: MetadataRuntimeRoute): string {
-  if (isImageMetadataRoute(route) && process.env.NODE_ENV === "development") {
+  if (route.isDynamic && isImageMetadataRoute(route) && process.env.NODE_ENV === "development") {
     return CACHE_HEADERS.noCache;
   }
   return CACHE_HEADERS.revalidate;

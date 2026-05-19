@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { handleMetadataRouteRequest } from "../packages/vinext/src/server/metadata-route-response.js";
 import type { MetadataFileRoute } from "../packages/vinext/src/server/metadata-routes.js";
+import { withEnvVar } from "./env-test-helpers.js";
 
 type MetadataRuntimeRoute = MetadataFileRoute & {
   fileDataBase64?: string;
@@ -64,6 +65,30 @@ describe("handleMetadataRouteRequest", () => {
     expect(
       Array.from(new Uint8Array((await response?.arrayBuffer()) ?? new ArrayBuffer(0))),
     ).toEqual([105, 99, 111, 110, 45, 98, 121, 116, 101, 115]);
+  });
+
+  it("keeps static image metadata route cache control stable in development", async () => {
+    await withEnvVar("NODE_ENV", "development", async () => {
+      const route = {
+        type: "apple-icon",
+        isDynamic: false,
+        filePath: "/tmp/app/apple-icon.png",
+        routePrefix: "",
+        routeSegments: [],
+        servedUrl: "/apple-icon.png",
+        contentType: "image/png",
+        fileDataBase64: btoa("icon-bytes"),
+      } satisfies MetadataRuntimeRoute;
+
+      const response = await handleMetadataRouteRequest({
+        metadataRoutes: [route],
+        cleanPathname: "/apple-icon.png",
+        makeThenableParams,
+      });
+
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+    });
   });
 
   it("caches metadata route module function lookups", async () => {
