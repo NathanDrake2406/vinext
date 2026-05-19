@@ -90,6 +90,7 @@ function createTestRouteManifest(routes: readonly TestManifestRoute[]): RouteMan
   const manifestRoutes = new Map<string, RouteManifestRoute>();
   const slotBindings = new Map<string, RouteManifestSlotBinding>();
   const interceptions = new Map<string, RouteManifestInterception>();
+  const interceptionsBySlotId = new Map<string, RouteManifestInterception[]>();
   const rootBoundaries = new Map<RootBoundaryId, RouteManifestRootBoundary>();
   const routeIdByPattern = new Map(
     routes.map((route) => [route.pattern, route.id ?? `route:${route.pattern}`]),
@@ -137,7 +138,7 @@ function createTestRouteManifest(routes: readonly TestManifestRoute[]): RouteMan
         .split("/")
         .filter((segment) => segment.length > 0);
       const id = `interception:${interception.slotId}:${interception.sourcePattern}->${interception.targetPattern}`;
-      interceptions.set(id, {
+      const manifestInterception = {
         id,
         interceptingRouteId: routeIdByPattern.get(interception.sourcePattern) ?? null,
         ownerLayoutId: interception.ownerLayoutId,
@@ -149,7 +150,14 @@ function createTestRouteManifest(routes: readonly TestManifestRoute[]): RouteMan
         targetPattern: interception.targetPattern,
         targetPatternParts,
         targetRouteId: routeIdByPattern.get(interception.targetPattern) ?? null,
-      });
+      };
+      interceptions.set(id, manifestInterception);
+      const slotInterceptions = interceptionsBySlotId.get(interception.slotId);
+      if (slotInterceptions) {
+        slotInterceptions.push(manifestInterception);
+      } else {
+        interceptionsBySlotId.set(interception.slotId, [manifestInterception]);
+      }
     }
 
     const rootLayoutId = route.layoutIds[0];
@@ -166,6 +174,7 @@ function createTestRouteManifest(routes: readonly TestManifestRoute[]): RouteMan
     boundaries: new Map(),
     defaults: new Map(),
     interceptions,
+    interceptionsBySlotId,
     layouts: new Map(),
     pages: new Map(),
     rootBoundaries,

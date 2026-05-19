@@ -48,6 +48,7 @@ function buildRouteManifestExpression(routeManifest: RouteManifest | null): stri
     defaults: ${buildMapExpression(graph.defaults)},
     slotBindings: ${buildMapExpression(graph.slotBindings)},
     interceptions: ${buildMapExpression(graph.interceptions)},
+    interceptionsBySlotId: ${buildMapExpression(graph.interceptionsBySlotId)},
     boundaries: ${buildMapExpression(graph.boundaries)},
     rootBoundaries: ${buildMapExpression(graph.rootBoundaries)}
   }

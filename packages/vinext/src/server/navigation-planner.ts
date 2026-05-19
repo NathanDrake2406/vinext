@@ -345,11 +345,10 @@ function findRouteManifestInterceptionForProof(
     routeId: proof.targetRouteId,
     routeManifest,
   });
-  const interceptions = routeManifest.segmentGraph.interceptions;
-  if (!interceptions) return null;
+  const candidateInterceptions =
+    routeManifest.segmentGraph.interceptionsBySlotId.get(proof.slotId) ?? [];
 
-  for (const interception of interceptions.values()) {
-    if (interception.slotId !== proof.slotId) continue;
+  for (const interception of candidateInterceptions) {
     if (!matchRoutePatternPrefix(sourceParts, interception.sourcePatternParts)) {
       continue;
     }

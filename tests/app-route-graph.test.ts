@@ -51,6 +51,7 @@ function snapshotRouteManifest(manifest: RouteManifest) {
     defaults: Array.from(manifest.segmentGraph.defaults.entries()),
     slotBindings: Array.from(manifest.segmentGraph.slotBindings.entries()),
     interceptions: Array.from(manifest.segmentGraph.interceptions.entries()),
+    interceptionsBySlotId: Array.from(manifest.segmentGraph.interceptionsBySlotId.entries()),
     boundaries: Array.from(manifest.segmentGraph.boundaries.entries()),
     rootBoundaries: Array.from(manifest.segmentGraph.rootBoundaries.entries()),
   };
@@ -991,6 +992,9 @@ describe("App Router route graph builder", () => {
 
         const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
         const interceptions = Array.from(graph.routeManifest.segmentGraph.interceptions.values());
+        const interceptionsBySlotId = Array.from(
+          graph.routeManifest.segmentGraph.interceptionsBySlotId.entries(),
+        );
 
         expect(interceptions).toEqual([
           {
@@ -1005,6 +1009,7 @@ describe("App Router route graph builder", () => {
             targetRouteId: "route:/:locale/photos/:id",
           },
         ]);
+        expect(interceptionsBySlotId).toEqual([["slot:modal:/[locale]/feed", interceptions]]);
       });
     });
   });
