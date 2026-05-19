@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { PassThrough } from "node:stream";
 import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { handleApiRoute } from "../packages/vinext/src/server/api-handler.js";
 import {
   reportRequestError,
@@ -84,6 +85,7 @@ function mockRes(): http.ServerResponse & {
   _headers: Record<string, string | string[]>;
   _statusCode: number;
   _ended: boolean;
+  _writes: Buffer[];
 } {
   const headers: Record<string, string | string[]> = {};
   const res = {
@@ -92,6 +94,7 @@ function mockRes(): http.ServerResponse & {
     _headers: headers,
     _statusCode: 200,
     _ended: false,
+    _writes: [] as Buffer[],
     setHeader(name: string, value: string | string[]) {
       headers[name.toLowerCase()] = value;
     },
@@ -107,9 +110,28 @@ function mockRes(): http.ServerResponse & {
         }
       }
     },
+    write(data: string | Buffer | Uint8Array) {
+      const chunk =
+        typeof data === "string"
+          ? Buffer.from(data)
+          : Buffer.isBuffer(data)
+            ? data
+            : Buffer.from(data);
+      res._writes.push(chunk);
+      res._body = Buffer.isBuffer(res._body)
+        ? Buffer.concat([res._body, chunk])
+        : res._body
+          ? Buffer.concat([Buffer.from(res._body), chunk])
+          : chunk;
+      return true;
+    },
     end(data?: string | Buffer) {
       if (data !== undefined) {
-        res._body = data;
+        if (res._writes.length) {
+          res.write(data);
+        } else {
+          res._body = data;
+        }
       }
       res._ended = true;
       res._statusCode = res.statusCode;
@@ -119,6 +141,7 @@ function mockRes(): http.ServerResponse & {
     _headers: Record<string, string | string[]>;
     _statusCode: number;
     _ended: boolean;
+    _writes: Buffer[];
   };
   return res;
 }
@@ -822,6 +845,57 @@ describe("handleApiRoute", () => {
       expect(res._statusCode).toBe(200);
       expect(res._headers["set-cookie"]).toEqual(["one=1; Path=/", "two=2; Path=/"]);
       expect(res._body.toString()).toBe("ok");
+    });
+
+    it("streams edge API response bodies through the dev bridge", async () => {
+      let releaseSecondChunk!: () => void;
+      const secondChunkReady = new Promise<void>((resolve) => {
+        releaseSecondChunk = resolve;
+      });
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode("first"));
+          void secondChunkReady.then(() => {
+            controller.enqueue(encoder.encode("-second"));
+            controller.close();
+          });
+        },
+      });
+      const handler = vi.fn(() => new Response(body));
+      const server = mockServer({
+        config: { runtime: "edge" },
+        default: handler,
+      });
+      const nodeServer = http.createServer((req, res) => {
+        void handleApiRoute(server, req, res, req.url ?? "/", [route("/api/users")]);
+      });
+
+      try {
+        await new Promise<void>((resolve) => nodeServer.listen(0, resolve));
+        const address = nodeServer.address() as AddressInfo;
+        const response = await fetch(`http://127.0.0.1:${address.port}/api/users`);
+        const reader = response.body?.getReader();
+        expect(reader).toBeDefined();
+        if (!reader) return;
+
+        const first = await reader.read();
+        expect(first.done).toBe(false);
+        expect(new TextDecoder().decode(first.value)).toBe("first");
+
+        releaseSecondChunk();
+        const second = await reader.read();
+        const done = await reader.read();
+
+        expect(second.done).toBe(false);
+        expect(new TextDecoder().decode(second.value)).toBe("-second");
+        expect(done.done).toBe(true);
+      } finally {
+        nodeServer.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          nodeServer.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
     });
   });
 

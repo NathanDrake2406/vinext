@@ -171,6 +171,53 @@ async function createEdgeApiRequest(req: IncomingMessage, url: string): Promise<
   });
 }
 
+function waitForWritableDrain(res: ServerResponse): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      res.off("drain", onDrain);
+      res.off("error", onError);
+    };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    res.once("drain", onDrain);
+    res.once("error", onError);
+  });
+}
+
+async function writeEdgeApiResponseBody(
+  res: ServerResponse,
+  body: ReadableStream<Uint8Array> | null,
+): Promise<void> {
+  if (!body) {
+    res.end();
+    return;
+  }
+
+  const reader = body.getReader();
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      if (result.value.byteLength === 0) continue;
+      if (!res.write(Buffer.from(result.value))) {
+        await waitForWritableDrain(res);
+      }
+    }
+    res.end();
+  } catch (error) {
+    res.destroy(error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 /**
  * Enhance a Node.js req/res pair with Next.js API route helpers.
  */
@@ -273,7 +320,7 @@ export async function handleApiRoute(
       if (setCookieHeaders.length) {
         res.setHeader("set-cookie", setCookieHeaders);
       }
-      res.end(Buffer.from(await response.arrayBuffer()));
+      await writeEdgeApiResponseBody(res, response.body);
       return true;
     }
 

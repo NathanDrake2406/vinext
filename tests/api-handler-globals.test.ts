@@ -21,6 +21,7 @@ type MockResponse = http.ServerResponse & {
   _body: string | Buffer;
   _headers: Record<string, string | string[]>;
   _statusCode: number;
+  _writes: Buffer[];
 };
 
 const originalAsyncLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "AsyncLocalStorage");
@@ -74,14 +75,39 @@ function mockRes(): MockResponse {
     _body: "",
     _headers: headers,
     _statusCode: 200,
+    _writes: [] as Buffer[],
     headersSent: false,
     writableEnded: false,
     setHeader(name: string, value: string | string[]) {
       headers[name.toLowerCase()] = value;
     },
+    write(data: string | Buffer | Uint8Array) {
+      const chunk =
+        typeof data === "string"
+          ? Buffer.from(data)
+          : Buffer.isBuffer(data)
+            ? data
+            : Buffer.from(data);
+      res._writes.push(chunk);
+      res._body = Buffer.isBuffer(res._body)
+        ? Buffer.concat([res._body, chunk])
+        : res._body
+          ? Buffer.concat([Buffer.from(res._body), chunk])
+          : chunk;
+      return true;
+    },
     end(data?: string | Buffer) {
-      if (data !== undefined) res._body = data;
+      if (data !== undefined) {
+        if (res._writes.length) {
+          res.write(data);
+        } else {
+          res._body = data;
+        }
+      }
       res._statusCode = res.statusCode;
+    },
+    destroy() {
+      return res;
     },
   } as unknown as MockResponse;
   return res;
