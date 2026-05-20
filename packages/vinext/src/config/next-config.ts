@@ -1159,7 +1159,15 @@ function isSupportedTailwindTurbopackCssRule(rule: unknown): boolean {
     );
   }
 
-  if (!isRecord(rule) || !Array.isArray(rule.loaders)) {
+  if (!isRecord(rule)) {
+    return false;
+  }
+
+  if (!("loaders" in rule)) {
+    return typeof rule.type === "string";
+  }
+
+  if (!Array.isArray(rule.loaders)) {
     return false;
   }
 

@@ -674,12 +674,17 @@ export function checkConventions(root: string): CheckItem[] {
   if (postcssConfig) {
     const configFile = path.basename(postcssConfig.configPath);
     const content = fs.readFileSync(postcssConfig.configPath, "utf-8");
-    if (configFile === "postcss.config.json") {
+    const isJsonConfig =
+      configFile === "package.json" ||
+      configFile === "postcss.config.json" ||
+      configFile === ".postcssrc.json" ||
+      (configFile === ".postcssrc" && postcssConfig.config !== undefined);
+    if (isJsonConfig) {
       items.push({
         name: `PostCSS config (${configFile})`,
         status: "supported",
         detail:
-          "postcss.config.json is supported by Next.js and vinext injects it into Vite automatically",
+          "JSON PostCSS config is supported by Next.js and vinext injects string-form plugins into Vite automatically",
       });
     } else {
       // Detect string-form plugins: plugins: ["..."] or plugins: ['...']

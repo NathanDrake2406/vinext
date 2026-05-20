@@ -323,17 +323,17 @@ module.exports.postcss = true;
     }
   });
 
-  it("picks file-based PostCSS config over package.json postcss", async () => {
+  it("picks package.json postcss over file-based PostCSS config", async () => {
     const fsp = await import("node:fs/promises");
     const dir = await createTmpProject(
       "postcss.config.js",
-      `module.exports = { plugins: ["mock-postcss-plugin"] };`,
+      `module.exports = { plugins: ["missing-postcss-plugin"] };`,
     );
     await fsp.writeFile(
       path.join(dir, "package.json"),
       JSON.stringify({
         type: "module",
-        postcss: { plugins: { autoprefixer: {} } },
+        postcss: { plugins: ["mock-postcss-plugin"] },
       }),
     );
     try {

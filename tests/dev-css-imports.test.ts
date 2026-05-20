@@ -91,6 +91,35 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     }
   });
 
+  it("does not recurse forever through circular source imports", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-dev-css-"));
+    try {
+      const appDir = path.join(root, "src", "app");
+      await fs.mkdir(appDir, { recursive: true });
+      const pagePath = path.join(appDir, "page.tsx");
+      const shellPath = path.join(appDir, "Shell.tsx");
+      await fs.writeFile(
+        pagePath,
+        `import Shell from "./Shell";\nimport "./page.css";\nexport default Shell;`,
+      );
+      await fs.writeFile(
+        shellPath,
+        `import Page from "./page";\nimport "./shell.css";\nexport default Page;`,
+      );
+      await fs.writeFile(path.join(appDir, "page.css"), `.page { color: red; }`);
+      await fs.writeFile(path.join(appDir, "shell.css"), `.shell { color: blue; }`);
+
+      const hrefs = await collectDevCssHrefsForFiles([pagePath], {
+        projectRoot: root,
+        aliases: {},
+      });
+
+      expect(hrefs).toEqual(["/src/app/page.css", "/src/app/shell.css"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("does not walk resolved package source graphs from bare imports", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-dev-css-"));
     try {

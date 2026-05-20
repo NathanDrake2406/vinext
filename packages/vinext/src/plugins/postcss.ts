@@ -29,8 +29,8 @@ type PostcssConfigInfo = {
 
 /**
  * PostCSS config file names to search for, in priority order.
- * Starts with vinext's historical Vite-compatible order, then adds
- * `postcss.config.json`, which Next.js supports via findConfig().
+ * `package.json` is checked first in findPostcssConfig() to match Next.js
+ * findConfig(), where package configuration always wins.
  */
 const POSTCSS_CONFIG_FILES = [
   "postcss.config.js",
@@ -112,6 +112,14 @@ function parseJsonConfigContent(content: string, configPath: string): unknown {
 }
 
 export function findPostcssConfig(projectRoot: string): FoundPostcssConfig | null {
+  const packageJsonPath = path.join(projectRoot, "package.json");
+  if (fs.existsSync(packageJsonPath)) {
+    const packageJson = readJsonFile<unknown>(packageJsonPath);
+    if (isRecord(packageJson) && isRecord(packageJson.postcss)) {
+      return { configPath: packageJsonPath, config: packageJson.postcss, loadModule: false };
+    }
+  }
+
   for (const name of POSTCSS_CONFIG_FILES) {
     const candidate = path.join(projectRoot, name);
     if (!fs.existsSync(candidate)) continue;
@@ -149,14 +157,6 @@ export function findPostcssConfig(projectRoot: string): FoundPostcssConfig | nul
     }
 
     return { configPath: candidate, config: undefined, loadModule: true };
-  }
-
-  const packageJsonPath = path.join(projectRoot, "package.json");
-  if (fs.existsSync(packageJsonPath)) {
-    const packageJson = readJsonFile<unknown>(packageJsonPath);
-    if (isRecord(packageJson) && isRecord(packageJson.postcss)) {
-      return { configPath: packageJsonPath, config: packageJson.postcss, loadModule: false };
-    }
   }
 
   return null;

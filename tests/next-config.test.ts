@@ -659,6 +659,26 @@ describe("resolveNextConfig turbopack.rules warning", () => {
     expect(turbopackRulesWarning).toBeUndefined();
   });
 
+  it("does not warn for type-only Turbopack CSS rules", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const config = await resolveNextConfig({
+      turbopack: {
+        rules: {
+          "*.css": {
+            type: "css",
+          },
+        },
+      },
+    });
+
+    expect(config.tailwindTurbopackCssLoader).toBe(false);
+    const turbopackRulesWarning = warn.mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].includes("turbopack.rules"),
+    );
+    expect(turbopackRulesWarning).toBeUndefined();
+  });
+
   it("warns when unsupported Turbopack rules are configured alongside Tailwind CSS", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 

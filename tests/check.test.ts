@@ -825,6 +825,28 @@ describe("checkConventions", () => {
     expect(postcss?.status).toBe("supported");
   });
 
+  it("reports JSON-format .postcssrc string-form plugins as supported", () => {
+    writeFile("app/page.tsx", `export default function Home() { return <div/>; }`);
+    writeFile(".postcssrc", JSON.stringify({ plugins: ["@tailwindcss/postcss"] }));
+
+    const items = checkConventions(tmpDir);
+    const postcss = items.find((i) => i.name.includes("PostCSS"));
+    expect(postcss).toBeDefined();
+    expect(postcss?.name).toBe("PostCSS config (.postcssrc)");
+    expect(postcss?.status).toBe("supported");
+  });
+
+  it("reports package.json postcss config as supported", () => {
+    writeFile("app/page.tsx", `export default function Home() { return <div/>; }`);
+    writeFile("package.json", JSON.stringify({ postcss: { plugins: ["@tailwindcss/postcss"] } }));
+
+    const items = checkConventions(tmpDir);
+    const postcss = items.find((i) => i.name.includes("PostCSS"));
+    expect(postcss).toBeDefined();
+    expect(postcss?.name).toBe("PostCSS config (package.json)");
+    expect(postcss?.status).toBe("supported");
+  });
+
   it("does not flag PostCSS when no config exists", () => {
     writeFile("app/page.tsx", `export default function Home() { return <div/>; }`);
 
