@@ -48,17 +48,18 @@ export function createAppPrerenderStaticParamsResolver(
   }
 
   return async ({ params }) => {
-    const picked = filterRootParams(params);
-    let paramSets: RootParams[] = [picked];
+    let paramSets: RootParams[] = [params];
 
     for (const generateStaticParams of generateStaticParamsFns) {
       const nextParamSets: RootParams[] = [];
 
       for (const parentParams of paramSets) {
-        const pickedParent = filterRootParams(parentParams);
-        const result = await runWithRootParamsScope(pickedParent, async () =>
+        const rootScope = filterRootParams(parentParams);
+
+        const result = await runWithRootParamsScope(rootScope, async () =>
           generateStaticParams({ params: parentParams }),
         );
+
         if (!Array.isArray(result)) return [];
 
         for (const item of result) {

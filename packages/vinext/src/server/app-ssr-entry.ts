@@ -214,7 +214,7 @@ export async function handleSsr(
       clearServerInsertedHTML();
     };
 
-    const rootParams = options?.rootParams ?? navContext?.params ?? {};
+    const rootParams = options?.rootParams ?? {};
     return runWithRootParamsScope(rootParams, async () => {
       try {
         // Fused tee path (#981): caller pre-split the stream. No internal tee needed.

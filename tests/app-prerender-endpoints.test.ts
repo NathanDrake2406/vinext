@@ -56,6 +56,23 @@ describe("App prerender endpoint helpers", () => {
     });
   });
 
+  it("preserves incoming non-root parent params in the resolver", async () => {
+    const first = vi.fn(async ({ params }) => {
+      expect(params).toEqual({ lang: "en", category: "docs" });
+      expect(await getRootParam("lang")).toBe("en");
+      expect(await getRootParam("category")).toBeUndefined();
+      return [{ slug: `${params.category}-post` }];
+    });
+
+    const second = vi.fn(({ params }) => [{ final: params.slug }]);
+
+    const resolve = createAppPrerenderStaticParamsResolver([first, second], ["lang"]);
+
+    await expect(resolve?.({ params: { lang: "en", category: "docs" } })).resolves.toEqual([
+      { lang: "en", category: "docs", slug: "docs-post", final: "docs-post" },
+    ]);
+  });
+
   it("bails out of composed generateStaticParams when a source returns a non-array", async () => {
     const malformedLayoutGenerateStaticParams = vi.fn(() => undefined);
     const pageGenerateStaticParams = vi.fn(() => [{ slug: "unused" }]);
