@@ -33,6 +33,10 @@ type AppPageRequestCacheLife = {
 };
 export type AppPageCacheOutcomeMetric = Readonly<{
   artifact: "html" | "rsc";
+  /**
+   * Internal cache lookup key for debugging and tests. Runtime telemetry sinks should hash or
+   * redact this value before export to avoid high-cardinality or user-derived labels.
+   */
   cacheKey: string;
   outcome: "hit" | "miss" | "stale";
   reason:

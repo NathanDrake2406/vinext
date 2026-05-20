@@ -1414,7 +1414,7 @@ export function buildStaticLayoutReuseProof(
   if (input.candidateVariant.dimensions.length > 0) {
     return rejectStaticLayoutReuseProof("CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN", {
       dimensionCount: input.candidateVariant.dimensions.length,
-      sources: input.candidateVariant.dimensions.map((dimension) => dimension.source),
+      sources: input.candidateVariant.dimensions.map((dimension) => dimension.source).sort(),
     });
   }
 
@@ -1502,7 +1502,7 @@ export function createStaticLayoutArtifactReuseDecision(
   if (artifactCompatibility.kind === "unknown") {
     return createStaticLayoutArtifactReuseFallback(
       buildBreakerFallback("CP_ARTIFACT_COMPATIBILITY_UNKNOWN", {
-        fallback: artifactCompatibility.fallback,
+        compatibilityFallback: artifactCompatibility.fallback,
         reason: artifactCompatibility.reason,
       }),
     );
@@ -1510,7 +1510,7 @@ export function createStaticLayoutArtifactReuseDecision(
   if (artifactCompatibility.kind === "incompatible") {
     return createStaticLayoutArtifactReuseFallback(
       buildBreakerFallback("CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE", {
-        fallback: artifactCompatibility.fallback,
+        compatibilityFallback: artifactCompatibility.fallback,
         reason: artifactCompatibility.reason,
       }),
     );

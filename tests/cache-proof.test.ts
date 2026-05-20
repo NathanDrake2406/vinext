@@ -141,6 +141,12 @@ function expectStaticLayoutProofRejection(
   return result.fallback;
 }
 
+function expectStaticLayoutArtifactReuseDecisionInput(
+  input: Parameters<typeof createStaticLayoutArtifactReuseDecision>[0],
+): void {
+  void input;
+}
+
 describe("disabled cache proof model", () => {
   it("normalizes route graph semantic ids for cache proof scopes", () => {
     const route = {
@@ -915,16 +921,14 @@ describe("disabled cache proof model", () => {
     const candidateObservation = buildLayoutObservation({ output });
 
     expect(rawVariant.kind).toBe("variant");
-    if (process.env.VINEXT_CACHE_PROOF_TYPECHECK_ONLY === "1") {
-      createStaticLayoutArtifactReuseDecision({
-        currentArtifactCompatibility: artifactCompatibility,
-        candidateArtifactCompatibility: artifactCompatibility,
-        candidateObservation,
-        // @ts-expect-error raw variants have not proven route-budget admission.
-        candidateVariant: rawVariant,
-        currentOutput: output,
-      });
-    }
+    expectStaticLayoutArtifactReuseDecisionInput({
+      currentArtifactCompatibility: artifactCompatibility,
+      candidateArtifactCompatibility: artifactCompatibility,
+      candidateObservation,
+      // @ts-expect-error raw variants have not proven route-budget admission.
+      candidateVariant: rawVariant,
+      currentOutput: output,
+    });
   });
 
   it("rejects static layout proof for public variant dimensions without current dimension proof", () => {
@@ -1018,6 +1022,10 @@ describe("disabled cache proof model", () => {
       canReuse: false,
       fallback: {
         code: "CP_ARTIFACT_COMPATIBILITY_UNKNOWN",
+        fields: {
+          compatibilityFallback: "renderFresh",
+          reason: "graphVersionUnknown",
+        },
         mode: "renderFresh",
       },
       metric: {
@@ -1030,6 +1038,7 @@ describe("disabled cache proof model", () => {
       fallback: {
         code: "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE",
         fields: {
+          compatibilityFallback: "renderFresh",
           reason: "deploymentVersionMismatch",
         },
       },
