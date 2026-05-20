@@ -11,6 +11,7 @@ import {
   type LayoutFlags,
 } from "../server/app-elements.js";
 import type { ArtifactCompatibilityEnvelope } from "../server/artifact-compatibility.js";
+import type { CacheEntryReuseProof } from "../server/cache-proof.js";
 import { notFound } from "./navigation.js";
 
 const EMPTY_ELEMENTS: AppElements = Object.freeze({});
@@ -88,16 +89,23 @@ function isInterceptionMetadataValue(value: unknown): value is AppElementsInterc
   );
 }
 
+function isCacheEntryReuseProofValue(value: unknown): value is CacheEntryReuseProof {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return "kind" in value && value.kind === "runtime-cache-entry" && "decision" in value;
+}
+
 function isTransportMetadataValue(
   value: AppElementValue | undefined,
 ): value is
   | LayoutFlags
   | ArtifactCompatibilityEnvelope
+  | CacheEntryReuseProof
   | AppElementsInterception
   | readonly AppElementsSlotBinding[] {
   return (
     isLayoutFlagsValue(value) ||
     isArtifactCompatibilityEnvelopeValue(value) ||
+    isCacheEntryReuseProofValue(value) ||
     isInterceptionMetadataValue(value) ||
     isSlotBindingListValue(value)
   );

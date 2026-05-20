@@ -3,12 +3,14 @@ export const NAVIGATION_TRACE_SCHEMA_VERSION = 0;
 export type NavigationTraceSchemaVersion = 0;
 
 export const NavigationTraceReasonCodes = {
+  cacheProofRejected: "NC_CACHE_REJECT",
   commitCurrent: "NC_COMMIT",
   interceptedCommitCurrent: "NC_INTERCEPT_COMMIT",
   interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT",
   interceptedRejectedMissingProof: "NC_INTERCEPT_REJECT_MISSING_PROOF",
   interceptedRejectedMissingSlotProof: "NC_INTERCEPT_REJECT_SLOT",
   interceptedRejectedTargetMismatch: "NC_INTERCEPT_REJECT_TARGET",
+  interceptedRejectedUndeclaredTopology: "NC_INTERCEPT_REJECT_GRAPH",
   interceptedRejectedUnknownSource: "NC_INTERCEPT_REJECT_SOURCE",
   prefetchOnly: "NC_PREFETCH_ONLY",
   requestWork: "NC_REQUEST",
@@ -16,12 +18,14 @@ export const NavigationTraceReasonCodes = {
   rootBoundaryUnknown: "NC_ROOT_UNKNOWN",
   staleOperation: "NC_STALE",
 } satisfies Readonly<{
+  cacheProofRejected: "NC_CACHE_REJECT";
   commitCurrent: "NC_COMMIT";
   interceptedCommitCurrent: "NC_INTERCEPT_COMMIT";
   interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT";
   interceptedRejectedMissingProof: "NC_INTERCEPT_REJECT_MISSING_PROOF";
   interceptedRejectedMissingSlotProof: "NC_INTERCEPT_REJECT_SLOT";
   interceptedRejectedTargetMismatch: "NC_INTERCEPT_REJECT_TARGET";
+  interceptedRejectedUndeclaredTopology: "NC_INTERCEPT_REJECT_GRAPH";
   interceptedRejectedUnknownSource: "NC_INTERCEPT_REJECT_SOURCE";
   prefetchOnly: "NC_PREFETCH_ONLY";
   requestWork: "NC_REQUEST";
@@ -50,6 +54,10 @@ export type NavigationTraceCode = NavigationTraceReasonCode | NavigationTraceTra
 
 export type NavigationTraceFieldName =
   | "activeNavigationId"
+  | "cacheProofCode"
+  | "cacheProofMode"
+  | "cacheProofReuseClass"
+  | "cacheProofScope"
   | "currentRootLayoutTreePath"
   | "currentVisibleCommitVersion"
   | "nextRootLayoutTreePath"

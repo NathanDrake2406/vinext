@@ -5,8 +5,11 @@ import {
   commitClientNavigationState,
 } from "vinext/shims/navigation";
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
+import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
+  FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
   createPendingNavigationCommit,
+  type AppNavigationPayloadOrigin,
   type AppRouterState,
   type OperationLane,
 } from "./app-browser-state.js";
@@ -56,6 +59,7 @@ type SameUrlServerActionLifecycleOptions = {
 type BrowserNavigationControllerDeps = {
   commitClientNavigationState?: typeof commitClientNavigationState;
   performHardNavigation?: (href: string, mode?: HardNavigationMode) => boolean;
+  getRouteManifest?: () => RouteManifest | null;
   syncHistoryStatePreviousNextUrl?: (previousNextUrl: string | null) => void;
 };
 
@@ -79,6 +83,7 @@ type BrowserNavigationController = {
     navigationSnapshot: ClientNavigationRenderSnapshot;
     nextElements: Promise<AppElements>;
     operationLane: OperationLane;
+    payloadOrigin: AppNavigationPayloadOrigin;
     params: Record<string, string | string[]>;
     pendingRouterState: PendingBrowserRouterState | null;
     previousNextUrl: string | null;
@@ -193,6 +198,7 @@ export function createAppBrowserNavigationController(
   const commitClientNavigationStateImpl =
     deps.commitClientNavigationState ?? commitClientNavigationState;
   const performHardNavigation = deps.performHardNavigation ?? performHardNavigationWithLoopGuard;
+  const getRouteManifest = deps.getRouteManifest ?? (() => null);
   const syncHistoryStatePreviousNextUrl = deps.syncHistoryStatePreviousNextUrl ?? (() => {});
 
   // These are plain module-level variables (inside the controller closure),
@@ -408,6 +414,7 @@ export function createAppBrowserNavigationController(
       nextElements,
       navigationSnapshot,
       operationLane: "hmr",
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       renderId,
       type: "replace",
     });
@@ -489,6 +496,7 @@ export function createAppBrowserNavigationController(
     navigationSnapshot: ClientNavigationRenderSnapshot;
     nextElements: Promise<AppElements>;
     operationLane: OperationLane;
+    payloadOrigin: AppNavigationPayloadOrigin;
     params: Record<string, string | string[]>;
     pendingRouterState: PendingBrowserRouterState | null;
     previousNextUrl: string | null;
@@ -511,6 +519,7 @@ export function createAppBrowserNavigationController(
         nextElements: options.nextElements,
         navigationSnapshot: options.navigationSnapshot,
         operationLane: options.operationLane,
+        payloadOrigin: options.payloadOrigin,
         previousNextUrl: options.previousNextUrl,
         renderId,
         type: options.actionType,
@@ -520,6 +529,7 @@ export function createAppBrowserNavigationController(
         activeNavigationId,
         currentState: getBrowserRouterState(),
         pending,
+        routeManifest: getRouteManifest(),
         startedNavigationId: options.navId,
         targetHref: options.targetHref,
       });
@@ -597,7 +607,9 @@ export function createAppBrowserNavigationController(
       nextElements,
       renderId: allocateRenderId(),
       operationLane: "server-action",
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       startedNavigationId,
+      routeManifest: getRouteManifest(),
       targetHref,
       type: "navigate",
     });
@@ -617,6 +629,7 @@ export function createAppBrowserNavigationController(
         activeNavigationId,
         currentState: getBrowserRouterState(),
         pending,
+        routeManifest: getRouteManifest(),
         startedNavigationId,
         targetHref,
       });

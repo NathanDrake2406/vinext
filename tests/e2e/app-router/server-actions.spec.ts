@@ -233,3 +233,49 @@ test.describe("useActionState", () => {
     await expect(page.locator("h1")).toHaveText("useActionState Test");
   });
 });
+
+test.describe("Server action forwarding loop guard", () => {
+  test("middleware rewrite of action POST does not hang (no forwarding loop)", async ({ page }) => {
+    await page.goto(`${BASE}/nextjs-compat/action-forward-loop`);
+    await expect(page.locator("h1")).toHaveText("Action Forward Loop Test");
+    await waitForAppRouterHydration(page);
+
+    // Click the action button. Middleware rewrites POST to rewrite-target page,
+    // but vinext's single-worker bundle still finds the action locally.
+    // The action should succeed without any infinite loop / timeout.
+    await page.click("#run-action");
+
+    // Wait for action result to appear (or the boundary text if the action fails)
+    await expect(async () => {
+      const text = await page.locator("#action-result").textContent();
+      expect(text).toContain("action-ok");
+    }).toPass({ timeout: 10_000 });
+  });
+
+  // This tests the pre-existing "unknown action ID" path, not the new
+  // x-action-forwarded guard. In vinext's single-worker model the action is
+  // found locally, so the guard cannot be triggered organically via E2E.
+  test("stale action ID returns 404 with x-nextjs-action-not-found header", async ({ page }) => {
+    await page.goto(`${BASE}/nextjs-compat/action-forward-loop`);
+    await waitForAppRouterHydration(page);
+
+    const response = await page.evaluate(async (base) => {
+      const res = await fetch(`${base}/nextjs-compat/action-forward-loop`, {
+        method: "POST",
+        headers: {
+          "x-rsc-action": "stale-action-id",
+          "content-type": "text/plain;charset=UTF-8",
+          origin: base,
+        },
+        body: "encoded-flight-body",
+      });
+      return {
+        status: res.status,
+        hasNotFoundHeader: res.headers.get("x-nextjs-action-not-found") === "1",
+      };
+    }, BASE);
+
+    expect(response.status).toBe(404);
+    expect(response.hasNotFoundHeader).toBe(true);
+  });
+});

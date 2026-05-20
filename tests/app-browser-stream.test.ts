@@ -4,16 +4,21 @@ import {
   createProgressiveRscStream,
   getVinextBrowserGlobal,
 } from "../packages/vinext/src/server/app-browser-stream.js";
+import {
+  NAVIGATION_RUNTIME_KEY,
+  getNavigationRuntime,
+  registerNavigationRuntimeBootstrap,
+} from "../packages/vinext/src/client/navigation-runtime.js";
 
 const originalDocument = globalThis.document;
 const vinext = getVinextBrowserGlobal();
 
 function resetBrowserGlobals(): void {
-  delete vinext.__VINEXT_RSC__;
   delete vinext.__VINEXT_RSC_CHUNKS__;
   delete vinext.__VINEXT_RSC_DONE__;
   delete vinext.__VINEXT_RSC_PARAMS__;
   delete vinext.__VINEXT_RSC_NAV__;
+  Reflect.deleteProperty(globalThis, "window");
 }
 
 function setGlobalDocument(value: Document | undefined): void {
@@ -104,6 +109,37 @@ describe("App browser stream helpers", () => {
     expect(await readText(reader)).toEqual({ done: true, text: undefined });
 
     expect(listeners.has("DOMContentLoaded")).toBe(true);
+  });
+
+  it("streams progressive chunks from the typed navigation runtime", async () => {
+    const runtimeWindow = {};
+    Reflect.set(globalThis, "window", runtimeWindow);
+    setGlobalDocument({
+      readyState: "loading",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as Document);
+
+    registerNavigationRuntimeBootstrap({ rsc: { rsc: ["shell"], done: false } });
+
+    const reader = createProgressiveRscStream().getReader();
+
+    expect(await readText(reader)).toEqual({ done: false, text: "shell" });
+
+    const runtimeRsc = getNavigationRuntime()?.bootstrap.rsc;
+    if (runtimeRsc === undefined) {
+      throw new Error("Expected navigation runtime RSC bootstrap");
+    }
+
+    runtimeRsc.rsc.push("delta");
+    expect(await readText(reader)).toEqual({ done: false, text: "delta" });
+
+    runtimeRsc.done = true;
+    runtimeRsc.rsc.push("final");
+    expect(await readText(reader)).toEqual({ done: false, text: "final" });
+    expect(await readText(reader)).toEqual({ done: true, text: undefined });
+
+    expect(Reflect.has(runtimeWindow, NAVIGATION_RUNTIME_KEY)).toBe(true);
   });
 
   it("streams every chunk when push receives multiple arguments", async () => {

@@ -196,46 +196,59 @@ describe("RSC lazy stream: headers() context survives until stream is consumed",
 //   [id]/page.tsx  — dynamic-segment variant
 
 const NAV_ROUTE = "/nextjs-compat/nav-context-hydration";
+const RSC_BOOTSTRAP_PREFIX =
+  'Object.assign(((self[Symbol.for("vinext.navigationRuntime")]??={bootstrap:{routeManifest:null},functions:{}}).bootstrap.rsc??={rsc:[]}),{params:';
 
-describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consistency", () => {
+function extractRscBootstrap(html: string): {
+  nav: { pathname: string; searchParams: [string, string][] };
+  params: Record<string, string | string[]>;
+} {
+  const start = html.indexOf(RSC_BOOTSTRAP_PREFIX);
+  expect(start, "navigation runtime RSC bootstrap script not found").toBeGreaterThan(-1);
+  const paramsStart = start + RSC_BOOTSTRAP_PREFIX.length;
+  const navSeparator = html.indexOf(",nav:", paramsStart);
+  expect(navSeparator, "navigation runtime nav payload not found").toBeGreaterThan(-1);
+  const end = html.indexOf("})</script>", navSeparator);
+  expect(end, "navigation runtime RSC bootstrap script was not closed").toBeGreaterThan(-1);
+  return {
+    params: JSON.parse(html.slice(paramsStart, navSeparator)),
+    nav: JSON.parse(html.slice(navSeparator + ",nav:".length, end)),
+  };
+}
+
+describe("navigation runtime RSC bootstrap: nav context embedded for hydration snapshot consistency", () => {
   // ── 1. Script tag is present ──────────────────────────────────────────────
 
-  it("HTML contains a __VINEXT_RSC_NAV__ script tag", async () => {
+  it("HTML contains a navigation runtime nav bootstrap payload", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}`);
     expect(res.status).toBe(200);
     const html = await res.text();
 
-    // generateSsrEntry() emits:
-    //   <script>self.__VINEXT_RSC_NAV__={"pathname":...,"searchParams":...}</script>
-    expect(html).toContain("__VINEXT_RSC_NAV__");
+    expect(html).toContain(RSC_BOOTSTRAP_PREFIX);
+    expect(html).toContain(",nav:");
   });
 
-  it("HTML contains a __VINEXT_RSC_PARAMS__ script tag", async () => {
+  it("HTML contains a navigation runtime params bootstrap payload", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}`);
     expect(res.status).toBe(200);
     const html = await res.text();
 
-    // generateSsrEntry() emits:
-    //   <script>self.__VINEXT_RSC_PARAMS__={...}</script>
-    expect(html).toContain("__VINEXT_RSC_PARAMS__");
+    expect(html).toContain(RSC_BOOTSTRAP_PREFIX);
+    expect(html).toContain("{params:");
   });
 
   // ── 2. Pathname is correct ────────────────────────────────────────────────
 
-  it("__VINEXT_RSC_NAV__ pathname matches the request pathname", async () => {
+  it("navigation runtime pathname matches the request pathname", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}`);
     const html = await res.text();
 
-    // Extract the JSON payload from the script tag.
-    // The server emits: self.__VINEXT_RSC_NAV__=<json>;
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match, "__VINEXT_RSC_NAV__ script tag not found").toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
 
     expect(nav.pathname).toBe(NAV_ROUTE);
   });
 
-  it("__VINEXT_RSC_NAV__ pathname agrees with SSR-rendered usePathname() output", async () => {
+  it("navigation runtime pathname agrees with SSR-rendered usePathname() output", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}`);
     const html = await res.text();
 
@@ -246,22 +259,18 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
     // a mismatch.
     expect(html).toContain(`<span id="nav-pathname">${NAV_ROUTE}</span>`);
 
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match).toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
 
     expect(nav.pathname).toBe(NAV_ROUTE);
   });
 
   // ── 3. searchParams are correct (no query string) ─────────────────────────
 
-  it("__VINEXT_RSC_NAV__ searchParams is empty array when no query string", async () => {
+  it("navigation runtime searchParams is empty array when no query string", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}`);
     const html = await res.text();
 
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match).toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
 
     // searchParams is serialised as [...urlSearchParams.entries()] — an array of
     // [key, value] pairs — to preserve duplicate keys (e.g. ?tag=a&tag=b).
@@ -292,13 +301,11 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
   //   - getServerSnapshot returns: "hello"
   //   → React sees "hello" = "hello" → no mismatch
 
-  it("__VINEXT_RSC_NAV__ searchParams carries query params from request URL", async () => {
+  it("navigation runtime searchParams carries query params from request URL", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}?q=hello&page=3`);
     const html = await res.text();
 
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match).toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
 
     // Serialised as array of [key, value] pairs to preserve duplicates.
     expect(nav.searchParams).toEqual([
@@ -307,7 +314,7 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
     ]);
   });
 
-  it("__VINEXT_RSC_NAV__ searchParams agrees with SSR-rendered useSearchParams() output", async () => {
+  it("navigation runtime searchParams agrees with SSR-rendered useSearchParams() output", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}?q=hello&page=3`);
     const html = await res.text();
 
@@ -316,9 +323,7 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
     expect(html).toContain('<span id="nav-search-page">3</span>');
 
     // Embedded payload must match
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match).toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
 
     // new URLSearchParams(nav.searchParams) reconstructs the same params
     const sp = new URLSearchParams(nav.searchParams);
@@ -342,7 +347,7 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
 
   // ── 5. Special characters in searchParams are safely serialised ───────────
 
-  it("__VINEXT_RSC_NAV__ searchParams handles special characters without XSS", async () => {
+  it("navigation runtime searchParams handles special characters without XSS", async () => {
     // Ensure the JSON serialisation (safeJsonStringify) encodes characters
     // that could break out of a <script> tag if embedded raw.
     // The server uses safeJsonStringify which encodes < > & / to unicode escapes.
@@ -357,9 +362,7 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
     expect(html).not.toContain(`"q":"${specialQ}"`);
 
     // But when we parse the embedded JSON, the value round-trips correctly.
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match).toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
     const sp = new URLSearchParams(nav.searchParams);
     expect(sp.get("q")).toBe(specialQ);
   });
@@ -372,31 +375,27 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
   // params: to setNavigationContext(), so useParams() returns the right value
   // during client hydration.
 
-  it("__VINEXT_RSC_PARAMS__ contains dynamic segment value for [id] route", async () => {
+  it("navigation runtime params contains dynamic segment value for [id] route", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}/hello`);
     expect(res.status).toBe(200);
     const html = await res.text();
 
-    const match = html.match(/self\.__VINEXT_RSC_PARAMS__=(\{[^<]*\})/);
-    expect(match, "__VINEXT_RSC_PARAMS__ script tag not found").toBeTruthy();
-    const params = JSON.parse(match![1]);
+    const { params } = extractRscBootstrap(html);
 
     expect(params.id).toBe("hello");
   });
 
-  it("__VINEXT_RSC_NAV__ pathname is correct for dynamic segment route", async () => {
+  it("navigation runtime pathname is correct for dynamic segment route", async () => {
     const dynamicPath = `${NAV_ROUTE}/hello`;
     const res = await fetch(`${_baseUrl}${dynamicPath}`);
     const html = await res.text();
 
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match).toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
 
     expect(nav.pathname).toBe(dynamicPath);
   });
 
-  it("__VINEXT_RSC_NAV__ pathname agrees with SSR-rendered usePathname() for dynamic route", async () => {
+  it("navigation runtime pathname agrees with SSR-rendered usePathname() for dynamic route", async () => {
     const dynamicPath = `${NAV_ROUTE}/hello`;
     const res = await fetch(`${_baseUrl}${dynamicPath}`);
     const html = await res.text();
@@ -405,9 +404,7 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
     // Its usePathname() output must match __VINEXT_RSC_NAV__.pathname.
     expect(html).toContain(`<span id="nav-pathname">${dynamicPath}</span>`);
 
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match).toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
     expect(nav.pathname).toBe(dynamicPath);
   });
 
@@ -419,22 +416,17 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
   // If they were injected into the body stream they could arrive after
   // hydrateRoot() is called, making the hydration snapshot stale.
 
-  it("__VINEXT_RSC_NAV__ and __VINEXT_RSC_PARAMS__ are injected before </head>", async () => {
+  it("navigation runtime nav and params are injected before </head>", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}?q=timing`);
     const html = await res.text();
 
     const headEnd = html.indexOf("</head>");
     expect(headEnd).toBeGreaterThan(-1);
 
-    const navIdx = html.indexOf("__VINEXT_RSC_NAV__");
-    const paramsIdx = html.indexOf("__VINEXT_RSC_PARAMS__");
+    const bootstrapIdx = html.indexOf(RSC_BOOTSTRAP_PREFIX);
+    expect(bootstrapIdx).toBeGreaterThan(-1);
 
-    expect(navIdx).toBeGreaterThan(-1);
-    expect(paramsIdx).toBeGreaterThan(-1);
-
-    // Both script tags must appear before </head>
-    expect(navIdx).toBeLessThan(headEnd);
-    expect(paramsIdx).toBeLessThan(headEnd);
+    expect(bootstrapIdx).toBeLessThan(headEnd);
   });
 
   // ── 8. pathname uses the clean path, not the raw URL ─────────────────────
@@ -443,13 +435,11 @@ describe("__VINEXT_RSC_NAV__: nav context embedded for hydration snapshot consis
   // the trailing slash normalised). This must be the value embedded in
   // __VINEXT_RSC_NAV__, not the raw URL including query string.
 
-  it("__VINEXT_RSC_NAV__ pathname does not include query string", async () => {
+  it("navigation runtime pathname does not include query string", async () => {
     const res = await fetch(`${_baseUrl}${NAV_ROUTE}?q=shouldnotbehere`);
     const html = await res.text();
 
-    const match = html.match(/self\.__VINEXT_RSC_NAV__=(\{[^<]+\})/);
-    expect(match).toBeTruthy();
-    const nav = JSON.parse(match![1]);
+    const { nav } = extractRscBootstrap(html);
 
     // pathname must be just the path, not "…?q=shouldnotbehere"
     expect(nav.pathname).not.toContain("?");

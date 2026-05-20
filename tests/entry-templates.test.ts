@@ -169,11 +169,40 @@ describe("App Router generated manifest construction", () => {
       },
     ]);
 
+    expect(code).toContain("import { registerNavigationRuntimeBootstrap } from ");
     expect(code).toContain("window.__VINEXT_LINK_PREFETCH_ROUTES__ = ");
+    expect(code).toContain("registerNavigationRuntimeBootstrap({");
+    expect(code).toContain("routeManifest: null");
     expect(code).toContain('{"patternParts":["about"],"isDynamic":false}');
     expect(code).toContain('{"patternParts":["blog",":slug"],"isDynamic":true}');
     expect(code).toContain('{"patternParts":["modal-host"],"isDynamic":false}');
     expect(code).not.toContain('{"patternParts":["api"],"isDynamic":false}');
+  });
+
+  it("embeds the RouteManifest read model in the browser entry", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-browser-route-manifest-"));
+    const appDir = path.join(tmpDir, "app");
+    try {
+      fs.mkdirSync(path.join(appDir, "dashboard"), { recursive: true });
+      fs.writeFileSync(path.join(appDir, "layout.tsx"), "export default function Layout() {}\n");
+      fs.writeFileSync(path.join(appDir, "page.tsx"), "export default function Page() {}\n");
+      fs.writeFileSync(
+        path.join(appDir, "dashboard", "page.tsx"),
+        "export default function Page() {}\n",
+      );
+
+      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
+      const code = generateBrowserEntry(graph.routes, graph.routeManifest);
+
+      expect(code).toContain("registerNavigationRuntimeBootstrap({");
+      expect(code).toContain("graphVersion:");
+      expect(code).toContain("routes: new Map(");
+      expect(code).toContain("rootBoundaries: new Map(");
+      expect(code).toContain('"route:/dashboard"');
+      expect(code).toContain('"root-boundary:/"');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("constructs route module imports and route entries from the scanned app shape", () => {
@@ -299,7 +328,97 @@ describe("App Router generated manifest construction", () => {
     expect(dynamicRouteEntry).toContain('params: ["photoId"]');
     expect(dynamicRouteEntry).not.toContain("styles:");
     expect(manifest.generateStaticParamsEntries).toEqual([
-      '  "/dashboard/:id": mod_5?.generateStaticParams ?? null,',
+      '  "/dashboard/:id": __createAppPrerenderStaticParamsResolver([mod_5?.generateStaticParams], ["id"]),',
+    ]);
+  });
+
+  it("exposes layout-level generateStaticParams to App Router prerender", () => {
+    // Ported from Next.js: test/e2e/app-dir/app-root-params-getters/generate-static-params.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-root-params-getters/generate-static-params.test.ts
+    const routes = [
+      {
+        pattern: "/:lang/:locale/other/:slug",
+        patternParts: [":lang", ":locale", "other", ":slug"],
+        pagePath: "/tmp/test/app/[lang]/[locale]/other/[slug]/page.tsx",
+        routePath: null,
+        layouts: ["/tmp/test/app/[lang]/[locale]/layout.tsx"],
+        templates: [],
+        parallelSlots: [],
+        loadingPath: null,
+        errorPath: null,
+        layoutErrorPaths: [null],
+        notFoundPath: null,
+        notFoundPaths: [null],
+        forbiddenPath: null,
+        forbiddenPaths: [null],
+        unauthorizedPath: null,
+        unauthorizedPaths: [null],
+        routeSegments: ["[lang]", "[locale]", "other", "[slug]"],
+        templateTreePositions: [],
+        layoutTreePositions: [2],
+        isDynamic: true,
+        params: ["lang", "locale", "slug"],
+        rootParamNames: ["lang", "locale"],
+      },
+    ] satisfies AppRoute[];
+
+    const manifest = buildAppRscManifestCode({
+      routes,
+      metadataRoutes: [],
+      globalErrorPath: null,
+    });
+
+    expect(manifest.generateStaticParamsEntries).toEqual([
+      '  "/:lang/:locale": __createAppPrerenderStaticParamsResolver([mod_1?.generateStaticParams], ["lang","locale"]),',
+      '  "/:lang/:locale/other/:slug": __createAppPrerenderStaticParamsResolver([mod_0?.generateStaticParams], ["lang","locale"]),',
+    ]);
+    expect(manifest.rootParamNameEntries).toEqual([
+      '  "/:lang/:locale/other/:slug": ["lang","locale"],',
+      '  "/:lang/:locale": ["lang","locale"],',
+    ]);
+  });
+
+  it("keys layout generateStaticParams with canonical decoded route patterns", () => {
+    const routes = [
+      {
+        pattern: "/:lang/docs v2/:section/:slug",
+        patternParts: [":lang", "docs v2", ":section", ":slug"],
+        pagePath: "/tmp/test/app/[lang]/docs%20v2/[section]/[slug]/page.tsx",
+        routePath: null,
+        layouts: ["/tmp/test/app/[lang]/docs%20v2/[section]/layout.tsx"],
+        templates: [],
+        parallelSlots: [],
+        loadingPath: null,
+        errorPath: null,
+        layoutErrorPaths: [null],
+        notFoundPath: null,
+        notFoundPaths: [null],
+        forbiddenPath: null,
+        forbiddenPaths: [null],
+        unauthorizedPath: null,
+        unauthorizedPaths: [null],
+        routeSegments: ["[lang]", "docs%20v2", "[section]", "[slug]"],
+        templateTreePositions: [],
+        layoutTreePositions: [3],
+        isDynamic: true,
+        params: ["lang", "section", "slug"],
+        rootParamNames: ["lang", "section"],
+      },
+    ] satisfies AppRoute[];
+
+    const manifest = buildAppRscManifestCode({
+      routes,
+      metadataRoutes: [],
+      globalErrorPath: null,
+    });
+
+    expect(manifest.generateStaticParamsEntries).toEqual([
+      '  "/:lang/docs v2/:section": __createAppPrerenderStaticParamsResolver([mod_1?.generateStaticParams], ["lang","section"]),',
+      '  "/:lang/docs v2/:section/:slug": __createAppPrerenderStaticParamsResolver([mod_0?.generateStaticParams], ["lang","section"]),',
+    ]);
+    expect(manifest.rootParamNameEntries).toEqual([
+      '  "/:lang/docs v2/:section/:slug": ["lang","section"],',
+      '  "/:lang/docs v2/:section": ["lang","section"],',
     ]);
   });
 

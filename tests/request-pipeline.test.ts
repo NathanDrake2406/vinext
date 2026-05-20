@@ -338,6 +338,28 @@ describe("normalizeTrailingSlash", () => {
     expect(res!.headers.get("Location")).toBe("/about/?foo=1");
   });
 
+  it("strips the trailing slash from file-looking paths when trailingSlash is true", () => {
+    const res = normalizeTrailingSlash("/catch-all/hello.world/", "", true, "");
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(308);
+    expect(res!.headers.get("Location")).toBe("/catch-all/hello.world");
+  });
+
+  it("preserves query string when stripping file-looking paths with trailingSlash true", () => {
+    const res = normalizeTrailingSlash("/catch-all/hello.world/", "", true, "?hello=world");
+    expect(res).not.toBeNull();
+    expect(res!.headers.get("Location")).toBe("/catch-all/hello.world?hello=world");
+  });
+
+  it("does not add a slash to already-canonical file-looking paths with trailingSlash true", () => {
+    expect(normalizeTrailingSlash("/catch-all/hello.world", "", true, "")).toBeNull();
+  });
+
+  it("does not redirect .well-known paths when trailingSlash is true", () => {
+    expect(normalizeTrailingSlash("/.well-known/acme-challenge", "", true, "")).toBeNull();
+    expect(normalizeTrailingSlash("/.well-known/acme-challenge/", "", true, "")).toBeNull();
+  });
+
   it("prepends basePath to redirect Location", () => {
     const res = normalizeTrailingSlash("/about", "/docs", true, "");
     expect(res!.headers.get("Location")).toBe("/docs/about/");
@@ -667,6 +689,7 @@ describe("INTERNAL_HEADERS", () => {
       "x-matched-path",
       "x-nextjs-data",
       "x-next-resume-state-length",
+      "x-action-forwarded",
     ];
     expect(INTERNAL_HEADERS).toEqual(expected);
   });

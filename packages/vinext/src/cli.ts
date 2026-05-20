@@ -7,6 +7,7 @@
  *   vinext build   Build for production
  *   vinext start   Start production server
  *   vinext deploy  Deploy to Cloudflare Workers
+ *   vinext typegen Generate App Router route helper types
  *   vinext lint    Run linter (delegates to eslint/oxlint)
  *
  * Automatically configures Vite with the vinext plugin — no vite.config.ts
@@ -34,6 +35,7 @@ import {
   formatAlreadyRunningError,
   tryAcquireLockfile,
 } from "./server/dev-lockfile.js";
+import { generateRouteTypes } from "./typegen.js";
 
 // ─── Resolve Vite from the project root ────────────────────────────────────────
 //
@@ -721,6 +723,26 @@ async function check() {
   console.log(formatReport(result));
 }
 
+async function typegen() {
+  const parsed = parseArgs(rawArgs);
+  if (parsed.help) return printHelp("typegen");
+
+  const root = path.resolve(parsed.positionals?.[0] ?? process.cwd());
+  loadDotenv({
+    root,
+    mode: "production",
+  });
+  const resolvedNextConfig = await resolveNextConfig(
+    await loadNextConfig(root, PHASE_PRODUCTION_BUILD),
+    root,
+  );
+  const outputPath = await generateRouteTypes({
+    root,
+    pageExtensions: resolvedNextConfig.pageExtensions,
+  });
+  console.log(`\n  Generated route types at ${path.relative(root, outputPath)}\n`);
+}
+
 async function initCommand() {
   const parsed = parseArgs(rawArgs);
   if (parsed.help) return printHelp("init");
@@ -889,6 +911,22 @@ function printHelp(cmd?: string) {
     return;
   }
 
+  if (cmd === "typegen") {
+    console.log(`
+  vinext typegen - Generate App Router route helper types
+
+  Usage: vinext typegen [directory] [options]
+
+  Generates Next-compatible global route helpers for App Router projects:
+  PageProps, LayoutProps, and RouteContext. Output is written to
+  .next/types/routes.d.ts under the target directory.
+
+  Options:
+    -h, --help    Show this help
+`);
+    return;
+  }
+
   if (cmd === "lint") {
     console.log(`
   vinext lint - Run linter
@@ -914,6 +952,7 @@ function printHelp(cmd?: string) {
     build    Build for production
     start    Start production server
     deploy   Deploy to Cloudflare Workers
+    typegen  Generate App Router route helper types
     init     Migrate a Next.js project to vinext
     check    Scan Next.js app for compatibility
     lint     Run linter
@@ -926,6 +965,7 @@ function printHelp(cmd?: string) {
     vinext dev                  Start dev server on port 3000
     vinext dev -p 4000          Start dev server on port 4000
     vinext build                Build for production
+    vinext typegen              Generate route helper types
     vinext start                Start production server
     vinext deploy               Deploy to Cloudflare Workers
     vinext init                 Migrate a Next.js project
@@ -987,6 +1027,13 @@ switch (command) {
 
   case "check":
     check().catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+    break;
+
+  case "typegen":
+    typegen().catch((e) => {
       console.error(e);
       process.exit(1);
     });

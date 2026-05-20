@@ -22,7 +22,11 @@ describe("Tailwind config compatibility", () => {
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
-    await Promise.all(tmpDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    await Promise.all(
+      tmpDirs
+        .splice(0)
+        .map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+    );
   });
 
   async function createProject() {

@@ -146,6 +146,7 @@ type BuildAppPageRouteElementOptions<
   makeThenableParams: (params: AppPageParams) => unknown;
   matchedParams: AppPageParams;
   resolvedMetadata: Metadata | null;
+  resolvedMetadataPathname?: string;
   resolvedViewport: Viewport;
   rootForbiddenModule?: TModule | null;
   rootNotFoundModule?: TModule | null;
@@ -349,11 +350,15 @@ function createAppPageSlotBindings<
   });
 }
 
-function createAppPageRouteHead(metadata: Metadata | null, viewport: Viewport): ReactNode {
+function createAppPageRouteHead(
+  metadata: Metadata | null,
+  viewport: Viewport,
+  pathname: string,
+): ReactNode {
   return (
     <>
       <meta charSet="utf-8" />
-      {metadata ? <MetadataHead metadata={metadata} /> : null}
+      {metadata ? <MetadataHead metadata={metadata} pathname={pathname} /> : null}
       <ViewportHead viewport={viewport} />
     </>
   );
@@ -858,7 +863,11 @@ export function buildAppPageElements<
         const assetHref = prefixRouteAssetHref(href, options.basePath);
         return <link key={assetHref} rel="stylesheet" href={assetHref} />;
       })}
-      {createAppPageRouteHead(options.resolvedMetadata, options.resolvedViewport)}
+      {createAppPageRouteHead(
+        options.resolvedMetadata,
+        options.resolvedViewport,
+        options.resolvedMetadataPathname ?? options.routePath,
+      )}
       {routeChildren}
     </>
   );

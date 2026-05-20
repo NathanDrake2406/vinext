@@ -63,6 +63,28 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
+const RSC_RUNTIME_BOOTSTRAP_EXPRESSION =
+  '((self[Symbol.for("vinext.navigationRuntime")]??={bootstrap:{routeManifest:null},functions:{}}).bootstrap.rsc??={rsc:[]})';
+
+function runtimeRscChunkScript(chunk: string | [3, string]): string {
+  return `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.rsc.push(${safeJsonStringify(chunk)})</script>`;
+}
+
+function runtimeRscDoneScript(): string {
+  return `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.done=true</script>`;
+}
+
+function legacyRscChunkScript(chunk: string | [3, string]): string {
+  return (
+    "<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];" +
+    `self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify(chunk)})</script>`
+  );
+}
+
+function legacyRscDoneScript(): string {
+  return "<script>self.__VINEXT_RSC_DONE__=true</script>";
+}
+
 // ─── App Router RSC payload extraction ───────────────────────────────────────
 
 describe("extractRscPayloadFromPrerenderedHtml", () => {
@@ -79,14 +101,19 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
     ];
     const html =
       "<html><body>" +
-      chunks
-        .map(
-          (chunk) =>
-            "<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];" +
-            `self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify(chunk)})</script>`,
-        )
-        .join("") +
-      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      chunks.map((chunk) => runtimeRscChunkScript(chunk)).join("") +
+      runtimeRscDoneScript() +
+      "</body></html>";
+
+    expect(decodeExtractedPayload(html)).toBe(chunks.join(""));
+  });
+
+  it("keeps parsing legacy streamed RSC chunk scripts", () => {
+    const chunks = ['0:D{"name":"layout"}\n', '1:["$","div",null,{"children":"legacy"}]\n'];
+    const html =
+      "<html><body>" +
+      chunks.map((chunk) => legacyRscChunkScript(chunk)).join("") +
+      legacyRscDoneScript() +
       "</body></html>";
 
     expect(decodeExtractedPayload(html)).toBe(chunks.join(""));
@@ -97,9 +124,9 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/binary/rsc-binary.test.ts
     const html =
       "<html><body>" +
-      `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify("0:text\n")})</script>` +
-      '<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push([3,"/wABAgM="])</script>' +
-      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      runtimeRscChunkScript("0:text\n") +
+      runtimeRscChunkScript([3, "/wABAgM="]) +
+      runtimeRscDoneScript() +
       "</body></html>";
 
     const payload = extractRscPayloadFromPrerenderedHtml(html);
@@ -110,28 +137,34 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
   });
 
   it("throws when the done marker is missing", () => {
-    const html =
-      "<html><body>" +
-      `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify("0:[]\n")})</script>` +
-      "</body></html>";
+    const html = "<html><body>" + runtimeRscChunkScript("0:[]\n") + "</body></html>";
 
-    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing __VINEXT_RSC_DONE__/);
+    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing RSC done marker/);
   });
 
   it("does not treat marker-looking RSC payload text as the done control script", () => {
     const html =
+      "<html><body>" + runtimeRscChunkScript('0:["__VINEXT_RSC_DONE__=true"]\n') + "</body></html>";
+
+    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing RSC done marker/);
+  });
+
+  it("ignores non-chunk runtime scripts that start with the bootstrap expression", () => {
+    const html =
       "<html><body>" +
-      `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify('0:["__VINEXT_RSC_DONE__=true"]\n')})</script>` +
+      `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.metadata={}</script>` +
+      runtimeRscChunkScript("0:[]\n") +
+      runtimeRscDoneScript() +
       "</body></html>";
 
-    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing __VINEXT_RSC_DONE__/);
+    expect(decodeExtractedPayload(html)).toBe("0:[]\n");
   });
 
   it("rejects chunk scripts with trailing code after the payload push", () => {
     const html =
       "<html><body>" +
-      `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify("0:[]\n")})alert(1)</script>` +
-      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.rsc.push(${safeJsonStringify("0:[]\n")})alert(1)</script>` +
+      runtimeRscDoneScript() +
       "</body></html>";
 
     // JSON.parse rejects the slice (which includes the `)` and `alert(1` after
@@ -145,8 +178,8 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
   it("rejects chunk scripts with invalid JSON", () => {
     const html =
       "<html><body>" +
-      '<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push("\\uZZZZ")</script>' +
-      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.rsc.push("\\uZZZZ")</script>` +
+      runtimeRscDoneScript() +
       "</body></html>";
 
     expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(
@@ -164,7 +197,7 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
   it("throws when only the done marker is present without any chunks", () => {
     // Half-emitted embed (done marker but no chunks) is a real bug — partial
     // emission shouldn't fall back silently.
-    const html = "<html><body><script>self.__VINEXT_RSC_DONE__=true</script></body></html>";
+    const html = `<html><body>${runtimeRscDoneScript()}</body></html>`;
 
     expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(
       "[vinext] Malformed prerender RSC embed: done marker present without chunk scripts",
@@ -203,8 +236,8 @@ describe("prerenderApp — RSC extraction", () => {
       res.setHeader("content-type", "text/html");
       res.end(
         "<html><body>" +
-          `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify(rscPayload)})</script>` +
-          "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+          runtimeRscChunkScript(rscPayload) +
+          runtimeRscDoneScript() +
           "</body></html>",
       );
     });
@@ -1208,53 +1241,86 @@ function mockRoute(pattern: string, opts: { pagePath?: string | null } = {}): Ap
   };
 }
 
-function routeIndexFrom(routes: AppRoute[]): ReadonlyMap<string, AppRoute> {
-  return new Map(routes.map((r) => [r.pattern, r]));
-}
-
 describe("resolveParentParams", () => {
   it("returns empty array when route has no parent dynamic segments", async () => {
     const route = mockRoute("/blog/:slug");
-    const result = await resolveParentParams(route, routeIndexFrom([route]), {});
+    const result = await resolveParentParams(route, {});
     expect(result).toEqual([]);
   });
 
-  it("returns empty array when parent route has no pagePath", async () => {
-    const parent = mockRoute("/shop/:category", { pagePath: null });
+  it("returns empty array when no parent generateStaticParams is registered", async () => {
     const child = mockRoute("/shop/:category/:item");
-    const result = await resolveParentParams(child, routeIndexFrom([parent, child]), {});
+    const result = await resolveParentParams(child, {});
     expect(result).toEqual([]);
+  });
+
+  it("resolves layout-level parent generateStaticParams without requiring a parent page", async () => {
+    // Ported from Next.js: test/e2e/app-dir/app-root-params-getters/generate-static-params.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/app-root-params-getters/generate-static-params.test.ts
+    const child = mockRoute("/:lang/:locale/other/:slug");
+    const staticParamsMap: StaticParamsMap = {
+      "/:lang/:locale": async () => [
+        { lang: "en", locale: "us" },
+        { lang: "es", locale: "es" },
+      ],
+    };
+
+    const result = await resolveParentParams(child, staticParamsMap);
+
+    expect(result).toEqual([
+      { lang: "en", locale: "us" },
+      { lang: "es", locale: "es" },
+    ]);
   });
 
   it("returns empty array when parent has no generateStaticParams", async () => {
-    const parent = mockRoute("/shop/:category");
     const child = mockRoute("/shop/:category/:item");
     const staticParamsMap: StaticParamsMap = {};
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([]);
   });
 
+  it("skips missing parent providers but bails on malformed non-array results", async () => {
+    const child = mockRoute("/shop/:category/:item/:slug");
+    const calls: Record<string, string | string[]>[] = [];
+    const itemGenerateStaticParams = async ({
+      params,
+    }: {
+      params: Record<string, string | string[]>;
+    }) => {
+      calls.push(params);
+      return [{ item: "shoes" }];
+    };
+    const staticParamsMap: StaticParamsMap = {
+      "/shop/:category": async () => null,
+      "/shop/:category/:item": itemGenerateStaticParams,
+    };
+
+    const missingProviderResult = await resolveParentParams(child, staticParamsMap);
+
+    expect(missingProviderResult).toEqual([{ item: "shoes" }]);
+    expect(calls).toEqual([{}]);
+
+    calls.length = 0;
+    const malformedProviderResult = await resolveParentParams(child, {
+      "/shop/:category": async () => undefined,
+      "/shop/:category/:item": itemGenerateStaticParams,
+    });
+
+    expect(malformedProviderResult).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it("resolves single parent dynamic segment", async () => {
-    const parent = mockRoute("/shop/:category");
     const child = mockRoute("/shop/:category/:item");
     const staticParamsMap: StaticParamsMap = {
       "/shop/:category": async () => [{ category: "electronics" }, { category: "clothing" }],
     };
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([{ category: "electronics" }, { category: "clothing" }]);
   });
 
   it("resolves two levels of parent dynamic segments", async () => {
-    const grandparent = mockRoute("/a/:b");
-    const parent = mockRoute("/a/:b/c/:d");
     const child = mockRoute("/a/:b/c/:d/:e");
     const staticParamsMap: StaticParamsMap = {
       "/a/:b": async () => [{ b: "1" }, { b: "2" }],
@@ -1263,11 +1329,7 @@ describe("resolveParentParams", () => {
         return [{ d: "y" }, { d: "z" }];
       },
     };
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([grandparent, parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([
       { b: "1", d: "x" },
       { b: "2", d: "y" },
@@ -1276,42 +1338,32 @@ describe("resolveParentParams", () => {
   });
 
   it("skips static segments between dynamic parents", async () => {
-    const parent = mockRoute("/shop/:category");
     const child = mockRoute("/shop/:category/details/:item");
     const staticParamsMap: StaticParamsMap = {
       "/shop/:category": async () => [{ category: "shoes" }],
     };
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([{ category: "shoes" }]);
   });
 
   it("returns empty array for a fully static route", async () => {
     const route = mockRoute("/about/contact");
-    const result = await resolveParentParams(route, routeIndexFrom([route]), {});
+    const result = await resolveParentParams(route, {});
     expect(result).toEqual([]);
   });
 
   it("returns empty array for a single-segment dynamic route", async () => {
     const route = mockRoute("/:id");
-    const result = await resolveParentParams(route, routeIndexFrom([route]), {});
+    const result = await resolveParentParams(route, {});
     expect(result).toEqual([]);
   });
 
   it("resolves parent with catch-all child segment", async () => {
-    const parent = mockRoute("/shop/:category");
     const child = mockRoute("/shop/:category/:rest+");
     const staticParamsMap: StaticParamsMap = {
       "/shop/:category": async () => [{ category: "electronics" }],
     };
-    const result = await resolveParentParams(
-      child,
-      routeIndexFrom([parent, child]),
-      staticParamsMap,
-    );
+    const result = await resolveParentParams(child, staticParamsMap);
     expect(result).toEqual([{ category: "electronics" }]);
   });
 });

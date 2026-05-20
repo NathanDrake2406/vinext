@@ -17,12 +17,23 @@ async function pushAppRoute(page: Page, pathname: string): Promise<void> {
 
 async function captureRscNavigationPromises(page: Page): Promise<void> {
   await page.evaluate((marker) => {
-    const navigate = window.__VINEXT_RSC_NAVIGATE__;
+    type TestNavigate = (
+      href: string,
+      redirectDepth?: number,
+      navigationKind?: "navigate" | "refresh" | "prefetch",
+      historyUpdateMode?: "push" | "replace",
+      previousNextUrlOverride?: string | null,
+      programmaticTransition?: boolean,
+    ) => Promise<unknown>;
+    const runtime = Reflect.get(window, Symbol.for("vinext.navigationRuntime")) as
+      | { functions?: { navigate?: TestNavigate } }
+      | undefined;
+    const navigate = runtime?.functions?.navigate ?? null;
     if (typeof navigate !== "function") {
-      throw new Error("window.__VINEXT_RSC_NAVIGATE__ is not installed");
+      throw new Error("App Router navigation runtime is not installed");
     }
 
-    const wrappedNavigate: typeof navigate = (
+    const wrappedNavigate: TestNavigate = (
       href,
       redirectDepth,
       navigationKind,
@@ -42,7 +53,10 @@ async function captureRscNavigationPromises(page: Page): Promise<void> {
       return pendingNavigation;
     };
 
-    window.__VINEXT_RSC_NAVIGATE__ = wrappedNavigate;
+    if (!runtime?.functions) {
+      throw new Error("App Router navigation runtime functions are not installed");
+    }
+    runtime.functions.navigate = wrappedNavigate;
   }, RSC_NAVIGATION_PROMISE_MARKER);
 }
 
@@ -57,7 +71,7 @@ async function waitForLastRscNavigation(page: Page): Promise<void> {
 }
 
 test.describe("App Router RSC compatibility navigation", () => {
-  test("replays same-build visited RSC payloads instead of refetching or reloading", async ({
+  test("refetches unproofed same-build visited RSC payloads instead of reloading", async ({
     page,
   }) => {
     const aboutRscRequests: string[] = [];
@@ -75,7 +89,7 @@ test.describe("App Router RSC compatibility navigation", () => {
     await pushAppRoute(page, "/about");
     await expect(page.locator("h1")).toHaveText("About");
     // router.push commits visible UI before the RSC navigation promise has
-    // finished seeding the visited-response cache this test asserts on.
+    // finished its post-commit cache-store eligibility check.
     await waitForLastRscNavigation(page);
     expect(aboutRscRequests).toHaveLength(1);
 
@@ -93,9 +107,12 @@ test.describe("App Router RSC compatibility navigation", () => {
     await pushAppRoute(page, "/about");
     await expect(page.locator("h1")).toHaveText("About");
 
+    // Until a real cache proof producer exists, unproofed responses must not be
+    // restored as commit-capable visited-cache entries. The marker proves this
+    // stayed a soft navigation rather than degrading to an MPA reload.
     await expect(
       page.evaluate((marker) => Reflect.get(window, marker), VISITED_CACHE_MARKER),
     ).resolves.toBe(true);
-    expect(aboutRscRequests).toHaveLength(1);
+    expect(aboutRscRequests).toHaveLength(2);
   });
 });

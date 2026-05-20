@@ -1,4 +1,5 @@
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
+import type { RouteManifest } from "../routing/app-route-graph.js";
 import { mergeElements } from "vinext/shims/slot";
 import {
   normalizeAppElementsSlotBindings,
@@ -8,6 +9,7 @@ import {
 import {
   createPendingNavigationCommit,
   resolvePendingNavigationCommitDispositionDecision,
+  type AppNavigationPayloadOrigin,
   type AppRouterAction,
   type AppRouterState,
   type CommittedOperationRecord,
@@ -208,6 +210,7 @@ function resolvePendingNavigationCommitDecision(options: {
   activeNavigationId: number;
   currentState: AppRouterState;
   pending: PendingNavigationCommit;
+  routeManifest?: RouteManifest | null;
   startedNavigationId: number;
   targetHref: string;
 }): CommitDecision {
@@ -355,6 +358,7 @@ export function approvePendingNavigationCommit(options: {
   activeNavigationId: number;
   currentState: AppRouterState;
   pending: PendingNavigationCommit;
+  routeManifest?: RouteManifest | null;
   startedNavigationId: number;
   targetHref: string;
 }): CommitApproval {
@@ -363,6 +367,7 @@ export function approvePendingNavigationCommit(options: {
       activeNavigationId: options.activeNavigationId,
       currentState: options.currentState,
       pending: options.pending,
+      routeManifest: options.routeManifest ?? null,
       startedNavigationId: options.startedNavigationId,
       targetHref: options.targetHref,
     }),
@@ -401,8 +406,10 @@ export async function resolveAndClassifyNavigationCommit(options: {
   navigationSnapshot: ClientNavigationRenderSnapshot;
   nextElements: Promise<AppElements>;
   operationLane: OperationLane;
+  payloadOrigin: AppNavigationPayloadOrigin;
   previousNextUrl?: string | null;
   renderId: number;
+  routeManifest?: RouteManifest | null;
   startedNavigationId: number;
   targetHref: string;
   type: "navigate" | "replace" | "traverse";
@@ -412,6 +419,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
     nextElements: options.nextElements,
     navigationSnapshot: options.navigationSnapshot,
     operationLane: options.operationLane,
+    payloadOrigin: options.payloadOrigin,
     previousNextUrl: options.previousNextUrl,
     renderId: options.renderId,
     type: options.type,
@@ -422,6 +430,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
     activeNavigationId: options.getActiveNavigationId?.() ?? options.activeNavigationId,
     currentState: approvalState,
     pending,
+    routeManifest: options.routeManifest ?? null,
     startedNavigationId: options.startedNavigationId,
     targetHref: options.targetHref,
   });

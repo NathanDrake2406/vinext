@@ -142,6 +142,33 @@ export function matchRoutePattern(
   return params;
 }
 
+export function matchRoutePatternPrefix(
+  pathParts: readonly string[],
+  patternParts: readonly string[],
+): boolean {
+  let pathIndex = 0;
+  for (let patternIndex = 0; patternIndex < patternParts.length; patternIndex++) {
+    const patternPart = patternParts[patternIndex];
+    const isTerminal = patternIndex === patternParts.length - 1;
+
+    if (patternPart.startsWith(":") && patternPart.endsWith("+")) {
+      return isTerminal && pathParts.length - pathIndex >= 1;
+    }
+    if (patternPart.startsWith(":") && patternPart.endsWith("*")) {
+      return isTerminal;
+    }
+    if (pathIndex >= pathParts.length) return false;
+    if (patternPart.startsWith(":")) {
+      pathIndex++;
+      continue;
+    }
+    if (pathParts[pathIndex] !== patternPart) return false;
+    pathIndex++;
+  }
+
+  return true;
+}
+
 /**
  * A single entry from `getStaticPaths().paths`.
  *

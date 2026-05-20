@@ -1,4 +1,5 @@
 import { stripBasePath } from "../utils/base-path.js";
+import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
   AppElementsWire,
   getMountedSlotIds,
@@ -21,6 +22,7 @@ import {
   type NavigationTrace,
   type NavigationTraceFields,
 } from "./navigation-trace.js";
+import { createCacheEntryReuseProof, type CacheEntryReuseProof } from "./cache-proof.js";
 import {
   navigationPlanner,
   type MountedParallelSlotSnapshotV0,
@@ -77,6 +79,7 @@ export type AppRouterState = {
 };
 
 export type AppRouterAction = {
+  cacheEntryReuseProof?: CacheEntryReuseProof;
   elements: AppElements;
   interception: AppElementsInterception | null;
   interceptionContext: string | null;
@@ -94,6 +97,7 @@ export type AppRouterAction = {
 
 export type PendingNavigationCommit = {
   action: AppRouterAction;
+  cacheEntryReuseProof?: CacheEntryReuseProof;
   interception: AppElementsInterception | null;
   interceptionContext: string | null;
   previousNextUrl: string | null;
@@ -101,7 +105,21 @@ export type PendingNavigationCommit = {
   routeId: string;
 };
 
+export type AppNavigationPayloadOrigin = Readonly<
+  { origin: "fresh" } | { origin: "visited-cache" }
+>;
+
+export const FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
+  origin: "fresh",
+};
+export const VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
+  origin: "visited-cache",
+};
+
 type PendingNavigationCommitDisposition = "dispatch" | "hard-navigate" | "skip";
+type CacheRestorableAppPayloadMetadata = Readonly<{
+  cacheEntryReuseProof?: CacheEntryReuseProof;
+}>;
 type DispatchPendingNavigationCommitDispositionDecision = {
   disposition: "dispatch";
   preserveAbsentSlots: boolean;
@@ -128,6 +146,25 @@ function createOperationRecord(options: {
     startedVisibleCommitVersion: options.startedVisibleCommitVersion,
     state: "pending",
   };
+}
+
+export function isCacheRestorableAppPayloadMetadata(
+  metadata: CacheRestorableAppPayloadMetadata,
+): metadata is CacheRestorableAppPayloadMetadata & { cacheEntryReuseProof: CacheEntryReuseProof } {
+  return metadata.cacheEntryReuseProof !== undefined;
+}
+
+function requiresCacheEntryReuseProof(origin: AppNavigationPayloadOrigin): boolean {
+  switch (origin.origin) {
+    case "fresh":
+      return false;
+    case "visited-cache":
+      return true;
+    default: {
+      const _exhaustive: never = origin;
+      throw new Error("[vinext] Unknown App Router payload origin: " + String(_exhaustive));
+    }
+  }
 }
 
 function normalizeNavigationSnapshotMatchedUrl(pathname: string): string {
@@ -210,6 +247,7 @@ export function resolvePendingNavigationCommitDispositionDecision(options: {
   activeNavigationId: number;
   currentState: AppRouterState;
   pending: PendingNavigationCommit;
+  routeManifest?: RouteManifest | null;
   startedNavigationId: number;
   targetHref?: string;
 }): PendingNavigationCommitDispositionDecision {
@@ -231,6 +269,7 @@ export function resolvePendingNavigationCommitDispositionDecision(options: {
     planPendingRootBoundaryFlightResponse({
       currentState: options.currentState,
       pending: options.pending,
+      routeManifest: options.routeManifest ?? null,
       targetHref: options.targetHref,
       traceFields,
     }),
@@ -325,12 +364,13 @@ function createPendingRouteSnapshot(pending: PendingNavigationCommit): RouteSnap
 
 function createPendingNavigationOperationToken(options: {
   pending: PendingNavigationCommit;
+  routeManifest: RouteManifest | null;
   targetSnapshot: RouteSnapshotV0;
 }): OperationToken {
   return {
     baseVisibleCommitVersion: options.pending.action.operation.startedVisibleCommitVersion,
     deploymentVersion: null,
-    graphVersion: null,
+    graphVersion: options.routeManifest?.graphVersion ?? null,
     lane: options.pending.action.operation.lane,
     operationId: options.pending.action.operation.id,
     targetSnapshotFingerprint: createRootBoundarySnapshotFingerprint(options.targetSnapshot),
@@ -344,22 +384,24 @@ function createRootBoundarySnapshotFingerprint(snapshot: RouteSnapshotV0): strin
 function planPendingRootBoundaryFlightResponse(options: {
   currentState: AppRouterState;
   pending: PendingNavigationCommit;
+  routeManifest: RouteManifest | null;
   targetHref?: string;
   traceFields: NavigationTraceFields;
 }): NavigationDecisionV0 {
   const targetSnapshot = createPendingRouteSnapshot(options.pending);
   const token = createPendingNavigationOperationToken({
     pending: options.pending,
+    routeManifest: options.routeManifest,
     targetSnapshot,
   });
+  const cacheEntryReuseProof = options.pending.cacheEntryReuseProof;
 
   // #726-CORE-07/08 keeps the browser state layer as the lifecycle gate and
   // only translates committed AppElements metadata into planner snapshots.
-  // The planner owns the root-boundary decision; later #726 route-graph work
-  // should replace these client-visible snapshots with the read model called
-  // out in routing/app-router.ts instead of adding more local topology checks.
+  // RouteManifest now supplies graph-owned route topology while snapshots
+  // continue to carry runtime state such as visible slot content.
   return navigationPlanner.plan({
-    routeManifest: null,
+    routeManifest: options.routeManifest,
     state: {
       nextOperationToken: token,
       traceFields: options.traceFields,
@@ -369,6 +411,7 @@ function planPendingRootBoundaryFlightResponse(options: {
     event: {
       kind: "flightResponseArrived",
       result: {
+        ...(cacheEntryReuseProof ? { cacheEntryReuseProof } : {}),
         // Approval call sites must pass the executor's targetHref so the
         // planner trace and future hard-nav executor agree with the browser
         // URL. The fallback remains for lower-level tests and direct disposition
@@ -413,6 +456,7 @@ export async function createPendingNavigationCommit(options: {
   nextElements: Promise<AppElements>;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   operationLane: OperationLane;
+  payloadOrigin: AppNavigationPayloadOrigin;
   // Advisory: non-intercepted responses clear this even when callers pass the
   // current visible previousNextUrl.
   previousNextUrl?: string | null;
@@ -421,6 +465,11 @@ export async function createPendingNavigationCommit(options: {
 }): Promise<PendingNavigationCommit> {
   const elements = await options.nextElements;
   const metadata = AppElementsWire.readMetadata(elements);
+  const cacheEntryReuseProof =
+    metadata.cacheEntryReuseProof ??
+    (requiresCacheEntryReuseProof(options.payloadOrigin)
+      ? createCacheEntryReuseProof(null)
+      : undefined);
   const requestedPreviousNextUrl =
     options.previousNextUrl !== undefined
       ? options.previousNextUrl
@@ -429,6 +478,7 @@ export async function createPendingNavigationCommit(options: {
 
   return {
     action: {
+      ...(cacheEntryReuseProof ? { cacheEntryReuseProof } : {}),
       elements,
       interception: metadata.interception,
       interceptionContext: metadata.interceptionContext,
@@ -447,7 +497,8 @@ export async function createPendingNavigationCommit(options: {
       routeId: metadata.routeId,
       type: options.type,
     },
-    // Convenience aliases — always equal action.interceptionContext / action.rootLayoutTreePath / action.routeId.
+    // Convenience aliases — always equal their action.* counterparts.
+    ...(cacheEntryReuseProof ? { cacheEntryReuseProof } : {}),
     interception: metadata.interception,
     interceptionContext: metadata.interceptionContext,
     previousNextUrl,

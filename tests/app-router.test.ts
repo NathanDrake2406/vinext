@@ -2119,8 +2119,9 @@ describe("App Router Production build", () => {
       const homeHtml = await homeRes.text();
       expect(homeHtml).toContain("Welcome to App Router");
       expect(homeHtml).toContain("<script");
-      // Production bootstrap should reference hashed assets
-      expect(homeHtml).toMatch(/import\("\/assets\/[^"]+\.js"\)/);
+      // Production bootstrap is emitted as a real <script type="module" src=…>
+      // tag (via React's bootstrapModules option) referencing hashed assets.
+      expect(homeHtml).toMatch(/<script[^>]+type="module"[^>]+src="\/assets\/[^"]+\.js"/);
 
       // Dynamic route works
       const blogRes = await fetch(`${previewUrl}/blog/test-post`);
@@ -2203,7 +2204,9 @@ describe("App Router Production server (startProdServer)", () => {
       "script-src 'nonce-first' 'strict-dynamic';",
     );
     const firstHtml = await firstRes.text();
-    expect(firstHtml).toContain('<script nonce="first">self.__VINEXT_RSC_PARAMS__={}</script>');
+    expect(firstHtml).toContain(
+      '<script nonce="first">Object.assign(((self[Symbol.for("vinext.navigationRuntime")]',
+    );
 
     const secondRes = await fetch(`${baseUrl}/revalidate-test?csp-nonce=second`);
     expect(secondRes.status).toBe(200);
@@ -2212,7 +2215,9 @@ describe("App Router Production server (startProdServer)", () => {
       "script-src 'nonce-second' 'strict-dynamic';",
     );
     const secondHtml = await secondRes.text();
-    expect(secondHtml).toContain('<script nonce="second">self.__VINEXT_RSC_PARAMS__={}</script>');
+    expect(secondHtml).toContain(
+      '<script nonce="second">Object.assign(((self[Symbol.for("vinext.navigationRuntime")]',
+    );
     expect(secondHtml).not.toContain('nonce="first"');
   });
 
@@ -3297,6 +3302,14 @@ describe("metadata routes integration (App Router)", () => {
     expect(data.display).toBe("standalone");
   });
 
+  it("serves sitemap routes that import but do not render client references", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-dynamic-routes/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-dynamic-routes/index.test.ts
+    const res = await fetch(`${baseUrl}/client-ref-dependency/sitemap.xml`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/xml");
+  });
+
   // Note: serving /icon from dynamic icon.tsx requires the RSC environment
   // to have access to Satori + Resvg Node APIs. This works when the RSC env
   // has proper Node externals configured. The discovery/routing is tested below.
@@ -3933,6 +3946,8 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain("export default __createAppRscHandler({");
     expect(code).toContain("configRedirects: __configRedirects");
     expect(code).toContain("dispatchMatchedPage({");
+    expect(code).toContain("    rootParams,\n    request,");
+    expect(code).toContain("      rootParams,\n      probeLayoutAt");
     expect(code).toContain("dispatchMatchedRouteHandler({");
     expect(code).toContain("matchRoute,");
   });

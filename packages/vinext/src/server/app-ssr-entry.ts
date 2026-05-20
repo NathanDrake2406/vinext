@@ -17,6 +17,7 @@ import {
   useServerInsertedHTML,
 } from "vinext/shims/navigation";
 import { runWithNavigationContext } from "vinext/shims/navigation-state";
+import { runWithRootParamsScope, type RootParams } from "vinext/shims/root-params";
 import { isOpenRedirectShaped } from "./request-pipeline.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import { withScriptNonce } from "vinext/shims/script-nonce-context";
@@ -26,7 +27,11 @@ import {
   escapeHtmlAttr,
   safeJsonStringify,
 } from "./html.js";
-import { createRscEmbedTransform, createTickBufferedTransform } from "./app-ssr-stream.js";
+import {
+  createNavigationRuntimeRscMetadataScript,
+  createRscEmbedTransform,
+  createTickBufferedTransform,
+} from "./app-ssr-stream.js";
 import { deferUntilStreamConsumed } from "./app-page-stream.js";
 import { createSsrErrorMetaRenderer } from "./app-ssr-error-meta.js";
 import { AppElementsWire, type AppWireElements } from "./app-elements.js";
@@ -111,33 +116,49 @@ function renderFontHtml(fontData?: FontData, nonce?: string): string {
   return fontHTML;
 }
 
-function extractModulePreloadHtml(bootstrapScriptContent?: string, nonce?: string): string {
-  if (!bootstrapScriptContent) return "";
+/**
+ * Extract the bootstrap module URL from the `import("...")` string that
+ * `import.meta.viteRsc.loadBootstrapScriptContent("index")` returns.
+ *
+ * The plugin-rsc helper returns the bootstrap as an inline call so we can
+ * inject it via `bootstrapScriptContent`. We instead pass the URL to
+ * React's `bootstrapModules` option so a real
+ * `<script type="module" src="…">` tag ends up in the streamed HTML —
+ * this exposes the URL to anything that reads `script.attribs.src` (e.g.
+ * the Next.js asset-prefix fixture test). The same URL also feeds the
+ * `<link rel="modulepreload">` we emit ahead of the bootstrap.
+ *
+ * Returns `undefined` when the helper produced no URL (older plugin-rsc
+ * versions, or a custom client entry that disables bootstrap content).
+ */
+function extractBootstrapModuleUrl(bootstrapScriptContent?: string): string | undefined {
+  if (!bootstrapScriptContent) return undefined;
+  // Accept either quote style — plugin-rsc currently emits double quotes
+  // (`import("…")`) but a future version could switch to single quotes,
+  // and there's no public contract documenting which is used.
+  const match = bootstrapScriptContent.match(/import\(["']([^"']+)["']\)/);
+  return match?.[1] ?? undefined;
+}
 
-  const match = bootstrapScriptContent.match(/import\("([^"]+)"\)/);
-  if (!match?.[1]) return "";
-
-  return `<link rel="modulepreload"${createNonceAttribute(nonce)} href="${escapeHtmlAttr(match[1])}" />\n`;
+function buildModulePreloadHtml(bootstrapModuleUrl?: string, nonce?: string): string {
+  if (!bootstrapModuleUrl) return "";
+  return `<link rel="modulepreload"${createNonceAttribute(nonce)} href="${escapeHtmlAttr(bootstrapModuleUrl)}" />\n`;
 }
 
 function buildHeadInjectionHtml(
   navContext: NavigationContext | null,
-  bootstrapScriptContent: string | undefined,
+  bootstrapModuleUrl: string | undefined,
   formState: ReactFormState | null,
   insertedHTML: string,
   fontHTML: string,
   scriptNonce?: string,
 ): string {
-  const paramsScript = createInlineScriptTag(
-    "self.__VINEXT_RSC_PARAMS__=" + safeJsonStringify(navContext?.params ?? {}),
-    scriptNonce,
-  );
   const navPayload = {
     pathname: navContext?.pathname ?? "/",
     searchParams: navContext?.searchParams ? [...navContext.searchParams.entries()] : [],
   };
-  const navScript = createInlineScriptTag(
-    "self.__VINEXT_RSC_NAV__=" + safeJsonStringify(navPayload),
+  const rscMetadataScript = createInlineScriptTag(
+    createNavigationRuntimeRscMetadataScript(navContext?.params ?? {}, navPayload),
     scriptNonce,
   );
   const formStateScript =
@@ -149,10 +170,9 @@ function buildHeadInjectionHtml(
         );
 
   return (
-    paramsScript +
-    navScript +
+    rscMetadataScript +
     formStateScript +
-    extractModulePreloadHtml(bootstrapScriptContent, scriptNonce) +
+    buildModulePreloadHtml(bootstrapModuleUrl, scriptNonce) +
     insertedHTML +
     fontHTML
   );
@@ -172,6 +192,7 @@ export async function handleSsr(
     capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
     formState?: ReactFormState | null;
     basePath?: string;
+    rootParams?: RootParams;
     /** When true, wait for the full React tree (including Suspense boundaries)
      *  to resolve before returning the HTML stream. Used for static prerender
      *  and ISR cache writes to avoid caching fallback content. */
@@ -192,118 +213,155 @@ export async function handleSsr(
       clearServerInsertedHTML();
     };
 
-    try {
-      // Fused tee path (#981): caller pre-split the stream. No internal tee needed.
-      // sideStream carries both the embed transform and raw byte accumulation.
-      // rscStream is used directly for createFromReadableStream (SSR).
-      let ssrStream: ReadableStream<Uint8Array>;
-      let rscEmbed;
+    const rootParams = options?.rootParams ?? {};
+    return runWithRootParamsScope(rootParams, async () => {
+      try {
+        // Fused tee path (#981): caller pre-split the stream. No internal tee needed.
+        // sideStream carries both the embed transform and raw byte accumulation.
+        // rscStream is used directly for createFromReadableStream (SSR).
+        let ssrStream: ReadableStream<Uint8Array>;
+        let rscEmbed;
 
-      if (options?.sideStream) {
-        ssrStream = rscStream;
-        rscEmbed = createRscEmbedTransform(options.sideStream, options?.scriptNonce);
-        if (options.capturedRscDataRef) {
-          options.capturedRscDataRef.value = rscEmbed.getRawBuffer();
-        }
-      } else {
-        const [s1, s2] = rscStream.tee();
-        ssrStream = s1;
-        rscEmbed = createRscEmbedTransform(s2, options?.scriptNonce);
-      }
-
-      let flightRoot: PromiseLike<AppWireElements> | null = null;
-
-      function VinextFlightRoot(): ReactNode {
-        if (!flightRoot) {
-          flightRoot = createFromReadableStream<AppWireElements>(ssrStream);
-        }
-        const wireElements = use(flightRoot);
-        const elements = AppElementsWire.decode(wireElements);
-        const metadata = AppElementsWire.readMetadata(elements);
-        return createReactElement(
-          ElementsContext.Provider,
-          { value: elements },
-          createReactElement(Slot, { id: metadata.routeId }),
-        );
-      }
-
-      const flightRootElement = createReactElement(VinextFlightRoot);
-      const root = AppRouterContext
-        ? createReactElement(
-            AppRouterContext.Provider,
-            { value: appRouterInstance },
-            flightRootElement,
-          )
-        : flightRootElement;
-      const ssrTree = ServerInsertedHTMLContext
-        ? createReactElement(
-            ServerInsertedHTMLContext.Provider,
-            { value: useServerInsertedHTML },
-            root,
-          )
-        : root;
-      const ssrRoot = withScriptNonce(ssrTree, options?.scriptNonce);
-
-      const bootstrapScriptContent = await import.meta.viteRsc.loadBootstrapScriptContent("index");
-      const errorMetaRenderer = createSsrErrorMetaRenderer({
-        basePath: options?.basePath,
-      });
-
-      const htmlStream = await renderToReadableStream(ssrRoot, {
-        bootstrapScriptContent,
-        formState: options?.formState ?? null,
-        nonce: options?.scriptNonce,
-        onError(error) {
-          errorMetaRenderer.capture(error);
-
-          if (error && typeof error === "object" && "digest" in error) {
-            return String(error.digest);
+        if (options?.sideStream) {
+          ssrStream = rscStream;
+          rscEmbed = createRscEmbedTransform(options.sideStream, options?.scriptNonce);
+          if (options.capturedRscDataRef) {
+            options.capturedRscDataRef.value = rscEmbed.getRawBuffer();
           }
+        } else {
+          const [s1, s2] = rscStream.tee();
+          ssrStream = s1;
+          rscEmbed = createRscEmbedTransform(s2, options?.scriptNonce);
+        }
 
-          if (process.env.NODE_ENV === "production" && error) {
-            const message = getErrorMessage(error);
-            const stack = error instanceof Error ? (error.stack ?? "") : "";
-            return ssrErrorDigest(message + stack);
+        let flightRoot: PromiseLike<AppWireElements> | null = null;
+
+        function VinextFlightRoot(): ReactNode {
+          if (!flightRoot) {
+            flightRoot = createFromReadableStream<AppWireElements>(ssrStream);
           }
+          const wireElements = use(flightRoot);
+          const elements = AppElementsWire.decode(wireElements);
+          const metadata = AppElementsWire.readMetadata(elements);
+          return createReactElement(
+            ElementsContext.Provider,
+            { value: elements },
+            createReactElement(Slot, { id: metadata.routeId }),
+          );
+        }
 
-          return undefined;
-        },
-      });
+        const flightRootElement = createReactElement(VinextFlightRoot);
+        const root = AppRouterContext
+          ? createReactElement(
+              AppRouterContext.Provider,
+              { value: appRouterInstance },
+              flightRootElement,
+            )
+          : flightRootElement;
+        const ssrTree = ServerInsertedHTMLContext
+          ? createReactElement(
+              ServerInsertedHTMLContext.Provider,
+              { value: useServerInsertedHTML },
+              root,
+            )
+          : root;
+        const ssrRoot = withScriptNonce(ssrTree, options?.scriptNonce);
 
-      // When producing static output (prerender / ISR cache writes), wait for
-      // the full React tree to resolve before emitting bytes. This prevents
-      // Suspense fallback content from being serialized to the cache.
-      // Matches Next.js waitForAllReady forkpoint in renderToNodeFizzStream.
-      if (options?.waitForAllReady === true) {
-        await htmlStream.allReady;
-      }
-
-      const fontHTML = renderFontHtml(fontData, options?.scriptNonce);
-      let didInjectHeadHTML = false;
-      const getInsertedHTML = (): string => {
-        const insertedHTML = renderInsertedHtml(renderServerInsertedHTML());
-        const errorMetaHTML = errorMetaRenderer.flush();
-        if (didInjectHeadHTML) return insertedHTML + errorMetaHTML;
-
-        didInjectHeadHTML = true;
-        return buildHeadInjectionHtml(
-          navContext,
-          bootstrapScriptContent,
-          options?.formState ?? null,
-          insertedHTML + errorMetaHTML,
-          fontHTML,
-          options?.scriptNonce,
+        // plugin-rsc returns the bootstrap as `import("<url>")` so callers can
+        // inject it via `bootstrapScriptContent`. We hand the URL to React's
+        // `bootstrapModules` option instead so the streamed HTML contains a
+        // real `<script type="module" src="<url>">` tag — exposing the URL
+        // to anything that inspects `script.attribs.src` (e.g. the Next.js
+        // asset-prefix fixture test "bundles should return 200 on served
+        // assetPrefix"). Mirrors Next.js's app-render path which passes
+        // `bootstrapScripts: [{ src }]` for the same reason; we use
+        // `bootstrapModules` because vinext's chunks are native ES modules
+        // (Vite output) so a `type="module"` tag is the correct loader.
+        //
+        // In dev, `<url>` is a Vite dev URL like
+        // `/@id/__x00__virtual:vinext-app-browser-entry`; the browser fetches
+        // it as a module from the dev server. In prod it's the hashed bundle
+        // URL (e.g. `/_next/static/index-abc123.js`, optionally prefixed by
+        // `assetPrefix`). Both are valid `<script type="module" src=…>` targets.
+        const bootstrapScriptContent = await import.meta.viteRsc.loadBootstrapScriptContent(
+          "index",
         );
-      };
+        const bootstrapModuleUrl = extractBootstrapModuleUrl(bootstrapScriptContent);
+        const errorMetaRenderer = createSsrErrorMetaRenderer({
+          basePath: options?.basePath,
+        });
 
-      return deferUntilStreamConsumed(
-        htmlStream.pipeThrough(createTickBufferedTransform(rscEmbed, getInsertedHTML)),
-        cleanup,
-      );
-    } catch (error) {
-      cleanup();
-      throw error;
-    }
+        const htmlStream = await renderToReadableStream(ssrRoot, {
+          // `bootstrapScriptContent` was previously how vinext injected the
+          // dynamic-import call. `bootstrapModules` performs the same work
+          // natively (and exposes the URL in the DOM), so passing both would
+          // load the bootstrap module twice.
+          //
+          // CSP implications of using `bootstrapModules` instead of inline
+          // `bootstrapScriptContent`:
+          //  - Apps no longer need `script-src 'unsafe-inline'` to load the
+          //    bootstrap (improvement — inline imports required `'unsafe-inline'`).
+          //  - Apps that restrict script sources need `'self'` for the
+          //    common case, or the CDN origin when `assetPrefix` is an
+          //    absolute URL like `https://cdn.example.com`.
+          //  - React still applies `nonce` to the emitted
+          //    `<script type="module" src=…>` tag, so nonce-based CSP
+          //    (`script-src 'nonce-…' 'strict-dynamic'`) keeps working.
+          bootstrapModules: bootstrapModuleUrl ? [bootstrapModuleUrl] : undefined,
+          formState: options?.formState ?? null,
+          nonce: options?.scriptNonce,
+          onError(error) {
+            errorMetaRenderer.capture(error);
+
+            if (error && typeof error === "object" && "digest" in error) {
+              return String(error.digest);
+            }
+
+            if (process.env.NODE_ENV === "production" && error) {
+              const message = getErrorMessage(error);
+              const stack = error instanceof Error ? (error.stack ?? "") : "";
+              return ssrErrorDigest(message + stack);
+            }
+
+            return undefined;
+          },
+        });
+
+        // When producing static output (prerender / ISR cache writes), wait for
+        // the full React tree to resolve before emitting bytes. This prevents
+        // Suspense fallback content from being serialized to the cache.
+        // Matches Next.js waitForAllReady forkpoint in renderToNodeFizzStream.
+        if (options?.waitForAllReady === true) {
+          await htmlStream.allReady;
+        }
+
+        const fontHTML = renderFontHtml(fontData, options?.scriptNonce);
+        let didInjectHeadHTML = false;
+        const getInsertedHTML = (): string => {
+          const insertedHTML = renderInsertedHtml(renderServerInsertedHTML());
+          const errorMetaHTML = errorMetaRenderer.flush();
+          if (didInjectHeadHTML) return insertedHTML + errorMetaHTML;
+
+          didInjectHeadHTML = true;
+          return buildHeadInjectionHtml(
+            navContext,
+            bootstrapModuleUrl,
+            options?.formState ?? null,
+            insertedHTML + errorMetaHTML,
+            fontHTML,
+            options?.scriptNonce,
+          );
+        };
+
+        return deferUntilStreamConsumed(
+          htmlStream.pipeThrough(createTickBufferedTransform(rscEmbed, getInsertedHTML)),
+          cleanup,
+        );
+      } catch (error) {
+        cleanup();
+        throw error;
+      }
+    });
   }) as Promise<ReadableStream<Uint8Array>>;
 }
 

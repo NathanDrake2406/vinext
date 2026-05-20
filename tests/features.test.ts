@@ -23,6 +23,7 @@ import {
   requestNodeServerWithHost,
   startFixtureServer,
 } from "./helpers.js";
+import { withEnvVar } from "./env-test-helpers.js";
 import { createValidFileMatcher } from "../packages/vinext/src/routing/file-matcher.js";
 
 const FIXTURE_DIR = PAGES_FIXTURE_DIR;
@@ -2065,6 +2066,14 @@ describe("basePath + trailingSlash interaction", () => {
 }`,
     );
 
+    await fsp.mkdir(path.join(tmpDir, "pages", "catch-all"), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "pages", "catch-all", "[...slug].tsx"),
+      `export default function CatchAll() {
+  return <h1>TrailingSlash CatchAll</h1>;
+}`,
+    );
+
     const plugins: any[] = [vinext()];
     tsServer = await createServer({
       root: tmpDir,
@@ -2104,6 +2113,14 @@ describe("basePath + trailingSlash interaction", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("TrailingSlash About");
+  });
+
+  it("GET /app/catch-all/hello.world/ redirects to the file-looking canonical path", async () => {
+    const res = await fetch(`${tsBaseUrl}/app/catch-all/hello.world/`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("/app/catch-all/hello.world");
   });
 });
 
@@ -2491,6 +2508,28 @@ describe("MetadataHead rendering", () => {
     renderToStaticMarkup = (await import("react-dom/server")).renderToStaticMarkup;
   });
 
+  function metadataRouteImage(url: string): { url: string } {
+    const image = { url };
+    Object.defineProperty(image, "metadataRoute", { value: true });
+    return image;
+  }
+
+  function renderStaticSocialImagesMetadata(metadataBase: URL | null): string {
+    return renderToStaticMarkup(
+      React.createElement(MetadataHead, {
+        metadata: {
+          metadataBase,
+          openGraph: {
+            images: [metadataRouteImage("/metadata-base/unset/opengraph-image2/100")],
+          },
+          twitter: {
+            images: metadataRouteImage("/metadata-base/unset/twitter-image.png"),
+          },
+        },
+      }),
+    );
+  }
+
   it("renders generator meta tag", () => {
     const html = renderToStaticMarkup(
       React.createElement(MetadataHead, { metadata: { generator: "Next.js" } }),
@@ -2677,6 +2716,116 @@ describe("MetadataHead rendering", () => {
     );
     expect(html).toContain('href="https://acme.com/about"');
     expect(html).toContain('content="https://acme.com/og.png"');
+  });
+
+  it("normalizes root canonical metadataBase URLs without a trailing slash", () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-dynamic-routes/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-dynamic-routes/index.test.ts
+    const html = renderToStaticMarkup(
+      React.createElement(MetadataHead, {
+        metadata: {
+          metadataBase: new URL("https://mydomain.com"),
+          alternates: { canonical: "./" },
+        },
+        pathname: "/",
+      }),
+    );
+
+    expect(html).toContain('rel="canonical"');
+    expect(html).toContain('href="https://mydomain.com"');
+  });
+
+  it("keeps manifest metadata routes relative when metadataBase is configured", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(MetadataHead, {
+        metadata: {
+          metadataBase: new URL("https://mydomain.com"),
+          manifest: "/manifest.webmanifest",
+        },
+      }),
+    );
+
+    expect(html).toContain('rel="manifest"');
+    expect(html).toContain('href="/manifest.webmanifest"');
+  });
+
+  it("uses social image fallback metadataBase for static metadata route images", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("PORT", "4567", () => {
+        withEnvVar("VERCEL_PROJECT_PRODUCTION_URL", undefined, () => {
+          const html = renderStaticSocialImagesMetadata(null);
+
+          expect(html).toContain(
+            'content="http://localhost:4567/metadata-base/unset/opengraph-image2/100"',
+          );
+          expect(html).toContain(
+            'content="http://localhost:4567/metadata-base/unset/twitter-image.png"',
+          );
+        });
+      });
+    });
+  });
+
+  it("lets configured metadataBase win over non-preview deployment urls for static metadata route images", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("VERCEL_URL", "my-deployment.vercel.app", () => {
+        withEnvVar("VERCEL_ENV", "production", () => {
+          const html = renderStaticSocialImagesMetadata(new URL("https://mydomain.com"));
+
+          expect(html).toContain(
+            'content="https://mydomain.com/metadata-base/unset/opengraph-image2/100"',
+          );
+          expect(html).not.toContain("my-deployment.vercel.app");
+        });
+      });
+    });
+  });
+
+  it("lets configured metadataBase win over deployment urls when VERCEL_ENV is unset", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("VERCEL_URL", "my-deployment.vercel.app", () => {
+        withEnvVar("VERCEL_ENV", undefined, () => {
+          const html = renderStaticSocialImagesMetadata(new URL("https://mydomain.com"));
+
+          expect(html).toContain(
+            'content="https://mydomain.com/metadata-base/unset/opengraph-image2/100"',
+          );
+          expect(html).not.toContain("my-deployment.vercel.app");
+        });
+      });
+    });
+  });
+
+  it("uses preview deployment urls for static metadata route images in Vercel preview", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("VERCEL_BRANCH_URL", "branch-preview.vercel.app", () => {
+        withEnvVar("VERCEL_ENV", "preview", () => {
+          const html = renderStaticSocialImagesMetadata(new URL("https://mydomain.com"));
+
+          expect(html).toContain(
+            'content="https://branch-preview.vercel.app/metadata-base/unset/opengraph-image2/100"',
+          );
+          expect(html).not.toContain("https://mydomain.com/metadata-base/unset");
+        });
+      });
+    });
+  });
+
+  it("uses production deployment urls as fallback when metadataBase is unset", () => {
+    withEnvVar("NODE_ENV", "production", () => {
+      withEnvVar("VERCEL_PROJECT_PRODUCTION_URL", "project-production.vercel.app", () => {
+        withEnvVar("VERCEL_URL", "my-deployment.vercel.app", () => {
+          withEnvVar("VERCEL_ENV", "production", () => {
+            const html = renderStaticSocialImagesMetadata(null);
+
+            expect(html).toContain(
+              'content="https://project-production.vercel.app/metadata-base/unset/opengraph-image2/100"',
+            );
+            expect(html).not.toContain("my-deployment.vercel.app");
+          });
+        });
+      });
+    });
   });
 
   it("accepts URL objects for canonical and openGraph.url", () => {

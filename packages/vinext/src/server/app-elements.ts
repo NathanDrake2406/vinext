@@ -4,6 +4,7 @@ import { AppElementsWire, UNMATCHED_SLOT, type AppElements } from "./app-element
 export {
   AppElementsWire,
   APP_ARTIFACT_COMPATIBILITY_KEY,
+  APP_CACHE_ENTRY_REUSE_PROOF_KEY,
   APP_INTERCEPTION_KEY,
   APP_INTERCEPTION_CONTEXT_KEY,
   APP_LAYOUT_IDS_KEY,

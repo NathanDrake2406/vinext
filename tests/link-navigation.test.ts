@@ -46,6 +46,31 @@ const linkPrefetchRoutes = [
   { patternParts: ["blog", ":slug"], isDynamic: true },
 ] satisfies VinextLinkPrefetchRoute[];
 
+function createTestNavigationRuntime(navigate: unknown) {
+  return {
+    bootstrap: {
+      routeManifest: null,
+      rsc: undefined,
+    },
+    functions: {
+      navigate,
+    },
+  };
+}
+
+function pingVisibleLinksFromRuntime(): void {
+  const runtime: unknown = Reflect.get(window, Symbol.for("vinext.navigationRuntime"));
+  if (typeof runtime !== "object" || runtime === null || !("functions" in runtime)) return;
+  const { functions } = runtime;
+  if (typeof functions !== "object" || functions === null || !("pingVisibleLinks" in functions)) {
+    return;
+  }
+  const { pingVisibleLinks } = functions;
+  if (typeof pingVisibleLinks === "function") {
+    pingVisibleLinks();
+  }
+}
+
 type MockReactAnchorCaptureOptions = {
   captureAnchor(type: unknown, props: unknown): void;
   captureEffect?: (effect: CapturedEffect) => void;
@@ -342,7 +367,15 @@ describe("Link App Router navigation scheduling", () => {
       transitionStates.push(transitionActive);
     });
     vi.stubGlobal("window", {
-      __VINEXT_RSC_NAVIGATE__: navigate,
+      [Symbol.for("vinext.navigationRuntime")]: {
+        bootstrap: {
+          routeManifest: null,
+          rsc: undefined,
+        },
+        functions: {
+          navigate,
+        },
+      },
       addEventListener: vi.fn(),
       history: {
         pushState: vi.fn(),
@@ -448,7 +481,15 @@ describe("Link App Router navigation scheduling", () => {
 
     const navigate = vi.fn(async () => {});
     vi.stubGlobal("window", {
-      __VINEXT_RSC_NAVIGATE__: navigate,
+      [Symbol.for("vinext.navigationRuntime")]: {
+        bootstrap: {
+          routeManifest: null,
+          rsc: undefined,
+        },
+        functions: {
+          navigate,
+        },
+      },
       addEventListener: vi.fn(),
       history: {
         pushState: vi.fn(),
@@ -503,6 +544,7 @@ describe("Link App Router navigation scheduling", () => {
 });
 
 async function renderIsolatedLink(options: {
+  appNavigation?: boolean;
   href: string;
   nodeEnv: string;
   props?: Record<string, unknown>;
@@ -539,6 +581,8 @@ async function renderIsolatedLink(options: {
     href: "https://example.com/current",
     origin: "https://example.com",
   };
+  const navigationRuntime =
+    options.appNavigation === false ? undefined : createTestNavigationRuntime(navigate);
 
   vi.stubGlobal("fetch", fetch);
   vi.stubGlobal("document", {
@@ -550,7 +594,9 @@ async function renderIsolatedLink(options: {
     },
   });
   vi.stubGlobal("window", {
-    __VINEXT_RSC_NAVIGATE__: navigate,
+    ...(navigationRuntime === undefined
+      ? {}
+      : { [Symbol.for("vinext.navigationRuntime")]: navigationRuntime }),
     addEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
     history: {
@@ -1017,11 +1063,11 @@ describe("Link prefetch scheduling", () => {
   it("prefetches Pages Router links on mouse intent when prefetch is false", async () => {
     const userOnMouseEnter = vi.fn();
     const result = await renderIsolatedLink({
+      appNavigation: false,
       href: "/pages-disabled-mouse-intent-prefetch-target",
       nodeEnv: "production",
       props: { onMouseEnter: userOnMouseEnter, prefetch: false },
       windowOverrides: {
-        __VINEXT_RSC_NAVIGATE__: undefined,
         __NEXT_DATA__: {
           __vinext: {
             pageModuleUrl: "/_next/static/chunks/pages/current.js",
@@ -1051,11 +1097,11 @@ describe("Link prefetch scheduling", () => {
   it("prefetches Pages Router links on touch intent when prefetch is false", async () => {
     const userOnTouchStart = vi.fn();
     const result = await renderIsolatedLink({
+      appNavigation: false,
       href: "/pages-disabled-touch-intent-prefetch-target",
       nodeEnv: "production",
       props: { onTouchStart: userOnTouchStart, prefetch: false },
       windowOverrides: {
-        __VINEXT_RSC_NAVIGATE__: undefined,
         __NEXT_DATA__: {
           __vinext: {
             pageModuleUrl: "/_next/static/chunks/pages/current.js",
@@ -1085,10 +1131,10 @@ describe("Link prefetch scheduling", () => {
   it("does not duplicate Pages Router viewport prefetch after visibility changes", async () => {
     const observer = stubIntersectionObserver();
     const result = await renderIsolatedLink({
+      appNavigation: false,
       href: "/pages-viewport-prefetch-target",
       nodeEnv: "production",
       windowOverrides: {
-        __VINEXT_RSC_NAVIGATE__: undefined,
         __NEXT_DATA__: {
           __vinext: {
             pageModuleUrl: "/_next/static/chunks/pages/current.js",
@@ -1104,7 +1150,7 @@ describe("Link prefetch scheduling", () => {
       await flushPrefetchTasks();
       observer.dispatchIntersectingEntry(result.anchor, true);
       await flushPrefetchTasks();
-      window.__VINEXT_PING_VISIBLE_LINKS__?.();
+      pingVisibleLinksFromRuntime();
       await flushPrefetchTasks();
 
       expect(result.fetch).not.toHaveBeenCalled();

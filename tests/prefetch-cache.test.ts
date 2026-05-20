@@ -264,7 +264,15 @@ describe("prefetch cache eviction", () => {
     });
     const navigate = vi.fn();
     (globalThis as any).fetch = fetch;
-    (globalThis as any).window.__VINEXT_RSC_NAVIGATE__ = navigate;
+    (globalThis as any).window[Symbol.for("vinext.navigationRuntime")] = {
+      bootstrap: {
+        routeManifest: null,
+        rsc: undefined,
+      },
+      functions: {
+        navigate,
+      },
+    };
 
     appRouterInstance.prefetch("/dashboard");
     await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);

@@ -39,6 +39,7 @@ import {
 import { runWithHeadersContext, headersContextFromRequest } from "vinext/shims/headers";
 import { createValidFileMatcher, findFileWithExtensions } from "../routing/file-matcher.js";
 import { normalizeStaticPathsEntry, type StaticPathsEntry } from "../routing/route-pattern.js";
+import { navigationRuntimeRscBootstrapExpression } from "../server/app-ssr-stream.js";
 import { VINEXT_PRERENDER_SECRET_HEADER } from "../server/headers.js";
 import { startProdServer } from "../server/prod-server.js";
 import { readPrerenderSecret } from "./server-manifest.js";
@@ -186,12 +187,14 @@ const NOT_FOUND_SENTINEL_PATH = "/__vinext_nonexistent_for_404__";
 
 const DEFAULT_CONCURRENCY = Math.min(os.availableParallelism(), 8);
 
-const RSC_CHUNK_SCRIPT_PREFIX = "self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];";
-const RSC_DONE_MARKER = "__VINEXT_RSC_DONE__=true";
-// Full literal that createRscEmbedTransform concatenates before the
-// safeJsonStringify(chunk) argument. Keep this in sync with the writer at
-// packages/vinext/src/server/app-ssr-stream.ts:73.
-const RSC_CHUNK_FULL_PREFIX = `${RSC_CHUNK_SCRIPT_PREFIX}self.__VINEXT_RSC_CHUNKS__.push(`;
+const RSC_LEGACY_CHUNK_SCRIPT_PREFIX = "self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];";
+const RSC_LEGACY_DONE_SCRIPT = "self.__VINEXT_RSC_DONE__=true";
+// Full literals that createRscEmbedTransform concatenates before the chunk
+// argument in packages/vinext/src/server/app-ssr-stream.ts.
+const RSC_LEGACY_CHUNK_FULL_PREFIX = `${RSC_LEGACY_CHUNK_SCRIPT_PREFIX}self.__VINEXT_RSC_CHUNKS__.push(`;
+const RSC_RUNTIME_BOOTSTRAP_EXPRESSION = navigationRuntimeRscBootstrapExpression();
+const RSC_RUNTIME_CHUNK_FULL_PREFIX = `${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.rsc.push(`;
+const RSC_RUNTIME_DONE_SCRIPT = `${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.done=true`;
 
 /**
  * Reconstruct the RSC payload from a prerender HTML response by parsing the
@@ -217,13 +220,22 @@ export function extractRscPayloadFromPrerenderedHtml(html: string): Uint8Array |
   while ((match = scriptPattern.exec(html)) !== null) {
     const script = (match[1] ?? "").trim().replace(/;$/, "");
 
-    if (script === `self.${RSC_DONE_MARKER}`) {
+    if (script === RSC_RUNTIME_DONE_SCRIPT || script === RSC_LEGACY_DONE_SCRIPT) {
       sawDone = true;
       continue;
     }
 
-    if (script.startsWith(RSC_CHUNK_SCRIPT_PREFIX)) {
-      chunks.push(decodeRscEmbeddedChunk(parseRscChunkPushArgument(script)));
+    if (script.startsWith(RSC_RUNTIME_CHUNK_FULL_PREFIX)) {
+      chunks.push(
+        decodeRscEmbeddedChunk(parseRscChunkPushArgument(script, RSC_RUNTIME_CHUNK_FULL_PREFIX)),
+      );
+      continue;
+    }
+
+    if (script.startsWith(RSC_LEGACY_CHUNK_SCRIPT_PREFIX)) {
+      chunks.push(
+        decodeRscEmbeddedChunk(parseRscChunkPushArgument(script, RSC_LEGACY_CHUNK_FULL_PREFIX)),
+      );
     }
   }
 
@@ -238,7 +250,7 @@ export function extractRscPayloadFromPrerenderedHtml(html: string): Uint8Array |
     );
   }
   if (!sawDone) {
-    throw new Error("[vinext] Malformed prerender RSC embed: missing __VINEXT_RSC_DONE__ marker");
+    throw new Error("[vinext] Malformed prerender RSC embed: missing RSC done marker");
   }
 
   return concatUint8Arrays(chunks);
@@ -251,11 +263,11 @@ export function extractRscPayloadFromPrerenderedHtml(html: string): Uint8Array |
  * prefix and ends with `)`. JSON.parse on the slice catches any tampering or
  * trailing code.
  */
-function parseRscChunkPushArgument(script: string): RscEmbeddedChunk {
-  if (!script.startsWith(RSC_CHUNK_FULL_PREFIX) || !script.endsWith(")")) {
+function parseRscChunkPushArgument(script: string, chunkPrefix: string): RscEmbeddedChunk {
+  if (!script.startsWith(chunkPrefix) || !script.endsWith(")")) {
     throw new Error("[vinext] Malformed prerender RSC embed: unexpected chunk script shape");
   }
-  const jsonSource = script.slice(RSC_CHUNK_FULL_PREFIX.length, -1);
+  const jsonSource = script.slice(chunkPrefix.length, -1);
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonSource);
@@ -369,11 +381,7 @@ export function getOutputPath(urlPath: string, trailingSlash: boolean): string {
 /** Map of route patterns to generateStaticParams functions (or null/undefined). */
 export type StaticParamsMap = Record<
   string,
-  | ((opts: {
-      params: Record<string, string | string[]>;
-    }) => Promise<Record<string, string | string[]>[]>)
-  | null
-  | undefined
+  ((opts: { params: Record<string, string | string[]> }) => Promise<unknown>) | null | undefined
 >;
 
 /**
@@ -385,7 +393,6 @@ export type StaticParamsMap = Record<
  */
 export async function resolveParentParams(
   childRoute: AppRoute,
-  routeIndex: ReadonlyMap<string, AppRoute>,
   staticParamsMap: StaticParamsMap,
 ): Promise<Record<string, string | string[]>[]> {
   const { patternParts } = childRoute;
@@ -403,7 +410,7 @@ export async function resolveParentParams(
 
   type GenerateStaticParamsFn = (opts: {
     params: Record<string, string | string[]>;
-  }) => Promise<Record<string, string | string[]>[]>;
+  }) => Promise<unknown>;
 
   const parentSegments: GenerateStaticParamsFn[] = [];
 
@@ -413,38 +420,41 @@ export async function resolveParentParams(
     prefixPattern += "/" + part;
     if (!part.startsWith(":")) continue;
 
-    const parentRoute = routeIndex.get(prefixPattern);
-    // TODO: layout-level generateStaticParams — a layout segment can define
-    // generateStaticParams without a corresponding page file, so parentRoute
-    // may be undefined here even though the layout exports generateStaticParams.
-    // resolveParentParams currently only looks up routes that have a pagePath
-    // (i.e. leaf pages), missing layout-level providers. Fix requires scanning
-    // layout files in addition to page files during route collection.
-    if (parentRoute?.pagePath) {
-      const fn = staticParamsMap[prefixPattern];
-      if (typeof fn === "function") {
-        parentSegments.push(fn);
-      }
+    const fn = staticParamsMap[prefixPattern];
+    if (typeof fn === "function") {
+      parentSegments.push(fn);
     }
   }
 
   if (parentSegments.length === 0) return [];
 
   let currentParams: Record<string, string | string[]>[] = [{}];
+  let resolvedAnyParent = false;
+
   for (const generateStaticParams of parentSegments) {
     const nextParams: Record<string, string | string[]>[] = [];
+    let resolvedThisParent = false;
+
     for (const parentParams of currentParams) {
       const results = await generateStaticParams({ params: parentParams });
-      if (Array.isArray(results)) {
-        for (const result of results) {
-          nextParams.push({ ...parentParams, ...result });
-        }
+      // `null` is the CF Workers Proxy sentinel: the proxy has no
+      // generateStaticParams for this pattern. Skip and let later providers run.
+      if (results === null) continue;
+      if (!Array.isArray(results)) return [];
+
+      resolvedThisParent = true;
+      resolvedAnyParent = true;
+      for (const result of results) {
+        nextParams.push({ ...parentParams, ...result });
       }
     }
-    currentParams = nextParams;
+
+    if (resolvedThisParent) {
+      currentParams = nextParams;
+    }
   }
 
-  return currentParams;
+  return resolvedAnyParent ? currentParams : [];
 }
 
 // ─── Pages Router Prerender ───────────────────────────────────────────────────
@@ -962,8 +972,6 @@ export async function prerenderApp({
       },
     });
 
-    const routeIndex = new Map(routes.map((r) => [r.pattern, r]));
-
     // ── Collect URLs to render ────────────────────────────────────────────────
     type UrlToRender = {
       urlPath: string;
@@ -1048,7 +1056,7 @@ export async function prerenderApp({
             continue;
           }
 
-          const parentParamSets = await resolveParentParams(route, routeIndex, staticParamsMap);
+          const parentParamSets = await resolveParentParams(route, staticParamsMap);
           let paramSets: Record<string, string | string[]>[] | null;
 
           if (parentParamSets.length > 0) {
@@ -1067,10 +1075,14 @@ export async function prerenderApp({
                     ...childParams,
                   });
                 }
+              } else {
+                paramSets = [];
+                break;
               }
             }
           } else {
-            paramSets = await generateStaticParamsFn({ params: {} });
+            const results = await generateStaticParamsFn({ params: {} });
+            paramSets = Array.isArray(results) || results === null ? results : [];
           }
 
           // null: route has no generateStaticParams (CF Workers Proxy returned null)

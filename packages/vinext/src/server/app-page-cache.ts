@@ -31,6 +31,23 @@ type AppPageRequestCacheLife = {
   revalidate?: number;
   expire?: number;
 };
+export type AppPageCacheOutcomeMetric = Readonly<{
+  artifact: "html" | "rsc";
+  /**
+   * Internal cache lookup key for debugging and tests. Runtime telemetry sinks should hash or
+   * redact this value before export to avoid high-cardinality or user-derived labels.
+   */
+  cacheKey: string;
+  outcome: "hit" | "miss" | "stale";
+  reason:
+    | "empty-entry"
+    | "no-entry"
+    | "non-app-page-entry"
+    | "read-error"
+    | "served"
+    | "stale-empty-entry";
+}>;
+type AppPageCacheOutcomeRecorder = (metric: AppPageCacheOutcomeMetric) => void;
 
 type BuildAppPageCacheRenderObservation = (input: {
   cacheTags: readonly string[];
@@ -73,6 +90,7 @@ type ReadAppPageCacheResponseOptions = {
   middlewareHeaders?: Headers | null;
   middlewareStatus?: number | null;
   mountedSlotsHeader?: string | null;
+  recordCacheOutcome?: AppPageCacheOutcomeRecorder;
   renderMode?: AppRscRenderMode;
   expireSeconds?: number;
   revalidateSeconds: number;
@@ -129,6 +147,17 @@ type ScheduleAppPageRscCacheWriteOptions = {
 };
 
 const NO_STORE_CACHE_CONTROL = "no-store, must-revalidate";
+
+function recordAppPageCacheOutcome(
+  recordCacheOutcome: AppPageCacheOutcomeRecorder | undefined,
+  input: AppPageCacheOutcomeMetric,
+): void {
+  try {
+    recordCacheOutcome?.(input);
+  } catch {
+    // Metrics are observational only; telemetry failures must not alter cache serving behavior.
+  }
+}
 
 export function buildAppPageCacheTags(pathname: string, extraTags: readonly string[]): string[] {
   const tags = [pathname, `_N_T_${pathname}`, "_N_T_/layout"];
@@ -274,10 +303,22 @@ export async function readAppPageCacheResponse(
   const isrKey = options.isRscRequest
     ? options.isrRscKey(options.cleanPathname, options.mountedSlotsHeader, options.renderMode)
     : options.isrHtmlKey(options.cleanPathname);
+  const artifact = options.isRscRequest ? "rsc" : "html";
 
   try {
     const cached = await options.isrGet(isrKey);
     const cachedValue = getCachedAppPageValue(cached);
+
+    if (cached && !cachedValue) {
+      recordAppPageCacheOutcome(options.recordCacheOutcome, {
+        artifact,
+        cacheKey: isrKey,
+        outcome: "miss",
+        reason: "non-app-page-entry",
+      });
+      options.isrDebug?.("MISS (non app-page cache entry)", options.cleanPathname);
+      return null;
+    }
 
     if (cachedValue && !cached?.isStale) {
       const hitResponse = buildAppPageCachedResponse(cachedValue, {
@@ -292,6 +333,12 @@ export async function readAppPageCacheResponse(
       });
 
       if (hitResponse) {
+        recordAppPageCacheOutcome(options.recordCacheOutcome, {
+          artifact,
+          cacheKey: isrKey,
+          outcome: "hit",
+          reason: "served",
+        });
         options.isrDebug?.(
           options.isRscRequest ? "HIT (RSC)" : "HIT (HTML)",
           options.cleanPathname,
@@ -300,6 +347,12 @@ export async function readAppPageCacheResponse(
         return hitResponse;
       }
 
+      recordAppPageCacheOutcome(options.recordCacheOutcome, {
+        artifact,
+        cacheKey: isrKey,
+        outcome: "miss",
+        reason: "empty-entry",
+      });
       options.isrDebug?.("MISS (empty cached entry)", options.cleanPathname);
     }
 
@@ -372,6 +425,12 @@ export async function readAppPageCacheResponse(
       });
 
       if (staleResponse) {
+        recordAppPageCacheOutcome(options.recordCacheOutcome, {
+          artifact,
+          cacheKey: isrKey,
+          outcome: "stale",
+          reason: "served",
+        });
         options.isrDebug?.(
           options.isRscRequest ? "STALE (RSC)" : "STALE (HTML)",
           options.cleanPathname,
@@ -380,13 +439,31 @@ export async function readAppPageCacheResponse(
         return staleResponse;
       }
 
+      recordAppPageCacheOutcome(options.recordCacheOutcome, {
+        artifact,
+        cacheKey: isrKey,
+        outcome: "miss",
+        reason: "stale-empty-entry",
+      });
       options.isrDebug?.("STALE MISS (empty stale entry)", options.cleanPathname);
     }
 
     if (!cached) {
+      recordAppPageCacheOutcome(options.recordCacheOutcome, {
+        artifact,
+        cacheKey: isrKey,
+        outcome: "miss",
+        reason: "no-entry",
+      });
       options.isrDebug?.("MISS (no cache entry)", options.cleanPathname);
     }
   } catch (isrReadError) {
+    recordAppPageCacheOutcome(options.recordCacheOutcome, {
+      artifact,
+      cacheKey: isrKey,
+      outcome: "miss",
+      reason: "read-error",
+    });
     console.error("[vinext] ISR cache read error:", isrReadError);
   }
 

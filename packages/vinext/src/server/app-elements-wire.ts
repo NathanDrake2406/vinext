@@ -4,12 +4,19 @@ import {
   parseArtifactCompatibilityEnvelope,
   type ArtifactCompatibilityEnvelope,
 } from "./artifact-compatibility.js";
-import type { RenderObservation } from "./cache-proof.js";
+import type {
+  CacheEntryReuseProof,
+  CacheProofBreakerFallbackMode,
+  CacheProofFallbackScope,
+  CacheProofRejectionCode,
+  RenderObservation,
+} from "./cache-proof.js";
 import { isInterceptionMatchedUrlPath } from "./normalize-path.js";
 
 const APP_INTERCEPTION_SEPARATOR = "\0";
 
 export const APP_ARTIFACT_COMPATIBILITY_KEY = "__artifactCompatibility";
+export const APP_CACHE_ENTRY_REUSE_PROOF_KEY = "__cacheEntryReuseProof";
 export const APP_INTERCEPTION_KEY = "__interception";
 export const APP_INTERCEPTION_CONTEXT_KEY = "__interceptionContext";
 export const APP_LAYOUT_IDS_KEY = "__layoutIds";
@@ -21,6 +28,50 @@ export const APP_SLOT_BINDINGS_KEY = "__slotBindings";
 export const APP_UNMATCHED_SLOT_WIRE_VALUE = "__VINEXT_UNMATCHED_SLOT__";
 
 export const UNMATCHED_SLOT = Symbol.for("vinext.unmatchedSlot");
+
+function createCacheProofRejectionCodeSet<const T extends readonly CacheProofRejectionCode[]>(
+  codes: T &
+    ([CacheProofRejectionCode] extends [T[number]]
+      ? unknown
+      : readonly [
+          "Missing cache proof rejection codes",
+          Exclude<CacheProofRejectionCode, T[number]>,
+        ]),
+): ReadonlySet<string> {
+  return new Set(codes);
+}
+
+const CACHE_PROOF_REJECTION_CODES = createCacheProofRejectionCodeSet([
+  "CP_CACHE_ENTRY_PROOF_MISSING",
+  "CP_MODEL_DISABLED",
+  "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE",
+  "CP_ARTIFACT_COMPATIBILITY_UNKNOWN",
+  "CP_DIMENSION_COUNT_EXCEEDED",
+  "CP_DIMENSION_NAME_MISSING",
+  "CP_DIMENSION_NAME_TOO_LONG",
+  "CP_DIMENSION_VALUE_COUNT_EXCEEDED",
+  "CP_DIMENSION_VALUE_TOO_LONG",
+  "CP_DIMENSION_VALUES_MISSING",
+  "CP_ENCODED_VARIANT_TOO_LONG",
+  "CP_INVALID_VARIANT_BUDGET",
+  "CP_ROUTE_VARIANT_BUDGET_ROUTE_MISMATCH",
+  "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
+  "CP_UNSAFE_PUBLIC_DIMENSION",
+  "CP_BOUNDARY_OUTCOME_MISMATCH",
+  "CP_BOUNDARY_OUTCOME_UNKNOWN",
+  "CP_PRIVATE_DYNAMIC_DOWNGRADE",
+  "CP_STATIC_LAYOUT_CANDIDATE_OUTPUT_KIND",
+  "CP_STATIC_LAYOUT_CURRENT_OUTPUT_KIND",
+  "CP_STATIC_LAYOUT_ID_MISMATCH",
+  "CP_STATIC_LAYOUT_OBSERVATION_OUTPUT_KIND",
+  "CP_STATIC_LAYOUT_OBSERVATION_OUTPUT_MISMATCH",
+  "CP_STATIC_LAYOUT_PRIVATE_DYNAMIC_DOWNGRADE",
+  "CP_STATIC_LAYOUT_REQUEST_API_OBSERVED",
+  "CP_STATIC_LAYOUT_REQUEST_API_UNKNOWN",
+  "CP_STATIC_LAYOUT_ROOT_BOUNDARY_MISMATCH",
+  "CP_STATIC_LAYOUT_ROOT_BOUNDARY_UNKNOWN",
+  "CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN",
+]);
 
 export type AppElementsSlotBindingState = "active" | "default" | "unmatched";
 
@@ -88,6 +139,7 @@ export type AppElementValue =
   | null
   | LayoutFlags
   | ArtifactCompatibilityEnvelope
+  | CacheEntryReuseProof
   | AppElementsInterception
   | readonly AppElementsSlotBinding[];
 type AppWireElementValue =
@@ -96,6 +148,7 @@ type AppWireElementValue =
   | null
   | LayoutFlags
   | ArtifactCompatibilityEnvelope
+  | CacheEntryReuseProof
   | AppElementsInterception
   | readonly AppElementsSlotBinding[];
 
@@ -123,6 +176,7 @@ export type LayoutFlags = Readonly<Record<string, "s" | "d">>;
 
 type AppElementsMetadata = {
   artifactCompatibility: ArtifactCompatibilityEnvelope;
+  cacheEntryReuseProof?: CacheEntryReuseProof;
   interception: AppElementsInterception | null;
   interceptionContext: string | null;
   layoutIds: readonly string[];
@@ -169,6 +223,7 @@ export type AppOutgoingElements = Readonly<
     | ReactNode
     | LayoutFlags
     | ArtifactCompatibilityEnvelope
+    | CacheEntryReuseProof
     | AppElementsInterception
     | RenderObservation
     | readonly AppElementsSlotBinding[]
@@ -177,6 +232,7 @@ export type AppOutgoingElements = Readonly<
 
 type AppElementsWireKeys = {
   readonly artifactCompatibility: typeof APP_ARTIFACT_COMPATIBILITY_KEY;
+  readonly cacheEntryReuseProof: typeof APP_CACHE_ENTRY_REUSE_PROOF_KEY;
   readonly interception: typeof APP_INTERCEPTION_KEY;
   readonly interceptionContext: typeof APP_INTERCEPTION_CONTEXT_KEY;
   readonly layoutIds: typeof APP_LAYOUT_IDS_KEY;
@@ -201,6 +257,7 @@ type AppElementsWireCodec = {
           Record<string, ReactNode | AppElementsInterception | readonly AppElementsSlotBinding[]>
         >;
     artifactCompatibility?: ArtifactCompatibilityEnvelope;
+    cacheEntryReuseProof?: CacheEntryReuseProof;
     layoutFlags: LayoutFlags;
     renderObservation?: RenderObservation;
   }): ReactNode | AppOutgoingElements;
@@ -545,6 +602,7 @@ export function buildOutgoingAppPayload(input: {
         Record<string, ReactNode | AppElementsInterception | readonly AppElementsSlotBinding[]>
       >;
   artifactCompatibility?: ArtifactCompatibilityEnvelope;
+  cacheEntryReuseProof?: CacheEntryReuseProof;
   layoutFlags: LayoutFlags;
   renderObservation?: RenderObservation;
 }): ReactNode | AppOutgoingElements {
@@ -556,6 +614,7 @@ export function buildOutgoingAppPayload(input: {
     | ReactNode
     | LayoutFlags
     | ArtifactCompatibilityEnvelope
+    | CacheEntryReuseProof
     | AppElementsInterception
     | RenderObservation
     | readonly AppElementsSlotBinding[]
@@ -565,6 +624,9 @@ export function buildOutgoingAppPayload(input: {
     [APP_ARTIFACT_COMPATIBILITY_KEY]:
       input.artifactCompatibility ?? createArtifactCompatibilityEnvelope(),
   };
+  if (input.cacheEntryReuseProof) {
+    payload[APP_CACHE_ENTRY_REUSE_PROOF_KEY] = input.cacheEntryReuseProof;
+  }
   if (input.renderObservation) {
     payload[APP_RENDER_OBSERVATION_KEY] = input.renderObservation;
   }
@@ -580,6 +642,81 @@ function readArtifactCompatibilityMetadata(value: unknown): ArtifactCompatibilit
   // emitted as scaffolding, so bad or future-version values degrade like
   // missing __layoutFlags instead of crashing render paths that do not read it.
   return artifactCompatibility ?? createArtifactCompatibilityEnvelope();
+}
+
+function createMissingCacheEntryReuseProof(): CacheEntryReuseProof {
+  return {
+    kind: "runtime-cache-entry",
+    decision: null,
+  };
+}
+
+function isCacheProofRejectionCode(value: unknown): value is CacheProofRejectionCode {
+  return typeof value === "string" && CACHE_PROOF_REJECTION_CODES.has(value);
+}
+
+function isCacheProofFallbackMode(value: unknown): value is CacheProofBreakerFallbackMode {
+  return value === "renderFresh" || value === "privateUncacheable";
+}
+
+function isCacheProofFallbackScope(value: unknown): value is CacheProofFallbackScope {
+  return value === "affectedOutput" || value === "route";
+}
+
+// Three-way wire semantics are intentional:
+// - null means the proof field was absent and no cache authority was claimed.
+// - { decision: null } means a present proof was malformed or unusable.
+// - { decision: ... } means the proof parsed into an explicit reuse decision.
+function parseCacheEntryReuseProofMetadata(value: unknown): CacheEntryReuseProof | null {
+  if (value === undefined) return null;
+  if (!isRecord(value) || value.kind !== "runtime-cache-entry") {
+    return createMissingCacheEntryReuseProof();
+  }
+
+  const decision = value.decision;
+  if (decision === null) return createMissingCacheEntryReuseProof();
+  if (!isRecord(decision)) return createMissingCacheEntryReuseProof();
+
+  if (
+    decision.kind === "reuse" &&
+    decision.canReuse === true &&
+    decision.code === "CP_STATIC_LAYOUT_REUSE_PROVEN" &&
+    // Static layout proofs are the only runtime cache-entry reuse class today.
+    // Extend this parser alongside any new reuse class before it can restore
+    // visited cache entries as commit-capable payloads.
+    decision.reuseClass === "static-layout"
+  ) {
+    return {
+      kind: "runtime-cache-entry",
+      decision: {
+        canReuse: true,
+        code: decision.code,
+        kind: "reuse",
+        reuseClass: decision.reuseClass,
+      },
+    };
+  }
+
+  if (
+    decision.kind === "reject" &&
+    decision.canReuse === false &&
+    isCacheProofRejectionCode(decision.code) &&
+    isCacheProofFallbackMode(decision.mode) &&
+    isCacheProofFallbackScope(decision.scope)
+  ) {
+    return {
+      kind: "runtime-cache-entry",
+      decision: {
+        canReuse: false,
+        code: decision.code,
+        kind: "reject",
+        mode: decision.mode,
+        scope: decision.scope,
+      },
+    };
+  }
+
+  return createMissingCacheEntryReuseProof();
 }
 
 export function readAppElementsMetadata(
@@ -614,9 +751,13 @@ export function readAppElementsMetadata(
   const artifactCompatibility = readArtifactCompatibilityMetadata(
     elements[APP_ARTIFACT_COMPATIBILITY_KEY],
   );
+  const cacheEntryReuseProof = parseCacheEntryReuseProofMetadata(
+    elements[APP_CACHE_ENTRY_REUSE_PROOF_KEY],
+  );
 
   return {
     artifactCompatibility,
+    ...(cacheEntryReuseProof ? { cacheEntryReuseProof } : {}),
     interception,
     interceptionContext: interceptionContext ?? null,
     layoutIds,
@@ -632,6 +773,7 @@ export const AppElementsWire: AppElementsWireCodec = {
   // behind the codec boundary.
   keys: {
     artifactCompatibility: APP_ARTIFACT_COMPATIBILITY_KEY,
+    cacheEntryReuseProof: APP_CACHE_ENTRY_REUSE_PROOF_KEY,
     interception: APP_INTERCEPTION_KEY,
     interceptionContext: APP_INTERCEPTION_CONTEXT_KEY,
     layoutIds: APP_LAYOUT_IDS_KEY,

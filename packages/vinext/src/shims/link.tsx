@@ -19,6 +19,11 @@ import React, {
   type MouseEvent,
   type TouchEvent,
 } from "react";
+import {
+  getNavigationRuntime,
+  hasAppNavigationRuntime,
+  registerNavigationRuntimeFunctions,
+} from "../client/navigation-runtime.js";
 // Import shared RSC prefetch utilities from navigation shim (relative path
 // so this resolves both via the Vite plugin and in direct vitest imports)
 import {
@@ -50,6 +55,7 @@ import { appendSearchParamsToUrl, type UrlQuery, urlQueryToSearchParams } from "
 import { addLocalePrefix, getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
 import { getI18nContext } from "./i18n-context.js";
 import type { VinextLinkPrefetchRoute, VinextNextData } from "../client/vinext-next-data.js";
+import { navigatePagesRouterLink } from "../client/pages-router-link-navigation.js";
 import { createRouteTrieCache, matchRouteWithTrie } from "../routing/route-matching.js";
 import { stripBasePath } from "../utils/base-path.js";
 
@@ -156,9 +162,7 @@ function toSameOriginRouteHref(href: string): string | null {
 }
 
 function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
-  return typeof window !== "undefined" && typeof window.__VINEXT_RSC_NAVIGATE__ === "function"
-    ? "app"
-    : "pages";
+  return hasAppNavigationRuntime() ? "app" : "pages";
 }
 
 export function canAutoPrefetchFullAppRoute(href: string): boolean {
@@ -206,7 +210,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
 
   schedule(() => {
     void (async () => {
-      if (typeof window.__VINEXT_RSC_NAVIGATE__ === "function") {
+      if (hasAppNavigationRuntime()) {
         // `auto`/`null`/undefined should not behave like `prefetch={true}` for
         // App Router dynamic routes. Next.js may prefetch a loading-boundary
         // shell for dynamic routes, but vinext's current client cache stores
@@ -286,7 +290,7 @@ function setVisibleLinkPrefetch(instance: LinkPrefetchInstance, isVisible: boole
 
 function registerVisibleLinkPing(): void {
   if (typeof window === "undefined") return;
-  window.__VINEXT_PING_VISIBLE_LINKS__ = pingVisibleLinkPrefetches;
+  registerNavigationRuntimeFunctions({ pingVisibleLinks: pingVisibleLinkPrefetches });
 }
 
 function pingVisibleLinkPrefetches(): void {
@@ -326,6 +330,13 @@ function getDefaultLocale(): string | undefined {
   return getI18nContext()?.defaultLocale;
 }
 
+function getCurrentLocale(): string | undefined {
+  if (typeof window !== "undefined") {
+    return window.__VINEXT_LOCALE__;
+  }
+  return getI18nContext()?.locale;
+}
+
 function getDomainLocales(): readonly DomainLocale[] | undefined {
   if (typeof window !== "undefined") {
     return (window.__NEXT_DATA__ as VinextNextData | undefined)?.domainLocales;
@@ -360,8 +371,8 @@ function applyLocaleToHref(href: string, locale: string | false | undefined): st
     return href;
   }
 
-  if (locale === undefined) {
-    // No locale prop: keep current behavior (href as-is)
+  const resolvedLocale = locale ?? getCurrentLocale();
+  if (resolvedLocale === undefined) {
     return href;
   }
 
@@ -371,12 +382,12 @@ function applyLocaleToHref(href: string, locale: string | false | undefined): st
     return href;
   }
 
-  const domainLocaleHref = getDomainLocaleHref(href, locale);
+  const domainLocaleHref = getDomainLocaleHref(href, resolvedLocale);
   if (domainLocaleHref) {
     return domainLocaleHref;
   }
 
-  return addLocalePrefix(href, locale, getDefaultLocale() ?? "");
+  return addLocalePrefix(href, resolvedLocale, getDefaultLocale() ?? "");
 }
 
 const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
@@ -591,7 +602,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
 
     // App Router: delegate to navigateClientSide which handles scroll save,
     // hash-only changes, RSC fetch, and two-phase URL commit.
-    if (typeof window.__VINEXT_RSC_NAVIGATE__ === "function") {
+    if (getNavigationRuntime()?.functions.navigate) {
       setPending(true);
       React.startTransition(() => {
         void navigateClientSide(navigateHref, replace ? "replace" : "push", scroll, true).finally(
@@ -608,13 +619,8 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       // Pages Router: use the Router singleton
       try {
         const routerModule = await import("next/router");
-        // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- vinext's Router shim accepts (url, as, options)
-        const Router = routerModule.default as any;
-        if (replace) {
-          await Router.replace(absoluteHref, undefined, { scroll });
-        } else {
-          await Router.push(absoluteHref, undefined, { scroll });
-        }
+        const Router = routerModule.default;
+        await navigatePagesRouterLink(Router, { href: absoluteHref, replace, scroll, locale });
       } catch {
         // Fallback to hard navigation if router fails
         if (replace) {

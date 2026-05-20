@@ -229,6 +229,8 @@ export type RouteManifestRouteHandler = {
 export type RouteManifestLayout = {
   id: string;
   treePath: string;
+  patternParts: readonly string[];
+  paramNames: readonly string[];
   rootBoundaryId: RootBoundaryId | null;
 };
 
@@ -277,6 +279,18 @@ export type RouteManifestSlotBinding = {
   slotParamNames?: readonly string[];
 };
 
+export type RouteManifestInterception = {
+  id: string;
+  sourcePattern: string;
+  sourcePatternParts: readonly string[];
+  targetPattern: string;
+  targetPatternParts: readonly string[];
+  slotId: string;
+  ownerLayoutId: string | null;
+  interceptingRouteId: string | null;
+  targetRouteId: string | null;
+};
+
 export type RouteManifestBoundaryOutcome = "error" | "forbidden" | "notFound" | "unauthorized";
 
 export type RouteManifestBoundary = {
@@ -302,6 +316,8 @@ export type StaticSegmentGraph = {
   slots: ReadonlyMap<string, RouteManifestSlot>;
   defaults: ReadonlyMap<string, RouteManifestDefault>;
   slotBindings: ReadonlyMap<string, RouteManifestSlotBinding>;
+  interceptions: ReadonlyMap<string, RouteManifestInterception>;
+  interceptionsBySlotId: ReadonlyMap<string, readonly RouteManifestInterception[]>;
   boundaries: ReadonlyMap<string, RouteManifestBoundary>;
   rootBoundaries: ReadonlyMap<RootBoundaryId, RouteManifestRootBoundary>;
 };
@@ -339,6 +355,14 @@ function createAppRouteGraphDefaultId(slotId: string): string {
   return `default:${slotId}`;
 }
 
+function createAppRouteGraphInterceptionId(
+  slotId: string,
+  sourcePattern: string,
+  targetPattern: string,
+): string {
+  return `interception:${slotId}:${sourcePattern}->${targetPattern}`;
+}
+
 function createAppRouteGraphRootBoundaryId(treePath: string): RootBoundaryId {
   return `root-boundary:${treePath}`;
 }
@@ -373,8 +397,10 @@ function createStaticSegmentGraph(routes: readonly AppRouteGraphRoute[]): Static
   const slots = new Map<string, RouteManifestSlot>();
   const defaults = new Map<string, RouteManifestDefault>();
   const slotBindings = new Map<string, RouteManifestSlotBinding>();
+  const interceptions = new Map<string, RouteManifestInterception>();
   const boundaries = new Map<string, RouteManifestBoundary>();
   const rootBoundaries = new Map<RootBoundaryId, RouteManifestRootBoundary>();
+  const routeIdByPattern = createRouteManifestRouteIdByPattern(routes);
 
   for (const route of routes) {
     routeEntries.set(route.ids.route, {
@@ -417,9 +443,12 @@ function createStaticSegmentGraph(routes: readonly AppRouteGraphRoute[]): Static
       if (existingLayout) {
         assertRouteManifestRootBoundary("layout", route, layoutId, existingLayout.rootBoundaryId);
       }
+      const layoutRouteParts = convertTreePathToRouteParts(treePath);
       const layout = {
         id: layoutId,
         treePath,
+        patternParts: layoutRouteParts.urlSegments,
+        paramNames: layoutRouteParts.params,
         rootBoundaryId: route.ids.rootBoundary,
       };
       layouts.set(layoutId, layout);
@@ -471,6 +500,32 @@ function createStaticSegmentGraph(routes: readonly AppRouteGraphRoute[]): Static
     for (const slot of route.parallelSlots) {
       const ownerLayoutId = findSlotOwnerLayoutId(route, slot);
       const defaultId = slot.defaultPath ? createAppRouteGraphDefaultId(slot.id) : null;
+      if (slot.layoutPath) {
+        // Materialize the slot-local layout as its own entry so consumers
+        // (e.g. typegen) can distinguish it from the owning layout. Note
+        // that this layout may have zero entries in `slots`: the slot
+        // itself is registered below against `ownerLayoutId`, which points
+        // to the ancestor layout that owns the slot prop.
+        const slotLayoutTreePath = createSlotLayoutTreePath(slot);
+        const slotLayoutId = createAppRouteGraphLayoutId(slotLayoutTreePath);
+        const existingLayout = layouts.get(slotLayoutId);
+        if (existingLayout) {
+          assertRouteManifestRootBoundary(
+            "layout",
+            route,
+            slotLayoutId,
+            existingLayout.rootBoundaryId,
+          );
+        }
+        const slotLayoutRouteParts = convertTreePathToRouteParts(slotLayoutTreePath);
+        layouts.set(slotLayoutId, {
+          id: slotLayoutId,
+          treePath: slotLayoutTreePath,
+          patternParts: slotLayoutRouteParts.urlSegments,
+          paramNames: slotLayoutRouteParts.params,
+          rootBoundaryId: route.ids.rootBoundary,
+        });
+      }
       slots.set(slot.id, {
         id: slot.id,
         key: slot.key,
@@ -493,8 +548,17 @@ function createStaticSegmentGraph(routes: readonly AppRouteGraphRoute[]): Static
       }
       const binding = createRouteManifestSlotBinding(route, slot, ownerLayoutId, defaultId);
       slotBindings.set(binding.id, binding);
+      addRouteManifestInterceptionFacts({
+        interceptions,
+        ownerLayoutId,
+        route,
+        routeIdByPattern,
+        slot,
+      });
     }
   }
+
+  const interceptionsBySlotId = createRouteManifestInterceptionsBySlotId(interceptions);
 
   return {
     routes: routeEntries,
@@ -505,9 +569,17 @@ function createStaticSegmentGraph(routes: readonly AppRouteGraphRoute[]): Static
     slots,
     defaults,
     slotBindings,
+    interceptions,
+    interceptionsBySlotId,
     boundaries,
     rootBoundaries,
   };
+}
+
+function createRouteManifestRouteIdByPattern(
+  routes: readonly AppRouteGraphRoute[],
+): ReadonlyMap<string, string> {
+  return new Map(routes.map((route) => [route.pattern, route.ids.route]));
 }
 
 function findRouteManifestOwnerLayoutId(
@@ -524,6 +596,12 @@ function findSlotOwnerLayoutId(
 ): string | null {
   if (slot.layoutIndex < 0) return null;
   return route.ids.layouts[slot.layoutIndex] ?? null;
+}
+
+function createSlotLayoutTreePath(slot: AppRouteGraphParallelSlot): string {
+  const slotSegment = `@${slot.name}`;
+  if (slot.ownerTreePath === "/") return `/${slotSegment}`;
+  return `${slot.ownerTreePath}/${slotSegment}`;
 }
 
 function createRouteManifestSlotBinding(
@@ -551,6 +629,61 @@ function createRouteManifestSlotBinding(
   }
 
   return binding;
+}
+
+function addRouteManifestInterceptionFacts(input: {
+  interceptions: Map<string, RouteManifestInterception>;
+  ownerLayoutId: string | null;
+  route: AppRouteGraphRoute;
+  routeIdByPattern: ReadonlyMap<string, string>;
+  slot: AppRouteGraphParallelSlot;
+}): void {
+  for (const interception of input.slot.interceptingRoutes) {
+    const id = createAppRouteGraphInterceptionId(
+      input.slot.id,
+      interception.sourceMatchPattern,
+      interception.targetPattern,
+    );
+    input.interceptions.set(id, {
+      id,
+      sourcePattern: interception.sourceMatchPattern,
+      sourcePatternParts: splitRouteManifestPatternParts(interception.sourceMatchPattern),
+      targetPattern: interception.targetPattern,
+      targetPatternParts: splitRouteManifestPatternParts(interception.targetPattern),
+      slotId: input.slot.id,
+      ownerLayoutId: input.ownerLayoutId,
+      interceptingRouteId: input.routeIdByPattern.get(interception.sourceMatchPattern) ?? null,
+      targetRouteId: input.routeIdByPattern.get(interception.targetPattern) ?? null,
+    });
+  }
+}
+
+function createRouteManifestInterceptionsBySlotId(
+  interceptions: ReadonlyMap<string, RouteManifestInterception>,
+): ReadonlyMap<string, readonly RouteManifestInterception[]> {
+  const interceptionsBySlotId = new Map<string, RouteManifestInterception[]>();
+  for (const interception of interceptions.values()) {
+    const existing = interceptionsBySlotId.get(interception.slotId);
+    if (existing) {
+      existing.push(interception);
+    } else {
+      interceptionsBySlotId.set(interception.slotId, [interception]);
+    }
+  }
+
+  for (const slotInterceptions of interceptionsBySlotId.values()) {
+    slotInterceptions.sort((left, right) => compareStableStrings(left.id, right.id));
+  }
+
+  return new Map(
+    Array.from(interceptionsBySlotId.entries()).sort(([left], [right]) =>
+      compareStableStrings(left, right),
+    ),
+  );
+}
+
+function splitRouteManifestPatternParts(pattern: string): string[] {
+  return pattern.split("/").filter((part) => part.length > 0);
 }
 
 function getRouteManifestSlotBindingState(
@@ -675,6 +808,8 @@ function createRouteManifestGraphVersion(segmentGraph: StaticSegmentGraph): Grap
     slots: sortedMapValues(segmentGraph.slots),
     defaults: sortedMapValues(segmentGraph.defaults),
     slotBindings: sortedMapValues(segmentGraph.slotBindings),
+    interceptions: sortedMapValues(segmentGraph.interceptions),
+    interceptionsBySlotId: sortedMapValues(segmentGraph.interceptionsBySlotId),
     boundaries: sortedMapValues(segmentGraph.boundaries),
     rootBoundaries: sortedMapValues(segmentGraph.rootBoundaries),
   };
@@ -1251,6 +1386,19 @@ function createAppRouteGraphTreePath(
     return "/";
   }
   return `/${treePathSegments.join("/")}`;
+}
+
+function convertTreePathToRouteParts(treePath: string): {
+  urlSegments: string[];
+  params: string[];
+} {
+  if (treePath === "/") return { urlSegments: [], params: [] };
+  const segments = treePath.split("/").filter(Boolean);
+  const routeParts = convertSegmentsToRouteParts(segments);
+  if (!routeParts) {
+    throw new Error(`Invalid App Router layout tree path "${treePath}".`);
+  }
+  return { urlSegments: routeParts.urlSegments, params: routeParts.params };
 }
 
 /**
@@ -1936,7 +2084,7 @@ function computeInterceptSourceMatchPattern(interceptParentDir: string, appDir: 
  * Used by computeInterceptTarget, convertSegmentsToRouteParts, and
  * hasRemainingVisibleSegments — keep this the single source of truth.
  */
-function isInvisibleSegment(segment: string): boolean {
+export function isInvisibleSegment(segment: string): boolean {
   if (segment === ".") return true;
   if (segment.startsWith("(") && segment.endsWith(")")) return true;
   if (segment.startsWith("@")) return true;
@@ -2072,8 +2220,8 @@ function findFile(dir: string, name: string, matcher: ValidFileMatcher): string 
  * (route groups, @slots, ".") and converting dynamic segment syntax to Express-style
  * patterns (e.g. "[id]" → ":id", "[...slug]" → ":slug+").
  */
-function convertSegmentsToRouteParts(
-  segments: string[],
+export function convertSegmentsToRouteParts(
+  segments: readonly string[],
 ): { urlSegments: string[]; params: string[]; isDynamic: boolean } | null {
   const urlSegments: string[] = [];
   const params: string[] = [];
@@ -2125,7 +2273,7 @@ function convertSegmentsToRouteParts(
   return { urlSegments, params, isDynamic };
 }
 
-function hasRemainingVisibleSegments(segments: string[], startIndex: number): boolean {
+function hasRemainingVisibleSegments(segments: readonly string[], startIndex: number): boolean {
   for (let i = startIndex; i < segments.length; i++) {
     if (!isInvisibleSegment(segments[i])) return true;
   }
