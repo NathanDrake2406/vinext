@@ -1,4 +1,10 @@
-import { getRequestContext, isInsideUnifiedScope } from "./unified-request-context.js";
+import {
+  getRequestContext,
+  isInsideUnifiedScope,
+  createRequestContext,
+  runWithRequestContext,
+  runWithUnifiedStateMutation,
+} from "./unified-request-context.js";
 
 export type RootParams = Record<string, string | string[] | undefined>;
 
@@ -35,6 +41,24 @@ export function setRootParams(params: RootParams | null): void {
   getState().rootParams = params;
 }
 
+export function getRootParams(): RootParams | null {
+  return getState().rootParams;
+}
+
 export function getRootParam(name: string): Promise<string | string[] | undefined> {
   return Promise.resolve(getState().rootParams?.[name]);
+}
+
+export function runWithRootParamsScope<T>(
+  params: RootParams,
+  fn: () => T | Promise<T>,
+): T | Promise<T> {
+  if (isInsideUnifiedScope()) {
+    return runWithUnifiedStateMutation((ctx) => {
+      ctx.rootParams = params;
+    }, fn);
+  } else {
+    const ctx = createRequestContext({ rootParams: params });
+    return runWithRequestContext(ctx, fn);
+  }
 }

@@ -1,4 +1,4 @@
-import { pickRootParams, setRootParams, type RootParams } from "vinext/shims/root-params";
+import { pickRootParams, runWithRootParamsScope, type RootParams } from "vinext/shims/root-params";
 
 type GenerateStaticParamsFunction = (input: { params: RootParams }) => unknown;
 
@@ -20,14 +20,15 @@ export function createAppPrerenderStaticParamsResolver(
     // Wrap the single source in the same non-array/non-object guards as the
     // multi-source composition path so the contract is uniform regardless of
     // how many sources were composed.
-    return async (input) => {
-      const result = await single(input);
-      if (!Array.isArray(result)) return [];
-      for (const item of result) {
-        if (!isRootParams(item)) return [];
-      }
-      return result;
-    };
+    return async (input) =>
+      runWithRootParamsScope(input.params, async () => {
+        const result = await single(input);
+        if (!Array.isArray(result)) return [];
+        for (const item of result) {
+          if (!isRootParams(item)) return [];
+        }
+        return result;
+      });
   }
 
   return async ({ params }) => {
@@ -37,7 +38,9 @@ export function createAppPrerenderStaticParamsResolver(
       const nextParamSets: RootParams[] = [];
 
       for (const parentParams of paramSets) {
-        const result = await generateStaticParams({ params: parentParams });
+        const result = await runWithRootParamsScope(parentParams, async () =>
+          generateStaticParams({ params: parentParams }),
+        );
         if (!Array.isArray(result)) return [];
 
         for (const item of result) {
@@ -63,10 +66,6 @@ type CallAppPrerenderStaticParamsOptions = {
 export async function callAppPrerenderStaticParams(
   options: CallAppPrerenderStaticParamsOptions,
 ): Promise<unknown> {
-  setRootParams(pickRootParams(options.params, options.rootParamNamesByPattern[options.pattern]));
-  try {
-    return await options.fn({ params: options.params });
-  } finally {
-    setRootParams(null);
-  }
+  const picked = pickRootParams(options.params, options.rootParamNamesByPattern[options.pattern]);
+  return runWithRootParamsScope(picked, () => options.fn({ params: options.params }));
 }
