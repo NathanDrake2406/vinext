@@ -28,6 +28,10 @@ import type {
   RouteManifestSlotBinding,
   StaticSegmentGraph,
 } from "../packages/vinext/src/routing/app-route-graph.js";
+import {
+  createCacheEntryReuseProof,
+  type CacheEntryReuseProof,
+} from "../packages/vinext/src/server/cache-proof.js";
 
 type TestManifestRoute = {
   id?: string;
@@ -278,6 +282,21 @@ function createOperationToken(overrides: Partial<OperationToken> = {}): Operatio
   };
 }
 
+function createRejectedCacheEntryReuseProof(
+  code: "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE" | "CP_ROUTE_VARIANT_CEILING_EXCEEDED",
+): CacheEntryReuseProof {
+  return {
+    kind: "runtime-cache-entry",
+    decision: {
+      canReuse: false,
+      code,
+      kind: "reject",
+      mode: code === "CP_ROUTE_VARIANT_CEILING_EXCEEDED" ? "privateUncacheable" : "renderFresh",
+      scope: code === "CP_ROUTE_VARIANT_CEILING_EXCEEDED" ? "route" : "affectedOutput",
+    },
+  };
+}
+
 function planFlightResponse(rootBoundaryId: string | null): NavigationDecisionV0 {
   const token = createOperationToken({
     targetSnapshotFingerprint: `route:/dashboard|root:${rootBoundaryId ?? "unknown"}`,
@@ -393,6 +412,7 @@ function planFlightResponseFromRootBoundaries(options: {
 }
 
 function planFlightResponseFromSnapshots(options: {
+  cacheEntryReuseProof?: CacheEntryReuseProof;
   currentSnapshot: RouteSnapshotV0;
   lane?: OperationToken["lane"];
   routeManifest?: RouteManifest | null;
@@ -410,6 +430,9 @@ function planFlightResponseFromSnapshots(options: {
     event: {
       kind: "flightResponseArrived",
       result: {
+        ...(options.cacheEntryReuseProof
+          ? { cacheEntryReuseProof: options.cacheEntryReuseProof }
+          : {}),
         href: options.targetSnapshot.displayUrl,
         targetSnapshot: options.targetSnapshot,
       },
@@ -456,6 +479,134 @@ describe("navigationPlanner root-boundary decisions", () => {
           },
         },
       ],
+    });
+  });
+
+  it("rejects runtime cache entries when the cache proof is missing", () => {
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/"),
+      displayUrl: "https://example.com/dashboard/profile",
+      matchedUrl: "/dashboard/profile",
+      routeId: "route:/dashboard/profile",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/"),
+      displayUrl: "https://example.com/dashboard/settings",
+      matchedUrl: "/dashboard/settings",
+      routeId: "route:/dashboard/settings",
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      cacheEntryReuseProof: createCacheEntryReuseProof(null),
+      currentSnapshot,
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("hardNavigate");
+    if (decision.kind !== "hardNavigate") {
+      throw new Error("Expected cache proof rejection to hard navigate");
+    }
+    expect(decision.reason).toBe("cacheProofRejected");
+    expect(decision.url).toBe("https://example.com/dashboard/settings");
+    expect(decision.trace.entries).toEqual([
+      {
+        code: NavigationTraceReasonCodes.cacheProofRejected,
+        fields: {
+          cacheProofCode: "CP_CACHE_ENTRY_PROOF_MISSING",
+          currentRootLayoutTreePath: "/",
+          currentVisibleCommitVersion: 2,
+          nextRootLayoutTreePath: "/",
+          startedVisibleCommitVersion: 2,
+        },
+      },
+    ]);
+  });
+
+  it("rejects incompatible runtime cache entries before route-topology commit approval", () => {
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/"),
+      displayUrl: "https://example.com/dashboard/profile",
+      matchedUrl: "/dashboard/profile",
+      routeId: "route:/dashboard/profile",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/"),
+      displayUrl: "https://example.com/dashboard/settings",
+      matchedUrl: "/dashboard/settings",
+      routeId: "route:/dashboard/settings",
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      cacheEntryReuseProof: createRejectedCacheEntryReuseProof(
+        "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE",
+      ),
+      currentSnapshot,
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("hardNavigate");
+    if (decision.kind !== "hardNavigate") {
+      throw new Error("Expected incompatible cache entry to hard navigate");
+    }
+    expect(decision.reason).toBe("cacheProofRejected");
+    expect(decision.trace.entries[0]).toEqual({
+      code: NavigationTraceReasonCodes.cacheProofRejected,
+      fields: {
+        cacheProofCode: "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE",
+        cacheProofMode: "renderFresh",
+        cacheProofScope: "affectedOutput",
+        currentRootLayoutTreePath: "/",
+        currentVisibleCommitVersion: 2,
+        nextRootLayoutTreePath: "/",
+        startedVisibleCommitVersion: 2,
+      },
+    });
+  });
+
+  it("keeps accepted runtime cache proof visible on the commit proposal", () => {
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/"),
+      displayUrl: "https://example.com/dashboard/profile",
+      matchedUrl: "/dashboard/profile",
+      routeId: "route:/dashboard/profile",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/"),
+      displayUrl: "https://example.com/dashboard/settings",
+      matchedUrl: "/dashboard/settings",
+      routeId: "route:/dashboard/settings",
+    };
+    const cacheEntryReuseProof: CacheEntryReuseProof = {
+      kind: "runtime-cache-entry",
+      decision: {
+        canReuse: true,
+        code: "CP_STATIC_LAYOUT_REUSE_PROVEN",
+        kind: "reuse",
+        reuseClass: "static-layout",
+      },
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      cacheEntryReuseProof,
+      currentSnapshot,
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("proposeCommit");
+    if (decision.kind !== "proposeCommit") {
+      throw new Error("Expected proven cache entry to remain committable");
+    }
+    expect(decision.proposal.cacheEntryReuseDecision).toEqual(cacheEntryReuseProof.decision);
+    expect(decision.trace.entries[0]).toEqual({
+      code: NavigationTraceReasonCodes.commitCurrent,
+      fields: {
+        cacheProofCode: "CP_STATIC_LAYOUT_REUSE_PROVEN",
+        cacheProofReuseClass: "static-layout",
+        currentRootLayoutTreePath: "/",
+        currentVisibleCommitVersion: 2,
+        nextRootLayoutTreePath: "/",
+        startedVisibleCommitVersion: 2,
+      },
     });
   });
 

@@ -22,6 +22,7 @@ import {
   type NavigationTrace,
   type NavigationTraceFields,
 } from "./navigation-trace.js";
+import { createCacheEntryReuseProof, type CacheEntryReuseProof } from "./cache-proof.js";
 import {
   navigationPlanner,
   type MountedParallelSlotSnapshotV0,
@@ -78,6 +79,7 @@ export type AppRouterState = {
 };
 
 export type AppRouterAction = {
+  cacheEntryReuseProof?: CacheEntryReuseProof;
   elements: AppElements;
   interception: AppElementsInterception | null;
   interceptionContext: string | null;
@@ -95,6 +97,7 @@ export type AppRouterAction = {
 
 export type PendingNavigationCommit = {
   action: AppRouterAction;
+  cacheEntryReuseProof?: CacheEntryReuseProof;
   interception: AppElementsInterception | null;
   interceptionContext: string | null;
   previousNextUrl: string | null;
@@ -358,6 +361,8 @@ function planPendingRootBoundaryFlightResponse(options: {
     routeManifest: options.routeManifest,
     targetSnapshot,
   });
+  const cacheEntryReuseProof =
+    options.pending.cacheEntryReuseProof ?? options.pending.action.cacheEntryReuseProof;
 
   // #726-CORE-07/08 keeps the browser state layer as the lifecycle gate and
   // only translates committed AppElements metadata into planner snapshots.
@@ -374,6 +379,7 @@ function planPendingRootBoundaryFlightResponse(options: {
     event: {
       kind: "flightResponseArrived",
       result: {
+        ...(cacheEntryReuseProof ? { cacheEntryReuseProof } : {}),
         // Approval call sites must pass the executor's targetHref so the
         // planner trace and future hard-nav executor agree with the browser
         // URL. The fallback remains for lower-level tests and direct disposition
@@ -422,10 +428,14 @@ export async function createPendingNavigationCommit(options: {
   // current visible previousNextUrl.
   previousNextUrl?: string | null;
   renderId: number;
+  requireCacheEntryReuseProof?: boolean;
   type: "navigate" | "replace" | "traverse";
 }): Promise<PendingNavigationCommit> {
   const elements = await options.nextElements;
   const metadata = AppElementsWire.readMetadata(elements);
+  const cacheEntryReuseProof =
+    metadata.cacheEntryReuseProof ??
+    (options.requireCacheEntryReuseProof ? createCacheEntryReuseProof(null) : undefined);
   const requestedPreviousNextUrl =
     options.previousNextUrl !== undefined
       ? options.previousNextUrl
@@ -434,6 +444,7 @@ export async function createPendingNavigationCommit(options: {
 
   return {
     action: {
+      ...(cacheEntryReuseProof ? { cacheEntryReuseProof } : {}),
       elements,
       interception: metadata.interception,
       interceptionContext: metadata.interceptionContext,
@@ -452,7 +463,8 @@ export async function createPendingNavigationCommit(options: {
       routeId: metadata.routeId,
       type: options.type,
     },
-    // Convenience aliases — always equal action.interceptionContext / action.rootLayoutTreePath / action.routeId.
+    // Convenience aliases — always equal their action.* counterparts.
+    ...(cacheEntryReuseProof ? { cacheEntryReuseProof } : {}),
     interception: metadata.interception,
     interceptionContext: metadata.interceptionContext,
     previousNextUrl,

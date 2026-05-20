@@ -6,6 +6,11 @@ import type {
   RouteManifestRoute,
 } from "../routing/app-route-graph.js";
 import { compareAppElementsSlotIds, type AppElementsSlotBinding } from "./app-elements.js";
+import type {
+  CacheEntryReuseDecision,
+  CacheEntryReuseProof,
+  CacheProofRejectionCode,
+} from "./cache-proof.js";
 import {
   NavigationTraceReasonCodes,
   createNavigationLifecycleTraceFields,
@@ -96,6 +101,7 @@ export type RequestedWork =
   | { kind: "prefetch"; href: string };
 
 export type CommitProposal = {
+  cacheEntryReuseDecision?: AcceptedCacheEntryReuseDecision;
   preserveAbsentSlots: boolean;
   preserveElementIds: readonly string[];
   preservePreviousSlotIds: readonly string[];
@@ -104,7 +110,10 @@ export type CommitProposal = {
 };
 
 export type NoCommitReason = "prefetchOnly";
-export type HardNavigationReason = "interceptionProofRejected" | "rootBoundaryChanged";
+export type HardNavigationReason =
+  | "cacheProofRejected"
+  | "interceptionProofRejected"
+  | "rootBoundaryChanged";
 export type RootBoundaryTransition =
   | "currentRootBoundary"
   | "rootBoundaryChanged"
@@ -138,6 +147,7 @@ export type NavigationDecisionV0 =
     };
 
 export type FlightResultV0 = {
+  cacheEntryReuseProof?: CacheEntryReuseProof;
   href: string;
   targetSnapshot: RouteSnapshotV0;
 };
@@ -168,8 +178,21 @@ type RouteTopologyResolution =
     };
 
 type RouteTopologySlotBindingSource = "snapshot" | "manifestTarget";
+type AcceptedCacheEntryReuseDecision = Extract<CacheEntryReuseDecision, { canReuse: true }>;
+type RejectedCacheEntryReuseDecision = Extract<CacheEntryReuseDecision, { canReuse: false }>;
+type CacheEntryProofEvaluation =
+  | Readonly<{
+      decision: AcceptedCacheEntryReuseDecision | null;
+      kind: "accepted";
+    }>
+  | Readonly<{
+      decision: RejectedCacheEntryReuseDecision | null;
+      kind: "rejected";
+    }>;
 
 const ROUTE_INTERCEPTION_CONTEXT_SEPARATOR = "\0";
+const CACHE_ENTRY_PROOF_MISSING_CODE =
+  "CP_CACHE_ENTRY_PROOF_MISSING" satisfies CacheProofRejectionCode;
 
 function createRequestWorkDecision(options: {
   eventKind: NavigationEvent["kind"];
@@ -604,6 +627,93 @@ function createInterceptionProofRejectedDecision(options: {
   };
 }
 
+function evaluateCacheEntryReuseProof(
+  proof: CacheEntryReuseProof | undefined,
+): CacheEntryProofEvaluation {
+  if (proof === undefined) {
+    return {
+      kind: "accepted",
+      decision: null,
+    };
+  }
+
+  if (proof.decision === null) {
+    return {
+      kind: "rejected",
+      decision: null,
+    };
+  }
+
+  if (proof.decision.canReuse) {
+    return {
+      kind: "accepted",
+      decision: proof.decision,
+    };
+  }
+
+  return {
+    kind: "rejected",
+    decision: proof.decision,
+  };
+}
+
+function createCacheProofRejectedTraceFields(
+  traceFields: NavigationTraceFields,
+  decision: RejectedCacheEntryReuseDecision | null,
+): NavigationTraceFields {
+  if (decision === null) {
+    return {
+      ...traceFields,
+      cacheProofCode: CACHE_ENTRY_PROOF_MISSING_CODE,
+    };
+  }
+
+  return {
+    ...traceFields,
+    cacheProofCode: decision.code,
+    cacheProofMode: decision.mode,
+    cacheProofScope: decision.scope,
+  };
+}
+
+function createCacheProofRejectedDecision(options: {
+  event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
+  rejection: Extract<CacheEntryProofEvaluation, { kind: "rejected" }>;
+  traceFields: NavigationTraceFields;
+}): NavigationDecisionV0 {
+  return {
+    kind: "hardNavigate",
+    reason: "cacheProofRejected",
+    token: options.event.token,
+    trace: createNavigationTrace(
+      NavigationTraceReasonCodes.cacheProofRejected,
+      createCacheProofRejectedTraceFields(options.traceFields, options.rejection.decision),
+    ),
+    url: options.event.result.href,
+  };
+}
+
+function createAcceptedCacheProofTraceFields(
+  traceFields: NavigationTraceFields,
+  decision: AcceptedCacheEntryReuseDecision | null,
+): NavigationTraceFields {
+  if (decision === null) return traceFields;
+  return {
+    ...traceFields,
+    cacheProofCode: decision.code,
+    cacheProofReuseClass: decision.reuseClass,
+  };
+}
+
+function createCacheEntryProposalFields(
+  decision: AcceptedCacheEntryReuseDecision | null,
+): Pick<CommitProposal, "cacheEntryReuseDecision"> {
+  if (decision === null) return {};
+  return {
+    cacheEntryReuseDecision: decision,
+  };
+}
+
 function validateInterceptedPreservation(options: {
   currentSnapshot: RouteSnapshotV0;
   currentTopology: RouteTopologySnapshot;
@@ -731,6 +841,23 @@ function planFlightResponseArrived(options: {
     };
   }
 
+  const cacheEntryProofEvaluation = evaluateCacheEntryReuseProof(
+    options.event.result.cacheEntryReuseProof,
+  );
+  if (cacheEntryProofEvaluation.kind === "rejected") {
+    return createCacheProofRejectedDecision({
+      event: options.event,
+      rejection: cacheEntryProofEvaluation,
+      traceFields,
+    });
+  }
+  const acceptedCacheEntryDecision = cacheEntryProofEvaluation.decision;
+  const commitTraceFields = createAcceptedCacheProofTraceFields(
+    traceFields,
+    acceptedCacheEntryDecision,
+  );
+  const cacheEntryProposalFields = createCacheEntryProposalFields(acceptedCacheEntryDecision);
+
   // interceptionContext is transport evidence, not authority. Normal payloads
   // can carry it when a request was sent from an intercepted visible world, so
   // only explicit __interception proof enters the preservation branch.
@@ -762,6 +889,7 @@ function planFlightResponseArrived(options: {
     return {
       kind: "proposeCommit",
       proposal: {
+        ...cacheEntryProposalFields,
         preserveAbsentSlots: false,
         preserveElementIds: validation.preserveElementIds,
         preservePreviousSlotIds: validation.preservePreviousSlotIds,
@@ -771,7 +899,7 @@ function planFlightResponseArrived(options: {
       token: options.event.token,
       trace: createNavigationTrace(
         NavigationTraceReasonCodes.interceptedCommitCurrent,
-        traceFields,
+        commitTraceFields,
       ),
     };
   }
@@ -801,6 +929,7 @@ function planFlightResponseArrived(options: {
     return {
       kind: "proposeCommit",
       proposal: {
+        ...cacheEntryProposalFields,
         preserveAbsentSlots: false,
         preserveElementIds: [],
         preservePreviousSlotIds: [],
@@ -808,7 +937,10 @@ function planFlightResponseArrived(options: {
         targetSnapshot,
       },
       token: options.event.token,
-      trace: createNavigationTrace(NavigationTraceReasonCodes.rootBoundaryUnknown, traceFields),
+      trace: createNavigationTrace(
+        NavigationTraceReasonCodes.rootBoundaryUnknown,
+        commitTraceFields,
+      ),
     };
   }
 
@@ -819,6 +951,7 @@ function planFlightResponseArrived(options: {
   return {
     kind: "proposeCommit",
     proposal: {
+      ...cacheEntryProposalFields,
       preserveAbsentSlots: false,
       preserveElementIds: resolveCurrentRootBoundaryCommitElementPersistence({
         currentTopology: currentTopology.topology,
@@ -834,7 +967,7 @@ function planFlightResponseArrived(options: {
       targetSnapshot,
     },
     token: options.event.token,
-    trace: createNavigationTrace(NavigationTraceReasonCodes.commitCurrent, traceFields),
+    trace: createNavigationTrace(NavigationTraceReasonCodes.commitCurrent, commitTraceFields),
   };
 }
 

@@ -84,6 +84,7 @@ type BrowserNavigationController = {
     params: Record<string, string | string[]>;
     pendingRouterState: PendingBrowserRouterState | null;
     previousNextUrl: string | null;
+    requireCacheEntryReuseProof?: boolean;
     targetHistoryIndex?: number | null;
     targetHref: string;
     navId: number;
@@ -495,6 +496,7 @@ export function createAppBrowserNavigationController(
     params: Record<string, string | string[]>;
     pendingRouterState: PendingBrowserRouterState | null;
     previousNextUrl: string | null;
+    requireCacheEntryReuseProof?: boolean;
     targetHistoryIndex?: number | null;
     targetHref: string;
     navId: number;
@@ -516,6 +518,7 @@ export function createAppBrowserNavigationController(
         operationLane: options.operationLane,
         previousNextUrl: options.previousNextUrl,
         renderId,
+        requireCacheEntryReuseProof: options.requireCacheEntryReuseProof,
         type: options.actionType,
       });
 

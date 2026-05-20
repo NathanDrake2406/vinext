@@ -446,6 +446,7 @@ async function renderNavigationPayload(
   actionType: "navigate" | "replace" | "traverse" = "navigate",
   operationLane: OperationLane = "navigation",
   traversalIntent: HistoryTraversalIntent | null = null,
+  requireCacheEntryReuseProof: boolean = false,
 ): Promise<NavigationPayloadOutcome> {
   try {
     return await browserNavigationController.renderNavigationPayload({
@@ -461,6 +462,7 @@ async function renderNavigationPayload(
       params,
       pendingRouterState,
       previousNextUrl,
+      requireCacheEntryReuseProof,
       targetHistoryIndex: traversalIntent === null ? undefined : traversalIntent.targetHistoryIndex,
       targetHref,
       navId,
@@ -1318,6 +1320,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             toActionType(navigationKind),
             toOperationLane(navigationKind),
             activeTraversalIntent,
+            true,
           );
           return;
         }

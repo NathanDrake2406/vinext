@@ -11,6 +11,7 @@ export const CACHE_PROOF_MODEL_SCHEMA_VERSION = 1;
 export type CacheProofModelSchemaVersion = 1;
 
 export type CacheProofRejectionCode =
+  | "CP_CACHE_ENTRY_PROOF_MISSING"
   | "CP_MODEL_DISABLED"
   | "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE"
   | "CP_ARTIFACT_COMPATIBILITY_UNKNOWN"
@@ -395,6 +396,26 @@ export type StaticLayoutArtifactReuseDecision =
       kind: "fallback";
       metric: CacheProofHotPathMetric;
     }>;
+
+export type CacheEntryReuseDecision =
+  | Readonly<{
+      canReuse: true;
+      code: CacheProofAcceptanceCode;
+      kind: "reuse";
+      reuseClass: StaticLayoutReuseProof["reuseClass"];
+    }>
+  | Readonly<{
+      canReuse: false;
+      code: CacheProofRejectionCode;
+      kind: "reject";
+      mode: CacheProofBreakerFallbackMode;
+      scope: CacheProofFallbackScope;
+    }>;
+
+export type CacheEntryReuseProof = Readonly<{
+  decision: CacheEntryReuseDecision | null;
+  kind: "runtime-cache-entry";
+}>;
 
 export type CreateStaticLayoutArtifactReuseDecisionInput = Readonly<{
   candidateArtifactCompatibility: ArtifactCompatibilityEnvelope;
@@ -1531,6 +1552,43 @@ export function createStaticLayoutArtifactReuseDecision(
     proof: proof.proof,
     metric: createCacheProofHotPathMetric("reuse", proof.proof.code, proof.proof.fields),
   };
+}
+
+export function createCacheEntryReuseProof(
+  decision: StaticLayoutArtifactReuseDecision | null,
+): CacheEntryReuseProof {
+  if (decision === null) {
+    return {
+      kind: "runtime-cache-entry",
+      decision: null,
+    };
+  }
+
+  switch (decision.kind) {
+    case "reuse":
+      return {
+        kind: "runtime-cache-entry",
+        decision: {
+          canReuse: true,
+          code: decision.proof.code,
+          kind: "reuse",
+          reuseClass: decision.proof.reuseClass,
+        },
+      };
+    case "fallback":
+      return {
+        kind: "runtime-cache-entry",
+        decision: {
+          canReuse: false,
+          code: decision.fallback.code,
+          kind: "reject",
+          mode: decision.fallback.mode,
+          scope: decision.fallback.scope,
+        },
+      };
+    default:
+      return assertNever(decision);
+  }
 }
 
 export function createDisabledCacheProofDecision(

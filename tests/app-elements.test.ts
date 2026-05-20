@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { UNMATCHED_SLOT } from "../packages/vinext/src/shims/slot.js";
 import {
   APP_ARTIFACT_COMPATIBILITY_KEY,
+  APP_CACHE_ENTRY_REUSE_PROOF_KEY,
   AppElementsWire,
   APP_INTERCEPTION_KEY,
   APP_INTERCEPTION_CONTEXT_KEY,
@@ -29,7 +30,10 @@ import {
   evaluateArtifactCompatibility,
   RSC_PAYLOAD_SCHEMA_VERSION,
 } from "../packages/vinext/src/server/artifact-compatibility.js";
-import { buildRenderObservation } from "../packages/vinext/src/server/cache-proof.js";
+import {
+  buildRenderObservation,
+  createCacheEntryReuseProof,
+} from "../packages/vinext/src/server/cache-proof.js";
 
 describe("AppElementsWire", () => {
   it("encodes outgoing record payloads without mutating caller-owned records", () => {
@@ -838,6 +842,27 @@ describe("buildOutgoingAppPayload", () => {
         rootBoundaryId: "root-a",
         renderEpoch: null,
       });
+    }
+  });
+
+  it("carries planner-visible cache entry reuse proof as metadata only", () => {
+    const cacheEntryReuseProof = createCacheEntryReuseProof(null);
+    const result = buildOutgoingAppPayload({
+      element: {
+        [APP_ROUTE_KEY]: "route:/dashboard",
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        "page:/dashboard": "dashboard-page",
+      },
+      cacheEntryReuseProof,
+      layoutFlags: { "layout:/": "s" },
+    });
+
+    expect(isAppElementsRecord(result)).toBe(true);
+    if (isAppElementsRecord(result)) {
+      expect(result[APP_CACHE_ENTRY_REUSE_PROOF_KEY]).toEqual(cacheEntryReuseProof);
+      expect(AppElementsWire.readMetadata(result).cacheEntryReuseProof).toEqual(
+        cacheEntryReuseProof,
+      );
     }
   });
 

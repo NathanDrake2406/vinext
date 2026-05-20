@@ -1247,6 +1247,64 @@ describe("app browser entry state helpers", () => {
     ]);
   });
 
+  it("rejects cache-restored pending commits when cache-entry proof metadata is absent", async () => {
+    const currentState = createState({
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/dashboard/profile",
+        {},
+      ),
+      routeId: "route:/dashboard/profile",
+    });
+    const pending = await createPendingNavigationCommit({
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements(
+          "route:/dashboard/settings",
+          "/",
+          null,
+          {
+            "page:/dashboard/settings": React.createElement("main", null, "settings"),
+          },
+          ["layout:/"],
+        ),
+      ),
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/dashboard/settings",
+        {},
+      ),
+      operationLane: "navigation",
+      renderId: 2,
+      requireCacheEntryReuseProof: true,
+      type: "navigate",
+    });
+
+    const decision = resolvePendingNavigationCommitDispositionDecision({
+      activeNavigationId: 2,
+      currentState,
+      pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
+      startedNavigationId: 2,
+      targetHref: "https://example.com/dashboard/settings",
+    });
+
+    expect(decision.disposition).toBe("hard-navigate");
+    expect(decision.trace.entries).toEqual([
+      {
+        code: NavigationTraceReasonCodes.cacheProofRejected,
+        fields: {
+          activeNavigationId: 2,
+          cacheProofCode: "CP_CACHE_ENTRY_PROOF_MISSING",
+          currentRootLayoutTreePath: "/",
+          currentVisibleCommitVersion: 0,
+          nextRootLayoutTreePath: "/",
+          startedNavigationId: 2,
+          startedVisibleCommitVersion: 0,
+          targetHref: "https://example.com/dashboard/settings",
+        },
+      },
+    ]);
+  });
+
   it("traces unknown root-layout identity without preserving absent slots", async () => {
     const decision = await resolveTestPendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
@@ -2021,6 +2079,67 @@ describe("app browser navigation controller", () => {
       expect(createNavigationCommitEffect).toHaveBeenCalledTimes(1);
       expect(commitEffect).not.toHaveBeenCalled();
       expect(setBrowserRouterState).toHaveBeenCalledTimes(1);
+    } finally {
+      detach();
+    }
+  });
+
+  it("hard-navigates cache-restored payloads missing cache-entry proof metadata", async () => {
+    const performHardNavigation = vi.fn(() => true);
+    const createNavigationCommitEffect = vi.fn(() => vi.fn());
+    const currentState = createState({
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/dashboard/profile",
+        {},
+      ),
+      routeId: "route:/dashboard/profile",
+    });
+    const routeManifest = createTestRouteManifest([
+      {
+        id: "route:/dashboard/profile",
+        layoutIds: currentState.layoutIds,
+        pattern: "/dashboard/profile",
+        rootBoundaryId: "root-boundary:/",
+      },
+      {
+        id: "route:/dashboard/settings",
+        layoutIds: [AppElementsWire.encodeLayoutId("/")],
+        pattern: "/dashboard/settings",
+        rootBoundaryId: "root-boundary:/",
+      },
+    ]);
+    const { controller, detach, stateRef } = createControllerHarness(currentState, {
+      getRouteManifest: () => routeManifest,
+      performHardNavigation,
+    });
+
+    try {
+      const result = await controller.renderNavigationPayload({
+        actionType: "navigate",
+        createNavigationCommitEffect,
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot(
+          "https://example.com/dashboard/settings",
+          {},
+        ),
+        nextElements: Promise.resolve(
+          createResolvedElements("route:/dashboard/settings", "/", null, {
+            "page:/dashboard/settings": React.createElement("main", null, "settings"),
+          }),
+        ),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        requireCacheEntryReuseProof: true,
+        targetHref: "https://example.com/dashboard/settings",
+        navId: controller.beginNavigation(),
+      });
+
+      expect(result).toBe("hard-navigate");
+      expect(performHardNavigation).toHaveBeenCalledWith("https://example.com/dashboard/settings");
+      expect(createNavigationCommitEffect).not.toHaveBeenCalled();
+      expect(stateRef.current.routeId).toBe("route:/dashboard/profile");
     } finally {
       detach();
     }

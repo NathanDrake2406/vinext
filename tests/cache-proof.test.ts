@@ -10,6 +10,7 @@ import {
   classifyCacheVariantDimensionDowngrade,
   classifyRenderObservationDowngrade,
   createAppRouteCacheProofGraphScope,
+  createCacheEntryReuseProof,
   createDisabledCacheProofDecision,
   createStaticLayoutArtifactReuseDecision,
   DEFAULT_CACHE_VARIANT_BUDGET,
@@ -902,6 +903,64 @@ describe("disabled cache proof model", () => {
           rootBoundaryId: "layout:/",
         },
       },
+    });
+  });
+
+  it("projects static layout artifact decisions into planner-visible cache entry proof", () => {
+    const currentOutput = createLayoutOutput({
+      routeId: "route:/dashboard/profile",
+    });
+    const candidateOutput = createLayoutOutput({
+      routeId: "route:/dashboard/settings",
+    });
+    const compatibleArtifact = createArtifactCompatibilityEnvelope({
+      deploymentVersion: "deploy-a",
+      graphVersion: "graph-a",
+      rootBoundaryId: "layout:/",
+      renderEpoch: "epoch-a",
+    });
+    const reuseDecision = createStaticLayoutArtifactReuseDecision({
+      currentArtifactCompatibility: compatibleArtifact,
+      candidateArtifactCompatibility: compatibleArtifact,
+      candidateObservation: buildLayoutObservation({ output: candidateOutput }),
+      candidateVariant: buildLayoutVariantAdmission({ output: candidateOutput }),
+      currentOutput,
+    });
+    const rejectedDecision = createStaticLayoutArtifactReuseDecision({
+      currentArtifactCompatibility: compatibleArtifact,
+      candidateArtifactCompatibility: createArtifactCompatibilityEnvelope({
+        deploymentVersion: "deploy-b",
+        graphVersion: "graph-a",
+        rootBoundaryId: "layout:/",
+        renderEpoch: "epoch-a",
+      }),
+      candidateObservation: buildLayoutObservation({ output: candidateOutput }),
+      candidateVariant: buildLayoutVariantAdmission({ output: candidateOutput }),
+      currentOutput,
+    });
+
+    expect(createCacheEntryReuseProof(reuseDecision)).toEqual({
+      kind: "runtime-cache-entry",
+      decision: {
+        canReuse: true,
+        code: "CP_STATIC_LAYOUT_REUSE_PROVEN",
+        kind: "reuse",
+        reuseClass: "static-layout",
+      },
+    });
+    expect(createCacheEntryReuseProof(rejectedDecision)).toEqual({
+      kind: "runtime-cache-entry",
+      decision: {
+        canReuse: false,
+        code: "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE",
+        kind: "reject",
+        mode: "renderFresh",
+        scope: "affectedOutput",
+      },
+    });
+    expect(createCacheEntryReuseProof(null)).toEqual({
+      kind: "runtime-cache-entry",
+      decision: null,
     });
   });
 

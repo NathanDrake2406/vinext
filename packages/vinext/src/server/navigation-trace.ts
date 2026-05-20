@@ -3,6 +3,7 @@ export const NAVIGATION_TRACE_SCHEMA_VERSION = 0;
 export type NavigationTraceSchemaVersion = 0;
 
 export const NavigationTraceReasonCodes = {
+  cacheProofRejected: "NC_CACHE_REJECT",
   commitCurrent: "NC_COMMIT",
   interceptedCommitCurrent: "NC_INTERCEPT_COMMIT",
   interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT",
@@ -17,6 +18,7 @@ export const NavigationTraceReasonCodes = {
   rootBoundaryUnknown: "NC_ROOT_UNKNOWN",
   staleOperation: "NC_STALE",
 } satisfies Readonly<{
+  cacheProofRejected: "NC_CACHE_REJECT";
   commitCurrent: "NC_COMMIT";
   interceptedCommitCurrent: "NC_INTERCEPT_COMMIT";
   interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT";
@@ -52,6 +54,10 @@ export type NavigationTraceCode = NavigationTraceReasonCode | NavigationTraceTra
 
 export type NavigationTraceFieldName =
   | "activeNavigationId"
+  | "cacheProofCode"
+  | "cacheProofMode"
+  | "cacheProofReuseClass"
+  | "cacheProofScope"
   | "currentRootLayoutTreePath"
   | "currentVisibleCommitVersion"
   | "nextRootLayoutTreePath"
