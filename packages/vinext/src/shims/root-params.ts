@@ -1,8 +1,7 @@
+import { getOrCreateAls } from "./internal/als-registry.js";
 import {
   getRequestContext,
   isInsideUnifiedScope,
-  createRequestContext,
-  runWithRequestContext,
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
 
@@ -14,6 +13,7 @@ export type RootParamsState = {
 
 const _FALLBACK_KEY = Symbol.for("vinext.rootParams.fallback");
 const _g = globalThis as unknown as Record<PropertyKey, unknown>;
+const _als = getOrCreateAls<RootParamsState>("vinext.rootParams.als");
 
 const _fallbackState = (_g[_FALLBACK_KEY] ??= {
   rootParams: null,
@@ -23,7 +23,7 @@ function getState(): RootParamsState {
   if (isInsideUnifiedScope()) {
     return getRequestContext();
   }
-  return _fallbackState;
+  return _als.getStore() ?? _fallbackState;
 }
 
 export function pickRootParams(
@@ -58,7 +58,6 @@ export function runWithRootParamsScope<T>(
       ctx.rootParams = params;
     }, fn);
   } else {
-    const ctx = createRequestContext({ rootParams: params });
-    return runWithRequestContext(ctx, fn);
+    return _als.run({ rootParams: params }, fn);
   }
 }

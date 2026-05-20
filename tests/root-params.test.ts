@@ -4,6 +4,11 @@ import {
   runWithRequestContext,
   createRequestContext,
 } from "../packages/vinext/src/shims/unified-request-context.js";
+import { runWithNavigationContext } from "../packages/vinext/src/shims/navigation-state.js";
+import {
+  getNavigationContext,
+  setNavigationContext,
+} from "../packages/vinext/src/shims/navigation.js";
 
 describe("next/root-params shim", () => {
   it("resolves to undefined when called outside of root params scope", async () => {
@@ -60,6 +65,21 @@ describe("next/root-params shim", () => {
       langVal: "fr",
       nestedVal: "de",
       langValAfter: "fr",
+    });
+  });
+
+  it("proves sibling standalone state survives runWithRootParamsScope", async () => {
+    await runWithNavigationContext(async () => {
+      setNavigationContext({
+        pathname: "/blog/en",
+        searchParams: new URLSearchParams(),
+        params: { lang: "en" },
+      });
+
+      await runWithRootParamsScope({ lang: "en" }, async () => {
+        expect(getNavigationContext()?.pathname).toBe("/blog/en");
+        await expect(getRootParam("lang")).resolves.toBe("en");
+      });
     });
   });
 });
