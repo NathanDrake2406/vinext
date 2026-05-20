@@ -6,7 +6,7 @@
  * interface (shims/internal/utils.ts) and cast at the usage sites.
  */
 import type { NEXT_DATA } from "vinext/shims/internal/utils";
-import { isUnknownRecord } from "../utils/cache-control-metadata.js";
+import { isUnknownRecord } from "../utils/type-guards.js";
 
 export type VinextLinkPrefetchRoute = {
   patternParts: string[];
@@ -36,7 +36,14 @@ export function extractVinextNextDataJson(html: string): string | null {
   if (!assignment || assignment.index === undefined) return null;
 
   let start = assignment.index + assignment[0].length;
-  while (html[start] === " " || html[start] === "\n" || html[start] === "\t") start++;
+  while (
+    html[start] === " " ||
+    html[start] === "\n" ||
+    html[start] === "\t" ||
+    html[start] === "\r"
+  ) {
+    start++;
+  }
   if (html[start] !== "{") return null;
 
   let depth = 0;
@@ -81,10 +88,10 @@ export function parseVinextNextDataJson(json: string): BrowserVinextNextData {
 function isBrowserVinextNextData(value: unknown): value is BrowserVinextNextData {
   if (!isUnknownRecord(value)) return false;
 
-  const props = Reflect.get(value, "props");
-  const page = Reflect.get(value, "page");
-  const query = Reflect.get(value, "query");
-  const vinext = Reflect.get(value, "__vinext");
+  const props = value.props;
+  const page = value.page;
+  const query = value.query;
+  const vinext = value.__vinext;
 
   return (
     isUnknownRecord(props) &&

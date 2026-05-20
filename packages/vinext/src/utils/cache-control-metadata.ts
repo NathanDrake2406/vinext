@@ -1,6 +1,6 @@
-export function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+import { isUnknownRecord } from "./type-guards.js";
+
+export { isUnknownRecord } from "./type-guards.js";
 
 function readRecordField(
   ctx: Record<string, unknown> | undefined,

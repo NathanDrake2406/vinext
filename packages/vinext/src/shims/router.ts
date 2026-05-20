@@ -1005,7 +1005,11 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   // compatibility.
   routerEvents.emit("beforeHistoryChange", fullAppUrl, { shallow: false });
   void (async () => {
-    const result = await runNavigateClient(browserUrl, fullAppUrl);
+    const result = await runNavigateClient(
+      browserUrl,
+      fullAppUrl,
+      getPagesHtmlFetchUrl(browserUrl, window.__VINEXT_LOCALE__),
+    );
     if (result === "completed") {
       routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: false });
       restoreScrollPosition(e.state);
