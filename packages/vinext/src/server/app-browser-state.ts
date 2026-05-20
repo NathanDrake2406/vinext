@@ -150,7 +150,7 @@ function createOperationRecord(options: {
 
 export function isCacheRestorableAppPayloadMetadata(
   metadata: CacheRestorableAppPayloadMetadata,
-): boolean {
+): metadata is Required<CacheRestorableAppPayloadMetadata> {
   return metadata.cacheEntryReuseProof !== undefined;
 }
 

@@ -677,6 +677,9 @@ function parseCacheEntryReuseProofMetadata(value: unknown): CacheEntryReuseProof
     decision.kind === "reuse" &&
     decision.canReuse === true &&
     decision.code === "CP_STATIC_LAYOUT_REUSE_PROVEN" &&
+    // Static layout proofs are the only runtime cache-entry reuse class today.
+    // Extend this parser alongside any new reuse class before it can restore
+    // visited cache entries as commit-capable payloads.
     decision.reuseClass === "static-layout"
   ) {
     return {
