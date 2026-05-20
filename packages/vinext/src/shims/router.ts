@@ -32,7 +32,12 @@ import {
   toSameOriginAppPath,
 } from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
-import { addLocalePrefix, getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
+import {
+  addLocalePrefix,
+  getDomainLocaleUrl,
+  getLocalePathPrefix,
+  type DomainLocale,
+} from "../utils/domain-locale.js";
 import {
   addQueryParam,
   appendSearchParamsToUrl,
@@ -189,6 +194,9 @@ export function applyNavigationLocale(url: string, locale?: string): string {
   // Absolute and protocol-relative URLs must not be prefixed — locale
   // only applies to local paths.
   if (isAbsoluteOrProtocolRelativeUrl(url)) {
+    return url;
+  }
+  if (getLocalePathPrefix(url, window.__VINEXT_LOCALES__)) {
     return url;
   }
 

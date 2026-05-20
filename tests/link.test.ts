@@ -20,6 +20,7 @@ import Link, {
   resolveLinkPrefetchMode,
   useLinkStatus,
 } from "../packages/vinext/src/shims/link.js";
+import { navigatePagesRouterLink } from "../packages/vinext/src/client/pages-router-link-navigation.js";
 
 // Internal helpers re-exported or accessible via the router shim
 import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/router.js";
@@ -488,6 +489,32 @@ describe("Link locale handling", () => {
       }
       vi.resetModules();
     }
+  });
+
+  it("passes locale=false through the Pages Router Link handoff", async () => {
+    const push = vi.fn(async () => true);
+    const replace = vi.fn(async () => true);
+
+    await navigatePagesRouterLink(
+      { push, replace },
+      { href: "/", replace: false, scroll: true, locale: false },
+    );
+
+    expect(push).toHaveBeenCalledWith("/", undefined, { scroll: true, locale: false });
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("passes explicit locale through the Pages Router Link handoff", async () => {
+    const push = vi.fn(async () => true);
+    const replace = vi.fn(async () => true);
+
+    await navigatePagesRouterLink(
+      { push, replace },
+      { href: "/fr/about", replace: false, scroll: true, locale: "fr" },
+    );
+
+    expect(push).toHaveBeenCalledWith("/fr/about", undefined, { scroll: true, locale: "fr" });
+    expect(replace).not.toHaveBeenCalled();
   });
 });
 

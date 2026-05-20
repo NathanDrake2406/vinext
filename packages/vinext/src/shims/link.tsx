@@ -50,6 +50,7 @@ import { appendSearchParamsToUrl, type UrlQuery, urlQueryToSearchParams } from "
 import { addLocalePrefix, getDomainLocaleUrl, type DomainLocale } from "../utils/domain-locale.js";
 import { getI18nContext } from "./i18n-context.js";
 import type { VinextLinkPrefetchRoute, VinextNextData } from "../client/vinext-next-data.js";
+import { navigatePagesRouterLink } from "../client/pages-router-link-navigation.js";
 import { createRouteTrieCache, matchRouteWithTrie } from "../routing/route-matching.js";
 import { stripBasePath } from "../utils/base-path.js";
 
@@ -615,13 +616,8 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       // Pages Router: use the Router singleton
       try {
         const routerModule = await import("next/router");
-        // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- vinext's Router shim accepts (url, as, options)
-        const Router = routerModule.default as any;
-        if (replace) {
-          await Router.replace(absoluteHref, undefined, { scroll });
-        } else {
-          await Router.push(absoluteHref, undefined, { scroll });
-        }
+        const Router = routerModule.default;
+        await navigatePagesRouterLink(Router, { href: absoluteHref, replace, scroll, locale });
       } catch {
         // Fallback to hard navigation if router fails
         if (replace) {
