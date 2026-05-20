@@ -326,6 +326,13 @@ function getDefaultLocale(): string | undefined {
   return getI18nContext()?.defaultLocale;
 }
 
+function getCurrentLocale(): string | undefined {
+  if (typeof window !== "undefined") {
+    return window.__VINEXT_LOCALE__;
+  }
+  return getI18nContext()?.locale;
+}
+
 function getDomainLocales(): readonly DomainLocale[] | undefined {
   if (typeof window !== "undefined") {
     return (window.__NEXT_DATA__ as VinextNextData | undefined)?.domainLocales;
@@ -360,8 +367,8 @@ function applyLocaleToHref(href: string, locale: string | false | undefined): st
     return href;
   }
 
-  if (locale === undefined) {
-    // No locale prop: keep current behavior (href as-is)
+  const resolvedLocale = locale ?? getCurrentLocale();
+  if (resolvedLocale === undefined) {
     return href;
   }
 
@@ -371,12 +378,12 @@ function applyLocaleToHref(href: string, locale: string | false | undefined): st
     return href;
   }
 
-  const domainLocaleHref = getDomainLocaleHref(href, locale);
+  const domainLocaleHref = getDomainLocaleHref(href, resolvedLocale);
   if (domainLocaleHref) {
     return domainLocaleHref;
   }
 
-  return addLocalePrefix(href, locale, getDefaultLocale() ?? "");
+  return addLocalePrefix(href, resolvedLocale, getDefaultLocale() ?? "");
 }
 
 const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(

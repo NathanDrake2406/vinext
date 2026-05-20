@@ -99,8 +99,12 @@ type UrlObject = {
 type TransitionOptions = {
   shallow?: boolean;
   scroll?: boolean;
-  locale?: string;
+  locale?: string | false;
 };
+
+type BrowserNextData = NonNullable<Window["__NEXT_DATA__"]>;
+type NavigationNextData = BrowserNextData & VinextNextData;
+type NavigationNextDataQuery = BrowserNextData["query"] & VinextNextData["query"];
 
 type RouterEvents = {
   on(event: string, handler: (...args: unknown[]) => void): void;
@@ -153,6 +157,12 @@ function resolveNavigationTarget(
   return applyNavigationLocale(as ?? resolveUrl(url), locale);
 }
 
+function resolveTransitionLocale(locale: TransitionOptions["locale"]): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  if (locale === false) return window.__VINEXT_DEFAULT_LOCALE__;
+  return locale ?? window.__VINEXT_LOCALE__;
+}
+
 function getDomainLocales(): readonly DomainLocale[] | undefined {
   return (window.__NEXT_DATA__ as VinextNextData | undefined)?.domainLocales;
 }
@@ -185,6 +195,37 @@ export function applyNavigationLocale(url: string, locale?: string): string {
   if (domainLocalePath) return domainLocalePath;
 
   return addLocalePrefix(url, locale, window.__VINEXT_DEFAULT_LOCALE__ ?? "");
+}
+
+function isDefaultLocaleRootNavigation(url: string, locale: string | undefined): boolean {
+  if (typeof window === "undefined") return false;
+  if (!locale || locale !== window.__VINEXT_DEFAULT_LOCALE__) return false;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url, window.location.href);
+  } catch {
+    return false;
+  }
+
+  return stripBasePath(parsed.pathname, __basePath) === "/";
+}
+
+function getPagesHtmlFetchUrl(browserUrl: string, locale: string | undefined): string {
+  if (!isDefaultLocaleRootNavigation(browserUrl, locale)) return browserUrl;
+
+  // Browser URL stays unprefixed for the default locale, but the internal
+  // HTML fetch must bypass root Accept-Language detection.
+  const parsed = new URL(browserUrl, window.location.href);
+  const localeRoot = normalizePathTrailingSlash(`/${locale}`, __trailingSlash);
+  return normalizePathTrailingSlash(
+    toBrowserNavigationHref(
+      `${localeRoot}${parsed.search}${parsed.hash}`,
+      window.location.href,
+      __basePath,
+    ),
+    __trailingSlash,
+  );
 }
 
 /** Check if a URL is external (any URL scheme per RFC 3986, or protocol-relative) */
@@ -501,6 +542,30 @@ function scheduleHardNavigationAndThrow(url: string, message: string): never {
   throw new HardNavigationScheduledError(message);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeNextDataQuery(query: Record<string, unknown>): NavigationNextDataQuery {
+  const normalized: Record<string, string | string[]> = {};
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value === "string") {
+      normalized[key] = value;
+    } else if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      normalized[key] = [...value];
+    }
+  }
+  return normalized;
+}
+
+function normalizeVinextMetadata(value: unknown): VinextNextData["__vinext"] {
+  if (!isRecord(value)) return undefined;
+  return {
+    pageModuleUrl: typeof value.pageModuleUrl === "string" ? value.pageModuleUrl : undefined,
+    appModuleUrl: typeof value.appModuleUrl === "string" ? value.appModuleUrl : undefined,
+  };
+}
+
 /**
  * Perform client-side navigation: fetch the target page's HTML,
  * extract __NEXT_DATA__, and re-render the React root.
@@ -509,7 +574,77 @@ function scheduleHardNavigationAndThrow(url: string, message: string): never {
  * Throws on hard-navigation failures (non-OK response, missing data) so the
  * caller can distinguish success from failure for event emission.
  */
-async function navigateClient(url: string): Promise<void> {
+function extractNextDataJson(html: string): string | null {
+  const assignment = /<script(?:\s[^>]*)?>\s*window\.__NEXT_DATA__\s*=\s*/.exec(html);
+  if (!assignment || assignment.index === undefined) return null;
+
+  let start = assignment.index + assignment[0].length;
+  while (html[start] === " " || html[start] === "\n" || html[start] === "\t") start++;
+  if (html[start] !== "{") return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < html.length; index++) {
+    const char = html[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth++;
+    } else if (char === "}") {
+      depth--;
+      if (depth === 0) return html.slice(start, index + 1);
+    }
+  }
+
+  return null;
+}
+
+function parseNavigationNextData(json: string): NavigationNextData {
+  const parsed: unknown = JSON.parse(json);
+  if (!isRecord(parsed)) {
+    throw new Error("Navigation failed: invalid __NEXT_DATA__ payload");
+  }
+  if (!isRecord(parsed.props) || typeof parsed.page !== "string" || !isRecord(parsed.query)) {
+    throw new Error("Navigation failed: invalid __NEXT_DATA__ shape");
+  }
+
+  return {
+    ...parsed,
+    props: parsed.props,
+    page: parsed.page,
+    query: normalizeNextDataQuery(parsed.query),
+    buildId: typeof parsed.buildId === "string" ? parsed.buildId : "",
+    __vinext: normalizeVinextMetadata(parsed.__vinext),
+  } satisfies NavigationNextData;
+}
+
+function updateLocaleGlobalsFromNextData(nextData: VinextNextData): void {
+  if (nextData.locale !== undefined) {
+    window.__VINEXT_LOCALE__ = nextData.locale;
+  }
+  if (nextData.locales !== undefined) {
+    window.__VINEXT_LOCALES__ = nextData.locales;
+  }
+  if (nextData.defaultLocale !== undefined) {
+    window.__VINEXT_DEFAULT_LOCALE__ = nextData.defaultLocale;
+  }
+}
+
+async function navigateClient(url: string, fetchUrl = url): Promise<void> {
   if (typeof window === "undefined") return;
 
   const root = window.__VINEXT_ROOT__;
@@ -537,7 +672,7 @@ async function navigateClient(url: string): Promise<void> {
     // Fetch the target page's SSR HTML
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await fetch(fetchUrl, {
         headers: { Accept: "text/html" },
         signal: controller.signal,
       });
@@ -567,12 +702,12 @@ async function navigateClient(url: string): Promise<void> {
     assertStillCurrent();
 
     // Extract __NEXT_DATA__ from the HTML
-    const match = html.match(/<script>window\.__NEXT_DATA__\s*=\s*(.*?)<\/script>/);
-    if (!match) {
+    const nextDataJson = extractNextDataJson(html);
+    if (!nextDataJson) {
       scheduleHardNavigationAndThrow(url, "Navigation failed: missing __NEXT_DATA__ in response");
     }
 
-    const nextData = JSON.parse(match[1]);
+    const nextData = parseNavigationNextData(nextDataJson);
     const { pageProps } = nextData.props;
     // Defer writing window.__NEXT_DATA__ until just before root.render() —
     // writing it here would let a stale navigation briefly pollute the global
@@ -653,6 +788,7 @@ async function navigateClient(url: string): Promise<void> {
     // root.render() is synchronous. If any step here ever becomes async, add
     // another assertStillCurrent() before writing __NEXT_DATA__.
     window.__NEXT_DATA__ = nextData;
+    updateLocaleGlobalsFromNextData(nextData);
     root.render(element);
   } finally {
     // Clean up the abort controller if this navigation is still the active one
@@ -677,9 +813,10 @@ async function navigateClient(url: string): Promise<void> {
 async function runNavigateClient(
   fullUrl: string,
   resolvedUrl: string,
+  fetchUrl = fullUrl,
 ): Promise<"completed" | "cancelled" | "failed"> {
   try {
-    await navigateClient(fullUrl);
+    await navigateClient(fullUrl, fetchUrl);
     return "completed";
   } catch (err: unknown) {
     routerEvents.emit("routeChangeError", err, resolvedUrl, { shallow: false });
@@ -786,7 +923,8 @@ async function performNavigation(
   mode: "push" | "replace",
   onStateUpdate?: () => void,
 ): Promise<boolean> {
-  let resolved = resolveNavigationTarget(url, as, options?.locale);
+  const navigationLocale = resolveTransitionLocale(options?.locale);
+  let resolved = resolveNavigationTarget(url, as, navigationLocale);
 
   // External URLs — delegate to browser (unless same-origin)
   if (isExternalUrl(resolved)) {
@@ -804,6 +942,7 @@ async function performNavigation(
     toBrowserNavigationHref(resolved, window.location.href, __basePath),
     __trailingSlash,
   );
+  const htmlFetchUrl = getPagesHtmlFetchUrl(full, navigationLocale);
   const shallow = options?.shallow ?? false;
   const doScroll = options?.scroll !== false;
 
@@ -824,7 +963,7 @@ async function performNavigation(
   routerEvents.emit("beforeHistoryChange", resolved, { shallow });
   updateHistory(mode, full);
   if (!shallow) {
-    const result = await runNavigateClient(full, resolved);
+    const result = await runNavigateClient(full, resolved, htmlFetchUrl);
     if (result === "cancelled") return true;
     if (result === "failed") return false;
   }
