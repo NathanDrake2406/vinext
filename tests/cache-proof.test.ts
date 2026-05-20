@@ -953,6 +953,12 @@ describe("disabled cache proof model", () => {
           values: ["settings"],
         },
         {
+          name: "sort",
+          privacy: "public",
+          source: "search",
+          values: ["asc"],
+        },
+        {
           name: "team",
           privacy: "public",
           source: "params",
@@ -973,13 +979,14 @@ describe("disabled cache proof model", () => {
       fallback: {
         code: "CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN",
         fields: {
-          dimensionCount: 3,
+          dimensionCount: 4,
           sources: ["params", "route", "search"],
         },
       },
     });
     expect(JSON.stringify(proof)).not.toContain("/dashboard/settings");
     expect(JSON.stringify(proof)).not.toContain("alpha");
+    expect(JSON.stringify(proof)).not.toContain("asc");
   });
 
   it("falls back to render when artifact compatibility is unknown or incompatible", () => {

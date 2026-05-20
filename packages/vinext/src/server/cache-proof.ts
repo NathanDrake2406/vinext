@@ -1414,7 +1414,7 @@ export function buildStaticLayoutReuseProof(
   if (input.candidateVariant.dimensions.length > 0) {
     return rejectStaticLayoutReuseProof("CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN", {
       dimensionCount: input.candidateVariant.dimensions.length,
-      sources: input.candidateVariant.dimensions.map((dimension) => dimension.source).sort(),
+      sources: sortedUnique(input.candidateVariant.dimensions.map((dimension) => dimension.source)),
     });
   }
 
