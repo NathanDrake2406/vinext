@@ -41,14 +41,15 @@ export function setRootParams(params: RootParams | null): void {
   getState().rootParams = params;
 }
 
-export function getRootParams(): RootParams | null {
-  return getState().rootParams;
-}
-
 export function getRootParam(name: string): Promise<string | string[] | undefined> {
   return Promise.resolve(getState().rootParams?.[name]);
 }
 
+export function runWithRootParamsScope<T>(params: RootParams, fn: () => Promise<T>): Promise<T>;
+export function runWithRootParamsScope<T>(
+  params: RootParams,
+  fn: () => T | Promise<T>,
+): T | Promise<T>;
 export function runWithRootParamsScope<T>(
   params: RootParams,
   fn: () => T | Promise<T>,

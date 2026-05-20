@@ -17,17 +17,8 @@ export function createAppPrerenderStaticParamsResolver(
   const generateStaticParamsFns = sources.filter(isGenerateStaticParamsFunction);
   if (generateStaticParamsFns.length === 0) return null;
 
-  const rootParamNamesSet = rootParamNames ? new Set(rootParamNames) : null;
-  const filterRootParams = (params: RootParams): RootParams => {
-    if (!rootParamNamesSet) return params;
-    const picked: RootParams = {};
-    for (const [key, value] of Object.entries(params)) {
-      if (rootParamNamesSet.has(key)) {
-        picked[key] = value;
-      }
-    }
-    return picked;
-  };
+  const filterRootParams = (params: RootParams): RootParams =>
+    pickRootParams(params, rootParamNames ?? []);
 
   if (generateStaticParamsFns.length === 1) {
     const single = generateStaticParamsFns[0];
