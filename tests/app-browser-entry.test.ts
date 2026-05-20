@@ -74,15 +74,27 @@ import type {
   GraphVersion,
   RootBoundaryId,
   RouteManifest,
+  RouteManifestInterception,
   RouteManifestRootBoundary,
   RouteManifestRoute,
+  RouteManifestSlotBinding,
   StaticSegmentGraph,
 } from "../packages/vinext/src/routing/app-route-graph.js";
 
 type TestRouteManifestRoute = {
+  id?: string;
+  interceptions?: readonly TestRouteManifestInterception[];
   layoutIds: readonly string[];
   pattern: string;
   rootBoundaryId: string | null;
+  slotBindings?: readonly AppElementsSlotBinding[];
+};
+
+type TestRouteManifestInterception = {
+  ownerLayoutId: string | null;
+  slotId: string;
+  sourcePattern: string;
+  targetPattern: string;
 };
 
 function createResolvedElements(
@@ -144,12 +156,20 @@ function createInterceptionProof(
 
 function createTestRouteManifest(routes: readonly TestRouteManifestRoute[]): RouteManifest {
   const manifestRoutes = new Map<string, RouteManifestRoute>();
+  const slotBindings = new Map<string, RouteManifestSlotBinding>();
+  const interceptions = new Map<string, RouteManifestInterception>();
+  const interceptionsBySlotId = new Map<string, RouteManifestInterception[]>();
   const rootBoundaries = new Map<RootBoundaryId, RouteManifestRootBoundary>();
+  const routeIdByPattern = new Map(
+    routes.map((route) => [route.pattern, route.id ?? `route:${route.pattern}`]),
+  );
 
   for (const route of routes) {
-    const routeId = `route:${route.pattern}`;
+    const routeId = route.id ?? `route:${route.pattern}`;
     const rootBoundaryId =
       route.rootBoundaryId === null ? null : (route.rootBoundaryId as RootBoundaryId);
+    const routeSlotBindings = route.slotBindings ?? [];
+    const slotIds = routeSlotBindings.map((binding) => binding.slotId).sort();
     const patternParts = route.pattern.split("/").filter((segment) => segment.length > 0);
     manifestRoutes.set(routeId, {
       id: routeId,
@@ -164,9 +184,48 @@ function createTestRouteManifest(routes: readonly TestRouteManifestRoute[]): Rou
       rootBoundaryId,
       rootParamNames: [],
       routeHandlerId: null,
-      slotIds: [],
+      slotIds,
       templateIds: [],
     });
+
+    for (const binding of routeSlotBindings) {
+      slotBindings.set(`${routeId}::${binding.slotId}`, {
+        defaultId: binding.state === "default" ? `default:${binding.slotId}` : null,
+        id: `${routeId}::${binding.slotId}`,
+        ownerLayoutId: binding.ownerLayoutId,
+        routeId,
+        routeSegments: null,
+        slotId: binding.slotId,
+        state: binding.state,
+      });
+    }
+
+    for (const interception of route.interceptions ?? []) {
+      const targetPatternParts = interception.targetPattern
+        .split("/")
+        .filter((segment) => segment.length > 0);
+      const id = `interception:${interception.slotId}:${interception.sourcePattern}->${interception.targetPattern}`;
+      const manifestInterception = {
+        id,
+        interceptingRouteId: routeIdByPattern.get(interception.sourcePattern) ?? null,
+        ownerLayoutId: interception.ownerLayoutId,
+        slotId: interception.slotId,
+        sourcePattern: interception.sourcePattern,
+        sourcePatternParts: interception.sourcePattern
+          .split("/")
+          .filter((segment) => segment.length > 0),
+        targetPattern: interception.targetPattern,
+        targetPatternParts,
+        targetRouteId: routeIdByPattern.get(interception.targetPattern) ?? null,
+      };
+      interceptions.set(id, manifestInterception);
+      const slotInterceptions = interceptionsBySlotId.get(interception.slotId);
+      if (slotInterceptions) {
+        slotInterceptions.push(manifestInterception);
+      } else {
+        interceptionsBySlotId.set(interception.slotId, [manifestInterception]);
+      }
+    }
 
     const rootLayoutId = route.layoutIds[0];
     if (rootBoundaryId !== null && rootLayoutId !== undefined) {
@@ -181,14 +240,14 @@ function createTestRouteManifest(routes: readonly TestRouteManifestRoute[]): Rou
   const segmentGraph: StaticSegmentGraph = {
     boundaries: new Map(),
     defaults: new Map(),
-    interceptions: new Map(),
-    interceptionsBySlotId: new Map(),
+    interceptions,
+    interceptionsBySlotId,
     layouts: new Map(),
     pages: new Map(),
     rootBoundaries,
     routeHandlers: new Map(),
     routes: manifestRoutes,
-    slotBindings: new Map(),
+    slotBindings,
     slots: new Map(),
     templates: new Map(),
   };
@@ -197,6 +256,118 @@ function createTestRouteManifest(routes: readonly TestRouteManifestRoute[]): Rou
     graphVersion: "graph:test" as GraphVersion,
     segmentGraph,
   };
+}
+
+function rootBoundaryIdFromTreePath(rootLayoutTreePath: string | null): string | null {
+  return rootLayoutTreePath === null ? null : `root-boundary:${rootLayoutTreePath}`;
+}
+
+function normalizeTestRoutePattern(pathname: string): string {
+  try {
+    return decodeURI(pathname);
+  } catch {
+    return pathname;
+  }
+}
+
+function routeIdWithoutInterceptionContext(routeId: string): string {
+  const parsed = AppElementsWire.parseElementKey(routeId);
+  if (parsed?.kind !== "route") return routeId;
+  return AppElementsWire.encodeRouteId(parsed.path, null);
+}
+
+function createRouteManifestForPendingCommit(
+  currentState: AppRouterState,
+  pending: Awaited<ReturnType<typeof createPendingNavigationCommit>>,
+): RouteManifest {
+  const currentPattern =
+    currentState.interception?.sourceMatchedUrl ??
+    normalizeTestRoutePattern(currentState.navigationSnapshot.pathname);
+  const currentRouteId =
+    currentState.interception?.sourceRouteId ??
+    routeIdWithoutInterceptionContext(currentState.routeId);
+  const currentRoute = {
+    id: currentRouteId,
+    layoutIds: currentState.layoutIds,
+    pattern: currentPattern,
+    rootBoundaryId: rootBoundaryIdFromTreePath(currentState.rootLayoutTreePath),
+    slotBindings: currentState.slotBindings,
+  };
+  const pendingInterception = pending.action.interception;
+
+  if (pendingInterception !== null) {
+    const currentMatchesSource =
+      currentRouteId === pendingInterception.sourceRouteId &&
+      currentPattern === pendingInterception.sourceMatchedUrl;
+    const sourceLayoutIds = currentMatchesSource
+      ? currentState.layoutIds
+      : pending.action.layoutIds;
+    const sourceRootLayoutTreePath = currentMatchesSource
+      ? currentState.rootLayoutTreePath
+      : pending.rootLayoutTreePath;
+    return createTestRouteManifest([
+      currentRoute,
+      {
+        id: pendingInterception.sourceRouteId,
+        interceptions: [
+          {
+            ownerLayoutId:
+              pending.action.slotBindings.find(
+                (binding) => binding.slotId === pendingInterception.slotId,
+              )?.ownerLayoutId ?? null,
+            slotId: pendingInterception.slotId,
+            sourcePattern: pendingInterception.sourceMatchedUrl,
+            targetPattern: pendingInterception.targetMatchedUrl,
+          },
+        ],
+        layoutIds: sourceLayoutIds,
+        pattern: pendingInterception.sourceMatchedUrl,
+        rootBoundaryId: rootBoundaryIdFromTreePath(sourceRootLayoutTreePath),
+        slotBindings: pending.action.slotBindings,
+      },
+      {
+        id: pendingInterception.targetRouteId,
+        layoutIds: pending.action.layoutIds,
+        pattern: pendingInterception.targetMatchedUrl,
+        rootBoundaryId: rootBoundaryIdFromTreePath(pending.rootLayoutTreePath),
+      },
+    ]);
+  }
+
+  return createTestRouteManifest([
+    currentRoute,
+    {
+      id: routeIdWithoutInterceptionContext(pending.routeId),
+      layoutIds: pending.action.layoutIds,
+      pattern: normalizeTestRoutePattern(pending.action.navigationSnapshot.pathname),
+      rootBoundaryId: rootBoundaryIdFromTreePath(pending.rootLayoutTreePath),
+      slotBindings: pending.action.slotBindings,
+    },
+  ]);
+}
+
+function createRootChangeRouteManifest(
+  options: {
+    currentPattern?: string;
+    currentRouteId?: string;
+    targetPattern?: string;
+    targetRouteId?: string;
+  } = {},
+): RouteManifest {
+  return createTestRouteManifest([
+    {
+      id: options.currentRouteId ?? "route:/initial",
+      layoutIds: [AppElementsWire.encodeLayoutId("/(marketing)")],
+      pattern: options.currentPattern ?? "/initial",
+      rootBoundaryId: "root-boundary:/(marketing)",
+    },
+    {
+      id: options.targetRouteId ?? "route:/dashboard",
+      layoutIds: [AppElementsWire.encodeLayoutId("/(dashboard)")],
+      pattern: options.targetPattern ?? "/dashboard",
+      rootBoundaryId: "root-boundary:/(dashboard)",
+    },
+  ]);
 }
 
 type TestPendingDispositionOptions = {
@@ -235,6 +406,7 @@ async function resolveTestPendingNavigationCommitDispositionDecision(
     activeNavigationId: options.activeNavigationId,
     currentState,
     pending,
+    routeManifest: createRouteManifestForPendingCommit(currentState, pending),
     startedNavigationId: options.startedNavigationId,
   });
 }
@@ -310,6 +482,7 @@ async function applyApprovedTestCommit(
     activeNavigationId,
     currentState: state,
     pending,
+    routeManifest: createRouteManifestForPendingCommit(state, pending),
     startedNavigationId: options.startedNavigationId ?? activeNavigationId,
     targetHref: options.targetHref ?? "https://example.com/initial",
   });
@@ -640,6 +813,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 1,
       currentState: state,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(state, pending),
       startedNavigationId: 1,
       targetHref: "https://example.com/next",
     });
@@ -761,6 +935,7 @@ describe("app browser entry state helpers", () => {
         activeNavigationId: 3,
         currentState,
         pending,
+        routeManifest: createRouteManifestForPendingCommit(currentState, pending),
         startedNavigationId: 3,
       }).disposition,
     ).toBe("hard-navigate");
@@ -829,6 +1004,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 1,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 1,
       targetHref: "https://example.com/dashboard",
     });
@@ -863,6 +1039,7 @@ describe("app browser entry state helpers", () => {
         activeNavigationId: 5,
         currentState,
         pending,
+        routeManifest: createRouteManifestForPendingCommit(currentState, pending),
         startedNavigationId: 4,
       }).disposition,
     ).toBe("skip");
@@ -887,6 +1064,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 7,
       currentState: latestState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(latestState, pending),
       startedNavigationId: 7,
       targetHref: "https://example.com/dashboard",
     });
@@ -937,6 +1115,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 8,
       currentState: latestState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(latestState, pending),
       startedNavigationId: 8,
       targetHref: "https://example.com/previous",
     });
@@ -1068,7 +1247,7 @@ describe("app browser entry state helpers", () => {
     ]);
   });
 
-  it("traces unknown root-layout identity as a legacy soft-commit fallback", async () => {
+  it("traces unknown root-layout identity without preserving absent slots", async () => {
     const decision = await resolveTestPendingNavigationCommitDispositionDecision({
       activeNavigationId: 2,
       currentVisibleCommitVersion: 0,
@@ -1158,6 +1337,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 1,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 1,
     });
 
@@ -1230,6 +1410,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 1,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 1,
     });
 
@@ -1243,6 +1424,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 1,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 1,
       targetHref: "https://example.com/feed",
     });
@@ -1295,6 +1477,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 2,
       currentState: contextOnlyState,
       pending: interceptedPending,
+      routeManifest: createRouteManifestForPendingCommit(contextOnlyState, interceptedPending),
       startedNavigationId: 2,
       targetHref: "https://example.com/photos/42",
     });
@@ -1324,6 +1507,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 4,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 4,
       targetHref: "https://example.com/dashboard",
     });
@@ -1371,7 +1555,7 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("traces unknown root-layout approval as a visible commit with an uncertainty reason", async () => {
+  it("traces unknown root-layout approval as an unproven payload commit", async () => {
     const currentState = createState();
     const pending = await createPendingNavigationCommit({
       currentState,
@@ -1386,6 +1570,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 6,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 6,
       targetHref: "https://example.com/legacy-payload",
     });
@@ -1394,7 +1579,7 @@ describe("app browser entry state helpers", () => {
     if (approval.decision.disposition !== "commit") {
       throw new Error("Expected visible commit approval");
     }
-    expect(approval.decision.preserveAbsentSlots).toBe(true);
+    expect(approval.decision.preserveAbsentSlots).toBe(false);
     expect(approval.decision.trace.entries[0]?.code).toBe(
       NavigationTraceTransactionCodes.visibleCommit,
     );
@@ -1476,6 +1661,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 4,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 4,
       targetHref: "https://example.com/next",
     });
@@ -1514,6 +1700,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 4,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 4,
       targetHref: "https://example.com/feed",
     });
@@ -1549,6 +1736,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 8,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 7,
       targetHref: "https://example.com/dashboard",
     });
@@ -1565,6 +1753,7 @@ describe("app browser entry state helpers", () => {
       activeNavigationId: 8,
       currentState,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
       startedNavigationId: 8,
       targetHref: "https://example.com/dashboard?from=planner",
     });
@@ -2304,7 +2493,7 @@ describe("app browser navigation controller", () => {
     }
   });
 
-  it("hard-navigates same-URL server action payloads when the root layout changes", async () => {
+  it("does not hard-navigate same-URL server action payloads from snapshot root topology alone", async () => {
     const actionTargetHref = "https://example.com/marketing?from=action";
     const initialState = createState({
       rootLayoutTreePath: "/(marketing)",
@@ -2331,9 +2520,8 @@ describe("app browser navigation controller", () => {
       );
 
       expect(result).toBeUndefined();
-      expect(assign).toHaveBeenCalledTimes(1);
-      expect(assign).toHaveBeenCalledWith(actionTargetHref);
-      expect(stateRef.current.routeId).toBe("route:/marketing");
+      expect(assign).not.toHaveBeenCalled();
+      expect(stateRef.current.routeId).toBe("route:/dashboard");
     } finally {
       detach();
     }
@@ -2798,6 +2986,7 @@ describe("app browser root-layout hard navigation", () => {
   it("renderNavigationPayload calls window.location.assign when root layout changes", async () => {
     const { controller, detach } = createControllerHarness(
       createState({ rootLayoutTreePath: "/(marketing)" }),
+      { getRouteManifest: () => createRootChangeRouteManifest() },
     );
     const { assign } = stubWindow("https://example.com/marketing");
     const createNavigationCommitEffect = vi.fn();
@@ -2809,7 +2998,7 @@ describe("app browser root-layout hard navigation", () => {
         createNavigationCommitEffect,
         historyUpdateMode: "push",
         navigationSnapshot: createClientNavigationRenderSnapshot(
-          "https://example.com/marketing",
+          "https://example.com/dashboard",
           {},
         ),
         nextElements: Promise.resolve(
@@ -2837,6 +3026,7 @@ describe("app browser root-layout hard navigation", () => {
   it("hard-navigate settles the pending router state before navigating away", async () => {
     const { controller, detach } = createControllerHarness(
       createState({ rootLayoutTreePath: "/(marketing)" }),
+      { getRouteManifest: () => createRootChangeRouteManifest() },
     );
     const { assign } = stubWindow("https://example.com/marketing");
     const pendingRouterState = controller.beginPendingBrowserRouterState();
@@ -2851,7 +3041,7 @@ describe("app browser root-layout hard navigation", () => {
         createNavigationCommitEffect: () => () => {},
         historyUpdateMode: "push",
         navigationSnapshot: createClientNavigationRenderSnapshot(
-          "https://example.com/marketing",
+          "https://example.com/dashboard",
           {},
         ),
         nextElements: Promise.resolve(
@@ -2882,6 +3072,7 @@ describe("app browser root-layout hard navigation", () => {
   it("blocks a repeated same-target root-boundary hard navigation to prevent reload loops", async () => {
     const { controller, detach } = createControllerHarness(
       createState({ rootLayoutTreePath: "/(marketing)" }),
+      { getRouteManifest: () => createRootChangeRouteManifest() },
     );
     const { assign, storage } = stubWindow("https://example.com/marketing");
 
@@ -2893,7 +3084,7 @@ describe("app browser root-layout hard navigation", () => {
           createNavigationCommitEffect: () => () => {},
           historyUpdateMode: "push",
           navigationSnapshot: createClientNavigationRenderSnapshot(
-            "https://example.com/marketing",
+            "https://example.com/dashboard",
             {},
           ),
           nextElements: Promise.resolve(
@@ -2947,6 +3138,7 @@ describe("app browser root-layout hard navigation", () => {
   it("allows cross-page hard navigation when the stored guard target is not the current URL", async () => {
     const { controller, detach } = createControllerHarness(
       createState({ rootLayoutTreePath: "/(marketing)" }),
+      { getRouteManifest: () => createRootChangeRouteManifest() },
     );
     const { assign } = stubWindow("https://example.com/marketing");
 
@@ -2958,7 +3150,7 @@ describe("app browser root-layout hard navigation", () => {
           createNavigationCommitEffect: () => () => {},
           historyUpdateMode: "push",
           navigationSnapshot: createClientNavigationRenderSnapshot(
-            "https://example.com/marketing",
+            "https://example.com/dashboard",
             {},
           ),
           nextElements: Promise.resolve(
@@ -2985,7 +3177,7 @@ describe("app browser root-layout hard navigation", () => {
           createNavigationCommitEffect: () => () => {},
           historyUpdateMode: "push",
           navigationSnapshot: createClientNavigationRenderSnapshot(
-            "https://example.com/settings",
+            "https://example.com/dashboard",
             {},
           ),
           nextElements: Promise.resolve(
@@ -3109,7 +3301,7 @@ describe("app browser entry previousNextUrl helpers", () => {
     });
   });
 
-  it("classifies pending commits in one step for same-url payloads", async () => {
+  it("classifies same-url payloads without treating snapshot root topology as authority", async () => {
     const currentState = createState({
       rootLayoutTreePath: "/(marketing)",
     });
@@ -3126,11 +3318,11 @@ describe("app browser entry previousNextUrl helpers", () => {
       type: "navigate",
     });
 
-    expect(result.decision.disposition).toBe("hard-navigate");
+    expect(result.decision.disposition).toBe("commit");
     expect(result.pending.routeId).toBe("route:/dashboard");
     expect(result.pending.action.renderId).toBe(3);
-    expect(result.trace.entries[0]?.code).toBe(NavigationTraceTransactionCodes.hardNavigate);
-    expect(result.trace.entries[1]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryChanged);
+    expect(result.trace.entries[0]?.code).toBe(NavigationTraceTransactionCodes.visibleCommit);
+    expect(result.trace.entries[1]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
     expect(result.trace.entries[1]?.fields.targetHref).toBe(
       "https://example.com/dashboard?action=same-url",
     );
@@ -3301,6 +3493,7 @@ describe("app browser entry previousNextUrl helpers", () => {
       activeNavigationId: 1,
       currentState: state,
       pending,
+      routeManifest: createRouteManifestForPendingCommit(state, pending),
       startedNavigationId: 1,
       targetHref: "https://example.com/feed/comments",
     });

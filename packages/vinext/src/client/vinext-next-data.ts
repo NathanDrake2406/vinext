@@ -6,7 +6,7 @@
  * interface (shims/internal/utils.ts) and cast at the usage sites.
  */
 import type { NEXT_DATA } from "vinext/shims/internal/utils";
-import { isUnknownRecord } from "../utils/type-guards.js";
+import { isUnknownRecord } from "../utils/record.js";
 
 export type VinextLinkPrefetchRoute = {
   patternParts: string[];

@@ -4,7 +4,7 @@ import {
   matchRoutePatternPrefix,
   type RoutePatternParams,
 } from "../routing/route-pattern.js";
-import { normalizePathnameForRouteMatch } from "../routing/utils.js";
+import { splitPathnameForRouteMatch } from "../routing/utils.js";
 
 type AppRscRouteParams = RoutePatternParams;
 
@@ -68,7 +68,7 @@ function createRouteParams(): AppRscRouteParams {
 function appRscPathnameParts(pathname: string): string[] {
   const pathOnly = pathname.split("?")[0];
   const normalized = pathOnly === "/" ? "/" : pathOnly.replace(/\/$/, "");
-  return normalizePathnameForRouteMatch(normalized).split("/").filter(Boolean);
+  return splitPathnameForRouteMatch(normalized);
 }
 
 export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(

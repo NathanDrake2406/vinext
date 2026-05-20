@@ -123,6 +123,10 @@ export function normalizePathnameForRouteMatch(pathname: string): string {
     .join("/");
 }
 
+export function splitPathnameForRouteMatch(pathname: string): string[] {
+  return normalizePathnameForRouteMatch(pathname).split("/").filter(Boolean);
+}
+
 /**
  * Strict pathname normalization for live request handling.
  * Throws on malformed percent-encoding so callers can return 400.

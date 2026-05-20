@@ -1,6 +1,5 @@
-import { isUnknownRecord } from "./type-guards.js";
-
-export { isUnknownRecord } from "./type-guards.js";
+import { isUnknownRecord } from "./record.js";
+export { isUnknownRecord } from "./record.js";
 
 function readRecordField(
   ctx: Record<string, unknown> | undefined,

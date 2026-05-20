@@ -159,7 +159,7 @@ describe("nuqs", () => {
 
     const optimizedAdapter = readFileSync(path.join(depsDir, optimizedAdapterFile!), "utf8");
 
-    expect(optimizedAdapter).toContain("__VINEXT_RSC_NAVIGATE__");
+    expect(optimizedAdapter).toContain("vinext.navigationRuntime");
     expect(optimizedAdapter).toContain("vinext.navigation.readonlySearchParams");
     expect(optimizedAdapter).not.toContain("node_modules/.pnpm/next@");
   });

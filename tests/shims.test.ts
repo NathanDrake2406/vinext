@@ -125,11 +125,19 @@ describe("next/navigation shim", () => {
         replaceState: () => {},
       },
       addEventListener: () => {},
-      __VINEXT_CLEAR_NAV_CACHES__: () => {
-        calls.push("clear");
-      },
-      __VINEXT_RSC_NAVIGATE__: async (_href: string, _depth: number, kind: string) => {
-        calls.push(`navigate:${kind}`);
+      [Symbol.for("vinext.navigationRuntime")]: {
+        bootstrap: {
+          routeManifest: null,
+          rsc: undefined,
+        },
+        functions: {
+          clearNavigationCaches: () => {
+            calls.push("clear");
+          },
+          navigate: async (_href: string, _depth: number, kind: string) => {
+            calls.push(`navigate:${kind}`);
+          },
+        },
       },
     };
     (globalThis as any).window = win;

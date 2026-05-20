@@ -1,5 +1,5 @@
 import { matchRoutePattern, matchRoutePatternPrefix } from "../routing/route-pattern.js";
-import { normalizePathnameForRouteMatch } from "../routing/utils.js";
+import { splitPathnameForRouteMatch } from "../routing/utils.js";
 import type {
   RouteManifest,
   RouteManifestInterception,
@@ -99,7 +99,7 @@ export type CommitProposal = {
   preserveAbsentSlots: boolean;
   preserveElementIds: readonly string[];
   preservePreviousSlotIds: readonly string[];
-  reason: "currentRootBoundary" | "interceptedCurrentRootBoundary" | "rootBoundaryUnknownFallback";
+  reason: "currentRootBoundary" | "interceptedCurrentRootBoundary" | "unprovenTopologyFallback";
   targetSnapshot: RouteSnapshotV0;
 };
 
@@ -108,7 +108,7 @@ export type HardNavigationReason = "interceptionProofRejected" | "rootBoundaryCh
 export type RootBoundaryTransition =
   | "currentRootBoundary"
   | "rootBoundaryChanged"
-  | "rootBoundaryUnknownFallback";
+  | "rootBoundaryUnknown";
 
 export type NavigationDecisionV0 =
   | {
@@ -157,6 +157,15 @@ type RouteTopologySnapshot = {
   rootLayoutTreePath: string | null;
   slotBindings: readonly ParallelSlotBindingSnapshotV0[];
 };
+
+type RouteTopologyResolution =
+  | {
+      kind: "known";
+      topology: RouteTopologySnapshot;
+    }
+  | {
+      kind: "unknown";
+    };
 
 type RouteTopologySlotBindingSource = "snapshot" | "manifestTarget";
 
@@ -220,9 +229,7 @@ function getMatchedUrlPathname(matchedUrl: string): string {
 }
 
 function splitMatchedUrlIntoRouteParts(matchedUrl: string): string[] {
-  return normalizePathnameForRouteMatch(getMatchedUrlPathname(matchedUrl))
-    .split("/")
-    .filter((part) => part.length > 0);
+  return splitPathnameForRouteMatch(getMatchedUrlPathname(matchedUrl));
 }
 
 function findRouteManifestRouteByMatchedUrl(
@@ -310,13 +317,13 @@ function resolveRouteTopologySnapshot(options: {
   routeManifest: RouteManifest | null;
   slotBindingSource: RouteTopologySlotBindingSource;
   snapshot: RouteSnapshotV0;
-}): RouteTopologySnapshot {
+}): RouteTopologyResolution {
   const route =
     options.routeManifest === null
       ? null
       : findRouteManifestRouteForSnapshot(options.routeManifest, options.snapshot);
   if (route === null || options.routeManifest === null) {
-    return createSnapshotRouteTopology(options.snapshot);
+    return { kind: "unknown" };
   }
 
   // Intercepted targets carry the source route's tree topology, not the direct
@@ -325,12 +332,15 @@ function resolveRouteTopologySnapshot(options: {
     options.slotBindingSource === "manifestTarget" && options.snapshot.interception === null;
 
   return {
-    layoutIds: route.layoutIds,
-    rootBoundaryId: route.rootBoundaryId,
-    rootLayoutTreePath: resolveRouteManifestRootLayoutTreePath(options.routeManifest, route),
-    slotBindings: shouldUseManifestSlotBindings
-      ? resolveRouteManifestSlotBindings(options.routeManifest, route)
-      : options.snapshot.slotBindings,
+    kind: "known",
+    topology: {
+      layoutIds: route.layoutIds,
+      rootBoundaryId: route.rootBoundaryId,
+      rootLayoutTreePath: resolveRouteManifestRootLayoutTreePath(options.routeManifest, route),
+      slotBindings: shouldUseManifestSlotBindings
+        ? resolveRouteManifestSlotBindings(options.routeManifest, route)
+        : options.snapshot.slotBindings,
+    },
   };
 }
 
@@ -392,10 +402,7 @@ function classifyRootBoundaryTransition(
   nextRootBoundaryId: string | null,
 ): RootBoundaryTransition {
   if (currentRootBoundaryId === null || nextRootBoundaryId === null) {
-    // Both null directions intentionally share the fallback because unresolved
-    // routes or legacy callers cannot prove either same-root reuse or root
-    // changes from semantic topology.
-    return "rootBoundaryUnknownFallback";
+    return "rootBoundaryUnknown";
   }
 
   return currentRootBoundaryId === nextRootBoundaryId
@@ -707,9 +714,11 @@ function planFlightResponseArrived(options: {
     snapshot: targetSnapshot,
   });
   const traceFields = createRootBoundaryTraceFields({
-    currentRootLayoutTreePath: currentTopology.rootLayoutTreePath,
+    currentRootLayoutTreePath:
+      currentTopology.kind === "known" ? currentTopology.topology.rootLayoutTreePath : null,
     event: options.event,
-    nextRootLayoutTreePath: targetTopology.rootLayoutTreePath,
+    nextRootLayoutTreePath:
+      targetTopology.kind === "known" ? targetTopology.topology.rootLayoutTreePath : null,
     state: options.state,
   });
 
@@ -727,12 +736,20 @@ function planFlightResponseArrived(options: {
   // only explicit __interception proof enters the preservation branch.
   const hasInterceptedPayload = targetSnapshot.interception !== null;
   if (hasInterceptedPayload) {
+    if (currentTopology.kind === "unknown" || targetTopology.kind === "unknown") {
+      return createInterceptionProofRejectedDecision({
+        event: options.event,
+        reasonCode: NavigationTraceReasonCodes.interceptedRejectedUndeclaredTopology,
+        traceFields,
+      });
+    }
+
     const validation = validateInterceptedPreservation({
       currentSnapshot: options.state.visibleSnapshot,
-      currentTopology,
+      currentTopology: currentTopology.topology,
       routeManifest: options.routeManifest,
       targetSnapshot,
-      targetTopology,
+      targetTopology: targetTopology.topology,
     });
     if (validation.kind === "rejected") {
       return createInterceptionProofRejectedDecision({
@@ -759,10 +776,13 @@ function planFlightResponseArrived(options: {
     };
   }
 
-  const transition = classifyRootBoundaryTransition(
-    currentTopology.rootBoundaryId,
-    targetTopology.rootBoundaryId,
-  );
+  const transition =
+    currentTopology.kind === "unknown" || targetTopology.kind === "unknown"
+      ? "rootBoundaryUnknown"
+      : classifyRootBoundaryTransition(
+          currentTopology.topology.rootBoundaryId,
+          targetTopology.topology.rootBoundaryId,
+        );
 
   if (transition === "rootBoundaryChanged") {
     return {
@@ -774,17 +794,17 @@ function planFlightResponseArrived(options: {
     };
   }
 
-  if (transition === "rootBoundaryUnknownFallback") {
-    // Unknown root identity is an uncertainty fallback, not evidence that
-    // reuse is safe. It remains only for callers without a manifest or routes
-    // that cannot be matched back to RouteManifest topology.
+  if (transition === "rootBoundaryUnknown") {
+    // Unknown topology is not semantic proof. The event may still commit its
+    // fully supplied payload, but it must not preserve absent slots, layouts,
+    // or previous slot content from snapshot-derived route shape.
     return {
       kind: "proposeCommit",
       proposal: {
-        preserveAbsentSlots: true,
+        preserveAbsentSlots: false,
         preserveElementIds: [],
         preservePreviousSlotIds: [],
-        reason: "rootBoundaryUnknownFallback",
+        reason: "unprovenTopologyFallback",
         targetSnapshot,
       },
       token: options.event.token,
@@ -792,19 +812,23 @@ function planFlightResponseArrived(options: {
     };
   }
 
+  if (currentTopology.kind !== "known" || targetTopology.kind !== "known") {
+    throw new Error("[vinext] Current-root navigation planning requires manifest topology");
+  }
+
   return {
     kind: "proposeCommit",
     proposal: {
       preserveAbsentSlots: false,
       preserveElementIds: resolveCurrentRootBoundaryCommitElementPersistence({
-        currentTopology,
+        currentTopology: currentTopology.topology,
         lane: options.event.token.lane,
-        targetTopology,
+        targetTopology: targetTopology.topology,
       }),
       preservePreviousSlotIds: resolveCurrentRootBoundaryCommitSlotPersistence({
-        currentTopology,
+        currentTopology: currentTopology.topology,
         lane: options.event.token.lane,
-        targetTopology,
+        targetTopology: targetTopology.topology,
       }),
       reason: "currentRootBoundary",
       targetSnapshot,

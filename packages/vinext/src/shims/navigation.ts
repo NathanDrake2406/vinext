@@ -11,6 +11,7 @@
 // would throw at link time for missing bindings. With `import * as React`, the
 // bindings are just `undefined` on the namespace object and we can guard at runtime.
 import * as React from "react";
+import { getNavigationRuntime, hasAppNavigationRuntime } from "../client/navigation-runtime.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
 import { AppElementsWire } from "../server/app-elements.js";
 import { createExternalHistoryStatePreservingMetadata } from "../server/app-history-state.js";
@@ -520,7 +521,7 @@ export function invalidatePrefetchCache(): void {
   }
   prefetched.clear();
   if (!isServer) {
-    window.__VINEXT_PING_VISIBLE_LINKS__?.();
+    getNavigationRuntime()?.functions.pingVisibleLinks?.();
   }
 }
 
@@ -1240,7 +1241,7 @@ export function commitClientNavigationState(
 
   if (shouldNotify) {
     notifyNavigationListeners();
-    window.__VINEXT_PING_VISIBLE_LINKS__?.();
+    getNavigationRuntime()?.functions.pingVisibleLinks?.();
   }
 }
 
@@ -1282,7 +1283,7 @@ function saveScrollPosition(): void {
 }
 
 function commitHashOnlyHistoryState(href: string, mode: "push" | "replace", scroll: boolean): void {
-  const commitAppRouterHashNavigation = window.__VINEXT_RSC_COMMIT_HASH_NAVIGATION__;
+  const commitAppRouterHashNavigation = getNavigationRuntime()?.functions.commitHashNavigation;
   if (commitAppRouterHashNavigation) {
     commitAppRouterHashNavigation(href, mode, scroll);
     return;
@@ -1299,8 +1300,8 @@ function commitHashOnlyHistoryState(href: string, mode: "push" | "replace", scro
  * Restore scroll position from a history state object (used on popstate).
  *
  * When an RSC navigation is in flight (back/forward triggers both this
- * handler and the browser entry's popstate handler which calls
- * __VINEXT_RSC_NAVIGATE__), we must wait for the new content to render
+ * handler and the browser entry's popstate handler which calls the registered
+ * navigation runtime), we must wait for the new content to render
  * before scrolling. Otherwise the user sees old content flash at the
  * restored scroll position.
  *
@@ -1398,15 +1399,9 @@ export async function navigateClientSide(
   // navigateRsc owns the push/replace exclusively. This avoids a fragile
   // double-push and ensures window.location still reflects the *current* URL
   // when navigateRsc publishes the committed URL.
-  if (typeof window.__VINEXT_RSC_NAVIGATE__ === "function") {
-    await window.__VINEXT_RSC_NAVIGATE__(
-      fullHref,
-      0,
-      "navigate",
-      mode,
-      undefined,
-      programmaticTransition,
-    );
+  const appNavigate = getNavigationRuntime()?.functions.navigate;
+  if (appNavigate) {
+    await appNavigate(fullHref, 0, "navigate", mode, undefined, programmaticTransition);
   } else {
     if (mode === "replace") {
       replaceHistoryStateWithoutNotify(null, "", fullHref);
@@ -1476,13 +1471,10 @@ const _appRouter = {
     // without this, a stale cached payload for a sibling route (e.g. a page
     // gated by a session that has since been cleared) would still satisfy a
     // subsequent client navigation and bypass the server's redirect logic.
-    const clearCaches = window.__VINEXT_CLEAR_NAV_CACHES__;
-    if (typeof clearCaches === "function") {
-      clearCaches();
-    }
+    getNavigationRuntime()?.functions.clearNavigationCaches?.();
     // Re-fetch the current page's RSC stream
-    const rscNavigate = window.__VINEXT_RSC_NAVIGATE__;
-    if (typeof rscNavigate === "function") {
+    const rscNavigate = getNavigationRuntime()?.functions.navigate;
+    if (rscNavigate) {
       const navigate = () => {
         void rscNavigate(window.location.href, 0, "refresh", undefined, undefined, true);
       };
@@ -2073,12 +2065,12 @@ if (!isServer) {
     state.patchInstalled = true;
 
     // Listen for popstate on the client.
-    // Note: This handler runs for Pages Router only (when __VINEXT_RSC_NAVIGATE__
-    // is not available). It restores scroll position with microtask-based deferral.
+    // Note: This handler runs for Pages Router only (when App Router navigation
+    // runtime is not available). It restores scroll position with microtask-based deferral.
     // App Router scroll restoration is handled in server/app-browser-entry.ts:697
     // with RSC navigation coordination (waits for pending navigation to settle).
     window.addEventListener("popstate", (event) => {
-      if (typeof window.__VINEXT_RSC_NAVIGATE__ !== "function") {
+      if (!hasAppNavigationRuntime()) {
         commitClientNavigationState();
         restoreScrollPosition(event.state);
       }

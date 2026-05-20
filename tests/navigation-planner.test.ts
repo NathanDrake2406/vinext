@@ -191,6 +191,81 @@ function createTestRouteManifest(routes: readonly TestManifestRoute[]): RouteMan
   };
 }
 
+function rootBoundaryIdForManifest(rootBoundaryId: string | null): string | null {
+  return rootBoundaryId === null ? null : `root-boundary:${rootBoundaryId}`;
+}
+
+function createRouteManifestForSnapshots(
+  currentSnapshot: RouteSnapshotV0,
+  targetSnapshot: RouteSnapshotV0,
+): RouteManifest {
+  if (targetSnapshot.interception !== null) {
+    const proof = targetSnapshot.interception;
+    const routes: TestManifestRoute[] = [
+      {
+        id: currentSnapshot.routeId,
+        layoutIds: currentSnapshot.layoutIds,
+        pattern: currentSnapshot.matchedUrl,
+        rootBoundaryId: rootBoundaryIdForManifest(currentSnapshot.rootBoundaryId),
+      },
+    ];
+    if (
+      proof.sourceRouteId !== currentSnapshot.routeId ||
+      proof.sourceMatchedUrl !== currentSnapshot.matchedUrl
+    ) {
+      routes.push({
+        id: proof.sourceRouteId,
+        layoutIds: targetSnapshot.layoutIds,
+        pattern: proof.sourceMatchedUrl,
+        rootBoundaryId: rootBoundaryIdForManifest(targetSnapshot.rootBoundaryId),
+      });
+    }
+    routes.push(
+      {
+        id: proof.sourceRouteId,
+        interceptions: [
+          {
+            ownerLayoutId:
+              targetSnapshot.slotBindings.find((binding) => binding.slotId === proof.slotId)
+                ?.ownerLayoutId ?? null,
+            slotId: proof.slotId,
+            sourcePattern: proof.sourceMatchedUrl,
+            targetPattern: proof.targetMatchedUrl,
+          },
+        ],
+        layoutIds: currentSnapshot.layoutIds,
+        pattern: proof.sourceMatchedUrl,
+        rootBoundaryId: rootBoundaryIdForManifest(currentSnapshot.rootBoundaryId),
+        slotBindings: targetSnapshot.slotBindings,
+      },
+      {
+        id: proof.targetRouteId,
+        layoutIds: targetSnapshot.layoutIds,
+        pattern: proof.targetMatchedUrl,
+        rootBoundaryId: rootBoundaryIdForManifest(targetSnapshot.rootBoundaryId),
+      },
+    );
+    return createTestRouteManifest(routes);
+  }
+
+  return createTestRouteManifest([
+    {
+      id: currentSnapshot.routeId,
+      layoutIds: currentSnapshot.layoutIds,
+      pattern: currentSnapshot.matchedUrl,
+      rootBoundaryId: rootBoundaryIdForManifest(currentSnapshot.rootBoundaryId),
+      slotBindings: currentSnapshot.slotBindings,
+    },
+    {
+      id: targetSnapshot.routeId,
+      layoutIds: targetSnapshot.layoutIds,
+      pattern: targetSnapshot.matchedUrl,
+      rootBoundaryId: rootBoundaryIdForManifest(targetSnapshot.rootBoundaryId),
+      slotBindings: targetSnapshot.slotBindings,
+    },
+  ]);
+}
+
 function createOperationToken(overrides: Partial<OperationToken> = {}): OperationToken {
   return {
     baseVisibleCommitVersion: 2,
@@ -207,9 +282,25 @@ function planFlightResponse(rootBoundaryId: string | null): NavigationDecisionV0
   const token = createOperationToken({
     targetSnapshotFingerprint: `route:/dashboard|root:${rootBoundaryId ?? "unknown"}`,
   });
+  const routeManifest = createTestRouteManifest([
+    {
+      layoutIds: ["layout:/"],
+      pattern: "/current",
+      rootBoundaryId: "root-boundary:/",
+    },
+    {
+      layoutIds: rootBoundaryId === null ? [] : [`layout:${rootBoundaryId}`],
+      pattern: "/dashboard",
+      rootBoundaryId: rootBoundaryId === null ? null : `root-boundary:${rootBoundaryId}`,
+    },
+  ]);
   const result: FlightResultV0 = {
     href: "https://example.com/dashboard",
-    targetSnapshot: createRouteSnapshot(rootBoundaryId),
+    targetSnapshot: {
+      ...createRouteSnapshot(rootBoundaryId),
+      matchedUrl: "/dashboard",
+      routeId: "route:/dashboard",
+    },
   };
   const state: NavigationPlannerStateV0 = {
     nextOperationToken: token,
@@ -220,7 +311,12 @@ function planFlightResponse(rootBoundaryId: string | null): NavigationDecisionV0
       startedVisibleCommitVersion: 2,
     },
     visibleCommitVersion: 2,
-    visibleSnapshot: createRouteSnapshot("/"),
+    visibleSnapshot: {
+      ...createRouteSnapshot("/"),
+      displayUrl: "https://example.com/current",
+      matchedUrl: "/current",
+      routeId: "route:/current",
+    },
   };
   const event: NavigationEvent = {
     kind: "flightResponseArrived",
@@ -229,7 +325,7 @@ function planFlightResponse(rootBoundaryId: string | null): NavigationDecisionV0
   };
   const input: NavigationPlannerInput = {
     event,
-    routeManifest: null,
+    routeManifest,
     state,
   };
 
@@ -244,16 +340,39 @@ function planFlightResponseFromRootBoundaries(options: {
     targetSnapshotFingerprint: `route:/dashboard|root:${options.nextRootBoundaryId ?? "unknown"}`,
   });
 
+  const routeManifest = createTestRouteManifest([
+    {
+      layoutIds:
+        options.currentRootBoundaryId === null ? [] : [`layout:${options.currentRootBoundaryId}`],
+      pattern: "/current",
+      rootBoundaryId:
+        options.currentRootBoundaryId === null
+          ? null
+          : `root-boundary:${options.currentRootBoundaryId}`,
+    },
+    {
+      layoutIds:
+        options.nextRootBoundaryId === null ? [] : [`layout:${options.nextRootBoundaryId}`],
+      pattern: "/dashboard",
+      rootBoundaryId:
+        options.nextRootBoundaryId === null ? null : `root-boundary:${options.nextRootBoundaryId}`,
+    },
+  ]);
+
   return navigationPlanner.plan({
     event: {
       kind: "flightResponseArrived",
       result: {
         href: "https://example.com/dashboard",
-        targetSnapshot: createRouteSnapshot(options.nextRootBoundaryId),
+        targetSnapshot: {
+          ...createRouteSnapshot(options.nextRootBoundaryId),
+          matchedUrl: "/dashboard",
+          routeId: "route:/dashboard",
+        },
       },
       token,
     },
-    routeManifest: null,
+    routeManifest,
     state: {
       nextOperationToken: token,
       traceFields: {
@@ -263,7 +382,12 @@ function planFlightResponseFromRootBoundaries(options: {
         startedVisibleCommitVersion: 2,
       },
       visibleCommitVersion: 2,
-      visibleSnapshot: createRouteSnapshot(options.currentRootBoundaryId),
+      visibleSnapshot: {
+        ...createRouteSnapshot(options.currentRootBoundaryId),
+        displayUrl: "https://example.com/current",
+        matchedUrl: "/current",
+        routeId: "route:/current",
+      },
     },
   });
 }
@@ -291,7 +415,10 @@ function planFlightResponseFromSnapshots(options: {
       },
       token,
     },
-    routeManifest: options.routeManifest ?? null,
+    routeManifest:
+      options.routeManifest === undefined
+        ? createRouteManifestForSnapshots(options.currentSnapshot, options.targetSnapshot)
+        : options.routeManifest,
     state: {
       nextOperationToken: token,
       traceFields: options.traceFields,
@@ -359,34 +486,34 @@ describe("navigationPlanner root-boundary decisions", () => {
     ]);
   });
 
-  it("uses the current soft fallback when the target root identity is unknown", () => {
+  it("uses an unproven payload fallback when the target root identity is unknown", () => {
     const decision = planFlightResponse(null);
 
     expect(decision.kind).toBe("proposeCommit");
     if (decision.kind !== "proposeCommit") {
       throw new Error("Expected proposeCommit decision");
     }
-    expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
-    expect(decision.proposal.preserveAbsentSlots).toBe(true);
+    expect(decision.proposal.reason).toBe("unprovenTopologyFallback");
+    expect(decision.proposal.preserveAbsentSlots).toBe(false);
     expect(decision.proposal.preserveElementIds).toEqual([]);
     expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
   });
 
-  it("uses the current soft fallback when the visible root identity is unknown", () => {
+  it("uses an unproven payload fallback when the visible root identity is unknown", () => {
     const transition = navigationPlanner.classifyRootBoundaryTransition(null, "/");
     const decision = planFlightResponseFromRootBoundaries({
       currentRootBoundaryId: null,
       nextRootBoundaryId: "/",
     });
 
-    expect(transition).toBe("rootBoundaryUnknownFallback");
+    expect(transition).toBe("rootBoundaryUnknown");
     expect(decision.kind).toBe("proposeCommit");
     if (decision.kind !== "proposeCommit") {
       throw new Error("Expected proposeCommit decision");
     }
-    expect(decision.proposal.reason).toBe("rootBoundaryUnknownFallback");
-    expect(decision.proposal.preserveAbsentSlots).toBe(true);
+    expect(decision.proposal.reason).toBe("unprovenTopologyFallback");
+    expect(decision.proposal.preserveAbsentSlots).toBe(false);
     expect(decision.proposal.preserveElementIds).toEqual([]);
     expect(decision.proposal.preservePreviousSlotIds).toEqual([]);
     expect(decision.trace.entries[0]?.code).toBe(NavigationTraceReasonCodes.rootBoundaryUnknown);
@@ -487,7 +614,7 @@ describe("navigationPlanner root-boundary decisions", () => {
         },
         token,
       },
-      routeManifest: null,
+      routeManifest: createRouteManifestForSnapshots(currentSnapshot, targetSnapshot),
       state: {
         nextOperationToken: token,
         traceFields: {
@@ -533,6 +660,12 @@ describe("navigationPlanner root-boundary decisions", () => {
         createSlotBinding("slot:reports:/dashboard", "layout:/dashboard", "active"),
       ],
     );
+    const targetSettingsSnapshot: RouteSnapshotV0 = {
+      ...targetSnapshot,
+      displayUrl: "https://example.com/dashboard/settings",
+      matchedUrl: "/dashboard/settings",
+      routeId: "route:/dashboard/settings",
+    };
     const token = createOperationToken({
       targetSnapshotFingerprint: "route:/dashboard/settings|root:/",
     });
@@ -542,11 +675,11 @@ describe("navigationPlanner root-boundary decisions", () => {
         kind: "flightResponseArrived",
         result: {
           href: "https://example.com/dashboard/settings",
-          targetSnapshot,
+          targetSnapshot: targetSettingsSnapshot,
         },
         token,
       },
-      routeManifest: null,
+      routeManifest: createRouteManifestForSnapshots(currentSnapshot, targetSettingsSnapshot),
       state: {
         nextOperationToken: token,
         traceFields: {
@@ -587,6 +720,12 @@ describe("navigationPlanner root-boundary decisions", () => {
         createSlotBinding("slot:analytics:/dashboard", "layout:/dashboard", "unmatched"),
       ],
     );
+    const targetSettingsSnapshot: RouteSnapshotV0 = {
+      ...targetSnapshot,
+      displayUrl: "https://example.com/dashboard/settings",
+      matchedUrl: "/dashboard/settings",
+      routeId: "route:/dashboard/settings",
+    };
     const token = createOperationToken({
       targetSnapshotFingerprint: "route:/dashboard/settings|root:/",
     });
@@ -596,11 +735,11 @@ describe("navigationPlanner root-boundary decisions", () => {
         kind: "flightResponseArrived",
         result: {
           href: "https://example.com/dashboard/settings",
-          targetSnapshot,
+          targetSnapshot: targetSettingsSnapshot,
         },
         token,
       },
-      routeManifest: null,
+      routeManifest: createRouteManifestForSnapshots(currentSnapshot, targetSettingsSnapshot),
       state: {
         nextOperationToken: token,
         visibleCommitVersion: 2,
@@ -616,12 +755,17 @@ describe("navigationPlanner root-boundary decisions", () => {
   });
 
   it("does not preserve default target slots when their owner layout is not retained", () => {
-    const currentSnapshot = createRouteSnapshot(
-      "/",
-      ["layout:/", "layout:/feed"],
-      [],
-      [createSlotBinding("slot:modal:/dashboard", "layout:/dashboard", "active")],
-    );
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot(
+        "/",
+        ["layout:/", "layout:/feed"],
+        [],
+        [createSlotBinding("slot:modal:/dashboard", "layout:/dashboard", "active")],
+      ),
+      displayUrl: "https://example.com/feed",
+      matchedUrl: "/feed",
+      routeId: "route:/feed",
+    };
     const targetSnapshot = createRouteSnapshot(
       "/",
       ["layout:/", "layout:/dashboard"],
@@ -1303,7 +1447,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     );
   });
 
-  it("rejects intercepted preservation when source and target share no layout root", () => {
+  it("does not use intercepted snapshot root topology as preservation authority", () => {
     const currentSnapshot: RouteSnapshotV0 = {
       ...createRouteSnapshot("/", ["layout:/", "layout:/feed"]),
       matchedUrl: "/feed",
@@ -1331,7 +1475,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     }
     expect(decision.reason).toBe("interceptionProofRejected");
     expect(decision.trace.entries[0]?.code).toBe(
-      NavigationTraceReasonCodes.interceptedRejectedIncompatibleRoot,
+      NavigationTraceReasonCodes.interceptedRejectedMissingSlotProof,
     );
   });
 

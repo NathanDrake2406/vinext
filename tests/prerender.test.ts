@@ -63,6 +63,28 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
+const RSC_RUNTIME_BOOTSTRAP_EXPRESSION =
+  '((self[Symbol.for("vinext.navigationRuntime")]??={bootstrap:{routeManifest:null},functions:{}}).bootstrap.rsc??={rsc:[]})';
+
+function runtimeRscChunkScript(chunk: string | [3, string]): string {
+  return `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.rsc.push(${safeJsonStringify(chunk)})</script>`;
+}
+
+function runtimeRscDoneScript(): string {
+  return `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.done=true</script>`;
+}
+
+function legacyRscChunkScript(chunk: string | [3, string]): string {
+  return (
+    "<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];" +
+    `self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify(chunk)})</script>`
+  );
+}
+
+function legacyRscDoneScript(): string {
+  return "<script>self.__VINEXT_RSC_DONE__=true</script>";
+}
+
 // ─── App Router RSC payload extraction ───────────────────────────────────────
 
 describe("extractRscPayloadFromPrerenderedHtml", () => {
@@ -79,14 +101,19 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
     ];
     const html =
       "<html><body>" +
-      chunks
-        .map(
-          (chunk) =>
-            "<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];" +
-            `self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify(chunk)})</script>`,
-        )
-        .join("") +
-      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      chunks.map((chunk) => runtimeRscChunkScript(chunk)).join("") +
+      runtimeRscDoneScript() +
+      "</body></html>";
+
+    expect(decodeExtractedPayload(html)).toBe(chunks.join(""));
+  });
+
+  it("keeps parsing legacy streamed RSC chunk scripts", () => {
+    const chunks = ['0:D{"name":"layout"}\n', '1:["$","div",null,{"children":"legacy"}]\n'];
+    const html =
+      "<html><body>" +
+      chunks.map((chunk) => legacyRscChunkScript(chunk)).join("") +
+      legacyRscDoneScript() +
       "</body></html>";
 
     expect(decodeExtractedPayload(html)).toBe(chunks.join(""));
@@ -97,9 +124,9 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/binary/rsc-binary.test.ts
     const html =
       "<html><body>" +
-      `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify("0:text\n")})</script>` +
-      '<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push([3,"/wABAgM="])</script>' +
-      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      runtimeRscChunkScript("0:text\n") +
+      runtimeRscChunkScript([3, "/wABAgM="]) +
+      runtimeRscDoneScript() +
       "</body></html>";
 
     const payload = extractRscPayloadFromPrerenderedHtml(html);
@@ -110,28 +137,34 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
   });
 
   it("throws when the done marker is missing", () => {
-    const html =
-      "<html><body>" +
-      `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify("0:[]\n")})</script>` +
-      "</body></html>";
+    const html = "<html><body>" + runtimeRscChunkScript("0:[]\n") + "</body></html>";
 
-    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing __VINEXT_RSC_DONE__/);
+    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing RSC done marker/);
   });
 
   it("does not treat marker-looking RSC payload text as the done control script", () => {
     const html =
+      "<html><body>" + runtimeRscChunkScript('0:["__VINEXT_RSC_DONE__=true"]\n') + "</body></html>";
+
+    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing RSC done marker/);
+  });
+
+  it("ignores non-chunk runtime scripts that start with the bootstrap expression", () => {
+    const html =
       "<html><body>" +
-      `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify('0:["__VINEXT_RSC_DONE__=true"]\n')})</script>` +
+      `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.metadata={}</script>` +
+      runtimeRscChunkScript("0:[]\n") +
+      runtimeRscDoneScript() +
       "</body></html>";
 
-    expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(/missing __VINEXT_RSC_DONE__/);
+    expect(decodeExtractedPayload(html)).toBe("0:[]\n");
   });
 
   it("rejects chunk scripts with trailing code after the payload push", () => {
     const html =
       "<html><body>" +
-      `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify("0:[]\n")})alert(1)</script>` +
-      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.rsc.push(${safeJsonStringify("0:[]\n")})alert(1)</script>` +
+      runtimeRscDoneScript() +
       "</body></html>";
 
     // JSON.parse rejects the slice (which includes the `)` and `alert(1` after
@@ -145,8 +178,8 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
   it("rejects chunk scripts with invalid JSON", () => {
     const html =
       "<html><body>" +
-      '<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push("\\uZZZZ")</script>' +
-      "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+      `<script>${RSC_RUNTIME_BOOTSTRAP_EXPRESSION}.rsc.push("\\uZZZZ")</script>` +
+      runtimeRscDoneScript() +
       "</body></html>";
 
     expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(
@@ -164,7 +197,7 @@ describe("extractRscPayloadFromPrerenderedHtml", () => {
   it("throws when only the done marker is present without any chunks", () => {
     // Half-emitted embed (done marker but no chunks) is a real bug — partial
     // emission shouldn't fall back silently.
-    const html = "<html><body><script>self.__VINEXT_RSC_DONE__=true</script></body></html>";
+    const html = `<html><body>${runtimeRscDoneScript()}</body></html>`;
 
     expect(() => extractRscPayloadFromPrerenderedHtml(html)).toThrow(
       "[vinext] Malformed prerender RSC embed: done marker present without chunk scripts",
@@ -203,8 +236,8 @@ describe("prerenderApp — RSC extraction", () => {
       res.setHeader("content-type", "text/html");
       res.end(
         "<html><body>" +
-          `<script>self.__VINEXT_RSC_CHUNKS__=self.__VINEXT_RSC_CHUNKS__||[];self.__VINEXT_RSC_CHUNKS__.push(${safeJsonStringify(rscPayload)})</script>` +
-          "<script>self.__VINEXT_RSC_DONE__=true</script>" +
+          runtimeRscChunkScript(rscPayload) +
+          runtimeRscDoneScript() +
           "</body></html>",
       );
     });

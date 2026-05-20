@@ -37,12 +37,20 @@ export function resolveEntryPath(rel: string, base: string): string {
  * published packages.
  */
 export function resolveRuntimeEntryModule(name: string): string {
+  return resolveRuntimeModulePath("server", name);
+}
+
+export function resolveClientRuntimeModule(name: string): string {
+  return resolveRuntimeModulePath("client", name);
+}
+
+function resolveRuntimeModulePath(directory: "client" | "server", name: string): string {
   for (const ext of [".ts", ".js", ".mts", ".mjs"]) {
-    const filePath = resolveEntryPath(`../server/${name}${ext}`, import.meta.url);
+    const filePath = resolveEntryPath(`../${directory}/${name}${ext}`, import.meta.url);
     if (fs.existsSync(filePath)) {
       return filePath;
     }
   }
 
-  return resolveEntryPath(`../server/${name}.js`, import.meta.url);
+  return resolveEntryPath(`../${directory}/${name}.js`, import.meta.url);
 }
