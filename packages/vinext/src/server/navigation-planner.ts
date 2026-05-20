@@ -867,7 +867,7 @@ function planFlightResponseArrived(options: {
       return createInterceptionProofRejectedDecision({
         event: options.event,
         reasonCode: NavigationTraceReasonCodes.interceptedRejectedUndeclaredTopology,
-        traceFields,
+        traceFields: commitTraceFields,
       });
     }
 
@@ -882,7 +882,7 @@ function planFlightResponseArrived(options: {
       return createInterceptionProofRejectedDecision({
         event: options.event,
         reasonCode: validation.reasonCode,
-        traceFields,
+        traceFields: commitTraceFields,
       });
     }
 
@@ -917,7 +917,10 @@ function planFlightResponseArrived(options: {
       kind: "hardNavigate",
       reason: "rootBoundaryChanged",
       token: options.event.token,
-      trace: createNavigationTrace(NavigationTraceReasonCodes.rootBoundaryChanged, traceFields),
+      trace: createNavigationTrace(
+        NavigationTraceReasonCodes.rootBoundaryChanged,
+        commitTraceFields,
+      ),
       url: options.event.result.href,
     };
   }

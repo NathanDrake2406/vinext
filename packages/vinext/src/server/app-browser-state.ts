@@ -150,7 +150,7 @@ function createOperationRecord(options: {
 
 export function isCacheRestorableAppPayloadMetadata(
   metadata: CacheRestorableAppPayloadMetadata,
-): metadata is Required<CacheRestorableAppPayloadMetadata> {
+): metadata is CacheRestorableAppPayloadMetadata & { cacheEntryReuseProof: CacheEntryReuseProof } {
   return metadata.cacheEntryReuseProof !== undefined;
 }
 
@@ -394,8 +394,7 @@ function planPendingRootBoundaryFlightResponse(options: {
     routeManifest: options.routeManifest,
     targetSnapshot,
   });
-  const cacheEntryReuseProof =
-    options.pending.cacheEntryReuseProof ?? options.pending.action.cacheEntryReuseProof;
+  const cacheEntryReuseProof = options.pending.cacheEntryReuseProof;
 
   // #726-CORE-07/08 keeps the browser state layer as the lifecycle gate and
   // only translates committed AppElements metadata into planner snapshots.

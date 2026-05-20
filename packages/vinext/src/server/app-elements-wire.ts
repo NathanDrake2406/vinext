@@ -663,6 +663,10 @@ function isCacheProofFallbackScope(value: unknown): value is CacheProofFallbackS
   return value === "affectedOutput" || value === "route";
 }
 
+// Three-way wire semantics are intentional:
+// - null means the proof field was absent and no cache authority was claimed.
+// - { decision: null } means a present proof was malformed or unusable.
+// - { decision: ... } means the proof parsed into an explicit reuse decision.
 function parseCacheEntryReuseProofMetadata(value: unknown): CacheEntryReuseProof | null {
   if (value === undefined) return null;
   if (!isRecord(value) || value.kind !== "runtime-cache-entry") {

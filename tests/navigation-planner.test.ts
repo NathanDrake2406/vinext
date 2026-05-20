@@ -82,6 +82,18 @@ function createInterceptionSnapshot(
   };
 }
 
+function createAcceptedStaticLayoutCacheEntryReuseProof(): CacheEntryReuseProof {
+  return {
+    kind: "runtime-cache-entry",
+    decision: {
+      canReuse: true,
+      code: "CP_STATIC_LAYOUT_REUSE_PROVEN",
+      kind: "reuse",
+      reuseClass: "static-layout",
+    },
+  };
+}
+
 function createSlotBinding(
   slotId: string,
   ownerLayoutId: string,
@@ -576,15 +588,7 @@ describe("navigationPlanner root-boundary decisions", () => {
       matchedUrl: "/dashboard/settings",
       routeId: "route:/dashboard/settings",
     };
-    const cacheEntryReuseProof: CacheEntryReuseProof = {
-      kind: "runtime-cache-entry",
-      decision: {
-        canReuse: true,
-        code: "CP_STATIC_LAYOUT_REUSE_PROVEN",
-        kind: "reuse",
-        reuseClass: "static-layout",
-      },
-    };
+    const cacheEntryReuseProof = createAcceptedStaticLayoutCacheEntryReuseProof();
 
     const decision = planFlightResponseFromSnapshots({
       cacheEntryReuseProof,
@@ -635,6 +639,44 @@ describe("navigationPlanner root-boundary decisions", () => {
         },
       },
     ]);
+  });
+
+  it("keeps accepted runtime cache proof fields on later root-boundary rejections", () => {
+    const currentSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/"),
+      displayUrl: "https://example.com/current",
+      matchedUrl: "/current",
+      routeId: "route:/current",
+    };
+    const targetSnapshot: RouteSnapshotV0 = {
+      ...createRouteSnapshot("/(dashboard)"),
+      displayUrl: "https://example.com/dashboard",
+      matchedUrl: "/dashboard",
+      routeId: "route:/dashboard",
+    };
+
+    const decision = planFlightResponseFromSnapshots({
+      cacheEntryReuseProof: createAcceptedStaticLayoutCacheEntryReuseProof(),
+      currentSnapshot,
+      targetSnapshot,
+    });
+
+    expect(decision.kind).toBe("hardNavigate");
+    if (decision.kind !== "hardNavigate") {
+      throw new Error("Expected hardNavigate decision");
+    }
+    expect(decision.reason).toBe("rootBoundaryChanged");
+    expect(decision.trace.entries[0]).toEqual({
+      code: NavigationTraceReasonCodes.rootBoundaryChanged,
+      fields: {
+        cacheProofCode: "CP_STATIC_LAYOUT_REUSE_PROVEN",
+        cacheProofReuseClass: "static-layout",
+        currentRootLayoutTreePath: "/",
+        currentVisibleCommitVersion: 2,
+        nextRootLayoutTreePath: "/(dashboard)",
+        startedVisibleCommitVersion: 2,
+      },
+    });
   });
 
   it("uses an unproven payload fallback when the target root identity is unknown", () => {
@@ -1387,6 +1429,7 @@ describe("navigationPlanner root-boundary decisions", () => {
     };
 
     const decision = planFlightResponseFromSnapshots({
+      cacheEntryReuseProof: createAcceptedStaticLayoutCacheEntryReuseProof(),
       currentSnapshot,
       routeManifest,
       targetSnapshot,
@@ -1400,6 +1443,10 @@ describe("navigationPlanner root-boundary decisions", () => {
     expect(decision.trace.entries[0]?.code).toBe(
       NavigationTraceReasonCodes.interceptedRejectedUndeclaredTopology,
     );
+    expect(decision.trace.entries[0]?.fields).toMatchObject({
+      cacheProofCode: "CP_STATIC_LAYOUT_REUSE_PROVEN",
+      cacheProofReuseClass: "static-layout",
+    });
   });
 
   it("rejects intercepted preservation when RouteManifest declares a different slot owner", () => {
