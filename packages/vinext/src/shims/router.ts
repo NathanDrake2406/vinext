@@ -227,6 +227,8 @@ function getPagesHtmlFetchUrl(browserUrl: string, locale: string | undefined): s
   // HTML fetch must bypass root Accept-Language detection.
   const parsed = new URL(browserUrl, window.location.href);
   const localeRoot = normalizePathTrailingSlash(`/${locale}`, __trailingSlash);
+  // Base path joining can change slash shape, then the final URL must still
+  // conform to the app's trailingSlash setting.
   return normalizePathTrailingSlash(
     toBrowserNavigationHref(
       `${localeRoot}${parsed.search}${parsed.hash}`,

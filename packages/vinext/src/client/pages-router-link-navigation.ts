@@ -1,5 +1,5 @@
 type PagesRouterLinkTransitionOptions = {
-  scroll: boolean;
+  scroll?: boolean;
   locale?: string | false;
 };
 
