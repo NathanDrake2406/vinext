@@ -5,6 +5,8 @@ import { PAGES_FIXTURE_DIR } from "./helpers.js";
 import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/router.js";
 import { isValidModulePath } from "../packages/vinext/src/client/validate-module-path.js";
 import vinext from "../packages/vinext/src/index.js";
+import { safeJsonStringify } from "../packages/vinext/src/server/html.js";
+import { buildPagesNextDataScript } from "../packages/vinext/src/server/pages-page-response.js";
 import type { Plugin } from "vite-plus";
 import type { NextRouter } from "../packages/vinext/src/shims/router.js";
 import type {
@@ -11202,15 +11204,18 @@ describe("Pages Router concurrent navigation", () => {
     page: string,
     pageModuleUrl: string,
     query: Record<string, unknown> = {},
+    i18n?: { locale: string; locales: string[]; defaultLocale: string },
   ): string {
-    const nextData = JSON.stringify({
-      page,
-      query,
-      isFallback: false,
-      props: { pageProps: { page } },
-      __vinext: { pageModuleUrl },
+    const nextDataScript = buildPagesNextDataScript({
+      buildId: null,
+      i18n: i18n ?? {},
+      pageProps: { page },
+      params: query,
+      routePattern: page,
+      safeJsonStringify,
+      vinext: { pageModuleUrl },
     });
-    return `<html><head></head><body><script>window.__NEXT_DATA__ = ${nextData}</script></body></html>`;
+    return `<html><head></head><body>${nextDataScript}</body></html>`;
   }
 
   /**
@@ -11548,6 +11553,61 @@ describe("Pages Router concurrent navigation", () => {
       // Catch-all: exactly one history write plus exactly one hard-nav fallback.
       expect(hrefAssignments).toHaveLength(2);
     } finally {
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("fetches default-locale root through a locale-qualified URL without changing the browser URL", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    win.location.pathname = "/new";
+    win.location.href = "http://localhost/new";
+    Object.assign(win, {
+      __VINEXT_LOCALE__: "en",
+      __VINEXT_LOCALES__: ["en", "id"],
+      __VINEXT_DEFAULT_LOCALE__: "en",
+    });
+    (globalThis as any).window = win;
+
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          buildNavHtml(
+            "/",
+            pageModuleUrl,
+            {},
+            {
+              locale: "en",
+              locales: ["en", "id"],
+              defaultLocale: "en",
+            },
+          ),
+          { status: 200 },
+        ),
+    );
+    globalThis.fetch = fetch;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push("/");
+
+      expect(result).toBe(true);
+      expect(fetch).toHaveBeenCalledWith("/en", expect.any(Object));
+      expect(win.history.pushState).toHaveBeenCalledWith({}, "", "/");
+      expect(win.location.href).toBe("http://localhost/");
+      expect(win.__VINEXT_LOCALE__).toBe("en");
+    } finally {
+      vi.resetModules();
       if (previousWindow === undefined) {
         delete (globalThis as any).window;
       } else {
