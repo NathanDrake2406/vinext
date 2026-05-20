@@ -79,6 +79,7 @@ import {
   createHistoryStateWithPreviousNextUrl,
   readHistoryStatePreviousNextUrl,
   readHistoryStateTraversalIndex,
+  isCacheRestorableAppPayloadMetadata,
   resolveHistoryTraversalIntent,
   resolveInterceptionContextFromPreviousNextUrl,
   resolveServerActionRequestState,
@@ -1488,6 +1489,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         // never actually rendered successfully.
         const resolvedElements = await rscPayload;
         const metadata = AppElementsWire.readMetadata(resolvedElements);
+        if (!isCacheRestorableAppPayloadMetadata(metadata)) {
+          void cacheBufferPromise.catch(() => {});
+          return;
+        }
         const cacheBuffer = await cacheBufferPromise;
         storeVisitedResponseSnapshot(
           rscUrl,

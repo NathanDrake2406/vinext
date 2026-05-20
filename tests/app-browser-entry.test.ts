@@ -43,6 +43,7 @@ import {
   createHistoryStateWithNavigationMetadata,
   createHistoryStateWithPreviousNextUrl,
   createPendingNavigationCommit,
+  isCacheRestorableAppPayloadMetadata,
   readHistoryStatePreviousNextUrl,
   readHistoryStateTraversalIndex,
   resolveInterceptionContextFromPreviousNextUrl,
@@ -1303,6 +1304,14 @@ describe("app browser entry state helpers", () => {
         },
       },
     ]);
+  });
+
+  it("does not classify unproofed payload metadata as cache-restorable", () => {
+    const elements = createResolvedElements("route:/dashboard/settings", "/", null, {
+      "page:/dashboard/settings": React.createElement("main", null, "settings"),
+    });
+
+    expect(isCacheRestorableAppPayloadMetadata(AppElementsWire.readMetadata(elements))).toBe(false);
   });
 
   it("traces unknown root-layout identity without preserving absent slots", async () => {

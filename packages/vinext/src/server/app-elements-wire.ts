@@ -29,7 +29,19 @@ export const APP_UNMATCHED_SLOT_WIRE_VALUE = "__VINEXT_UNMATCHED_SLOT__";
 
 export const UNMATCHED_SLOT = Symbol.for("vinext.unmatchedSlot");
 
-const CACHE_PROOF_REJECTION_CODES: ReadonlySet<string> = new Set([
+function createCacheProofRejectionCodeSet<const T extends readonly CacheProofRejectionCode[]>(
+  codes: T &
+    ([CacheProofRejectionCode] extends [T[number]]
+      ? unknown
+      : readonly [
+          "Missing cache proof rejection codes",
+          Exclude<CacheProofRejectionCode, T[number]>,
+        ]),
+): ReadonlySet<string> {
+  return new Set(codes);
+}
+
+const CACHE_PROOF_REJECTION_CODES = createCacheProofRejectionCodeSet([
   "CP_CACHE_ENTRY_PROOF_MISSING",
   "CP_MODEL_DISABLED",
   "CP_ARTIFACT_COMPATIBILITY_INCOMPATIBLE",
@@ -59,7 +71,7 @@ const CACHE_PROOF_REJECTION_CODES: ReadonlySet<string> = new Set([
   "CP_STATIC_LAYOUT_ROOT_BOUNDARY_MISMATCH",
   "CP_STATIC_LAYOUT_ROOT_BOUNDARY_UNKNOWN",
   "CP_STATIC_LAYOUT_VARIANT_DIMENSION_UNPROVEN",
-] satisfies readonly CacheProofRejectionCode[]);
+]);
 
 export type AppElementsSlotBindingState = "active" | "default" | "unmatched";
 

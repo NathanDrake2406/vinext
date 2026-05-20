@@ -106,6 +106,9 @@ export type PendingNavigationCommit = {
 };
 
 type PendingNavigationCommitDisposition = "dispatch" | "hard-navigate" | "skip";
+type CacheRestorableAppPayloadMetadata = Readonly<{
+  cacheEntryReuseProof?: CacheEntryReuseProof;
+}>;
 type DispatchPendingNavigationCommitDispositionDecision = {
   disposition: "dispatch";
   preserveAbsentSlots: boolean;
@@ -132,6 +135,12 @@ function createOperationRecord(options: {
     startedVisibleCommitVersion: options.startedVisibleCommitVersion,
     state: "pending",
   };
+}
+
+export function isCacheRestorableAppPayloadMetadata(
+  metadata: CacheRestorableAppPayloadMetadata,
+): boolean {
+  return metadata.cacheEntryReuseProof !== undefined;
 }
 
 function normalizeNavigationSnapshotMatchedUrl(pathname: string): string {
