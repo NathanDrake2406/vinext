@@ -12,16 +12,31 @@ function isRootParams(value: unknown): value is RootParams {
 
 export function createAppPrerenderStaticParamsResolver(
   sources: readonly unknown[],
+  rootParamNames?: readonly string[],
 ): GenerateStaticParamsFunction | null {
   const generateStaticParamsFns = sources.filter(isGenerateStaticParamsFunction);
   if (generateStaticParamsFns.length === 0) return null;
+
+  const rootParamNamesSet = rootParamNames ? new Set(rootParamNames) : null;
+  const filterRootParams = (params: RootParams): RootParams => {
+    if (!rootParamNamesSet) return params;
+    const picked: RootParams = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (rootParamNamesSet.has(key)) {
+        picked[key] = value;
+      }
+    }
+    return picked;
+  };
+
   if (generateStaticParamsFns.length === 1) {
     const single = generateStaticParamsFns[0];
     // Wrap the single source in the same non-array/non-object guards as the
     // multi-source composition path so the contract is uniform regardless of
     // how many sources were composed.
-    return async (input) =>
-      runWithRootParamsScope(input.params, async () => {
+    return async (input) => {
+      const picked = filterRootParams(input.params);
+      return runWithRootParamsScope(picked, async () => {
         const result = await single(input);
         if (!Array.isArray(result)) return [];
         for (const item of result) {
@@ -29,16 +44,19 @@ export function createAppPrerenderStaticParamsResolver(
         }
         return result;
       });
+    };
   }
 
   return async ({ params }) => {
-    let paramSets: RootParams[] = [params];
+    const picked = filterRootParams(params);
+    let paramSets: RootParams[] = [picked];
 
     for (const generateStaticParams of generateStaticParamsFns) {
       const nextParamSets: RootParams[] = [];
 
       for (const parentParams of paramSets) {
-        const result = await runWithRootParamsScope(parentParams, async () =>
+        const pickedParent = filterRootParams(parentParams);
+        const result = await runWithRootParamsScope(pickedParent, async () =>
           generateStaticParams({ params: parentParams }),
         );
         if (!Array.isArray(result)) return [];

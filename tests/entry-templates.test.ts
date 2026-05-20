@@ -325,7 +325,7 @@ describe("App Router generated manifest construction", () => {
     expect(dynamicRouteEntry).toContain("page: mod_17");
     expect(dynamicRouteEntry).toContain('params: ["photoId"]');
     expect(manifest.generateStaticParamsEntries).toEqual([
-      '  "/dashboard/:id": __createAppPrerenderStaticParamsResolver([mod_5?.generateStaticParams]),',
+      '  "/dashboard/:id": __createAppPrerenderStaticParamsResolver([mod_5?.generateStaticParams], ["id"]),',
     ]);
   });
 
@@ -366,8 +366,8 @@ describe("App Router generated manifest construction", () => {
     });
 
     expect(manifest.generateStaticParamsEntries).toEqual([
-      '  "/:lang/:locale": __createAppPrerenderStaticParamsResolver([mod_1?.generateStaticParams]),',
-      '  "/:lang/:locale/other/:slug": __createAppPrerenderStaticParamsResolver([mod_0?.generateStaticParams]),',
+      '  "/:lang/:locale": __createAppPrerenderStaticParamsResolver([mod_1?.generateStaticParams], ["lang","locale"]),',
+      '  "/:lang/:locale/other/:slug": __createAppPrerenderStaticParamsResolver([mod_0?.generateStaticParams], ["lang","locale"]),',
     ]);
     expect(manifest.rootParamNameEntries).toEqual([
       '  "/:lang/:locale/other/:slug": ["lang","locale"],',
@@ -410,8 +410,8 @@ describe("App Router generated manifest construction", () => {
     });
 
     expect(manifest.generateStaticParamsEntries).toEqual([
-      '  "/:lang/docs v2/:section": __createAppPrerenderStaticParamsResolver([mod_1?.generateStaticParams]),',
-      '  "/:lang/docs v2/:section/:slug": __createAppPrerenderStaticParamsResolver([mod_0?.generateStaticParams]),',
+      '  "/:lang/docs v2/:section": __createAppPrerenderStaticParamsResolver([mod_1?.generateStaticParams], ["lang","section"]),',
+      '  "/:lang/docs v2/:section/:slug": __createAppPrerenderStaticParamsResolver([mod_0?.generateStaticParams], ["lang","section"]),',
     ]);
     expect(manifest.rootParamNameEntries).toEqual([
       '  "/:lang/docs v2/:section/:slug": ["lang","section"],',

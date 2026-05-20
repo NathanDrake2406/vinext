@@ -17,7 +17,7 @@ import {
   useServerInsertedHTML,
 } from "vinext/shims/navigation";
 import { runWithNavigationContext } from "vinext/shims/navigation-state";
-import { runWithRootParamsScope } from "vinext/shims/root-params";
+import { runWithRootParamsScope, type RootParams } from "vinext/shims/root-params";
 import { isOpenRedirectShaped } from "./request-pipeline.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import { withScriptNonce } from "vinext/shims/script-nonce-context";
@@ -193,6 +193,7 @@ export async function handleSsr(
     capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
     formState?: ReactFormState | null;
     basePath?: string;
+    rootParams?: RootParams;
     /** When true, wait for the full React tree (including Suspense boundaries)
      *  to resolve before returning the HTML stream. Used for static prerender
      *  and ISR cache writes to avoid caching fallback content. */
@@ -213,7 +214,7 @@ export async function handleSsr(
       clearServerInsertedHTML();
     };
 
-    const rootParams = navContext?.params ?? {};
+    const rootParams = options?.rootParams ?? navContext?.params ?? {};
     return runWithRootParamsScope(rootParams, async () => {
       try {
         // Fused tee path (#981): caller pre-split the stream. No internal tee needed.
