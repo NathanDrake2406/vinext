@@ -6,6 +6,7 @@
  * interface (shims/internal/utils.ts) and cast at the usage sites.
  */
 import type { NEXT_DATA } from "vinext/shims/internal/utils";
+import { isUnknownRecord } from "../utils/cache-control-metadata.js";
 
 export type VinextLinkPrefetchRoute = {
   patternParts: string[];
@@ -70,10 +71,27 @@ export function extractVinextNextDataJson(html: string): string | null {
 }
 
 export function parseVinextNextDataJson(json: string): BrowserVinextNextData {
-  // Boundary invariant: Pages Router HTML embeds __NEXT_DATA__ via
-  // buildPagesNextDataScript(), so JSON.parse receives vinext's own serialized
-  // NEXT_DATA shape plus optional __vinext metadata.
-  return JSON.parse(json) as BrowserVinextNextData;
+  const parsed: unknown = JSON.parse(json);
+  if (!isBrowserVinextNextData(parsed)) {
+    throw new Error("Navigation failed: invalid __NEXT_DATA__ in response");
+  }
+  return parsed;
+}
+
+function isBrowserVinextNextData(value: unknown): value is BrowserVinextNextData {
+  if (!isUnknownRecord(value)) return false;
+
+  const props = Reflect.get(value, "props");
+  const page = Reflect.get(value, "page");
+  const query = Reflect.get(value, "query");
+  const vinext = Reflect.get(value, "__vinext");
+
+  return (
+    isUnknownRecord(props) &&
+    typeof page === "string" &&
+    isUnknownRecord(query) &&
+    (vinext === undefined || isUnknownRecord(vinext))
+  );
 }
 
 export function applyVinextLocaleGlobals(
