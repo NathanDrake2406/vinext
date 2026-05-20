@@ -42,6 +42,8 @@ import * as navigationShim from "../packages/vinext/src/shims/navigation.js";
 import {
   createHistoryStateWithNavigationMetadata,
   createHistoryStateWithPreviousNextUrl,
+  FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+  VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
   createPendingNavigationCommit,
   isCacheRestorableAppPayloadMetadata,
   readHistoryStatePreviousNextUrl,
@@ -393,6 +395,7 @@ async function resolveTestPendingNavigationCommitDispositionDecision(
     visibleCommitVersion: options.currentVisibleCommitVersion,
   });
   const pending = await createPendingNavigationCommit({
+    payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
     currentState: startState,
     nextElements: Promise.resolve(
       createResolvedElements("route:/dashboard", options.nextRootLayoutTreePath),
@@ -457,6 +460,7 @@ async function applyApprovedTestCommit(
   options: ApprovedTestCommitOptions,
 ): Promise<AppRouterState> {
   const pending = await createPendingNavigationCommit({
+    payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
     currentState: state,
     nextElements: Promise.resolve(
       createResolvedElements(
@@ -736,6 +740,7 @@ describe("app browser entry navigation scheduling", () => {
         navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/initial", {}),
         nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
         operationLane: "navigation",
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         params: {},
         pendingRouterState: null,
         previousNextUrl: null,
@@ -754,6 +759,7 @@ describe("app browser entry state helpers", () => {
   it("requires renderId when creating pending commits", () => {
     // @ts-expect-error renderId is required to avoid duplicate commit ids.
     void createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: createState(),
       nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
       navigationSnapshot: createState().navigationSnapshot,
@@ -803,6 +809,7 @@ describe("app browser entry state helpers", () => {
 
     const state = createState();
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: state,
       nextElements: Promise.resolve(nextElements),
       navigationSnapshot: state.navigationSnapshot,
@@ -863,6 +870,7 @@ describe("app browser entry state helpers", () => {
 
   it("carries interception context through pending navigation commits", async () => {
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: createState(),
       nextElements: Promise.resolve(
         createResolvedElements(
@@ -905,6 +913,7 @@ describe("app browser entry state helpers", () => {
     });
 
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: interceptedState,
       nextElements: Promise.resolve(createResolvedElements("route:/feed", "/")),
       navigationSnapshot: createState().navigationSnapshot,
@@ -923,6 +932,7 @@ describe("app browser entry state helpers", () => {
       rootLayoutTreePath: "/(marketing)",
     });
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/(dashboard)")),
       navigationSnapshot: currentState.navigationSnapshot,
@@ -949,6 +959,7 @@ describe("app browser entry state helpers", () => {
     });
     let resolved = false;
     const pending = createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: createState(),
       nextElements,
       navigationSnapshot: createState().navigationSnapshot,
@@ -986,6 +997,7 @@ describe("app browser entry state helpers", () => {
     });
 
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
       navigationSnapshot: currentState.navigationSnapshot,
@@ -1027,6 +1039,7 @@ describe("app browser entry state helpers", () => {
   it("skips a pending commit when a newer navigation has become active", async () => {
     const currentState = createState();
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
       navigationSnapshot: currentState.navigationSnapshot,
@@ -1053,6 +1066,7 @@ describe("app browser entry state helpers", () => {
       visibleCommitVersion: 5,
     });
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: refreshStartState,
       nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
       navigationSnapshot: refreshStartState.navigationSnapshot,
@@ -1103,6 +1117,7 @@ describe("app browser entry state helpers", () => {
       visibleCommitVersion: 3,
     });
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: traverseStartState,
       nextElements: Promise.resolve(createResolvedElements("route:/previous", "/")),
       navigationSnapshot: traverseStartState.navigationSnapshot,
@@ -1275,7 +1290,7 @@ describe("app browser entry state helpers", () => {
       ),
       operationLane: "navigation",
       renderId: 2,
-      requireCacheEntryReuseProof: true,
+      payloadOrigin: VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
       type: "navigate",
     });
 
@@ -1370,6 +1385,7 @@ describe("app browser entry state helpers", () => {
       ],
     });
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(
         createResolvedElements(
@@ -1423,6 +1439,7 @@ describe("app browser entry state helpers", () => {
 
   it("builds a merge commit for refresh and server-action payloads", async () => {
     const refreshCommit = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: createState(),
       nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
       navigationSnapshot: createState().navigationSnapshot,
@@ -1450,6 +1467,7 @@ describe("app browser entry state helpers", () => {
     });
 
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(
         createResolvedElements(
@@ -1504,6 +1522,7 @@ describe("app browser entry state helpers", () => {
     expect(contextOnlyState.routeId).toBe(AppElementsWire.encodeRouteId("/feed", "/feed"));
 
     const interceptedPending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: contextOnlyState,
       nextElements: Promise.resolve(
         createResolvedElements(
@@ -1558,6 +1577,7 @@ describe("app browser entry state helpers", () => {
   it("creates an approved visible commit only after the current operation decision allows mutation", async () => {
     const currentState = createState();
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(
         createResolvedElements("route:/dashboard", "/", null, {
@@ -1625,6 +1645,7 @@ describe("app browser entry state helpers", () => {
   it("traces unknown root-layout approval as an unproven payload commit", async () => {
     const currentState = createState();
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(createResolvedElements("route:/legacy-payload", null)),
       navigationSnapshot: currentState.navigationSnapshot,
@@ -1659,6 +1680,7 @@ describe("app browser entry state helpers", () => {
   it("approves HMR visible commits through a named trusted recovery path", async () => {
     const currentState = createState();
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(
         createResolvedElements("route:/hmr", "/", null, {
@@ -1693,6 +1715,7 @@ describe("app browser entry state helpers", () => {
   it("rejects non-HMR commits on the HMR approval path", async () => {
     const currentState = createState();
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/")),
       navigationSnapshot: currentState.navigationSnapshot,
@@ -1716,6 +1739,7 @@ describe("app browser entry state helpers", () => {
       "page:/next": React.createElement("main", null, "next"),
     });
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(nextElements),
       navigationSnapshot: currentState.navigationSnapshot,
@@ -1754,6 +1778,7 @@ describe("app browser entry state helpers", () => {
       }),
     });
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(createResolvedElements("route:/feed", "/")),
       navigationSnapshot: currentState.navigationSnapshot,
@@ -1791,6 +1816,7 @@ describe("app browser entry state helpers", () => {
       rootLayoutTreePath: "/(marketing)",
     });
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState,
       nextElements: Promise.resolve(createResolvedElements("route:/dashboard", "/(dashboard)")),
       navigationSnapshot: currentState.navigationSnapshot,
@@ -1942,6 +1968,7 @@ describe("app browser navigation controller", () => {
       );
 
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => vi.fn(),
         historyUpdateMode: "push",
@@ -1994,6 +2021,7 @@ describe("app browser navigation controller", () => {
       });
 
       const result = controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => vi.fn(),
         historyUpdateMode: "push",
@@ -2068,6 +2096,7 @@ describe("app browser navigation controller", () => {
 
     try {
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect,
         historyUpdateMode: "push",
@@ -2137,10 +2166,10 @@ describe("app browser navigation controller", () => {
           }),
         ),
         operationLane: "navigation",
+        payloadOrigin: VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
         params: {},
         pendingRouterState: null,
         previousNextUrl: null,
-        requireCacheEntryReuseProof: true,
         targetHref: "https://example.com/dashboard/settings",
         navId: controller.beginNavigation(),
       });
@@ -2166,6 +2195,7 @@ describe("app browser navigation controller", () => {
     try {
       const navId = controller.beginNavigation();
       const renderPromise = controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect,
         historyUpdateMode: "push",
@@ -2210,6 +2240,7 @@ describe("app browser navigation controller", () => {
     try {
       const navId = controller.beginNavigation();
       const renderPromise = controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => commitEffect,
         historyUpdateMode: "push",
@@ -2680,6 +2711,7 @@ describe("app browser navigation lifecycle settlement", () => {
       // Start three navigations. Only C is the current (winning) one.
       const navA = controller.beginNavigation();
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => {
           effectsRun.push("A");
@@ -2698,6 +2730,7 @@ describe("app browser navigation lifecycle settlement", () => {
 
       const navB = controller.beginNavigation();
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => {
           effectsRun.push("B");
@@ -2716,6 +2749,7 @@ describe("app browser navigation lifecycle settlement", () => {
 
       const navC = controller.beginNavigation();
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => {
           effectsRun.push("C");
@@ -2790,6 +2824,7 @@ describe("app browser navigation lifecycle settlement", () => {
       // Start cross-root navigation A (deferred, /(marketing) → /(dashboard)).
       const navA = controller.beginNavigation();
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
         historyUpdateMode: "push",
@@ -2806,6 +2841,7 @@ describe("app browser navigation lifecycle settlement", () => {
       // Start new navigation B (same root). B advances activeNavigationId past A.
       const navB = controller.beginNavigation();
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
         historyUpdateMode: "push",
@@ -2859,6 +2895,7 @@ describe("app browser navigation lifecycle settlement", () => {
     try {
       const refreshNav = controller.beginNavigation();
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
         historyUpdateMode: undefined,
@@ -2912,6 +2949,7 @@ describe("app browser navigation lifecycle settlement", () => {
       const traversePendingState = controller.beginPendingBrowserRouterState();
       const traverseNav = controller.beginNavigation();
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "traverse",
         createNavigationCommitEffect: () => () => {},
         historyUpdateMode: undefined,
@@ -2957,6 +2995,7 @@ describe("app browser navigation lifecycle settlement", () => {
 
   it("resolveAndClassifyNavigationCommit classifies skip when IDs have diverged", async () => {
     const result = await resolveAndClassifyNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       activeNavigationId: 9,
       currentState: createState(),
       navigationSnapshot: createState().navigationSnapshot,
@@ -2981,6 +3020,7 @@ describe("app browser navigation lifecycle settlement", () => {
     });
 
     const resultPromise = resolveAndClassifyNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       activeNavigationId,
       currentState,
       getActiveNavigationId: () => activeNavigationId,
@@ -3032,6 +3072,7 @@ describe("app browser navigation lifecycle settlement", () => {
     });
 
     const resultPromise = resolveAndClassifyNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       activeNavigationId: 8,
       currentState: startedState,
       getCurrentStateForApproval: () => approvalState,
@@ -3085,6 +3126,7 @@ describe("app browser navigation lifecycle settlement", () => {
     try {
       const navId = controller.beginNavigation();
       const renderPromise = controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
         historyUpdateMode: "push",
@@ -3122,6 +3164,7 @@ describe("app browser root-layout hard navigation", () => {
     try {
       const navId = controller.beginNavigation();
       const renderPromise = controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect,
         historyUpdateMode: "push",
@@ -3165,6 +3208,7 @@ describe("app browser root-layout hard navigation", () => {
     try {
       const navId = controller.beginNavigation();
       void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
         historyUpdateMode: "push",
@@ -3208,6 +3252,7 @@ describe("app browser root-layout hard navigation", () => {
       const firstNavId = controller.beginNavigation();
       await expect(
         controller.renderNavigationPayload({
+          payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: "navigate",
           createNavigationCommitEffect: () => () => {},
           historyUpdateMode: "push",
@@ -3236,6 +3281,7 @@ describe("app browser root-layout hard navigation", () => {
       const secondNavId = controller.beginNavigation();
       await expect(
         controller.renderNavigationPayload({
+          payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: "navigate",
           createNavigationCommitEffect: () => () => {},
           historyUpdateMode: "push",
@@ -3274,6 +3320,7 @@ describe("app browser root-layout hard navigation", () => {
       const firstNavId = controller.beginNavigation();
       await expect(
         controller.renderNavigationPayload({
+          payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: "navigate",
           createNavigationCommitEffect: () => () => {},
           historyUpdateMode: "push",
@@ -3301,6 +3348,7 @@ describe("app browser root-layout hard navigation", () => {
       const secondNavId = controller.beginNavigation();
       await expect(
         controller.renderNavigationPayload({
+          payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: "navigate",
           createNavigationCommitEffect: () => () => {},
           historyUpdateMode: "push",
@@ -3435,6 +3483,7 @@ describe("app browser entry previousNextUrl helpers", () => {
     });
 
     const result = await resolveAndClassifyNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       activeNavigationId: 7,
       currentState,
       navigationSnapshot: currentState.navigationSnapshot,
@@ -3588,6 +3637,7 @@ describe("app browser entry previousNextUrl helpers", () => {
       slotBindings: [modalSlotBinding],
     });
     const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       currentState: state,
       nextElements: Promise.resolve(
         createResolvedElements(

@@ -105,6 +105,17 @@ export type PendingNavigationCommit = {
   routeId: string;
 };
 
+export type AppNavigationPayloadOrigin = Readonly<
+  { origin: "fresh" } | { origin: "visited-cache" }
+>;
+
+export const FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
+  origin: "fresh",
+};
+export const VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN: AppNavigationPayloadOrigin = {
+  origin: "visited-cache",
+};
+
 type PendingNavigationCommitDisposition = "dispatch" | "hard-navigate" | "skip";
 type CacheRestorableAppPayloadMetadata = Readonly<{
   cacheEntryReuseProof?: CacheEntryReuseProof;
@@ -141,6 +152,19 @@ export function isCacheRestorableAppPayloadMetadata(
   metadata: CacheRestorableAppPayloadMetadata,
 ): boolean {
   return metadata.cacheEntryReuseProof !== undefined;
+}
+
+function requiresCacheEntryReuseProof(origin: AppNavigationPayloadOrigin): boolean {
+  switch (origin.origin) {
+    case "fresh":
+      return false;
+    case "visited-cache":
+      return true;
+    default: {
+      const _exhaustive: never = origin;
+      throw new Error("[vinext] Unknown App Router payload origin: " + String(_exhaustive));
+    }
+  }
 }
 
 function normalizeNavigationSnapshotMatchedUrl(pathname: string): string {
@@ -433,18 +457,20 @@ export async function createPendingNavigationCommit(options: {
   nextElements: Promise<AppElements>;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   operationLane: OperationLane;
+  payloadOrigin: AppNavigationPayloadOrigin;
   // Advisory: non-intercepted responses clear this even when callers pass the
   // current visible previousNextUrl.
   previousNextUrl?: string | null;
   renderId: number;
-  requireCacheEntryReuseProof?: boolean;
   type: "navigate" | "replace" | "traverse";
 }): Promise<PendingNavigationCommit> {
   const elements = await options.nextElements;
   const metadata = AppElementsWire.readMetadata(elements);
   const cacheEntryReuseProof =
     metadata.cacheEntryReuseProof ??
-    (options.requireCacheEntryReuseProof ? createCacheEntryReuseProof(null) : undefined);
+    (requiresCacheEntryReuseProof(options.payloadOrigin)
+      ? createCacheEntryReuseProof(null)
+      : undefined);
   const requestedPreviousNextUrl =
     options.previousNextUrl !== undefined
       ? options.previousNextUrl

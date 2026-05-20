@@ -9,6 +9,7 @@ import {
 import {
   createPendingNavigationCommit,
   resolvePendingNavigationCommitDispositionDecision,
+  type AppNavigationPayloadOrigin,
   type AppRouterAction,
   type AppRouterState,
   type CommittedOperationRecord,
@@ -405,6 +406,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
   navigationSnapshot: ClientNavigationRenderSnapshot;
   nextElements: Promise<AppElements>;
   operationLane: OperationLane;
+  payloadOrigin: AppNavigationPayloadOrigin;
   previousNextUrl?: string | null;
   renderId: number;
   routeManifest?: RouteManifest | null;
@@ -417,6 +419,7 @@ export async function resolveAndClassifyNavigationCommit(options: {
     nextElements: options.nextElements,
     navigationSnapshot: options.navigationSnapshot,
     operationLane: options.operationLane,
+    payloadOrigin: options.payloadOrigin,
     previousNextUrl: options.previousNextUrl,
     renderId: options.renderId,
     type: options.type,

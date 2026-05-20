@@ -75,6 +75,8 @@ import {
   type AppWireElements,
 } from "./app-elements.js";
 import {
+  FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+  VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
   createHistoryStateWithNavigationMetadata,
   createHistoryStateWithPreviousNextUrl,
   readHistoryStatePreviousNextUrl,
@@ -83,6 +85,7 @@ import {
   resolveHistoryTraversalIntent,
   resolveInterceptionContextFromPreviousNextUrl,
   resolveServerActionRequestState,
+  type AppNavigationPayloadOrigin,
   type AppRouterState,
   type HistoryTraversalIntent,
   type OperationLane,
@@ -444,10 +447,10 @@ async function renderNavigationPayload(
   params: Record<string, string | string[]>,
   previousNextUrl: string | null,
   pendingRouterState: PendingBrowserRouterState | null,
+  payloadOrigin: AppNavigationPayloadOrigin,
   actionType: "navigate" | "replace" | "traverse" = "navigate",
   operationLane: OperationLane = "navigation",
   traversalIntent: HistoryTraversalIntent | null = null,
-  requireCacheEntryReuseProof: boolean = false,
 ): Promise<NavigationPayloadOutcome> {
   try {
     return await browserNavigationController.renderNavigationPayload({
@@ -460,10 +463,10 @@ async function renderNavigationPayload(
       navigationSnapshot,
       nextElements: payload,
       operationLane,
+      payloadOrigin,
       params,
       pendingRouterState,
       previousNextUrl,
-      requireCacheEntryReuseProof,
       targetHistoryIndex: traversalIntent === null ? undefined : traversalIntent.targetHistoryIndex,
       targetHref,
       navId,
@@ -1318,10 +1321,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             cachedParams,
             requestPreviousNextUrl,
             pendingRouterState,
+            VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
             toActionType(navigationKind),
             toOperationLane(navigationKind),
             activeTraversalIntent,
-            true,
           );
           return;
         }
@@ -1475,6 +1478,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           navParams,
           requestPreviousNextUrl,
           pendingRouterState,
+          FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           toActionType(navigationKind),
           toOperationLane(navigationKind),
           activeTraversalIntent,

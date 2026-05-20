@@ -7,7 +7,9 @@ import {
 import type { ClientNavigationRenderSnapshot } from "vinext/shims/navigation";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
+  FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
   createPendingNavigationCommit,
+  type AppNavigationPayloadOrigin,
   type AppRouterState,
   type OperationLane,
 } from "./app-browser-state.js";
@@ -81,10 +83,10 @@ type BrowserNavigationController = {
     navigationSnapshot: ClientNavigationRenderSnapshot;
     nextElements: Promise<AppElements>;
     operationLane: OperationLane;
+    payloadOrigin: AppNavigationPayloadOrigin;
     params: Record<string, string | string[]>;
     pendingRouterState: PendingBrowserRouterState | null;
     previousNextUrl: string | null;
-    requireCacheEntryReuseProof?: boolean;
     targetHistoryIndex?: number | null;
     targetHref: string;
     navId: number;
@@ -412,6 +414,7 @@ export function createAppBrowserNavigationController(
       nextElements,
       navigationSnapshot,
       operationLane: "hmr",
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       renderId,
       type: "replace",
     });
@@ -493,10 +496,10 @@ export function createAppBrowserNavigationController(
     navigationSnapshot: ClientNavigationRenderSnapshot;
     nextElements: Promise<AppElements>;
     operationLane: OperationLane;
+    payloadOrigin: AppNavigationPayloadOrigin;
     params: Record<string, string | string[]>;
     pendingRouterState: PendingBrowserRouterState | null;
     previousNextUrl: string | null;
-    requireCacheEntryReuseProof?: boolean;
     targetHistoryIndex?: number | null;
     targetHref: string;
     navId: number;
@@ -516,9 +519,9 @@ export function createAppBrowserNavigationController(
         nextElements: options.nextElements,
         navigationSnapshot: options.navigationSnapshot,
         operationLane: options.operationLane,
+        payloadOrigin: options.payloadOrigin,
         previousNextUrl: options.previousNextUrl,
         renderId,
-        requireCacheEntryReuseProof: options.requireCacheEntryReuseProof,
         type: options.actionType,
       });
 
@@ -604,6 +607,7 @@ export function createAppBrowserNavigationController(
       nextElements,
       renderId: allocateRenderId(),
       operationLane: "server-action",
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
       startedNavigationId,
       routeManifest: getRouteManifest(),
       targetHref,
