@@ -15961,3 +15961,197 @@ describe("next/router SSR guard (issue #1353)", () => {
     expect(caught as Error).not.toBeInstanceOf(ReferenceError);
   });
 });
+
+// ---------------------------------------------------------------------------
+// i18n `locale: false` on rewrites/redirects (issue #1336, item 1).
+// Ported from Next.js: test/e2e/i18n-ignore-rewrite-source-locale/rewrites.test.ts
+// https://github.com/vercel/next.js/blob/canary/test/e2e/i18n-ignore-rewrite-source-locale/rewrites.test.ts
+//
+// When a rewrite/redirect source carries `locale: false`, Next.js leaves the
+// source pattern untouched (no internal locale prefix is prepended). So a
+// source like `/:locale/rewrite-files/:path*` matches the raw locale-prefixed
+// path with `:locale` capturing the actual locale segment.
+//
+// Without `locale: false`, Next.js prepends `/:nextInternalLocale(en|sv|nl)?`
+// to the source so that the rule matches both prefixed and unprefixed paths
+// (and the user-supplied source pattern matches against the de-localised
+// remainder).
+
+describe("locale: false on rewrites/redirects (issue #1336)", () => {
+  const emptyCtx = {
+    headers: new Headers(),
+    cookies: {},
+    query: new URLSearchParams(),
+    host: "localhost",
+  };
+
+  it("matches multi-param source with trailing catch-all (regression)", async () => {
+    // Even before the locale: false logic, the underlying matcher must handle
+    // a source like `/:locale/rewrite-files/:path*` where there is another
+    // named param before the trailing catch-all. Previously this fell into
+    // the simple catch-all branch which only handled the trailing param.
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    const pattern = "/:locale/rewrite-files/:path*";
+    const result = matchConfigPattern("/en/rewrite-files/file.txt", pattern);
+    expect(result).toEqual({ locale: "en", path: "file.txt" });
+
+    const nested = matchConfigPattern("/sv/rewrite-files/sub/dir/file.txt", pattern);
+    expect(nested).toEqual({ locale: "sv", path: "sub/dir/file.txt" });
+  });
+
+  it("processRoutes: with locale:false leaves source untouched", async () => {
+    const { applyLocaleToRoutes } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const i18n = { locales: ["en", "sv", "nl"], defaultLocale: "en" };
+    const rules = [
+      {
+        source: "/:locale/rewrite-files/:path*",
+        destination: "/:path*",
+        locale: false as const,
+      },
+    ];
+    const out = applyLocaleToRoutes(rules, i18n, "rewrite");
+    expect(out).toHaveLength(1);
+    // locale:false → no internal locale prefix is injected.
+    expect(out[0].source).toBe("/:locale/rewrite-files/:path*");
+    expect(out[0].destination).toBe("/:path*");
+  });
+
+  it("processRoutes: without locale:false prepends the locale alternation", async () => {
+    const { applyLocaleToRoutes } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const i18n = { locales: ["en", "sv", "nl"], defaultLocale: "en" };
+    const rules = [{ source: "/old", destination: "/new", permanent: true as const }];
+    const out = applyLocaleToRoutes(rules, i18n, "redirect");
+    // Next.js produces two source-variants per default-locale (and per domain
+    // default locale for redirects): one default-prefixed and one with the
+    // internal locale capture group. We only require that one of the produced
+    // rules captures the locale alternation so the original source matches
+    // localised URLs.
+    const hasInternalLocaleVariant = out.some((r) => r.source.startsWith("/:nextInternalLocale("));
+    expect(hasInternalLocaleVariant).toBe(true);
+  });
+
+  it("matchRewrite honours locale:false against locale-prefixed paths", async () => {
+    const { matchRewrite, applyLocaleToRoutes } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const i18n = { locales: ["en", "sv", "nl"], defaultLocale: "en" };
+    const rules = applyLocaleToRoutes(
+      [
+        {
+          source: "/:locale/rewrite-files/:path*",
+          destination: "/:path*",
+          locale: false as const,
+        },
+        {
+          source: "/:locale/rewrite-api/:path*",
+          destination: "/api/:path*",
+          locale: false as const,
+        },
+      ],
+      i18n,
+      "rewrite",
+    );
+
+    expect(matchRewrite("/en/rewrite-files/file.txt", rules, emptyCtx)).toBe("/file.txt");
+    expect(matchRewrite("/sv/rewrite-files/file.txt", rules, emptyCtx)).toBe("/file.txt");
+    expect(matchRewrite("/nl/rewrite-files/file.txt", rules, emptyCtx)).toBe("/file.txt");
+    expect(matchRewrite("/en/rewrite-api/hello", rules, emptyCtx)).toBe("/api/hello");
+  });
+
+  it("matchRewrite without locale:false matches all locale-prefixed forms", async () => {
+    // When the user writes a plain source like `/old` and i18n is configured,
+    // vinext emits a `/:nextInternalLocale(en|sv|nl)` variant so the rule
+    // matches any locale-prefixed URL while retaining the original `/old`
+    // source for default-locale requests that arrive without a prefix.
+    const { matchRewrite, applyLocaleToRoutes } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const i18n = { locales: ["en", "sv", "nl"], defaultLocale: "en" };
+    const rules = applyLocaleToRoutes([{ source: "/old", destination: "/new" }], i18n, "rewrite");
+
+    // Locale-prefixed paths match and the destination is also locale-prefixed.
+    expect(matchRewrite("/en/old", rules, emptyCtx)).toBe("/en/new");
+    expect(matchRewrite("/sv/old", rules, emptyCtx)).toBe("/sv/new");
+    expect(matchRewrite("/nl/old", rules, emptyCtx)).toBe("/nl/new");
+    // Unprefixed default-locale paths still match the original source.
+    expect(matchRewrite("/old", rules, emptyCtx)).toBe("/new");
+  });
+
+  it("matchRedirect uses the locale-static fast path for nextInternalLocale variants", async () => {
+    // The `_LOCALE_STATIC_RE` detection regex must accept both
+    //   `/:locale(en|fr)?/foo` (optional, user-written)
+    // and
+    //   `/:nextInternalLocale(en|fr)/foo` (mandatory, emitted by
+    //                                       applyLocaleToRoutes)
+    // — otherwise the locale-capture variants emitted by this PR would fall
+    // into the linear scan, regressing the O(1) lookup performance of i18n
+    // apps with many redirects.
+    const { matchRedirect, applyLocaleToRoutes } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const i18n = { locales: ["en", "sv", "nl"], defaultLocale: "en" };
+    const rules = applyLocaleToRoutes(
+      [{ source: "/security", destination: "/security-dest", permanent: false as const }],
+      i18n,
+      "redirect",
+    );
+    // Locale-capture (mandatory) variant must hit the fast path AND substitute
+    // the captured locale into the destination.
+    expect(matchRedirect("/sv/security", rules, emptyCtx)?.destination).toBe("/sv/security-dest");
+    // Default-locale-literal variant strips the prefix.
+    expect(matchRedirect("/en/security", rules, emptyCtx)?.destination).toBe("/security-dest");
+    // No-locale-prefix path must not be matched by the mandatory variant —
+    // the original (unprefixed) source matches and produces the unprefixed
+    // destination.
+    expect(matchRedirect("/security", rules, emptyCtx)?.destination).toBe("/security-dest");
+  });
+
+  it("applyLocaleToRoutes preserves trailing slash when trailingSlash is true", async () => {
+    const { applyLocaleToRoutes } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const i18n = { locales: ["en", "fr"], defaultLocale: "en" };
+
+    // trailingSlash: false (default) — root source collapses to "".
+    const noTrailing = applyLocaleToRoutes(
+      [{ source: "/", destination: "/home" }],
+      i18n,
+      "rewrite",
+      { trailingSlash: false },
+    );
+    const internalNoTrailing = noTrailing.find((r) => r.source.startsWith("/:nextInternalLocale("));
+    expect(internalNoTrailing?.source).toBe("/:nextInternalLocale(en|fr)");
+
+    // trailingSlash: true — root source is preserved.
+    const withTrailing = applyLocaleToRoutes(
+      [{ source: "/", destination: "/home" }],
+      i18n,
+      "rewrite",
+      { trailingSlash: true },
+    );
+    const internalWithTrailing = withTrailing.find((r) =>
+      r.source.startsWith("/:nextInternalLocale("),
+    );
+    expect(internalWithTrailing?.source).toBe("/:nextInternalLocale(en|fr)/");
+  });
+
+  it("matchRedirect emits both default-locale-literal and locale-capture variants", async () => {
+    // For redirects, Next.js emits two source variants per rule:
+    //   1. `/${defaultLocale}/old` with destination `/new` (no locale prefix
+    //      in destination — the default-locale variant strips the prefix).
+    //   2. `/:nextInternalLocale(en|sv|nl)/old` with destination
+    //      `/:nextInternalLocale/new` so non-default locales keep their prefix.
+    // This matches packages/next/src/lib/load-custom-routes.ts processRoutes.
+    const { matchRedirect, applyLocaleToRoutes } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const i18n = { locales: ["en", "sv", "nl"], defaultLocale: "en" };
+    const rules = applyLocaleToRoutes(
+      [{ source: "/old", destination: "/new", permanent: false as const }],
+      i18n,
+      "redirect",
+    );
+    // `/en/old` matches the default-locale-literal variant first → strips the prefix.
+    expect(matchRedirect("/en/old", rules, emptyCtx)?.destination).toBe("/new");
+    // Non-default locales match the `:nextInternalLocale` variant.
+    expect(matchRedirect("/sv/old", rules, emptyCtx)?.destination).toBe("/sv/new");
+    expect(matchRedirect("/nl/old", rules, emptyCtx)?.destination).toBe("/nl/new");
+  });
+});
