@@ -23,6 +23,7 @@ import type { Server as HttpServer } from "node:http";
 import type { Route } from "../routing/pages-router.js";
 import type { AppRoute } from "../routing/app-router.js";
 import type { ResolvedNextConfig } from "../config/next-config.js";
+import { BLOCKED_PAGES } from "vinext/shims/constants";
 import { classifyPagesRoute, classifyAppRoute, getAppRouteRenderEntryPath } from "./report.js";
 import {
   concatUint8Arrays,
@@ -650,9 +651,8 @@ export async function prerenderPages({
     const pagesToRender: PageToRender[] = [];
 
     for (const route of bundlePageRoutes) {
-      // Skip internal pages (_app, _document, _error, etc.)
-      const routeName = path.basename(route.filePath, path.extname(route.filePath));
-      if (routeName.startsWith("_")) continue;
+      // Skip Next.js special pages (_app, _document, _error)
+      if (BLOCKED_PAGES.includes(route.pattern)) continue;
       // `/404` is rendered by the dedicated 404 block below. Production serves
       // it with a 404 status, so the generic static-page loop must not treat
       // that non-2xx response as a prerender failure.
