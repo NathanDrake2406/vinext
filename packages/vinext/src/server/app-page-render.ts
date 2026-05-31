@@ -103,7 +103,6 @@ type RenderAppPageLifecycleOptions = {
   isPrerender?: boolean;
   isProduction: boolean;
   isRscRequest: boolean;
-  waitForAllReady?: boolean;
   isrDebug?: AppPageDebugLogger;
   isrHtmlKey: (pathname: string) => string;
   isrRscKey: (
@@ -526,7 +525,7 @@ export async function renderAppPageLifecycle(
         scriptNonce: options.scriptNonce,
         sideStream: rscCapture.sideStream,
         ssrHandler,
-        waitForAllReady: options.isPrerender === true || options.waitForAllReady === true,
+        waitForAllReady: options.isPrerender === true,
       });
     },
     renderSpecialErrorResponse(specialError) {

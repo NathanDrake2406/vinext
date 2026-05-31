@@ -2325,7 +2325,7 @@ describe("App Router Production build", () => {
 });
 
 describe("App Router cacheComponents root-param shell parity", () => {
-  it("keeps cached root-param content out of the Suspense fallback for unlisted child params", async () => {
+  it("keeps cached root-param content ready while preserving dynamic fallbacks for unlisted child params", async () => {
     // Ported from Next.js: test/e2e/app-dir/ppr-root-param-fallback/ppr-root-param-fallback.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/ppr-root-param-fallback/ppr-root-param-fallback.test.ts
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-ppr-root-param-fallback-"));
@@ -2477,6 +2477,27 @@ export function generateStaticParams() {
         logLevel: "silent",
       });
       await builder.buildApp();
+      const { runPrerender } = await import("../packages/vinext/src/build/run-prerender.js");
+      await runPrerender({ root, concurrency: 1 });
+      const prerenderManifest = JSON.parse(
+        fs.readFileSync(path.join(rscOutDir, "vinext-prerender.json"), "utf-8"),
+      ) as {
+        routes: Array<{ path?: string; route: string; status: string }>;
+      };
+      expect(prerenderManifest.routes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "/en/blog/[slug]",
+            route: "/:locale/blog/:slug",
+            status: "rendered",
+          }),
+          expect.objectContaining({
+            path: "/fr/blog/[slug]",
+            route: "/:locale/blog/:slug",
+            status: "rendered",
+          }),
+        ]),
+      );
 
       const { startProdServer } = await import("../packages/vinext/src/server/prod-server.js");
       ({ server } = await startProdServer({
@@ -2497,6 +2518,11 @@ export function generateStaticParams() {
         expect(html).toMatch(new RegExp(`Locale:\\s*(?:<!-- -->\\s*)?${locale}`));
         expect(html).toContain(`Home (${locale})`);
         expect(html).not.toContain('id="locale-loading"');
+        expect(html).toContain('id="blog-loading"');
+        expect(html).not.toContain('id="blog-content"');
+        expect(html).toContain('id="dynamic-loading"');
+        expect(html).not.toContain('id="user-info"');
+        expect(html).not.toContain('id="comments"');
       }
     } finally {
       await new Promise<void>((resolve, reject) => {

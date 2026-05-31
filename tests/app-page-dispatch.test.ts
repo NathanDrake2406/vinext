@@ -77,6 +77,7 @@ function createDispatchOptions(
     generateStaticParams?: DispatchOptions["generateStaticParams"];
     formState?: DispatchOptions["formState"];
     getSourceRoute?: DispatchOptions["getSourceRoute"];
+    getNavigationContext?: DispatchOptions["getNavigationContext"];
     actionError?: DispatchOptions["actionError"];
     actionFailed?: DispatchOptions["actionFailed"];
     interceptionContext?: string | null;
@@ -88,6 +89,8 @@ function createDispatchOptions(
     loadSsrHandler?: DispatchOptions["loadSsrHandler"];
     middlewareContext?: AppPageMiddlewareContext;
     mountedSlotsHeader?: string | null;
+    params?: DispatchOptions["params"];
+    pprFallbackCacheShells?: DispatchOptions["pprFallbackCacheShells"];
     renderToReadableStream?: DispatchOptions["renderToReadableStream"];
     request?: Request;
     revalidateSeconds?: number | null;
@@ -132,9 +135,7 @@ function createDispatchOptions(
     getFontStyles() {
       return [];
     },
-    getNavigationContext() {
-      return { pathname: "/posts/hello" };
-    },
+    getNavigationContext: overrides.getNavigationContext ?? (() => ({ pathname: "/posts/hello" })),
     getSourceRoute: overrides.getSourceRoute ?? (() => undefined),
     hasGenerateStaticParams: typeof overrides.generateStaticParams === "function",
     hasPageDefaultExport: true,
@@ -162,7 +163,8 @@ function createDispatchOptions(
       status: null,
     },
     mountedSlotsHeader: overrides.mountedSlotsHeader,
-    params: { slug: "hello" },
+    params: overrides.params ?? { slug: "hello" },
+    pprFallbackCacheShells: overrides.pprFallbackCacheShells,
     probeLayoutAt() {
       return null;
     },
@@ -218,6 +220,108 @@ describe("app page dispatch", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("x-vinext-cache")).toBe("HIT");
     await expect(response.text()).resolves.toBe("<html>cached</html>");
+  });
+
+  it("serves stale PPR fallback-shell HTML instead of rendering the unknown concrete path", async () => {
+    let navigationContext: { params?: Record<string, string | string[]>; pathname?: string } = {};
+    const scheduledRegeneration: {
+      key?: string;
+      render?: () => Promise<void>;
+    } = {};
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `element:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
+          true,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/new-post",
+      getNavigationContext() {
+        return navigationContext;
+      },
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr(_rscStream, navContext) {
+          if (
+            !navContext ||
+            typeof navContext !== "object" ||
+            !("pathname" in navContext) ||
+            !("params" in navContext)
+          ) {
+            throw new Error("expected navigation context for fallback shell regeneration");
+          }
+          return createStream([
+            `<html><head></head><body>${String(navContext.pathname)}:${JSON.stringify(navContext.params)}</body></html>`,
+          ]);
+        },
+      }),
+      params: { locale: "en", slug: "new-post" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+      scheduleBackgroundRegeneration(key, render) {
+        scheduledRegeneration.key = key;
+        scheduledRegeneration.render = render;
+      },
+      setNavigationContext(context) {
+        navigationContext = context;
+      },
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual([
+      "html:/en/blog/new-post",
+      "html:/en/blog/[slug]",
+    ]);
+    expect(response.headers.get("x-vinext-cache")).toBe("STALE");
+    await expect(response.text()).resolves.toContain("Locale: en");
+    expect(buildPageElement).not.toHaveBeenCalled();
+    expect(scheduledRegeneration.key).toBe("html:/en/blog/[slug]");
+
+    if (!scheduledRegeneration.render) {
+      throw new Error("expected fallback shell regeneration to be scheduled");
+    }
+    await scheduledRegeneration.render();
+
+    expect(buildPageElement).toHaveBeenCalledTimes(2);
+    expect(buildPageElement.mock.calls.map(([, params]) => params)).toEqual([
+      { locale: "en", slug: "[slug]" },
+      { locale: "en", slug: "[slug]" },
+    ]);
+    expect(options.isrSet).toHaveBeenCalledWith(
+      "html:/en/blog/[slug]",
+      expect.objectContaining({
+        html: expect.stringContaining('/en/blog/[slug]:{"locale":"en","slug":"[slug]"}'),
+      }),
+      60,
+      expect.arrayContaining(["/en/blog/[slug]"]),
+      undefined,
+    );
   });
 
   it("bypasses cached production HTML when draft mode is enabled", async () => {
