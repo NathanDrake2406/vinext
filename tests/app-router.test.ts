@@ -2324,6 +2324,193 @@ describe("App Router Production build", () => {
   }, 30000);
 });
 
+describe("App Router cacheComponents root-param shell parity", () => {
+  it("keeps cached root-param content out of the Suspense fallback for unlisted child params", async () => {
+    // Ported from Next.js: test/e2e/app-dir/ppr-root-param-fallback/ppr-root-param-fallback.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/ppr-root-param-fallback/ppr-root-param-fallback.test.ts
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-ppr-root-param-fallback-"));
+    const appDir = path.join(root, "app");
+    const localeDir = path.join(appDir, "[locale]");
+    const blogDir = path.join(localeDir, "blog", "[slug]");
+    fs.mkdirSync(blogDir, { recursive: true });
+    fs.symlinkSync(
+      path.resolve(import.meta.dirname, "../node_modules"),
+      path.join(root, "node_modules"),
+      "junction",
+    );
+    fs.writeFileSync(path.join(root, "package.json"), `{"type":"module"}`);
+    fs.writeFileSync(
+      path.join(root, "next.config.ts"),
+      `import type { NextConfig } from "vinext";
+
+const nextConfig: NextConfig = {
+  cacheComponents: true,
+};
+
+export default nextConfig;
+`,
+    );
+    fs.writeFileSync(
+      path.join(localeDir, "layout.tsx"),
+      `import { Suspense } from "react";
+import { cookies } from "next/headers";
+
+async function getLocaleConfig(locale: string) {
+  "use cache";
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return {
+    locale,
+    translations: {
+      home: \`Home (\${locale})\`,
+      blog: \`Blog (\${locale})\`,
+    },
+  };
+}
+
+async function LocaleInfo({ params }: { params: Promise<{ locale: string }> }) {
+  const { locale } = await params;
+  const config = await getLocaleConfig(locale);
+  return (
+    <header id="locale-header">
+      <span>Locale: {config.locale}</span>
+      <div id="translations">{config.translations.home} | {config.translations.blog}</div>
+    </header>
+  );
+}
+
+export default function LocaleLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode;
+  params: Promise<{ locale: string }>;
+}) {
+  return (
+    <html>
+      <body>
+        <div id="static-header">Welcome to our Blog Platform</div>
+        <Suspense fallback={<div id="locale-loading">Loading locale info...</div>}>
+          <LocaleInfo params={params} />
+        </Suspense>
+        <Suspense fallback={<div id="dynamic-loading">Loading user...</div>}>
+          <UserInfo />
+        </Suspense>
+        {children}
+      </body>
+    </html>
+  );
+}
+
+async function UserInfo() {
+  const cookieStore = await cookies();
+  const user = cookieStore.get("user")?.value || "anonymous";
+  return <div id="user-info">Logged in as: {user}</div>;
+}
+
+export function generateStaticParams() {
+  return [{ locale: "en" }, { locale: "fr" }];
+}
+`,
+    );
+    fs.writeFileSync(
+      path.join(blogDir, "page.tsx"),
+      `import { Suspense } from "react";
+import { cookies } from "next/headers";
+
+async function getBlogPost(locale: string, slug: string) {
+  "use cache";
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return { title: \`Blog Post: \${slug}\`, locale };
+}
+
+async function BlogContent({ params }: { params: Promise<{ locale: string; slug: string }> }) {
+  const { locale, slug } = await params;
+  const post = await getBlogPost(locale, slug);
+  return <article id="blog-content">{post.title} / {post.locale}</article>;
+}
+
+export default function BlogPost({
+  params,
+}: {
+  params: Promise<{ locale: string; slug: string }>;
+}) {
+  return (
+    <main>
+      <div id="static-blog-header">Blog Article</div>
+      <Suspense fallback={<div id="blog-loading">Loading article...</div>}>
+        <BlogContent params={params} />
+      </Suspense>
+      <Suspense fallback={<div id="dynamic-loading">Loading comments...</div>}>
+        <DynamicComments />
+      </Suspense>
+    </main>
+  );
+}
+
+async function DynamicComments() {
+  const cookieStore = await cookies();
+  const user = cookieStore.get("user")?.value || "anonymous";
+  return (
+    <section id="comments">
+      <h3>Comments</h3>
+      <p>Viewing as: {user}</p>
+    </section>
+  );
+}
+
+export function generateStaticParams() {
+  return [{ slug: "hello-world" }, { slug: "getting-started" }];
+}
+`,
+    );
+
+    let server: import("node:http").Server | undefined;
+    try {
+      const outDir = path.join(root, "dist");
+      const rscOutDir = path.join(outDir, "server");
+      const ssrOutDir = path.join(outDir, "server", "ssr");
+      const clientOutDir = path.join(outDir, "client");
+      const builder = await createBuilder({
+        root,
+        configFile: false,
+        plugins: [vinext({ appDir: root, rscOutDir, ssrOutDir, clientOutDir })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+
+      const { startProdServer } = await import("../packages/vinext/src/server/prod-server.js");
+      ({ server } = await startProdServer({
+        port: 0,
+        outDir,
+        noCompression: true,
+      }));
+      const addr = server.address();
+      if (!addr || typeof addr !== "object") {
+        throw new Error("production server did not expose a TCP port");
+      }
+
+      for (const locale of ["en", "fr"]) {
+        const response = await fetch(`http://localhost:${addr.port}/${locale}/blog/new-post`);
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(html).toContain('id="locale-header"');
+        expect(html).toMatch(new RegExp(`Locale:\\s*(?:<!-- -->\\s*)?${locale}`));
+        expect(html).toContain(`Home (${locale})`);
+        expect(html).not.toContain('id="locale-loading"');
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        if (!server) {
+          resolve();
+          return;
+        }
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
 describe("App Router Production server (startProdServer)", () => {
   const outDir = path.resolve(APP_FIXTURE_DIR, "dist");
   let server: import("node:http").Server | undefined;
@@ -4279,6 +4466,15 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain("      rootParams,\n      probeLayoutAt");
     expect(code).toContain("dispatchMatchedRouteHandler({");
     expect(code).toContain("matchRoute,");
+  });
+
+  it("passes cacheComponents into the typed App RSC handler", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
+      cacheComponents: true,
+    });
+
+    expect(code).toContain("const __cacheComponents = true;");
+    expect(code).toContain("cacheComponents: __cacheComponents");
   });
 
   it("describes beforeFiles rewrites in the generated app shape", () => {

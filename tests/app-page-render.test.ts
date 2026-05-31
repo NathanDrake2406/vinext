@@ -47,6 +47,14 @@ function createDeferred<T = void>() {
   return { promise, reject, resolve };
 }
 
+type TestSsrOptions = {
+  formState?: unknown;
+  scriptNonce?: string;
+  sideStream?: ReadableStream<Uint8Array>;
+  capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
+  waitForAllReady?: boolean;
+};
+
 function createCommonOptions() {
   const waitUntilPromises: Promise<void>[] = [];
   const renderToReadableStream = vi.fn(() => createStream(["flight-data"]));
@@ -55,12 +63,7 @@ function createCommonOptions() {
       _rscStream: ReadableStream<Uint8Array>,
       _navContext: unknown,
       _fontData: unknown,
-      options?: {
-        formState?: unknown;
-        scriptNonce?: string;
-        sideStream?: ReadableStream<Uint8Array>;
-        capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
-      },
+      options?: TestSsrOptions,
     ) {
       // Fill capturedRscDataRef so the ISR cache write path can verify paired
       // HTML + RSC writes. The embed transform accumulates raw bytes; simulate
@@ -185,6 +188,34 @@ function createCommonOptions() {
     },
   };
 }
+
+describe("App page HTML stream readiness", () => {
+  it("passes waitForAllReady to the SSR handler when requested", async () => {
+    const common = createCommonOptions();
+    const observed: Array<boolean | undefined> = [];
+    const loadSsrHandler = vi.fn(async () => ({
+      async handleSsr(
+        _rscStream: ReadableStream<Uint8Array>,
+        _navContext: unknown,
+        _fontData: unknown,
+        options?: TestSsrOptions,
+      ) {
+        observed.push(options?.waitForAllReady);
+        return createStream(["<html>page</html>"]);
+      },
+    }));
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      loadSsrHandler,
+      waitForAllReady: true,
+    });
+
+    await response.text();
+
+    expect(observed).toEqual([true]);
+  });
+});
 
 describe("clearRequestContext timing — issue #660", () => {
   // Regression test: clearRequestContext() must not be called before the HTML

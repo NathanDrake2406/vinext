@@ -216,6 +216,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   middlewareContext: AppPageMiddlewareContext;
   mountedSlotsHeader?: string | null;
   params: AppPageParams;
+  waitForAllReady?: boolean;
   staticParamsValidationParams?: AppPageParams;
   rootParams?: RootParams;
   probeLayoutAt: (layoutIndex: number) => unknown;
@@ -719,6 +720,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     isPrerender: process.env.VINEXT_PRERENDER === "1",
     isProduction: options.isProduction,
     isRscRequest: options.isRscRequest,
+    waitForAllReady: options.waitForAllReady,
     isrDebug: options.isrDebug,
     isrHtmlKey: options.isrHtmlKey,
     isrRscKey: options.isrRscKey,

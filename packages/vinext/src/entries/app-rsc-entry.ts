@@ -133,6 +133,8 @@ type AppRouterConfig = {
   cacheMaxMemorySize?: number;
   /** Inline app CSS into production HTML (from experimental.inlineCss). */
   inlineCss?: boolean;
+  /** Enables Next.js Cache Components semantics for App Router document HTML. */
+  cacheComponents?: boolean;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
   /**
@@ -190,6 +192,7 @@ export function generateRscEntry(
   const expireTime = config?.expireTime ?? DEFAULT_EXPIRE_TIME;
   const cacheMaxMemorySize = config?.cacheMaxMemorySize;
   const inlineCss = config?.inlineCss === true;
+  const cacheComponents = config?.cacheComponents === true;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
   const publicFiles = config?.publicFiles ?? [];
@@ -514,6 +517,7 @@ const __clientTraceMetadata = ${JSON.stringify(clientTraceMetadata)};
 // \`vinextConfig\` export). Empty string when unset.
 export const __assetPrefix = ${JSON.stringify(assetPrefix)};
 export const __inlineCss = ${JSON.stringify(inlineCss)};
+const __cacheComponents = ${JSON.stringify(cacheComponents)};
 
 export function seedMemoryCacheFromPrerender(serverDir) {
   return __seedMemoryCacheFromPrerender(serverDir, {
@@ -556,6 +560,7 @@ export default __createAppRscHandler({
     __clearRequestContext();
   },
   configHeaders: __configHeaders,
+  cacheComponents: __cacheComponents,
   configRedirects: __configRedirects,
   configRewrites: __configRewrites,
   draftModeSecret: __draftModeSecret,
@@ -571,6 +576,7 @@ export default __createAppRscHandler({
     middlewareContext,
     mountedSlotsHeader,
     params,
+    waitForAllReady,
     staticParamsValidationParams,
     rootParams,
     request,
@@ -651,6 +657,7 @@ export default __createAppRscHandler({
       middlewareContext,
       mountedSlotsHeader,
       params,
+      waitForAllReady,
       staticParamsValidationParams,
       rootParams,
       probeLayoutAt(li) {

@@ -2382,6 +2382,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               expireTime: nextConfig?.expireTime,
               cacheMaxMemorySize: nextConfig?.cacheMaxMemorySize,
               inlineCss: nextConfig?.inlineCss,
+              cacheComponents: nextConfig?.cacheComponents,
               i18n: nextConfig?.i18n,
               hasPagesDir,
               publicFiles: scanPublicFileRoutes(root),

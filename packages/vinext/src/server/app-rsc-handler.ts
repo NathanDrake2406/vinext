@@ -122,6 +122,7 @@ type DispatchMatchedPageOptions<TRoute> = {
   middlewareContext: AppRscMiddlewareContext;
   mountedSlotsHeader: string | null;
   params: AppPageParams;
+  waitForAllReady?: boolean;
   staticParamsValidationParams?: AppPageParams;
   rootParams?: RootParams;
   request: Request;
@@ -215,6 +216,7 @@ type NavigationContextValue = {
 
 type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   basePath: string;
+  cacheComponents?: boolean;
   clearRequestContext: () => void;
   configHeaders: NextHeader[];
   configRedirects: NextRedirect[];
@@ -699,6 +701,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     middlewareContext,
     mountedSlotsHeader,
     params: renderParams,
+    waitForAllReady: options.cacheComponents === true && request.method === "GET" && !isRscRequest,
     staticParamsValidationParams: prerenderRouteParams === null ? undefined : params,
     rootParams,
     request,
