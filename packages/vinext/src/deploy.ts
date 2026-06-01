@@ -1425,56 +1425,74 @@ type PrerenderManifest = {
   routes?: PrerenderManifestRoute[];
 };
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const VINEXT_PREGEN_START = "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */";
+const VINEXT_PREGEN_END = "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */";
+const VINEXT_PREGEN_RE = new RegExp(
+  `${escapeRegExp(VINEXT_PREGEN_START)}[\\s\\S]*?${escapeRegExp(VINEXT_PREGEN_END)}\\n?`,
+  "g",
+);
+
 /**
  * Read the prerender manifest and inject pregenerated concrete paths into the
  * App Router Worker bundle so the PPR fallback-shell guard is populated at
  * module init time without calling `seedMemoryCacheFromPrerender`.
  *
  * The paths are injected as `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS`
- * and consumed by `initPregeneratedPathsFromGlobals` in the generated RSC entry.
- * No-op when the manifest or Worker entry does not exist.
+ * wrapped in replaceable marker comments, and consumed by
+ * `initPregeneratedPathsFromGlobals` in the generated RSC entry.
+ *
+ * Idempotent: repeated calls strip the previous injection before writing the
+ * new one. If the manifest is missing, corrupt, or empty, any prior injection
+ * is stripped and nothing new is written — failing closed to empty.
  */
-function injectPregeneratedConcretePaths(root: string): void {
-  const manifestPath = path.join(root, "dist", "server", "vinext-prerender.json");
-  if (!fs.existsSync(manifestPath)) return;
-
-  let manifest: PrerenderManifest;
-  try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
-  } catch {
-    return;
-  }
-
-  if (!manifest.routes?.length) return;
-
-  // Group concrete paths by route pattern
-  const byPattern = new Map<string, string[]>();
-  for (const route of manifest.routes) {
-    if (route.status !== "rendered") continue;
-    if (route.router !== "app") continue;
-    if (!route.path) continue;
-    const pattern = route.route;
-    if (!pattern) continue;
-    const paths = byPattern.get(pattern);
-    if (paths) {
-      paths.push(route.path);
-    } else {
-      byPattern.set(pattern, [route.path]);
-    }
-  }
-
-  if (byPattern.size === 0) return;
-
-  const table: Array<[string, string[]]> = [];
-  for (const [pattern, paths] of byPattern) {
-    table.push([pattern, paths]);
-  }
-
+export function injectPregeneratedConcretePaths(root: string): void {
   const workerEntry = path.resolve(root, "dist", "server", "index.js");
   if (!fs.existsSync(workerEntry)) return;
 
   let code = fs.readFileSync(workerEntry, "utf-8");
-  code = `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = ${JSON.stringify(table)};\n` + code;
+  code = code.replace(VINEXT_PREGEN_RE, "");
+
+  const manifestPath = path.join(root, "dist", "server", "vinext-prerender.json");
+  let manifest: PrerenderManifest | undefined;
+
+  if (fs.existsSync(manifestPath)) {
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    } catch {
+      // corrupt — fall through to write stripped code
+    }
+  }
+
+  if (manifest?.routes?.length) {
+    const byPattern = new Map<string, string[]>();
+    for (const route of manifest.routes) {
+      if (route.status !== "rendered") continue;
+      if (route.router !== "app") continue;
+      if (!route.path) continue;
+      const pattern = route.route;
+      if (!pattern) continue;
+      const paths = byPattern.get(pattern);
+      if (paths) {
+        paths.push(route.path);
+      } else {
+        byPattern.set(pattern, [route.path]);
+      }
+    }
+
+    if (byPattern.size > 0) {
+      const table = Array.from(byPattern.entries());
+      const injection =
+        `${VINEXT_PREGEN_START}\n` +
+        `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = ${JSON.stringify(table)};\n` +
+        `${VINEXT_PREGEN_END}\n`;
+      code = injection + code;
+    }
+  }
+
   fs.writeFileSync(workerEntry, code);
 }
 
