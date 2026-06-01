@@ -91,6 +91,7 @@ function createDispatchOptions(
     mountedSlotsHeader?: string | null;
     params?: DispatchOptions["params"];
     pprFallbackCacheShells?: DispatchOptions["pprFallbackCacheShells"];
+    renderedConcreteUrlPaths?: DispatchOptions["renderedConcreteUrlPaths"];
     renderToReadableStream?: DispatchOptions["renderToReadableStream"];
     request?: Request;
     revalidateSeconds?: number | null;
@@ -165,6 +166,7 @@ function createDispatchOptions(
     mountedSlotsHeader: overrides.mountedSlotsHeader,
     params: overrides.params ?? { slug: "hello" },
     pprFallbackCacheShells: overrides.pprFallbackCacheShells,
+    renderedConcreteUrlPaths: overrides.renderedConcreteUrlPaths,
     probeLayoutAt() {
       return null;
     },
@@ -220,6 +222,71 @@ describe("app page dispatch", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("x-vinext-cache")).toBe("HIT");
     await expect(response.text()).resolves.toBe("<html>cached</html>");
+  });
+
+  it("does not serve the fallback shell for a known pregenerated route whose exact cache is absent", async () => {
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `fresh:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      // Exact HTML cache is absent (evicted / stale-empty / read-error)
+      if (key === "html:/en/blog/known-post") {
+        return null;
+      }
+      // Fallback shell cache EXISTS
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/known-post",
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr(_rscStream, _navContext) {
+          return createStream([
+            `<html><head></head><body>fresh:${JSON.stringify({ locale: "en", slug: "known-post" })}</body></html>`,
+          ]);
+        },
+      }),
+      params: { locale: "en", slug: "known-post" },
+      // Mark /en/blog/known-post as a known pregenerated route
+      renderedConcreteUrlPaths: new Set(["/en/blog/known-post"]),
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    // The dispatch should NOT serve the fallback shell. It should fall
+    // through to a fresh render because /en/blog/known-post is a known
+    // pregenerated route (its exact cache is temporarily absent).
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual(["html:/en/blog/known-post"]);
+    expect(isrGet).not.toHaveBeenCalledWith("html:/en/blog/[slug]");
+    expect(buildPageElement).toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
   });
 
   it("serves stale PPR fallback-shell HTML instead of rendering the unknown concrete path", async () => {

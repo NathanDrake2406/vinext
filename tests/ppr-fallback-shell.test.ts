@@ -38,6 +38,46 @@ describe("ppr fallback shell cache task tracking", () => {
     expect(state.pendingCacheTasks).toBe(0);
   });
 
+  it("completes independent child public cache work before cache-ready when parent hits dynamic boundary", async () => {
+    const state = createPprFallbackShellState({
+      fallbackParamNames: ["slug"],
+      routePattern: "/:locale/blog/:slug",
+    });
+    let childWorkResolve!: () => void;
+    const childWork = new Promise<void>((resolve) => {
+      childWorkResolve = resolve;
+    });
+    let childCompleted = false;
+    let isReady = false;
+    const readyPromise = waitForPprFallbackShellCacheReady(state).then(() => {
+      isReady = true;
+    });
+
+    runWithPprFallbackShellState(state, () =>
+      trackPprFallbackShellCacheTask(async () => {
+        trackPprFallbackShellCacheTask(async () => {
+          await childWork;
+          childCompleted = true;
+        }, "default").catch(() => {});
+
+        const suspension = createPprFallbackShellSuspensePromise("headers");
+        if (suspension) throw suspension;
+      }, "default"),
+    ).catch(() => {});
+
+    await delay(5);
+    expect(isReady).toBe(false);
+
+    childWorkResolve();
+    await readyPromise;
+
+    expect(isReady).toBe(true);
+    expect(childCompleted).toBe(true);
+    expect(state.pendingCacheTasks).toBe(0);
+
+    state.abortController.abort();
+  });
+
   it("stops waiting for cache tasks that suspend on fallback-shell dynamic work", async () => {
     const state = createPprFallbackShellState({
       fallbackParamNames: ["slug"],

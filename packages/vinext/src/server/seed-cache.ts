@@ -69,6 +69,32 @@ type PrerenderCacheSeedOptions = {
   ) => Promise<void>;
 };
 
+// ─── Rendered concrete URL paths ──────────────────────────────────────────────
+
+/**
+ * Route pattern → set of concrete URL paths that were pre-rendered at build time.
+ * Populated during `seedMemoryCacheFromPrerender`, read by the dispatch function
+ * to avoid serving the fallback shell for known pregenerated routes when the
+ * exact cache entry is temporarily absent (eviction, cold start, stale-empty).
+ *
+ * There is no race condition here: the seeder runs at startup before any
+ * requests are served, and the map is read-only afterwards.
+ */
+const concreteUrlPathsByRoute = new Map<string, Set<string>>();
+
+/**
+ * Returns the set of concrete URL paths that were pre-rendered for the given
+ * route pattern, or `undefined` if the route pattern has no pre-rendered paths.
+ *
+ * This set is populated during `seedMemoryCacheFromPrerender` and is stable
+ * for the lifetime of the process. Lookups are O(1).
+ */
+export function getRenderedConcreteUrlPathsForRoute(
+  routePattern: string,
+): ReadonlySet<string> | undefined {
+  return concreteUrlPathsByRoute.get(routePattern);
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -107,7 +133,17 @@ export async function seedMemoryCacheFromPrerender(
     if (route.status !== "rendered") continue;
     if (route.router !== "app") continue;
 
-    const artifactPathname = route.path ?? route.route;
+    // Collect concrete URL paths by route pattern so the dispatch function
+    // knows which pregenerated routes to exempt from fallback-shell fallback.
+    const concretePath = route.path ?? route.route;
+    let pathsForRoute = concreteUrlPathsByRoute.get(route.route);
+    if (!pathsForRoute) {
+      pathsForRoute = new Set();
+      concreteUrlPathsByRoute.set(route.route, pathsForRoute);
+    }
+    pathsForRoute.add(concretePath);
+
+    const artifactPathname = concretePath;
     const cachePathname = normalizePrerenderCachePathname(artifactPathname);
     // Fallback keys support older generated entries that do not export their
     // runtime key builders. Current App Router entries inject buildAppPage*Key

@@ -241,6 +241,14 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     fallbackParamNames: readonly string[];
     routePattern: string;
   };
+  /**
+   * Set of concrete URL paths that were pre-rendered at build time for this
+   * route. When the exact cache entry for a known pregenerated path is absent
+   * (evicted, stale-empty, cold start, read error), the fallback shell must
+   * NOT be served — the route is a valid generated route whose cache merely
+   * has a transient gap. Falls through to a fresh render instead.
+   */
+  renderedConcreteUrlPaths?: ReadonlySet<string>;
   skipStaticParamsValidation?: boolean;
   staticParamsValidationParams?: AppPageParams;
   rootParams?: RootParams;
@@ -802,7 +810,22 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     }
   }
 
+  // Before probing fallback shells, check whether this exact URL was a
+  // pre-rendered concrete route at build time. If so, the exact cache entry
+  // was seeded at startup and its current absence is a transient condition
+  // (eviction, cold start, stale-empty, read error) — not a semantic signal
+  // that this is an unknown dynamic route. Serving the fallback shell would
+  // silently degrade a known pregenerated route to unknown-param content.
+  //
+  // Without this guard, a cache miss on `/en/blog/known-post` with a
+  // pre-existing fallback shell `/en/blog/[slug]` would serve the shell
+  // instead of regenerating the exact known page. The fallback shell must
+  // only be used for truly unknown child params, not for cache misses on
+  // known generated paths.
+  const isKnownPregeneratedRoute =
+    options.renderedConcreteUrlPaths?.has(options.cleanPathname) === true;
   if (
+    !isKnownPregeneratedRoute &&
     options.pprFallbackCacheShells &&
     options.pprFallbackCacheShells.length > 0 &&
     !options.isRscRequest &&
