@@ -36,6 +36,10 @@ import { isrCacheKey, isrSetPrerenderedAppPage } from "./isr-cache.js";
 import { getOutputPath, getRscOutputPath } from "../utils/prerender-output-paths.js";
 import { normalizePathnameForRouteMatch } from "../routing/utils.js";
 import { normalizePath } from "./normalize-path.js";
+import {
+  addPregeneratedConcretePath,
+  clearPregeneratedConcretePaths,
+} from "./pregenerated-concrete-paths.js";
 
 // ─── Manifest types ───────────────────────────────────────────────────────────
 
@@ -69,32 +73,6 @@ type PrerenderCacheSeedOptions = {
   ) => Promise<void>;
 };
 
-// ─── Rendered concrete URL paths ──────────────────────────────────────────────
-
-/**
- * Route pattern → set of concrete URL paths that were pre-rendered at build time.
- * Populated during `seedMemoryCacheFromPrerender`, read by the dispatch function
- * to avoid serving the fallback shell for known pregenerated routes when the
- * exact cache entry is temporarily absent (eviction, cold start, stale-empty).
- *
- * There is no race condition here: the seeder runs at startup before any
- * requests are served, and the map is read-only afterwards.
- */
-const concreteUrlPathsByRoute = new Map<string, Set<string>>();
-
-/**
- * Returns the set of concrete URL paths that were pre-rendered for the given
- * route pattern, or `undefined` if the route pattern has no pre-rendered paths.
- *
- * This set is populated during `seedMemoryCacheFromPrerender` and is stable
- * for the lifetime of the process. Lookups are O(1).
- */
-export function getRenderedConcreteUrlPathsForRoute(
-  routePattern: string,
-): ReadonlySet<string> | undefined {
-  return concreteUrlPathsByRoute.get(routePattern);
-}
-
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -124,6 +102,10 @@ export async function seedMemoryCacheFromPrerender(
   const { buildId, routes } = manifest;
   if (!buildId || !Array.isArray(routes)) return 0;
 
+  // Clear any pre-existing concrete paths from a previous build so stale
+  // entries never incorrectly suppress fallback-shell reuse.
+  clearPregeneratedConcretePaths();
+
   const trailingSlash = manifest.trailingSlash ?? false;
   const prerenderDir = path.join(serverDir, "prerendered-routes");
   const writeAppPageEntry = options?.writeAppPageEntry ?? createDefaultAppPageEntryWriter();
@@ -133,17 +115,15 @@ export async function seedMemoryCacheFromPrerender(
     if (route.status !== "rendered") continue;
     if (route.router !== "app") continue;
 
-    // Collect concrete URL paths by route pattern so the dispatch function
-    // knows which pregenerated routes to exempt from fallback-shell fallback.
-    const concretePath = route.path ?? route.route;
-    let pathsForRoute = concreteUrlPathsByRoute.get(route.route);
-    if (!pathsForRoute) {
-      pathsForRoute = new Set();
-      concreteUrlPathsByRoute.set(route.route, pathsForRoute);
-    }
-    pathsForRoute.add(concretePath);
+    // Register the normalised concrete path so the PPR fallback-shell guard
+    // knows this route was pre-rendered at build time. The set is cleared at
+    // the top of this function to prevent stale cross-build contamination.
+    addPregeneratedConcretePath(
+      route.route,
+      normalizePrerenderCachePathname(route.path ?? route.route),
+    );
 
-    const artifactPathname = concretePath;
+    const artifactPathname = route.path ?? route.route;
     const cachePathname = normalizePrerenderCachePathname(artifactPathname);
     // Fallback keys support older generated entries that do not export their
     // runtime key builders. Current App Router entries inject buildAppPage*Key

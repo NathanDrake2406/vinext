@@ -86,6 +86,10 @@ const appPrerenderStaticParamsPath = resolveEntryPath(
   import.meta.url,
 );
 const seedCachePath = resolveEntryPath("../server/seed-cache.js", import.meta.url);
+const pregeneratedConcretePathsPath = resolveEntryPath(
+  "../server/pregenerated-concrete-paths.js",
+  import.meta.url,
+);
 const appHookWarningSuppressionPath = resolveEntryPath(
   "../server/app-hook-warning-suppression.js",
   import.meta.url,
@@ -330,6 +334,11 @@ import { clearAppRequestContext as __clearRequestContext, setAppNavigationContex
 __configureMemoryCacheHandler({ cacheMaxMemorySize: ${JSON.stringify(cacheMaxMemorySize)} });
 import { createAppPrerenderStaticParamsResolver as __createAppPrerenderStaticParamsResolver } from ${JSON.stringify(appPrerenderStaticParamsPath)};
 import { seedMemoryCacheFromPrerender as __seedMemoryCacheFromPrerender } from ${JSON.stringify(seedCachePath)};
+import {
+  getRenderedConcreteUrlPathsForRoute as __getRenderedConcreteUrlPathsForRoute,
+  addPregeneratedConcretePath as __addPregeneratedConcretePath,
+  clearPregeneratedConcretePaths as __clearPregeneratedConcretePaths,
+} from ${JSON.stringify(pregeneratedConcretePathsPath)};
 
 const __draftModeSecret = ${JSON.stringify(draftModeSecret)};
 
@@ -517,6 +526,14 @@ const __clientTraceMetadata = ${JSON.stringify(clientTraceMetadata)};
 // \`vinextConfig\` export). Empty string when unset.
 export const __assetPrefix = ${JSON.stringify(assetPrefix)};
 export const __inlineCss = ${JSON.stringify(inlineCss)};
+// Re-exported for all runtime paths (Node prod-server, Cloudflare Worker,
+// tests) so the PPR fallback-shell guard can read which concrete URLs were
+// pre-rendered without depending on memory-cache seeding having run. The
+// module is bundled into this entry and therefore available in every
+// environment that loads the generated RSC entry.
+export const getRenderedConcreteUrlPathsForRoute = __getRenderedConcreteUrlPathsForRoute;
+export const addPregeneratedConcretePath = __addPregeneratedConcretePath;
+export const clearPregeneratedConcretePaths = __clearPregeneratedConcretePaths;
 const __cacheComponents = ${JSON.stringify(cacheComponents)};
 
 export function seedMemoryCacheFromPrerender(serverDir) {

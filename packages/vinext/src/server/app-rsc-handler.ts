@@ -45,7 +45,7 @@ import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
 import { notFoundResponse } from "./http-error-responses.js";
-import { getRenderedConcreteUrlPathsForRoute } from "./seed-cache.js";
+import { getRenderedConcreteUrlPathsForRoute } from "./pregenerated-concrete-paths.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
 import { buildPageCacheTags } from "./implicit-tags.js";
 import { isImageOptimizationPath } from "./image-optimization.js";

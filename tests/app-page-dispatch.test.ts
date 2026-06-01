@@ -289,6 +289,155 @@ describe("app page dispatch", () => {
     expect(response.headers.get("x-vinext-cache")).toBe("MISS");
   });
 
+  it("does not serve the fallback shell for an encoded known pregenerated route whose exact cache is absent", async () => {
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `fresh:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      // Exact HTML cache for the decoded pathname is absent
+      if (key === "html:/en/blog/hello world") {
+        return null;
+      }
+      // Fallback shell cache EXISTS
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>fallback shell</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      // cleanPathname is decoded — the RSC handler normalises percent-encoding
+      // before passing to dispatch, so the request path /en/blog/hello%20world
+      // arrives as /en/blog/hello world.
+      cleanPathname: "/en/blog/hello world",
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr(_rscStream, _navContext) {
+          return createStream([
+            `<html><head></head><body>fresh:${JSON.stringify({ locale: "en", slug: "hello world" })}</body></html>`,
+          ]);
+        },
+      }),
+      params: { locale: "en", slug: "hello world" },
+      // The manifest stored /en/blog/hello%20world, but seedMemoryCacheFromPrerender
+      // normalises via normalizePrerenderCachePathname which decodes each segment,
+      // so the set contains /en/blog/hello world — matching cleanPathname.
+      renderedConcreteUrlPaths: new Set(["/en/blog/hello world"]),
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    // MUST NOT probe the fallback shell — only the exact cache key is checked.
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual(["html:/en/blog/hello world"]);
+    expect(isrGet).not.toHaveBeenCalledWith("html:/en/blog/[slug]");
+    expect(buildPageElement).toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+  });
+
+  it("does not serve the fallback shell when concrete paths are populated via the standalone module (Worker path)", async () => {
+    // This simulates populating the module directly via
+    // addPregeneratedConcretePath() — the same mechanism available to the
+    // Cloudflare Worker entry — without going through seedMemoryCacheFromPrerender.
+    // Must call clearPregeneratedConcretePaths first and use
+    // getRenderedConcreteUrlPathsForRoute to read, proving the module is
+    // independently usable in any runtime path.
+    const {
+      clearPregeneratedConcretePaths: clear,
+      addPregeneratedConcretePath: add,
+      getRenderedConcreteUrlPathsForRoute: get,
+    } = await import("../packages/vinext/src/server/pregenerated-concrete-paths.js");
+
+    clear();
+    add("/:locale/blog/:slug", "/en/blog/worker-known");
+    const concretePaths = get("/:locale/blog/:slug");
+
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `fresh:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      // Exact HTML cache is absent
+      if (key === "html:/en/blog/worker-known") {
+        return null;
+      }
+      // Fallback shell cache EXISTS
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>fallback shell</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/worker-known",
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr(_rscStream, _navContext) {
+          return createStream([
+            `<html><head></head><body>fresh:${JSON.stringify({ locale: "en", slug: "worker-known" })}</body></html>`,
+          ]);
+        },
+      }),
+      params: { locale: "en", slug: "worker-known" },
+      // Pass the result of getRenderedConcreteUrlPathsForRoute — exactly what
+      // the RSC handler does when dispatching.
+      renderedConcreteUrlPaths: concretePaths,
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual(["html:/en/blog/worker-known"]);
+    expect(isrGet).not.toHaveBeenCalledWith("html:/en/blog/[slug]");
+    expect(buildPageElement).toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+
+    clear();
+  });
+
   it("serves stale PPR fallback-shell HTML instead of rendering the unknown concrete path", async () => {
     let navigationContext: { params?: Record<string, string | string[]>; pathname?: string } = {};
     const scheduledRegeneration: {

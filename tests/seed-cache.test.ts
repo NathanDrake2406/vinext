@@ -18,6 +18,7 @@ import {
   type IncrementalCacheValue,
 } from "../packages/vinext/src/shims/cache.js";
 import { isrCacheKey, getRevalidateDuration } from "../packages/vinext/src/server/isr-cache.js";
+import { getRenderedConcreteUrlPathsForRoute } from "../packages/vinext/src/server/pregenerated-concrete-paths.js";
 import { seedMemoryCacheFromPrerender } from "../packages/vinext/src/server/seed-cache.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -614,5 +615,65 @@ describe("seedMemoryCacheFromPrerender", () => {
     const htmlKey = isrCacheKey("app", longPath, buildId) + ":html";
     expect(htmlKey).toContain("__hash:");
     expect(await getCacheHandler().get(htmlKey)).not.toBeNull();
+  });
+
+  it("clears pregenerated concrete paths from a previous build and repopulates from the current manifest (issue 2/3)", async () => {
+    const serverDir = createTempServerDir();
+
+    // Build A: seed with known-post only
+    setupPrerenderFixture(
+      serverDir,
+      {
+        buildId: "build-a",
+        routes: [
+          {
+            route: "/en/blog/[slug]",
+            status: "rendered",
+            router: "app",
+            path: "/en/blog/known-post",
+            revalidate: 60,
+          },
+        ],
+      },
+      {
+        "en/blog/known-post.html": "<html>build A</html>",
+        "en/blog/known-post.rsc": "build-a-flight",
+      },
+    );
+    await seedMemoryCacheFromPrerender(serverDir);
+
+    // Build A paths should be registered
+    const buildAPaths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    expect(buildAPaths).toBeDefined();
+    expect(buildAPaths!.has("/en/blog/known-post")).toBe(true);
+
+    // Build B: seed with different path (no /en/blog/known-post)
+    setupPrerenderFixture(
+      serverDir,
+      {
+        buildId: "build-b",
+        routes: [
+          {
+            route: "/en/blog/[slug]",
+            status: "rendered",
+            router: "app",
+            path: "/en/blog/new-post",
+            revalidate: 60,
+          },
+        ],
+      },
+      {
+        "en/blog/new-post.html": "<html>build B</html>",
+        "en/blog/new-post.rsc": "build-b-flight",
+      },
+    );
+    await seedMemoryCacheFromPrerender(serverDir);
+
+    // Build B paths must NOT include the old build A path
+    const buildBPaths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    expect(buildBPaths).toBeDefined();
+    expect(buildBPaths!.has("/en/blog/known-post")).toBe(false);
+    expect(buildBPaths!.has("/en/blog/new-post")).toBe(true);
+    expect(buildBPaths!.size).toBe(1);
   });
 });
