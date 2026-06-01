@@ -47,6 +47,7 @@ import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
 import { notFoundResponse } from "./http-error-responses.js";
+import { getRenderedConcreteUrlPathsForRoute } from "./pregenerated-concrete-paths.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
 import { buildPageCacheTags } from "./implicit-tags.js";
 import { isImageOptimizationPath } from "./image-optimization.js";
@@ -66,10 +67,11 @@ import {
   validateImageUrl,
 } from "./request-pipeline.js";
 import {
-  prerenderRouteParamsPayloadMatchesRoute,
+  matchPrerenderRouteParamsPayload,
   readTrustedPrerenderRouteParams,
   serializePrerenderRouteParamsHeader,
 } from "./prerender-route-params.js";
+import { createAppPprFallbackShells } from "./app-ppr-fallback-shell.js";
 
 type AppPageParams = Record<string, string | string[]>;
 type RequestContext = ReturnType<typeof requestContextFromRequest>;
@@ -84,6 +86,7 @@ type AppRscMiddlewareContext = AppMiddlewareContext;
 
 type AppRscHandlerRoute = {
   isDynamic: boolean;
+  params?: readonly string[];
   page?: unknown;
   pattern: string;
   rootParamNames?: readonly string[];
@@ -128,6 +131,19 @@ type DispatchMatchedPageOptions<TRoute> = {
   middlewareContext: AppRscMiddlewareContext;
   mountedSlotsHeader: string | null;
   params: AppPageParams;
+  pprFallbackCacheShells?:
+    | readonly {
+        fallbackParamNames: readonly string[];
+        params: AppPageParams;
+        pathname: string;
+      }[]
+    | null;
+  pprFallbackShell?: {
+    fallbackParamNames: readonly string[];
+    routePattern: string;
+  };
+  renderedConcreteUrlPaths?: ReadonlySet<string>;
+  skipStaticParamsValidation?: boolean;
   staticParamsValidationParams?: AppPageParams;
   rootParams?: RootParams;
   request: Request;
@@ -221,6 +237,7 @@ type NavigationContextValue = {
 
 type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   basePath: string;
+  cacheComponents?: boolean;
   clearRequestContext: () => void;
   configHeaders: NextHeader[];
   configRedirects: NextRedirect[];
@@ -717,14 +734,29 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // branch and any downstream synchronous module reads.
   if (options.ensureRouteLoaded) await options.ensureRouteLoaded(route);
   const prerenderRouteParamsPayload = readTrustedPrerenderRouteParams(request);
-  const prerenderRouteParams = prerenderRouteParamsPayloadMatchesRoute(
+  const prerenderRouteParamsMatch = matchPrerenderRouteParamsPayload(
     prerenderRouteParamsPayload,
     route.pattern,
     params,
-  )
-    ? prerenderRouteParamsPayload.params
-    : null;
+  );
+  const prerenderRouteParams = prerenderRouteParamsMatch?.params ?? null;
+  const isPrerenderFallbackShell = prerenderRouteParamsMatch?.kind === "fallback-shell";
   const renderParams = prerenderRouteParams ?? params;
+  const runtimeFallbackShells =
+    options.cacheComponents === true &&
+    request.method === "GET" &&
+    !isRscRequest &&
+    !isPrerenderFallbackShell &&
+    route.params
+      ? createAppPprFallbackShells(
+          {
+            params: route.params,
+            pattern: route.pattern,
+            rootParamNames: route.rootParamNames,
+          },
+          params,
+        )
+      : [];
   options.setNavigationContext({
     pathname: canonicalPathname,
     searchParams: url.searchParams,
@@ -765,7 +797,17 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     middlewareContext,
     mountedSlotsHeader,
     params: renderParams,
-    staticParamsValidationParams: prerenderRouteParams === null ? undefined : params,
+    pprFallbackCacheShells: runtimeFallbackShells,
+    pprFallbackShell: isPrerenderFallbackShell
+      ? {
+          fallbackParamNames: prerenderRouteParamsMatch.fallbackParamNames,
+          routePattern: route.pattern,
+        }
+      : undefined,
+    renderedConcreteUrlPaths: getRenderedConcreteUrlPathsForRoute(route.pattern),
+    skipStaticParamsValidation: isPrerenderFallbackShell,
+    staticParamsValidationParams:
+      prerenderRouteParams === null || isPrerenderFallbackShell ? undefined : params,
     rootParams,
     request,
     route,

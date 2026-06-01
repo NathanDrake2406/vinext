@@ -838,7 +838,7 @@ export async function renderAppPageLifecycle(
         scriptNonce: options.scriptNonce,
         sideStream: rscCapture.sideStream,
         ssrHandler,
-        waitForAllReady: options.isPrerender,
+        waitForAllReady: options.isPrerender === true,
       });
     },
     renderSpecialErrorResponse(specialError) {

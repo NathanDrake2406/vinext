@@ -90,6 +90,10 @@ const appPrerenderStaticParamsPath = resolveEntryPath(
   import.meta.url,
 );
 const seedCachePath = resolveEntryPath("../server/seed-cache.js", import.meta.url);
+const pregeneratedConcretePathsPath = resolveEntryPath(
+  "../server/pregenerated-concrete-paths.js",
+  import.meta.url,
+);
 const appHookWarningSuppressionPath = resolveEntryPath(
   "../server/app-hook-warning-suppression.js",
   import.meta.url,
@@ -206,6 +210,7 @@ export function generateRscEntry(
   const reactMaxHeadersLength = config?.reactMaxHeadersLength ?? DEFAULT_REACT_MAX_HEADERS_LENGTH;
   const cacheMaxMemorySize = config?.cacheMaxMemorySize;
   const inlineCss = config?.inlineCss === true;
+  const cacheComponents = config?.cacheComponents === true;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
   const publicFiles = config?.publicFiles ?? [];
@@ -349,8 +354,14 @@ __configureMemoryCacheHandler({ cacheMaxMemorySize: ${JSON.stringify(cacheMaxMem
 import { createAppPrerenderStaticParamsResolver as __createAppPrerenderStaticParamsResolver } from ${JSON.stringify(appPrerenderStaticParamsPath)};
 import { ensureAppRouteModulesLoaded as __ensureRouteLoaded } from ${JSON.stringify(appRouteModuleLoaderPath)};
 import { seedMemoryCacheFromPrerender as __seedMemoryCacheFromPrerender } from ${JSON.stringify(seedCachePath)};
+import {
+  getRenderedConcreteUrlPathsForRoute as __getRenderedConcreteUrlPathsForRoute,
+  initPregeneratedPathsFromGlobals as __initPregeneratedPathsFromGlobals,
+} from ${JSON.stringify(pregeneratedConcretePathsPath)};
 
 const __draftModeSecret = ${JSON.stringify(draftModeSecret)};
+
+__initPregeneratedPathsFromGlobals();
 
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -547,6 +558,8 @@ const __reactMaxHeadersLength = ${JSON.stringify(reactMaxHeadersLength)};
 export const __assetPrefix = ${JSON.stringify(assetPrefix)};
 export const __inlineCss = ${JSON.stringify(inlineCss)};
 export const __hasPagesDir = ${JSON.stringify(hasPagesDir)};
+export const getRenderedConcreteUrlPathsForRoute = __getRenderedConcreteUrlPathsForRoute;
+const __cacheComponents = ${JSON.stringify(cacheComponents)};
 
 export function seedMemoryCacheFromPrerender(serverDir) {
   return __seedMemoryCacheFromPrerender(serverDir, {
@@ -598,6 +611,7 @@ export default __createAppRscHandler({
   },
   registerCacheAdapters: __registerConfiguredCacheAdapters,
   configHeaders: __configHeaders,
+  cacheComponents: __cacheComponents,
   configRedirects: __configRedirects,
   configRewrites: __configRewrites,
   draftModeSecret: __draftModeSecret,
@@ -615,6 +629,10 @@ export default __createAppRscHandler({
     middlewareContext,
     mountedSlotsHeader,
     params,
+    pprFallbackCacheShells,
+    pprFallbackShell,
+    renderedConcreteUrlPaths,
+    skipStaticParamsValidation,
     staticParamsValidationParams,
     rootParams,
     request,
@@ -701,6 +719,10 @@ export default __createAppRscHandler({
       middlewareContext,
       mountedSlotsHeader,
       params,
+      pprFallbackCacheShells,
+      pprFallbackShell,
+      renderedConcreteUrlPaths,
+      skipStaticParamsValidation,
       staticParamsValidationParams,
       rootParams,
       probeLayoutAt(li, layoutParamAccess) {

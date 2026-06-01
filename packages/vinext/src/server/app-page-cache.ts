@@ -73,6 +73,13 @@ type AppPageCacheRenderResult = {
   tags: string[];
 };
 
+type AppPageFallbackShellCacheRenderResult = {
+  cacheControl?: CacheControlMetadata;
+  html: string;
+  htmlRenderObservation?: RenderObservation;
+  tags: string[];
+};
+
 type BuildAppPageCachedResponseOptions = {
   cacheControl?: CacheControlMetadata;
   cacheState: "HIT" | "STALE";
@@ -105,6 +112,23 @@ type ReadAppPageCacheResponseOptions = {
   expireSeconds?: number;
   revalidateSeconds: number;
   renderFreshPageForCache: () => Promise<AppPageCacheRenderResult>;
+  scheduleBackgroundRegeneration: AppPageBackgroundRegenerator;
+};
+
+type ReadAppPageFallbackShellCacheResponseOptions = {
+  clearRequestContext: () => void;
+  expireSeconds?: number;
+  fallbackPathname: string;
+  isEdgeRuntime?: boolean;
+  isrDebug?: AppPageDebugLogger;
+  isrGet: AppPageCacheGetter;
+  isrHtmlKey: (pathname: string) => string;
+  isrSet: AppPageCacheSetter;
+  middlewareHeaders?: Headers | null;
+  middlewareStatus?: number | null;
+  revalidateSeconds: number;
+  renderFreshFallbackShellForCache: () => Promise<AppPageFallbackShellCacheRenderResult>;
+  rewriteHtml: (html: string) => string;
   scheduleBackgroundRegeneration: AppPageBackgroundRegenerator;
 };
 
@@ -516,6 +540,86 @@ export async function readAppPageCacheResponse(
   }
 
   return null;
+}
+
+function scheduleAppPageFallbackShellRegeneration(
+  isrKey: string,
+  options: ReadAppPageFallbackShellCacheResponseOptions,
+): void {
+  options.scheduleBackgroundRegeneration(isrKey, async () => {
+    const revalidatedShell = await options.renderFreshFallbackShellForCache();
+    const revalidateSeconds =
+      revalidatedShell.cacheControl?.revalidate ?? options.revalidateSeconds;
+    const expireSeconds = revalidatedShell.cacheControl?.expire ?? options.expireSeconds;
+    await options.isrSet(
+      isrKey,
+      buildAppPageCacheValue(
+        revalidatedShell.html,
+        undefined,
+        200,
+        revalidatedShell.htmlRenderObservation,
+      ),
+      revalidateSeconds,
+      revalidatedShell.tags,
+      expireSeconds,
+    );
+    options.isrDebug?.("regen complete (fallback shell)", options.fallbackPathname);
+  });
+}
+
+export async function readAppPageFallbackShellCacheResponse(
+  options: ReadAppPageFallbackShellCacheResponseOptions,
+): Promise<Response | null> {
+  const isrKey = options.isrHtmlKey(options.fallbackPathname);
+
+  try {
+    const cached = await options.isrGet(isrKey);
+    const cachedValue = getCachedAppPageValue(cached);
+    if (!cachedValue) {
+      options.isrDebug?.("MISS (fallback shell)", options.fallbackPathname);
+      return null;
+    }
+
+    if (typeof cachedValue.html !== "string" || cachedValue.html.length === 0) {
+      if (cached?.isStale) {
+        scheduleAppPageFallbackShellRegeneration(isrKey, options);
+      }
+      options.isrDebug?.("MISS (empty fallback shell)", options.fallbackPathname);
+      return null;
+    }
+
+    const cacheState = cached?.isStale ? "STALE" : "HIT";
+    if (cached?.isStale) {
+      scheduleAppPageFallbackShellRegeneration(isrKey, options);
+    }
+
+    const response = buildAppPageCachedResponse(
+      {
+        ...cachedValue,
+        html: options.rewriteHtml(cachedValue.html),
+      },
+      {
+        cacheState,
+        cacheControl: cached?.value.cacheControl,
+        expireSeconds: options.expireSeconds,
+        isEdgeRuntime: options.isEdgeRuntime,
+        isRscRequest: false,
+        middlewareHeaders: options.middlewareHeaders,
+        middlewareStatus: options.middlewareStatus,
+        revalidateSeconds: options.revalidateSeconds,
+      },
+    );
+
+    if (!response) return null;
+
+    options.isrDebug?.(`${cacheState} (fallback shell)`, options.fallbackPathname);
+    options.clearRequestContext();
+    return response;
+  } catch (isrReadError) {
+    options.isrDebug?.("MISS (fallback shell read error)", options.fallbackPathname);
+    console.error("[vinext] ISR fallback shell cache read error:", isrReadError);
+    return null;
+  }
 }
 
 export function finalizeAppPageHtmlCacheResponse(

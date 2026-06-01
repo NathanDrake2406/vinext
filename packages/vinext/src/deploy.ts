@@ -32,6 +32,10 @@ import { runPrerender } from "./build/run-prerender.js";
 import { loadDotenv } from "./config/dotenv.js";
 import { loadNextConfig, resolveNextConfig } from "./config/next-config.js";
 import { parsePositiveIntegerArg } from "./cli-args.js";
+import {
+  readPrerenderManifest,
+  buildPregeneratedConcretePathTable,
+} from "./server/prerender-manifest.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -1210,6 +1214,54 @@ function runWranglerDeploy(root: string, options: Pick<DeployOptions, "preview" 
   return deployedUrl ?? "(URL not detected in wrangler output)";
 }
 
+// ─── Pregenerated Concrete Paths Injection ────────────────────────────────────
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const VINEXT_PREGEN_START = "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */";
+const VINEXT_PREGEN_END = "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */";
+const VINEXT_PREGEN_RE = new RegExp(
+  `${escapeRegExp(VINEXT_PREGEN_START)}[\\s\\S]*?${escapeRegExp(VINEXT_PREGEN_END)}\\n?`,
+  "g",
+);
+
+/**
+ * Read the prerender manifest and inject pregenerated concrete paths into the
+ * App Router Worker bundle so the PPR fallback-shell guard is populated at
+ * module init time without calling `seedMemoryCacheFromPrerender`.
+ *
+ * The paths are injected as `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS`
+ * wrapped in replaceable marker comments, and consumed by
+ * `initPregeneratedPathsFromGlobals` in the generated RSC entry.
+ *
+ * Idempotent: repeated calls strip the previous injection before writing the
+ * new one. If the manifest is missing, corrupt, or empty, any prior injection
+ * is stripped and nothing new is written — failing closed to empty.
+ */
+export function injectPregeneratedConcretePaths(root: string): void {
+  const workerEntry = path.resolve(root, "dist", "server", "index.js");
+  if (!fs.existsSync(workerEntry)) return;
+
+  let code = fs.readFileSync(workerEntry, "utf-8");
+  code = code.replace(VINEXT_PREGEN_RE, "");
+
+  const manifestPath = path.join(root, "dist", "server", "vinext-prerender.json");
+  const manifest = readPrerenderManifest(manifestPath);
+  const table = buildPregeneratedConcretePathTable(manifest ?? {});
+
+  if (table.length > 0) {
+    const injection =
+      `${VINEXT_PREGEN_START}\n` +
+      `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = ${JSON.stringify(table)};\n` +
+      `${VINEXT_PREGEN_END}\n`;
+    code = injection + code;
+  }
+
+  fs.writeFileSync(workerEntry, code);
+}
+
 // ─── Main Entry ──────────────────────────────────────────────────────────────
 
 export async function deploy(options: DeployOptions): Promise<void> {
@@ -1337,6 +1389,10 @@ export async function deploy(options: DeployOptions): Promise<void> {
       }
       await runPrerender({ root: info.root, concurrency: options.prerenderConcurrency });
     }
+
+    // Inject pregenerated concrete paths into the Worker bundle so the PPR
+    // fallback-shell guard is populated without calling seedMemoryCacheFromPrerender.
+    injectPregeneratedConcretePaths(root);
   }
 
   // Step 6b: TPR — pre-render hot pages into KV cache (experimental, opt-in)

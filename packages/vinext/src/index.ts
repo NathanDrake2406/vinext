@@ -175,7 +175,6 @@ import { createRequireContextPlugin } from "./plugins/require-context.js";
 import { createWasmModuleImportPlugin } from "./plugins/wasm-module-import.js";
 import { hasMdxFiles } from "./utils/mdx-scan.js";
 import { scanPublicFileRoutes } from "./utils/public-routes.js";
-import { getViteMajorVersion } from "./utils/vite-version.js";
 import tsconfigPaths from "vite-tsconfig-paths";
 import type { Options as VitePluginReactOptions } from "@vitejs/plugin-react";
 import MagicString from "magic-string";
@@ -202,29 +201,6 @@ function isInsideDirectory(dir: string, filePath: string): boolean {
   return relativePath !== "" && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
-// Detect a module-level `"use server"` directive (a Server Actions module).
-// Directives form the leading prologue of string-literal ExpressionStatements,
-// so we only scan until the first non-directive statement.
-function hasModuleLevelUseServerDirective(body: ReturnType<typeof parseAst>["body"]): boolean {
-  for (const node of body) {
-    if (node.type !== "ExpressionStatement") break;
-    const directive = (node as ASTNode & { directive?: unknown }).directive;
-    const expression = (node as ASTNode & { expression?: { type?: string; value?: unknown } })
-      .expression;
-    const value =
-      typeof directive === "string"
-        ? directive
-        : expression?.type === "Literal"
-          ? expression.value
-          : undefined;
-    if (value === "use server") return true;
-    // Keep scanning through other directives (e.g. "use strict"); a
-    // non-string-literal statement ends the directive prologue.
-    if (typeof value !== "string") break;
-  }
-  return false;
-}
-
 function hasServerOnlyMarkerImport(code: string): boolean {
   if (!code.includes("server-only")) return false;
 
@@ -234,15 +210,6 @@ function hasServerOnlyMarkerImport(code: string): boolean {
   } catch {
     return false;
   }
-
-  // Server Actions modules (`"use server"`) live in the server/action layer,
-  // not the client layer. Next.js allows them to `import "server-only"` even
-  // though the client bundle holds references used to invoke the actions
-  // (see test/e2e/app-dir/actions/app/client/actions.js, which does exactly
-  // this). Treating them as client-reachable here is a false positive that
-  // breaks the entire client build, so exempt them while still rejecting
-  // genuine client modules below.
-  if (hasModuleLevelUseServerDirective(ast.body)) return false;
 
   function walk(node: ASTNode | ASTNode[] | null | undefined): boolean {
     if (!node) return false;
@@ -468,6 +435,40 @@ function loadTsconfigPathAliases(
     ...aliases,
     ...materializeTsconfigPathAliases(pathsConfig, resolvedBaseUrl, projectRoot),
   };
+}
+
+/**
+ * Detect Vite major version at runtime by resolving from cwd.
+ * The plugin may be installed in a workspace root with Vite 7 but used
+ * by a project that has Vite 8 — so we resolve from cwd, not from
+ * the plugin's own location.
+ */
+function getViteMajorVersion(): number {
+  try {
+    const require = createRequire(path.join(process.cwd(), "package.json"));
+    const vitePkg = require("vite/package.json");
+
+    const viteMajor = parseInt(vitePkg?.version, 10);
+    if (vitePkg?.name === "vite" && Number.isFinite(viteMajor)) {
+      return viteMajor;
+    }
+
+    const bundledViteMajor = parseInt(vitePkg?.bundledVersions?.vite, 10);
+    if (Number.isFinite(bundledViteMajor)) {
+      return bundledViteMajor;
+    }
+
+    // npm aliases like `vite: npm:@voidzero-dev/vite-plus-core@...` expose the
+    // aliased package.json, whose own version is not Vite's version.
+    console.warn(
+      `[vinext] Could not determine Vite major version from ${vitePkg?.name ?? "vite/package.json"}; assuming Vite 7`,
+    );
+    return 7;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[vinext] Failed to resolve vite/package.json (${message}); assuming Vite 7`);
+    return 7;
+  }
 }
 
 /**
@@ -2636,6 +2637,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               reactMaxHeadersLength: nextConfig?.reactMaxHeadersLength,
               cacheMaxMemorySize: nextConfig?.cacheMaxMemorySize,
               inlineCss: nextConfig?.inlineCss,
+              cacheComponents: nextConfig?.cacheComponents,
               i18n: nextConfig?.i18n,
               hasPagesDir,
               publicFiles: scanPublicFileRoutes(root),

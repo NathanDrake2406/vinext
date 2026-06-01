@@ -6,6 +6,7 @@ import {
   finalizeAppPageHtmlCacheResponse,
   finalizeAppPageRscCacheResponse,
   readAppPageCacheResponse,
+  readAppPageFallbackShellCacheResponse,
   scheduleAppPageRscCacheWrite,
 } from "../packages/vinext/src/server/app-page-cache.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
@@ -682,6 +683,80 @@ describe("app page cache helpers", () => {
       { key: "rsc:/stale-html:none", expireSeconds: 20, revalidateSeconds: 10 },
       { key: "html:/stale-html", expireSeconds: 20, revalidateSeconds: 10 },
     ]);
+  });
+
+  it("serves stale fallback shells and regenerates the fallback shell key", async () => {
+    const scheduledRegenerations: Array<{ key: string; render: () => Promise<void> }> = [];
+    const isrSetCalls: Array<{
+      key: string;
+      html: string;
+      expireSeconds: number | undefined;
+      revalidateSeconds: number;
+      tags: string[];
+    }> = [];
+    const debugCalls: Array<[string, string]> = [];
+
+    const response = await readAppPageFallbackShellCacheResponse({
+      clearRequestContext() {},
+      async isrGet() {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>stale shell</body></html>"),
+          true,
+          { revalidate: 60, expire: 300 },
+        );
+      },
+      isrDebug(event, detail) {
+        debugCalls.push([event, detail]);
+      },
+      isrHtmlKey(pathname) {
+        return "html:" + pathname;
+      },
+      async isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
+        isrSetCalls.push({
+          key,
+          html: data.html,
+          expireSeconds,
+          revalidateSeconds,
+          tags,
+        });
+      },
+      fallbackPathname: "/en/blog/[slug]",
+      expireSeconds: 300,
+      middlewareHeaders: new Headers({ "X-From-Middleware": "yes" }),
+      revalidateSeconds: 60,
+      async renderFreshFallbackShellForCache() {
+        return {
+          cacheControl: { revalidate: 10, expire: 20 },
+          html: "<html><head></head><body>fresh shell</body></html>",
+          tags: ["/en/blog/[slug]", "_N_T_/en/blog/[slug]/page"],
+        };
+      },
+      rewriteHtml(html) {
+        return html.replace("stale shell", "rewritten stale shell");
+      },
+      scheduleBackgroundRegeneration(key, render) {
+        scheduledRegenerations.push({ key, render });
+      },
+    });
+
+    expect(response?.headers.get("x-vinext-cache")).toBe("STALE");
+    expect(response?.headers.get("x-from-middleware")).toBe("yes");
+    await expect(response?.text()).resolves.toContain("rewritten stale shell");
+    expect(scheduledRegenerations.map(({ key }) => key)).toEqual(["html:/en/blog/[slug]"]);
+    expect(debugCalls).toContainEqual(["STALE (fallback shell)", "/en/blog/[slug]"]);
+
+    await scheduledRegenerations[0].render();
+
+    expect(isrSetCalls).toEqual([
+      {
+        key: "html:/en/blog/[slug]",
+        html: "<html><head></head><body>fresh shell</body></html>",
+        expireSeconds: 20,
+        revalidateSeconds: 10,
+        tags: ["/en/blog/[slug]", "_N_T_/en/blog/[slug]/page"],
+      },
+    ]);
+    expect(debugCalls).toContainEqual(["regen complete (fallback shell)", "/en/blog/[slug]"]);
   });
 
   it("still schedules stale regeneration when the stale payload is unusable for this request", async () => {

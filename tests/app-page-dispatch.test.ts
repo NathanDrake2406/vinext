@@ -1,5 +1,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import type { NavigationContext } from "vinext/shims/navigation";
+import { clearPregeneratedConcretePaths } from "../packages/vinext/src/server/pregenerated-concrete-paths.js";
 import {
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
@@ -255,6 +257,7 @@ function createDispatchOptions(
     findIntercept?: DispatchOptions["findIntercept"];
     generateStaticParams?: DispatchOptions["generateStaticParams"];
     formState?: DispatchOptions["formState"];
+    getNavigationContext?: DispatchOptions["getNavigationContext"];
     getSourceRoute?: DispatchOptions["getSourceRoute"];
     actionError?: DispatchOptions["actionError"];
     actionFailed?: DispatchOptions["actionFailed"];
@@ -269,7 +272,9 @@ function createDispatchOptions(
     loadSsrHandler?: DispatchOptions["loadSsrHandler"];
     middlewareContext?: AppPageMiddlewareContext;
     mountedSlotsHeader?: string | null;
-    params?: Record<string, string | string[]>;
+    params?: DispatchOptions["params"];
+    pprFallbackCacheShells?: DispatchOptions["pprFallbackCacheShells"];
+    renderedConcreteUrlPaths?: DispatchOptions["renderedConcreteUrlPaths"];
     probeLayoutAt?: DispatchOptions["probeLayoutAt"];
     probePage?: DispatchOptions["probePage"];
     renderToReadableStream?: DispatchOptions["renderToReadableStream"];
@@ -318,13 +323,13 @@ function createDispatchOptions(
     getFontStyles() {
       return [];
     },
-    getNavigationContext() {
-      return {
+    getNavigationContext:
+      overrides.getNavigationContext ??
+      (() => ({
         pathname: "/posts/hello",
         searchParams: new URLSearchParams(),
         params: { slug: "hello" },
-      };
-    },
+      })),
     getSourceRoute: overrides.getSourceRoute ?? (() => undefined),
     hasGenerateStaticParams: typeof overrides.generateStaticParams === "function",
     hasPageDefaultExport: true,
@@ -353,12 +358,14 @@ function createDispatchOptions(
       status: null,
     },
     mountedSlotsHeader: overrides.mountedSlotsHeader,
-    params,
+    params: overrides.params ?? { slug: "hello" },
+    pprFallbackCacheShells: overrides.pprFallbackCacheShells,
     probeLayoutAt: overrides.probeLayoutAt ?? createLayoutParamProbe(route, params, []),
     probePage: overrides.probePage ?? (() => null),
     renderErrorBoundaryPage: vi.fn(async () => null),
     renderHttpAccessFallbackPage: vi.fn(async () => null),
     renderToReadableStream,
+    renderedConcreteUrlPaths: overrides.renderedConcreteUrlPaths,
     request: overrides.request ?? new Request("https://example.test/posts/hello"),
     revalidateSeconds: overrides.revalidateSeconds ?? null,
     resolveRouteFetchCacheMode: overrides.resolveRouteFetchCacheMode,
@@ -476,6 +483,8 @@ describe("app page dispatch", () => {
     consumeDynamicUsage();
     consumeRenderRequestApiUsage();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    clearPregeneratedConcretePaths();
   });
 
   it("serves cached production HTML instead of revalidating params or rendering", async () => {
@@ -1194,5 +1203,440 @@ describe("app page dispatch", () => {
 
     expect(capturedWaitForAllReady).toBe(true);
     expect(isrSet).toHaveBeenCalled();
+  });
+
+  it("serves exact cache HIT instead of fallback shell", async () => {
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `element:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/known-post") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>exact HIT</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/known-post",
+      isProduction: true,
+      isrGet,
+      params: { locale: "en", slug: "known-post" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(response.headers.get("x-vinext-cache")).toBe("HIT");
+    await expect(response.text()).resolves.toBe("<html><head></head><body>exact HIT</body></html>");
+    expect(buildPageElement).not.toHaveBeenCalled();
+  });
+
+  it("static params validation rejects unknown params before shell probing", async () => {
+    const generateStaticParams = vi.fn(async () => [{ locale: "en", slug: "hello-world" }]);
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `element:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async () => null);
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/unknown-post",
+      generateStaticParams,
+      isProduction: true,
+      isrGet,
+      params: { locale: "en", slug: "unknown-post" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage({
+      ...options,
+      dynamicParamsConfig: false,
+    });
+
+    expect(response.status).toBe(404);
+    expect(isrGet).not.toHaveBeenCalledWith("html:/en/blog/[slug]");
+    expect(buildPageElement).not.toHaveBeenCalled();
+  });
+
+  it("serves fallback shell HTML for an unknown child param after the exact cache misses", async () => {
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `element:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/new-post",
+      isProduction: true,
+      isrGet,
+      params: { locale: "en", slug: "new-post" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual([
+      "html:/en/blog/new-post",
+      "html:/en/blog/[slug]",
+    ]);
+    expect(response.headers.get("x-vinext-cache")).toBe("HIT");
+    await expect(response.text()).resolves.toContain("Locale: en");
+    expect(buildPageElement).not.toHaveBeenCalled();
+  });
+
+  it("serves stale PPR fallback-shell HTML and regenerates the shell key", async () => {
+    let navigationContext: NavigationContext = {
+      pathname: "/en/blog/new-post",
+      searchParams: new URLSearchParams(),
+      params: { slug: "new-post" },
+    };
+    const scheduledRegeneration: {
+      key?: string;
+      render?: () => Promise<void>;
+    } = {};
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `element:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
+          true,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/new-post",
+      getNavigationContext() {
+        return navigationContext;
+      },
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr(_rscStream, navContext) {
+          if (
+            !navContext ||
+            typeof navContext !== "object" ||
+            !("pathname" in navContext) ||
+            !("params" in navContext)
+          ) {
+            throw new Error("expected navigation context for fallback shell regeneration");
+          }
+          return createStream([
+            `<html><head></head><body>${String(navContext.pathname)}:${JSON.stringify(navContext.params)}</body></html>`,
+          ]);
+        },
+      }),
+      params: { locale: "en", slug: "new-post" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+      scheduleBackgroundRegeneration(key, render) {
+        scheduledRegeneration.key = key;
+        scheduledRegeneration.render = render;
+      },
+      setNavigationContext(context) {
+        navigationContext = context;
+      },
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual([
+      "html:/en/blog/new-post",
+      "html:/en/blog/[slug]",
+    ]);
+    expect(response.headers.get("x-vinext-cache")).toBe("STALE");
+    await expect(response.text()).resolves.toContain("Locale: en");
+    expect(buildPageElement).not.toHaveBeenCalled();
+    expect(scheduledRegeneration.key).toBe("html:/en/blog/[slug]");
+
+    if (!scheduledRegeneration.render) {
+      throw new Error("expected fallback shell regeneration to be scheduled");
+    }
+    await scheduledRegeneration.render();
+
+    expect(buildPageElement).toHaveBeenCalledTimes(2);
+    expect(buildPageElement.mock.calls.map(([, params]) => params)).toEqual([
+      { locale: "en", slug: "[slug]" },
+      { locale: "en", slug: "[slug]" },
+    ]);
+    expect(options.isrSet).toHaveBeenCalledWith(
+      "html:/en/blog/[slug]",
+      expect.objectContaining({
+        html: expect.stringContaining('/en/blog/[slug]:{"locale":"en","slug":"[slug]"}'),
+      }),
+      60,
+      expect.arrayContaining(["/en/blog/[slug]"]),
+      undefined,
+    );
+  });
+
+  it("does not serve the fallback shell for a known pregenerated route whose exact cache is absent", async () => {
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `fresh:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>fallback shell</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/known-post",
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          return createStream([
+            `<html><head></head><body>fresh:${JSON.stringify({
+              locale: "en",
+              slug: "known-post",
+            })}</body></html>`,
+          ]);
+        },
+      }),
+      params: { locale: "en", slug: "known-post" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      renderedConcreteUrlPaths: new Set(["/en/blog/known-post"]),
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual(["html:/en/blog/known-post"]);
+    expect(isrGet).not.toHaveBeenCalledWith("html:/en/blog/[slug]");
+    expect(buildPageElement).toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+  });
+
+  it("does not serve the fallback shell for an encoded known pregenerated route whose exact cache is absent", async () => {
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `fresh:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>fallback shell</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/hello world",
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          return createStream([
+            `<html><head></head><body>fresh:${JSON.stringify({
+              locale: "en",
+              slug: "hello world",
+            })}</body></html>`,
+          ]);
+        },
+      }),
+      params: { locale: "en", slug: "hello world" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      renderedConcreteUrlPaths: new Set(["/en/blog/hello world"]),
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual(["html:/en/blog/hello world"]);
+    expect(isrGet).not.toHaveBeenCalledWith("html:/en/blog/[slug]");
+    expect(buildPageElement).toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+  });
+
+  it("does not serve the fallback shell when concrete paths come from the Worker global registry", async () => {
+    const { getRenderedConcreteUrlPathsForRoute, initPregeneratedPathsFromGlobals } =
+      await import("../packages/vinext/src/server/pregenerated-concrete-paths.js");
+
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [
+      ["/:locale/blog/:slug", ["/en/blog/worker-known"]],
+    ];
+    initPregeneratedPathsFromGlobals();
+    delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
+    const concretePaths = getRenderedConcreteUrlPathsForRoute("/:locale/blog/:slug");
+
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        _searchParams: URLSearchParams,
+      ) => `fresh:${JSON.stringify(params)}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>fallback shell</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/worker-known",
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          return createStream([
+            `<html><head></head><body>fresh:${JSON.stringify({
+              locale: "en",
+              slug: "worker-known",
+            })}</body></html>`,
+          ]);
+        },
+      }),
+      params: { locale: "en", slug: "worker-known" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      renderedConcreteUrlPaths: concretePaths,
+      revalidateSeconds: 60,
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual(["html:/en/blog/worker-known"]);
+    expect(isrGet).not.toHaveBeenCalledWith("html:/en/blog/[slug]");
+    expect(buildPageElement).toHaveBeenCalled();
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
   });
 });
