@@ -88,6 +88,12 @@ export async function seedMemoryCacheFromPrerender(
   serverDir: string,
   options?: PrerenderCacheSeedOptions,
 ): Promise<number> {
+  // Clear any pre-existing concrete paths from a previous build BEFORE checking
+  // whether the manifest exists. This ensures that a missing or corrupt manifest
+  // in a new build still fails closed to an empty set — the stale paths from a
+  // previous build are never visible to the new server process.
+  clearPregeneratedConcretePaths();
+
   const manifestPath = path.join(serverDir, "vinext-prerender.json");
   if (!fs.existsSync(manifestPath)) return 0;
 
@@ -102,10 +108,6 @@ export async function seedMemoryCacheFromPrerender(
   const { buildId, routes } = manifest;
   if (!buildId || !Array.isArray(routes)) return 0;
 
-  // Clear any pre-existing concrete paths from a previous build so stale
-  // entries never incorrectly suppress fallback-shell reuse.
-  clearPregeneratedConcretePaths();
-
   const trailingSlash = manifest.trailingSlash ?? false;
   const prerenderDir = path.join(serverDir, "prerendered-routes");
   const writeAppPageEntry = options?.writeAppPageEntry ?? createDefaultAppPageEntryWriter();
@@ -116,8 +118,7 @@ export async function seedMemoryCacheFromPrerender(
     if (route.router !== "app") continue;
 
     // Register the normalised concrete path so the PPR fallback-shell guard
-    // knows this route was pre-rendered at build time. The set is cleared at
-    // the top of this function to prevent stale cross-build contamination.
+    // knows this route was pre-rendered at build time.
     addPregeneratedConcretePath(
       route.route,
       normalizePrerenderCachePathname(route.path ?? route.route),

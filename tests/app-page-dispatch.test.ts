@@ -1,5 +1,6 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { clearPregeneratedConcretePaths } from "../packages/vinext/src/server/pregenerated-concrete-paths.js";
 import { dispatchAppPage } from "../packages/vinext/src/server/app-page-dispatch.js";
 import type { AppPageMiddlewareContext } from "../packages/vinext/src/server/app-page-response.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
@@ -200,7 +201,8 @@ function createDispatchOptions(
 
 describe("app page dispatch", () => {
   afterEach(() => {
-    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    clearPregeneratedConcretePaths();
   });
 
   it("serves cached production HTML instead of revalidating params or rendering", async () => {
@@ -357,22 +359,19 @@ describe("app page dispatch", () => {
     expect(response.headers.get("x-vinext-cache")).toBe("MISS");
   });
 
-  it("does not serve the fallback shell when concrete paths are populated via the standalone module (Worker path)", async () => {
-    // This simulates populating the module directly via
-    // addPregeneratedConcretePath() — the same mechanism available to the
-    // Cloudflare Worker entry — without going through seedMemoryCacheFromPrerender.
-    // Must call clearPregeneratedConcretePaths first and use
-    // getRenderedConcreteUrlPathsForRoute to read, proving the module is
-    // independently usable in any runtime path.
-    const {
-      clearPregeneratedConcretePaths: clear,
-      addPregeneratedConcretePath: add,
-      getRenderedConcreteUrlPathsForRoute: get,
-    } = await import("../packages/vinext/src/server/pregenerated-concrete-paths.js");
+  it("does not serve the fallback shell when concrete paths are populated via initPregeneratedPathsFromGlobals (Worker path)", async () => {
+    // This simulates the deploy-time injection path: deploy.ts injects
+    // globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS → the generated RSC entry
+    // calls initPregeneratedPathsFromGlobals at module init time → paths are
+    // populated without any seedMemoryCacheFromPrerender call.
+    const { initPregeneratedPathsFromGlobals, getRenderedConcreteUrlPathsForRoute } =
+      await import("../packages/vinext/src/server/pregenerated-concrete-paths.js");
 
-    clear();
-    add("/:locale/blog/:slug", "/en/blog/worker-known");
-    const concretePaths = get("/:locale/blog/:slug");
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [
+      ["/:locale/blog/:slug", ["/en/blog/worker-known"]],
+    ];
+    initPregeneratedPathsFromGlobals();
+    const concretePaths = getRenderedConcreteUrlPathsForRoute("/:locale/blog/:slug");
 
     const buildPageElement = vi.fn(
       async (
@@ -435,7 +434,7 @@ describe("app page dispatch", () => {
     expect(buildPageElement).toHaveBeenCalled();
     expect(response.headers.get("x-vinext-cache")).toBe("MISS");
 
-    clear();
+    delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
   });
 
   it("serves stale PPR fallback-shell HTML instead of rendering the unknown concrete path", async () => {

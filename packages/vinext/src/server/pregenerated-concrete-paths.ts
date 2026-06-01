@@ -1,42 +1,24 @@
-/**
- * Pregenerated concrete URL paths — build-semantic data decoupled from
- * memory-cache seeding.
- *
- * Stores the set of concrete URL paths that were pre-rendered at build time
- * for each route pattern. This is a build-time fact (not a cache state) and
- * is used by the PPR fallback-shell guard in `app-page-dispatch.ts` to avoid
- * serving the fallback shell for known pregenerated routes when the exact
- * cache entry is temporarily absent (eviction, cold start, stale-empty).
- *
- * Layout:
- *   route pattern (e.g. "/en/blog/[slug]")
- *     → set of normalised concrete paths (e.g. {"/en/blog/hello", "/en/blog/world"})
- *
- * Populated at runtime from the prerender manifest (`vinext-prerender.json`)
- * by `seed-cache.ts` on the Node prod-server path, or by deploy-time wiring
- * for the Cloudflare Workers path (via TPR or embedded manifest data).
- *
- * The module-level map is safe for repeated initialisation because every
- * populating call site calls `clearPregeneratedConcretePaths` first.
- */
+import { normalizePathnameForRouteMatch } from "../routing/utils.js";
+import { normalizePath } from "./normalize-path.js";
 
+declare global {
+  var __VINEXT_PREGENERATED_CONCRETE_PATHS: unknown;
+}
+
+/**
+ * Stores concrete URL paths pre-rendered at build time per route pattern.
+ * Used by the PPR fallback-shell guard to avoid serving fallback shells for
+ * known routes whose exact cache entry is temporarily absent.
+ *
+ * Populated by `seed-cache.ts` (Node) or from `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS`
+ * injected by `deploy.ts` after prerender (Workers).
+ */
 const concreteUrlPathsByRoute = new Map<string, Set<string>>();
 
-/**
- * Remove all entries. Must be called before re-population to prevent stale
- * paths from a previous build from incorrectly suppressing fallback-shell
- * reuse in a new server process.
- */
 export function clearPregeneratedConcretePaths(): void {
   concreteUrlPathsByRoute.clear();
 }
 
-/**
- * Register a single normalised concrete URL path for a route pattern.
- * Pathnames must be normalised (decoded, collapsed, stripped) to match the
- * same form used by runtime request handling — typically via
- * `normalizePrerenderCachePathname`.
- */
 export function addPregeneratedConcretePath(routePattern: string, pathname: string): void {
   let paths = concreteUrlPathsByRoute.get(routePattern);
   if (!paths) {
@@ -46,15 +28,47 @@ export function addPregeneratedConcretePath(routePattern: string, pathname: stri
   paths.add(pathname);
 }
 
-/**
- * Returns the set of concrete URL paths that were pre-rendered for the given
- * route pattern, or `undefined` if the route pattern has no pre-rendered paths.
- *
- * Lookups are O(1). The returned set is read-only; mutations must go through
- * `addPregeneratedConcretePath` + `clearPregeneratedConcretePaths`.
- */
 export function getRenderedConcreteUrlPathsForRoute(
   routePattern: string,
 ): ReadonlySet<string> | undefined {
   return concreteUrlPathsByRoute.get(routePattern);
+}
+
+/**
+ * Populate the registry from `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS`.
+ * No-op when the global is not set (Node path — seed-cache handles it later).
+ * Pathnames are normalised so they match the runtime `cleanPathname`.
+ */
+export function initPregeneratedPathsFromGlobals(): void {
+  const raw = globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
+  const data = parsePregeneratedConcretePaths(raw);
+  if (!data) return;
+  clearPregeneratedConcretePaths();
+  for (const [routePattern, pathnames] of data) {
+    for (const pathname of pathnames) {
+      addPregeneratedConcretePath(
+        routePattern,
+        normalizePath(normalizePathnameForRouteMatch(pathname)),
+      );
+    }
+  }
+}
+
+function parsePregeneratedConcretePaths(value: unknown): Array<[string, string[]]> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const result: Array<[string, string[]]> = [];
+  for (const entry of value) {
+    if (!Array.isArray(entry)) return undefined;
+    if (entry.length !== 2) return undefined;
+    const [pattern, paths] = entry;
+    if (typeof pattern !== "string") return undefined;
+    if (!Array.isArray(paths)) return undefined;
+    const strings: string[] = [];
+    for (const p of paths) {
+      if (typeof p !== "string") return undefined;
+      strings.push(p);
+    }
+    result.push([pattern, strings]);
+  }
+  return result;
 }

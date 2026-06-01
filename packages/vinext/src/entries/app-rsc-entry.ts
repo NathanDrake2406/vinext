@@ -338,9 +338,14 @@ import {
   getRenderedConcreteUrlPathsForRoute as __getRenderedConcreteUrlPathsForRoute,
   addPregeneratedConcretePath as __addPregeneratedConcretePath,
   clearPregeneratedConcretePaths as __clearPregeneratedConcretePaths,
+  initPregeneratedPathsFromGlobals as __initPregeneratedPathsFromGlobals,
 } from ${JSON.stringify(pregeneratedConcretePathsPath)};
 
 const __draftModeSecret = ${JSON.stringify(draftModeSecret)};
+
+// Populate pregenerated paths from deploy-injected global (Worker path).
+// No-op on Node (seed-cache handles it at startup).
+__initPregeneratedPathsFromGlobals();
 
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the

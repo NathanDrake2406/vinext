@@ -1411,6 +1411,73 @@ function runWranglerDeploy(root: string, options: Pick<DeployOptions, "preview" 
   return deployedUrl ?? "(URL not detected in wrangler output)";
 }
 
+// ─── Pregenerated Concrete Paths Injection ────────────────────────────────────
+
+type PrerenderManifestRoute = {
+  route?: string;
+  status?: string;
+  router?: string;
+  path?: string;
+};
+
+type PrerenderManifest = {
+  buildId?: string;
+  routes?: PrerenderManifestRoute[];
+};
+
+/**
+ * Read the prerender manifest and inject pregenerated concrete paths into the
+ * App Router Worker bundle so the PPR fallback-shell guard is populated at
+ * module init time without calling `seedMemoryCacheFromPrerender`.
+ *
+ * The paths are injected as `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS`
+ * and consumed by `initPregeneratedPathsFromGlobals` in the generated RSC entry.
+ * No-op when the manifest or Worker entry does not exist.
+ */
+function injectPregeneratedConcretePaths(root: string): void {
+  const manifestPath = path.join(root, "dist", "server", "vinext-prerender.json");
+  if (!fs.existsSync(manifestPath)) return;
+
+  let manifest: PrerenderManifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+  } catch {
+    return;
+  }
+
+  if (!manifest.routes?.length) return;
+
+  // Group concrete paths by route pattern
+  const byPattern = new Map<string, string[]>();
+  for (const route of manifest.routes) {
+    if (route.status !== "rendered") continue;
+    if (route.router !== "app") continue;
+    if (!route.path) continue;
+    const pattern = route.route;
+    if (!pattern) continue;
+    const paths = byPattern.get(pattern);
+    if (paths) {
+      paths.push(route.path);
+    } else {
+      byPattern.set(pattern, [route.path]);
+    }
+  }
+
+  if (byPattern.size === 0) return;
+
+  const table: Array<[string, string[]]> = [];
+  for (const [pattern, paths] of byPattern) {
+    table.push([pattern, paths]);
+  }
+
+  const workerEntry = path.resolve(root, "dist", "server", "index.js");
+  if (!fs.existsSync(workerEntry)) return;
+
+  let code = fs.readFileSync(workerEntry, "utf-8");
+  code = `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = ${JSON.stringify(table)};\n` + code;
+  fs.writeFileSync(workerEntry, code);
+}
+
 // ─── Main Entry ──────────────────────────────────────────────────────────────
 
 export async function deploy(options: DeployOptions): Promise<void> {
@@ -1523,6 +1590,10 @@ export async function deploy(options: DeployOptions): Promise<void> {
       }
       await runPrerender({ root: info.root, concurrency: options.prerenderConcurrency });
     }
+
+    // Inject pregenerated concrete paths into the Worker bundle so the PPR
+    // fallback-shell guard is populated without calling seedMemoryCacheFromPrerender.
+    injectPregeneratedConcretePaths(root);
   }
 
   // Step 6b: TPR — pre-render hot pages into KV cache (experimental, opt-in)

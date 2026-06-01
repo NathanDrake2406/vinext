@@ -11,6 +11,7 @@ import {
   clearPregeneratedConcretePaths,
   addPregeneratedConcretePath,
   getRenderedConcreteUrlPathsForRoute,
+  initPregeneratedPathsFromGlobals,
 } from "../packages/vinext/src/server/pregenerated-concrete-paths.js";
 
 describe("pregenerated concrete paths", () => {
@@ -65,5 +66,22 @@ describe("pregenerated concrete paths", () => {
     expect(paths.has("/en/blog/also-old")).toBe(false);
     expect(paths.has("/en/blog/new")).toBe(true);
     expect(paths.size).toBe(1);
+  });
+
+  it("populates paths from globalThis via initPregeneratedPathsFromGlobals (Worker path)", () => {
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [
+      ["/:locale/blog/:slug", ["/en/blog/hello", "/fr/blog/bonjour"]],
+      ["/products/:id", ["/products/42"]],
+    ];
+    initPregeneratedPathsFromGlobals();
+    delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
+
+    const blogPaths = getRenderedConcreteUrlPathsForRoute("/:locale/blog/:slug");
+    expect(blogPaths).toBeDefined();
+    expect([...blogPaths!]).toEqual(["/en/blog/hello", "/fr/blog/bonjour"]);
+
+    const productPaths = getRenderedConcreteUrlPathsForRoute("/products/:id");
+    expect(productPaths).toBeDefined();
+    expect([...productPaths!]).toEqual(["/products/42"]);
   });
 });
