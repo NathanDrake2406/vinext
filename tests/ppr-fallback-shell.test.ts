@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createPprFallbackShellState,
   createPprFallbackShellSuspensePromise,
+  isPprFallbackShellAbortError,
+  preparePprFallbackShellFinalRender,
   runWithPprFallbackShellState,
   trackPprFallbackShellCacheTask,
   waitForPprFallbackShellCacheReady,
@@ -105,5 +107,127 @@ describe("ppr fallback shell cache task tracking", () => {
 
     state.abortController.abort();
     await tracked.catch(() => undefined);
+  });
+});
+
+describe("ppr fallback shell render lifecycle", () => {
+  it("createPprFallbackShellSuspensePromise returns a promise for params expression", () => {
+    const state = createPprFallbackShellState({
+      fallbackParamNames: ["slug"],
+      routePattern: "/:locale/blog/:slug",
+    });
+
+    runWithPprFallbackShellState(state, () => {
+      const promise = createPprFallbackShellSuspensePromise("params");
+      expect(promise).not.toBeNull();
+      expect(typeof (promise as Promise<void>)?.then).toBe("function");
+      expect(state.hasDynamicBoundary).toBe(true);
+    });
+
+    state.abortController.abort();
+  });
+
+  it("createPprFallbackShellSuspensePromise returns a promise for headers expression", () => {
+    const state = createPprFallbackShellState({
+      fallbackParamNames: ["slug"],
+      routePattern: "/:locale/blog/:slug",
+    });
+
+    runWithPprFallbackShellState(state, () => {
+      const promise = createPprFallbackShellSuspensePromise("headers");
+      expect(promise).not.toBeNull();
+      expect(state.hasDynamicBoundary).toBe(true);
+    });
+
+    state.abortController.abort();
+  });
+
+  it("createPprFallbackShellSuspensePromise returns a promise for cookies expression", () => {
+    const state = createPprFallbackShellState({
+      fallbackParamNames: ["slug"],
+      routePattern: "/:locale/blog/:slug",
+    });
+
+    runWithPprFallbackShellState(state, () => {
+      const promise = createPprFallbackShellSuspensePromise("cookies");
+      expect(promise).not.toBeNull();
+      expect(state.hasDynamicBoundary).toBe(true);
+    });
+
+    state.abortController.abort();
+  });
+
+  it("createPprFallbackShellSuspensePromise returns null outside shell context", () => {
+    const promise = createPprFallbackShellSuspensePromise("params");
+    expect(promise).toBeNull();
+  });
+
+  it("waitForPprFallbackShellCacheReady resolves immediately in final phase", async () => {
+    const state = createPprFallbackShellState({
+      fallbackParamNames: ["slug"],
+      routePattern: "/:locale/blog/:slug",
+    });
+
+    preparePprFallbackShellFinalRender(state);
+    expect(state.phase).toBe("final");
+
+    const result = await waitForPprFallbackShellCacheReady(state);
+    expect(result).toBeUndefined();
+  });
+
+  it("preparePprFallbackShellFinalRender resets state for final render", () => {
+    const state = createPprFallbackShellState({
+      fallbackParamNames: ["slug"],
+      routePattern: "/:locale/blog/:slug",
+    });
+
+    state.hasDynamicBoundary = true;
+    state.pendingCacheTasks = 3;
+
+    preparePprFallbackShellFinalRender(state);
+
+    expect(state.phase).toBe("final");
+    expect(state.hasDynamicBoundary).toBe(false);
+    expect(state.pendingCacheTasks).toBe(0);
+    expect(state.isAbortScheduled).toBe(false);
+    expect(state.cacheReadyResolvers.length).toBe(0);
+    expect(state.abortController.signal.aborted).toBe(false);
+  });
+
+  it("isPprFallbackShellAbortError returns true for DOMException AbortError", () => {
+    const error = new DOMException("aborted", "AbortError");
+    expect(isPprFallbackShellAbortError(error)).toBe(true);
+  });
+
+  it("isPprFallbackShellAbortError returns false for regular errors", () => {
+    expect(isPprFallbackShellAbortError(new Error("something else"))).toBe(false);
+    expect(isPprFallbackShellAbortError("string error")).toBe(false);
+    expect(isPprFallbackShellAbortError(null)).toBe(false);
+  });
+
+  it("multiple suspense promises in the same warmup phase track correctly", async () => {
+    const state = createPprFallbackShellState({
+      fallbackParamNames: ["slug"],
+      routePattern: "/:locale/blog/:slug",
+    });
+    let isReady = false;
+
+    const ready = waitForPprFallbackShellCacheReady(state).then(() => {
+      isReady = true;
+    });
+
+    runWithPprFallbackShellState(state, () => {
+      const p1 = createPprFallbackShellSuspensePromise("params");
+      expect(p1).not.toBeNull();
+      const p2 = createPprFallbackShellSuspensePromise("headers");
+      expect(p2).not.toBeNull();
+    });
+
+    await delay(5);
+    expect(isReady).toBe(true);
+    expect(state.pendingCacheTasks).toBe(0);
+
+    state.abortController.abort();
+    await ready.catch(() => {});
   });
 });
