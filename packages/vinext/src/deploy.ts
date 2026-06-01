@@ -32,6 +32,10 @@ import { runPrerender } from "./build/run-prerender.js";
 import { loadDotenv } from "./config/dotenv.js";
 import { loadNextConfig, resolveNextConfig } from "./config/next-config.js";
 import { parsePositiveIntegerArg } from "./cli-args.js";
+import {
+  readPrerenderManifest,
+  buildPregeneratedConcretePathTable,
+} from "./server/prerender-manifest.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -1413,18 +1417,6 @@ function runWranglerDeploy(root: string, options: Pick<DeployOptions, "preview" 
 
 // ─── Pregenerated Concrete Paths Injection ────────────────────────────────────
 
-type PrerenderManifestRoute = {
-  route?: string;
-  status?: string;
-  router?: string;
-  path?: string;
-};
-
-type PrerenderManifest = {
-  buildId?: string;
-  routes?: PrerenderManifestRoute[];
-};
-
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1457,40 +1449,15 @@ export function injectPregeneratedConcretePaths(root: string): void {
   code = code.replace(VINEXT_PREGEN_RE, "");
 
   const manifestPath = path.join(root, "dist", "server", "vinext-prerender.json");
-  let manifest: PrerenderManifest | undefined;
+  const manifest = readPrerenderManifest(manifestPath);
+  const table = buildPregeneratedConcretePathTable(manifest ?? {});
 
-  if (fs.existsSync(manifestPath)) {
-    try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
-    } catch {
-      // corrupt — fall through to write stripped code
-    }
-  }
-
-  if (manifest?.routes?.length) {
-    const byPattern = new Map<string, string[]>();
-    for (const route of manifest.routes) {
-      if (route.status !== "rendered") continue;
-      if (route.router !== "app") continue;
-      if (!route.path) continue;
-      const pattern = route.route;
-      if (!pattern) continue;
-      const paths = byPattern.get(pattern);
-      if (paths) {
-        paths.push(route.path);
-      } else {
-        byPattern.set(pattern, [route.path]);
-      }
-    }
-
-    if (byPattern.size > 0) {
-      const table = Array.from(byPattern.entries());
-      const injection =
-        `${VINEXT_PREGEN_START}\n` +
-        `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = ${JSON.stringify(table)};\n` +
-        `${VINEXT_PREGEN_END}\n`;
-      code = injection + code;
-    }
+  if (table.length > 0) {
+    const injection =
+      `${VINEXT_PREGEN_START}\n` +
+      `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = ${JSON.stringify(table)};\n` +
+      `${VINEXT_PREGEN_END}\n`;
+    code = injection + code;
   }
 
   fs.writeFileSync(workerEntry, code);

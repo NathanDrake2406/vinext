@@ -5,6 +5,10 @@ declare global {
   var __VINEXT_PREGENERATED_CONCRETE_PATHS: unknown;
 }
 
+export function normalizePregeneratedPathname(pathname: string): string {
+  return normalizePath(normalizePathnameForRouteMatch(pathname));
+}
+
 /**
  * Stores concrete URL paths pre-rendered at build time per route pattern.
  * Used by the PPR fallback-shell guard to avoid serving fallback shells for
@@ -46,10 +50,7 @@ export function initPregeneratedPathsFromGlobals(): void {
   clearPregeneratedConcretePaths();
   for (const [routePattern, pathnames] of data) {
     for (const pathname of pathnames) {
-      addPregeneratedConcretePath(
-        routePattern,
-        normalizePath(normalizePathnameForRouteMatch(pathname)),
-      );
+      addPregeneratedConcretePath(routePattern, normalizePregeneratedPathname(pathname));
     }
   }
 }

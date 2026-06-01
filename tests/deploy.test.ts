@@ -2730,6 +2730,40 @@ describe("injectPregeneratedConcretePaths", () => {
     expect(after).toContain('import { handler } from "vinext/server/app-router-entry"');
   });
 
+  it("excludes fallback-shell placeholder paths from injection", () => {
+    const sourceCode = 'export default { fetch(request) { return new Response("ok"); } };\n';
+    const manifest = {
+      buildId: "test",
+      routes: [
+        {
+          route: "/blog/[slug]",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-a",
+          revalidate: 60,
+        },
+        {
+          route: "/blog/[slug]",
+          status: "rendered",
+          router: "app",
+          path: "/blog/[slug]",
+          revalidate: 60,
+        },
+      ],
+    };
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", sourceCode);
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifest));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const code = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    const match = code.match(/globalThis\.__VINEXT_PREGENERATED_CONCRETE_PATHS = (\[.*?\]);/);
+    expect(match).not.toBeNull();
+    const table: unknown = JSON.parse(match![1]);
+    expect(table).toEqual([["/blog/[slug]", ["/blog/post-a"]]]);
+  });
+
   it("corrupt manifest strips prior injection", () => {
     const priorInjection = [
       "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */",

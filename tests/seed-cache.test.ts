@@ -677,6 +677,43 @@ describe("seedMemoryCacheFromPrerender", () => {
     expect(buildBPaths!.size).toBe(1);
   });
 
+  it("excludes fallback-shell placeholder paths from concrete path registry", async () => {
+    const buildId = "fallback-shell-test";
+    setupPrerenderFixture(
+      serverDir,
+      {
+        buildId,
+        routes: [
+          {
+            route: "/en/blog/[slug]",
+            status: "rendered",
+            router: "app",
+            path: "/en/blog/known-post",
+            revalidate: 60,
+          },
+          {
+            route: "/en/blog/[slug]",
+            status: "rendered",
+            router: "app",
+            path: "/en/blog/[slug]",
+            revalidate: 60,
+          },
+        ],
+      },
+      {
+        "en/blog/known-post.html": "<html>known post</html>",
+        "en/blog/known-post.rsc": "flight-data",
+      },
+    );
+    await seedMemoryCacheFromPrerender(serverDir);
+
+    const paths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    expect(paths).toBeDefined();
+    expect(paths!.has("/en/blog/known-post")).toBe(true);
+    expect(paths!.has("/en/blog/[slug]")).toBe(false);
+    expect(paths!.size).toBe(1);
+  });
+
   it("clears pregenerated concrete paths when manifest is absent from a subsequent build", async () => {
     const serverDir = createTempServerDir();
 
