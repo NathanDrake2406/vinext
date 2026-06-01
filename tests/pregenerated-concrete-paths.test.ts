@@ -1,11 +1,3 @@
-/**
- * Tests for the pregenerated-concrete-paths standalone module.
- *
- * The module holds build-semantic data about which concrete URL paths were
- * pre-rendered, decoupled from memory-cache seeding. These tests verify
- * the module works in isolation — the same mechanism available to both
- * Node prod-server and Cloudflare Worker runtimes.
- */
 import { describe, it, expect, afterEach } from "vite-plus/test";
 import {
   clearPregeneratedConcretePaths,
@@ -83,5 +75,76 @@ describe("pregenerated concrete paths", () => {
     const productPaths = getRenderedConcreteUrlPathsForRoute("/products/:id");
     expect(productPaths).toBeDefined();
     expect([...productPaths!]).toEqual(["/products/42"]);
+  });
+
+  it("is a no-op when globalThis key is not set", () => {
+    addPregeneratedConcretePath("/en/blog/[slug]", "/en/blog/known");
+    // No global is set — call init and verify existing paths survive
+    initPregeneratedPathsFromGlobals();
+    const paths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    expect(paths).toBeDefined();
+    expect(paths!.has("/en/blog/known")).toBe(true);
+  });
+
+  it("is a no-op when globalThis value is not an array", () => {
+    addPregeneratedConcretePath("/en/blog/[slug]", "/en/blog/known");
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = "not-an-array";
+    initPregeneratedPathsFromGlobals();
+    delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
+    const paths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    expect(paths).toBeDefined();
+    expect(paths!.has("/en/blog/known")).toBe(true);
+  });
+
+  it("is a no-op when globalThis entries have wrong structure", () => {
+    addPregeneratedConcretePath("/en/blog/[slug]", "/en/blog/known");
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [
+      ["/:locale/blog/:slug", ["/en/blog/hello"]],
+      ["/broken"],
+      "not-an-entry",
+      null,
+    ];
+    initPregeneratedPathsFromGlobals();
+    delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
+    const paths = getRenderedConcreteUrlPathsForRoute("/:locale/blog/:slug");
+    // First valid entry populated, then second invalid entry caused reject
+    expect(paths).toBeUndefined();
+    // Original state should survive the reject
+    const origPaths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    expect(origPaths).toBeDefined();
+    expect(origPaths!.has("/en/blog/known")).toBe(true);
+  });
+
+  it("clears previous state and repopulates when globalThis has empty array", () => {
+    addPregeneratedConcretePath("/en/blog/[slug]", "/en/blog/old");
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [];
+    initPregeneratedPathsFromGlobals();
+    delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
+    // Previous state was cleared (empty table)
+    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")).toBeUndefined();
+  });
+
+  it("normalizes percent-encoded paths from globalThis", () => {
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [
+      ["/:locale/blog/:slug", ["/en/blog/hello%20world"]],
+    ];
+    initPregeneratedPathsFromGlobals();
+    delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
+    const paths = [...getRenderedConcreteUrlPathsForRoute("/:locale/blog/:slug")!];
+    expect(paths).toEqual(["/en/blog/hello world"]);
+  });
+
+  it("second initPregeneratedPathsFromGlobals call overrides the first", () => {
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/route/a", ["/a/one"]]];
+    initPregeneratedPathsFromGlobals();
+    expect(getRenderedConcreteUrlPathsForRoute("/route/a")).toBeDefined();
+
+    globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/route/b", ["/b/one"]]];
+    initPregeneratedPathsFromGlobals();
+    delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
+    // First route's paths are gone
+    expect(getRenderedConcreteUrlPathsForRoute("/route/a")).toBeUndefined();
+    // Second route's paths are present
+    expect([...getRenderedConcreteUrlPathsForRoute("/route/b")!]).toEqual(["/b/one"]);
   });
 });

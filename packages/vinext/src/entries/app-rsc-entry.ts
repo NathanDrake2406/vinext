@@ -343,8 +343,6 @@ import {
 
 const __draftModeSecret = ${JSON.stringify(draftModeSecret)};
 
-// Populate pregenerated paths from deploy-injected global (Worker path).
-// No-op on Node (seed-cache handles it at startup).
 __initPregeneratedPathsFromGlobals();
 
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores

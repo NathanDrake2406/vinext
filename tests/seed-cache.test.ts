@@ -676,4 +676,35 @@ describe("seedMemoryCacheFromPrerender", () => {
     expect(buildBPaths!.has("/en/blog/new-post")).toBe(true);
     expect(buildBPaths!.size).toBe(1);
   });
+
+  it("clears pregenerated concrete paths when manifest is absent from a subsequent build", async () => {
+    const serverDir = createTempServerDir();
+
+    // Build A: seed with a known path
+    setupPrerenderFixture(
+      serverDir,
+      {
+        buildId: "build-a",
+        routes: [
+          {
+            route: "/en/blog/[slug]",
+            status: "rendered",
+            router: "app",
+            path: "/en/blog/known-post",
+            revalidate: 60,
+          },
+        ],
+      },
+      { "en/blog/known-post.html": "<html>A</html>" },
+    );
+    await seedMemoryCacheFromPrerender(serverDir);
+    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")).toBeDefined();
+
+    // Build B: no manifest exists
+    fs.rmSync(path.join(serverDir, "vinext-prerender.json"));
+    await seedMemoryCacheFromPrerender(serverDir);
+
+    const buildBPaths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    expect(buildBPaths).toBeUndefined();
+  });
 });
