@@ -1356,6 +1356,46 @@ describe("augmentSsrManifestFromBundle", () => {
     expect(augmented["pages/about.tsx"]).toEqual(["assets/about.js", "assets/about.css"]);
   });
 
+  it("collapses a basePath that Vite duplicated in the SSR manifest", () => {
+    // Regression for double-applied basePath in Pages Router client asset URLs.
+    // Vite+ bakes `base` into chunk fileNames on disk
+    // (dist/client/docs/_next/static/...) AND prepends `base` again when it
+    // writes ssr-manifest.json, producing "docs/docs/_next/static/..." entries.
+    // Those doubled URLs 404 in the browser, so the page never hydrates and
+    // client-side navigation dies. The augmented manifest must carry the
+    // basePath exactly once, matching the on-disk fileName.
+    const bundle = {
+      "docs/_next/static/_slug_.js": {
+        type: "chunk" as const,
+        // On disk the chunk already lives under the basePath segment.
+        fileName: "docs/_next/static/_slug_.js",
+        imports: [],
+        modules: {},
+      },
+    };
+
+    // Vite emitted the page chunk URL as base + fileName, doubling "docs/".
+    const ssrManifest = {
+      "pages/[slug].tsx": ["docs/docs/_next/static/_slug_.js"],
+    };
+
+    const augmented = _augmentSsrManifestFromBundle(ssrManifest, bundle, "/proj", "/docs/");
+
+    expect(augmented["pages/[slug].tsx"]).toEqual(["docs/_next/static/_slug_.js"]);
+  });
+
+  it("leaves a single basePath prefix untouched (no over-collapse)", () => {
+    // Guards the collapse logic against rewriting a correctly single-prefixed
+    // entry (e.g. when the bundler does not bake base into fileNames).
+    const ssrManifest = {
+      "pages/index.tsx": ["docs/_next/static/index.js"],
+    };
+
+    const augmented = _augmentSsrManifestFromBundle(ssrManifest, {}, "/proj", "/docs/");
+
+    expect(augmented["pages/index.tsx"]).toEqual(["docs/_next/static/index.js"]);
+  });
+
   it("normalizes existing absolute manifest keys before merging bundle metadata", () => {
     const bundle = {
       "assets/counter.js": {
