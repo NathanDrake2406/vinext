@@ -2137,6 +2137,111 @@ export const getStaticPaths = () => [
   });
 });
 
+// ─── App Router build compatibility ──────────────────────────────────────────
+
+describe("App Router build compatibility", () => {
+  // Ported from Next.js: test/e2e/app-dir/dynamic-requests/dynamic-requests.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/dynamic-requests/dynamic-requests.test.ts
+  it("builds page and route modules with guarded very dynamic import and require calls", async () => {
+    const vinext = (await import("../packages/vinext/src/index.js")).default;
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-dynamic-requests-build-"));
+    const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");
+    await fsp.symlink(rootNodeModules, path.join(tmpDir, "node_modules"), "junction");
+
+    const writeFile = async (filePath: string, content: string) => {
+      const absPath = path.join(tmpDir, filePath);
+      await fsp.mkdir(path.dirname(absPath), { recursive: true });
+      await fsp.writeFile(absPath, content);
+    };
+
+    try {
+      await writeFile(
+        "package.json",
+        JSON.stringify({ name: "vinext-dynamic-requests-build", private: true, type: "module" }),
+      );
+      await writeFile(
+        "tsconfig.json",
+        JSON.stringify(
+          {
+            compilerOptions: {
+              target: "ES2022",
+              module: "ESNext",
+              moduleResolution: "bundler",
+              jsx: "react-jsx",
+              strict: true,
+              skipLibCheck: true,
+              types: ["vite/client", "@vitejs/plugin-rsc/types"],
+            },
+            include: ["app", "*.ts", "*.tsx"],
+          },
+          null,
+          2,
+        ),
+      );
+      await writeFile(
+        "app/layout.tsx",
+        `import type { ReactNode } from "react";
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  );
+}
+`,
+      );
+
+      const guardedDynamicRequest = `function dynamic() {
+  const dynamic = Math.random() + "";
+  require(dynamic);
+  import(dynamic);
+}
+`;
+
+      await writeFile(
+        "app/page.tsx",
+        `export default async function Page() {
+  if (Math.random() < 0) dynamic();
+  return <p>Hello World</p>;
+}
+
+${guardedDynamicRequest}`,
+      );
+      await writeFile(
+        "app/hello/route.tsx",
+        `export function GET() {
+  if (Math.random() < 0) dynamic();
+  return new Response("Hello World");
+}
+
+${guardedDynamicRequest}`,
+      );
+
+      const rscOutDir = path.join(tmpDir, "dist", "server");
+      const ssrOutDir = path.join(tmpDir, "dist", "server", "ssr");
+      const clientOutDir = path.join(tmpDir, "dist", "client");
+      const builder = await createBuilder({
+        root: tmpDir,
+        configFile: false,
+        plugins: [vinext({ appDir: tmpDir, rscOutDir, ssrOutDir, clientOutDir })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+
+      await expect(fsp.access(path.join(tmpDir, "dist", "server", "index.js"))).resolves.toBe(
+        undefined,
+      );
+      await expect(
+        fsp.access(path.join(tmpDir, "dist", "server", "ssr", "index.js")),
+      ).resolves.toBe(undefined);
+      await expect(fsp.access(path.join(tmpDir, "dist", "client"))).resolves.toBe(undefined);
+    } finally {
+      await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 60_000);
+});
+
 // ─── getClientTreeshakeConfigForVite ──────────────────────────────────────────
 
 describe("getClientTreeshakeConfigForVite", () => {

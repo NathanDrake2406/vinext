@@ -149,6 +149,7 @@ import {
 import { stripServerExports } from "./plugins/strip-server-exports.js";
 import { removeConsoleCalls } from "./plugins/remove-console.js";
 import { createImportMetaUrlPlugin } from "./plugins/import-meta-url.js";
+import { createIgnoreDynamicRequestsPlugin } from "./plugins/ignore-dynamic-requests.js";
 import { hasMdxFiles } from "./utils/mdx-scan.js";
 import { scanPublicFileRoutes } from "./utils/public-routes.js";
 import { getViteMajorVersion } from "./utils/vite-version.js";
@@ -982,6 +983,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     ...(viteMajorVersion >= 8 ? [] : [tsconfigPaths()]),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
+    // Next.js/Turbopack ignores "very dynamic" requests with no static path
+    // part during graph analysis. Preserve that behaviour before the CJS
+    // plugin tries to expand require(dynamic) as a static glob.
+    createIgnoreDynamicRequestsPlugin(),
     // Transform CJS require()/module.exports to ESM before other plugins
     // analyze imports (RSC directive scanning, shim resolution, etc.)
     commonjs(),
