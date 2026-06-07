@@ -17,6 +17,18 @@ type CreateAppPageFontDataOptions = {
   getStyles: () => string[];
 };
 
+export type AppSsrRenderResult = {
+  htmlStream: ReadableStream<Uint8Array>;
+  metadataReady: Promise<void>;
+  capturedRscData: Promise<ArrayBuffer> | null;
+};
+
+export function isAppSsrRenderResult(value: unknown): value is AppSsrRenderResult {
+  return (
+    typeof value === "object" && value !== null && "htmlStream" in value && "metadataReady" in value
+  );
+}
+
 export type AppPageSsrHandler = {
   handleSsr: (
     rscStream: ReadableStream<Uint8Array>,
@@ -39,7 +51,7 @@ export type AppPageSsrHandler = {
       /** Dev-only: original server error to surface in the browser overlay. */
       initialDevServerError?: unknown;
     },
-  ) => Promise<ReadableStream<Uint8Array>>;
+  ) => Promise<ReadableStream<Uint8Array> | AppSsrRenderResult>;
 };
 
 type RenderAppPageHtmlStreamOptions = {
@@ -79,12 +91,14 @@ type RenderAppPageHtmlResponseOptions = {
 type AppPageHtmlStreamRecoveryResult = {
   htmlStream: ReadableStream<Uint8Array> | null;
   response: Response | null;
+  metadataReady: Promise<void>;
+  capturedRscData: Promise<ArrayBuffer> | null;
 };
 
 type RenderAppPageHtmlStreamWithRecoveryOptions<TSpecialError> = {
   onShellRendered?: () => void;
   renderErrorBoundaryResponse: (error: unknown) => Promise<Response | null>;
-  renderHtmlStream: () => Promise<ReadableStream<Uint8Array>>;
+  renderHtmlStream: () => Promise<ReadableStream<Uint8Array> | AppSsrRenderResult>;
   renderSpecialErrorResponse: (specialError: TSpecialError) => Promise<Response>;
   resolveSpecialError: (error: unknown) => TSpecialError | null;
 };
@@ -116,7 +130,7 @@ export function createAppPageFontData(options: CreateAppPageFontDataOptions): Ap
 
 export async function renderAppPageHtmlStream(
   options: RenderAppPageHtmlStreamOptions,
-): Promise<ReadableStream<Uint8Array>> {
+): Promise<AppSsrRenderResult> {
   const ssrOptions = {
     formState: options.formState ?? null,
     scriptNonce: options.scriptNonce,
@@ -129,12 +143,22 @@ export async function renderAppPageHtmlStream(
     initialDevServerError: options.initialDevServerError,
   };
 
-  return options.ssrHandler.handleSsr(
+  const rawResult = await options.ssrHandler.handleSsr(
     options.rscStream,
     options.navigationContext,
     options.fontData,
     ssrOptions,
   );
+
+  if (isAppSsrRenderResult(rawResult)) {
+    return rawResult;
+  }
+
+  return {
+    htmlStream: rawResult,
+    metadataReady: Promise.resolve(),
+    capturedRscData: options.capturedRscDataRef?.value ?? null,
+  };
 }
 
 /**
@@ -195,7 +219,7 @@ export function deferUntilStreamConsumed(
 export async function renderAppPageHtmlResponse(
   options: RenderAppPageHtmlResponseOptions,
 ): Promise<Response> {
-  const htmlStream = await renderAppPageHtmlStream(options);
+  const { htmlStream } = await renderAppPageHtmlStream(options);
 
   // Defer clearRequestContext() until the stream is fully consumed by the HTTP
   // layer. Calling it synchronously here would race the lazy RSC/SSR pipeline:
@@ -228,11 +252,21 @@ export async function renderAppPageHtmlStreamWithRecovery<TSpecialError>(
   options: RenderAppPageHtmlStreamWithRecoveryOptions<TSpecialError>,
 ): Promise<AppPageHtmlStreamRecoveryResult> {
   try {
-    const htmlStream = await options.renderHtmlStream();
+    const rawResult = await options.renderHtmlStream();
+    const result = isAppSsrRenderResult(rawResult)
+      ? rawResult
+      : {
+          htmlStream: rawResult,
+          metadataReady: Promise.resolve(),
+          capturedRscData: null,
+        };
+    const { htmlStream, metadataReady, capturedRscData } = result;
     options.onShellRendered?.();
     return {
       htmlStream,
       response: null,
+      metadataReady,
+      capturedRscData,
     };
   } catch (error) {
     const specialError = options.resolveSpecialError(error);
@@ -240,6 +274,8 @@ export async function renderAppPageHtmlStreamWithRecovery<TSpecialError>(
       return {
         htmlStream: null,
         response: await options.renderSpecialErrorResponse(specialError),
+        metadataReady: Promise.resolve(),
+        capturedRscData: null,
       };
     }
 
@@ -248,6 +284,8 @@ export async function renderAppPageHtmlStreamWithRecovery<TSpecialError>(
       return {
         htmlStream: null,
         response: boundaryResponse,
+        metadataReady: Promise.resolve(),
+        capturedRscData: null,
       };
     }
 

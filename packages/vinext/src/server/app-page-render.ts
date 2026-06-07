@@ -57,7 +57,7 @@ import type {
   ClientReuseManifestTraceFields,
 } from "./client-reuse-manifest.js";
 import { NO_STORE_CACHE_CONTROL } from "./cache-control.js";
-import { readStreamAsText } from "../utils/text-stream.js";
+
 import {
   createClientReuseSkipTransportPlan,
   createStaticLayoutClientReuseArtifactCompatibility,
@@ -179,8 +179,6 @@ type RenderAppPageLifecycleOptions = {
   classification?: LayoutClassificationOptions | null;
 };
 
-const textEncoder = new TextEncoder();
-
 function buildResponseTiming(
   options: Pick<RenderAppPageLifecycleOptions, "handlerStart" | "isProduction"> & {
     compileEnd?: number;
@@ -198,18 +196,6 @@ function buildResponseTiming(
     renderEnd: options.renderEnd,
     responseKind: options.responseKind,
   };
-}
-
-function createBufferedHtmlStream(html: string): ReadableStream<Uint8Array> {
-  const encoded = textEncoder.encode(html);
-  return new ReadableStream({
-    start(controller) {
-      if (encoded.byteLength > 0) {
-        controller.enqueue(encoded);
-      }
-      controller.close();
-    },
-  });
 }
 
 function readRequestCacheLifeForPrerender(
@@ -899,9 +885,8 @@ export async function renderAppPageLifecycle(
 
   // Eagerly read values that must be captured before the stream is consumed.
   if (options.isPrerender === true) {
-    const bufferedHtml = await readStreamAsText(htmlStream);
-    htmlStream = createBufferedHtmlStream(bufferedHtml);
-    await settleCapturedRscRenderForCacheMetadata(capturedRscDataRef.value);
+    await htmlRender.metadataReady;
+    await settleCapturedRscRenderForCacheMetadata(htmlRender.capturedRscData);
     ({ expireSeconds, revalidateSeconds } = applyRequestCacheLife({
       expireSeconds,
       requestCacheLife: readRequestCacheLifeForPrerender(options),
