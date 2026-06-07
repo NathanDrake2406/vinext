@@ -37,6 +37,7 @@ import { mergeMiddlewareResponseHeaders } from "./app-page-response.js";
 import { handleAppPrerenderEndpoint } from "./app-prerender-endpoints.js";
 import {
   createRscRedirectLocation,
+  hasRscCacheBustingSearchParam,
   resolveInvalidRscCacheBustingRequest,
   stripRscCacheBustingSearchParam,
   stripRscSuffix,
@@ -56,6 +57,7 @@ import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
 import type { ClientReuseManifestParseResult } from "./client-reuse-manifest.js";
 import {
   cloneRequestWithHeaders,
+  cloneRequestWithUrl,
   filterInternalHeaders,
   applyConfigHeadersToResponse,
   normalizeTrailingSlash,
@@ -353,6 +355,26 @@ function applyConfigHeadersToMiddlewareRedirect(
   return response;
 }
 
+function requestWithoutRscCacheBustingSearchParam(request: Request): Request {
+  const url = new URL(request.url);
+  // `hasRscCacheBustingSearchParam` and `stripRscCacheBustingSearchParam` share
+  // the same encoding-aware matcher (`isRscCacheBustingSearchPair`), so the
+  // guard and the strip can never disagree on which pairs count as `_rsc`
+  // (including encoded-key edge cases like `%5Frsc`). Gating on the matcher
+  // rather than a before/after search comparison also avoids spuriously
+  // rebuilding/normalizing requests whose only difference is degenerate empty
+  // query pairs (e.g. `?a=1&&b=2`).
+  if (!hasRscCacheBustingSearchParam(url)) return request;
+
+  stripRscCacheBustingSearchParam(url);
+  // Clone when a body is present so the original request stays usable, then
+  // reconstruct via `cloneRequestWithUrl` rather than a bare `new Request` so
+  // the Workers `cf` metadata is preserved (user middleware reads it directly)
+  // and `duplex: "half"` is set for streaming bodies.
+  const source = request.body ? request.clone() : request;
+  return cloneRequestWithUrl(source, url.toString());
+}
+
 async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   options: CreateAppRscHandlerOptions<TRoute>,
   request: Request,
@@ -452,6 +474,12 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   });
   if (rscCacheBustingRedirect) return rscCacheBustingRedirect;
 
+  // Keep cache-busting validation on the real request above, then hide the
+  // internal `_rsc` transport query from userland middleware and post-middleware
+  // has/missing matching. This mirrors Next.js' navigation middleware fixture.
+  const userlandRequest = isRscRequest
+    ? requestWithoutRscCacheBustingSearchParam(request)
+    : request;
   const middlewareContext: AppRscMiddlewareContext = {
     headers: null,
     requestHeaders: null,
@@ -467,7 +495,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       isDataRequest,
       isProxy: options.isMiddlewareProxy,
       module: options.middlewareModule,
-      request,
+      request: userlandRequest,
       trailingSlash: options.trailingSlash,
     });
     if (middlewareResult.kind === "response") {
@@ -486,7 +514,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   }
 
   const scriptNonce = getScriptNonceFromHeaderSources(request.headers, middlewareContext.headers);
-  const postMiddlewareRequestContext = buildPostMwRequestContext(request);
+  const postMiddlewareRequestContext = buildPostMwRequestContext(userlandRequest);
 
   // Rewrites (beforeFiles, afterFiles, fallback) use `matchPathname` from
   // above to splice in the default locale before matching. Route matching
@@ -497,7 +525,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     {
       basePathState,
       clearRequestContext: options.clearRequestContext,
-      request,
+      // Forward the `_rsc`-stripped request so external rewrite proxies never
+      // receive the internal RSC transport query (same invariant as middleware).
+      request: userlandRequest,
       requestContext: postMiddlewareRequestContext,
       rewrites: options.configRewrites.beforeFiles,
     },
@@ -602,7 +632,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       {
         basePathState,
         clearRequestContext: options.clearRequestContext,
-        request,
+        // Forward the `_rsc`-stripped request so external rewrite proxies never
+        // receive the internal RSC transport query (same invariant as middleware).
+        request: userlandRequest,
         requestContext: postMiddlewareRequestContext,
         rewrites: options.configRewrites.afterFiles,
       },
@@ -620,7 +652,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       {
         basePathState,
         clearRequestContext: options.clearRequestContext,
-        request,
+        // Forward the `_rsc`-stripped request so external rewrite proxies never
+        // receive the internal RSC transport query (same invariant as middleware).
+        request: userlandRequest,
         requestContext: postMiddlewareRequestContext,
         rewrites: options.configRewrites.fallback,
       },
