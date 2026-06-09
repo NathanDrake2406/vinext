@@ -126,4 +126,29 @@ describe("rewriteAppPprFallbackShellHtmlNavigation", () => {
     expect(headCloseIndex).toBeGreaterThanOrEqual(0);
     expect(paramsIndex).toBeLessThan(headCloseIndex);
   });
+
+  it("appends actual request metadata after cached placeholder metadata", () => {
+    const placeholderHtml = rewriteAppPprFallbackShellHtmlNavigation({
+      html: "<html><head><title>x</title></head><body>shell</body></html>",
+      params: { locale: "en", slug: "[slug]" },
+      pathname: "/en/blog/[slug]",
+      searchParams: new URLSearchParams(),
+    });
+    const html = rewriteAppPprFallbackShellHtmlNavigation({
+      html: placeholderHtml,
+      params: { locale: "en", slug: "new-post" },
+      pathname: "/en/blog/new-post",
+      searchParams: new URLSearchParams([["preview", "1"]]),
+    });
+
+    const placeholderIndex = html.indexOf('params:{"locale":"en","slug":"[slug]"}');
+    const actualIndex = html.indexOf('params:{"locale":"en","slug":"new-post"}');
+    const headCloseIndex = html.indexOf("</head>");
+
+    expect(placeholderIndex).toBeGreaterThanOrEqual(0);
+    expect(actualIndex).toBeGreaterThan(placeholderIndex);
+    expect(actualIndex).toBeLessThan(headCloseIndex);
+    expect(html).toContain('"pathname":"/en/blog/new-post"');
+    expect(html).toContain('"searchParams":[["preview","1"]]');
+  });
 });

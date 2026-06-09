@@ -29,7 +29,7 @@ export function addPregeneratedConcretePath(routePattern: string, pathname: stri
     paths = new Set();
     concreteUrlPathsByRoute.set(routePattern, paths);
   }
-  paths.add(pathname);
+  paths.add(normalizePregeneratedPathname(pathname));
 }
 
 export function getRenderedConcreteUrlPathsForRoute(
@@ -50,7 +50,7 @@ export function initPregeneratedPathsFromGlobals(): void {
   clearPregeneratedConcretePaths();
   for (const [routePattern, pathnames] of data) {
     for (const pathname of pathnames) {
-      addPregeneratedConcretePath(routePattern, normalizePregeneratedPathname(pathname));
+      addPregeneratedConcretePath(routePattern, pathname);
     }
   }
 }

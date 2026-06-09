@@ -65,6 +65,14 @@ describe("pregenerated concrete paths", () => {
     expect(normalizePregeneratedPathname("/en/blog/hello%20world")).toBe("/en/blog/hello world");
   });
 
+  it("normalizes pathnames when adding concrete paths", () => {
+    addPregeneratedConcretePath("/:locale/blog/:slug", "/en/blog/hello%20world");
+
+    expect([...getRenderedConcreteUrlPathsForRoute("/:locale/blog/:slug")!]).toEqual([
+      "/en/blog/hello world",
+    ]);
+  });
+
   it("initializes from the Worker global concrete-path table", () => {
     globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [
       ["/:locale/blog/:slug", ["/en/blog/hello%20world"]],
