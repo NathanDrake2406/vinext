@@ -13,6 +13,17 @@ type AppPprFallbackShell = {
   params: Record<string, string | string[]>;
 };
 
+/**
+ * A fallback-shell cache entry as consumed by the dispatch layer.
+ * Produced at build time by the PPR prerender and served at request time
+ * when the exact cache entry for a dynamic child param is missing.
+ */
+export type AppPagePprFallbackCacheShell = {
+  fallbackParamNames: readonly string[];
+  params: Record<string, string | string[]>;
+  pathname: string;
+};
+
 function routeRootParamNames(route: AppPprFallbackShellRoute): Set<string> {
   return new Set(route.rootParamNames ?? []);
 }

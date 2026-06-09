@@ -24,11 +24,7 @@ import { createRequestContext, runWithRequestContext } from "vinext/shims/unifie
 import {
   createPprFallbackShellState,
   getPprFallbackShellState,
-  isPprFallbackShellAbortError,
-  preparePprFallbackShellFinalRender,
   runWithPprFallbackShellState,
-  waitForPprFallbackShellCacheReady,
-  type PprFallbackShellState,
 } from "vinext/shims/ppr-fallback-shell";
 import {
   ensureFetchPatch,
@@ -45,7 +41,15 @@ import {
   readAppPageCacheResponse,
   readAppPageFallbackShellCacheResponse,
 } from "./app-page-cache.js";
-import { rewriteAppPprFallbackShellHtmlNavigation } from "./app-ppr-fallback-shell.js";
+import {
+  rewriteAppPprFallbackShellHtmlNavigation,
+  type AppPagePprFallbackCacheShell,
+} from "./app-ppr-fallback-shell.js";
+import {
+  renderFreshPprFallbackShellForCache,
+  warmPprFallbackShellCaches,
+  type FallbackShellRenderDeps,
+} from "./app-ppr-fallback-shell-render.js";
 import {
   resolveAppPageParentHttpAccessBoundary,
   resolveAppPageParentHttpAccessBoundaryModule,
@@ -53,7 +57,6 @@ import {
 import { readStreamAsText } from "../utils/text-stream.js";
 import {
   buildAppPageSpecialErrorResponse,
-  readAppPageBinaryStream,
   resolveAppPageSpecialError,
   teeAppPageRscStreamForCapture,
   type AppPageFontPreload,
@@ -182,12 +185,6 @@ type AppPageDispatchRoute = {
   routeSegments: readonly string[];
   unauthorized?: AppPageModule | null;
   unauthorizeds?: readonly (AppPageModule | null | undefined)[];
-};
-
-type AppPagePprFallbackCacheShell = {
-  fallbackParamNames: readonly string[];
-  params: AppPageParams;
-  pathname: string;
 };
 
 function resolveAppPageRouteBoundaryModule(
@@ -507,186 +504,90 @@ function toInterceptOptions(
   };
 }
 
-async function warmPprFallbackShellCaches(options: {
-  element: AppPageRenderableElement;
-  onError: AppPageBoundaryOnError;
-  renderToReadableStream: DispatchAppPageOptions<AppPageDispatchRoute>["renderToReadableStream"];
-  state: PprFallbackShellState;
-}): Promise<void> {
-  let warmupError: unknown = null;
-  const warmupStream = options.renderToReadableStream(options.element, {
-    onError(error, requestInfo, errorContext) {
-      if (options.state.abortController.signal.aborted || isPprFallbackShellAbortError(error)) {
-        return undefined;
-      }
-
-      return options.onError(error, requestInfo, errorContext);
-    },
-  });
-  const warmupDrain = readAppPageBinaryStream(warmupStream).catch((error: unknown) => {
-    if (options.state.abortController.signal.aborted || isPprFallbackShellAbortError(error)) {
-      return;
-    }
-    warmupError = error;
-  });
-
-  try {
-    await waitForPprFallbackShellCacheReady(options.state);
-  } finally {
-    options.state.abortController.abort();
-    await warmupDrain;
-    preparePprFallbackShellFinalRender(options.state);
-  }
-
-  if (warmupError) {
-    throw warmupError;
-  }
-}
-
-async function renderFreshPprFallbackShellForCache<TRoute extends AppPageDispatchRoute>(
+/**
+ * Probe PPR fallback-shell cache entries after an exact cache miss.
+ *
+ * Guards against serving fallback shells for known pregenerated routes whose
+ * exact cache entry is temporarily absent (eviction, cold start, etc.).
+ * Returns the first matching shell response, or `null` when probing is
+ * skipped or every shell misses.
+ */
+async function tryServePprFallbackShell<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
-  fallbackShell: AppPagePprFallbackCacheShell,
-) {
-  const fallbackSearchParams = new URLSearchParams();
-  return runAppPageRevalidationContext(
-    {
-      cleanPathname: fallbackShell.pathname,
-      currentFetchCacheMode:
-        options.resolveRouteFetchCacheMode?.(options.route) ?? options.fetchCache ?? null,
-      draftModeSecret: options.draftModeSecret,
-      dynamicConfig: options.dynamicConfig,
-      params: fallbackShell.params,
-      routePattern: options.route.pattern,
-      routeSegments: options.route.routeSegments,
-      setNavigationContext: options.setNavigationContext,
-    },
-    async () => {
-      const fallbackShellState = createPprFallbackShellState({
-        fallbackParamNames: fallbackShell.fallbackParamNames,
-        routePattern: options.route.pattern,
-      });
+  route: TRoute,
+  currentRevalidateSeconds: number | null,
+  isDraftMode: boolean,
+  isForceDynamic: boolean,
+): Promise<Response | null> {
+  // Before probing fallback shells, check whether this exact URL was a
+  // pre-rendered concrete route at build time. If so, the exact cache entry
+  // was seeded at startup and its current absence is a transient condition
+  // (eviction, cold start, stale-empty, read error) — not a semantic signal
+  // that this is an unknown dynamic route. Serving the fallback shell would
+  // silently degrade a known pregenerated route to unknown-param content.
+  const isKnownPregeneratedRoute =
+    options.renderedConcreteUrlPaths?.has(options.cleanPathname) === true;
+  if (
+    isKnownPregeneratedRoute ||
+    !options.pprFallbackCacheShells ||
+    options.pprFallbackCacheShells.length === 0 ||
+    options.isRscRequest ||
+    options.request.method !== "GET" ||
+    !shouldReadAppPageCache({
+      isDraftMode,
+      isForceDynamic,
+      isProgressiveActionRender: options.isProgressiveActionRender === true,
+      isProduction: options.isProduction,
+      isRscRequest: false,
+      revalidateSeconds: currentRevalidateSeconds,
+      scriptNonce: options.scriptNonce,
+    })
+  ) {
+    return null;
+  }
 
-      return await runWithPprFallbackShellState(fallbackShellState, async () => {
-        try {
-          const onError = options.createRscOnErrorHandler(
-            fallbackShell.pathname,
-            options.route.pattern,
-          );
-          const warmupElement = await options.buildPageElement(
-            options.route,
-            fallbackShell.params,
-            undefined,
-            fallbackSearchParams,
-          );
-          await warmPprFallbackShellCaches({
-            element: warmupElement,
-            onError,
-            renderToReadableStream: options.renderToReadableStream,
-            state: fallbackShellState,
-          });
-          _consumeRequestScopedCacheLife();
-          consumeDynamicFetchObservations();
-          consumeRenderRequestApiUsage();
-          consumeInvalidDynamicUsageError();
-          consumeDynamicUsage();
+  for (const fallbackShell of options.pprFallbackCacheShells) {
+    const fallbackShellResponse = await readAppPageFallbackShellCacheResponse({
+      clearRequestContext: options.clearRequestContext,
+      expireSeconds: options.expireSeconds,
+      fallbackPathname: fallbackShell.pathname,
+      isEdgeRuntime: options.isEdgeRuntime,
+      isrDebug: options.isrDebug,
+      isrGet: options.isrGet,
+      isrHtmlKey: options.isrHtmlKey,
+      isrSet: options.isrSet,
+      middlewareHeaders: options.middlewareContext.headers,
+      middlewareStatus: options.middlewareContext.status,
+      revalidateSeconds: currentRevalidateSeconds ?? 0,
+      renderFreshFallbackShellForCache() {
+        return renderFreshPprFallbackShellForCache(
+          options as FallbackShellRenderDeps<TRoute>,
+          runAppPageRevalidationContext,
+          fallbackShell,
+        );
+      },
+      rewriteHtml(html) {
+        return rewriteAppPprFallbackShellHtmlNavigation({
+          html,
+          params: options.params,
+          pathname: options.cleanPathname,
+          searchParams: options.searchParams,
+        });
+      },
+      scheduleBackgroundRegeneration(key, renderFn) {
+        options.scheduleBackgroundRegeneration(key, renderFn, {
+          routerKind: "App Router",
+          routePath: route.pattern,
+          routeType: "render",
+        });
+      },
+    });
+    if (fallbackShellResponse) {
+      return fallbackShellResponse;
+    }
+  }
 
-          options.setNavigationContext({
-            pathname: fallbackShell.pathname,
-            searchParams: fallbackSearchParams,
-            params: fallbackShell.params,
-          });
-          const finalElement = await options.buildPageElement(
-            options.route,
-            fallbackShell.params,
-            undefined,
-            fallbackSearchParams,
-          );
-          const finalRscStream = options.renderToReadableStream(finalElement, {
-            onError,
-          });
-          const finalRscCapture = teeAppPageRscStreamForCapture(finalRscStream, true);
-          const capturedRscDataRef: { value: Promise<ArrayBuffer> | null } = {
-            value: null,
-          };
-          const ssrHandler = await options.loadSsrHandler();
-          const htmlStream = await ssrHandler.handleSsr(
-            finalRscCapture.ssrStream,
-            options.getNavigationContext(),
-            {
-              links: options.getFontLinks(),
-              styles: options.getFontStyles(),
-              preloads: options.getFontPreloads(),
-            },
-            {
-              basePath: options.basePath,
-              clientTraceMetadata: options.clientTraceMetadata,
-              rootParams: options.rootParams,
-              ...(finalRscCapture.sideStream
-                ? {
-                    sideStream: finalRscCapture.sideStream,
-                    capturedRscDataRef,
-                  }
-                : {}),
-            },
-          );
-          const htmlStreamNormalized = isAppSsrRenderResult(htmlStream)
-            ? htmlStream.htmlStream
-            : htmlStream;
-          const html = await readStreamAsText(htmlStreamNormalized);
-          try {
-            await capturedRscDataRef.value;
-          } catch {
-            // HTML rendering owns the user-visible error path. The fallback-shell
-            // regeneration only writes HTML, but observing the capture promise
-            // prevents a secondary unhandled rejection from the tee side stream.
-          }
-          const cacheLife = _consumeRequestScopedCacheLife();
-          const tags = buildAppPageTags(
-            fallbackShell.pathname,
-            getCollectedFetchTags(),
-            options.route.routeSegments,
-          );
-          const observationState = {
-            dynamicFetches: consumeDynamicFetchObservations(),
-            requestApis: consumeRenderRequestApiUsage(),
-          };
-          consumeInvalidDynamicUsageError();
-          consumeDynamicUsage();
-
-          return {
-            html,
-            htmlRenderObservation: createAppPageRenderObservation({
-              boundaryOutcome: { kind: "success" },
-              cacheability: "public",
-              cacheTags: tags,
-              cleanPathname: fallbackShell.pathname,
-              completeness: "complete",
-              output: createAppPageHtmlOutputScope({
-                element: finalElement,
-                renderEpoch: null,
-                rootBoundaryId: null,
-                routePattern: options.route.pattern,
-              }),
-              params: fallbackShell.params,
-              state: observationState,
-            }),
-            tags,
-            cacheControl:
-              typeof cacheLife?.revalidate === "number"
-                ? { revalidate: cacheLife.revalidate, expire: cacheLife.expire }
-                : undefined,
-          };
-        } finally {
-          _consumeRequestScopedCacheLife();
-          consumeDynamicFetchObservations();
-          consumeRenderRequestApiUsage();
-          consumeInvalidDynamicUsageError();
-          consumeDynamicUsage();
-          options.clearRequestContext();
-        }
-      });
-    },
-  );
+  return null;
 }
 
 export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
@@ -945,72 +846,15 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     }
   }
 
-  // Before probing fallback shells, check whether this exact URL was a
-  // pre-rendered concrete route at build time. If so, the exact cache entry
-  // was seeded at startup and its current absence is a transient condition
-  // (eviction, cold start, stale-empty, read error) — not a semantic signal
-  // that this is an unknown dynamic route. Serving the fallback shell would
-  // silently degrade a known pregenerated route to unknown-param content.
-  //
-  // Without this guard, a cache miss on `/en/blog/known-post` with a
-  // pre-existing fallback shell `/en/blog/[slug]` would serve the shell
-  // instead of regenerating the exact known page. The fallback shell must
-  // only be used for truly unknown child params, not for cache misses on
-  // known generated paths.
-  const isKnownPregeneratedRoute =
-    options.renderedConcreteUrlPaths?.has(options.cleanPathname) === true;
-  if (
-    !isKnownPregeneratedRoute &&
-    options.pprFallbackCacheShells &&
-    options.pprFallbackCacheShells.length > 0 &&
-    !options.isRscRequest &&
-    options.request.method === "GET" &&
-    shouldReadAppPageCache({
-      isDraftMode,
-      isForceDynamic,
-      isProgressiveActionRender: options.isProgressiveActionRender === true,
-      isProduction: options.isProduction,
-      isRscRequest: false,
-      revalidateSeconds: currentRevalidateSeconds,
-      scriptNonce: options.scriptNonce,
-    })
-  ) {
-    for (const fallbackShell of options.pprFallbackCacheShells) {
-      const fallbackShellResponse = await readAppPageFallbackShellCacheResponse({
-        clearRequestContext: options.clearRequestContext,
-        expireSeconds: options.expireSeconds,
-        fallbackPathname: fallbackShell.pathname,
-        isEdgeRuntime: options.isEdgeRuntime,
-        isrDebug: options.isrDebug,
-        isrGet: options.isrGet,
-        isrHtmlKey: options.isrHtmlKey,
-        isrSet: options.isrSet,
-        middlewareHeaders: options.middlewareContext.headers,
-        middlewareStatus: options.middlewareContext.status,
-        revalidateSeconds: currentRevalidateSeconds ?? 0,
-        renderFreshFallbackShellForCache() {
-          return renderFreshPprFallbackShellForCache(options, fallbackShell);
-        },
-        rewriteHtml(html) {
-          return rewriteAppPprFallbackShellHtmlNavigation({
-            html,
-            params: options.params,
-            pathname: options.cleanPathname,
-            searchParams: options.searchParams,
-          });
-        },
-        scheduleBackgroundRegeneration(key, renderFn) {
-          options.scheduleBackgroundRegeneration(key, renderFn, {
-            routerKind: "App Router",
-            routePath: route.pattern,
-            routeType: "render",
-          });
-        },
-      });
-      if (fallbackShellResponse) {
-        return fallbackShellResponse;
-      }
-    }
+  const fallbackShellResponse = await tryServePprFallbackShell(
+    options,
+    route,
+    currentRevalidateSeconds,
+    isDraftMode,
+    isForceDynamic,
+  );
+  if (fallbackShellResponse) {
+    return fallbackShellResponse;
   }
 
   const interceptResult = await resolveAppPageIntercept<

@@ -185,6 +185,7 @@ import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
 import { normalizePathSeparators, stripViteModuleQuery } from "./utils/path.js";
+import { getViteMajorVersion } from "./utils/vite-version.js";
 
 // Install the process-level peer-disconnect backstop at module load.
 // Vite plugin lifecycle hooks (config / configureServer) proved
@@ -435,40 +436,6 @@ function loadTsconfigPathAliases(
     ...aliases,
     ...materializeTsconfigPathAliases(pathsConfig, resolvedBaseUrl, projectRoot),
   };
-}
-
-/**
- * Detect Vite major version at runtime by resolving from cwd.
- * The plugin may be installed in a workspace root with Vite 7 but used
- * by a project that has Vite 8 — so we resolve from cwd, not from
- * the plugin's own location.
- */
-function getViteMajorVersion(): number {
-  try {
-    const require = createRequire(path.join(process.cwd(), "package.json"));
-    const vitePkg = require("vite/package.json");
-
-    const viteMajor = parseInt(vitePkg?.version, 10);
-    if (vitePkg?.name === "vite" && Number.isFinite(viteMajor)) {
-      return viteMajor;
-    }
-
-    const bundledViteMajor = parseInt(vitePkg?.bundledVersions?.vite, 10);
-    if (Number.isFinite(bundledViteMajor)) {
-      return bundledViteMajor;
-    }
-
-    // npm aliases like `vite: npm:@voidzero-dev/vite-plus-core@...` expose the
-    // aliased package.json, whose own version is not Vite's version.
-    console.warn(
-      `[vinext] Could not determine Vite major version from ${vitePkg?.name ?? "vite/package.json"}; assuming Vite 7`,
-    );
-    return 7;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[vinext] Failed to resolve vite/package.json (${message}); assuming Vite 7`);
-    return 7;
-  }
 }
 
 /**

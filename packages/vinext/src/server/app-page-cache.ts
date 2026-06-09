@@ -73,7 +73,7 @@ type AppPageCacheRenderResult = {
   tags: string[];
 };
 
-type AppPageFallbackShellCacheRenderResult = {
+export type AppPageFallbackShellCacheRenderResult = {
   cacheControl?: CacheControlMetadata;
   html: string;
   htmlRenderObservation?: RenderObservation;
