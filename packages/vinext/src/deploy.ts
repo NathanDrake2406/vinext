@@ -36,6 +36,7 @@ import {
   readPrerenderManifest,
   buildPregeneratedConcretePathTable,
 } from "./server/prerender-manifest.js";
+import { escapeRegExp } from "./utils/regex.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -1215,10 +1216,6 @@ function runWranglerDeploy(root: string, options: Pick<DeployOptions, "preview" 
 }
 
 // ─── Pregenerated Concrete Paths Injection ────────────────────────────────────
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 const VINEXT_PREGEN_START = "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */";
 const VINEXT_PREGEN_END = "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */";

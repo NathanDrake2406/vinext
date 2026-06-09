@@ -1,6 +1,6 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { NavigationContext } from "vinext/shims/navigation";
+import type { NavigationContext } from "../packages/vinext/src/shims/navigation.js";
 import { clearPregeneratedConcretePaths } from "../packages/vinext/src/server/pregenerated-concrete-paths.js";
 import {
   APP_ROOT_LAYOUT_KEY,

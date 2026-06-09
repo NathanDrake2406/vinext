@@ -560,8 +560,33 @@ async function tryServePprFallbackShell<TRoute extends AppPageDispatchRoute>(
       middlewareStatus: options.middlewareContext.status,
       revalidateSeconds: currentRevalidateSeconds ?? 0,
       renderFreshFallbackShellForCache() {
+        const fallbackShellRenderDeps = {
+          basePath: options.basePath,
+          buildPageElement(_route, params, _opts, searchParams) {
+            return options.buildPageElement(route, params, undefined, searchParams);
+          },
+          clearRequestContext: options.clearRequestContext,
+          clientTraceMetadata: options.clientTraceMetadata,
+          createRscOnErrorHandler: options.createRscOnErrorHandler,
+          draftModeSecret: options.draftModeSecret,
+          dynamicConfig: options.dynamicConfig,
+          fetchCache: options.fetchCache,
+          getFontLinks: options.getFontLinks,
+          getFontPreloads: options.getFontPreloads,
+          getFontStyles: options.getFontStyles,
+          getNavigationContext: options.getNavigationContext,
+          loadSsrHandler: options.loadSsrHandler,
+          renderToReadableStream: options.renderToReadableStream,
+          resolveRouteFetchCacheMode: options.resolveRouteFetchCacheMode
+            ? () => options.resolveRouteFetchCacheMode?.(route) ?? null
+            : undefined,
+          rootParams: options.rootParams,
+          route,
+          setNavigationContext: options.setNavigationContext,
+        } satisfies FallbackShellRenderDeps;
+
         return renderFreshPprFallbackShellForCache(
-          options as FallbackShellRenderDeps<TRoute>,
+          fallbackShellRenderDeps,
           runAppPageRevalidationContext,
           fallbackShell,
         );

@@ -532,15 +532,15 @@ function isVirtualEntryFacade(id: string | null | undefined, virtualId: string):
 }
 
 /**
- * Returns true when `code` starts with a React `"use client"` or `"use server"`
- * directive (after stripping leading comments, hashbang, and whitespace).
+ * Returns the leading React `"use client"` or `"use server"` directive after
+ * stripping leading comments, hashbang, and whitespace.
  *
  * Used by `vinext:jsx-in-js` to opt `.js` files inside `node_modules` into the
  * JSX transform. We mirror `@vitejs/plugin-rsc`'s detection by looking at the
  * directive prologue rather than scanning the whole file — `code.includes`
  * alone would match incidental occurrences in template literals or comments.
  */
-function hasReactDirective(code: string): boolean {
+function getLeadingReactDirective(code: string): "use client" | "use server" | null {
   let i = 0;
   const len = code.length;
   // Strip BOM.
@@ -548,42 +548,46 @@ function hasReactDirective(code: string): boolean {
   // Strip hashbang.
   if (code[i] === "#" && code[i + 1] === "!") {
     const nl = code.indexOf("\n", i);
-    if (nl === -1) return false;
+    if (nl === -1) return null;
     i = nl + 1;
   }
   while (i < len) {
     // Skip whitespace.
     while (i < len && /\s/.test(code[i] ?? "")) i++;
-    if (i >= len) return false;
+    if (i >= len) return null;
     // Skip line comments.
     if (code[i] === "/" && code[i + 1] === "/") {
       const nl = code.indexOf("\n", i + 2);
-      if (nl === -1) return false;
+      if (nl === -1) return null;
       i = nl + 1;
       continue;
     }
     // Skip block comments.
     if (code[i] === "/" && code[i + 1] === "*") {
       const end = code.indexOf("*/", i + 2);
-      if (end === -1) return false;
+      if (end === -1) return null;
       i = end + 2;
       continue;
     }
     // At first non-comment, non-whitespace token. Must be a string literal
     // directive to qualify (per ECMA-262 Directive Prologue grammar).
     const quote = code[i];
-    if (quote !== '"' && quote !== "'") return false;
+    if (quote !== '"' && quote !== "'") return null;
     const closing = code.indexOf(quote, i + 1);
-    if (closing === -1) return false;
+    if (closing === -1) return null;
     const directive = code.slice(i + 1, closing);
-    if (directive === "use client" || directive === "use server") return true;
+    if (directive === "use client" || directive === "use server") return directive;
     // Other directives (e.g., "use strict") may precede the React directive.
     // Continue scanning past the statement-terminating `;` or newline.
     i = closing + 1;
     while (i < len && (code[i] === ";" || code[i] === " " || code[i] === "\t")) i++;
     if (code[i] === "\n") i++;
   }
-  return false;
+  return null;
+}
+
+function hasReactDirective(code: string): boolean {
+  return getLeadingReactDirective(code) !== null;
 }
 
 function generateRootParamsModule(rootParamNames: Iterable<string>): string {
@@ -3796,6 +3800,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         handler(code, id) {
           if (this.environment?.name !== "client") return null;
           if (id.startsWith("\0")) return null;
+          if (getLeadingReactDirective(code) === "use server") return null;
           if (!hasServerOnlyMarkerImport(code)) return null;
 
           throw new Error(
