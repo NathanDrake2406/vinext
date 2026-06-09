@@ -1347,6 +1347,62 @@ describe("app page dispatch", () => {
     expect(buildPageElement).not.toHaveBeenCalled();
   });
 
+  it("does not serve fallback shell HTML for an unknown child param when the request has search params", async () => {
+    const buildPageElement = vi.fn(
+      async (
+        _route: TestRoute,
+        params: Record<string, string | string[]>,
+        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+        searchParams: URLSearchParams,
+      ) => `fresh:${JSON.stringify(params)}?${searchParams}`,
+    );
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
+          false,
+        );
+      }
+      return null;
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/en/blog/new-post",
+      isProduction: true,
+      isrGet,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          return createStream(["<html><head></head><body>fresh render</body></html>"]);
+        },
+      }),
+      params: { locale: "en", slug: "new-post" },
+      pprFallbackCacheShells: [
+        {
+          fallbackParamNames: ["slug"],
+          params: { locale: "en", slug: "[slug]" },
+          pathname: "/en/blog/[slug]",
+        },
+      ],
+      revalidateSeconds: 60,
+      request: new Request("https://example.test/en/blog/new-post?preview=1"),
+      route: createRoute({
+        isDynamic: true,
+        params: ["locale", "slug"],
+        pattern: "/:locale/blog/:slug",
+        routeSegments: ["[locale]", "blog", "[slug]"],
+      }),
+      searchParams: new URLSearchParams("preview=1"),
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(isrGet.mock.calls.map(([key]) => key)).toEqual(["html:/en/blog/new-post"]);
+    expect(isrGet).not.toHaveBeenCalledWith("html:/en/blog/[slug]");
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+    await expect(response.text()).resolves.toContain("fresh render");
+    expect(buildPageElement).toHaveBeenCalled();
+  });
+
   it("serves stale PPR fallback-shell HTML and regenerates the shell key", async () => {
     let navigationContext: NavigationContext = {
       pathname: "/en/blog/new-post",

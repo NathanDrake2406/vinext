@@ -517,6 +517,7 @@ async function tryServePprFallbackShell<TRoute extends AppPageDispatchRoute>(
   route: TRoute,
   currentRevalidateSeconds: number | null,
   isDraftMode: boolean,
+  isForceStatic: boolean,
   isForceDynamic: boolean,
 ): Promise<Response | null> {
   // Before probing fallback shells, check whether this exact URL was a
@@ -533,6 +534,7 @@ async function tryServePprFallbackShell<TRoute extends AppPageDispatchRoute>(
     options.pprFallbackCacheShells.length === 0 ||
     options.isRscRequest ||
     options.request.method !== "GET" ||
+    (!isForceStatic && hasSearchParams(options.searchParams)) ||
     !shouldReadAppPageCache({
       isDraftMode,
       isForceDynamic,
@@ -876,6 +878,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     route,
     currentRevalidateSeconds,
     isDraftMode,
+    isForceStatic,
     isForceDynamic,
   );
   if (fallbackShellResponse) {

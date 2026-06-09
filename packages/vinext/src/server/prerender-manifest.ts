@@ -19,7 +19,8 @@ export function readPrerenderManifest(manifestPath: string): PrerenderManifest |
   if (!fs.existsSync(manifestPath)) return null;
   try {
     return JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
-  } catch {
+  } catch (error) {
+    console.warn(`[vinext] Failed to read prerender manifest at ${manifestPath}:`, error);
     return null;
   }
 }
