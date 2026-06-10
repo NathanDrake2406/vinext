@@ -84,6 +84,12 @@ export type FontData = {
 type StaticPrerender = typeof import("react-dom/static.edge").prerender;
 
 function isReactDevelopmentRuntime(): boolean {
+  if (process.env.NODE_ENV === "production") {
+    return false;
+  }
+  if (process.env.NODE_ENV === "development") {
+    return true;
+  }
   return Function.prototype.toString.call(createReactElement).includes("getOwner");
 }
 

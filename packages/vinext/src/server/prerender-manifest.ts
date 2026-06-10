@@ -7,6 +7,7 @@ type PrerenderManifestRoute = {
   expire?: number;
   path?: string;
   router?: string;
+  fallback?: boolean;
 };
 
 type PrerenderManifest = {
@@ -48,7 +49,13 @@ function groupRoutesByPattern(routes: PrerenderManifestRoute[]): Map<string, str
  * indicating it is a fallback-shell placeholder (e.g. `/en/blog/[slug]`)
  * rather than a concrete rendered URL.
  */
-export function isFallbackShellArtifactPath(pathname: string): boolean {
+export function isFallbackShellArtifactPath(
+  pathname: string,
+  route?: PrerenderManifestRoute,
+): boolean {
+  if (route?.fallback === true) {
+    return true;
+  }
   return pathname.includes("[") || pathname.includes("]");
 }
 
@@ -68,7 +75,7 @@ export function buildPregeneratedConcretePathTable(
   const appRoutes = getRenderedAppRoutes(routes);
   const concreteRoutes = appRoutes.filter((r) => {
     const pathname = r.path ?? r.route;
-    return !isFallbackShellArtifactPath(pathname);
+    return !isFallbackShellArtifactPath(pathname, r);
   });
 
   return Array.from(groupRoutesByPattern(concreteRoutes).entries());

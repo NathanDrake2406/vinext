@@ -676,7 +676,7 @@ describe("seedMemoryCacheFromPrerender", () => {
         buildId: "build-a",
         routes: [
           {
-            route: "/en/blog/[slug]",
+            route: "/en/blog/:slug",
             status: "rendered",
             router: "app",
             path: "/en/blog/known-post",
@@ -691,7 +691,7 @@ describe("seedMemoryCacheFromPrerender", () => {
     );
     await seedMemoryCacheFromPrerender(serverDir);
 
-    const buildAPaths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    const buildAPaths = getRenderedConcreteUrlPathsForRoute("/en/blog/:slug");
     expect(buildAPaths).toBeDefined();
     expect(buildAPaths!.has("/en/blog/known-post")).toBe(true);
 
@@ -701,7 +701,7 @@ describe("seedMemoryCacheFromPrerender", () => {
         buildId: "build-b",
         routes: [
           {
-            route: "/en/blog/[slug]",
+            route: "/en/blog/:slug",
             status: "rendered",
             router: "app",
             path: "/en/blog/new-post",
@@ -716,7 +716,7 @@ describe("seedMemoryCacheFromPrerender", () => {
     );
     await seedMemoryCacheFromPrerender(serverDir);
 
-    const buildBPaths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    const buildBPaths = getRenderedConcreteUrlPathsForRoute("/en/blog/:slug");
     expect(buildBPaths).toBeDefined();
     expect(buildBPaths!.has("/en/blog/known-post")).toBe(false);
     expect(buildBPaths!.has("/en/blog/new-post")).toBe(true);
@@ -731,18 +731,19 @@ describe("seedMemoryCacheFromPrerender", () => {
         buildId,
         routes: [
           {
-            route: "/en/blog/[slug]",
+            route: "/en/blog/:slug",
             status: "rendered",
             router: "app",
             path: "/en/blog/known-post",
             revalidate: 60,
           },
           {
-            route: "/en/blog/[slug]",
+            route: "/en/blog/:slug",
             status: "rendered",
             router: "app",
             path: "/en/blog/[slug]",
             revalidate: 60,
+            fallback: true,
           },
         ],
       },
@@ -753,7 +754,7 @@ describe("seedMemoryCacheFromPrerender", () => {
     );
     await seedMemoryCacheFromPrerender(serverDir);
 
-    const paths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]");
+    const paths = getRenderedConcreteUrlPathsForRoute("/en/blog/:slug");
     expect(paths).toBeDefined();
     expect(paths!.has("/en/blog/known-post")).toBe(true);
     expect(paths!.has("/en/blog/[slug]")).toBe(false);
@@ -767,7 +768,7 @@ describe("seedMemoryCacheFromPrerender", () => {
         buildId: "build-a",
         routes: [
           {
-            route: "/en/blog/[slug]",
+            route: "/en/blog/:slug",
             status: "rendered",
             router: "app",
             path: "/en/blog/known-post",
@@ -778,11 +779,11 @@ describe("seedMemoryCacheFromPrerender", () => {
       { "en/blog/known-post.html": "<html>A</html>" },
     );
     await seedMemoryCacheFromPrerender(serverDir);
-    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")).toBeDefined();
+    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/:slug")).toBeDefined();
 
     fs.rmSync(path.join(serverDir, "vinext-prerender.json"));
     await seedMemoryCacheFromPrerender(serverDir);
 
-    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")).toBeUndefined();
+    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/:slug")).toBeUndefined();
   });
 });

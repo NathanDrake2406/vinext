@@ -3026,7 +3026,7 @@ describe("injectPregeneratedConcretePaths", () => {
       buildId: "build-a",
       routes: [
         {
-          route: "/blog/[slug]",
+          route: "/blog/:slug",
           status: "rendered",
           router: "app",
           path: "/blog/post-a",
@@ -3038,7 +3038,7 @@ describe("injectPregeneratedConcretePaths", () => {
       buildId: "build-b",
       routes: [
         {
-          route: "/blog/[slug]",
+          route: "/blog/:slug",
           status: "rendered",
           router: "app",
           path: "/blog/post-b",
@@ -3069,7 +3069,7 @@ describe("injectPregeneratedConcretePaths", () => {
   it("missing manifest strips prior injection", () => {
     const priorInjection = [
       "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */",
-      'globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/blog/[slug]",["/blog/post-a"]]];',
+      'globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/blog/:slug",["/blog/post-a"]]];',
       "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */",
       'import { handler } from "vinext/server/app-router-entry";',
       "",
@@ -3091,18 +3091,19 @@ describe("injectPregeneratedConcretePaths", () => {
       buildId: "test",
       routes: [
         {
-          route: "/blog/[slug]",
+          route: "/blog/:slug",
           status: "rendered",
           router: "app",
           path: "/blog/post-a",
           revalidate: 60,
         },
         {
-          route: "/blog/[slug]",
+          route: "/blog/:slug",
           status: "rendered",
           router: "app",
           path: "/blog/[slug]",
           revalidate: 60,
+          fallback: true,
         },
       ],
     };
@@ -3116,7 +3117,7 @@ describe("injectPregeneratedConcretePaths", () => {
     const match = code.match(/globalThis\.__VINEXT_PREGENERATED_CONCRETE_PATHS = (\[.*?\]);/);
     expect(match).not.toBeNull();
     const table: unknown = JSON.parse(match![1]);
-    expect(table).toEqual([["/blog/[slug]", ["/blog/post-a"]]]);
+    expect(table).toEqual([["/blog/:slug", ["/blog/post-a"]]]);
   });
 
   it("hydrates the concrete-path registry when the generated Worker entry is imported", async () => {
@@ -3126,7 +3127,7 @@ describe("injectPregeneratedConcretePaths", () => {
     const sourceCode = [
       `import { getRenderedConcreteUrlPathsForRoute, initPregeneratedPathsFromGlobals } from ${JSON.stringify(registryModuleUrl)};`,
       "initPregeneratedPathsFromGlobals();",
-      'export const renderedPaths = [...(getRenderedConcreteUrlPathsForRoute("/blog/[slug]") ?? [])];',
+      'export const renderedPaths = [...(getRenderedConcreteUrlPathsForRoute("/blog/:slug") ?? [])];',
       'export default { fetch(request) { return new Response("ok"); } };',
       "",
     ].join("\n");
@@ -3134,7 +3135,7 @@ describe("injectPregeneratedConcretePaths", () => {
       buildId: "test",
       routes: [
         {
-          route: "/blog/[slug]",
+          route: "/blog/:slug",
           status: "rendered",
           router: "app",
           path: "/blog/post-a",

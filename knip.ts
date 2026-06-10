@@ -118,10 +118,6 @@ export default {
   ignoreBinaries: [
     // workspace's own bin, invoked in CI
     "vinext",
-    // system/user-project binaries invoked by runtime scripts
-    "ps",
-    "eslint",
-    "gh",
   ],
   ignoreFiles: [
     "tests/e2e/app-router/nextjs-compat/playwright.nextjs-compat.config.ts",

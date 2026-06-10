@@ -90,6 +90,8 @@ export type PrerenderRouteResult =
       path?: string;
       /** Which router produced this route. Used by cache seeding. */
       router: "app" | "pages";
+      /** Set to true when this is a PPR fallback shell. */
+      fallback?: boolean;
     }
   | {
       route: string;
@@ -1029,6 +1031,7 @@ export async function prerenderApp({
       prerenderRouteParams: PrerenderRouteParamsPayload | null;
       revalidate: number | false;
       isSpeculative: boolean; // 'unknown' route — mark skipped if render fails
+      isFallback?: boolean;
     };
     const urlsToRender: UrlToRender[] = [];
 
@@ -1192,6 +1195,7 @@ export async function prerenderApp({
                   ),
                   revalidate,
                   isSpeculative: false,
+                  isFallback: true,
                 });
               }
             }
@@ -1242,6 +1246,7 @@ export async function prerenderApp({
       prerenderRouteParams,
       revalidate,
       isSpeculative,
+      isFallback,
     }: UrlToRender): Promise<PrerenderRouteResult> {
       try {
         // Invoke RSC handler directly with a synthetic Request.
@@ -1386,6 +1391,7 @@ export async function prerenderApp({
             : {}),
           router: "app",
           ...(urlPath !== routePattern ? { path: urlPath } : {}),
+          ...(isFallback ? { fallback: true } : {}),
         };
       } catch (e) {
         if (isSpeculative) {
@@ -1538,6 +1544,7 @@ export function writePrerenderIndex(
         ...(typeof r.revalidate === "number" ? { expire: r.expire } : {}),
         router: r.router,
         ...(r.path ? { path: r.path } : {}),
+        ...(r.fallback ? { fallback: true } : {}),
       };
     }
     if (r.status === "skipped") {

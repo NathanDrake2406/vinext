@@ -1150,6 +1150,7 @@ describe("prerenderApp — cacheComponents PPR fallback-shell artifacts", () => 
       route: "/:locale/blog/:slug",
       path: "/en/blog/[slug]",
       status: "rendered",
+      fallback: true,
     });
     expect(renderedPaths).toEqual(expect.arrayContaining(["/en/blog/hello", "/en/blog/[slug]"]));
   });

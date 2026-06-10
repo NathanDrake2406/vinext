@@ -13,7 +13,7 @@ describe("pregenerated concrete paths", () => {
   });
 
   it("returns undefined for an unknown route pattern", () => {
-    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")).toBeUndefined();
+    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/:slug")).toBeUndefined();
   });
 
   it("stores and retrieves pathnames for a route pattern", () => {
@@ -36,25 +36,25 @@ describe("pregenerated concrete paths", () => {
   });
 
   it("returns an empty state after clear", () => {
-    addPregeneratedConcretePath("/en/blog/[slug]", "/en/blog/persistent");
-    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")).toBeDefined();
+    addPregeneratedConcretePath("/en/blog/:slug", "/en/blog/persistent");
+    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/:slug")).toBeDefined();
 
     clearPregeneratedConcretePaths();
 
-    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")).toBeUndefined();
+    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/:slug")).toBeUndefined();
   });
 
   it("clears stale paths from a previous build on re-population (issue 3)", () => {
     // Build A
-    addPregeneratedConcretePath("/en/blog/[slug]", "/en/blog/old");
-    addPregeneratedConcretePath("/en/blog/[slug]", "/en/blog/also-old");
-    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")!.size).toBe(2);
+    addPregeneratedConcretePath("/en/blog/:slug", "/en/blog/old");
+    addPregeneratedConcretePath("/en/blog/:slug", "/en/blog/also-old");
+    expect(getRenderedConcreteUrlPathsForRoute("/en/blog/:slug")!.size).toBe(2);
 
     // Build B — clear and re-seed without the old paths
     clearPregeneratedConcretePaths();
-    addPregeneratedConcretePath("/en/blog/[slug]", "/en/blog/new");
+    addPregeneratedConcretePath("/en/blog/:slug", "/en/blog/new");
 
-    const paths = getRenderedConcreteUrlPathsForRoute("/en/blog/[slug]")!;
+    const paths = getRenderedConcreteUrlPathsForRoute("/en/blog/:slug")!;
     expect(paths.has("/en/blog/old")).toBe(false);
     expect(paths.has("/en/blog/also-old")).toBe(false);
     expect(paths.has("/en/blog/new")).toBe(true);
