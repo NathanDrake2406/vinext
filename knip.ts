@@ -104,6 +104,8 @@ export default {
     // probed via require.resolve
     "next-intl",
 
+    // Vite+ reporter name used outside CI in vite.config.ts.
+    "agent",
 
     // internal module name, not an actual dependency
     "private-next-instrumentation-client",

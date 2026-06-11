@@ -6,6 +6,7 @@ import {
   initPregeneratedPathsFromGlobals,
   normalizePregeneratedPathname,
 } from "../packages/vinext/src/server/pregenerated-concrete-paths.js";
+import { isFallbackShellArtifactPath } from "../packages/vinext/src/server/prerender-manifest.js";
 
 describe("pregenerated concrete paths", () => {
   afterEach(() => {
@@ -83,5 +84,47 @@ describe("pregenerated concrete paths", () => {
     expect([...getRenderedConcreteUrlPathsForRoute("/:locale/blog/:slug")!]).toEqual([
       "/en/blog/hello world",
     ]);
+  });
+
+  describe("isFallbackShellArtifactPath", () => {
+    it("identifies fallback shells when fallback === true", () => {
+      expect(
+        isFallbackShellArtifactPath("/en/blog/[slug]", {
+          route: "/en/blog/[slug]",
+          fallback: true,
+          status: "rendered",
+          router: "app",
+        }),
+      ).toBe(true);
+    });
+
+    it("identifies concrete paths even with brackets when fallback === false", () => {
+      expect(
+        isFallbackShellArtifactPath("/en/blog/[draft]-post", {
+          route: "/en/blog/[slug]",
+          fallback: false,
+          status: "rendered",
+          router: "app",
+        }),
+      ).toBe(false);
+    });
+
+    it("falls back to bracket checks when fallback is undefined (legacy manifests)", () => {
+      expect(
+        isFallbackShellArtifactPath("/en/blog/[slug]", {
+          route: "/en/blog/[slug]",
+          status: "rendered",
+          router: "app",
+        }),
+      ).toBe(true);
+
+      expect(
+        isFallbackShellArtifactPath("/en/blog/hello", {
+          route: "/en/blog/[slug]",
+          status: "rendered",
+          router: "app",
+        }),
+      ).toBe(false);
+    });
   });
 });

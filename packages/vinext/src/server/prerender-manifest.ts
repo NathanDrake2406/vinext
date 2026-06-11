@@ -56,7 +56,13 @@ export function isFallbackShellArtifactPath(
   if (route?.fallback === true) {
     return true;
   }
-  return pathname.includes("[") || pathname.includes("]");
+  // Backward-compat only: manifests predating the `fallback` flag. Current
+  // builds always set `fallback`, so a concrete URL containing a literal
+  // bracket is never misclassified here.
+  if (route?.fallback === undefined) {
+    return pathname.includes("[") || pathname.includes("]");
+  }
+  return false;
 }
 
 /**
