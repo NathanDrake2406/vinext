@@ -19018,10 +19018,25 @@ describe("vinext shim package-subpath resolution", () => {
       import.meta.dirname,
       "../packages/vinext/src/shims/navigation.ts",
     );
+    const expectedReactServerShim = path.resolve(
+      import.meta.dirname,
+      "../packages/vinext/src/shims/navigation.react-server.ts",
+    );
+    const expectedOgShim = path.resolve(import.meta.dirname, "../packages/vinext/src/shims/og.tsx");
 
     expect(hook.filter.id.test("vinext/shims/navigation.js?v=123")).toBe(true);
-    expect(hook.filter.id.test("unrelated-next/navigation")).toBe(false);
+    expect(hook.filter.id.test("\0vinext/shims/navigation.js?v=123")).toBe(true);
+    expect(hook.filter.id.test("\0next/navigation")).toBe(true);
+    expect(hook.filter.id.test("\0@vercel/og")).toBe(true);
+    expect(hook.handler.call({}, "unrelated-next/navigation")).toBeUndefined();
     expect(hook.handler.call({}, "vinext/shims/navigation.js?v=123")).toBe(expectedShim);
+    expect(hook.handler.call({}, "\0vinext/shims/navigation.js?v=123")).toBe(expectedShim);
+    expect(hook.handler.call({ environment: { name: "rsc" } }, "\0next/navigation")).toBe(
+      expectedReactServerShim,
+    );
+    expect(
+      hook.handler.call({}, "\0@vercel/og", path.join(FIXTURE_DIR, "app/opengraph-image.tsx")),
+    ).toBe(expectedOgShim);
   });
 });
 
