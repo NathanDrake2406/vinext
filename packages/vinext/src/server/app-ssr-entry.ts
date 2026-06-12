@@ -103,6 +103,17 @@ function isStaticPrerenderModule(value: unknown): value is { prerender: StaticPr
 }
 
 async function loadStaticPrerender(): Promise<StaticPrerender> {
+  // Prefer the stable ESM entry in all environments. Future React dev builds
+  // may export prerender() here, so this is the first path we attempt.
+  const staticRenderer: unknown = await import("react-dom/static.edge");
+  if (isStaticPrerenderModule(staticRenderer)) {
+    return staticRenderer.prerender;
+  }
+
+  // Fallback: React development builds historically did not export prerender()
+  // from the ESM entry, so reach into the CJS artifact. The path is fragile
+  // because it depends on React's internal file layout, but it is only used
+  // when the stable ESM entry does not provide prerender().
   if (isReactDevelopmentRuntime()) {
     try {
       const [{ createRequire }, path] = await Promise.all([
@@ -117,6 +128,15 @@ async function loadStaticPrerender(): Promise<StaticPrerender> {
       if (isStaticPrerenderModule(devRenderer)) {
         return devRenderer.prerender;
       }
+      // Node.js ESM import of a CJS module wraps the exports in `default`.
+      const devRendererDefault =
+        typeof devRenderer === "object" &&
+        devRenderer !== null &&
+        "default" in devRenderer &&
+        devRenderer.default;
+      if (isStaticPrerenderModule(devRendererDefault)) {
+        return devRendererDefault.prerender;
+      }
       throw new Error("react-dom development renderer did not expose prerender().");
     } catch (error) {
       throw new Error("[vinext] Failed to load React static development renderer.", {
@@ -125,11 +145,7 @@ async function loadStaticPrerender(): Promise<StaticPrerender> {
     }
   }
 
-  const staticRenderer: unknown = await import("react-dom/static.edge");
-  if (!isStaticPrerenderModule(staticRenderer)) {
-    throw new Error("[vinext] react-dom/static.edge did not expose prerender().");
-  }
-  return staticRenderer.prerender;
+  throw new Error("[vinext] react-dom/static.edge did not expose prerender().");
 }
 
 const clientReferencePreloader = createClientReferencePreloader({
