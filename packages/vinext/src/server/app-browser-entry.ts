@@ -31,6 +31,7 @@ import {
   getClientNavigationRenderContext,
   getBfcacheIdMapContext,
   getPrefetchCache,
+  hasPrefetchCacheEntryForNavigation,
   invalidatePrefetchCache,
   decodeRedirectError,
   isRedirectError,
@@ -704,30 +705,28 @@ function getVisitedResponse(
     return null;
   }
 
-  if ((cached.response.mountedSlotsHeader ?? null) !== mountedSlotsHeader) {
-    visitedResponseCache.delete(cacheKey);
-    return null;
-  }
-
-  // `isVisitedResponseCacheEntryFresh` is the single source of truth for
-  // freshness and returns `false` for `navigationKind === "refresh"`, so a
-  // refresh falls through to the miss path below.
-  if (
-    isVisitedResponseCacheEntryFresh(cached, {
+  const cacheDecision = navigationPlanner.classifyVisitedResponseCacheCandidate({
+    candidate: "present",
+    fresh: isVisitedResponseCacheEntryFresh(cached, {
       navigationKind,
       now: Date.now(),
-    })
-  ) {
+    }),
+    mountedSlotsMatch: (cached.response.mountedSlotsHeader ?? null) === mountedSlotsHeader,
+    navigationKind,
+  });
+
+  if (cacheDecision.kind === "reuse") {
     // LRU: promote to most-recently-used
     visitedResponseCache.delete(cacheKey);
     visitedResponseCache.set(cacheKey, cached);
     return cached;
   }
 
-  // Stale (or refresh) entries are evicted on read. A refresh intentionally
-  // drops any prior snapshot here — the navigation re-fetches and re-stores a
-  // fresh one, so leaving the old entry around would only risk a later
-  // non-refresh navigation reusing a snapshot the user explicitly refreshed.
+  // Stale, slot-mismatched, and refresh entries are evicted on read. A refresh
+  // intentionally drops any prior snapshot here — the navigation re-fetches and
+  // re-stores a fresh one, so leaving the old entry around would only risk a
+  // later non-refresh navigation reusing a snapshot the user explicitly
+  // refreshed.
   visitedResponseCache.delete(cacheKey);
   return null;
 }
@@ -1735,7 +1734,29 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
               mountedSlotsHeader,
               navigationKind,
             );
-        if (cachedRoute) {
+        const routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
+        const hasPrefetchCandidate =
+          navigationKind !== "refresh" &&
+          !shouldBypassNavigationCache &&
+          hasPrefetchCacheEntryForNavigation(
+            rscUrl,
+            requestInterceptionContext,
+            mountedSlotsHeader,
+            { notifyInvalidation: false },
+          );
+        const reuseDecision = navigationPlanner.classifyNavigationReuse({
+          bypassNavigationCache: shouldBypassNavigationCache,
+          navigationKind,
+          optimisticRouteShell:
+            routeManifest === null
+              ? { reason: "routeManifestMissing", status: "unavailable" }
+              : { status: "available" },
+          prefetch: hasPrefetchCandidate ? { status: "available" } : { status: "unavailable" },
+          targetHref: currentHref,
+          visitedResponse:
+            cachedRoute === null ? { status: "unavailable" } : { status: "available" },
+        });
+        if (reuseDecision.kind === "reuseVisitedResponse" && cachedRoute) {
           const cachedFetchDecision = navigationPlanner.classifyRscFetchResult({
             clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
             compatibilityIdHeader: cachedRoute.response.compatibilityIdHeader ?? null,
@@ -1824,7 +1845,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         let navResponse: Response | undefined;
         let navResponseExpiresAt: number | undefined;
         let navResponseUrl: string | null = null;
-        if (navigationKind !== "refresh" && !shouldBypassNavigationCache) {
+        let fallbackReuseDecision = reuseDecision;
+        if (reuseDecision.kind === "consumePrefetch") {
           const prefetchedResponse = await consumePrefetchResponseForNavigation(
             rscUrl,
             requestInterceptionContext,
@@ -1839,6 +1861,19 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             navResponseExpiresAt = prefetchedResponse.expiresAt;
             navResponseUrl = prefetchedResponse.url;
           }
+          if (!navResponse) {
+            fallbackReuseDecision = navigationPlanner.classifyNavigationReuse({
+              bypassNavigationCache: shouldBypassNavigationCache,
+              navigationKind,
+              optimisticRouteShell:
+                routeManifest === null
+                  ? { reason: "routeManifestMissing", status: "unavailable" }
+                  : { status: "available" },
+              prefetch: { status: "unavailable" },
+              targetHref: currentHref,
+              visitedResponse: { status: "unavailable" },
+            });
+          }
         }
 
         // The optimistic shell is intentionally not gated by
@@ -1847,8 +1882,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         // real fetch commits, but that shell is a detached commit (see below)
         // that is always superseded by the authoritative fetch — the same as
         // cross-route navigations — so it never persists stale page content.
-        if (!navResponse && navigationKind === "navigate") {
-          const routeManifest = getBrowserRouteManifest();
+        if (!navResponse && fallbackReuseDecision.kind === "attemptOptimisticRouteShell") {
           await learnOptimisticRouteTemplatesFromPrefetchCache({
             interceptionContext: requestInterceptionContext,
             mountedSlotsHeader,
