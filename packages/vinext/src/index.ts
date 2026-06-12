@@ -2583,7 +2583,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // `vinext/shims/headers`). Source checkouts also alias userland
           // `next/*` imports to the local shim files. Resolve both forms
           // through this plugin so request-scoped singleton state is not split
-          // between source shims and the package export copy.
+          // between source shims and the package export copy. These internal
+          // package subpaths deliberately resolve to the plain shim today; if
+          // one gains an environment-specific variant, handle it here before
+          // returning rather than relying on the userland `next/*` map below.
           const vinextShimPrefix = "vinext/shims/";
           if (cleanId.startsWith(vinextShimPrefix)) {
             return resolveShimModulePath(

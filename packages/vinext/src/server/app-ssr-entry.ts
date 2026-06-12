@@ -127,6 +127,9 @@ function buildBootstrapModuleScript(bootstrapModuleUrl?: string, nonce?: string)
 }
 
 function markErrorShellStyle(html: string): string {
+  // DefaultGlobalError intentionally emits one style tag. If that changes,
+  // update this marker logic without touching styles inserted later by the
+  // stream transforms.
   return html.replace("<style>", '<style data-vinext-error-shell-style="">');
 }
 
@@ -632,14 +635,15 @@ export async function handleSsr(
           // back to the default `__next_error__` document shell: the original
           // flight payload plus the bootstrap module are still emitted, so the
           // browser recovers by re-rendering the real tree from the embedded
-          // RSC data (Next.js shell-error recovery semantics).
+          // RSC data (Next.js shell-error recovery semantics). This resolves
+          // as a successful shell render, so the caller preserves its normal
+          // status and ISR eligibility rather than treating it as a 500.
           if (
             options?.fallbackToErrorDocumentOnShellError !== true ||
             typeof (error as { digest?: unknown } | null)?.digest === "string"
           ) {
             throw error;
           }
-          errorMetaRenderer.capture(error);
           htmlStream = renderSsrErrorDocumentShell(bootstrapModuleUrl, options?.scriptNonce);
         }
 
