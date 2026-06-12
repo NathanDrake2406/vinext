@@ -2111,7 +2111,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           resolveId(id: string) {
             const shimBase = _reactServerShims.get(id);
             if (shimBase !== undefined) {
-              return resolveShimModulePath(shimsDir, stripJsExtension(shimBase));
+              return resolveShimModulePath(shimsDir, shimBase);
             }
           },
         };

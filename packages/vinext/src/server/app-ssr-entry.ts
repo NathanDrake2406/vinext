@@ -617,14 +617,16 @@ export async function handleSsr(
         const getBeforeInteractiveHeadHTML = (): string =>
           renderBeforeInteractiveInlineScripts(beforeInteractiveInlineScripts);
 
+        let renderedHtmlStream: Awaited<ReturnType<typeof renderToReadableStream>> | undefined;
         let htmlStream: ReadableStream<Uint8Array>;
         try {
-          const renderedHtmlStream = await renderToReadableStream(ssrRoot, ssrRenderOptions);
+          renderedHtmlStream = await renderToReadableStream(ssrRoot, ssrRenderOptions);
           if (options?.waitForAllReady === true) {
             await renderedHtmlStream.allReady;
           }
           htmlStream = renderedHtmlStream;
         } catch (error) {
+          void renderedHtmlStream?.cancel().catch(() => {});
           // Contract with renderAppPageHtmlStreamWithRecovery (app-page-stream.ts):
           // a rejected handleSsr drives redirect()/notFound() responses and
           // local/global error.tsx boundary re-renders. Errors that originate in
