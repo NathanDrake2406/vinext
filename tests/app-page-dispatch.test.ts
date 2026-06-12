@@ -258,46 +258,46 @@ function createRoute(overrides: Partial<TestRoute> = {}): TestRoute {
   };
 }
 
-function createDispatchOptions(
-  overrides: {
-    buildPageElement?: DispatchOptions["buildPageElement"];
-    cleanPathname?: string;
-    clearRequestContext?: DispatchOptions["clearRequestContext"];
-    dynamicConfig?: DispatchOptions["dynamicConfig"];
-    findIntercept?: DispatchOptions["findIntercept"];
-    generateStaticParams?: DispatchOptions["generateStaticParams"];
-    formState?: DispatchOptions["formState"];
-    getSourceRoute?: DispatchOptions["getSourceRoute"];
-    getNavigationContext?: DispatchOptions["getNavigationContext"];
-    actionError?: DispatchOptions["actionError"];
-    actionFailed?: DispatchOptions["actionFailed"];
-    interceptionContext?: string | null;
-    isProgressiveActionRender?: DispatchOptions["isProgressiveActionRender"];
-    isProduction?: boolean;
-    isRscRequest?: boolean;
-    isrRscKey?: DispatchOptions["isrRscKey"];
-    isrGet?: DispatchOptions["isrGet"];
-    isrSet?: DispatchOptions["isrSet"];
-    clientReuseManifest?: ClientReuseManifestParseResult;
-    loadSsrHandler?: DispatchOptions["loadSsrHandler"];
-    middlewareContext?: AppPageMiddlewareContext;
-    mountedSlotsHeader?: string | null;
-    params?: Record<string, string | string[]>;
-    pprFallbackCacheShells?: DispatchOptions["pprFallbackCacheShells"];
-    probeLayoutAt?: DispatchOptions["probeLayoutAt"];
-    probePage?: DispatchOptions["probePage"];
-    renderedConcreteUrlPaths?: DispatchOptions["renderedConcreteUrlPaths"];
-    renderToReadableStream?: DispatchOptions["renderToReadableStream"];
-    request?: Request;
-    revalidateSeconds?: number | null;
-    resolveRouteFetchCacheMode?: DispatchOptions["resolveRouteFetchCacheMode"];
-    resolveRouteDynamicConfig?: DispatchOptions["resolveRouteDynamicConfig"];
-    route?: TestRoute;
-    scheduleBackgroundRegeneration?: DispatchOptions["scheduleBackgroundRegeneration"];
-    searchParams?: URLSearchParams;
-    setNavigationContext?: DispatchOptions["setNavigationContext"];
-  } = {},
-) {
+type CreateDispatchOptionsOverrides = {
+  buildPageElement?: DispatchOptions["buildPageElement"];
+  cleanPathname?: string;
+  clearRequestContext?: DispatchOptions["clearRequestContext"];
+  dynamicConfig?: DispatchOptions["dynamicConfig"];
+  findIntercept?: DispatchOptions["findIntercept"];
+  generateStaticParams?: DispatchOptions["generateStaticParams"];
+  formState?: DispatchOptions["formState"];
+  getSourceRoute?: DispatchOptions["getSourceRoute"];
+  getNavigationContext?: DispatchOptions["getNavigationContext"];
+  actionError?: DispatchOptions["actionError"];
+  actionFailed?: boolean;
+  interceptionContext?: string | null;
+  isProgressiveActionRender?: DispatchOptions["isProgressiveActionRender"];
+  isProduction?: boolean;
+  isRscRequest?: boolean;
+  isrRscKey?: DispatchOptions["isrRscKey"];
+  isrGet?: DispatchOptions["isrGet"];
+  isrSet?: DispatchOptions["isrSet"];
+  clientReuseManifest?: ClientReuseManifestParseResult;
+  loadSsrHandler?: DispatchOptions["loadSsrHandler"];
+  middlewareContext?: AppPageMiddlewareContext;
+  mountedSlotsHeader?: string | null;
+  params?: Record<string, string | string[]>;
+  pprFallbackCacheShells?: DispatchOptions["pprFallbackCacheShells"];
+  probeLayoutAt?: DispatchOptions["probeLayoutAt"];
+  probePage?: DispatchOptions["probePage"];
+  renderedConcreteUrlPaths?: DispatchOptions["renderedConcreteUrlPaths"];
+  renderToReadableStream?: DispatchOptions["renderToReadableStream"];
+  request?: Request;
+  revalidateSeconds?: number | null;
+  resolveRouteFetchCacheMode?: DispatchOptions["resolveRouteFetchCacheMode"];
+  resolveRouteDynamicConfig?: DispatchOptions["resolveRouteDynamicConfig"];
+  route?: TestRoute;
+  scheduleBackgroundRegeneration?: DispatchOptions["scheduleBackgroundRegeneration"];
+  searchParams?: URLSearchParams;
+  setNavigationContext?: DispatchOptions["setNavigationContext"];
+};
+
+function createDispatchOptions(overrides: CreateDispatchOptionsOverrides = {}) {
   const route = overrides.route ?? createRoute();
   const buildPageElement =
     overrides.buildPageElement ?? (async () => React.createElement("main", null, "page"));
@@ -398,6 +398,66 @@ function createDispatchOptions(
     setNavigationContext,
     options,
   };
+}
+
+const pprBlogFallbackShells = [
+  {
+    fallbackParamNames: ["slug"],
+    params: { locale: "en", slug: "[slug]" },
+    pathname: "/en/blog/[slug]",
+  },
+] satisfies NonNullable<DispatchOptions["pprFallbackCacheShells"]>;
+
+function createPprBlogRoute(): TestRoute {
+  return createRoute({
+    isDynamic: true,
+    params: ["locale", "slug"],
+    pattern: "/:locale/blog/:slug",
+    routeSegments: ["[locale]", "blog", "[slug]"],
+  });
+}
+
+function createParamTextPageElement(prefix = "element") {
+  return vi.fn(
+    async (
+      _route: TestRoute,
+      params: Record<string, string | string[]>,
+      _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
+      searchParams: URLSearchParams,
+    ) => `${prefix}:${JSON.stringify(params)}${searchParams.size > 0 ? `?${searchParams}` : ""}`,
+  );
+}
+
+function createPprBlogDispatchOptions(overrides: CreateDispatchOptionsOverrides = {}) {
+  return createDispatchOptions({
+    cleanPathname: "/en/blog/new-post",
+    isProduction: true,
+    params: { locale: "en", slug: "new-post" },
+    pprFallbackCacheShells: pprBlogFallbackShells,
+    revalidateSeconds: 60,
+    route: createPprBlogRoute(),
+    ...overrides,
+  });
+}
+
+function createPprBlogFallbackShellGetter(stale: boolean) {
+  return vi.fn(async (key: string) => {
+    if (key === "html:/en/blog/[slug]") {
+      return buildISRCacheEntry(
+        buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
+        stale,
+      );
+    }
+    return null;
+  });
+}
+
+function createFreshBodySsrHandler(body: string): DispatchOptions["loadSsrHandler"] {
+  return async () => ({
+    async handleSsr() {
+      return createStream([`<html><head></head><body>${body}</body></html>`]);
+    },
+  });
 }
 
 function createVerifiedStaticLayoutManifest(input: {
@@ -1536,14 +1596,7 @@ describe("app page dispatch", () => {
   });
 
   it("serves exact cache HIT instead of fallback shell", async () => {
-    const buildPageElement = vi.fn(
-      async (
-        _route: TestRoute,
-        params: Record<string, string | string[]>,
-        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
-        _searchParams: URLSearchParams,
-      ) => `element:${JSON.stringify(params)}`,
-    );
+    const buildPageElement = createParamTextPageElement();
     const isrGet = vi.fn(async (key: string) => {
       if (key === "html:/en/blog/known-post") {
         return buildISRCacheEntry(
@@ -1553,26 +1606,11 @@ describe("app page dispatch", () => {
       }
       return null;
     });
-    const { options } = createDispatchOptions({
+    const { options } = createPprBlogDispatchOptions({
       buildPageElement,
       cleanPathname: "/en/blog/known-post",
-      isProduction: true,
       isrGet,
       params: { locale: "en", slug: "known-post" },
-      pprFallbackCacheShells: [
-        {
-          fallbackParamNames: ["slug"],
-          params: { locale: "en", slug: "[slug]" },
-          pathname: "/en/blog/[slug]",
-        },
-      ],
-      revalidateSeconds: 60,
-      route: createRoute({
-        isDynamic: true,
-        params: ["locale", "slug"],
-        pattern: "/:locale/blog/:slug",
-        routeSegments: ["[locale]", "blog", "[slug]"],
-      }),
     });
 
     const response = await dispatchAppPage(options);
@@ -1584,36 +1622,14 @@ describe("app page dispatch", () => {
 
   it("static params validation rejects unknown params before shell probing", async () => {
     const generateStaticParams = vi.fn(async () => [{ locale: "en", slug: "hello-world" }]);
-    const buildPageElement = vi.fn(
-      async (
-        _route: TestRoute,
-        params: Record<string, string | string[]>,
-        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
-        _searchParams: URLSearchParams,
-      ) => `element:${JSON.stringify(params)}`,
-    );
+    const buildPageElement = createParamTextPageElement();
     const isrGet = vi.fn(async () => null);
-    const { options } = createDispatchOptions({
+    const { options } = createPprBlogDispatchOptions({
       buildPageElement,
       cleanPathname: "/en/blog/unknown-post",
       generateStaticParams,
-      isProduction: true,
       isrGet,
       params: { locale: "en", slug: "unknown-post" },
-      pprFallbackCacheShells: [
-        {
-          fallbackParamNames: ["slug"],
-          params: { locale: "en", slug: "[slug]" },
-          pathname: "/en/blog/[slug]",
-        },
-      ],
-      revalidateSeconds: 60,
-      route: createRoute({
-        isDynamic: true,
-        params: ["locale", "slug"],
-        pattern: "/:locale/blog/:slug",
-        routeSegments: ["[locale]", "blog", "[slug]"],
-      }),
     });
 
     const response = await dispatchAppPage({
@@ -1627,43 +1643,11 @@ describe("app page dispatch", () => {
   });
 
   it("serves fallback shell HTML for an unknown child param after the exact cache misses", async () => {
-    const buildPageElement = vi.fn(
-      async (
-        _route: TestRoute,
-        params: Record<string, string | string[]>,
-        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
-        _searchParams: URLSearchParams,
-      ) => `element:${JSON.stringify(params)}`,
-    );
-    const isrGet = vi.fn(async (key: string) => {
-      if (key === "html:/en/blog/[slug]") {
-        return buildISRCacheEntry(
-          buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
-          false,
-        );
-      }
-      return null;
-    });
-    const { options } = createDispatchOptions({
+    const buildPageElement = createParamTextPageElement();
+    const isrGet = createPprBlogFallbackShellGetter(false);
+    const { options } = createPprBlogDispatchOptions({
       buildPageElement,
-      cleanPathname: "/en/blog/new-post",
-      isProduction: true,
       isrGet,
-      params: { locale: "en", slug: "new-post" },
-      pprFallbackCacheShells: [
-        {
-          fallbackParamNames: ["slug"],
-          params: { locale: "en", slug: "[slug]" },
-          pathname: "/en/blog/[slug]",
-        },
-      ],
-      revalidateSeconds: 60,
-      route: createRoute({
-        isDynamic: true,
-        params: ["locale", "slug"],
-        pattern: "/:locale/blog/:slug",
-        routeSegments: ["[locale]", "blog", "[slug]"],
-      }),
     });
 
     const response = await dispatchAppPage(options);
@@ -1678,49 +1662,13 @@ describe("app page dispatch", () => {
   });
 
   it("does not serve fallback shell HTML for an unknown child param when the request has search params", async () => {
-    const buildPageElement = vi.fn(
-      async (
-        _route: TestRoute,
-        params: Record<string, string | string[]>,
-        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
-        searchParams: URLSearchParams,
-      ) => `fresh:${JSON.stringify(params)}?${searchParams}`,
-    );
-    const isrGet = vi.fn(async (key: string) => {
-      if (key === "html:/en/blog/[slug]") {
-        return buildISRCacheEntry(
-          buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
-          false,
-        );
-      }
-      return null;
-    });
-    const { options } = createDispatchOptions({
+    const buildPageElement = createParamTextPageElement("fresh");
+    const isrGet = createPprBlogFallbackShellGetter(false);
+    const { options } = createPprBlogDispatchOptions({
       buildPageElement,
-      cleanPathname: "/en/blog/new-post",
-      isProduction: true,
       isrGet,
-      loadSsrHandler: async () => ({
-        async handleSsr() {
-          return createStream(["<html><head></head><body>fresh render</body></html>"]);
-        },
-      }),
-      params: { locale: "en", slug: "new-post" },
-      pprFallbackCacheShells: [
-        {
-          fallbackParamNames: ["slug"],
-          params: { locale: "en", slug: "[slug]" },
-          pathname: "/en/blog/[slug]",
-        },
-      ],
-      revalidateSeconds: 60,
+      loadSsrHandler: createFreshBodySsrHandler("fresh render"),
       request: new Request("https://example.test/en/blog/new-post?preview=1"),
-      route: createRoute({
-        isDynamic: true,
-        params: ["locale", "slug"],
-        pattern: "/:locale/blog/:slug",
-        routeSegments: ["[locale]", "blog", "[slug]"],
-      }),
       searchParams: new URLSearchParams("preview=1"),
     });
 
@@ -1743,30 +1691,13 @@ describe("app page dispatch", () => {
       key?: string;
       render?: () => Promise<void>;
     } = {};
-    const buildPageElement = vi.fn(
-      async (
-        _route: TestRoute,
-        params: Record<string, string | string[]>,
-        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
-        _searchParams: URLSearchParams,
-      ) => `element:${JSON.stringify(params)}`,
-    );
-    const isrGet = vi.fn(async (key: string) => {
-      if (key === "html:/en/blog/[slug]") {
-        return buildISRCacheEntry(
-          buildCachedAppPageValue("<html><head></head><body>Locale: en</body></html>"),
-          true,
-        );
-      }
-      return null;
-    });
-    const { options } = createDispatchOptions({
+    const buildPageElement = createParamTextPageElement();
+    const isrGet = createPprBlogFallbackShellGetter(true);
+    const { options } = createPprBlogDispatchOptions({
       buildPageElement,
-      cleanPathname: "/en/blog/new-post",
       getNavigationContext() {
         return navigationContext;
       },
-      isProduction: true,
       isrGet,
       loadSsrHandler: async () => ({
         async handleSsr(_rscStream, navContext) {
@@ -1782,21 +1713,6 @@ describe("app page dispatch", () => {
             `<html><head></head><body>${String(navContext.pathname)}:${JSON.stringify(navContext.params)}</body></html>`,
           ]);
         },
-      }),
-      params: { locale: "en", slug: "new-post" },
-      pprFallbackCacheShells: [
-        {
-          fallbackParamNames: ["slug"],
-          params: { locale: "en", slug: "[slug]" },
-          pathname: "/en/blog/[slug]",
-        },
-      ],
-      revalidateSeconds: 60,
-      route: createRoute({
-        isDynamic: true,
-        params: ["locale", "slug"],
-        pattern: "/:locale/blog/:slug",
-        routeSegments: ["[locale]", "blog", "[slug]"],
       }),
       scheduleBackgroundRegeneration(key, render) {
         scheduledRegeneration.key = key;
@@ -1840,54 +1756,17 @@ describe("app page dispatch", () => {
   });
 
   it("does not serve the fallback shell for a known pregenerated route whose exact cache is absent", async () => {
-    const buildPageElement = vi.fn(
-      async (
-        _route: TestRoute,
-        params: Record<string, string | string[]>,
-        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
-        _searchParams: URLSearchParams,
-      ) => `fresh:${JSON.stringify(params)}`,
-    );
-    const isrGet = vi.fn(async (key: string) => {
-      if (key === "html:/en/blog/[slug]") {
-        return buildISRCacheEntry(
-          buildCachedAppPageValue("<html><head></head><body>fallback shell</body></html>"),
-          false,
-        );
-      }
-      return null;
-    });
-    const { options } = createDispatchOptions({
+    const buildPageElement = createParamTextPageElement("fresh");
+    const isrGet = createPprBlogFallbackShellGetter(false);
+    const { options } = createPprBlogDispatchOptions({
       buildPageElement,
       cleanPathname: "/en/blog/known-post",
-      isProduction: true,
       isrGet,
-      loadSsrHandler: async () => ({
-        async handleSsr() {
-          return createStream([
-            `<html><head></head><body>fresh:${JSON.stringify({
-              locale: "en",
-              slug: "known-post",
-            })}</body></html>`,
-          ]);
-        },
-      }),
+      loadSsrHandler: createFreshBodySsrHandler(
+        `fresh:${JSON.stringify({ locale: "en", slug: "known-post" })}`,
+      ),
       params: { locale: "en", slug: "known-post" },
-      pprFallbackCacheShells: [
-        {
-          fallbackParamNames: ["slug"],
-          params: { locale: "en", slug: "[slug]" },
-          pathname: "/en/blog/[slug]",
-        },
-      ],
       renderedConcreteUrlPaths: new Set(["/en/blog/known-post"]),
-      revalidateSeconds: 60,
-      route: createRoute({
-        isDynamic: true,
-        params: ["locale", "slug"],
-        pattern: "/:locale/blog/:slug",
-        routeSegments: ["[locale]", "blog", "[slug]"],
-      }),
     });
 
     const response = await dispatchAppPage(options);
@@ -1899,54 +1778,17 @@ describe("app page dispatch", () => {
   });
 
   it("does not serve the fallback shell for an encoded known pregenerated route whose exact cache is absent", async () => {
-    const buildPageElement = vi.fn(
-      async (
-        _route: TestRoute,
-        params: Record<string, string | string[]>,
-        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
-        _searchParams: URLSearchParams,
-      ) => `fresh:${JSON.stringify(params)}`,
-    );
-    const isrGet = vi.fn(async (key: string) => {
-      if (key === "html:/en/blog/[slug]") {
-        return buildISRCacheEntry(
-          buildCachedAppPageValue("<html><head></head><body>fallback shell</body></html>"),
-          false,
-        );
-      }
-      return null;
-    });
-    const { options } = createDispatchOptions({
+    const buildPageElement = createParamTextPageElement("fresh");
+    const isrGet = createPprBlogFallbackShellGetter(false);
+    const { options } = createPprBlogDispatchOptions({
       buildPageElement,
       cleanPathname: "/en/blog/hello world",
-      isProduction: true,
       isrGet,
-      loadSsrHandler: async () => ({
-        async handleSsr() {
-          return createStream([
-            `<html><head></head><body>fresh:${JSON.stringify({
-              locale: "en",
-              slug: "hello world",
-            })}</body></html>`,
-          ]);
-        },
-      }),
+      loadSsrHandler: createFreshBodySsrHandler(
+        `fresh:${JSON.stringify({ locale: "en", slug: "hello world" })}`,
+      ),
       params: { locale: "en", slug: "hello world" },
-      pprFallbackCacheShells: [
-        {
-          fallbackParamNames: ["slug"],
-          params: { locale: "en", slug: "[slug]" },
-          pathname: "/en/blog/[slug]",
-        },
-      ],
       renderedConcreteUrlPaths: new Set(["/en/blog/hello world"]),
-      revalidateSeconds: 60,
-      route: createRoute({
-        isDynamic: true,
-        params: ["locale", "slug"],
-        pattern: "/:locale/blog/:slug",
-        routeSegments: ["[locale]", "blog", "[slug]"],
-      }),
     });
 
     const response = await dispatchAppPage(options);
@@ -1968,54 +1810,17 @@ describe("app page dispatch", () => {
     delete globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS;
     const concretePaths = getRenderedConcreteUrlPathsForRoute("/:locale/blog/:slug");
 
-    const buildPageElement = vi.fn(
-      async (
-        _route: TestRoute,
-        params: Record<string, string | string[]>,
-        _opts: Parameters<DispatchOptions["buildPageElement"]>[2],
-        _searchParams: URLSearchParams,
-      ) => `fresh:${JSON.stringify(params)}`,
-    );
-    const isrGet = vi.fn(async (key: string) => {
-      if (key === "html:/en/blog/[slug]") {
-        return buildISRCacheEntry(
-          buildCachedAppPageValue("<html><head></head><body>fallback shell</body></html>"),
-          false,
-        );
-      }
-      return null;
-    });
-    const { options } = createDispatchOptions({
+    const buildPageElement = createParamTextPageElement("fresh");
+    const isrGet = createPprBlogFallbackShellGetter(false);
+    const { options } = createPprBlogDispatchOptions({
       buildPageElement,
       cleanPathname: "/en/blog/worker-known",
-      isProduction: true,
       isrGet,
-      loadSsrHandler: async () => ({
-        async handleSsr() {
-          return createStream([
-            `<html><head></head><body>fresh:${JSON.stringify({
-              locale: "en",
-              slug: "worker-known",
-            })}</body></html>`,
-          ]);
-        },
-      }),
+      loadSsrHandler: createFreshBodySsrHandler(
+        `fresh:${JSON.stringify({ locale: "en", slug: "worker-known" })}`,
+      ),
       params: { locale: "en", slug: "worker-known" },
-      pprFallbackCacheShells: [
-        {
-          fallbackParamNames: ["slug"],
-          params: { locale: "en", slug: "[slug]" },
-          pathname: "/en/blog/[slug]",
-        },
-      ],
       renderedConcreteUrlPaths: concretePaths,
-      revalidateSeconds: 60,
-      route: createRoute({
-        isDynamic: true,
-        params: ["locale", "slug"],
-        pattern: "/:locale/blog/:slug",
-        routeSegments: ["[locale]", "blog", "[slug]"],
-      }),
     });
 
     const response = await dispatchAppPage(options);
