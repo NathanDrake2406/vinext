@@ -2578,6 +2578,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             );
           }
 
+          // Runtime helper modules embedded into generated entries import
+          // vinext's own shims by package subpath (for example
+          // `vinext/shims/headers`). Source checkouts also alias userland
+          // `next/*` imports to the local shim files. Resolve both forms
+          // through this plugin so request-scoped singleton state is not split
+          // between source shims and the package export copy.
+          const vinextShimPrefix = "vinext/shims/";
+          if (cleanId.startsWith(vinextShimPrefix)) {
+            return resolveShimModulePath(_shimsDir, cleanId.slice(vinextShimPrefix.length));
+          }
+
           // Shims with react-server variants — resolve per-environment.
           // These are NOT in resolve.alias (Vite's alias plugin runs
           // before enforce:"pre" plugins and can't be overridden).
