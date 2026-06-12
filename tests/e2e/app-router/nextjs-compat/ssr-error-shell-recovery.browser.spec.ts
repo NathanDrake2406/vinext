@@ -238,6 +238,31 @@ export default function Client(): React.ReactNode {
   );
   await fs.writeFile(path.join(boundaryAlwaysDir, "error.tsx"), localErrorBoundary);
 
+  // Ported from Next.js default global-error client runtime semantics:
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/errors/index.test.ts
+  // Combined with the SSR shell-recovery entry path exercised by:
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/next-dynamic-css/next-dynamic-css.test.ts
+  const noBoundaryAlwaysDir = path.join(appDir, "no-boundary-always");
+  await fs.mkdir(noBoundaryAlwaysDir, { recursive: true });
+  await fs.writeFile(
+    path.join(noBoundaryAlwaysDir, "page.tsx"),
+    `import React from "react";
+import Client from "./Client";
+export default function NoBoundaryAlwaysPage() {
+  return <Client />;
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(noBoundaryAlwaysDir, "Client.tsx"),
+    `"use client";
+import React from "react";
+export default function Client(): React.ReactNode {
+  throw new Error("always no boundary throw");
+}
+`,
+  );
+
   const vinextSource = path.resolve(process.cwd(), "packages/vinext/src/index.ts");
   await fs.writeFile(
     path.join(fixtureRoot, "vite.config.ts"),
@@ -332,12 +357,22 @@ test.describe("SSR shell-error recovery (no custom global-error.tsx)", () => {
       await page.goto(`${app.baseUrl}/boundary-always`, { waitUntil: "load" });
       await expect(page.locator("#local-error-boundary")).toHaveText("Local boundary caught it");
 
+      // No local boundary: the shell recovery still re-renders on the client,
+      // but the root default global-error boundary must catch the repeated
+      // throw instead of leaving a blank torn-down document.
+      await page.goto(`${app.baseUrl}/no-boundary-always`, { waitUntil: "load" });
+      await expect(page.getByRole("heading", { name: "This page couldn’t load" })).toBeVisible();
+      await expect(page.getByText("Reload to try again, or go back.")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Reload" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Back" })).toBeVisible();
+
       // The boundary routes throw on purpose, and React logs caught boundary
       // errors to the console. Drop those expected entries but stay strict
       // about anything else; the fixture re-asserts emptiness at teardown.
       const unexpectedErrors = consoleErrors.filter(
         (message) =>
           !message.includes("boundary throw") &&
+          !message.includes("always no boundary throw") &&
           !message.includes("genuine server digest error") &&
           !message.includes("Expected error to opt out of server rendering") &&
           // React's companion log for an error caught by a boundary.
