@@ -48,6 +48,7 @@ import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/s
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
+import DefaultGlobalError from "vinext/shims/default-global-error";
 
 /**
  * `@types/react-dom` does not yet type `maxHeadersLength` (it pairs with the
@@ -104,6 +105,55 @@ function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return Object.prototype.toString.call(error);
+}
+
+function createUtf8Stream(html: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(html));
+      controller.close();
+    },
+  });
+}
+
+function buildBootstrapModuleScript(bootstrapModuleUrl?: string, nonce?: string): string {
+  if (!bootstrapModuleUrl) return "";
+  return (
+    `<script type="module"${createNonceAttribute(nonce)} src="` +
+    escapeHtmlAttr(bootstrapModuleUrl) +
+    '" id="_R_" async=""></script>'
+  );
+}
+
+function markErrorShellStyle(html: string): string {
+  return html.replace("<style>", '<style data-vinext-error-shell-style="">');
+}
+
+function renderSsrErrorDocumentShell(
+  bootstrapModuleUrl?: string,
+  nonce?: string,
+): ReadableStream<Uint8Array> {
+  const html = markErrorShellStyle(
+    renderToStaticMarkup(
+      createReactElement(DefaultGlobalError, {
+        error: null,
+      }),
+    ),
+  );
+  const bootstrapScript = buildBootstrapModuleScript(bootstrapModuleUrl, nonce);
+  if (!bootstrapScript) {
+    return createUtf8Stream(`<!DOCTYPE html>${html}`);
+  }
+
+  const documentClose = "</body></html>";
+  if (!html.endsWith(documentClose)) {
+    return createUtf8Stream(`<!DOCTYPE html>${html}${bootstrapScript}`);
+  }
+
+  return createUtf8Stream(
+    `<!DOCTYPE html>${html.slice(0, -documentClose.length)}${bootstrapScript}${documentClose}`,
+  );
 }
 
 function renderInsertedHtml(insertedElements: readonly unknown[]): string {
@@ -306,6 +356,12 @@ export async function handleSsr(
      *  to resolve before returning the HTML stream. Used for static prerender
      *  and ISR cache writes to avoid caching fallback content. */
     waitForAllReady?: boolean;
+    /** When true, an SSR-phase shell render error (no RSC-originated `digest`)
+     *  resolves to the default `__next_error__` error-document shell with the
+     *  original flight payload and bootstrap module, instead of rejecting.
+     *  Callers set this only when the app has no custom global-error.tsx, so
+     *  boundary re-render semantics are unaffected. */
+    fallbackToErrorDocumentOnShellError?: boolean;
   },
 ): Promise<AppSsrRenderResult> {
   return runWithNavigationContext(async () => {
@@ -501,8 +557,6 @@ export async function handleSsr(
           },
         };
 
-        const htmlStream = await renderToReadableStream(ssrRoot, ssrRenderOptions);
-
         // Populated before any SSR request runs: at prod-server startup
         // (prod-server.ts) or via build-time bundle injection (index.ts). Left
         // undefined in dev, which naturally disables inline CSS there.
@@ -560,8 +614,33 @@ export async function handleSsr(
         const getBeforeInteractiveHeadHTML = (): string =>
           renderBeforeInteractiveInlineScripts(beforeInteractiveInlineScripts);
 
-        if (options?.waitForAllReady === true) {
-          await htmlStream.allReady;
+        let htmlStream: ReadableStream<Uint8Array>;
+        try {
+          const renderedHtmlStream = await renderToReadableStream(ssrRoot, ssrRenderOptions);
+          if (options?.waitForAllReady === true) {
+            await renderedHtmlStream.allReady;
+          }
+          htmlStream = renderedHtmlStream;
+        } catch (error) {
+          // Contract with renderAppPageHtmlStreamWithRecovery (app-page-stream.ts):
+          // a rejected handleSsr drives redirect()/notFound() responses and
+          // local/global error.tsx boundary re-renders. Errors that originate in
+          // the RSC render (rethrown here through the flight deserializer) carry
+          // a string `digest` and must always propagate so those semantics stay
+          // intact. Only an SSR-phase-only shell error — and only when the app
+          // has no custom global-error.tsx (the caller sets the flag) — falls
+          // back to the default `__next_error__` document shell: the original
+          // flight payload plus the bootstrap module are still emitted, so the
+          // browser recovers by re-rendering the real tree from the embedded
+          // RSC data (Next.js shell-error recovery semantics).
+          if (
+            options?.fallbackToErrorDocumentOnShellError !== true ||
+            typeof (error as { digest?: unknown } | null)?.digest === "string"
+          ) {
+            throw error;
+          }
+          errorMetaRenderer.capture(error);
+          htmlStream = renderSsrErrorDocumentShell(bootstrapModuleUrl, options?.scriptNonce);
         }
 
         const finalStream = deferUntilStreamConsumed(

@@ -267,6 +267,11 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   probeLayoutAt: (layoutIndex: number, layoutParamAccess?: AppLayoutParamAccessTracker) => unknown;
   probePage: () => unknown;
   expireSeconds?: number;
+  /** True when the app supplies a custom global-error.tsx (generated entry
+   *  knows this at build time). Gates SSR shell-error recovery: without a
+   *  custom global-error, shell errors serve the default `__next_error__`
+   *  recovery document instead of a server-side boundary re-render. */
+  hasCustomGlobalError?: boolean;
   renderErrorBoundaryPage: (error: unknown) => Promise<Response | null>;
   renderHttpAccessFallbackPage: (
     statusCode: number,
@@ -979,6 +984,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       return renderPageSpecialError(options, specialError);
     },
     renderToReadableStream: options.renderToReadableStream,
+    hasCustomGlobalError: options.hasCustomGlobalError,
     routePattern: route.pattern,
     runWithSuppressedHookWarning(probe) {
       return options.runWithSuppressedHookWarning(probe);

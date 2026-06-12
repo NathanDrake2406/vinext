@@ -678,6 +678,7 @@ export default __createAppRscHandler({
       getSourceRoute(sourceRouteIndex) {
         return routes[sourceRouteIndex];
       },
+      hasCustomGlobalError: ${globalErrorVar ? `Boolean(${globalErrorVar}?.default)` : "false"},
       hasGenerateStaticParams: __generateStaticParams.length > 0,
       hasPageDefaultExport: !!PageComponent,
       hasPageModule: !!route.page,

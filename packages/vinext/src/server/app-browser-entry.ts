@@ -18,7 +18,7 @@ import {
   setServerCallback,
 } from "@vitejs/plugin-rsc/browser";
 import { flushSync } from "react-dom";
-import { hydrateRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
 import "../client/instrumentation-client.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
 import {
@@ -1603,16 +1603,28 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         onCaughtError: prodOnCaughtError,
         onUncaughtError,
       });
-  window.__VINEXT_RSC_ROOT__ = hydrateRootInTransition({
-    children: createElement(BrowserRoot, {
-      initialElements: root,
-      initialNavigationSnapshot,
-    }),
-    container: document,
-    hydrateRoot,
-    options: hydrateRootOptions,
-    startTransition,
+  const children = createElement(BrowserRoot, {
+    initialElements: root,
+    initialNavigationSnapshot,
   });
+  if (document.documentElement.id === "__next_error__") {
+    for (const style of document.querySelectorAll("style[data-vinext-error-shell-style]")) {
+      style.remove();
+    }
+    startTransition(() => {
+      const clientRoot = createRoot(document, hydrateRootOptions);
+      clientRoot.render(children);
+      window.__VINEXT_RSC_ROOT__ = clientRoot;
+    });
+  } else {
+    window.__VINEXT_RSC_ROOT__ = hydrateRootInTransition({
+      children,
+      container: document,
+      hydrateRoot,
+      options: hydrateRootOptions,
+      startTransition,
+    });
+  }
 
   const navigateRsc: NavigationRuntimeNavigate = async function navigateRsc(
     href: string,

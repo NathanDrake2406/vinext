@@ -170,6 +170,10 @@ type RenderAppPageLifecycleOptions = {
     element: ReactNode | AppOutgoingElements,
     options: { onError: AppPageBoundaryOnError },
   ) => ReadableStream<Uint8Array>;
+  /** True when the app supplies a custom global-error.tsx. When false, SSR
+   *  shell render errors fall back to the default `__next_error__` recovery
+   *  document instead of a server-side boundary re-render. */
+  hasCustomGlobalError?: boolean;
   routePattern: string;
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
   scriptNonce?: string;
@@ -836,6 +840,7 @@ export async function renderAppPageLifecycle(
         rscStream: rscForResponse,
         scriptNonce: options.scriptNonce,
         sideStream: rscCapture.sideStream,
+        hasCustomGlobalError: options.hasCustomGlobalError,
         ssrHandler,
         waitForAllReady: options.isPrerender,
       });
