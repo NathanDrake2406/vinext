@@ -60,6 +60,13 @@ export function isFallbackShellArtifactPath(
   // builds always set `fallback`, so a concrete URL containing a literal
   // bracket is never misclassified here.
   if (route?.fallback === undefined) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(
+        "[vinext] Legacy manifest detected: missing `fallback` flag for route. " +
+          "Using bracket heuristic for fallback-shell detection. " +
+          "A concrete URL containing literal brackets may be misclassified as a fallback shell.",
+      );
+    }
     return pathname.includes("[") || pathname.includes("]");
   }
   return false;

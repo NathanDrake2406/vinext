@@ -90,7 +90,7 @@ describe("pregenerated concrete paths", () => {
     it("identifies fallback shells when fallback === true", () => {
       expect(
         isFallbackShellArtifactPath("/en/blog/[slug]", {
-          route: "/en/blog/[slug]",
+          route: "/en/blog/:slug",
           fallback: true,
           status: "rendered",
           router: "app",
@@ -101,7 +101,7 @@ describe("pregenerated concrete paths", () => {
     it("identifies concrete paths even with brackets when fallback === false", () => {
       expect(
         isFallbackShellArtifactPath("/en/blog/[draft]-post", {
-          route: "/en/blog/[slug]",
+          route: "/en/blog/:slug",
           fallback: false,
           status: "rendered",
           router: "app",
@@ -112,7 +112,7 @@ describe("pregenerated concrete paths", () => {
     it("falls back to bracket checks when fallback is undefined (legacy manifests)", () => {
       expect(
         isFallbackShellArtifactPath("/en/blog/[slug]", {
-          route: "/en/blog/[slug]",
+          route: "/en/blog/:slug",
           status: "rendered",
           router: "app",
         }),
@@ -120,7 +120,7 @@ describe("pregenerated concrete paths", () => {
 
       expect(
         isFallbackShellArtifactPath("/en/blog/hello", {
-          route: "/en/blog/[slug]",
+          route: "/en/blog/:slug",
           status: "rendered",
           router: "app",
         }),

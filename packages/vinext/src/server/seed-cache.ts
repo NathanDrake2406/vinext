@@ -104,7 +104,7 @@ export async function seedMemoryCacheFromPrerender(
   for (const route of appRoutes) {
     const concretePathname = route.path ?? route.route;
     if (!isFallbackShellArtifactPath(concretePathname, route)) {
-      addPregeneratedConcretePath(route.route, normalizePregeneratedPathname(concretePathname));
+      addPregeneratedConcretePath(route.route, concretePathname);
     }
 
     const artifactPathname = route.path ?? route.route;
