@@ -185,7 +185,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
-import { normalizePathSeparators, stripViteModuleQuery } from "./utils/path.js";
+import { normalizePathSeparators, stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
 
 // Install the process-level peer-disconnect backstop at module load.
 // Vite plugin lifecycle hooks (config / configureServer) proved
@@ -2111,7 +2111,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           resolveId(id: string) {
             const shimBase = _reactServerShims.get(id);
             if (shimBase !== undefined) {
-              return resolveShimModulePath(shimsDir, shimBase);
+              return resolveShimModulePath(shimsDir, stripJsExtension(shimBase));
             }
           },
         };
@@ -2586,7 +2586,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // between source shims and the package export copy.
           const vinextShimPrefix = "vinext/shims/";
           if (cleanId.startsWith(vinextShimPrefix)) {
-            return resolveShimModulePath(_shimsDir, cleanId.slice(vinextShimPrefix.length));
+            return resolveShimModulePath(
+              _shimsDir,
+              stripJsExtension(cleanId.slice(vinextShimPrefix.length)),
+            );
           }
 
           // Shims with react-server variants — resolve per-environment.
@@ -2599,7 +2602,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               this.environment?.name === "rsc"
                 ? `${reactServerShim}.react-server`
                 : reactServerShim;
-            return resolveShimModulePath(_shimsDir, shimName);
+            return resolveShimModulePath(_shimsDir, stripJsExtension(shimName));
           }
         },
       },

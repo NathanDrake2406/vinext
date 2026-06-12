@@ -128,6 +128,41 @@ export default function Client() {
 `,
   );
 
+  // Static prerender variant: no dynamic APIs, so the route is prerendered at
+  // build time. The SSR shell error is resolved to the error-document during
+  // prerender, and the cached HTML is served on the next request. The browser
+  // must still recover the real tree from the embedded flight payload.
+  const staticDir = path.join(appDir, "static-recovery");
+  await fs.mkdir(staticDir, { recursive: true });
+  await fs.writeFile(
+    path.join(staticDir, "page.tsx"),
+    `import React from "react";
+import Client from "./Client";
+
+export default function StaticPage() {
+  return (
+    <>
+      <p id="static-server-content">Hello Static Server</p>
+      <Client />
+    </>
+  );
+}
+`,
+  );
+  await fs.writeFile(
+    path.join(staticDir, "Client.tsx"),
+    `"use client";
+import React from "react";
+
+export default function Client() {
+  if (typeof window === "undefined") {
+    throw new Error("Expected error to opt out of server rendering");
+  }
+  return <p id="static-client-content">Hello Static Client</p>;
+}
+`,
+  );
+
   // Local error.tsx routes: the shell fallback must not swallow local
   // boundary semantics. Local boundaries for shell errors materialize
   // client-side from the flight payload (Next.js parity):
@@ -253,6 +288,13 @@ test.describe("SSR shell-error recovery (no custom global-error.tsx)", () => {
       await page.goto(`${app.baseUrl}/page`, { waitUntil: "load" });
       await expect(page.locator("#server-content")).toHaveText("Hello Server");
       await expect(page.locator("#client-content")).toHaveText("Hello Client");
+
+      // Static prerender variant: the shell error was resolved to the error
+      // document during prerender, cached as HTML, and the browser must still
+      // recover the real tree from the embedded flight payload.
+      await page.goto(`${app.baseUrl}/static-recovery`, { waitUntil: "load" });
+      await expect(page.locator("#static-server-content")).toHaveText("Hello Static Server");
+      await expect(page.locator("#static-client-content")).toHaveText("Hello Static Client");
 
       // SSR-only throw with a local error.tsx: browser re-render succeeds, so
       // the content (not the boundary) appears.
