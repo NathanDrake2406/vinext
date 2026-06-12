@@ -48,6 +48,7 @@ import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
 import { AppRouterContext, type AppRouterInstance } from "./internal/app-router-context.js";
+import { getPagesNavigationContext as _getPagesNavigationContext } from "./internal/pages-router-accessor.js";
 import { retryScrollTo, scrollToHashTarget } from "./hash-scroll.js";
 import {
   beginAppRouterScrollIntent,
@@ -337,30 +338,10 @@ export function _registerStateAccessors(accessors: _StateAccessors): void {
 // patches in unit tests that only want the router shim.
 // ---------------------------------------------------------------------------
 
-type PagesNavigationContext = {
-  pathname: string | null;
-  searchParams: URLSearchParams;
-  params: Record<string, string | string[]> | null;
-};
-
-const PAGES_NAVIGATION_ACCESSOR_KEY = Symbol.for(
-  "vinext.navigation.pagesNavigationContextAccessor",
-);
 const PAGES_NAVIGATION_NOTIFY_KEY = Symbol.for("vinext.navigation.pagesNavigationNotify");
-type _GlobalWithPagesAccessor = typeof globalThis & {
-  [PAGES_NAVIGATION_ACCESSOR_KEY]?: () => PagesNavigationContext | null;
+type _GlobalWithPagesNotify = typeof globalThis & {
   [PAGES_NAVIGATION_NOTIFY_KEY]?: () => void;
 };
-
-function _getPagesNavigationContext(): PagesNavigationContext | null {
-  const accessor = (globalThis as _GlobalWithPagesAccessor)[PAGES_NAVIGATION_ACCESSOR_KEY];
-  if (!accessor) return null;
-  try {
-    return accessor();
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Get the navigation context for the current SSR/RSC render.
@@ -1147,7 +1128,7 @@ function notifyNavigationListeners(): void {
 }
 
 if (!isServer) {
-  (globalThis as _GlobalWithPagesAccessor)[PAGES_NAVIGATION_NOTIFY_KEY] = notifyNavigationListeners;
+  (globalThis as _GlobalWithPagesNotify)[PAGES_NAVIGATION_NOTIFY_KEY] = notifyNavigationListeners;
 }
 
 // Cached URLSearchParams, pathname, etc. for referential stability
@@ -1346,7 +1327,8 @@ export function getClientNavigationRenderContext(): React.Context<ClientNavigati
 }
 
 /* oxlint-disable eslint-plugin-react-hooks/rules-of-hooks */
-function useClientNavigationRenderSnapshot(): ClientNavigationRenderSnapshot | null {
+/** @internal */
+export function useClientNavigationRenderSnapshot(): ClientNavigationRenderSnapshot | null {
   const ctx = getClientNavigationRenderContext();
   if (!ctx || typeof React.useContext !== "function") return null;
   try {

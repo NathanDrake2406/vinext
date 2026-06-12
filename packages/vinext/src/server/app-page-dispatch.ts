@@ -34,6 +34,7 @@ import {
   peekDynamicFetchObservations,
   runWithFetchDedupe,
   setCurrentFetchCacheMode,
+  setCurrentForceDynamicFetchDefault,
   setCurrentFetchSoftTags,
 } from "vinext/shims/fetch-cache";
 import { AppElementsWire, type AppOutgoingElements } from "./app-elements.js";
@@ -316,6 +317,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   request: Request;
   revalidateSeconds: number | null;
   resolveRouteFetchCacheMode?: (route: TRoute) => FetchCacheMode | null;
+  resolveRouteDynamicConfig?: (route: TRoute) => string | null | undefined;
   rootForbiddenModule?: AppPageModule | null;
   rootNotFoundModule?: AppPageModule | null;
   rootUnauthorizedModule?: AppPageModule | null;
@@ -472,6 +474,7 @@ async function runAppPageRevalidationContext<
   const requestContext = createRequestContext({
     headersContext,
     currentFetchCacheMode: options.currentFetchCacheMode ?? null,
+    currentForceDynamicFetchDefault: options.dynamicConfig === "force-dynamic",
     executionContext: getRequestExecutionContext(),
     unstableCacheRevalidation: "foreground",
   });
@@ -500,6 +503,18 @@ function getCapturedRscDataPromise(
   return capturedRscDataPromise;
 }
 
+type PprFallbackShellEligibility =
+  | { kind: "probe-fallback-shells"; fallbackShells: readonly AppPagePprFallbackCacheShell[] }
+  | {
+      kind:
+        | "skip-known-pregenerated-route"
+        | "skip-no-fallback-shells"
+        | "skip-rsc-request"
+        | "skip-non-get"
+        | "skip-search-params"
+        | "skip-cache-disabled";
+    };
+
 function toInterceptOptions(
   interceptionContext: string | null,
   intercept: AppPageDispatchIntercept,
@@ -515,14 +530,6 @@ function toInterceptOptions(
   };
 }
 
-/**
- * Probe PPR fallback-shell cache entries after an exact cache miss.
- *
- * Guards against serving fallback shells for known pregenerated routes whose
- * exact cache entry is temporarily absent (eviction, cold start, etc.).
- * Returns the first matching shell response, or `null` when probing is
- * skipped or every shell misses.
- */
 function buildFallbackShellRenderDeps<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
   route: TRoute,
@@ -553,29 +560,41 @@ function buildFallbackShellRenderDeps<TRoute extends AppPageDispatchRoute>(
   };
 }
 
-async function tryServePprFallbackShell<TRoute extends AppPageDispatchRoute>(
+/**
+ * Request-phase fallback-shell gate. Callers must run the exact cache read and
+ * static-param validation before this classification step.
+ */
+function classifyPprFallbackShellEligibility<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
-  route: TRoute,
   currentRevalidateSeconds: number | null,
   isDraftMode: boolean,
   isForceStatic: boolean,
   isForceDynamic: boolean,
-): Promise<Response | null> {
-  // Before probing fallback shells, check whether this exact URL was a
-  // pre-rendered concrete route at build time. If so, the exact cache entry
-  // was seeded at startup and its current absence is a transient condition
-  // (eviction, cold start, stale-empty, read error) — not a semantic signal
-  // that this is an unknown dynamic route. Serving the fallback shell would
-  // silently degrade a known pregenerated route to unknown-param content.
+): PprFallbackShellEligibility {
+  // Serving a reusable fallback shell is only safe for an unknown dynamic
+  // child path. If this concrete URL was pregenerated, a missing exact cache
+  // entry is a cache availability problem, not a routing signal. Fall through
+  // to fresh render instead.
   const isKnownPregeneratedRoute =
     options.renderedConcreteUrlPaths?.has(options.cleanPathname) === true;
+  if (isKnownPregeneratedRoute) {
+    return { kind: "skip-known-pregenerated-route" };
+  }
+
+  const fallbackShells = options.pprFallbackCacheShells;
+  if (!fallbackShells || fallbackShells.length === 0) {
+    return { kind: "skip-no-fallback-shells" };
+  }
+  if (options.isRscRequest) {
+    return { kind: "skip-rsc-request" };
+  }
+  if (options.request.method !== "GET") {
+    return { kind: "skip-non-get" };
+  }
+  if (!isForceStatic && hasSearchParams(options.searchParams)) {
+    return { kind: "skip-search-params" };
+  }
   if (
-    isKnownPregeneratedRoute ||
-    !options.pprFallbackCacheShells ||
-    options.pprFallbackCacheShells.length === 0 ||
-    options.isRscRequest ||
-    options.request.method !== "GET" ||
-    (!isForceStatic && hasSearchParams(options.searchParams)) ||
     !shouldReadAppPageCache({
       isDraftMode,
       isForceDynamic,
@@ -586,10 +605,19 @@ async function tryServePprFallbackShell<TRoute extends AppPageDispatchRoute>(
       scriptNonce: options.scriptNonce,
     })
   ) {
-    return null;
+    return { kind: "skip-cache-disabled" };
   }
 
-  for (const fallbackShell of options.pprFallbackCacheShells) {
+  return { kind: "probe-fallback-shells", fallbackShells };
+}
+
+async function probePprFallbackShellCache<TRoute extends AppPageDispatchRoute>(
+  options: DispatchAppPageOptions<TRoute>,
+  route: TRoute,
+  fallbackShells: readonly AppPagePprFallbackCacheShell[],
+  currentRevalidateSeconds: number | null,
+): Promise<Response | null> {
+  for (const fallbackShell of fallbackShells) {
     const fallbackShellResponse = await readAppPageFallbackShellCacheResponse({
       clearRequestContext: options.clearRequestContext,
       expireSeconds: options.expireSeconds,
@@ -633,6 +661,40 @@ async function tryServePprFallbackShell<TRoute extends AppPageDispatchRoute>(
   return null;
 }
 
+async function tryServePprFallbackShell<TRoute extends AppPageDispatchRoute>(
+  options: DispatchAppPageOptions<TRoute>,
+  route: TRoute,
+  currentRevalidateSeconds: number | null,
+  isDraftMode: boolean,
+  isForceStatic: boolean,
+  isForceDynamic: boolean,
+): Promise<Response | null> {
+  const decision = classifyPprFallbackShellEligibility(
+    options,
+    currentRevalidateSeconds,
+    isDraftMode,
+    isForceStatic,
+    isForceDynamic,
+  );
+
+  switch (decision.kind) {
+    case "skip-known-pregenerated-route":
+    case "skip-no-fallback-shells":
+    case "skip-rsc-request":
+    case "skip-non-get":
+    case "skip-search-params":
+    case "skip-cache-disabled":
+      return null;
+    case "probe-fallback-shells":
+      return await probePprFallbackShellCache(
+        options,
+        route,
+        decision.fallbackShells,
+        currentRevalidateSeconds,
+      );
+  }
+}
+
 export async function dispatchAppPage<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
 ): Promise<Response> {
@@ -659,6 +721,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
 
   setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], route.routeSegments));
   setCurrentFetchCacheMode(options.fetchCache ?? null);
+  setCurrentForceDynamicFetchDefault(isForceDynamic);
 
   if (options.hasPageModule && !options.hasPageDefaultExport) {
     options.clearRequestContext();
@@ -772,7 +835,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
               options.resolveRouteFetchCacheMode?.(revalidationTarget.route) ??
               (revalidationTarget.route === route ? (options.fetchCache ?? null) : null),
             draftModeSecret: options.draftModeSecret,
-            dynamicConfig,
+            dynamicConfig:
+              options.resolveRouteDynamicConfig?.(revalidationTarget.route) ??
+              (revalidationTarget.route === route ? dynamicConfig : undefined),
             params: revalidationTarget.navigationParams,
             routePattern: revalidationTarget.route.pattern,
             routeSegments: revalidationTarget.route.routeSegments,
@@ -935,7 +1000,16 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     ) {
       // Hydrate the intercept source route before reading its page module.
       await options.ensureRouteLoaded?.(interceptRoute);
+      // Deliberately no save/restore around buildPageElement: when this
+      // callback runs, resolveAppPageIntercept returns the intercept response
+      // directly and the dispatch never falls through to the original route.
+      // The intercept route's fetch defaults must also stay active past this
+      // call — its server components fetch lazily during the
+      // renderToReadableStream in renderInterceptResponse below.
       setCurrentFetchCacheMode(options.resolveRouteFetchCacheMode?.(interceptRoute) ?? null);
+      setCurrentForceDynamicFetchDefault(
+        options.resolveRouteDynamicConfig?.(interceptRoute) === "force-dynamic",
+      );
       return options.buildPageElement(
         interceptRoute,
         interceptParams,

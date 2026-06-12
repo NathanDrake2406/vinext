@@ -104,6 +104,7 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     currentRequestTags: [],
     currentFetchSoftTags: [],
     currentFetchCacheMode: null,
+    currentForceDynamicFetchDefault: false,
     dynamicFetchUrls: new Set<string>(),
     isFetchDedupeActive: false,
     currentFetchDedupeEntries: new Map(),

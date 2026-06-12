@@ -8,6 +8,7 @@ import {
   type FetchCacheMode,
   setCurrentFetchCacheMode,
   setCurrentFetchSoftTags,
+  setCurrentForceDynamicFetchDefault,
 } from "vinext/shims/fetch-cache";
 import type { ReactFormState } from "react-dom/client";
 import { isExternalUrl } from "../config/config-matchers.js";
@@ -271,6 +272,7 @@ export type HandleServerActionRscRequestOptions<
   ) => BodyInit | null | Promise<BodyInit | null>;
   reportRequestError: AppServerActionErrorReporter;
   resolveRouteFetchCacheMode?: (route: TRoute) => FetchCacheMode | null;
+  resolveRouteDynamicConfig?: (route: TRoute) => string | null | undefined;
   resolveRouteRuntime?: (route: TRoute) => AppServerActionRouteRuntime;
   request: Request;
   sanitizeErrorForClient: (error: unknown) => unknown;
@@ -1185,6 +1187,9 @@ export async function handleServerActionRscRequest<
         params: redirectNavigationParams,
       });
       setCurrentFetchCacheMode(options.resolveRouteFetchCacheMode?.(targetMatch.route) ?? null);
+      setCurrentForceDynamicFetchDefault(
+        options.resolveRouteDynamicConfig?.(targetMatch.route) === "force-dynamic",
+      );
       setCurrentFetchSoftTags(buildServerActionPageTags(targetMatch.route, targetPathname));
       const element = options.buildPageElement({
         cleanPathname: targetPathname,
@@ -1310,6 +1315,9 @@ export async function handleServerActionRscRequest<
       await options.ensureRouteLoaded?.(actionRerenderTarget.route);
       setCurrentFetchCacheMode(
         options.resolveRouteFetchCacheMode?.(actionRerenderTarget.route) ?? null,
+      );
+      setCurrentForceDynamicFetchDefault(
+        options.resolveRouteDynamicConfig?.(actionRerenderTarget.route) === "force-dynamic",
       );
       setCurrentFetchSoftTags(
         buildServerActionPageTags(actionRerenderTarget.route, options.cleanPathname),
