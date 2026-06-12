@@ -265,6 +265,7 @@ function createDispatchOptions(
     dynamicConfig?: DispatchOptions["dynamicConfig"];
     findIntercept?: DispatchOptions["findIntercept"];
     generateStaticParams?: DispatchOptions["generateStaticParams"];
+    hasCustomGlobalError?: DispatchOptions["hasCustomGlobalError"];
     formState?: DispatchOptions["formState"];
     getSourceRoute?: DispatchOptions["getSourceRoute"];
     actionError?: DispatchOptions["actionError"];
@@ -338,6 +339,7 @@ function createDispatchOptions(
     },
     getSourceRoute: overrides.getSourceRoute ?? (() => undefined),
     hasGenerateStaticParams: typeof overrides.generateStaticParams === "function",
+    hasCustomGlobalError: overrides.hasCustomGlobalError,
     hasPageDefaultExport: true,
     hasPageModule: true,
     handlerStart: 10,
@@ -1187,6 +1189,7 @@ describe("app page dispatch", () => {
       scheduledRender = renderFn;
     };
     let capturedWaitForAllReady: boolean | undefined;
+    let capturedFallbackToErrorDocument: boolean | undefined;
     const isrSet = vi.fn(async () => {});
     const { options } = createDispatchOptions({
       buildPageElement: async () => React.createElement("main", null, "fresh"),
@@ -1196,9 +1199,11 @@ describe("app page dispatch", () => {
         buildISRCacheEntry(buildCachedAppPageValue("<html>stale</html>"), true),
       ),
       isrSet,
+      hasCustomGlobalError: false,
       loadSsrHandler: async () => ({
         async handleSsr(_rscStream, _navigationContext, _fontData, captureOptions) {
           capturedWaitForAllReady = captureOptions?.waitForAllReady;
+          capturedFallbackToErrorDocument = captureOptions?.fallbackToErrorDocumentOnShellError;
           if (captureOptions?.capturedRscDataRef) {
             captureOptions.capturedRscDataRef.value = Promise.resolve(
               new TextEncoder().encode("fresh-flight").buffer,
@@ -1228,6 +1233,7 @@ describe("app page dispatch", () => {
     await scheduledRender();
 
     expect(capturedWaitForAllReady).toBe(true);
+    expect(capturedFallbackToErrorDocument).toBe(true);
     expect(isrSet).toHaveBeenCalled();
   });
 });

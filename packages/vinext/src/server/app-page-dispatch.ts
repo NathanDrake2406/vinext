@@ -664,6 +664,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
                 reactMaxHeadersLength: options.reactMaxHeadersLength,
                 rootParams: options.rootParams,
                 waitForAllReady: true,
+                fallbackToErrorDocumentOnShellError: options.hasCustomGlobalError === false,
                 ...(revalidatedRscCapture.sideStream
                   ? {
                       sideStream: revalidatedRscCapture.sideStream,

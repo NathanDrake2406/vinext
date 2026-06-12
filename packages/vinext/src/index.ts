@@ -2605,7 +2605,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               this.environment?.name === "rsc"
                 ? `${reactServerShim}.react-server`
                 : reactServerShim;
-            return resolveShimModulePath(_shimsDir, stripJsExtension(shimName));
+            return resolveShimModulePath(_shimsDir, shimName);
           }
         },
       },
