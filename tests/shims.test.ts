@@ -10073,6 +10073,28 @@ describe("parseCookies", () => {
     const { parseCookies } = await import("../packages/vinext/src/config/config-matchers.js");
     expect(parseCookies("  a = 1 ;  b = 2 ")).toEqual({ a: "1", b: "2" });
   });
+
+  // Next.js uses the same compiled `cookie` parser for request cookies.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/api-utils/get-cookie-parser.ts
+  it("matches Next.js duplicate, prototype-key, and empty-name semantics", async () => {
+    const { parseCookies } = await import("../packages/vinext/src/config/config-matchers.js");
+    const cookies = parseCookies(
+      'session=trusted; session=attacker; =empty-name; __proto__=prototype-cookie; constructor=constructor-cookie; toString=string-cookie; encoded=hello%20world; malformed=%E0%A4%A; quoted="quoted value"',
+    );
+
+    expect(Object.getPrototypeOf(cookies)).toBe(Object.prototype);
+    expect(cookies.hasOwnProperty("session")).toBe(true);
+    expect(Object.hasOwn(cookies, "toString")).toBe(false);
+    expect(Object.prototype.toString.call(cookies)).toBe("[object Object]");
+    expect(cookies.session).toBe("trusted");
+    expect(cookies[""]).toBe("empty-name");
+    expect(cookies.encoded).toBe("hello world");
+    expect(cookies.malformed).toBe("%E0%A4%A");
+    expect(cookies.quoted).toBe("quoted value");
+    expect(Object.hasOwn(cookies, "__proto__")).toBe(false);
+    expect(Object.hasOwn(cookies, "constructor")).toBe(false);
+    expect(Object.hasOwn(cookies, "toString")).toBe(false);
+  });
 });
 
 describe("checkHasConditions", () => {
@@ -10161,6 +10183,30 @@ describe("checkHasConditions", () => {
     expect(
       checkHasConditions([{ type: "cookie", key: "authorized", value: "false" }], undefined, ctx),
     ).toBe(false);
+  });
+
+  it("config cookie conditions ignore inherited names", async () => {
+    const { checkHasConditions, requestContextFromRequest } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const ctx = requestContextFromRequest(
+      new Request("https://example.com/account", {
+        headers: {
+          cookie:
+            "session=trusted; session=attacker; constructor=constructor-cookie; toString=string-cookie",
+        },
+      }),
+    );
+
+    expect(
+      checkHasConditions([{ type: "cookie", key: "session", value: "trusted" }], undefined, ctx),
+    ).toBe(true);
+    expect(
+      checkHasConditions([{ type: "cookie", key: "session", value: "attacker" }], undefined, ctx),
+    ).toBe(false);
+    expect(checkHasConditions([{ type: "cookie", key: "constructor" }], undefined, ctx)).toBe(
+      false,
+    );
+    expect(checkHasConditions([{ type: "cookie", key: "toString" }], undefined, ctx)).toBe(false);
   });
 
   // -- query conditions --
