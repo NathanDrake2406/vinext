@@ -1,7 +1,65 @@
 import path from "node:path";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { createRequire } from "node:module";
+import { createRequire, Module } from "node:module";
+
+type CommonJsModule = Module & {
+  _compile(content: string, filename: string): void;
+};
+
+const CommonJsModule = Module as typeof Module & {
+  _nodeModulePaths(from: string): string[];
+};
+
+function shouldRetryAsCommonJs(error: unknown, resolvedPath: string): boolean {
+  return (
+    resolvedPath.endsWith(".js") &&
+    ((error instanceof ReferenceError &&
+      /(?:module|exports|require) is not defined in ES module scope/.test(error.message)) ||
+      (error instanceof Error && "code" in error && error.code === "ERR_REQUIRE_ESM"))
+  );
+}
+
+function loadCommonJsPlugin(resolvedPath: string, cache = new Map<string, Module>()): unknown {
+  const cached = cache.get(resolvedPath);
+  if (cached) return cached.exports;
+
+  const mod = new CommonJsModule(resolvedPath) as CommonJsModule;
+  mod.filename = resolvedPath;
+  mod.paths = CommonJsModule._nodeModulePaths(path.dirname(resolvedPath));
+  cache.set(resolvedPath, mod);
+
+  const req = createRequire(resolvedPath);
+  const originalRequire = mod.require.bind(mod);
+  mod.require = ((specifier: string) => {
+    try {
+      return originalRequire(specifier);
+    } catch (error) {
+      const dependencyPath = req.resolve(specifier);
+      if (!shouldRetryAsCommonJs(error, dependencyPath)) throw error;
+      return loadCommonJsPlugin(dependencyPath, cache);
+    }
+  }) as Module["require"];
+
+  try {
+    mod._compile(fs.readFileSync(resolvedPath, "utf8"), resolvedPath);
+    mod.loaded = true;
+    return mod.exports;
+  } catch (error) {
+    cache.delete(resolvedPath);
+    throw error;
+  }
+}
+
+async function loadPluginExport(resolvedPath: string): Promise<unknown> {
+  try {
+    const mod = await import(pathToFileURL(resolvedPath).href);
+    return mod.default ?? mod;
+  } catch (error) {
+    if (!shouldRetryAsCommonJs(error, resolvedPath)) throw error;
+    return loadCommonJsPlugin(resolvedPath);
+  }
+}
 
 /**
  * PostCSS config file names to search for, in priority order.
@@ -117,8 +175,7 @@ async function resolvePostcssStringPluginsUncached(
       config.plugins.filter(Boolean).map(async (plugin: unknown) => {
         if (typeof plugin === "string") {
           const resolved = req.resolve(plugin);
-          const mod = await import(pathToFileURL(resolved).href);
-          const fn = mod.default ?? mod;
+          const fn = await loadPluginExport(resolved);
           // If the export is a function, call it to get the plugin instance
           return typeof fn === "function" ? fn() : fn;
         }
@@ -126,8 +183,7 @@ async function resolvePostcssStringPluginsUncached(
         if (Array.isArray(plugin) && typeof plugin[0] === "string") {
           const [name, options] = plugin;
           const resolved = req.resolve(name);
-          const mod = await import(pathToFileURL(resolved).href);
-          const fn = mod.default ?? mod;
+          const fn = await loadPluginExport(resolved);
           return typeof fn === "function" ? fn(options) : fn;
         }
         // Already a function or plugin object — pass through
