@@ -71,7 +71,9 @@ describe("loadNextConfig with CJS next.config.js under type:module", () => {
     fs.writeFileSync(
       path.join(tmpDir, "next.config.js"),
       `const path = require('node:path');\n` +
-        `module.exports = { basePath: path.join('/', 'docs') };\n`,
+        // posix.join keeps the result "/docs" on Windows too — the point of
+        // this fixture is exercising require(), not platform join behavior.
+        `module.exports = { basePath: path.posix.join('/', 'docs') };\n`,
     );
 
     const config = await loadNextConfig(tmpDir);
@@ -1272,6 +1274,20 @@ describe("resolveNextConfig prefetchInlining", () => {
   });
 });
 
+describe("resolveNextConfig gestureTransition", () => {
+  it("defaults experimental.gestureTransition to false", async () => {
+    const resolved = await resolveNextConfig({});
+    expect(resolved.gestureTransition).toBe(false);
+  });
+
+  it("reads experimental.gestureTransition from next.config", async () => {
+    const resolved = await resolveNextConfig({
+      experimental: { gestureTransition: true },
+    });
+    expect(resolved.gestureTransition).toBe(true);
+  });
+});
+
 describe("resolveNextConfig hashSalt", () => {
   const OLD_ENV = process.env.NEXT_HASH_SALT;
 
@@ -1615,6 +1631,7 @@ describe("detectNextIntlConfig", () => {
       output: "",
       pageExtensions: ["tsx", "ts", "jsx", "js"],
       cacheComponents: false,
+      gestureTransition: false,
       prefetchInlining: false,
       redirects: [],
       rewrites: { beforeFiles: [], afterFiles: [], fallback: [] },

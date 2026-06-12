@@ -62,6 +62,17 @@ type TestRoute = {
   params: readonly string[];
   pattern: string;
   routeSegments: readonly string[];
+  slots?: Readonly<
+    Record<
+      string,
+      {
+        default?: { default?: unknown } | null;
+        page?: { default?: unknown } | null;
+        slotParamNames?: readonly string[] | null;
+        slotPatternParts?: readonly string[] | null;
+      }
+    >
+  >;
   unauthorizeds?: readonly ({ default?: unknown } | null | undefined)[];
 };
 type DispatchOptions = Parameters<typeof dispatchAppPage<TestRoute>>[0];
@@ -991,10 +1002,28 @@ describe("app page dispatch", () => {
   });
 
   it("serves intercepted RSC source-route payloads with middleware response state", async () => {
-    const sourceRoute = createRoute({ params: [], pattern: "/feed", routeSegments: ["feed"] });
+    const sourceRoute = createRoute({
+      params: [],
+      pattern: "/feed",
+      routeSegments: ["feed"],
+      slots: {
+        "modal@app/feed/@modal": {
+          page: { default: "modal-page" },
+          slotParamNames: ["id"],
+          slotPatternParts: ["photos", ":id"],
+        },
+        "sidebar@app/feed/@sidebar": {
+          page: { default: "sidebar-page" },
+          slotParamNames: ["catchAll"],
+          slotPatternParts: [":catchAll+"],
+        },
+      },
+    });
     const currentRoute = createRoute({ params: ["id"], pattern: "/photos/[id]" });
     const middlewareHeaders = new Headers({ "x-from-middleware": "yes" });
+    const setNavigationContext = vi.fn();
     const { options } = createDispatchOptions({
+      cleanPathname: "/photos/123",
       async buildPageElement(route, params, opts) {
         return `${route.pattern}:${JSON.stringify(params)}:${opts?.interceptSlotKey ?? "direct"}`;
       },
@@ -1011,6 +1040,7 @@ describe("app page dispatch", () => {
       },
       route: currentRoute,
       searchParams: new URLSearchParams("from=feed"),
+      setNavigationContext,
     });
 
     const response = await dispatchAppPage({
@@ -1032,6 +1062,11 @@ describe("app page dispatch", () => {
     expect(response.headers.get("content-type")).toBe("text/x-component");
     expect(response.headers.get("x-from-middleware")).toBe("yes");
     await expect(response.text()).resolves.toBe("/feed:{}:modal@app/feed/@modal");
+    expect(setNavigationContext).toHaveBeenLastCalledWith({
+      params: { id: "123", catchAll: ["photos", "123"] },
+      pathname: "/photos/123",
+      searchParams: new URLSearchParams("from=feed"),
+    });
   });
 
   it("regenerates stale intercepted RSC cache entries from the source route", async () => {

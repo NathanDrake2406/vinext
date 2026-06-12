@@ -54,6 +54,7 @@ import {
   registerNavigationRuntimeBootstrap,
   registerNavigationRuntimeFunctions,
   type NavigationRuntimeNavigate,
+  type NavigationRuntimeVisibleCommitMode,
   type NavigationRuntimeRscBootstrap,
 } from "../client/navigation-runtime.js";
 import { retryScrollTo, scrollToHashTargetOnNextFrame } from "vinext/shims/hash-scroll";
@@ -136,7 +137,6 @@ import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-bounda
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
-import { stripBasePath } from "../utils/base-path.js";
 import { createOnUncaughtError, prodOnCaughtError } from "./app-browser-error.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
@@ -563,6 +563,7 @@ async function renderNavigationPayload(
   scrollIntent: AppRouterScrollIntent | null | undefined = null,
   restoredBfcacheIds: Readonly<Record<string, string>> | null = null,
   reuseCurrentBfcacheIds: boolean = true,
+  visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
 ): Promise<NavigationPayloadOutcome> {
   syncServerActionHttpFallbackHead(null);
   try {
@@ -586,6 +587,7 @@ async function renderNavigationPayload(
       targetHistoryIndex: traversalIntent === null ? undefined : traversalIntent.targetHistoryIndex,
       targetHref,
       navId,
+      visibleCommitMode,
     });
   } catch (error) {
     pendingNavigationRecoveryHref = null;
@@ -755,14 +757,12 @@ function storeVisitedResponseSnapshot(
   );
 }
 
-function isSamePageSearchNavigation(
-  currentSnapshot: ClientNavigationRenderSnapshot,
-  targetUrl: URL,
-): boolean {
-  const targetPathname = stripBasePath(targetUrl.pathname, __basePath);
-  if (targetPathname !== currentSnapshot.pathname) return false;
-
-  return targetUrl.searchParams.toString() !== currentSnapshot.searchParams.toString();
+// Build the absolute current-document href the early-intent planner compares
+// against the navigation target. The committed snapshot carries a base-stripped
+// pathname plus parsed search params; the planner re-strips the base (a no-op on
+// an already-stripped path) so both sides reduce to the same canonical form.
+function clientNavigationSnapshotHref(snapshot: ClientNavigationRenderSnapshot): string {
+  return `${window.location.origin}${createSnapshotPathAndSearch(snapshot)}`;
 }
 
 type NavigationRequestState = {
@@ -1623,6 +1623,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     programmaticTransition = false,
     traversalIntent?: HistoryTraversalIntent,
     scrollIntent?: AppRouterScrollIntent | null,
+    visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
   ): Promise<void> {
     let pendingRouterState: PendingBrowserRouterState | null = null;
     // Hoist navId above try so the catch and finally blocks can reference it.
@@ -1706,9 +1707,26 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         // when a visible Link prefetched the target. Search params are a page
         // input, so a cached full-route payload is not authoritative here.
         // Ref: packages/next/src/client/components/router-reducer/ppr-navigations.ts
+        //
+        // The planner owns the early-intent classification; hash-only changes are
+        // already short-circuited before reaching this loop, so for a "navigate"
+        // here the decision is always a flight navigation and only its
+        // cache-bypass bit is consumed.
+        const earlyIntentDecision =
+          navigationKind === "navigate"
+            ? navigationPlanner.classifyEarlyNavigationIntent({
+                basePath: __basePath,
+                currentHref: clientNavigationSnapshotHref(routerStateAtNavStart.navigationSnapshot),
+                // This loop only consumes the flight-navigation cache policy;
+                // hash-only intents already return before a request is queued.
+                mode: "push",
+                scroll: false,
+                targetHref: url.href,
+              })
+            : null;
         const shouldBypassNavigationCache =
-          navigationKind === "navigate" &&
-          isSamePageSearchNavigation(routerStateAtNavStart.navigationSnapshot, url);
+          earlyIntentDecision?.kind === "flightNavigation" &&
+          earlyIntentDecision.bypassNavigationCache;
         // The client reuse manifest is excluded from VINEXT_RSC_VARY_HEADER, so
         // it never affects the cache-busting URL. Defer producing it until the
         // visited-response cache miss is confirmed below — its producer iterates
@@ -1803,6 +1821,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             scrollIntent,
             restoredBfcacheIds,
             reuseCurrentBfcacheIds,
+            visibleCommitMode,
           );
           if (cachedRenderOutcome === "no-commit") {
             deleteVisitedResponse(rscUrl, requestInterceptionContext);
@@ -1887,6 +1906,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
                 scrollIntent,
                 restoredBfcacheIds,
                 reuseCurrentBfcacheIds,
+                visibleCommitMode,
               ).catch((error) => {
                 if (browserNavigationController.isCurrentNavigation(navId)) {
                   console.error("[vinext] Optimistic RSC navigation error:", error);
@@ -2021,6 +2041,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           scrollIntent,
           restoredBfcacheIds,
           reuseCurrentBfcacheIds,
+          visibleCommitMode,
         );
         if (renderOutcome !== "committed") return;
         // Don't cache the response if this navigation was superseded during

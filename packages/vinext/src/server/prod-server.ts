@@ -79,6 +79,75 @@ import {
   resolveRequestHost as resolveHost,
 } from "./proxy-trust.js";
 
+/**
+ * mtime of the build each bare (query-less) server-entry URL was first
+ * imported from in this process. Node's ESM cache pins a bare URL to that
+ * build forever, so rebuilds to the same path must be detected and loaded
+ * through a cache-busted URL instead.
+ */
+const bareServerEntryMtimes = new Map<string, number>();
+
+/**
+ * Import a built server entry module (App Router RSC entry or Pages Router
+ * server entry) by absolute file path.
+ *
+ * The first import of a given path uses the plain file:// URL with NO query
+ * string. This is load-bearing: code-split builds emit lazy chunks that
+ * import the entry back by bare specifier (default Vite builds on both
+ * supported majors — Rollup on Vite 7 and Rolldown on Vite 8 — hoist modules
+ * shared between the entry's static graph and lazy route chunks into the
+ * entry chunk, which the chunks then import as e.g. "../../index.js").
+ * Node keys its ESM cache on the full URL including the query string, so if
+ * the server imported the entry as `index.js?t=<mtime>`, a chunk's bare
+ * back-import would evaluate the entire server bundle a second time and
+ * module-level singletons (db pools, service registries) would silently
+ * diverge between the two copies. See
+ * https://github.com/cloudflare/vinext/issues/1923.
+ *
+ * A `?t=<mtime>` query string is appended only when the same path is
+ * imported again after a rebuild (different mtime) — e.g. test suites that
+ * rebuild a fixture to the same output path within one process — where the
+ * bare URL's cache entry would return the stale previous build. Note this
+ * rebuild branch trades the single-instance guarantee back: chunks that
+ * import the entry by bare path still resolve to the FIRST build's cache
+ * entry, so freshness and single-instance only hold together on the first
+ * import of a path. Production processes import each entry path exactly
+ * once and always get both.
+ *
+ * The entry is imported via its canonical real path: the bundler
+ * canonicalizes module ids with fs.realpathSync.native, so chunks evaluate
+ * under realpath-based URLs and their relative imports resolve to realpath
+ * URLs too. Importing the entry through a symlinked path (macOS /var/...
+ * tmpdirs, symlinked deploy directories) would otherwise create a second
+ * instance keyed on the symlinked URL.
+ *
+ * Exported for direct unit testing of the URL choice.
+ */
+export function resolveServerEntryImportUrl(entryPath: string): string {
+  // The catch only covers realpathSync.native failing on filesystems that
+  // don't support it; it does not make a missing entry path "work" — that
+  // still throws at the statSync below, same as before this helper existed.
+  let canonicalEntryPath: string;
+  try {
+    canonicalEntryPath = fs.realpathSync.native(entryPath);
+  } catch {
+    canonicalEntryPath = entryPath;
+  }
+  const href = pathToFileURL(canonicalEntryPath).href;
+  const mtime = fs.statSync(canonicalEntryPath).mtimeMs;
+  const bareMtime = bareServerEntryMtimes.get(href);
+  if (bareMtime === undefined || bareMtime === mtime) {
+    bareServerEntryMtimes.set(href, mtime);
+    return href;
+  }
+  return `${href}?t=${mtime}`;
+}
+
+// oxlint-disable-next-line typescript/no-explicit-any -- built entry modules are untyped, matching the previous inline `await import(...)`
+export async function importServerEntryModule(entryPath: string): Promise<any> {
+  return import(resolveServerEntryImportUrl(entryPath));
+}
+
 /** Convert a Node.js IncomingMessage into a ReadableStream for Web Request body. */
 function readNodeStream(req: IncomingMessage): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -245,11 +314,22 @@ function nodeHeadersToWebHeaders(headersRecord: IncomingMessage["headers"]): Hea
 
 const NO_BODY_RESPONSE_STATUSES = new Set([204, 205, 304]);
 
+// Constant header-name sets for `omitHeadersCaseInsensitive`. Hoisted to module
+// scope so the `.map().toLowerCase()` + `Set` allocation happens once at module
+// load instead of per response. All entries must be lowercase; the static-file
+// header constant is already `x-vinext-static-file`.
+const OMIT_BODY_HEADERS: ReadonlySet<string> = new Set(["content-length", "content-type"]);
+const OMIT_STATIC_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
+  VINEXT_STATIC_FILE_HEADER,
+  "content-encoding",
+  "content-length",
+  "content-type",
+]);
+
 function omitHeadersCaseInsensitive(
   headersRecord: Record<string, string | string[]>,
-  names: readonly string[],
+  targets: ReadonlySet<string>,
 ): Record<string, string | string[]> {
-  const targets = new Set(names.map((name) => name.toLowerCase()));
   const filtered: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(headersRecord)) {
     if (targets.has(key.toLowerCase())) continue;
@@ -341,10 +421,7 @@ function sendCompressed(
   const buf = typeof body === "string" ? Buffer.from(body) : body;
   const baseType = contentType.split(";")[0].trim();
   const encoding = compress ? negotiateEncoding(req) : null;
-  const headersWithoutBodyHeaders = omitHeadersCaseInsensitive(extraHeaders, [
-    "content-length",
-    "content-type",
-  ]);
+  const headersWithoutBodyHeaders = omitHeadersCaseInsensitive(extraHeaders, OMIT_BODY_HEADERS);
 
   const writeHead = (headers: Record<string, string | string[]>) => {
     if (statusText) {
@@ -1069,12 +1146,11 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   // Used to authenticate internal /__vinext/prerender/* HTTP endpoints.
   const prerenderSecret = readPrerenderSecret(path.dirname(rscEntryPath));
 
-  // Import the RSC handler (use file:// URL for reliable dynamic import).
-  // Cache-bust with mtime so that if this function is called multiple times
-  // (e.g. across test describe blocks that rebuild to the same path) Node's
-  // module cache does not return the stale module from a previous build.
-  const rscMtime = fs.statSync(rscEntryPath).mtimeMs;
-  const rscModule = await import(`${pathToFileURL(rscEntryPath).href}?t=${rscMtime}`);
+  // Import the RSC handler. importServerEntryModule uses the bare file://
+  // URL so lazy chunks that import the entry back resolve to the same module
+  // instance, and only cache-busts when this function runs again after a
+  // rebuild to the same path (e.g. across test describe blocks).
+  const rscModule = await importServerEntryModule(rscEntryPath);
   const rscHandler = resolveAppRouterHandler(rscModule.default);
 
   // `assetPrefix` is embedded as a compile-time constant in the generated
@@ -1271,7 +1347,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
 
         const staticResponseHeaders = omitHeadersCaseInsensitive(
           mergeResponseHeaders({}, response),
-          [VINEXT_STATIC_FILE_HEADER, "content-encoding", "content-length", "content-type"],
+          OMIT_STATIC_RESPONSE_HEADERS,
         );
 
         const served = await tryServeStatic(
@@ -1371,11 +1447,11 @@ function readPagesServerEntryPageRoutes(value: unknown): PagesServerEntryPageRou
 async function startPagesRouterServer(options: PagesRouterServerOptions) {
   const { port, host, clientDir, serverEntryPath, compress, purpose } = options;
 
-  // Import the server entry module (use file:// URL for reliable dynamic import).
-  // Cache-bust with mtime so that rebuilds to the same output path always load
-  // the freshly built module rather than a stale cached copy.
-  const serverMtime = fs.statSync(serverEntryPath).mtimeMs;
-  const serverEntry = await import(`${pathToFileURL(serverEntryPath).href}?t=${serverMtime}`);
+  // Import the server entry module. importServerEntryModule uses the bare
+  // file:// URL so lazy chunks that import the entry back resolve to the same
+  // module instance, and only cache-busts when this function runs again after
+  // a rebuild to the same output path.
+  const serverEntry = await importServerEntryModule(serverEntryPath);
   const {
     renderPage,
     handleApiRoute: handleApi,

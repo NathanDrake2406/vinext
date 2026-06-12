@@ -11,7 +11,11 @@
 // would throw at link time for missing bindings. With `import * as React`, the
 // bindings are just `undefined` on the namespace object and we can guard at runtime.
 import * as React from "react";
-import { getNavigationRuntime, hasAppNavigationRuntime } from "../client/navigation-runtime.js";
+import {
+  getNavigationRuntime,
+  hasAppNavigationRuntime,
+  type NavigationRuntimeVisibleCommitMode,
+} from "../client/navigation-runtime.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
 import { INITIAL_BFCACHE_ID, PUBLIC_INITIAL_BFCACHE_ID } from "../server/app-bfcache-id.js";
 import { AppElementsWire } from "../server/app-elements.js";
@@ -35,15 +39,15 @@ import {
 } from "../server/headers.js";
 import {
   isAbsoluteOrProtocolRelativeUrl,
-  isHashOnlyBrowserUrlChange,
   toBrowserNavigationHref,
   toSameOriginAppPath,
   withBasePath,
 } from "./url-utils.js";
+import { navigationPlanner } from "../server/navigation-planner.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
-import { AppRouterContext } from "./internal/app-router-context.js";
+import { AppRouterContext, type AppRouterInstance } from "./internal/app-router-context.js";
 import { retryScrollTo, scrollToHashTarget } from "./hash-scroll.js";
 import {
   beginAppRouterScrollIntent,
@@ -1367,6 +1371,11 @@ export function createClientNavigationRenderSnapshot(
   };
 }
 
+export function createSnapshotPathAndSearch(snapshot: ClientNavigationRenderSnapshot): string {
+  const query = snapshot.searchParams.toString();
+  return query === "" ? snapshot.pathname : `${snapshot.pathname}?${query}`;
+}
+
 // Module-level fallback for environments without window (tests, SSR).
 let _fallbackClientParams: Record<string, string | string[]> = _EMPTY_PARAMS;
 let _fallbackClientParamsJson = "{}";
@@ -1559,15 +1568,6 @@ function isExternalUrl(href: string): boolean {
   return isAbsoluteOrProtocolRelativeUrl(href);
 }
 
-/**
- * Check if a href is only a hash change relative to the current URL.
- */
-function isHashOnlyChange(href: string): boolean {
-  if (typeof window === "undefined") return false;
-  if (href.startsWith("#")) return true;
-  return isHashOnlyBrowserUrlChange(href, window.location.href, __basePath);
-}
-
 // ---------------------------------------------------------------------------
 // History method wrappers — suppress notifications for internal updates
 // ---------------------------------------------------------------------------
@@ -1753,6 +1753,7 @@ export async function navigateClientSide(
   mode: "push" | "replace",
   scroll: boolean,
   programmaticTransition = false,
+  visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
 ): Promise<void> {
   // Reset any link still showing a `useLinkStatus()` pending state that did not
   // initiate this navigation (e.g. a programmatic router.push or form submit).
@@ -1793,13 +1794,21 @@ export async function navigateClientSide(
     saveScrollPosition();
   }
 
-  // Hash-only change: update URL and scroll to target, skip RSC fetch
-  if (isHashOnlyChange(fullHref)) {
-    const hash = fullHref.includes("#") ? fullHref.slice(fullHref.indexOf("#")) : "";
-    commitHashOnlyHistoryState(fullHref, mode, scroll);
+  // The planner classifies the early navigation intent from the URL delta. A
+  // same-document scroll updates the URL and scrolls to the hash target without
+  // an RSC fetch; everything else proceeds to the RSC navigation below.
+  const earlyIntent = navigationPlanner.classifyEarlyNavigationIntent({
+    basePath: __basePath,
+    currentHref: window.location.href,
+    mode,
+    scroll,
+    targetHref: fullHref,
+  });
+  if (earlyIntent.kind === "sameDocumentScroll") {
+    commitHashOnlyHistoryState(fullHref, earlyIntent.mode, earlyIntent.scroll);
     commitClientNavigationState();
-    if (scroll) {
-      scrollToHashTarget(hash);
+    if (earlyIntent.scroll) {
+      scrollToHashTarget(earlyIntent.hash);
     }
     return;
   }
@@ -1851,6 +1860,7 @@ export async function navigateClientSide(
         programmaticTransition,
         undefined,
         scrollIntent,
+        visibleCommitMode,
       );
     } else {
       if (mode === "replace") {
@@ -1917,7 +1927,7 @@ function releaseScheduledAppRouterNavigationAfterCurrentTask(release: () => void
  * `window.next.router` for Next.js parity (see `client/window-next.ts`).
  * Internal callers in this file continue to use `_appRouter` for brevity.
  */
-const _appRouter = {
+const _appRouter: AppRouterInstance = {
   bfcacheId: INITIAL_BFCACHE_ID,
   push(href: string, options?: { scroll?: boolean }): void {
     assertSafeNavigationUrl(href);
@@ -2036,6 +2046,52 @@ const _appRouter = {
     });
   },
 };
+
+if (process.env.__NEXT_GESTURE_TRANSITION) {
+  _appRouter.experimental_gesturePush = (href: string, options?: { scroll?: boolean }): void => {
+    assertSafeNavigationUrl(href);
+    if (isServer) return;
+
+    // Next.js parity: upstream's gesturePush early-returns when
+    // `getCurrentAppRouterState() === null` (a gesture dispatched before
+    // hydration is a no-op). Our equivalent readiness signal is the runtime's
+    // navigate function — the same check navigateClientSide uses before its
+    // non-runtime fallback, which would otherwise perform a real history push
+    // here instead of upstream's no-op.
+    //
+    // This guard and navigateClientSide's own `appNavigate` lookup read the
+    // runtime separately, but there is no TOCTOU window between them: every
+    // `await` ahead of that lookup sits in a branch that returns without
+    // reaching it, so when the lookup runs it runs synchronously in this same
+    // task — and runtime registration is monotonic (the browser entry installs
+    // `navigate` once and never unregisters it), so a passed guard cannot go
+    // stale. Revisit if registration ever becomes async or revocable.
+    if (!getNavigationRuntime()?.functions.navigate) return;
+
+    // navigateClientSide would normalize same-origin absolute URLs itself; this
+    // inline check exists to *no-op* on external hrefs instead of falling
+    // through to its hard window.location.assign.
+    let appHref = href;
+    if (isAbsoluteOrProtocolRelativeUrl(href)) {
+      const localPath = toSameOriginAppPath(href, __basePath);
+      if (localPath === null) return;
+      appHref = localPath;
+    }
+
+    // Track the scheduled navigation like push/replace so a `refresh()` issued
+    // in the same task skips its redundant re-fetch (see
+    // hasScheduledAppRouterNavigation() in refresh()). Unlike push/replace
+    // there is no synchronous React.startTransition dispatch here that could
+    // throw, so no try/catch unwind is needed. The un-awaited
+    // `void navigateClientSide(...)` deliberately matches push/replace's
+    // fire-and-forget shape (their try/catch only covers the synchronous
+    // startTransition throw): an RSC fetch rejection mid-gesture surfaces the
+    // same way it would for those siblings.
+    const releaseNavigation = trackScheduledAppRouterNavigation();
+    void navigateClientSide(appHref, "push", options?.scroll !== false, false, "synchronous");
+    releaseScheduledAppRouterNavigationAfterCurrentTask(releaseNavigation);
+  };
+}
 
 function formatPublicBfcacheId(value: string | null | undefined): string {
   if (!value || value === INITIAL_BFCACHE_ID) return PUBLIC_INITIAL_BFCACHE_ID;
