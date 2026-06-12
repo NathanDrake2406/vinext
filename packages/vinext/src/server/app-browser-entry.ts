@@ -1607,17 +1607,16 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     initialElements: root,
     initialNavigationSnapshot,
   });
-  // The `__next_error__` marker is intentionally broad: it detects the default
-  // error document generally, not only the new SSR shell-error recovery path.
-  // Both `DefaultGlobalError` (used here) and the boundary renderer emit
-  // `<html id="__next_error__">`, so this branch also fires for legacy server-
-  // rendered global-error pages. That is upstream-compatible — the browser
-  // should always createRoot when the document is the default error shell.
-  if (document.documentElement.id === "__next_error__") {
+  const errorShellStyles = document.querySelectorAll("style[data-vinext-error-shell-style]");
+  // Only the SSR shell-error recovery document carries the style marker.
+  // Legacy server-rendered default-error pages also use `__next_error__`, but
+  // keep their existing hydration path so the serialized server error digest
+  // remains available to DefaultGlobalError.
+  if (document.documentElement.id === "__next_error__" && errorShellStyles.length > 0) {
     // There is no server-rendered form to hydrate in this client-render path;
     // reuse only the shared root error callbacks and related root options.
     const { formState: _inertFormState, ...createRootOptions } = hydrateRootOptions;
-    for (const style of document.querySelectorAll("style[data-vinext-error-shell-style]")) {
+    for (const style of errorShellStyles) {
       style.remove();
     }
     startTransition(() => {
@@ -2212,10 +2211,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       // current URL. If the edit fixed the error the page comes back clean; if
       // not, initial dev server errors re-populate the overlay.
       //
-      // The `__next_error__` marker is broad — see the matching comment in
-      // bootstrapHydration above. Reloading here is safe for any default-error
-      // document because the dev server will render the current state of the
-      // source after the edit.
+      // Reloading is safe for any default-error document because the dev
+      // server will render the current state of the source after the edit.
       if (document.documentElement.id === "__next_error__") {
         window.location.reload();
         return;

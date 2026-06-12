@@ -18993,6 +18993,37 @@ describe("@vercel/og compatibility resolution", () => {
   });
 });
 
+describe("vinext shim package-subpath resolution", () => {
+  type ResolveIdHook = {
+    filter: { id: RegExp };
+    handler: (
+      this: { environment?: { name?: string } },
+      id: string,
+      importer?: string,
+    ) => string | undefined;
+  };
+
+  function getResolveIdHook(): ResolveIdHook {
+    const plugins = vinext() as Plugin[];
+    const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
+    if (!configPlugin?.resolveId || typeof configPlugin.resolveId === "function") {
+      throw new Error("vinext:config resolveId hook not found");
+    }
+    return configPlugin.resolveId as ResolveIdHook;
+  }
+
+  it("strips JavaScript extensions and Vite queries from package subpaths", () => {
+    const hook = getResolveIdHook();
+    const expectedShim = path.resolve(
+      import.meta.dirname,
+      "../packages/vinext/src/shims/navigation.ts",
+    );
+
+    expect(hook.filter.id.test("vinext/shims/navigation.js?v=123")).toBe(true);
+    expect(hook.handler.call({}, "vinext/shims/navigation.js?v=123")).toBe(expectedShim);
+  });
+});
+
 // ── next/head attribute name validation ─────────────────────────────────────
 
 describe("isSafeAttrName", () => {

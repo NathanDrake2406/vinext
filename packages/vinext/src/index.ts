@@ -2591,7 +2591,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (cleanId.startsWith(vinextShimPrefix)) {
             return resolveShimModulePath(
               _shimsDir,
-              stripJsExtension(cleanId.slice(vinextShimPrefix.length)),
+              stripJsExtension(stripViteModuleQuery(cleanId.slice(vinextShimPrefix.length))),
             );
           }
 

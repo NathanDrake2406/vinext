@@ -163,6 +163,19 @@ export default function Client() {
 `,
   );
 
+  // Genuine RSC/server error with no custom global-error.tsx. It also uses an
+  // __next_error__ document, but must retain the pre-existing hydration path
+  // rather than being mistaken for the marked SSR shell-recovery document.
+  const serverErrorDir = path.join(appDir, "server-error");
+  await fs.mkdir(serverErrorDir, { recursive: true });
+  await fs.writeFile(
+    path.join(serverErrorDir, "page.tsx"),
+    `export default function ServerErrorPage(): never {
+  throw new Error("genuine server digest error");
+}
+`,
+  );
+
   // Local error.tsx routes: the shell fallback must not swallow local
   // boundary semantics. Local boundaries for shell errors materialize
   // client-side from the flight payload (Next.js parity):
@@ -296,6 +309,16 @@ test.describe("SSR shell-error recovery (no custom global-error.tsx)", () => {
       await expect(page.locator("#static-server-content")).toHaveText("Hello Static Server");
       await expect(page.locator("#static-client-content")).toHaveText("Hello Static Client");
 
+      // A genuine server/RSC error also uses the default __next_error__
+      // document, but has no recovery-shell style marker. It must keep the
+      // existing hydrated default-error card instead of entering createRoot.
+      await page.goto(`${app.baseUrl}/server-error`, { waitUntil: "load" });
+      await expect(page.getByRole("heading", { name: "This page couldn’t load" })).toBeVisible();
+      await expect(page.getByText("Reload to try again, or go back.")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Reload" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Back" })).toBeVisible();
+      await expect(page.locator("style[data-vinext-error-shell-style]")).toHaveCount(0);
+
       // SSR-only throw with a local error.tsx: browser re-render succeeds, so
       // the content (not the boundary) appears.
       await page.goto(`${app.baseUrl}/boundary-ssr-only`, { waitUntil: "load" });
@@ -315,6 +338,7 @@ test.describe("SSR shell-error recovery (no custom global-error.tsx)", () => {
       const unexpectedErrors = consoleErrors.filter(
         (message) =>
           !message.includes("boundary throw") &&
+          !message.includes("genuine server digest error") &&
           !message.includes("Expected error to opt out of server rendering") &&
           // React's companion log for an error caught by a boundary.
           !message.startsWith("The above error occurred in a React component"),
