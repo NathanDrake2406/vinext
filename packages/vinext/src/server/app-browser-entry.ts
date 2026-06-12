@@ -1614,11 +1614,14 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // rendered global-error pages. That is upstream-compatible — the browser
   // should always createRoot when the document is the default error shell.
   if (document.documentElement.id === "__next_error__") {
+    // There is no server-rendered form to hydrate in this client-render path;
+    // reuse only the shared root error callbacks and related root options.
+    const { formState: _inertFormState, ...createRootOptions } = hydrateRootOptions;
     for (const style of document.querySelectorAll("style[data-vinext-error-shell-style]")) {
       style.remove();
     }
     startTransition(() => {
-      const clientRoot = createRoot(document, hydrateRootOptions);
+      const clientRoot = createRoot(document, createRootOptions);
       clientRoot.render(children);
       window.__VINEXT_RSC_ROOT__ = clientRoot;
     });
