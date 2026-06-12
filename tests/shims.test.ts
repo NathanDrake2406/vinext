@@ -19020,6 +19020,7 @@ describe("vinext shim package-subpath resolution", () => {
     );
 
     expect(hook.filter.id.test("vinext/shims/navigation.js?v=123")).toBe(true);
+    expect(hook.filter.id.test("unrelated-next/navigation")).toBe(false);
     expect(hook.handler.call({}, "vinext/shims/navigation.js?v=123")).toBe(expectedShim);
   });
 });

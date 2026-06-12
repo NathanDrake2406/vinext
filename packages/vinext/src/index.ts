@@ -2500,11 +2500,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
       resolveId: {
         // Hook filter: only invoke JS for handled Next/Vinext compatibility modules.
-        // Matches "next/navigation", "next/router.js", "virtual:vinext-rsc-entry",
+        // Matches "next/navigation", "next/router.js", internal
+        // "vinext/shims/*" package subpaths, "virtual:vinext-rsc-entry",
         // direct @vercel/og imports in metadata routes, and \0-prefixed
         // re-imports from @vitejs/plugin-rsc.
         filter: {
-          id: /(?:next\/|virtual:vinext-|^@vercel\/og(?:\.js)?$)/,
+          id: /(?:^next\/|^vinext\/shims\/|virtual:vinext-|^@vercel\/og(?:\.js)?$)/,
         },
         handler(id, importer) {
           // Strip \0 prefix if present — @vitejs/plugin-rsc's generated
