@@ -8680,6 +8680,56 @@ describe("NextURL basePath and locale properties", () => {
     expect(url.pathname).toBe("/about");
   });
 
+  it("uses the matching domain default locale", async () => {
+    // Ported from Next.js: packages/next/src/server/web/next-url.ts
+    const { NextURL } = await import("../packages/vinext/src/shims/server.js");
+    const url = new NextURL("https://example.fr/about", undefined, {
+      nextConfig: {
+        i18n: {
+          locales: ["en", "fr", "de"],
+          defaultLocale: "en",
+          domains: [{ domain: "example.fr", defaultLocale: "fr", locales: ["fr"] }],
+        },
+      },
+    });
+    expect(url.defaultLocale).toBe("fr");
+    expect(url.locale).toBe("fr");
+    expect(url.pathname).toBe("/about");
+  });
+
+  it("pathname locale overrides the matching domain default locale", async () => {
+    const { NextURL } = await import("../packages/vinext/src/shims/server.js");
+    const url = new NextURL("https://example.fr/de/about", undefined, {
+      nextConfig: {
+        i18n: {
+          locales: ["en", "fr", "de"],
+          defaultLocale: "en",
+          domains: [{ domain: "example.fr", defaultLocale: "fr", locales: ["fr"] }],
+        },
+      },
+    });
+    expect(url.defaultLocale).toBe("fr");
+    expect(url.locale).toBe("de");
+    expect(url.pathname).toBe("/about");
+  });
+
+  it("re-analyzes domain locale after href reassignment", async () => {
+    const { NextURL } = await import("../packages/vinext/src/shims/server.js");
+    const url = new NextURL("https://example.com/about", undefined, {
+      nextConfig: {
+        i18n: {
+          locales: ["en", "fr"],
+          defaultLocale: "en",
+          domains: [{ domain: "example.fr", defaultLocale: "fr", locales: ["fr"] }],
+        },
+      },
+    });
+    expect(url.defaultLocale).toBe("en");
+    url.href = "https://example.fr/about";
+    expect(url.defaultLocale).toBe("fr");
+    expect(url.locale).toBe("fr");
+  });
+
   it("locale detection is case-insensitive", async () => {
     const { NextURL } = await import("../packages/vinext/src/shims/server.js");
     const url = new NextURL("http://localhost/FR/about", undefined, i18nConfig);

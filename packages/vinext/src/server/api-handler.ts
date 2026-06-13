@@ -174,6 +174,7 @@ function createEdgeApiRequest(
   req: IncomingMessage,
   url: string,
   params: Record<string, string | string[]>,
+  nextConfig?: { basePath?: string },
 ): Request {
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
@@ -193,6 +194,10 @@ function createEdgeApiRequest(
   const proto = resolveRequestProtocol(req);
   const host = resolveRequestHost(req, "localhost");
   const requestUrl = new URL(req.url ?? url, `${proto}://${host}`);
+  const basePath = nextConfig?.basePath;
+  if (basePath && !requestUrl.pathname.startsWith(`${basePath}/`)) {
+    requestUrl.pathname = `${basePath}${requestUrl.pathname}`;
+  }
   const query = mergeRouteParamsIntoQuery(parseQueryString(url), params);
   requestUrl.search = urlQueryToSearchParams(query).toString();
   const body = readEdgeRequestBody(req);
@@ -360,7 +365,7 @@ export async function handleApiRoute(
       // edge API handlers, so handlers can use `req.nextUrl.searchParams`,
       // `req.cookies`, etc. (Cf. NextRequestHint in next/src/server/web/adapter.ts.)
       const nextRequest = new NextRequest(
-        createEdgeApiRequest(req, url, params),
+        createEdgeApiRequest(req, url, params, nextConfig),
         nextConfig
           ? {
               nextConfig: {
