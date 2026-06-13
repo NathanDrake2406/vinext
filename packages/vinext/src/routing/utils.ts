@@ -108,8 +108,7 @@ export function sortRoutes<T extends { pattern: string }>(routes: T[]): T[] {
  * Centralised so the server's request handling and the client's link /
  * prefetch / programmatic-navigation paths all reach the same owner for
  * the same (pages pattern, app pattern) pair. Encapsulates the static /
- * dynamic short-circuits and the `sortRoutes` call (which carries the
- * static-prefix reduction and the Pages-first equal-pattern tiebreak).
+ * dynamic short-circuits and Next.js's segment-by-segment route ordering.
  *
  * Usage:
  *   compareHybridRoutePatterns("/:slug", true, "/:slug", true)  // → "pages"
@@ -132,19 +131,24 @@ export function compareHybridRoutePatterns(
   if (!pagesIsDynamic) return appIsDynamic ? "pages" : "app";
   // Pages is dynamic, App is static: App's literal always wins.
   if (!appIsDynamic) return "app";
-  // Both dynamic: insert Pages first, then App, and let `sortRoutes` decide.
-  // The Pages-first insertion is the provider-order tiebreak — when
-  // `routePrecedence` produces equal scores, `sortRoutes`' lexicographic
-  // tiebreak also returns 0 for identical patterns, and the front element
-  // (Pages) is preserved by `Array.prototype.sort`. The static-prefix
-  // reduction inside `routePrecedence` makes
-  // `/_sites/:slug*` (51) beat `/:slug*` (100) and similar.
-  const sorted: { owner: "app" | "pages"; pattern: string }[] = [
-    { owner: "pages", pattern: pagesPattern },
-    { owner: "app", pattern: appPattern },
-  ];
-  sortRoutes(sorted);
-  return sorted[0].owner;
+  const pagesSegments = pagesPattern.split("/").filter(Boolean);
+  const appSegments = appPattern.split("/").filter(Boolean);
+  const segmentRank = (segment: string): number => {
+    if (!segment.startsWith(":")) return 0;
+    if (segment.endsWith("*")) return 3;
+    if (segment.endsWith("+")) return 2;
+    return 1;
+  };
+
+  for (let index = 0; index < Math.min(pagesSegments.length, appSegments.length); index++) {
+    const pagesRank = segmentRank(pagesSegments[index]);
+    const appRank = segmentRank(appSegments[index]);
+    if (pagesRank !== appRank) return pagesRank < appRank ? "pages" : "app";
+  }
+
+  // Matching dynamic routes with the same structural specificity retain
+  // provider order. Next.js registers Pages providers before App providers.
+  return "pages";
 }
 
 // Matches literal delimiter characters and their percent-encoded equivalents.

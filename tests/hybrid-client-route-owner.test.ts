@@ -171,6 +171,14 @@ describe("resolveHybridClientRouteOwner", () => {
     expect(resolveHybridClientRouteOwner("/_sites/foo", "")).toBe("pages");
   });
 
+  it("prioritizes an earlier static App segment over a later static Pages segment", () => {
+    installWindow({
+      app: [appRoute(["account", ":tab"])],
+      pages: [pagesRoute([":section", "details"])],
+    });
+    expect(resolveHybridClientRouteOwner("/account/details", "")).toBe("app");
+  });
+
   it("ignores the basePath prefix when matching", () => {
     installWindow({
       app: [appRoute(["a"])],

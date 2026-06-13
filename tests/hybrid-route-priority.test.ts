@@ -68,6 +68,15 @@ describe("compareHybridRoutePatterns", () => {
       "pages",
     );
   });
+
+  it("prioritizes an earlier static App segment over a later static Pages segment", () => {
+    // Next.js sorts dynamic pathnames structurally, traversing a static child
+    // before a dynamic child at the first differing segment.
+    // Ported from Next.js: test/unit/page-route-sorter.test.ts
+    expect(compareHybridRoutePatterns("/:section/details", true, "/account/:tab", true)).toBe(
+      "app",
+    );
+  });
 });
 
 describe("hybrid App Router + Pages Router route priority", () => {

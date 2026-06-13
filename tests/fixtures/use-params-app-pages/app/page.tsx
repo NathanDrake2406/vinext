@@ -40,6 +40,20 @@ export default function Page() {
           router.prefetch(/pages-dir/foobar)
         </button>
       </div>
+      <div>
+        <Link href="/account/details" id="to-app-priority">
+          To /account/details (App)
+        </Link>
+      </div>
+      <div>
+        <button
+          type="button"
+          id="router-push-app-priority"
+          onClick={() => router.push("/account/details")}
+        >
+          router.push(/account/details)
+        </button>
+      </div>
     </>
   );
 }

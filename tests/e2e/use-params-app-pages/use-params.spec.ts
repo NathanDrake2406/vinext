@@ -68,6 +68,25 @@ test.describe("use-params", () => {
     await expect(page.locator("#params")).toHaveText('"foobar"');
   });
 
+  test("earlier static App segment wins on document load", async ({ page, baseURL }) => {
+    await page.goto(`${baseURL}/account/details`);
+    await expect(page.locator("#route-owner")).toHaveText("app");
+  });
+
+  test("earlier static App segment wins for Link navigation", async ({ page, baseURL }) => {
+    await page.goto(`${baseURL}/`);
+    await page.locator("#to-app-priority").click();
+    await expect(page).toHaveURL(/\/account\/details$/);
+    await expect(page.locator("#route-owner")).toHaveText("app");
+  });
+
+  test("earlier static App segment wins for router.push", async ({ page, baseURL }) => {
+    await page.goto(`${baseURL}/`);
+    await page.locator("#router-push-app-priority").click();
+    await expect(page).toHaveURL(/\/account\/details$/);
+    await expect(page.locator("#route-owner")).toHaveText("app");
+  });
+
   test("useRouter().prefetch does not issue an RSC request for a Pages-owned URL", async ({
     page,
     baseURL,
