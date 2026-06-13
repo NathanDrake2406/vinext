@@ -8967,6 +8967,27 @@ describe("NextURL basePath and locale properties", () => {
     expect(url.locale).toBe("fr");
   });
 
+  it("matches domain locale from the detected pathname locale", async () => {
+    // Ported from Next.js: packages/next/src/shared/lib/i18n/detect-domain-locale.ts
+    const { NextURL } = await import("../packages/vinext/src/shims/server.js");
+    const url = new NextURL("https://example.com/fr/about", undefined, {
+      nextConfig: {
+        i18n: {
+          locales: ["en", "fr", "de"],
+          defaultLocale: "en",
+          domains: [
+            { domain: "example.fr", defaultLocale: "fr", locales: ["fr"] },
+            { domain: "example.de", defaultLocale: "de", locales: ["de"] },
+          ],
+        },
+      },
+    });
+    expect(url.domainLocale?.domain).toBe("example.fr");
+    expect(url.defaultLocale).toBe("fr");
+    expect(url.locale).toBe("fr");
+    expect(url.pathname).toBe("/about");
+  });
+
   // --- NextRequest integration ---
 
   it("NextRequest passes basePath and i18n config through to nextUrl", async () => {

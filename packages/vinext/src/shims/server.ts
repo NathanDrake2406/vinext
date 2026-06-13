@@ -388,26 +388,29 @@ export class NextURL {
   }
 
   /** Extract locale from pathname, stripping it from the internal URL. */
-  private _analyzeLocale(locales: string[]): void {
+  private _detectPathnameLocale(locales: string[]): string | undefined {
     const segments = this._url.pathname.split("/");
     const candidate = segments[1]?.toLowerCase();
     const match = locales.find((l) => l.toLowerCase() === candidate);
     if (match) {
-      this._locale = match;
       this._url.pathname = "/" + segments.slice(2).join("/");
-    } else {
-      this._locale = this._defaultLocale;
     }
+    return match;
   }
 
   private _analyzeI18n(): void {
     if (!this._locales || !this._configDefaultLocale) return;
+    const detectedLocale = this._detectPathnameLocale(this._locales);
+    const detectedLocaleLower = detectedLocale?.toLowerCase();
     const hostname = this._url.hostname.toLowerCase();
     this._domainLocale = this._domains?.find(
-      (domain) => domain.domain.split(":", 1)[0].toLowerCase() === hostname,
+      (domain) =>
+        domain.domain.split(":", 1)[0].toLowerCase() === hostname ||
+        detectedLocaleLower === domain.defaultLocale.toLowerCase() ||
+        domain.locales?.some((locale) => locale.toLowerCase() === detectedLocaleLower),
     );
     this._defaultLocale = this._domainLocale?.defaultLocale ?? this._configDefaultLocale;
-    this._analyzeLocale(this._locales);
+    this._locale = detectedLocale ?? this._defaultLocale;
   }
 
   /**
