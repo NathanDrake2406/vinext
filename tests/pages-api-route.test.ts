@@ -314,7 +314,7 @@ describe("pages api route", () => {
     });
   });
 
-  it("passes the middleware-resolved URL to edge API nextUrl.searchParams", async () => {
+  it("passes the resolved query while preserving the original edge API pathname", async () => {
     // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
     //
@@ -328,19 +328,51 @@ describe("pages api route", () => {
           if (!nextUrl) {
             return new Response("missing nextUrl", { status: 500 });
           }
-          return Response.json(Object.fromEntries(nextUrl.searchParams));
+          return Response.json({
+            pathname: nextUrl.pathname,
+            query: Object.fromEntries(nextUrl.searchParams),
+          });
         },
         {},
         { runtime: "edge" },
       ),
-      request: new Request("https://example.com/api/edge-search-params?a=b"),
+      request: new Request("https://example.com/public-edge-path?a=b"),
       url: "/api/edge-search-params?a=b&foo=bar",
     });
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
+      pathname: "/public-edge-path",
+      query: {
+        a: "b",
+        foo: "bar",
+      },
+    });
+  });
+
+  it("includes dynamic route params in edge API nextUrl.searchParams", async () => {
+    // Ported from Next.js: test/e2e/edge-pages-support/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/edge-pages-support/index.test.ts
+    const response = await handlePagesApiRoute({
+      match: createMatch(
+        (request: Request) => {
+          const nextUrl = (request as Request & { nextUrl?: URL }).nextUrl;
+          if (!nextUrl) {
+            return new Response("missing nextUrl", { status: 500 });
+          }
+          return Response.json(Object.fromEntries(nextUrl.searchParams));
+        },
+        { id: "id-1" },
+        { runtime: "edge" },
+      ),
+      request: new Request("https://example.com/api/id-1?a=b"),
+      url: "/api/id-1?a=b",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
       a: "b",
-      foo: "bar",
+      id: "id-1",
     });
   });
 

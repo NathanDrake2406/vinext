@@ -13,7 +13,11 @@ import { decode as decodeQueryString } from "node:querystring";
 import { Buffer } from "node:buffer";
 import { type Route, matchRoute } from "../routing/pages-router.js";
 import { reportRequestError, importModule, type ModuleImporter } from "./instrumentation.js";
-import { mergeRouteParamsIntoQuery, parseQueryString } from "../utils/query.js";
+import {
+  mergeRouteParamsIntoQuery,
+  parseQueryString,
+  urlQueryToSearchParams,
+} from "../utils/query.js";
 import { parseCookieHeader } from "../utils/parse-cookie.js";
 import { PagesBodyParseError, getMediaType, isJsonMediaType } from "./pages-media-type.js";
 import { isEdgeApiRuntime } from "./edge-api-runtime.js";
@@ -165,7 +169,11 @@ function readEdgeRequestBody(req: IncomingMessage): ReadableStream<Uint8Array> |
   });
 }
 
-function createEdgeApiRequest(req: IncomingMessage, url: string): Request {
+function createEdgeApiRequest(
+  req: IncomingMessage,
+  url: string,
+  params: Record<string, string | string[]>,
+): Request {
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
     if (Array.isArray(value)) {
@@ -183,7 +191,9 @@ function createEdgeApiRequest(req: IncomingMessage, url: string): Request {
   // TLS-terminated. See: Finding F-PROD-7 in SECURITY-AUDIT-2026-05.md.
   const proto = resolveRequestProtocol(req);
   const host = resolveRequestHost(req, "localhost");
-  const requestUrl = new URL(url, `${proto}://${host}`);
+  const requestUrl = new URL(req.url ?? url, `${proto}://${host}`);
+  const query = mergeRouteParamsIntoQuery(parseQueryString(url), params);
+  requestUrl.search = urlQueryToSearchParams(query).toString();
   const body = readEdgeRequestBody(req);
 
   const init: RequestInit & { duplex?: "half" } = {
@@ -343,7 +353,7 @@ export async function handleApiRoute(
       // Next.js wraps the incoming Request in a NextRequest before invoking
       // edge API handlers, so handlers can use `req.nextUrl.searchParams`,
       // `req.cookies`, etc. (Cf. NextRequestHint in next/src/server/web/adapter.ts.)
-      const nextRequest = new NextRequest(createEdgeApiRequest(req, url));
+      const nextRequest = new NextRequest(createEdgeApiRequest(req, url, params));
       const response = await apiModule.default(nextRequest);
       if (!(response instanceof Response)) {
         throw new Error("Edge API route did not return a Response");
