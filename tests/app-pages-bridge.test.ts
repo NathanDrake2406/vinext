@@ -237,6 +237,47 @@ describe("renderPagesFallback", () => {
     ).not.toBeNull();
   });
 
+  it("filters static and dynamic Pages API matches by ownership phase", async () => {
+    const handleApiRoute = vi.fn(() => new Response("api"));
+    const request = new Request("http://localhost/api/posts/hello");
+    const url = new URL(request.url);
+    const deps = {
+      ...defaultDeps,
+      loadPagesEntry: () => ({
+        handleApiRoute,
+        matchApiRoute: () => ({ route: { isDynamic: true, pattern: "/api/posts/:slug" } }),
+      }),
+    };
+
+    expect(
+      await renderPagesFallback(
+        {
+          isRscRequest: false,
+          matchKind: "static",
+          middlewareContext: { headers: null, requestHeaders: null, status: null },
+          request,
+          url,
+        },
+        deps,
+      ),
+    ).toBeNull();
+    expect(handleApiRoute).not.toHaveBeenCalled();
+
+    expect(
+      await renderPagesFallback(
+        {
+          isRscRequest: false,
+          matchKind: "dynamic",
+          middlewareContext: { headers: null, requestHeaders: null, status: null },
+          request,
+          url,
+        },
+        deps,
+      ),
+    ).not.toBeNull();
+    expect(handleApiRoute).toHaveBeenCalledTimes(1);
+  });
+
   it("appends the middleware draft cookie to an API fallback response (#1520)", async () => {
     const handleApiRoute = vi.fn((_req: Request, _url: string) => new Response("api-response"));
     const deps = {

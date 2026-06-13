@@ -32,6 +32,7 @@ import {
 import { pickRootParams, setRootParams, type RootParams } from "vinext/shims/root-params";
 import { createRequestContext, runWithRequestContext } from "vinext/shims/unified-request-context";
 import { flattenErrorCauses } from "../utils/error-cause.js";
+import { mergeRewriteQuery } from "../utils/query.js";
 import { hasBasePath } from "../utils/base-path.js";
 import { applyAppMiddleware, type AppMiddlewareContext } from "./app-middleware.js";
 import { mergeMiddlewareResponseHeaders } from "./app-page-response.js";
@@ -414,6 +415,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     clientReuseManifest,
   } = normalized;
   let { pathname, cleanPathname } = normalized;
+  let resolvedUrl = cleanPathname + url.search;
   // Canonical (external) pathname the user requested. Middleware rewrites and
   // next.config.js rewrites mutate `cleanPathname` so internal route matching
   // can find the destination page, but hooks like `usePathname()` must reflect
@@ -552,7 +554,10 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     matchPathname(cleanPathname),
   );
   if (beforeFilesRewrite instanceof Response) return beforeFilesRewrite;
-  if (beforeFilesRewrite) cleanPathname = beforeFilesRewrite;
+  if (beforeFilesRewrite) {
+    resolvedUrl = mergeRewriteQuery(resolvedUrl, beforeFilesRewrite);
+    cleanPathname = resolvedUrl.split("?", 1)[0];
+  }
 
   if (isImageOptimizationPath(cleanPathname)) {
     const imageRedirect = resolveDevImageRedirect(
@@ -670,7 +675,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           isRscRequest,
           matchKind,
           middlewareContext,
-          pathname: cleanPathname,
+          pathname: resolvedUrl,
           request,
           url,
         })) ?? null)
@@ -696,7 +701,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     );
     if (afterFilesRewrite instanceof Response) return afterFilesRewrite;
     if (afterFilesRewrite) {
-      cleanPathname = afterFilesRewrite;
+      resolvedUrl = mergeRewriteQuery(resolvedUrl, afterFilesRewrite);
+      cleanPathname = resolvedUrl.split("?", 1)[0];
       match = options.matchRoute(cleanPathname);
       didAfterFilesRewrite = true;
     }
@@ -731,7 +737,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     );
     if (fallbackRewrite instanceof Response) return fallbackRewrite;
     if (fallbackRewrite) {
-      cleanPathname = fallbackRewrite;
+      resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
+      cleanPathname = resolvedUrl.split("?", 1)[0];
       match = options.matchRoute(cleanPathname);
       const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
       if (rewrittenStaticPagesResponse) {

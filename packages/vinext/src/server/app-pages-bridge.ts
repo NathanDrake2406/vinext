@@ -112,7 +112,7 @@ export async function renderPagesFallback(
     pagesRequest = new Request(request.url, pagesRequestInit);
   }
 
-  const pagesUrl = decodePathParams(pathname) + (url.search || "");
+  const pagesUrl = decodePathParams(pathname) + (pathname.includes("?") ? "" : url.search || "");
   const pagesPathname = pathname;
   if (pagesPathname.startsWith("/api/") || pagesPathname === "/api") {
     if (typeof pagesEntry.handleApiRoute !== "function") return null;
@@ -121,6 +121,8 @@ export async function renderPagesFallback(
       ? (pagesEntry.matchApiRoute?.(pagesUrl, pagesRequest) ?? null)
       : null;
     if (hasApiMatcher && apiMatch === null) return null;
+    if (apiMatch !== null && matchKind === "static" && apiMatch.route.isDynamic) return null;
+    if (apiMatch !== null && matchKind === "dynamic" && !apiMatch.route.isDynamic) return null;
     if (appRouteMatch !== null) {
       if (
         apiMatch === null ||

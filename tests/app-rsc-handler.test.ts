@@ -1090,6 +1090,52 @@ describe("createAppRscHandler", () => {
     );
   });
 
+  it.each(["beforeFiles", "afterFiles", "fallback"] as const)(
+    "preserves and overrides query parameters for %s rewrites to Pages routes",
+    async (rewritePhase) => {
+      const renderPagesFallback = vi.fn(async ({ pathname }) =>
+        pathname.startsWith("/pages?") ? new Response("pages", { status: 200 }) : null,
+      );
+      const handler = createHandler({
+        configHeaders: [],
+        configRewrites: {
+          beforeFiles:
+            rewritePhase === "beforeFiles"
+              ? [{ source: "/legacy", destination: "/pages?dest=2&same=new" }]
+              : [],
+          afterFiles:
+            rewritePhase === "afterFiles"
+              ? [{ source: "/legacy", destination: "/pages?dest=2&same=new" }]
+              : [],
+          fallback:
+            rewritePhase === "fallback"
+              ? [{ source: "/legacy", destination: "/pages?dest=2&same=new" }]
+              : [],
+        },
+        matchRoute: () => null,
+        renderPagesFallback,
+      });
+
+      const response = await handler(
+        new Request("https://example.test/docs/legacy?keep=1&same=old"),
+        null,
+      );
+
+      expect(await response.text()).toBe("pages");
+      const rewrittenCall = renderPagesFallback.mock.calls.find(([options]) =>
+        options.pathname.startsWith("/pages?"),
+      );
+      expect(rewrittenCall).toBeDefined();
+      const rewrittenUrl = new URL(rewrittenCall![0].pathname, "https://example.test");
+      expect(rewrittenUrl.pathname).toBe("/pages");
+      expect(Object.fromEntries(rewrittenUrl.searchParams)).toEqual({
+        dest: "2",
+        keep: "1",
+        same: "new",
+      });
+    },
+  );
+
   it("serves public files before route matching and clears request context", async () => {
     const clearRequestContext = vi.fn();
     const matchRoute = vi.fn(() => null);
