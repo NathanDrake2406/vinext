@@ -1589,11 +1589,12 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // user lands on a renderable URL with the actual error UI.
   const onUncaughtError = import.meta.env.DEV
     ? devOnUncaughtError
-    : createOnUncaughtError(() =>
-        navigationErrorRecoveryTarget.getHref((navId) =>
+    : createOnUncaughtError(() => {
+        if (!process.env.__NEXT_APP_NAV_FAIL_HANDLING) return null;
+        return navigationErrorRecoveryTarget.getHref((navId) =>
           browserNavigationController.isCurrentNavigation(navId),
-        ),
-      );
+        );
+      });
   const formState = consumeInitialFormState(getVinextBrowserGlobal());
   const hydrateRootOptions = import.meta.env.DEV
     ? createVinextHydrateRootOptions({
