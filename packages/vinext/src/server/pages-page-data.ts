@@ -981,6 +981,8 @@ export async function resolvePagesPageData(
           status: undefined,
         },
         revalidateSeconds,
+        undefined,
+        options.expireSeconds,
       );
     }
   }
