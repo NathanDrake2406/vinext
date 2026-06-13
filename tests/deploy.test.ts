@@ -947,17 +947,17 @@ describe("generatePagesRouterWorkerEntry", () => {
     expect(content).toContain("runPagesRequest(request, deps)");
   });
 
-  it("handles basePath stripping and creates a new request with stripped URL for middleware", () => {
+  it("handles basePath stripping and clones the request with the stripped URL", () => {
     const content = generatePagesRouterWorkerEntry();
     expect(content).toContain("basePath");
     expect(content).toContain(
       'import { hasBasePath, stripBasePath } from "vinext/utils/base-path"',
     );
     expect(content).toContain("const stripped = stripBasePath(pathname, basePath);");
-    // After stripping, a new request with the stripped URL must be created
-    // in the adapter so runPagesRequest receives a clean basePath-free request.
+    // After stripping, clone with the stripped URL so runPagesRequest receives
+    // a clean basePath-free request without dropping Worker metadata.
     expect(content).toContain("strippedUrl.pathname = stripped");
-    expect(content).toContain("new Request(strippedUrl, request)");
+    expect(content).toContain("cloneRequestWithUrl(request, strippedUrl.toString())");
   });
 
   it("handles trailing slash normalization", () => {
