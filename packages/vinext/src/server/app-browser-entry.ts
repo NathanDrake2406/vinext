@@ -1156,10 +1156,9 @@ function restoreHydrationNavigationContext(
   searchParams: SearchParamInput,
   params: Record<string, string | string[]>,
 ): void {
-  const normalizedSearchParams = new URLSearchParams(searchParams);
   setNavigationContext({
     pathname,
-    searchParams: normalizedSearchParams,
+    searchParams: new URLSearchParams(searchParams),
     params,
   });
 }
