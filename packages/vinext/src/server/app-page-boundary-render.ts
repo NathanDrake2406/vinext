@@ -250,6 +250,7 @@ function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
 ): AppElements {
   const routeId = AppElementsWire.encodeRouteId(options.pathname, null);
   const layoutEntries = createAppPageBoundaryLayoutEntries(options.route, options.layoutModules);
+  const sourcePageSegments = options.sourcePageSegments ?? options.route?.routeSegments;
 
   return {
     ...AppElementsWire.createMetadataEntries({
@@ -257,9 +258,7 @@ function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
       layoutIds: layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath: layoutEntries[0]?.treePath ?? null,
       routeId,
-      sourcePage: options.route
-        ? createAppPageSourcePage(options.sourcePageSegments ?? options.route.routeSegments)
-        : null,
+      sourcePage: sourcePageSegments ? createAppPageSourcePage(sourcePageSegments) : null,
     }),
     [routeId]: options.element,
   };

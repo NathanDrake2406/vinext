@@ -475,6 +475,24 @@ describe("app page boundary render helpers", () => {
     expect(payload["route:/posts/missing"]).toBeTruthy();
   });
 
+  it("omits source-page metadata when route segments are unavailable", async () => {
+    const common = createCommonOptions();
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
+      ...common,
+      isRscRequest: true,
+      matchedParams: {},
+      renderToReadableStream: renderWirePayloadToStream,
+      route: {
+        notFound: notFoundModule,
+        pattern: "/posts/missing",
+      },
+      statusCode: 404,
+    });
+
+    const payload = JSON.parse((await response?.text()) ?? "{}") as Record<string, unknown>;
+    expect(payload.__sourcePage).toBeUndefined();
+  });
+
   it("renders route error boundaries with sanitized errors inside layouts", async () => {
     const common = createCommonOptions();
     const sanitizeErrorForClient = vi.fn((error: Error) => new Error(`safe:${error.message}`));
