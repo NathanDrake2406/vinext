@@ -45,6 +45,7 @@ export async function generateClientEntry(
   fileMatcher: ReturnType<typeof createValidFileMatcher>,
   options: {
     appPrefetchRoutes?: readonly VinextLinkPrefetchRoute[];
+    hasMiddleware?: boolean;
     instrumentationClientPath?: string | null;
   } = {},
 ): Promise<string> {
@@ -155,6 +156,8 @@ window.__VINEXT_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(appPrefetchRoutes)};
 // instead of issuing an RSC request). Set here AND in app-browser-entry.ts
 // so whichever entry runs first emits the Pages manifest.
 window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(pagesPrefetchRoutes)};
+window.__VINEXT_CLIENT_REWRITES__ = ${JSON.stringify(nextConfig.rewrites)};
+window.__VINEXT_HAS_MIDDLEWARE__ = ${JSON.stringify(options.hasMiddleware ?? false)};
 
 async function hydrate() {
   const nextData = window.__NEXT_DATA__;

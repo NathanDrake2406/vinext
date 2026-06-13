@@ -112,8 +112,10 @@ export async function renderPagesFallback(
     pagesRequest = new Request(request.url, pagesRequestInit);
   }
 
-  const pagesUrl = decodePathParams(pathname) + (pathname.includes("?") ? "" : url.search || "");
-  const pagesPathname = pathname;
+  const queryIndex = pathname.indexOf("?");
+  const pagesPathname = queryIndex === -1 ? pathname : pathname.slice(0, queryIndex);
+  const pagesSearch = queryIndex === -1 ? url.search || "" : pathname.slice(queryIndex);
+  const pagesUrl = decodePathParams(pagesPathname) + pagesSearch;
   if (pagesPathname.startsWith("/api/") || pagesPathname === "/api") {
     if (typeof pagesEntry.handleApiRoute !== "function") return null;
     const hasApiMatcher = typeof pagesEntry.matchApiRoute === "function";

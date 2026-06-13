@@ -416,6 +416,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   } = normalized;
   let { pathname, cleanPathname } = normalized;
   let resolvedUrl = cleanPathname + url.search;
+  const getResolvedSearchParams = () => new URL(resolvedUrl, url).searchParams;
   // Canonical (external) pathname the user requested. Middleware rewrites and
   // next.config.js rewrites mutate `cleanPathname` so internal route matching
   // can find the destination page, but hooks like `usePathname()` must reflect
@@ -604,11 +605,12 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
 
   if (isRscRequest) {
     stripRscCacheBustingSearchParam(url);
+    resolvedUrl = cleanPathname + url.search;
   }
 
   options.setNavigationContext({
     pathname: canonicalPathname,
-    searchParams: url.searchParams,
+    searchParams: getResolvedSearchParams(),
     params: {},
   });
 
@@ -661,7 +663,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     middlewareContext,
     mountedSlotsHeader,
     request,
-    searchParams: url.searchParams,
+    searchParams: getResolvedSearchParams(),
   });
   if (serverActionResponse) return serverActionResponse;
 
@@ -794,15 +796,18 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     ? prerenderRouteParamsPayload.params
     : null;
   const renderParams = prerenderRouteParams ?? params;
+  const resolvedSearchParams = getResolvedSearchParams();
   options.setNavigationContext({
     pathname: canonicalPathname,
-    searchParams: url.searchParams,
+    searchParams: resolvedSearchParams,
     params: renderParams,
   });
   const rootParams = pickRootParams(renderParams, route.rootParamNames);
   setRootParams(rootParams);
 
   if (route.routeHandler) {
+    const routeHandlerUrl = new URL(request.url);
+    routeHandlerUrl.search = resolvedSearchParams.toString();
     setCurrentFetchSoftTags(
       buildPageCacheTags(cleanPathname, [], [...route.routeSegments], "route"),
     );
@@ -814,9 +819,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       // object (always `{}` for non-dynamic) so `useParams()` etc. still see
       // an object shape; only the user-facing handler context surfaces null.
       params: route.isDynamic ? renderParams : null,
-      request,
+      request: new Request(routeHandlerUrl, request),
       route,
-      searchParams: url.searchParams,
+      searchParams: resolvedSearchParams,
     });
   }
 
@@ -839,7 +844,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     request,
     route,
     scriptNonce,
-    searchParams: url.searchParams,
+    searchParams: resolvedSearchParams,
     renderMode,
   });
 

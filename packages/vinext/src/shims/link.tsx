@@ -398,7 +398,8 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
         // stream is never consumed (the click path now hard-navigates to
         // Pages) and would also race the request the browser will issue on
         // the actual navigation.
-        if (resolveHybridClientRouteOwner(prefetchHref, __basePath) === "pages") {
+        const hybridOwner = resolveHybridClientRouteOwner(prefetchHref, __basePath);
+        if (hybridOwner === "pages" || hybridOwner === "document") {
           return;
         }
         const autoPrefetch =
@@ -1001,7 +1002,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     // and a stale `useLinkStatus` indicator at worst.
     if (
       getNavigationRuntime()?.functions.navigate &&
-      resolveHybridClientRouteOwner(navigateHref, __basePath) === "pages"
+      ["pages", "document"].includes(resolveHybridClientRouteOwner(navigateHref, __basePath) ?? "")
     ) {
       if (replace) {
         window.location.replace(absoluteFullHref);

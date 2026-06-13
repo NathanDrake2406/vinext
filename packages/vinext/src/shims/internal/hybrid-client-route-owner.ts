@@ -16,6 +16,13 @@
  */
 import { createRouteTrieCache, matchRouteWithTrie } from "../../routing/route-matching.js";
 import { compareHybridRoutePatterns } from "../../routing/utils.js";
+import {
+  isExternalUrl,
+  matchConfigPattern,
+  matchRewrite,
+  type RequestContext,
+} from "../../config/config-matchers.js";
+import type { NextRewrite } from "../../config/next-config.js";
 import { stripBasePath } from "../../utils/base-path.js";
 import { getLocalePathPrefix } from "../../utils/domain-locale.js";
 import type {
@@ -23,14 +30,59 @@ import type {
   VinextPagesLinkPrefetchRoute,
 } from "../../client/vinext-next-data.js";
 
-export type HybridClientOwner = "app" | "pages";
+export type HybridClientOwner = "app" | "document" | "pages";
 
 declare global {
   // oxlint-disable-next-line typescript-eslint/consistent-type-definitions
   interface Window {
     __VINEXT_LINK_PREFETCH_ROUTES__?: VinextLinkPrefetchRoute[];
     __VINEXT_PAGES_LINK_PREFETCH_ROUTES__?: VinextPagesLinkPrefetchRoute[];
+    __VINEXT_CLIENT_REWRITES__?: {
+      afterFiles: NextRewrite[];
+      beforeFiles: NextRewrite[];
+      fallback: NextRewrite[];
+    };
+    __VINEXT_HAS_MIDDLEWARE__?: boolean;
   }
+}
+
+function resolveClientRewrite(
+  href: string,
+  basePath: string,
+  rewrites: readonly NextRewrite[],
+): { kind: "document" } | { href: string; kind: "rewrite" } | null {
+  const pathname = resolveSameOriginPathname(href, basePath);
+  if (pathname === null) return null;
+  const url = new URL(href, window.location.href);
+  if (
+    rewrites.some(
+      (rewrite) =>
+        (rewrite.has?.length || rewrite.missing?.length) &&
+        matchConfigPattern(pathname, rewrite.source) !== null,
+    )
+  ) {
+    return { kind: "document" };
+  }
+  const context: RequestContext = {
+    cookies: {},
+    headers: new Headers(),
+    host: url.hostname,
+    query: url.searchParams,
+  };
+  const rewritten = matchRewrite(
+    pathname,
+    rewrites.filter((rewrite) => !rewrite.has?.length && !rewrite.missing?.length),
+    context,
+    {
+      basePath,
+      hadBasePath: basePath
+        ? url.pathname === basePath || url.pathname.startsWith(`${basePath}/`)
+        : true,
+    },
+  );
+  if (rewritten === null) return null;
+  if (isExternalUrl(rewritten)) return { kind: "document" };
+  return { href: rewritten, kind: "rewrite" };
 }
 
 const appRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
@@ -110,9 +162,43 @@ export function resolveHybridClientRouteOwner(
 
   const appRoutes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
   const pagesRoutes = window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__;
+  const rewrites = window.__VINEXT_CLIENT_REWRITES__;
 
-  const appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
-  const pagesMatch = pagesRoutes ? matchPagesRoute(href, basePath, pagesRoutes) : null;
+  if (window.__VINEXT_HAS_MIDDLEWARE__) return "document";
+
+  if (rewrites) {
+    const beforeFilesRewrite = resolveClientRewrite(href, basePath, rewrites.beforeFiles);
+    if (beforeFilesRewrite?.kind === "document") return "document";
+    if (beforeFilesRewrite?.kind === "rewrite") href = beforeFilesRewrite.href;
+  }
+
+  let appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
+  let pagesMatch = pagesRoutes ? matchPagesRoute(href, basePath, pagesRoutes) : null;
+
+  if (
+    rewrites &&
+    (appMatch === null || appMatch.isDynamic) &&
+    (pagesMatch === null || pagesMatch.isDynamic)
+  ) {
+    const afterFilesRewrite = resolveClientRewrite(href, basePath, rewrites.afterFiles);
+    if (afterFilesRewrite?.kind === "document") return "document";
+    if (afterFilesRewrite?.kind === "rewrite") {
+      href = afterFilesRewrite.href;
+      appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
+      pagesMatch = pagesRoutes ? matchPagesRoute(href, basePath, pagesRoutes) : null;
+    }
+  }
+
+  if (rewrites && appMatch === null && pagesMatch === null) {
+    const fallbackRewrite = resolveClientRewrite(href, basePath, rewrites.fallback);
+    if (fallbackRewrite?.kind === "document") return "document";
+    if (fallbackRewrite?.kind === "rewrite") {
+      appMatch = appRoutes ? matchAppRoute(fallbackRewrite.href, basePath, appRoutes) : null;
+      pagesMatch = pagesRoutes
+        ? matchPagesRoute(fallbackRewrite.href, basePath, pagesRoutes)
+        : null;
+    }
+  }
 
   if (appMatch === null && pagesMatch === null) return null;
   if (pagesMatch === null) return "app";

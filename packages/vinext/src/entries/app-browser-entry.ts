@@ -5,6 +5,7 @@ import type {
 } from "../client/vinext-next-data.js";
 import type { AppRoute } from "../routing/app-router.js";
 import type { RouteManifest } from "../routing/app-route-graph.js";
+import type { NextRewrite } from "../config/next-config.js";
 
 /**
  * Generate the virtual browser entry module.
@@ -17,6 +18,12 @@ export function generateBrowserEntry(
   routes: readonly AppRoute[] = [],
   routeManifest: RouteManifest | null = null,
   pagesPrefetchRoutes: readonly VinextPagesLinkPrefetchRoute[] = [],
+  rewrites: { afterFiles: NextRewrite[]; beforeFiles: NextRewrite[]; fallback: NextRewrite[] } = {
+    afterFiles: [],
+    beforeFiles: [],
+    fallback: [],
+  },
+  hasMiddleware = false,
 ): string {
   const entryPath = resolveRuntimeEntryModule("app-browser-entry");
   const navigationRuntimePath = resolveClientRuntimeModule("navigation-runtime");
@@ -32,6 +39,8 @@ window.__VINEXT_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(prefetchRoutes)};
 // entry must also expose the Pages manifest (the Pages client entry does
 // the same — whichever entry runs first emits both globals).
 window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(pagesPrefetchRoutes)};
+window.__VINEXT_CLIENT_REWRITES__ = ${JSON.stringify(rewrites)};
+window.__VINEXT_HAS_MIDDLEWARE__ = ${JSON.stringify(hasMiddleware)};
 registerNavigationRuntimeBootstrap({
     routeManifest: ${buildRouteManifestExpression(routeManifest)}
 });

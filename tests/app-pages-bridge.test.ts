@@ -278,6 +278,64 @@ describe("renderPagesFallback", () => {
     expect(handleApiRoute).toHaveBeenCalledTimes(1);
   });
 
+  it("decodes rewritten page paths without decoding their query", async () => {
+    const matchPageRoute = vi.fn(() => ({
+      route: { isDynamic: false, pattern: "/café" },
+    }));
+    const renderPage = vi.fn(() => new Response("page"));
+    const request = new Request("http://localhost/legacy?original=1");
+    const url = new URL(request.url);
+
+    await renderPagesFallback(
+      {
+        isRscRequest: false,
+        middlewareContext: { headers: null, requestHeaders: null, status: null },
+        pathname: "/caf%C3%A9?value=hello%20world",
+        request,
+        url,
+      },
+      {
+        ...defaultDeps,
+        loadPagesEntry: () => ({ matchPageRoute, renderPage }),
+      },
+    );
+
+    expect(matchPageRoute).toHaveBeenCalledWith("/café?value=hello%20world", request);
+    expect(renderPage).toHaveBeenCalledWith(
+      request,
+      "/café?value=hello%20world",
+      {},
+      undefined,
+      null,
+    );
+  });
+
+  it("decodes rewritten API paths without decoding their query", async () => {
+    const matchApiRoute = vi.fn(() => ({
+      route: { isDynamic: false, pattern: "/api/café" },
+    }));
+    const handleApiRoute = vi.fn(() => new Response("api"));
+    const request = new Request("http://localhost/api/legacy?original=1");
+    const url = new URL(request.url);
+
+    await renderPagesFallback(
+      {
+        isRscRequest: false,
+        middlewareContext: { headers: null, requestHeaders: null, status: null },
+        pathname: "/api/caf%C3%A9?value=hello%20world",
+        request,
+        url,
+      },
+      {
+        ...defaultDeps,
+        loadPagesEntry: () => ({ handleApiRoute, matchApiRoute }),
+      },
+    );
+
+    expect(matchApiRoute).toHaveBeenCalledWith("/api/café?value=hello%20world", request);
+    expect(handleApiRoute).toHaveBeenCalledWith(request, "/api/café?value=hello%20world");
+  });
+
   it("appends the middleware draft cookie to an API fallback response (#1520)", async () => {
     const handleApiRoute = vi.fn((_req: Request, _url: string) => new Response("api-response"));
     const deps = {

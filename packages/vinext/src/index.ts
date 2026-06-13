@@ -886,6 +886,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       : [];
     return _generateClientEntry(pagesDir, nextConfig, fileMatcher, {
       appPrefetchRoutes,
+      hasMiddleware: middlewarePath !== null,
       instrumentationClientPath,
     });
   }
@@ -2741,7 +2742,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 }),
               )
             : [];
-          return generateBrowserEntry(graph.routes, graph.routeManifest, pagesPrefetchRoutes);
+          return generateBrowserEntry(
+            graph.routes,
+            graph.routeManifest,
+            pagesPrefetchRoutes,
+            nextConfig.rewrites,
+            middlewarePath !== null,
+          );
         }
         if (id.startsWith(RESOLVED_VIRTUAL_GOOGLE_FONTS + "?")) {
           return generateGoogleFontsVirtualModule(id, _fontGoogleShimPath);

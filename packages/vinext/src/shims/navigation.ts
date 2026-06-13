@@ -1785,7 +1785,8 @@ export async function navigateClientSide(
   // requests) or render the App catch-all's path array. This is the
   // programmatic equivalent of the link click / prefetch check in
   // `link.tsx`.
-  if (resolveHybridClientRouteOwner(normalizedHref, __basePath) === "pages") {
+  const hybridOwner = resolveHybridClientRouteOwner(normalizedHref, __basePath);
+  if (hybridOwner === "pages" || hybridOwner === "document") {
     const fullHref = toBrowserNavigationHref(normalizedHref, window.location.href, __basePath);
     notifyAppRouterTransitionStart(fullHref, mode);
     if (mode === "push") {
@@ -2026,7 +2027,8 @@ const _appRouter: AppRouterInstance = {
       // an unusable cache entry. The matching `push`/`replace` call will
       // hard-navigate via `window.location`, so a no-op here is correct —
       // the document prefetch the link shim emits on hover still runs.
-      if (resolveHybridClientRouteOwner(prefetchHref, __basePath) === "pages") {
+      const hybridOwner = resolveHybridClientRouteOwner(prefetchHref, __basePath);
+      if (hybridOwner === "pages" || hybridOwner === "document") {
         return;
       }
 

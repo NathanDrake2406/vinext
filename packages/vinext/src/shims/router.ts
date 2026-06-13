@@ -2079,7 +2079,7 @@ async function performNavigation(
     appPathNorm !== null ? getPagesRouterComponentsMap()[appPathNorm] : undefined;
   const appRouteDetected =
     (appPathEntry !== undefined && "__appRouter" in appPathEntry && appPathEntry.__appRouter) ||
-    resolveHybridClientRouteOwner(resolved, __basePath) === "app";
+    ["app", "document"].includes(resolveHybridClientRouteOwner(resolved, __basePath) ?? "");
   if (appRouteDetected) {
     if (mode === "push") window.location.assign(full);
     else window.location.replace(full);
