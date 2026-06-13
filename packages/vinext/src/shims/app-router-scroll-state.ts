@@ -4,6 +4,9 @@ export type AppRouterScrollIntent = Readonly<{
   id: number;
 }>;
 
+const hoistedHeadElementSelector =
+  "style[href][precedence],style[href][data-precedence],style[data-href][precedence],style[data-href][data-precedence],link[href][precedence],link[href][data-precedence]";
+
 // A scroll intent is staged by `navigateClientSide` (next/navigation) before an
 // RSC navigation and consumed by the committed `AppRouterScrollTarget`. Both run
 // in the browser, but next/navigation and this module can be loaded through
@@ -28,6 +31,29 @@ function getScrollIntentStore(): ScrollIntentStore {
   const globalState = globalThis as ScrollIntentGlobal;
   globalState[_SCROLL_INTENT_KEY] ??= { nextId: 0, pending: null };
   return globalState[_SCROLL_INTENT_KEY]!;
+}
+
+function createHoistedHeadSignature(element: Element): string {
+  const href = element.getAttribute("href") ?? "";
+  const dataHref = element.getAttribute("data-href") ?? "";
+  const precedence = element.getAttribute("precedence") ?? "";
+  const dataPrecedence = element.getAttribute("data-precedence") ?? "";
+  return `${element.localName}\0${href}\0${dataHref}\0${precedence}\0${dataPrecedence}`;
+}
+
+export function readAppRouterHoistedHeadSignatures(
+  doc: Pick<Document, "head"> | undefined = typeof document === "undefined" ? undefined : document,
+): readonly string[] {
+  const head = doc?.head;
+  if (head == null) return [];
+
+  return Array.from(head.querySelectorAll(hoistedHeadElementSelector))
+    .map(createHoistedHeadSignature)
+    .sort();
+}
+
+export function hasAppRouterHoistedHeadNode(): boolean {
+  return readAppRouterHoistedHeadSignatures().length > 0;
 }
 
 export function beginAppRouterScrollIntent(hash: string | null): AppRouterScrollIntent {

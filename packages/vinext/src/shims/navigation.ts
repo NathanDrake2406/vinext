@@ -54,6 +54,7 @@ import {
   beginAppRouterScrollIntent,
   clearAppRouterScrollIntent,
   consumeAppRouterScrollIntent,
+  hasAppRouterHoistedHeadNode,
   type AppRouterScrollIntent,
 } from "./app-router-scroll-state.js";
 
@@ -1684,6 +1685,14 @@ function applyAppRouterScrollFallback(intent: AppRouterScrollIntent): void {
 
   if (intent.hash !== null) {
     scrollToHashTarget(intent.hash);
+    return;
+  }
+
+  // Next's legacy App Router scroll handler can fail to scroll when the
+  // target route's first DOM child is a React-hoisted stylesheet in <head>.
+  // Vinext's fallback has no segment-local DOM anchor, so it must not mask
+  // that observable old-handler behavior by synthesizing a document-top scroll.
+  if (hasAppRouterHoistedHeadNode()) {
     return;
   }
 

@@ -1,4 +1,34 @@
 import { isNavigationSignalError } from "../utils/navigation-signal.js";
+import { isUnknownRecord } from "../utils/record.js";
+
+type VinextHydrateRootErrorInfo = {
+  componentStack?: string;
+  errorBoundary?: unknown;
+};
+
+type HydrateRootErrorHandler = (error: unknown, errorInfo: VinextHydrateRootErrorInfo) => void;
+
+function isImplicitRootErrorBoundary(errorInfo: VinextHydrateRootErrorInfo): boolean {
+  if (!isUnknownRecord(errorInfo.errorBoundary)) return false;
+  const props = errorInfo.errorBoundary.props;
+  return isUnknownRecord(props) && props.isImplicitRootErrorBoundary === true;
+}
+
+function logCaughtError(error: unknown, errorInfo: VinextHydrateRootErrorInfo): void {
+  console.error(error);
+  if (errorInfo?.componentStack) {
+    console.error("The above error occurred in a React component:\n" + errorInfo.componentStack);
+  }
+}
+
+function reportGlobalError(error: unknown): void {
+  if (typeof globalThis.reportError === "function") {
+    globalThis.reportError(error);
+    return;
+  }
+
+  console.error(error);
+}
 
 // Build the onUncaughtError handler for hydrateRoot. When a render error
 // tears down the tree without an error boundary catching, the
@@ -15,12 +45,9 @@ import { isNavigationSignalError } from "../utils/navigation-signal.js";
 // CSS — is structurally unreachable in production builds.
 export function createOnUncaughtError(
   getRecoveryHref: () => string | null,
-): (error: unknown, errorInfo: { componentStack?: string }) => void {
-  return (error, errorInfo) => {
-    console.error(error);
-    if (errorInfo?.componentStack) {
-      console.error("The above error occurred in a React component:\n" + errorInfo.componentStack);
-    }
+): HydrateRootErrorHandler {
+  return (error) => {
+    reportGlobalError(error);
     const recoveryHref = getRecoveryHref();
     if (recoveryHref !== null) {
       window.location.assign(recoveryHref);
@@ -39,10 +66,24 @@ export function createOnUncaughtError(
 //
 // All other caught errors are logged to console.error, preserving React's
 // default behavior.
-export function prodOnCaughtError(error: unknown, errorInfo: { componentStack?: string }): void {
+export function createProdOnCaughtError(
+  onImplicitRootError: HydrateRootErrorHandler,
+): HydrateRootErrorHandler {
+  return (error, errorInfo) => {
+    if (isNavigationSignalError(error)) return;
+    if (isImplicitRootErrorBoundary(errorInfo)) {
+      onImplicitRootError(error, errorInfo);
+      return;
+    }
+    logCaughtError(error, errorInfo);
+  };
+}
+
+export function prodOnCaughtError(error: unknown, errorInfo: VinextHydrateRootErrorInfo): void {
   if (isNavigationSignalError(error)) return;
-  console.error(error);
-  if (errorInfo?.componentStack) {
-    console.error("The above error occurred in a React component:\n" + errorInfo.componentStack);
-  }
+  logCaughtError(error, errorInfo);
+}
+
+export function prodOnRecoverableError(error: unknown): void {
+  reportGlobalError(error instanceof Error && error.cause !== undefined ? error.cause : error);
 }

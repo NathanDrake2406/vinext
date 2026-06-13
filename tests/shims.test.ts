@@ -12439,6 +12439,118 @@ describe("next/amp shim", () => {
 });
 
 describe("app router scroll intent state", () => {
+  type HeadSnapshotElement = {
+    attrs: Readonly<Record<string, string>>;
+    localName: string;
+  };
+
+  function matchesHeadSnapshotSelector(element: HeadSnapshotElement, selector: string): boolean {
+    return selector.split(",").some((compoundSelector) => {
+      const localName = compoundSelector.match(/^\w+/)?.[0];
+      if (localName !== element.localName) return false;
+
+      const requiredAttrs = Array.from(
+        compoundSelector.matchAll(/\[([^\]]+)\]/g),
+        (match) => match[1]!,
+      );
+      return requiredAttrs.every((attr) => Object.hasOwn(element.attrs, attr));
+    });
+  }
+
+  function createHeadSnapshotDocument(
+    elements: ReadonlyArray<HeadSnapshotElement>,
+  ): Pick<Document, "head"> {
+    return {
+      head: {
+        querySelectorAll: (selector: string) =>
+          elements
+            .filter((element) => matchesHeadSnapshotSelector(element, selector))
+            .map((element) => ({
+              getAttribute: (name: string) => element.attrs[name] ?? null,
+              localName: element.localName,
+            })),
+      },
+    } as unknown as Pick<Document, "head">;
+  }
+
+  it("detects React-hoisted stylesheet resources in document head", async () => {
+    const { readAppRouterHoistedHeadSignatures } =
+      await import("../packages/vinext/src/shims/app-router-scroll-state.js");
+
+    expect(
+      readAppRouterHoistedHeadSignatures(
+        createHeadSnapshotDocument([
+          {
+            attrs: { "data-href": "custom-stylesheet", "data-precedence": "alpha" },
+            localName: "style",
+          },
+        ]),
+      ),
+    ).toEqual(["style\0\0custom-stylesheet\0\0alpha"]);
+    expect(
+      readAppRouterHoistedHeadSignatures(
+        createHeadSnapshotDocument([
+          {
+            attrs: { href: "/a.css", precedence: "alpha" },
+            localName: "style",
+          },
+        ]),
+      ),
+    ).toEqual(["style\0/a.css\0\0alpha\0"]);
+    expect(
+      readAppRouterHoistedHeadSignatures(
+        createHeadSnapshotDocument([
+          { attrs: { name: "description" }, localName: "meta" },
+          { attrs: { href: "/plain.css" }, localName: "link" },
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports whether the current document contains hoisted head resources", async () => {
+    const { hasAppRouterHoistedHeadNode } =
+      await import("../packages/vinext/src/shims/app-router-scroll-state.js");
+
+    const doc = createHeadSnapshotDocument([
+      {
+        attrs: { "data-href": "custom-stylesheet", "data-precedence": "alpha" },
+        localName: "style",
+      },
+    ]);
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: doc,
+    });
+
+    try {
+      expect(hasAppRouterHoistedHeadNode()).toBe(true);
+    } finally {
+      if (originalDocument) {
+        Object.defineProperty(globalThis, "document", originalDocument);
+      } else {
+        Reflect.deleteProperty(globalThis, "document");
+      }
+    }
+  });
+
+  it("reports no hoisted head resources outside the browser", async () => {
+    const { hasAppRouterHoistedHeadNode } =
+      await import("../packages/vinext/src/shims/app-router-scroll-state.js");
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+
+    Reflect.deleteProperty(globalThis, "document");
+
+    try {
+      expect(hasAppRouterHoistedHeadNode()).toBe(false);
+    } finally {
+      if (originalDocument) {
+        Object.defineProperty(globalThis, "document", originalDocument);
+      }
+    }
+  });
+
   it("only lets the claimed render commit consume its own scroll intent", async () => {
     const {
       beginAppRouterScrollIntent,

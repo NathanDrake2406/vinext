@@ -137,7 +137,11 @@ import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-bounda
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
-import { createOnUncaughtError, prodOnCaughtError } from "./app-browser-error.js";
+import {
+  createOnUncaughtError,
+  createProdOnCaughtError,
+  prodOnRecoverableError,
+} from "./app-browser-error.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
   devOnCaughtError,
@@ -1016,21 +1020,24 @@ function BrowserRoot({
       },
     });
     browserRouterStateHasEverCommitted = true;
-    // App Router uses this timestamp as first committed tree readiness: the
-    // browser router state is attached and link/router interactions can safely
-    // observe the committed tree. It is intentionally later than hydrateRoot()
-    // returning.
-    const hydratedAt = performance.now();
-    window.__VINEXT_HYDRATED_AT = hydratedAt;
-    window.__NEXT_HYDRATED = true;
-    window.__NEXT_HYDRATED_AT = hydratedAt;
-    window.__NEXT_HYDRATED_CB?.();
     return () => {
       registerNavigationRuntimeFunctions({ navigateExternal: undefined });
       detach();
       setMountedSlotsHeader(null);
     };
   }, [setTreeStateValue]);
+
+  // Next.js publishes its deploy-test hydration marker from a passive effect in
+  // app-index's Root wrapper. Keep the same timing: route client effects have
+  // committed, so callers that mutate the document after __NEXT_HYDRATED_CB
+  // cannot race the initial hydration pass.
+  useEffect(() => {
+    const hydratedAt = performance.now();
+    window.__VINEXT_HYDRATED_AT = hydratedAt;
+    window.__NEXT_HYDRATED = true;
+    window.__NEXT_HYDRATED_AT = hydratedAt;
+    window.__NEXT_HYDRATED_CB?.();
+  }, []);
 
   // This effect snapshots treeState against the controller's current traversal
   // index but only depends on [treeState]. The ordering works because the
@@ -1588,7 +1595,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       })
     : createVinextHydrateRootOptions({
         formState,
-        onCaughtError: prodOnCaughtError,
+        onCaughtError: createProdOnCaughtError(onUncaughtError),
+        onRecoverableError: prodOnRecoverableError,
         onUncaughtError,
       });
   window.__VINEXT_RSC_ROOT__ = hydrateRootInTransition({

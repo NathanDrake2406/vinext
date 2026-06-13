@@ -2,7 +2,9 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createOnUncaughtError,
+  createProdOnCaughtError,
   prodOnCaughtError,
+  prodOnRecoverableError,
 } from "../packages/vinext/src/server/app-browser-error.js";
 import { applyServerActionResultDecision } from "../packages/vinext/src/server/app-browser-server-action-navigation.js";
 import {
@@ -6581,19 +6583,36 @@ describe("dev overlay store", () => {
 });
 
 describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
-  function withFakeWindow<T>(fn: (assignSpy: ReturnType<typeof vi.fn>) => T): T {
+  function withFakeWindow<T>(
+    fn: (spies: {
+      assignSpy: ReturnType<typeof vi.fn>;
+      reportErrorSpy: ReturnType<typeof vi.fn>;
+    }) => T,
+  ): T {
     const assignSpy = vi.fn();
+    const reportErrorSpy = vi.fn();
     const originalWindow = (globalThis as { window?: unknown }).window;
+    const originalReportError = Object.getOwnPropertyDescriptor(globalThis, "reportError");
     (globalThis as { window?: unknown }).window = {
       location: { assign: assignSpy },
     };
+    Object.defineProperty(globalThis, "reportError", {
+      configurable: true,
+      value: reportErrorSpy,
+      writable: true,
+    });
     try {
-      return fn(assignSpy);
+      return fn({ assignSpy, reportErrorSpy });
     } finally {
       if (originalWindow === undefined) {
         delete (globalThis as { window?: unknown }).window;
       } else {
         (globalThis as { window?: unknown }).window = originalWindow;
+      }
+      if (originalReportError) {
+        Object.defineProperty(globalThis, "reportError", originalReportError);
+      } else {
+        delete (globalThis as { reportError?: unknown }).reportError;
       }
     }
   }
@@ -6601,7 +6620,7 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
   it("hard-navigates to the recovery href when one is pending", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      withFakeWindow((assignSpy) => {
+      withFakeWindow(({ assignSpy }) => {
         const handler = createOnUncaughtError(() => "/broken-route");
         handler(new Error("render boom"), {});
         expect(assignSpy).toHaveBeenCalledWith("/broken-route");
@@ -6614,7 +6633,7 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
   it("does not navigate when no navigation is in flight (initial hydration error)", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      withFakeWindow((assignSpy) => {
+      withFakeWindow(({ assignSpy }) => {
         const handler = createOnUncaughtError(() => null);
         handler(new Error("hydration boom"), {});
         expect(assignSpy).not.toHaveBeenCalled();
@@ -6624,16 +6643,15 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
     }
   });
 
-  it("logs the error and component stack regardless of recovery", () => {
+  it("reports the error globally without writing to console.error", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      withFakeWindow(() => {
+      withFakeWindow(({ reportErrorSpy }) => {
         const handler = createOnUncaughtError(() => null);
         const err = new Error("boom");
         handler(err, { componentStack: "\n    at Page (page.tsx:10)" });
-        const loggedFirst = consoleSpy.mock.calls[0]?.[0];
-        expect(loggedFirst).toBe(err);
-        expect(String(consoleSpy.mock.calls[1]?.[0])).toContain("page.tsx:10");
+        expect(reportErrorSpy).toHaveBeenCalledWith(err);
+        expect(consoleSpy).not.toHaveBeenCalled();
       });
     } finally {
       consoleSpy.mockRestore();
@@ -6645,7 +6663,7 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
     // navigations; the handler must read it at call time, not at construction.
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      withFakeWindow((assignSpy) => {
+      withFakeWindow(({ assignSpy }) => {
         let current: string | null = "/first";
         const handler = createOnUncaughtError(() => current);
         current = "/second";
@@ -6704,6 +6722,51 @@ describe("prodOnCaughtError (hydrateRoot prod handler)", () => {
     }
   });
 
+  it("routes implicit root-boundary errors through the uncaught handler", () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const onImplicitRootError = vi.fn();
+      const handler = createProdOnCaughtError(onImplicitRootError);
+      const err = new Error("hydration mismatch");
+
+      handler(err, {
+        componentStack: "\n    at Lazy",
+        errorBoundary: {
+          props: { isImplicitRootErrorBoundary: true },
+        },
+      });
+
+      expect(onImplicitRootError).toHaveBeenCalledWith(
+        err,
+        expect.objectContaining({ componentStack: "\n    at Lazy" }),
+      );
+      expect(consoleSpy).not.toHaveBeenCalled();
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it("does not treat explicit segment boundaries as implicit", () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const onImplicitRootError = vi.fn();
+      const handler = createProdOnCaughtError(onImplicitRootError);
+      const err = new Error("segment error");
+
+      handler(err, {
+        componentStack: "\n    at Page",
+        errorBoundary: {
+          props: { isImplicitRootErrorBoundary: false },
+        },
+      });
+
+      expect(onImplicitRootError).not.toHaveBeenCalled();
+      expect(consoleSpy.mock.calls.map((args) => args[0])).toContain(err);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
   it("includes the React component stack in the log when provided", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -6743,6 +6806,44 @@ describe("prodOnCaughtError (hydrateRoot prod handler)", () => {
   });
 });
 
+describe("prodOnRecoverableError (hydrateRoot prod handler)", () => {
+  function withFakeReportError<T>(fn: (reportErrorSpy: ReturnType<typeof vi.fn>) => T): T {
+    const reportErrorSpy = vi.fn();
+    const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "reportError");
+    Object.defineProperty(globalThis, "reportError", {
+      configurable: true,
+      value: reportErrorSpy,
+      writable: true,
+    });
+    try {
+      return fn(reportErrorSpy);
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(globalThis, "reportError", originalDescriptor);
+      } else {
+        delete (globalThis as { reportError?: unknown }).reportError;
+      }
+    }
+  }
+
+  it("reports recoverable hydration errors through reportError", () => {
+    withFakeReportError((reportErrorSpy) => {
+      const err = new Error("Minified React error #418");
+      prodOnRecoverableError(err);
+      expect(reportErrorSpy).toHaveBeenCalledWith(err);
+    });
+  });
+
+  it("reports the underlying cause when React provides one", () => {
+    withFakeReportError((reportErrorSpy) => {
+      const cause = new Error("server/client text mismatch");
+      const err = new Error("recoverable", { cause });
+      prodOnRecoverableError(err);
+      expect(reportErrorSpy).toHaveBeenCalledWith(cause);
+    });
+  });
+});
+
 describe("app browser form-state hydration", () => {
   it("schedules App Router hydrateRoot inside a transition", () => {
     const container = { nodeType: 1 } as Element;
@@ -6776,6 +6877,7 @@ describe("app browser form-state hydration", () => {
     const formState = ["action-result", "key-path", "reference-id", 1] as never;
     const global = { [RSC_FORM_STATE_GLOBAL]: formState };
     const onCaughtError = vi.fn();
+    const onRecoverableError = vi.fn();
     const onUncaughtError = vi.fn();
     const hydrateRoot = vi.fn();
 
@@ -6783,6 +6885,7 @@ describe("app browser form-state hydration", () => {
     const hydrateOptions = createVinextHydrateRootOptions({
       formState: consumedFormState,
       onCaughtError,
+      onRecoverableError,
       onUncaughtError,
     });
     hydrateRoot("document", "root", hydrateOptions);
@@ -6796,6 +6899,7 @@ describe("app browser form-state hydration", () => {
     expect(hydrateOptions).toEqual({
       formState,
       onCaughtError,
+      onRecoverableError,
       onUncaughtError,
     });
   });

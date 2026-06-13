@@ -11,6 +11,7 @@ import {
 import {
   ErrorBoundary,
   ForbiddenBoundary,
+  GlobalErrorBoundary,
   NotFoundBoundary,
   RedirectBoundary,
   UnauthorizedBoundary,
@@ -1049,7 +1050,9 @@ export function buildAppPageElements<
 
   const globalErrorComponent = getErrorBoundaryExport(options.globalErrorModule);
   if (globalErrorComponent) {
-    routeChildren = <ErrorBoundary fallback={globalErrorComponent}>{routeChildren}</ErrorBoundary>;
+    routeChildren = (
+      <GlobalErrorBoundary fallback={globalErrorComponent}>{routeChildren}</GlobalErrorBoundary>
+    );
   }
 
   elements[routeId] = (
