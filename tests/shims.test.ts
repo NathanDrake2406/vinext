@@ -12666,6 +12666,66 @@ describe("app router scroll document-top fallback", () => {
       expect(documentElement.scrollTop).toBe(500);
     });
   });
+
+  it("full chain: marked head-hoisted intent survives claim→consume and suppresses the document-top fallback", async () => {
+    const {
+      beginAppRouterScrollIntent,
+      claimAppRouterScrollIntentForCommit,
+      clearAppRouterScrollIntent,
+      consumeAppRouterScrollIntent,
+      getPendingAppRouterScrollIntent,
+      markAppRouterScrollIntentHeadHoisted,
+    } = await import("../packages/vinext/src/shims/app-router-scroll-state.js");
+    const { applyAppRouterScrollFallback } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    // Start with a clean slate — no leftover intent from a prior test.
+    clearAppRouterScrollIntent();
+
+    // ── begin ──────────────────────────────────────────────────────────
+    // navigateClientSide stages an intent before sending the RSC navigation.
+    const originalIntent = beginAppRouterScrollIntent(null);
+    expect(originalIntent.targetHoistedInHead).toBe(false);
+
+    // ── claim ──────────────────────────────────────────────────────────
+    // The render commit claims the intent, writing its commit id.
+    claimAppRouterScrollIntentForCommit(originalIntent, 9);
+
+    // ── mark (head-hoisted) ───────────────────────────────────────────
+    // AppRouterScrollTarget finds the committed node is a React-hoisted
+    // resource in <head> and marks this navigation's intent.
+    markAppRouterScrollIntentHeadHoisted(originalIntent, 9);
+
+    // ── consume ────────────────────────────────────────────────────────
+    // navigateClientSide reads the consumable result.
+    const consumed = consumeAppRouterScrollIntent(originalIntent, 9);
+    expect(consumed).not.toBeNull();
+    expect(consumed!.targetHoistedInHead).toBe(true);
+    expect(consumed!.id).toBe(originalIntent.id);
+    expect(getPendingAppRouterScrollIntent()).toBeNull();
+
+    // ── apply fallback ─────────────────────────────────────────────────
+    // navigateClientSide calls the fallback with the consumed intent.
+    withScrollFallbackEnv({ querySelectorAll: () => [] }, (documentElement) => {
+      applyAppRouterScrollFallback(consumed!);
+      // targetHoistedInHead is true → fallback declines document-top scroll.
+      expect(documentElement.scrollTop).toBe(500);
+    });
+
+    // ══════════════════════════════════════════════════════════════════
+    // Regression guard
+    // ══════════════════════════════════════════════════════════════════
+    // markAppRouterScrollIntentHeadHoisted replaces the store.pending
+    // object with a spread copy to keep the type Readonly. The reference
+    // handed back by beginAppRouterScrollIntent still points at the old
+    // object where targetHoistedInHead is false. If a future refactor
+    // accidentally passes the original (stale) intent to the fallback
+    // instead of the consumed one, the flag check silently passes and the
+    // document scrolls to top — incorrectly masking the old-handler
+    // behaviour whose observable contract the upstream deploy-suite
+    // depends on.
+    expect(originalIntent.targetHoistedInHead).toBe(false);
+  });
 });
 
 describe("next/compat/router shim", () => {
