@@ -47,7 +47,7 @@ export type PendingBrowserRouterState = {
 export type NavigationPayloadOutcome = "committed" | "no-commit" | "hard-navigate";
 type HardNavigationMode = "assign" | "replace";
 
-type BrowserNavigationCommitEffect = { (): void; discard?: () => void };
+type BrowserNavigationCommitEffect = () => void;
 
 type BrowserNavigationCommitEffectFactory = (options: {
   bfcacheIds: Readonly<Record<string, string>>;
@@ -433,7 +433,6 @@ export function createAppBrowserNavigationController(
       if (id === upToRenderId) {
         effect();
       } else {
-        effect.discard?.();
         // Superseded navigations still need to balance the snapshot counter.
         commitClientNavigationStateImpl(undefined, { releaseSnapshot: true });
       }
@@ -731,9 +730,7 @@ export function createAppBrowserNavigationController(
         options.visibleCommitMode ?? "transition",
       );
     } catch (error) {
-      const discardedEffect = pendingNavigationPrePaintEffects.get(renderId);
       pendingNavigationPrePaintEffects.delete(renderId);
-      discardedEffect?.discard?.();
       pendingNavigationCommits.delete(renderId);
       if (snapshotActivated) {
         commitClientNavigationStateImpl(options.navId);

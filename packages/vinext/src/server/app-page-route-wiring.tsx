@@ -1051,13 +1051,15 @@ export function buildAppPageElements<
   }
 
   const globalErrorComponent = getErrorBoundaryExport(options.globalErrorModule);
-  if (globalErrorComponent) {
-    routeChildren = (
-      <GlobalErrorBoundary fallback={DEFAULT_GLOBAL_ERROR_COMPONENT}>
+  routeChildren = (
+    <GlobalErrorBoundary fallback={DEFAULT_GLOBAL_ERROR_COMPONENT}>
+      {globalErrorComponent ? (
         <ErrorBoundary fallback={globalErrorComponent}>{routeChildren}</ErrorBoundary>
-      </GlobalErrorBoundary>
-    );
-  }
+      ) : (
+        routeChildren
+      )}
+    </GlobalErrorBoundary>
+  );
 
   elements[routeId] = (
     <>

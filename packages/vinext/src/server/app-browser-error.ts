@@ -8,29 +8,6 @@ type VinextHydrateRootErrorInfo = {
 
 type HydrateRootErrorHandler = (error: unknown, errorInfo: VinextHydrateRootErrorInfo) => void;
 
-export function createNavigationErrorRecoveryTarget(): {
-  clear: (navId: number) => void;
-  getHref: (isCurrentNavigation: (navId: number) => boolean) => string | null;
-  stage: (href: string, navId: number) => void;
-} {
-  let pending: { href: string; navId: number } | null = null;
-
-  return {
-    clear(navId) {
-      if (pending?.navId === navId) pending = null;
-    },
-    getHref(isCurrentNavigation) {
-      if (pending === null) return null;
-      if (isCurrentNavigation(pending.navId)) return pending.href;
-      pending = null;
-      return null;
-    },
-    stage(href, navId) {
-      pending = { href, navId };
-    },
-  };
-}
-
 function isImplicitRootErrorBoundary(errorInfo: VinextHydrateRootErrorInfo): boolean {
   if (!isUnknownRecord(errorInfo.errorBoundary)) return false;
   const props = errorInfo.errorBoundary.props;

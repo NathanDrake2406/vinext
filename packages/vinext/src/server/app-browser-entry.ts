@@ -138,11 +138,15 @@ import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
-  createNavigationErrorRecoveryTarget,
   createOnUncaughtError,
   createProdOnCaughtError,
   prodOnRecoverableError,
 } from "./app-browser-error.js";
+import {
+  clearAppNavigationFailureTarget,
+  handleAppNavigationFailure,
+  installAppNavigationFailureListeners,
+} from "../client/app-nav-failure-handler.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
   devOnCaughtError,
@@ -300,12 +304,6 @@ const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 // the HMR handler to distinguish "still hydrating" (wait) from "was up, then
 // torn down by a render error" (full reload to recover).
 let browserRouterStateHasEverCommitted = false;
-// Most recent navigation target that has been dispatched but not yet committed.
-// Read by the onUncaughtError handler so a render error tearing down the tree
-// can land the browser on the URL the user was actually navigating to, instead
-// of stranding them on the previous URL with a blank page. Cleared once the
-// commit effect runs (URL update succeeded) or the navigation is superseded.
-const navigationErrorRecoveryTarget = createNavigationErrorRecoveryTarget();
 const mpaNavigationScheduler = new AppBrowserMpaNavigationScheduler();
 const unresolvedMpaNavigation = new Promise<never>(() => {});
 const RSC_HMR_SETTLE_DELAY_MS = 150;
@@ -546,7 +544,7 @@ function createNavigationCommitEffect(options: {
     });
 
     // URL has been updated; the recovery hard-nav target is no longer needed.
-    navigationErrorRecoveryTarget.clear(navId);
+    clearAppNavigationFailureTarget(href);
     commitClientNavigationState(navId);
   };
 }
@@ -570,36 +568,25 @@ async function renderNavigationPayload(
   visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
 ): Promise<NavigationPayloadOutcome> {
   syncServerActionHttpFallbackHead(null);
-  try {
-    return await browserNavigationController.renderNavigationPayload({
-      actionType,
-      createNavigationCommitEffect: (options) => {
-        navigationErrorRecoveryTarget.stage(options.href, options.navId);
-        const effect: (() => void) & { discard?: () => void } =
-          createNavigationCommitEffect(options);
-        effect.discard = () => navigationErrorRecoveryTarget.clear(options.navId);
-        return effect;
-      },
-      historyUpdateMode,
-      navigationSnapshot,
-      nextElements: payload,
-      operationLane,
-      payloadOrigin,
-      params,
-      pendingRouterState,
-      previousNextUrl,
-      scrollIntent,
-      restoredBfcacheIds,
-      reuseCurrentBfcacheIds,
-      targetHistoryIndex: traversalIntent === null ? undefined : traversalIntent.targetHistoryIndex,
-      targetHref,
-      navId,
-      visibleCommitMode,
-    });
-  } catch (error) {
-    navigationErrorRecoveryTarget.clear(navId);
-    throw error;
-  }
+  return browserNavigationController.renderNavigationPayload({
+    actionType,
+    createNavigationCommitEffect,
+    historyUpdateMode,
+    navigationSnapshot,
+    nextElements: payload,
+    operationLane,
+    payloadOrigin,
+    params,
+    pendingRouterState,
+    previousNextUrl,
+    scrollIntent,
+    restoredBfcacheIds,
+    reuseCurrentBfcacheIds,
+    targetHistoryIndex: traversalIntent === null ? undefined : traversalIntent.targetHistoryIndex,
+    targetHref,
+    navId,
+    visibleCommitMode,
+  });
 }
 
 function resolveActionRedirectTarget(
@@ -1558,6 +1545,7 @@ function registerServerActionCallback(): void {
 
 async function main(): Promise<void> {
   registerServerActionCallback();
+  installAppNavigationFailureListeners();
 
   if (import.meta.env.DEV) {
     installDevErrorOverlay();
@@ -1583,17 +1571,11 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   );
   historyController.writeBootstrapHistoryMetadata();
 
-  // In dev we route uncaught errors into the dev overlay rather than the
-  // hard-nav recovery: the overlay is what the developer needs to see, and a
-  // recovery nav would wipe it. In prod we keep the recovery hard-nav so the
-  // user lands on a renderable URL with the actual error UI.
   const onUncaughtError = import.meta.env.DEV
     ? devOnUncaughtError
     : createOnUncaughtError(() => {
-        if (!process.env.__NEXT_APP_NAV_FAIL_HANDLING) return null;
-        return navigationErrorRecoveryTarget.getHref((navId) =>
-          browserNavigationController.isCurrentNavigation(navId),
-        );
+        handleAppNavigationFailure(new Error("App Router navigation render failed"));
+        return null;
       });
   const formState = consumeInitialFormState(getVinextBrowserGlobal());
   const hydrateRootOptions = import.meta.env.DEV

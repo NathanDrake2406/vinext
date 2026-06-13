@@ -17,6 +17,10 @@ import {
   type NavigationRuntimeVisibleCommitMode,
 } from "../client/navigation-runtime.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
+import {
+  clearAppNavigationFailureTarget,
+  stageAppNavigationFailureTarget,
+} from "../client/app-nav-failure-handler.js";
 import { INITIAL_BFCACHE_ID, PUBLIC_INITIAL_BFCACHE_ID } from "../server/app-bfcache-id.js";
 import { AppElementsWire } from "../server/app-elements.js";
 import { resolveManifestNavigationInterceptionContext } from "../server/app-browser-interception-context.js";
@@ -1791,6 +1795,7 @@ export async function navigateClientSide(
   }
 
   const fullHref = toBrowserNavigationHref(normalizedHref, window.location.href, __basePath);
+  stageAppNavigationFailureTarget(fullHref);
   // Match Next.js: App Router reports navigation start before dispatching,
   // including hash-only navigations that short-circuit after URL update.
   notifyAppRouterTransitionStart(fullHref, mode);
@@ -1813,6 +1818,7 @@ export async function navigateClientSide(
   if (earlyIntent.kind === "sameDocumentScroll") {
     clearAppRouterScrollIntent();
     commitHashOnlyHistoryState(fullHref, earlyIntent.mode, earlyIntent.scroll);
+    clearAppNavigationFailureTarget(fullHref);
     commitClientNavigationState();
     if (earlyIntent.scroll) {
       scrollToHashTarget(earlyIntent.hash);

@@ -1683,6 +1683,34 @@ describe("app page route wiring helpers", () => {
     expect(userBoundary?.props.fallback).toBe(UserGlobalError);
   });
 
+  it("installs the default global error boundary without a user global error", () => {
+    const elements = buildAppPageElements({
+      element: createElement(PageProbe),
+      makeThenableParams: (params) => Promise.resolve(params),
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: RootLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null],
+        routeSegments: [],
+        slots: {},
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/",
+      rootNotFoundModule: null,
+    });
+
+    const outerBoundary = findElementByTypeName(elements["route:/"], "GlobalErrorBoundary");
+    expect(getElementTypeName(outerBoundary?.props.fallback)).toBe("DefaultGlobalError");
+  });
+
   it("interleaves templates with their corresponding layouts", async () => {
     const elements = buildAppPageElements({
       element: createElement(PageProbe),
