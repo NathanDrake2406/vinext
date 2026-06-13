@@ -7,10 +7,10 @@ disabled by default and unknown blog slugs use a normal full render.
 ```bash
 vp run vinext#build
 node ../../packages/vinext/dist/cli.js build --prerender-all
-node ../../packages/vinext/dist/cli.js start --port 4186
+node ../../packages/vinext/dist/cli.js start --port 4187
 ```
 
-Open <http://localhost:4186/en/blog/new-post>. The page should finish with `Home (en)`,
+Open <http://localhost:4187/en/blog/new-post>. The page should finish with `Home (en)`,
 `Blog Post: new-post`, and `Comments for anonymous`, without the global error UI.
 
 The example remains configured for Cloudflare Workers, but this safety test uses `vinext start`.

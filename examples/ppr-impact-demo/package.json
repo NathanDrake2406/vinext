@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "vinext build --prerender-all",
-    "start": "vinext start --port 4186",
-    "wrangler": "wrangler dev --config dist/server/wrangler.json --port 4186"
+    "start": "vinext start --port 4187",
+    "wrangler": "wrangler dev --config dist/server/wrangler.json --port 4187"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "catalog:",
