@@ -15,7 +15,12 @@ import {
 } from "./routing/pages-router.js";
 import { generateServerEntry as _generateServerEntry } from "./entries/pages-server-entry.js";
 import { generateClientEntry as _generateClientEntry } from "./entries/pages-client-entry.js";
-import { appRouteGraph, appRouter, invalidateAppRouteCache } from "./routing/app-router.js";
+import {
+  appRouteGraph,
+  appRouter,
+  invalidateAppRouteCache,
+  matchAppRoute,
+} from "./routing/app-router.js";
 import type { NitroRouteRuleConfig } from "./build/nitro-route-rules.js";
 import {
   buildViteResolveExtensions,
@@ -103,6 +108,7 @@ import {
   type PagesPipelineDeps,
   type MiddlewareResult,
 } from "./server/pages-request-pipeline.js";
+import { pagesRouteHasPriorityOverAppRoute } from "./server/hybrid-route-priority.js";
 import { proxyExternalRequest } from "./config/config-matchers.js";
 import { detectPackageManager } from "./utils/project.js";
 import { isUnknownRecord as isRecord } from "./utils/record.js";
@@ -3761,6 +3767,20 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // request, wiping the hybrid app+pages middleware context
                 // (VINEXT_MW_CTX_HEADER, set on req.headers) that the app RSC plugin reads.
                 const apiMatch = matchRoute(pipelineResult.apiUrl, apiRoutes);
+                if (apiMatch && hasAppDir && appDir) {
+                  const appRoutes = await appRouter(
+                    appDir,
+                    nextConfig?.pageExtensions,
+                    fileMatcher,
+                  );
+                  const appMatch = matchAppRoute(pipelineResult.apiUrl, appRoutes);
+                  if (
+                    appMatch &&
+                    !pagesRouteHasPriorityOverAppRoute(apiMatch.route, appMatch.route)
+                  ) {
+                    return next();
+                  }
+                }
                 if (apiMatch) {
                   flushStagedHeaders();
                   flushRequestHeaders();
@@ -3791,11 +3811,25 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 const routes = await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
                 // Hybrid app+pages dev: if the resolved URL matches no pages route
                 // and an app/ dir exists, defer to the RSC plugin (app routes live
-                // there). Mirrors the original hasAppDir fallthrough gates that the
-                // refactor centralised into the pipeline owner.
+                // there). If both routers match, apply Next.js's merged route
+                // precedence before choosing which plugin owns the request.
                 const renderMatch = matchRoute(pipelineResult.resolvedUrl.split("?")[0], routes);
-                if (!renderMatch && hasAppDir) {
-                  return next();
+                if (hasAppDir && appDir) {
+                  if (!renderMatch) {
+                    return next();
+                  }
+                  const appRoutes = await appRouter(
+                    appDir,
+                    nextConfig?.pageExtensions,
+                    fileMatcher,
+                  );
+                  const appMatch = matchAppRoute(pipelineResult.resolvedUrl, appRoutes);
+                  if (
+                    appMatch &&
+                    !pagesRouteHasPriorityOverAppRoute(renderMatch.route, appMatch.route)
+                  ) {
+                    return next();
+                  }
                 }
                 const handler = createSSRHandler(
                   server,

@@ -213,9 +213,18 @@ type RenderNotFoundOptions<TRoute> = {
   scriptNonce?: string;
 };
 
+type RenderPagesFallbackRouteMatch = {
+  route: {
+    isDynamic: boolean;
+    pattern: string;
+  };
+};
+
 type RenderPagesFallbackOptions = {
+  appRouteMatch?: RenderPagesFallbackRouteMatch | null;
   isRscRequest: boolean;
   middlewareContext: AppRscMiddlewareContext;
+  pathname: string;
   request: Request;
   url: URL;
 };
@@ -678,6 +687,19 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
   }
 
+  const pagesFallbackResponse = await options.renderPagesFallback?.({
+    appRouteMatch: match ?? null,
+    isRscRequest,
+    middlewareContext,
+    pathname: cleanPathname,
+    request,
+    url,
+  });
+  if (pagesFallbackResponse) {
+    options.clearRequestContext();
+    return pagesFallbackResponse;
+  }
+
   if (!match) {
     const fallbackRewrite = await applyRewrite(
       {
@@ -709,17 +731,6 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (process.env.NODE_ENV !== "production" && canonicalPathname === "/favicon.ico") {
       options.clearRequestContext();
       return new Response("", { status: 404 });
-    }
-
-    const pagesFallbackResponse = await options.renderPagesFallback?.({
-      isRscRequest,
-      middlewareContext,
-      request,
-      url,
-    });
-    if (pagesFallbackResponse) {
-      options.clearRequestContext();
-      return pagesFallbackResponse;
     }
 
     const renderedNotFoundResponse = await options.renderNotFound({

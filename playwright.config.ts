@@ -227,6 +227,18 @@ const projectServers = {
       timeout: 60_000,
     },
   },
+  "use-params-app-pages": {
+    testDir: "./tests/e2e/use-params-app-pages",
+    use: { baseURL: "http://localhost:4186" },
+    server: {
+      command:
+        "cd ../../.. && npx vp run vinext#build && cd tests/fixtures/use-params-app-pages && node ../../../packages/vinext/dist/cli.js build && node ../../../packages/vinext/dist/cli.js start --port 4186",
+      cwd: "./tests/fixtures/use-params-app-pages",
+      port: 4186,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+  },
 };
 
 type ProjectName = keyof typeof projectServers;
