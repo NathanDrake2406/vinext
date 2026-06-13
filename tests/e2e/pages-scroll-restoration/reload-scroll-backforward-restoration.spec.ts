@@ -28,8 +28,8 @@ async function expectScrollPosition(page: Page, expected: ScrollPosition) {
   await expect.poll(() => getScrollPosition(page)).toEqual(expected);
 }
 
-async function expectPageShowsRouteChangeComplete(page: Page): Promise<void> {
-  await expect(page.locator("html")).toContainText("routeChangeComplete");
+async function expectPageShowsRouteChangeComplete(page: Page, expectedPath: string): Promise<void> {
+  await expect(page.locator("html")).toContainText(`routeChangeComplete:${expectedPath}`);
 }
 
 async function pushWithPagesRouter(page: Page, href: string): Promise<void> {
@@ -73,7 +73,7 @@ test.describe("reload-scroll-back-restoration", () => {
     await pushWithPagesRouter(page, "/2");
 
     await page.goBack();
-    await expectPageShowsRouteChangeComplete(page);
+    await expectPageShowsRouteChangeComplete(page, "/1");
     await expectScrollPosition(page, scrollPositionMemories[1]);
 
     await page.reload();
@@ -81,7 +81,7 @@ test.describe("reload-scroll-back-restoration", () => {
     await expect.poll(() => isPagesRouterReady(page)).toBe(true);
 
     await page.goBack();
-    await expectPageShowsRouteChangeComplete(page);
+    await expectPageShowsRouteChangeComplete(page, "/0");
     await expectScrollPosition(page, scrollPositionMemories[0]);
   });
 
@@ -109,7 +109,7 @@ test.describe("reload-scroll-back-restoration", () => {
     await page.goBack();
     await page.goBack();
     await page.goForward();
-    await expectPageShowsRouteChangeComplete(page);
+    await expectPageShowsRouteChangeComplete(page, "/1");
     await expectScrollPosition(page, scrollPositionMemories[1]);
 
     await page.reload();
@@ -117,7 +117,7 @@ test.describe("reload-scroll-back-restoration", () => {
     await expect.poll(() => isPagesRouterReady(page)).toBe(true);
 
     await page.goForward();
-    await expectPageShowsRouteChangeComplete(page);
+    await expectPageShowsRouteChangeComplete(page, "/2");
     await expectScrollPosition(page, scrollPositionMemories[2]);
   });
 

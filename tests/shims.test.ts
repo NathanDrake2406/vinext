@@ -20773,3 +20773,105 @@ describe("default-locale path normalisation (issue #1336, item 4)", () => {
     ).toBe("/sv/new");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pages Router runtime state sharing
+//
+// Vite can evaluate `next/router` in both the client entry and in page chunks.
+// State that must be consistent across those instances (events, history keys,
+// abort/cancel state, and router readiness) must live on a window-scoped
+// runtime object rather than in module-local variables.
+// ---------------------------------------------------------------------------
+describe("Pages Router runtime state sharing", () => {
+  it("shares router readiness across duplicated next/router module instances", async () => {
+    const previousWindow = (globalThis as any).window;
+    const win: any = {
+      location: {
+        pathname: "/1",
+        search: "",
+        hash: "",
+        href: "http://localhost/1",
+        hostname: "localhost",
+      },
+      history: { state: null, pushState() {}, replaceState() {} },
+      addEventListener() {},
+      dispatchEvent() {},
+      scrollTo() {},
+      __NEXT_DATA__: {
+        page: "/[id]",
+        query: {},
+        autoExport: true,
+        isFallback: false,
+        props: { pageProps: {} },
+      },
+      __VINEXT_PAGE_LOADERS__: {},
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const React = await import("react");
+      const { renderToStaticMarkup } = await import("react-dom/server");
+
+      // First `next/router` instance: the generated Pages client entry.
+      const routerModuleA = await import("../packages/vinext/src/shims/router.js");
+      const RouterA = routerModuleA.default;
+      const markReadyA = routerModuleA._markPagesRouterReady;
+
+      // Second `next/router` instance: a later page chunk that re-evaluates the
+      // module and overwrites window.next.router.
+      vi.resetModules();
+      const routerModuleB = await import("../packages/vinext/src/shims/router.js");
+      const RouterB = routerModuleB.default;
+      const useRouterB = routerModuleB.useRouter;
+
+      // Both singletons start with the same deferred-ready state.
+      expect(win.next.router).toBe(RouterB);
+      expect(RouterA.isReady).toBe(false);
+      expect(RouterB.isReady).toBe(false);
+
+      // After hydration, the readiness bit still stays false until the provider
+      // publishes it.
+      win.__NEXT_HYDRATED = true;
+      expect(RouterA.isReady).toBe(false);
+      expect(RouterB.isReady).toBe(false);
+
+      // Simulate the provider mounting and flipping the shared ready bit.
+      expect(markReadyA()).toBe(true);
+      expect(markReadyA()).toBe(false);
+
+      // The readiness transition is visible from every module instance and from
+      // the global singleton.
+      expect(RouterA.isReady).toBe(true);
+      expect(RouterB.isReady).toBe(true);
+      expect(win.next.router.isReady).toBe(true);
+
+      // useRouter() backed by the second instance also converges to ready.
+      function ProbeB() {
+        const router = useRouterB();
+        return React.createElement("span", null, router.isReady ? "ready" : "not-ready");
+      }
+      const htmlB = renderToStaticMarkup(
+        routerModuleB.wrapWithRouterContext(React.createElement(ProbeB)),
+      );
+      expect(htmlB).toBe("<span>ready</span>");
+
+      // And a provider-mounted hook from the first instance sees it too.
+      function ProbeA() {
+        const router = routerModuleA.useRouter();
+        return React.createElement("span", null, router.isReady ? "ready" : "not-ready");
+      }
+      const htmlA = renderToStaticMarkup(
+        routerModuleA.wrapWithRouterContext(React.createElement(ProbeA)),
+      );
+      expect(htmlA).toBe("<span>ready</span>");
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
+});

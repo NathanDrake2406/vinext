@@ -395,6 +395,7 @@ type PagesRouterRuntimeState = {
   isFirstPopStateEvent: boolean;
   routerDidNavigate: boolean;
   deprecatedEventBridgeInstalled: boolean;
+  pagesRouterReady: boolean;
   publicRouter?: Record<string, unknown>;
 };
 
@@ -421,6 +422,7 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
     isFirstPopStateEvent: true,
     routerDidNavigate: false,
     deprecatedEventBridgeInstalled: false,
+    pagesRouterReady: typeof window === "undefined" || !shouldDeferInitialPagesRouterReady(),
   };
 }
 
@@ -1165,13 +1167,12 @@ function shouldDeferInitialPagesRouterReady(): boolean {
   );
 }
 
-let _pagesRouterReady =
-  typeof window === "undefined" ? true : !shouldDeferInitialPagesRouterReady();
-
 function isPagesRouterReady(): boolean {
-  // `_pagesRouterReady` initializes to `true` on the server and is only ever
-  // flipped on the client, so this reads correctly in both environments.
-  return _pagesRouterReady;
+  // The ready bit lives in the shared browser runtime state so duplicated
+  // `next/router` module instances (entry + page chunks) observe the same
+  // value. It initialises to `true` on the server, so this reads correctly
+  // in both environments.
+  return routerRuntimeState.pagesRouterReady;
 }
 
 function isPagesRouterDocumentActive(): boolean {
@@ -1183,8 +1184,8 @@ function isPagesRouterDocumentActive(): boolean {
 }
 
 function markPagesRouterReady(): boolean {
-  if (typeof window === "undefined" || _pagesRouterReady) return false;
-  _pagesRouterReady = true;
+  if (typeof window === "undefined" || routerRuntimeState.pagesRouterReady) return false;
+  routerRuntimeState.pagesRouterReady = true;
   return true;
 }
 
@@ -2980,5 +2981,9 @@ const _PAGES_NAVIGATION_ACCESSOR_KEY = Symbol.for(
 );
 (globalThis as Record<PropertyKey, unknown>)[_PAGES_NAVIGATION_ACCESSOR_KEY] =
   getPagesNavigationContext;
+
+// Internal export for unit tests that need to drive the readiness transition
+// without relying on React effect timing in a Node test environment.
+export { markPagesRouterReady as _markPagesRouterReady };
 
 export default Router;
