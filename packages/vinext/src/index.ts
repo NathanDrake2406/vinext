@@ -108,7 +108,10 @@ import {
   type PagesPipelineDeps,
   type MiddlewareResult,
 } from "./server/pages-request-pipeline.js";
-import { pagesRouteHasPriorityOverAppRoute } from "./server/hybrid-route-priority.js";
+import {
+  pagesRouteHasPriorityOverAppRoute,
+  validateHybridRouteConflicts,
+} from "./server/hybrid-route-priority.js";
 import { proxyExternalRequest } from "./config/config-matchers.js";
 import { detectPackageManager } from "./utils/project.js";
 import { isUnknownRecord as isRecord } from "./utils/record.js";
@@ -2421,7 +2424,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         return null;
       },
 
-      configResolved(config) {
+      async configResolved(config) {
         // Provide the resolved config to the Sass-aware CSS Modules Loader so
         // it can call Vite's `preprocessCSS` when processing SCSS files
         // referenced by `composes: className from './file.module.scss'`.
@@ -2429,6 +2432,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // work begins, but after the config is fully resolved so that Sass
         // preprocessor options and `css.modules` settings are in place.
         sassComposesLoader.setResolvedConfig(config);
+
+        if (hasAppDir && hasPagesDir) {
+          const [appRoutes, pageRoutes] = await Promise.all([
+            appRouter(appDir, nextConfig?.pageExtensions, fileMatcher),
+            pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher),
+          ]);
+          validateHybridRouteConflicts(pageRoutes, appRoutes);
+        }
 
         // When the user sets `ssr.external: true`, strip React entries from
         // `environments.ssr.resolve.noExternal`. @vitejs/plugin-rsc populates

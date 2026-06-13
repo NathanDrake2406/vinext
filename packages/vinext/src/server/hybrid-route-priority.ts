@@ -12,6 +12,40 @@ export type HybridRouteMatch<R extends HybridRoutePriorityRoute> = {
   params: Record<string, string | string[]>;
 };
 
+function normalizeHybridRouteStructure(pattern: string): string {
+  return pattern
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => {
+      if (!segment.startsWith(":")) return segment;
+      if (segment.endsWith("*")) return ":*";
+      if (segment.endsWith("+")) return ":+";
+      return ":";
+    })
+    .join("/");
+}
+
+export function validateHybridRouteConflicts(
+  pagesRoutes: readonly HybridRoutePriorityRoute[],
+  appRoutes: readonly HybridRoutePriorityRoute[],
+): void {
+  const pagesByStructure = new Map(
+    pagesRoutes.map((route) => [normalizeHybridRouteStructure(route.pattern), route.pattern]),
+  );
+  const conflicts = appRoutes.flatMap((route) => {
+    const pagesPattern = pagesByStructure.get(normalizeHybridRouteStructure(route.pattern));
+    return pagesPattern === undefined ? [] : [[pagesPattern, route.pattern] as const];
+  });
+  if (conflicts.length === 0) return;
+
+  const message = `Conflicting app and page file${conflicts.length === 1 ? " was" : "s were"} found, please remove the conflicting files to continue:`;
+  throw new Error(
+    `${message}\n${conflicts
+      .map(([pagesPattern, appPattern]) => `  pages "${pagesPattern}" - app "${appPattern}"`)
+      .join("\n")}`,
+  );
+}
+
 /**
  * Return whether a matched Pages Router route should own the request instead
  * of a matched App Router route.

@@ -122,6 +122,21 @@ export function compareHybridRoutePatterns(
   appPattern: string,
   appIsDynamic: boolean,
 ): "app" | "pages" {
+  const normalizeStructure = (pattern: string): string =>
+    pattern
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => {
+        if (!segment.startsWith(":")) return segment;
+        if (segment.endsWith("*")) return ":*";
+        if (segment.endsWith("+")) return ":+";
+        return ":";
+      })
+      .join("/");
+  if (normalizeStructure(pagesPattern) === normalizeStructure(appPattern)) {
+    throw new Error(`Conflicting app and page routes found for "${pagesPattern}"`);
+  }
+
   // Static-only paths: if Pages is static and App is also static, both have
   // a literal route, but the App's catch-all is irrelevant — App still owns
   // the literal hit (Next.js registers App providers after Pages but a
@@ -144,6 +159,10 @@ export function compareHybridRoutePatterns(
     const pagesRank = segmentRank(pagesSegments[index]);
     const appRank = segmentRank(appSegments[index]);
     if (pagesRank !== appRank) return pagesRank < appRank ? "pages" : "app";
+  }
+
+  if (pagesSegments.length !== appSegments.length) {
+    return pagesSegments.length < appSegments.length ? "pages" : "app";
   }
 
   // Matching dynamic routes with the same structural specificity retain

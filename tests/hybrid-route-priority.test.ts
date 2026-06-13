@@ -3,6 +3,7 @@ import { compareHybridRoutePatterns } from "../packages/vinext/src/routing/utils
 import {
   pagesRouteHasPriorityOverAppRoute,
   resolveHybridRouteOwner,
+  validateHybridRouteConflicts,
 } from "../packages/vinext/src/server/hybrid-route-priority.js";
 
 describe("compareHybridRoutePatterns", () => {
@@ -27,19 +28,16 @@ describe("compareHybridRoutePatterns", () => {
     expect(compareHybridRoutePatterns("/about", false, "/:path+", true)).toBe("pages");
   });
 
-  it("keeps the App route ahead of an identical static Pages route", () => {
-    // App providers are registered after Pages providers, but identical
-    // static routes have identical specificity, and App's static literal
-    // wins by direct hit.
-    expect(compareHybridRoutePatterns("/", false, "/", false)).toBe("app");
+  it("rejects an identical static App and Pages route", () => {
+    expect(() => compareHybridRoutePatterns("/", false, "/", false)).toThrow(
+      "Conflicting app and page routes",
+    );
   });
 
-  it("uses Pages provider order as the tie-breaker for identical dynamic patterns", () => {
-    // Next.js pushes Pages providers before App providers, then preserves
-    // provider order when merging dynamic matchers with the same pathname.
-    // `sortRoutes` returns 0 for equal patterns; Array.prototype.sort keeps
-    // the front element, and the front element is Pages.
-    expect(compareHybridRoutePatterns("/:slug", true, "/:slug", true)).toBe("pages");
+  it("rejects structurally identical dynamic App and Pages routes", () => {
+    expect(() => compareHybridRoutePatterns("/:slug", true, "/:id", true)).toThrow(
+      "Conflicting app and page routes",
+    );
   });
 
   it("lets a static-prefix Pages catch-all beat a bare App catch-all", () => {
@@ -77,6 +75,30 @@ describe("compareHybridRoutePatterns", () => {
       "app",
     );
   });
+
+  it("keeps an exact App dynamic route ahead of a Pages optional catch-all", () => {
+    expect(compareHybridRoutePatterns("/:section/:rest*", true, "/:section", true)).toBe("app");
+  });
+});
+
+describe("validateHybridRouteConflicts", () => {
+  it("rejects identical static routes", () => {
+    expect(() =>
+      validateHybridRouteConflicts(
+        [{ isDynamic: false, pattern: "/" }],
+        [{ isDynamic: false, pattern: "/" }],
+      ),
+    ).toThrow("Conflicting app and page file was found");
+  });
+
+  it("rejects structurally identical dynamic routes with different param names", () => {
+    expect(() =>
+      validateHybridRouteConflicts(
+        [{ isDynamic: true, pattern: "/:slug" }],
+        [{ isDynamic: true, pattern: "/:id" }],
+      ),
+    ).toThrow("Conflicting app and page file was found");
+  });
 });
 
 describe("hybrid App Router + Pages Router route priority", () => {
@@ -104,24 +126,22 @@ describe("hybrid App Router + Pages Router route priority", () => {
     ).toBe(false);
   });
 
-  it("keeps the App route ahead of an identical static Pages route", () => {
-    expect(
+  it("rejects an identical static App and Pages route", () => {
+    expect(() =>
       pagesRouteHasPriorityOverAppRoute(
         { isDynamic: false, pattern: "/" },
         { isDynamic: false, pattern: "/" },
       ),
-    ).toBe(false);
+    ).toThrow("Conflicting app and page routes");
   });
 
-  it("uses Pages provider order as the tie-breaker for identical dynamic patterns", () => {
-    // Next.js pushes Pages providers before App providers, then preserves
-    // provider order when merging dynamic matchers with the same pathname.
-    expect(
+  it("rejects structurally identical dynamic App and Pages routes", () => {
+    expect(() =>
       pagesRouteHasPriorityOverAppRoute(
         { isDynamic: true, pattern: "/:slug" },
-        { isDynamic: true, pattern: "/:slug" },
+        { isDynamic: true, pattern: "/:id" },
       ),
-    ).toBe(true);
+    ).toThrow("Conflicting app and page routes");
   });
 });
 
@@ -164,23 +184,21 @@ describe("resolveHybridRouteOwner", () => {
     ).toBe("app");
   });
 
-  it("lets an App static route win over an identical static Pages route", () => {
-    expect(
+  it("rejects an identical static App and Pages route", () => {
+    expect(() =>
       resolveHybridRouteOwner(
         { route: { isDynamic: false, pattern: "/" }, params: {} },
         { route: { isDynamic: false, pattern: "/" }, params: {} },
       ),
-    ).toBe("app");
+    ).toThrow("Conflicting app and page routes");
   });
 
-  it("uses Pages provider order as the tie-breaker for identical dynamic patterns", () => {
-    // Next.js pushes Pages providers before App providers, so identical
-    // dynamic patterns go to Pages.
-    expect(
+  it("rejects structurally identical dynamic App and Pages routes", () => {
+    expect(() =>
       resolveHybridRouteOwner(
         { route: { isDynamic: true, pattern: "/:slug" }, params: { slug: "x" } },
-        { route: { isDynamic: true, pattern: "/:slug" }, params: { slug: "x" } },
+        { route: { isDynamic: true, pattern: "/:id" }, params: { id: "x" } },
       ),
-    ).toBe("pages");
+    ).toThrow("Conflicting app and page routes");
   });
 });

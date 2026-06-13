@@ -126,29 +126,22 @@ describe("resolveHybridClientRouteOwner", () => {
     expect(resolveHybridClientRouteOwner("/about", "")).toBe("pages");
   });
 
-  it("lets an App static route win over an identical static Pages route", () => {
-    // Mirrors the server's "keeps the App route ahead of an identical
-    // static Pages route" assertion: both have identical static
-    // specificity, and the App literal wins by direct hit.
+  it("rejects an identical static App and Pages route", () => {
     installWindow({
       app: [appRoute([], false)],
       pages: [pagesRoute([], false)],
     });
-    expect(resolveHybridClientRouteOwner("/", "")).toBe("app");
+    expect(() => resolveHybridClientRouteOwner("/", "")).toThrow("Conflicting app and page routes");
   });
 
-  it("uses Pages provider order as the tie-breaker for identical dynamic patterns", () => {
-    // The hand-copied client comparator that this resolver used to ship
-    // with returned 'app' for this case (it compared
-    // `routePrecedence(p) < routePrecedence(a)` and ties go to false).
-    // Delegating to the shared `compareHybridRoutePatterns` (which puts
-    // Pages first into `sortRoutes` and preserves order on ties) restores
-    // parity with the server.
+  it("rejects structurally identical dynamic App and Pages routes", () => {
     installWindow({
       app: [appRoute([":slug"])],
-      pages: [pagesRoute([":slug"])],
+      pages: [pagesRoute([":id"])],
     });
-    expect(resolveHybridClientRouteOwner("/anything", "")).toBe("pages");
+    expect(() => resolveHybridClientRouteOwner("/anything", "")).toThrow(
+      "Conflicting app and page routes",
+    );
   });
 
   it("lets a static-prefix Pages catch-all beat a bare App catch-all", () => {
@@ -177,6 +170,14 @@ describe("resolveHybridClientRouteOwner", () => {
       pages: [pagesRoute([":section", "details"])],
     });
     expect(resolveHybridClientRouteOwner("/account/details", "")).toBe("app");
+  });
+
+  it("keeps an exact App dynamic route ahead of a Pages optional catch-all", () => {
+    installWindow({
+      app: [appRoute([":section"])],
+      pages: [pagesRoute([":section", ":rest*"])],
+    });
+    expect(resolveHybridClientRouteOwner("/foo", "")).toBe("app");
   });
 
   it("ignores the basePath prefix when matching", () => {
