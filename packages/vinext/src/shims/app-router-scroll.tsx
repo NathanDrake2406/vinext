@@ -125,6 +125,25 @@ export class AppRouterScrollTargetInner extends React.Component<{
   children: React.ReactNode;
   commitId: number | null;
 }> {
+  animationFrame: number | null = null;
+
+  schedulePotentialScroll = () => {
+    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+      this.handlePotentialScroll();
+      return;
+    }
+
+    if (this.animationFrame !== null) {
+      window.cancelAnimationFrame(this.animationFrame);
+    }
+    this.animationFrame = window.requestAnimationFrame(() => {
+      this.animationFrame = window.requestAnimationFrame(() => {
+        this.animationFrame = null;
+        this.handlePotentialScroll();
+      });
+    });
+  };
+
   handlePotentialScroll = () => {
     const intent = getPendingAppRouterScrollIntent();
     if (intent === null) return;
@@ -160,18 +179,21 @@ export class AppRouterScrollTargetInner extends React.Component<{
     if (consumed === null) return;
 
     scrollToElement(target, consumed.hash);
-    // Next's default handler uses plain focus(), but that lets the browser run
-    // a second implicit scroll after our explicit navigation scroll. Keep the
-    // focus transfer while preserving the scroll position we just chose.
-    target.focus({ preventScroll: true });
+    target.focus();
   };
 
   componentDidMount() {
-    this.handlePotentialScroll();
+    this.schedulePotentialScroll();
   }
 
   componentDidUpdate() {
-    this.handlePotentialScroll();
+    this.schedulePotentialScroll();
+  }
+
+  componentWillUnmount() {
+    if (this.animationFrame !== null && typeof window !== "undefined") {
+      window.cancelAnimationFrame(this.animationFrame);
+    }
   }
 
   render() {

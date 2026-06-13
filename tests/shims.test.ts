@@ -12439,6 +12439,40 @@ describe("next/amp shim", () => {
 });
 
 describe("app router scroll intent state", () => {
+  it("detects only precedence resources added after navigation begins", async () => {
+    const {
+      beginAppRouterScrollIntent,
+      clearAppRouterScrollIntent,
+      hasNewAppRouterHoistedHeadNode,
+    } = await import("../packages/vinext/src/shims/app-router-scroll-state.js");
+    const originalDocument = globalThis.document;
+    const elements: Element[] = [];
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: { head: { querySelectorAll: () => elements } },
+    });
+
+    try {
+      const element = (href: string) =>
+        ({
+          localName: "style",
+          getAttribute: (name: string) =>
+            name === "data-href" ? href : name === "data-precedence" ? "alpha" : null,
+        }) as unknown as Element;
+      elements.push(element("existing"));
+      const intent = beginAppRouterScrollIntent(null);
+      expect(hasNewAppRouterHoistedHeadNode(intent)).toBe(false);
+      elements.push(element("navigation"));
+      expect(hasNewAppRouterHoistedHeadNode(intent)).toBe(true);
+    } finally {
+      clearAppRouterScrollIntent();
+      Object.defineProperty(globalThis, "document", {
+        configurable: true,
+        value: originalDocument,
+      });
+    }
+  });
+
   it("marks only the claimed commit's intent as head-hoisted", async () => {
     const {
       beginAppRouterScrollIntent,
@@ -12659,7 +12693,13 @@ describe("app router scroll document-top fallback", () => {
     const { applyAppRouterScrollFallback } =
       await import("../packages/vinext/src/shims/navigation.js");
 
-    const intent = { commitId: 1, hash: null, id: 1, targetHoistedInHead: true };
+    const intent = {
+      commitId: 1,
+      hash: null,
+      hoistedHeadSignatures: [],
+      id: 1,
+      targetHoistedInHead: true,
+    };
 
     withScrollFallbackEnv({ querySelectorAll: () => [] }, (documentElement) => {
       applyAppRouterScrollFallback(intent);

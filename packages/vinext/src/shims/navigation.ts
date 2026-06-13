@@ -54,6 +54,8 @@ import {
   beginAppRouterScrollIntent,
   clearAppRouterScrollIntent,
   consumeAppRouterScrollIntent,
+  getPendingAppRouterScrollIntent,
+  hasNewAppRouterHoistedHeadNode,
   type AppRouterScrollIntent,
 } from "./app-router-scroll-state.js";
 
@@ -1697,11 +1699,30 @@ export function applyAppRouterScrollFallback(intent: AppRouterScrollIntent): voi
   // behavior by synthesizing a document-top scroll. The flag is per-intent: a
   // hoisted stylesheet merely present in <head> for an unrelated navigation
   // does not suppress this fallback.
-  if (intent.targetHoistedInHead) {
+  if (intent.targetHoistedInHead || hasNewAppRouterHoistedHeadNode(intent)) {
     return;
   }
 
   document.documentElement.scrollTop = 0;
+}
+
+function scheduleAppRouterScrollFallback(intent: AppRouterScrollIntent): void {
+  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+    const fallbackIntent = consumeAppRouterScrollIntent(intent);
+    if (fallbackIntent) applyAppRouterScrollFallback(fallbackIntent);
+    return;
+  }
+
+  const committedHref = window.location.href;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      if (window.location.href !== committedHref) return;
+      const pendingIntent = getPendingAppRouterScrollIntent();
+      if (pendingIntent === null || pendingIntent.id !== intent.id) return;
+      const fallbackIntent = consumeAppRouterScrollIntent(intent);
+      if (fallbackIntent) applyAppRouterScrollFallback(fallbackIntent);
+    });
+  });
 }
 
 /**
@@ -1874,10 +1895,7 @@ export async function navigateClientSide(
   }
 
   if (scrollIntent) {
-    const fallbackIntent = consumeAppRouterScrollIntent(scrollIntent);
-    if (fallbackIntent) {
-      applyAppRouterScrollFallback(fallbackIntent);
-    }
+    scheduleAppRouterScrollFallback(scrollIntent);
   }
 }
 

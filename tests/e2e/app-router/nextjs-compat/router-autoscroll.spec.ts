@@ -438,34 +438,7 @@ test.describe("Next.js compat: App Router autoscroll", () => {
     await expectScroll(page, { x: 0, y: 0 });
   });
 
-  // Ported from Next.js:
-  // test/e2e/app-dir/router-autoscroll/router-autoscroll.test.ts
-  test.skip("does not scroll to top when React hoists the route's first DOM node", async ({
-    page,
-  }) => {
-    // Next.js v16.2.6 only scrolls this case with
-    // __NEXT_EXPERIMENTAL_APP_NEW_SCROLL_HANDLER=true. The deploy-suite default
-    // exercises the old handler and expects the scroll wait to fail. The shared
-    // app-basic fixture has a root template and local layout siblings before
-    // the page, so it cannot honestly reproduce upstream's standalone first-DOM
-    // node shape; the upstream deploy-suite file covers this exact contract.
-    await page.goto(`${ROUTE_BASE}`);
-    await waitForControls(page);
-
-    await page.evaluate(() => {
-      window.scrollTo(0, document.documentElement.scrollHeight);
-    });
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-
-    await page.locator("#to-hoisted").click();
-    await expect(page.locator("#hoisted-page")).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.scrollY)).not.toBe(0);
-  });
-
-  test("preserves horizontal scroll when focusing the navigated segment", async ({ page }) => {
-    // Next's horizontal autoscroll coverage uses a non-focusable route root, so it
-    // misses the second browser scroll caused by focusing an offscreen target.
-    // Vinext intentionally prevents that extra focus scroll.
+  test("allows native focus scrolling after focusing the navigated segment", async ({ page }) => {
     await page.goto(`${ROUTE_BASE}/0/0/10000/10000/page1`);
     await waitForControls(page);
 
@@ -475,7 +448,7 @@ test.describe("Next.js compat: App Router autoscroll", () => {
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? null))
       .toBe("segment-container");
-    await expectScroll(page, { x: 1000, y: 0 });
+    await expectScroll(page, { x: 0, y: 0 });
   });
 
   // Ported from Next.js:
