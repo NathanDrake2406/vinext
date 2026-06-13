@@ -145,6 +145,148 @@ export default function middleware() {
   );
 }
 
+function writeGsspAppInitialPropsContextFixture(rootDir: string): void {
+  fs.mkdirSync(path.join(rootDir, "pages", "blog", "[post]"), { recursive: true });
+  fs.mkdirSync(path.join(rootDir, "pages", "rewrite-target"), { recursive: true });
+  const nmLink = path.join(rootDir, "node_modules");
+  if (!fs.existsSync(nmLink)) {
+    fs.symlinkSync(path.join(process.cwd(), "node_modules"), nmLink);
+  }
+  fs.writeFileSync(
+    path.join(rootDir, "next.config.js"),
+    `module.exports = {
+  generateBuildId: () => "test-build-id",
+  async rewrites() {
+    return [
+      { source: "/blog-post-1", destination: "/blog/post-1" },
+      { source: "/blog-post-2", destination: "/blog/post-2?hello=world" },
+      { source: "/blog-:param", destination: "/blog/post-3" },
+      { source: "/rewrite-source/:path+", destination: "/rewrite-target" },
+    ];
+  },
+};
+`,
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "pages", "_app.jsx"),
+    `import App from "next/app";
+
+class MyApp extends App {
+  static async getInitialProps(ctx) {
+    const { req, query, pathname, asPath } = ctx.ctx;
+    let pageProps = {};
+
+    if (ctx.Component.getInitialProps) {
+      pageProps = await ctx.Component.getInitialProps(ctx.ctx);
+    }
+
+    return {
+      appProps: {
+        url: (req || {}).url,
+        query,
+        pathname,
+        asPath,
+      },
+      pageProps,
+    };
+  }
+
+  render() {
+    const { Component, pageProps, appProps } = this.props;
+    return <Component {...pageProps} appProps={appProps} />;
+  }
+}
+
+export default MyApp;
+`,
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "pages", "blog", "[post]", "index.jsx"),
+    `import { useRouter } from "next/router";
+
+export async function getServerSideProps({ params, resolvedUrl }) {
+  return {
+    props: {
+      params,
+      resolvedUrl,
+      post: params.post,
+    },
+  };
+}
+
+export default function BlogPost({ post, params, appProps, resolvedUrl }) {
+  const router = useRouter();
+
+  return (
+    <>
+      <p>Post: {post}</p>
+      <div id="params">{JSON.stringify(params)}</div>
+      <div id="query">{JSON.stringify(router.query)}</div>
+      <div id="app-query">{JSON.stringify(appProps.query)}</div>
+      <div id="app-url">{appProps.url}</div>
+      <div id="resolved-url">{resolvedUrl}</div>
+      <div id="as-path">{router.asPath}</div>
+    </>
+  );
+}
+`,
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "pages", "something.jsx"),
+    `import { useRouter } from "next/router";
+
+export async function getServerSideProps({ params, query, resolvedUrl }) {
+  return {
+    props: {
+      resolvedUrl,
+      world: "world",
+      query: query || {},
+      params: params || {},
+    },
+  };
+}
+
+export default function Something({ world, params, query, appProps, resolvedUrl }) {
+  const router = useRouter();
+
+  return (
+    <>
+      <p>hello: {world}</p>
+      <div id="params">{JSON.stringify(params)}</div>
+      <div id="initial-query">{JSON.stringify(query)}</div>
+      <div id="query">{JSON.stringify(router.query)}</div>
+      <div id="app-query">{JSON.stringify(appProps.query)}</div>
+      <div id="app-url">{appProps.url}</div>
+      <div id="resolved-url">{resolvedUrl}</div>
+      <div id="as-path">{router.asPath}</div>
+    </>
+  );
+}
+`,
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "pages", "rewrite-target", "index.jsx"),
+    `import { useRouter } from "next/router";
+
+export async function getServerSideProps({ req }) {
+  return { props: { url: req.url } };
+}
+
+export default function RewriteTarget({ url }) {
+  const router = useRouter();
+
+  return (
+    <>
+      <h1>rewrite-target</h1>
+      <p id="as-path">{router.asPath}</p>
+      <p id="req-url">{url}</p>
+    </>
+  );
+}
+`,
+  );
+}
+
 async function buildPagesFixtureToOutDir(rootDir: string, outDir: string): Promise<void> {
   await build({
     root: rootDir,
@@ -1333,6 +1475,85 @@ describe("Pages Router integration", () => {
     const html = await res.text();
     // Should get the SSR page content (rewritten from /rewritten to /ssr)
     expect(html).toContain("Server-Side Rendered");
+  });
+
+  // Ported from Next.js:
+  // test/e2e/getserversideprops/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/getserversideprops/test/index.test.ts
+  it("passes original req.url, query, asPath, and resolvedUrl through _app.getInitialProps on GSSP pages", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-gssp-app-context-dev-"));
+    writeGsspAppInitialPropsContextFixture(tmpDir);
+
+    let tempServer: Awaited<ReturnType<typeof startFixtureServer>>["server"] | undefined;
+    try {
+      const started = await startFixtureServer(tmpDir);
+      tempServer = started.server;
+      const fixtureUrl = started.baseUrl;
+
+      const dynamicRes = await fetch(`${fixtureUrl}/blog/post-1`);
+      expect(dynamicRes.status).toBe(200);
+      const dynamicHtml = await dynamicRes.text();
+      const elementText = (html: string, id: string) => {
+        const match = html.match(new RegExp(`<[^>]+id="${id}"[^>]*>(.*?)</[^>]+>`));
+        expect(match).not.toBeNull();
+        return match?.[1]?.replaceAll("&quot;", '"') ?? "";
+      };
+      const expectElementText = (html: string, id: string, expected: string) => {
+        expect(elementText(html, id)).toBe(expected);
+      };
+      const expectElementJson = (html: string, id: string, expected: unknown) => {
+        expect(JSON.parse(elementText(html, id))).toEqual(expected);
+      };
+      expect(dynamicHtml).toMatch(/Post:\s*(<!--\s*-->)?\s*post-1/);
+      expectElementJson(dynamicHtml, "params", { post: "post-1" });
+      expectElementJson(dynamicHtml, "query", { post: "post-1" });
+      expectElementJson(dynamicHtml, "app-query", { post: "post-1" });
+      expectElementText(dynamicHtml, "app-url", "/blog/post-1");
+      expectElementText(dynamicHtml, "resolved-url", "/blog/post-1");
+      expectElementText(dynamicHtml, "as-path", "/blog/post-1");
+
+      const dataRes = await fetch(
+        `${fixtureUrl}/_next/data/test-build-id/blog/post-1.json?hello=world`,
+      );
+      expect(dataRes.status).toBe(200);
+      const data = await dataRes.json();
+      expect(data.pageProps.resolvedUrl).toEqual("/blog/post-1?hello=world");
+      expect(data.appProps).toEqual({
+        url: "/_next/data/test-build-id/blog/post-1.json?hello=world",
+        query: { post: "post-1", hello: "world" },
+        asPath: "/blog/post-1?hello=world",
+        pathname: "/blog/[post]",
+      });
+
+      const rewriteRes = await fetch(`${fixtureUrl}/blog-post-2`);
+      expect(rewriteRes.status).toBe(200);
+      const rewriteHtml = await rewriteRes.text();
+      expectElementText(rewriteHtml, "app-url", "/blog-post-2");
+      expectElementJson(rewriteHtml, "app-query", { post: "post-2", hello: "world" });
+      expectElementText(rewriteHtml, "resolved-url", "/blog/post-2");
+      expectElementText(rewriteHtml, "as-path", "/blog-post-2");
+
+      const rewriteParamRes = await fetch(`${fixtureUrl}/blog-post-3`);
+      expect(rewriteParamRes.status).toBe(200);
+      const rewriteParamHtml = await rewriteParamRes.text();
+      expectElementText(rewriteParamHtml, "app-url", "/blog-post-3");
+      expectElementJson(rewriteParamHtml, "app-query", {
+        post: "post-3",
+        param: "post-3",
+      });
+      expectElementText(rewriteParamHtml, "resolved-url", "/blog/post-3");
+      expectElementText(rewriteParamHtml, "as-path", "/blog-post-3");
+
+      const sourceRewriteRes = await fetch(`${fixtureUrl}/rewrite-source/foo`);
+      expect(sourceRewriteRes.status).toBe(200);
+      const sourceRewriteHtml = await sourceRewriteRes.text();
+      expect(sourceRewriteHtml).toContain("<h1>rewrite-target</h1>");
+      expect(sourceRewriteHtml).toContain('<p id="as-path">/rewrite-source/foo</p>');
+      expect(sourceRewriteHtml).toContain('<p id="req-url">/rewrite-source/foo</p>');
+    } finally {
+      await tempServer?.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   // Regression for cloudflare/vinext#1471: when a query value itself contains

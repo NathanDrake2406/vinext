@@ -26,6 +26,7 @@ import { buildNextDataJsonResponse } from "./pages-data-route.js";
 import { NEXTJS_DEPLOYMENT_ID_HEADER } from "./headers.js";
 import { isSerializableProps } from "./pages-serializable-props.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
+import { isUnknownRecord } from "../utils/record.js";
 
 type PagesRedirectResult = {
   destination: string;
@@ -62,6 +63,10 @@ type PagesGsspContextResponse = {
   req: unknown;
   res: PagesMutableGsspResponse;
   responsePromise: Promise<Response>;
+};
+
+type PagesRenderProps = Record<string, unknown> & {
+  pageProps: Record<string, unknown>;
 };
 
 export type PagesPageModule = {
@@ -114,9 +119,10 @@ export type PagesPageModule = {
 type RenderPagesIsrHtmlOptions = {
   buildId: string | null;
   cachedHtml: string;
-  createPageElement: (pageProps: Record<string, unknown>) => ReactNode;
+  createPageElement: (props: Record<string, unknown>) => ReactNode;
   i18n: PagesI18nRenderContext;
   pageProps: Record<string, unknown>;
+  props?: Record<string, unknown>;
   params: Record<string, unknown>;
   renderIsrPassToStringAsync: (element: ReactNode) => Promise<string>;
   routePattern: string;
@@ -139,7 +145,8 @@ export type ResolvePagesPageDataOptions = {
   isDataReq?: boolean;
   err?: unknown;
   createGsspReqRes: () => PagesGsspContextResponse;
-  createPageElement: (pageProps: Record<string, unknown>) => ReactNode;
+  createAppTree?: (props: Record<string, unknown>) => ReactNode;
+  createPageElement: (props: Record<string, unknown>) => ReactNode;
   fontLinkHeader: string;
   i18n: PagesI18nRenderContext;
   isrCacheKey: (router: string, pathname: string) => string;
@@ -186,9 +193,11 @@ export type ResolvePagesPageDataOptions = {
   deploymentId?: string;
   htmlLimitedBots?: string;
   pageModule: PagesPageModule;
+  AppComponent?: unknown;
   params: Record<string, unknown>;
   query: Record<string, unknown>;
   asPath?: string;
+  resolvedUrl?: string;
   route: Pick<Route, "isDynamic">;
   routePattern: string;
   routeUrl: string;
@@ -233,6 +242,7 @@ type ResolvePagesPageDataRenderResult = {
   gsspRes: PagesGsspResponse | null;
   isrRevalidateSeconds: number | null;
   pageProps: Record<string, unknown>;
+  props: PagesRenderProps;
   /**
    * True when `getStaticPaths` returned `fallback: true` AND the requested path
    * is not in the pre-rendered list. The caller renders a loading shell with
@@ -287,6 +297,13 @@ function buildPagesNotFoundResult(
 
 function resolvePagesRedirectStatus(redirect: PagesRedirectResult): number {
   return redirect.statusCode != null ? redirect.statusCode : redirect.permanent ? 308 : 307;
+}
+
+function normalizePagesRenderProps(props: Record<string, unknown>): PagesRenderProps {
+  return {
+    ...props,
+    pageProps: isUnknownRecord(props.pageProps) ? props.pageProps : {},
+  };
 }
 
 /**
@@ -484,13 +501,15 @@ function rewritePagesCachedHtml(
 }
 
 export async function renderPagesIsrHtml(options: RenderPagesIsrHtmlOptions): Promise<string> {
+  const renderProps = options.props ?? { pageProps: options.pageProps };
   const freshBody = await options.renderIsrPassToStringAsync(
-    options.createPageElement(options.pageProps),
+    options.createPageElement(renderProps),
   );
   const nextDataScript = buildPagesNextDataScript({
     buildId: options.buildId,
     i18n: options.i18n,
     pageProps: options.pageProps,
+    props: renderProps,
     params: options.params,
     routePattern: options.routePattern,
     safeJsonStringify: options.safeJsonStringify,
@@ -562,18 +581,63 @@ export async function resolvePagesPageData(
       gsspRes: null,
       isrRevalidateSeconds: null,
       pageProps,
+      props: { pageProps },
       isFallback: true,
     };
   }
 
+  let renderProps: PagesRenderProps = { pageProps };
+  let sharedReqRes: PagesGsspContextResponse | null = null;
+  function getSharedReqRes(): PagesGsspContextResponse {
+    sharedReqRes ??= options.createGsspReqRes();
+    return sharedReqRes;
+  }
+
+  const hasAppGetInitialProps = hasPagesGetInitialProps(options.AppComponent);
+  if (hasAppGetInitialProps) {
+    const { req, res, responsePromise } = getSharedReqRes();
+    const initialProps = await loadPagesGetInitialProps(options.AppComponent, {
+      AppTree: options.createAppTree ?? options.createPageElement,
+      Component: options.pageModule.default,
+      router: {
+        pathname: options.routePattern,
+        query: options.query,
+        asPath: options.asPath ?? options.routeUrl,
+      },
+      ctx: {
+        req,
+        res,
+        err: options.err,
+        pathname: options.routePattern,
+        query: options.query,
+        asPath: options.asPath ?? options.routeUrl,
+        locale: options.i18n.locale,
+        locales: options.i18n.locales,
+        defaultLocale: options.i18n.defaultLocale,
+      },
+    });
+
+    if (isResponseSent(res)) {
+      return {
+        kind: "response",
+        response: await responsePromise,
+      };
+    }
+
+    if (initialProps) {
+      renderProps = normalizePagesRenderProps(initialProps);
+      pageProps = renderProps.pageProps;
+    }
+  }
+
   if (typeof options.pageModule.getServerSideProps === "function") {
-    const { req, res, responsePromise } = options.createGsspReqRes();
+    const { req, res, responsePromise } = getSharedReqRes();
     const result = await options.pageModule.getServerSideProps({
       params: userFacingParams,
       req,
       res,
       query: options.query,
-      resolvedUrl: options.routeUrl,
+      resolvedUrl: options.resolvedUrl ?? options.routeUrl,
       locale: options.i18n.locale,
       locales: options.i18n.locales,
       defaultLocale: options.i18n.defaultLocale,
@@ -591,7 +655,11 @@ export async function resolvePagesPageData(
       // before serialising; otherwise pageProps would be a Promise and the
       // rendered page would receive empty props. See
       // packages/next/src/server/render.tsx (deferredContent).
-      pageProps = (await Promise.resolve(result.props)) as Record<string, unknown>;
+      pageProps = {
+        ...pageProps,
+        ...((await Promise.resolve(result.props)) as Record<string, unknown>),
+      };
+      renderProps = { ...renderProps, pageProps };
     }
 
     if (result?.redirect) {
@@ -761,7 +829,8 @@ export async function resolvePagesPageData(
     });
 
     if (result?.props) {
-      pageProps = result.props;
+      pageProps = { ...pageProps, ...result.props };
+      renderProps = { ...renderProps, pageProps };
     }
 
     if (result?.redirect) {
@@ -795,9 +864,10 @@ export async function resolvePagesPageData(
   if (
     typeof options.pageModule.getServerSideProps !== "function" &&
     typeof options.pageModule.getStaticProps !== "function" &&
+    !hasAppGetInitialProps &&
     hasPagesGetInitialProps(options.pageModule.default)
   ) {
-    const { req, res, responsePromise } = options.createGsspReqRes();
+    const { req, res, responsePromise } = getSharedReqRes();
     const initialProps = await loadPagesGetInitialProps(options.pageModule.default, {
       req,
       res,
@@ -819,6 +889,7 @@ export async function resolvePagesPageData(
 
     if (initialProps) {
       pageProps = { ...pageProps, ...initialProps };
+      renderProps = { ...renderProps, pageProps };
     }
   }
 
@@ -827,6 +898,7 @@ export async function resolvePagesPageData(
     gsspRes,
     isrRevalidateSeconds,
     pageProps,
+    props: renderProps,
     isFallback: false,
   };
 }

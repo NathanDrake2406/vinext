@@ -40,6 +40,7 @@ import { addBasePathToPathname, hasBasePath } from "../utils/base-path.js";
 export type PagesRenderOptions = {
   isDataReq?: boolean;
   renderErrorPageOnMiss?: boolean;
+  originalUrl?: string;
 };
 
 export type MiddlewareResult = {

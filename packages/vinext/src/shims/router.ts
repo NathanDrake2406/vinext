@@ -1132,9 +1132,9 @@ type NavigateClientOptions = {
 /** Wire format of `/_next/data/<id>/<page>.json` response bodies. */
 type PagesDataResponse = {
   pageProps?: Record<string, unknown>;
-  // Server may also emit `notFound`, `__N_SSP`, etc. — we only consume
-  // `pageProps`; everything else triggers a hard reload per the
-  // user-configured fallback policy.
+  // Mirrors Next.js's full Pages props envelope. `_app.getInitialProps`
+  // can add app-level props beside `pageProps`, and clients must thread
+  // that outer envelope through App during hydration/navigation.
   [key: string]: unknown;
 };
 
@@ -1379,8 +1379,10 @@ async function navigateClientData(
   }
   assertStillCurrent();
 
-  const pageProps: Record<string, unknown> =
-    body.pageProps && typeof body.pageProps === "object" ? body.pageProps : {};
+  const props: Record<string, unknown> = isUnknownRecord(body) ? body : {};
+  const pageProps: Record<string, unknown> = isUnknownRecord(props.pageProps)
+    ? props.pageProps
+    : {};
 
   // gSSP/gSP redirect marker. When getServerSideProps/getStaticProps returns
   // `{ redirect }`, the data endpoint replies 200 with `__N_REDIRECT` /
@@ -1437,16 +1439,17 @@ async function navigateClientData(
   let element: ReactElement;
   if (AppComponent) {
     element = React.createElement(AppComponent, {
+      ...props,
       Component: PageComponent,
       pageProps,
     });
   } else {
     element = React.createElement(PageComponent, pageProps);
   }
-  // Build the updated __NEXT_DATA__. The JSON envelope is intentionally
-  // minimal (just `pageProps`), so we synthesise the surrounding fields
-  // from the data we already have: the matched pattern, the params, and
-  // the previous nextData's buildId/locale state. This keeps
+  // Build the updated __NEXT_DATA__. The JSON envelope is the full Pages
+  // props object, so preserve it while synthesising the surrounding fields
+  // from the matched pattern, params, and previous nextData's buildId/locale
+  // state. This keeps
   // `useRouter()`, `getPagesNavigationContext()`, and any code reading
   // `window.__NEXT_DATA__` in sync after a JSON navigation — mirroring
   // what the HTML path produces.
@@ -1478,7 +1481,7 @@ async function navigateClientData(
     : (prev as VinextNextData | undefined)?.locale;
   const nextData = {
     ...prev,
-    props: { pageProps },
+    props,
     page: target.pattern,
     query: mergedQuery,
     buildId: target.buildId,
@@ -1573,7 +1576,10 @@ async function navigateClientHtml(
   }
 
   const nextData = parseVinextNextDataJson(nextDataJson);
-  const { pageProps } = nextData.props;
+  const props = nextData.props && typeof nextData.props === "object" ? nextData.props : {};
+  const pageProps: Record<string, unknown> = isUnknownRecord(props.pageProps)
+    ? props.pageProps
+    : {};
   // Defer writing window.__NEXT_DATA__ until just before root.render() —
   // writing it here would let a stale navigation briefly pollute the global
   // between this assertStillCurrent() and the next one after await import().
@@ -1643,6 +1649,7 @@ async function navigateClientHtml(
   let element;
   if (AppComponent) {
     element = React.createElement(AppComponent, {
+      ...props,
       Component: PageComponent,
       pageProps,
     });

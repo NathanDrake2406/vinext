@@ -2,13 +2,13 @@ type PagesGetInitialPropsContext = {
   req?: unknown;
   res?: unknown;
   err?: unknown;
-  pathname: string;
-  query: Record<string, unknown>;
-  asPath: string;
+  pathname?: string;
+  query?: Record<string, unknown>;
+  asPath?: string;
   locale?: string;
   locales?: string[];
   defaultLocale?: string;
-};
+} & Record<string, unknown>;
 
 type PagesGetInitialProps = (context: PagesGetInitialPropsContext) => unknown;
 

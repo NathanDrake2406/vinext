@@ -406,18 +406,24 @@ const _renderPage = __createPagesPageHandler({
   renderIsrPassToStringAsync: _renderIsrPassToStringAsync,
   safeJsonStringify,
   sanitizeDestination: sanitizeDestinationLocal,
-  createPageElement(PageComponent, AppComponent, pageProps) {
+  createPageElement(PageComponent, AppComponent, props) {
+    const pageProps = props && typeof props.pageProps === "object" && props.pageProps !== null
+      ? props.pageProps
+      : {};
     return AppComponent
-      ? React.createElement(AppComponent, { Component: PageComponent, pageProps })
+      ? React.createElement(AppComponent, { ...props, Component: PageComponent, pageProps })
       : React.createElement(PageComponent, pageProps);
   },
-  enhancePageElement(PageComponent, AppComponent, pageProps, opts) {
+  enhancePageElement(PageComponent, AppComponent, props, opts) {
+    const pageProps = props && typeof props.pageProps === "object" && props.pageProps !== null
+      ? props.pageProps
+      : {};
     let FinalApp = AppComponent;
     let FinalComp = PageComponent;
     if (opts && typeof opts.enhanceApp === "function" && FinalApp) FinalApp = opts.enhanceApp(FinalApp);
     if (opts && typeof opts.enhanceComponent === "function") FinalComp = opts.enhanceComponent(FinalComp);
     return FinalApp
-      ? React.createElement(FinalApp, { Component: FinalComp, pageProps })
+      ? React.createElement(FinalApp, { ...props, Component: FinalComp, pageProps })
       : React.createElement(FinalComp, pageProps);
   },
   AppComponent,

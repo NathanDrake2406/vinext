@@ -65,8 +65,9 @@ import {
   runDocumentRenderPage,
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
-import { loadPagesGetInitialProps } from "./pages-get-initial-props.js";
+import { hasPagesGetInitialProps, loadPagesGetInitialProps } from "./pages-get-initial-props.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
+import { isUnknownRecord } from "../utils/record.js";
 
 /**
  * Render a React element to a string using renderToReadableStream.
@@ -448,6 +449,7 @@ export function createSSRHandler(
      * client-side navigations in the Pages Router.
      */
     isDataReq: boolean = false,
+    originalUrl: string = url,
   ): Promise<void> => {
     const _reqStart = now();
     let _compileEnd: number | undefined;
@@ -535,6 +537,10 @@ export function createSSRHandler(
     }
 
     const { route, params } = match;
+    req.url = originalUrl;
+    const originalUrlSearch = new URL(originalUrl, "http://vinext.local").search;
+    const gsspResolvedUrl = localeStrippedUrl.split("?")[0]! + originalUrlSearch;
+    const requestAsPath = isDataReq ? gsspResolvedUrl : originalUrl;
     // Next.js exposes `params: null` to data-fetching contexts (gSSP, gSP) on
     // non-dynamic routes — see render.tsx's `...(pageIsDynamic ? { params } : undefined)`.
     // Internal use (query merging, _app router context) keeps the matched
@@ -614,7 +620,7 @@ export function createSSRHandler(
           routerShim.setSSRContext({
             pathname: patternToNextFormat(route.pattern),
             query,
-            asPath: url,
+            asPath: requestAsPath,
             navigationIsReady,
             nextData: pagesNextData,
             locale: locale ?? currentDefaultLocale,
@@ -667,6 +673,7 @@ export function createSSRHandler(
 
         // Collect page props via data fetching methods
         let pageProps: Record<string, unknown> = {};
+        let renderProps: Record<string, unknown> = { pageProps };
         let isrRevalidateSeconds: number | null = null;
         // Set when `getStaticPaths: { fallback: true }` is configured and the
         // requested path is NOT in the pre-rendered list. Triggers the loading
@@ -751,7 +758,7 @@ export function createSSRHandler(
               routerShim.setSSRContext({
                 pathname: patternToNextFormat(route.pattern),
                 query,
-                asPath: url,
+                asPath: requestAsPath,
                 navigationIsReady: false,
                 locale: locale ?? currentDefaultLocale,
                 locales: i18nConfig?.locales,
@@ -769,6 +776,44 @@ export function createSSRHandler(
         // would silently break if streamPageToResponse is refactored.
         const gsspExtraHeaders: Record<string, string | string[]> = {};
 
+        const hasAppGetInitialProps = hasPagesGetInitialProps(AppComponent);
+        if (hasAppGetInitialProps) {
+          const initialProps = await loadPagesGetInitialProps(AppComponent, {
+            AppTree: (appTreeProps: Record<string, unknown>) =>
+              React.createElement(AppComponent, {
+                ...appTreeProps,
+                Component: PageComponent,
+                pageProps: isUnknownRecord(appTreeProps.pageProps) ? appTreeProps.pageProps : {},
+              }),
+            Component: PageComponent,
+            router: {
+              pathname: patternToNextFormat(route.pattern),
+              query,
+              asPath: requestAsPath,
+            },
+            ctx: {
+              req,
+              res,
+              pathname: patternToNextFormat(route.pattern),
+              query,
+              asPath: requestAsPath,
+              locale: locale ?? currentDefaultLocale,
+              locales: i18nConfig?.locales,
+              defaultLocale: currentDefaultLocale,
+            },
+          });
+
+          if (res.headersSent || res.writableEnded) {
+            return;
+          }
+
+          if (initialProps) {
+            const initialPageProps = initialProps.pageProps;
+            pageProps = isUnknownRecord(initialPageProps) ? initialPageProps : {};
+            renderProps = { ...initialProps, pageProps };
+          }
+        }
+
         if (typeof pageModule.getServerSideProps === "function" && !isFallbackRender) {
           // Snapshot existing headers so we can detect what gSSP adds.
           const headersBeforeGSSP = new Set(Object.keys(res.getHeaders()));
@@ -778,7 +823,7 @@ export function createSSRHandler(
             req,
             res,
             query,
-            resolvedUrl: localeStrippedUrl,
+            resolvedUrl: gsspResolvedUrl,
             locale: locale ?? currentDefaultLocale,
             locales: i18nConfig?.locales,
             defaultLocale: currentDefaultLocale,
@@ -799,7 +844,11 @@ export function createSSRHandler(
             // it before serialising; otherwise pageProps would be a Promise
             // and the rendered page would receive empty props. See
             // packages/next/src/server/render.tsx (deferredContent).
-            pageProps = await Promise.resolve(result.props);
+            pageProps = {
+              ...pageProps,
+              ...(await Promise.resolve(result.props)),
+            };
+            renderProps = { ...renderProps, pageProps };
           }
           if (result && "redirect" in result) {
             writeGsspRedirect(res, result.redirect, isDataReq);
@@ -994,7 +1043,7 @@ export function createSSRHandler(
                         routerShim.setSSRContext({
                           pathname: patternToNextFormat(route.pattern),
                           query,
-                          asPath: url,
+                          asPath: requestAsPath,
                           navigationIsReady,
                           locale: locale ?? currentDefaultLocale,
                           locales: i18nConfig?.locales,
@@ -1139,7 +1188,11 @@ export function createSSRHandler(
           };
           const result = await pageModule.getStaticProps(context);
           if (result && "props" in result) {
-            pageProps = result.props;
+            pageProps = {
+              ...pageProps,
+              ...(await Promise.resolve(result.props)),
+            };
+            renderProps = { ...renderProps, pageProps };
           }
           if (result && "redirect" in result) {
             writeGsspRedirect(res, result.redirect, isDataReq);
@@ -1190,14 +1243,15 @@ export function createSSRHandler(
 
         if (
           typeof pageModule.getServerSideProps !== "function" &&
-          typeof pageModule.getStaticProps !== "function"
+          typeof pageModule.getStaticProps !== "function" &&
+          !hasAppGetInitialProps
         ) {
           const initialProps = await loadPagesGetInitialProps(PageComponent, {
             req,
             res,
             pathname: patternToNextFormat(route.pattern),
             query,
-            asPath: url,
+            asPath: requestAsPath,
             locale: locale ?? currentDefaultLocale,
             locales: i18nConfig?.locales,
             defaultLocale: currentDefaultLocale,
@@ -1209,12 +1263,13 @@ export function createSSRHandler(
 
           if (initialProps) {
             pageProps = { ...pageProps, ...initialProps };
+            renderProps = { ...renderProps, pageProps };
           }
         }
 
         // ── _next/data JSON envelope short-circuit (dev) ──────────────
         // Client-side navigations fetch /_next/data/<buildId>/<page>.json and
-        // expect { pageProps } as JSON. We have pageProps; skip the React
+        // expect the full Pages props object as JSON. We have renderProps; skip the React
         // tree render and the _document shell entirely. Headers set on `res`
         // by getServerSideProps (cookies, status codes, etc.) are preserved
         // because we already let gSSP mutate `res` above.
@@ -1241,7 +1296,7 @@ export function createSSRHandler(
             }
           }
           res.writeHead(statusCode ?? 200, dataHeaders);
-          res.end(JSON.stringify({ pageProps }));
+          res.end(JSON.stringify(renderProps));
           _renderEnd = now();
           return;
         }
@@ -1258,6 +1313,7 @@ export function createSSRHandler(
 
         if (AppComponent) {
           element = createElement(AppComponent, {
+            ...renderProps,
             Component: PageComponent,
             pageProps,
           });
@@ -1482,7 +1538,7 @@ hydrate();
           documentContext: {
             pathname: patternToNextFormat(route.pattern),
             query,
-            asPath: url,
+            asPath: requestAsPath,
           },
           // Used by `_document.getInitialProps` -> `ctx.renderPage` to wrap
           // App/Component with user enhancers (e.g. styled-components,
@@ -1506,6 +1562,7 @@ hydrate();
             let enhancedElement: React.ReactElement;
             if (FinalApp) {
               enhancedElement = createElement(FinalApp, {
+                ...renderProps,
                 Component: FinalComp,
                 pageProps,
               });
@@ -1548,6 +1605,7 @@ hydrate();
         if (!scriptNonce && isrRevalidateSeconds !== null && isrRevalidateSeconds > 0) {
           let isrElement = AppComponent
             ? createElement(AppComponent, {
+                ...renderProps,
                 Component: pageModule.default,
                 pageProps,
               })

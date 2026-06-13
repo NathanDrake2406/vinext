@@ -952,6 +952,41 @@ describe("Pages Router entry template", () => {
     }
   });
 
+  it("hydrates _app with the full Pages props envelope", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-client-entry-props-"));
+    const pagesDir = path.join(tmpDir, "pages");
+
+    try {
+      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pagesDir, "_app.tsx"),
+        "export default function App({ Component, pageProps }) { return <Component {...pageProps} />; }",
+      );
+      fs.writeFileSync(
+        path.join(pagesDir, "index.tsx"),
+        "export default function Page() { return null; }",
+      );
+
+      const code = await generateClientEntry(
+        pagesDir,
+        await resolveNextConfig({}),
+        createValidFileMatcher(),
+      );
+
+      expect(code).toContain(
+        'const props = nextData.props && typeof nextData.props === "object" ? nextData.props : {};',
+      );
+      expect(code).toContain(
+        'const pageProps = props.pageProps && typeof props.pageProps === "object" ? props.pageProps : {};',
+      );
+      expect(code).toContain(
+        "element = React.createElement(AppComponent, { ...props, Component: PageComponent, pageProps });",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("installs the dev error overlay before loading Pages Router modules", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-client-entry-overlay-"));
     const pagesDir = path.join(tmpDir, "pages");
