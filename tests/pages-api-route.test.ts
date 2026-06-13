@@ -410,6 +410,16 @@ describe("pages api route", () => {
   });
 
   it("preserves edge API request properties when applying the resolved URL", async () => {
+    const request = new Request("https://example.com/api/edge-search-params?a=b", {
+      body: "payload",
+      headers: { "x-test": "1" },
+      method: "POST",
+    });
+    Object.defineProperty(request, "cf", {
+      configurable: true,
+      enumerable: true,
+      value: { country: "US" },
+    });
     const response = await handlePagesApiRoute({
       match: createMatch(
         async (request: Request) => {
@@ -422,22 +432,20 @@ describe("pages api route", () => {
             header: request.headers.get("x-test"),
             method: request.method,
             query: Object.fromEntries(nextUrl.searchParams),
+            cf: Reflect.get(request, "cf"),
           });
         },
         {},
         { runtime: "edge" },
       ),
-      request: new Request("https://example.com/api/edge-search-params?a=b", {
-        body: "payload",
-        headers: { "x-test": "1" },
-        method: "POST",
-      }),
+      request,
       url: "/api/edge-search-params?a=b&foo=bar",
     });
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       body: "payload",
+      cf: { country: "US" },
       header: "1",
       method: "POST",
       query: {

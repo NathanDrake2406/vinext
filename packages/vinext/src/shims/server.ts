@@ -123,6 +123,14 @@ export class NextRequest extends Request {
       const requestInput =
         requestInit.body === undefined && input.body && !input.bodyUsed ? input.clone() : input;
       super(requestInput, requestInit);
+      const cf = Reflect.get(input, "cf");
+      if (cf !== undefined) {
+        Object.defineProperty(this, "cf", {
+          value: cf,
+          enumerable: true,
+          configurable: true,
+        });
+      }
     } else {
       super(input, requestInit);
     }
@@ -336,6 +344,9 @@ export class NextURL {
   private _defaultLocale: string | undefined;
   private _locales: string[] | undefined;
   private _domains: NonNullable<NonNullable<NextURLConfig["nextConfig"]>["i18n"]>["domains"];
+  private _domainLocale:
+    | NonNullable<NonNullable<NonNullable<NextURLConfig["nextConfig"]>["i18n"]>["domains"]>[number]
+    | undefined;
 
   constructor(input: string | URL, base?: string | URL, config?: NextURLConfig) {
     this._url = new URL(input.toString(), base);
@@ -392,10 +403,10 @@ export class NextURL {
   private _analyzeI18n(): void {
     if (!this._locales || !this._configDefaultLocale) return;
     const hostname = this._url.hostname.toLowerCase();
-    const domainLocale = this._domains?.find(
+    this._domainLocale = this._domains?.find(
       (domain) => domain.domain.split(":", 1)[0].toLowerCase() === hostname,
     );
-    this._defaultLocale = domainLocale?.defaultLocale ?? this._configDefaultLocale;
+    this._defaultLocale = this._domainLocale?.defaultLocale ?? this._configDefaultLocale;
     this._analyzeLocale(this._locales);
   }
 
@@ -544,6 +555,14 @@ export class NextURL {
 
   get defaultLocale(): string | undefined {
     return this._defaultLocale;
+  }
+
+  get domainLocale(): typeof this._domainLocale {
+    if (!this._domainLocale) return undefined;
+    return {
+      ...this._domainLocale,
+      locales: this._domainLocale.locales ? [...this._domainLocale.locales] : undefined,
+    };
   }
 
   get locales(): string[] | undefined {

@@ -8694,6 +8694,11 @@ describe("NextURL basePath and locale properties", () => {
     });
     expect(url.defaultLocale).toBe("fr");
     expect(url.locale).toBe("fr");
+    expect(url.domainLocale).toEqual({
+      domain: "example.fr",
+      defaultLocale: "fr",
+      locales: ["fr"],
+    });
     expect(url.pathname).toBe("/about");
   });
 
@@ -8728,6 +8733,7 @@ describe("NextURL basePath and locale properties", () => {
     url.href = "https://example.fr/about";
     expect(url.defaultLocale).toBe("fr");
     expect(url.locale).toBe("fr");
+    expect(url.domainLocale?.domain).toBe("example.fr");
   });
 
   it("locale detection is case-insensitive", async () => {

@@ -16,6 +16,7 @@ import {
 } from "./pages-node-compat.js";
 import { resolveBodyParserConfig } from "./pages-body-parser-config.js";
 import { internalServerErrorResponse } from "./http-error-responses.js";
+import { cloneRequestWithUrl } from "./request-pipeline.js";
 import { isEdgeApiRuntime } from "./edge-api-runtime.js";
 import { runWithExecutionContext, type ExecutionContextLike } from "vinext/shims/request-context";
 import { NextRequest } from "vinext/shims/server";
@@ -110,7 +111,9 @@ function createEdgeApiRequest(request: Request, url: string, params: PagesReques
   const resolvedUrl = new URL(request.url);
   resolvedUrl.search = urlQueryToSearchParams(buildPagesApiQuery(url, params)).toString();
   const resolvedUrlString = resolvedUrl.toString();
-  return resolvedUrlString === request.url ? request : new Request(resolvedUrlString, request);
+  return resolvedUrlString === request.url
+    ? request
+    : cloneRequestWithUrl(request, resolvedUrlString);
 }
 
 function isEdgeApiRouteModule(
