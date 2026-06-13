@@ -45,9 +45,9 @@ describe("compareHybridRoutePatterns", () => {
   it("lets a static-prefix Pages catch-all beat a bare App catch-all", () => {
     // /_sites/:slug* must beat /:slug*. `routePrecedence` reduces the
     // static-prefix score by 50 per segment, so the Pages route scores
-    // 51 and the App route scores 100. The hand-copied client comparator
-    // missed this reduction and reversed the answer; the shared
-    // comparator (which delegates to `sortRoutes`) gets it right.
+    // 1951 and the App route scores 2000. The hand-copied client
+    // comparator missed this reduction and reversed the answer; the
+    // shared comparator (which delegates to `sortRoutes`) gets it right.
     expect(compareHybridRoutePatterns("/_sites/:slug*", true, "/:slug*", true)).toBe("pages");
   });
 
