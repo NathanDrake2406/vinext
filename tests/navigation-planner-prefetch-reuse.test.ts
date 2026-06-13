@@ -27,6 +27,51 @@ function classifyReuse(overrides: Partial<NavigationReuseFactsV0> = {}): Navigat
 }
 
 describe("navigationPlanner prefetch reuse classification", () => {
+  it("skips prefetch probes when a visited response is already reusable", () => {
+    expect(
+      navigationPlanner.classifyNavigationPrefetchProbe({
+        bypassNavigationCache: false,
+        navigationKind: "navigate",
+        visitedResponse: { status: "available" },
+      }),
+    ).toEqual({
+      kind: "skip",
+      reason: "visitedResponseAvailable",
+    });
+  });
+
+  it("probes prefetch only for non-refresh cacheable visited-response misses", () => {
+    expect(
+      navigationPlanner.classifyNavigationPrefetchProbe({
+        bypassNavigationCache: false,
+        navigationKind: "navigate",
+        visitedResponse: { status: "unavailable" },
+      }),
+    ).toEqual({ kind: "probe" });
+
+    expect(
+      navigationPlanner.classifyNavigationPrefetchProbe({
+        bypassNavigationCache: false,
+        navigationKind: "refresh",
+        visitedResponse: { status: "unavailable" },
+      }),
+    ).toEqual({
+      kind: "skip",
+      reason: "refresh",
+    });
+
+    expect(
+      navigationPlanner.classifyNavigationPrefetchProbe({
+        bypassNavigationCache: true,
+        navigationKind: "navigate",
+        visitedResponse: { status: "unavailable" },
+      }),
+    ).toEqual({
+      kind: "skip",
+      reason: "cacheBypassed",
+    });
+  });
+
   it("reuses visited responses before prefetch or optimistic candidates", () => {
     const decision = classifyReuse({
       prefetch: { status: "available" },

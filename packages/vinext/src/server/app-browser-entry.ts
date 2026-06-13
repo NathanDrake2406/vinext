@@ -177,6 +177,7 @@ import {
 import { removeStylesheetLinksCoveredByInlineCss } from "./app-inline-css-client.js";
 import {
   navigationPlanner,
+  type NavigationReuseFactsV0,
   type VisitedResponseCacheCandidateFactsV0,
 } from "./navigation-planner.js";
 
@@ -1783,10 +1784,16 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           visitedResponseCandidate,
           visitedResponseDecision,
         );
+        const visitedResponse: NavigationReuseFactsV0["visitedResponse"] =
+          cachedRoute === null ? { status: "unavailable" } : { status: "available" };
+        const prefetchProbeDecision = navigationPlanner.classifyNavigationPrefetchProbe({
+          bypassNavigationCache: shouldBypassNavigationCache,
+          navigationKind,
+          visitedResponse,
+        });
         const routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
         const hasPrefetchCandidate =
-          navigationKind !== "refresh" &&
-          !shouldBypassNavigationCache &&
+          prefetchProbeDecision.kind === "probe" &&
           hasPrefetchCacheEntryForNavigation(
             rscUrl,
             requestInterceptionContext,
@@ -1802,8 +1809,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
               : { status: "available" },
           prefetch: hasPrefetchCandidate ? { status: "available" } : { status: "unavailable" },
           targetHref: currentHref,
-          visitedResponse:
-            cachedRoute === null ? { status: "unavailable" } : { status: "available" },
+          visitedResponse,
         });
         if (reuseDecision.kind === "reuseVisitedResponse" && cachedRoute) {
           const cachedFetchDecision = navigationPlanner.classifyRscFetchResult({

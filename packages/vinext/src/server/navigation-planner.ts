@@ -298,6 +298,16 @@ export type NavigationReuseDecisionV0 =
   | { kind: "attemptOptimisticRouteShell"; trace: NavigationTrace }
   | { kind: "fetchFresh"; reason: FreshFetchReason; trace: NavigationTrace };
 
+type NavigationPrefetchProbeFactsV0 = {
+  bypassNavigationCache: boolean;
+  navigationKind: NavigationReuseNavigationKind;
+  visitedResponse: NavigationReuseCandidateAvailability;
+};
+
+type NavigationPrefetchProbeDecisionV0 =
+  | { kind: "probe" }
+  | { kind: "skip"; reason: "cacheBypassed" | "refresh" | "visitedResponseAvailable" };
+
 export type NavigationPlannerInput = {
   // Graph-owned route topology is the semantic authority for root/layout/slot
   // decisions whenever the caller can supply it. Null keeps the legacy
@@ -739,6 +749,24 @@ function classifyNavigationReuse(facts: NavigationReuseFactsV0): NavigationReuse
   }
 
   return createFreshFetchDecision(facts, "cacheMiss");
+}
+
+function classifyNavigationPrefetchProbe(
+  facts: NavigationPrefetchProbeFactsV0,
+): NavigationPrefetchProbeDecisionV0 {
+  if (facts.visitedResponse.status === "available") {
+    return { kind: "skip", reason: "visitedResponseAvailable" };
+  }
+
+  if (facts.navigationKind === "refresh") {
+    return { kind: "skip", reason: "refresh" };
+  }
+
+  if (facts.bypassNavigationCache) {
+    return { kind: "skip", reason: "cacheBypassed" };
+  }
+
+  return { kind: "probe" };
 }
 
 function createSnapshotRouteTopology(snapshot: RouteSnapshotV0): RouteTopologySnapshot {
@@ -1669,6 +1697,7 @@ function classifyRscNavigationError(
 
 export const navigationPlanner = {
   classifyEarlyNavigationIntent,
+  classifyNavigationPrefetchProbe,
   classifyNavigationReuse,
   classifyRscFetchResult,
   classifyRscNavigationError,
