@@ -4,8 +4,11 @@ import { expect, test } from "@playwright/test";
 
 test.describe("use-params", () => {
   test("should work for single dynamic param", async ({ page, baseURL }) => {
-    await page.goto(`${baseURL}/a/b`);
+    await page.goto(`${baseURL}/a`);
     await expect(page.locator("#param-id")).toHaveText("a");
+
+    // Also verify that only the [id] layout (not [id]/[id2]) drives this page
+    await expect(page.locator("#param-id2")).toHaveCount(0);
   });
 
   test("should work for nested dynamic params", async ({ page, baseURL }) => {
