@@ -111,6 +111,25 @@ describe("App browser stream helpers", () => {
     expect(listeners.has("DOMContentLoaded")).toBe(true);
   });
 
+  it("closes the legacy progressive stream when the done marker arrives without another chunk", async () => {
+    setGlobalDocument({
+      readyState: "loading",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as Document);
+
+    vinext.__VINEXT_RSC_CHUNKS__ = [];
+    vinext.__VINEXT_RSC_DONE__ = false;
+
+    const reader = createProgressiveRscStream().getReader();
+
+    vinext.__VINEXT_RSC_CHUNKS__!.push("final");
+    expect(await readText(reader)).toEqual({ done: false, text: "final" });
+
+    vinext.__VINEXT_RSC_DONE__ = true;
+    expect(await readText(reader)).toEqual({ done: true, text: undefined });
+  });
+
   it("streams progressive chunks from the typed navigation runtime", async () => {
     const runtimeWindow = {};
     Reflect.set(globalThis, "window", runtimeWindow);
@@ -137,6 +156,32 @@ describe("App browser stream helpers", () => {
     runtimeRsc.done = true;
     runtimeRsc.rsc.push("final");
     expect(await readText(reader)).toEqual({ done: false, text: "final" });
+    expect(await readText(reader)).toEqual({ done: true, text: undefined });
+
+    expect(Reflect.has(runtimeWindow, NAVIGATION_RUNTIME_KEY)).toBe(true);
+  });
+
+  it("closes the typed navigation runtime stream when the done marker arrives without another chunk", async () => {
+    const runtimeWindow = {};
+    Reflect.set(globalThis, "window", runtimeWindow);
+    setGlobalDocument({
+      readyState: "loading",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as Document);
+
+    registerNavigationRuntimeBootstrap({ rsc: { rsc: [], done: false } });
+
+    const reader = createProgressiveRscStream().getReader();
+    const runtimeRsc = getNavigationRuntime()?.bootstrap.rsc;
+    if (runtimeRsc === undefined) {
+      throw new Error("Expected navigation runtime RSC bootstrap");
+    }
+
+    runtimeRsc.rsc.push("final");
+    expect(await readText(reader)).toEqual({ done: false, text: "final" });
+
+    runtimeRsc.done = true;
     expect(await readText(reader)).toEqual({ done: true, text: undefined });
 
     expect(Reflect.has(runtimeWindow, NAVIGATION_RUNTIME_KEY)).toBe(true);

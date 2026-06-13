@@ -27,6 +27,7 @@ type TestRoute = {
 };
 
 type HandlerOptions = Parameters<typeof createAppRscHandler<TestRoute>>[0];
+type DispatchMatchedRouteHandler = HandlerOptions["dispatchMatchedRouteHandler"];
 
 function createPageRoute(overrides: Partial<TestRoute> = {}): TestRoute {
   return {
@@ -774,6 +775,62 @@ describe("createAppRscHandler", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it("hides internal RSC cache-busting params from fallback-rewritten route handlers", async () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/front-redirect-issue/front-redirect-issue.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/front-redirect-issue/front-redirect-issue.test.ts
+    //
+    // The upstream fixture fallback-rewrites a front URL to an App route
+    // handler. That handler mutates `request.nextUrl.pathname` and forwards it
+    // through fetch(), so the userland URL must not expose Next's internal
+    // `_rsc` query. Next strips it before middleware/route userland in
+    // packages/next/src/server/internal-utils.ts and base-server.ts.
+    const route = createPageRoute({
+      isDynamic: true,
+      page: null,
+      pattern: "/api/app-redirect/:path",
+      routeHandler: { GET: () => new Response("route") },
+      routeSegments: ["api", "app-redirect", "[path]"],
+    });
+    const dispatchMatchedRouteHandler = vi.fn<DispatchMatchedRouteHandler>(
+      async () => new Response("route", { status: 200 }),
+    );
+    const headers = createRscRequestHeaders({ mountedSlotsHeader: "slot:modal:/" });
+    const rscUrl = await createRscRequestUrl("/docs/vercel-user?tab=latest", headers);
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [],
+        afterFiles: [],
+        fallback: [{ source: "/:path*", destination: "/api/app-redirect/:path*" }],
+      },
+      dispatchMatchedRouteHandler,
+      matchRoute: (pathname: string) =>
+        pathname === "/api/app-redirect/vercel-user"
+          ? {
+              params: { path: "vercel-user" },
+              route,
+            }
+          : null,
+    });
+
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(200);
+    expect(dispatchMatchedRouteHandler).toHaveBeenCalledTimes(1);
+    const dispatched = dispatchMatchedRouteHandler.mock.calls[0]?.[0];
+    expect(dispatched).toEqual(
+      expect.objectContaining({
+        cleanPathname: "/api/app-redirect/vercel-user",
+        params: { path: "vercel-user" },
+        route,
+      }),
+    );
+    expect(new URL(dispatched?.request.url ?? "").searchParams.has("_rsc")).toBe(false);
+    expect(new URL(dispatched?.request.url ?? "").searchParams.get("tab")).toBe("latest");
+    expect(dispatched?.searchParams.has("_rsc")).toBe(false);
   });
 
   it("does not render RSC payloads at HTML URLs marked only by RSC headers", async () => {

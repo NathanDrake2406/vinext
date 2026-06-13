@@ -214,6 +214,19 @@ const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
 const optimisticRouteTemplates = new Map<string, OptimisticRouteTemplate>();
 const optimisticRouteTemplateSources = new Set<string>();
 const optimisticRouteTemplateLearning = new Map<string, Promise<void>>();
+
+function claimInitialAppRouterBootstrap(): boolean {
+  if (window.__VINEXT_RSC_ROOT__ || window.__VINEXT_RSC_BOOTSTRAP_STATE__) {
+    return false;
+  }
+  window.__VINEXT_RSC_BOOTSTRAP_STATE__ = "starting";
+  return true;
+}
+
+function markInitialAppRouterBootstrapHydrated(): void {
+  window.__VINEXT_RSC_BOOTSTRAP_STATE__ = "hydrated";
+}
+
 function getBrowserRouteManifest(): RouteManifest | null {
   return getNavigationRuntime()?.bootstrap.routeManifest ?? null;
 }
@@ -290,6 +303,7 @@ function isRouterStatePromise(
 }
 
 let latestClientParams: Record<string, string | string[]> = {};
+let latestHydrationPathAndSearch: string | null = null;
 const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 // Sticky bit: stays true once BrowserRoot has committed at least once. Used by
 // the HMR handler to distinguish "still hydrating" (wait) from "was up, then
@@ -1143,9 +1157,12 @@ function restoreHydrationNavigationContext(
   searchParams: SearchParamInput,
   params: Record<string, string | string[]>,
 ): void {
+  const normalizedSearchParams = new URLSearchParams(searchParams);
+  const query = normalizedSearchParams.toString();
+  latestHydrationPathAndSearch = query === "" ? pathname : `${pathname}?${query}`;
   setNavigationContext({
     pathname,
-    searchParams: new URLSearchParams(searchParams),
+    searchParams: normalizedSearchParams,
     params,
   });
 }
@@ -1546,6 +1563,8 @@ function registerServerActionCallback(): void {
 }
 
 async function main(): Promise<void> {
+  if (!claimInitialAppRouterBootstrap()) return;
+
   registerServerActionCallback();
 
   if (import.meta.env.DEV) {
@@ -1567,7 +1586,7 @@ async function main(): Promise<void> {
 function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   const root = decodeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
   const initialNavigationSnapshot = createClientNavigationRenderSnapshot(
-    window.location.href,
+    latestHydrationPathAndSearch ?? window.location.href,
     latestClientParams,
   );
   historyController.writeBootstrapHistoryMetadata();
@@ -1601,6 +1620,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     options: hydrateRootOptions,
     startTransition,
   });
+  markInitialAppRouterBootstrapHydrated();
 
   const navigateRsc: NavigationRuntimeNavigate = async function navigateRsc(
     href: string,

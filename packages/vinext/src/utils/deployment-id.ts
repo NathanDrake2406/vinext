@@ -24,6 +24,25 @@ export function appendAssetDeploymentIdQuery(
   return appendDeploymentIdQuery(value, deploymentId);
 }
 
+export function stripDeploymentIdQuery(value: string): string {
+  const hashIndex = value.indexOf("#");
+  const url = hashIndex === -1 ? value : value.slice(0, hashIndex);
+  const fragment = hashIndex === -1 ? "" : value.slice(hashIndex);
+  const parsed = new URL(url, "http://vinext.local");
+  if (!parsed.searchParams.has("dpl")) return value;
+  parsed.searchParams.delete("dpl");
+  const isAbsolute = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
+  const isProtocolRelative = url.startsWith("//");
+  const pathname = isAbsolute
+    ? `${parsed.origin}${parsed.pathname}`
+    : isProtocolRelative
+      ? `//${parsed.host}${parsed.pathname}`
+      : url.startsWith("/")
+        ? parsed.pathname
+        : parsed.pathname.slice(1);
+  return `${pathname}${parsed.search}${fragment}`;
+}
+
 export function applyDeploymentIdHeader(headers: Headers, deploymentId = getDeploymentId()): void {
   if (deploymentId) headers.set(NEXT_DEPLOYMENT_ID_HEADER, deploymentId);
 }

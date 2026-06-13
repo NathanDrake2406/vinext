@@ -83,6 +83,13 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
           controller.close();
         }
       };
+      const scheduleCloseOnce = () => {
+        if (typeof queueMicrotask === "function") {
+          queueMicrotask(closeOnce);
+        } else {
+          void Promise.resolve().then(closeOnce);
+        }
+      };
       const errorOnce = () => {
         if (!closed) {
           closed = true;
@@ -112,6 +119,37 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
 
         return length;
       };
+      if (liveRuntimeRsc) {
+        let done = Boolean(liveRuntimeRsc.done);
+        Object.defineProperty(liveRuntimeRsc, "done", {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return done;
+          },
+          set(value) {
+            done = Boolean(value);
+            if (done) {
+              scheduleCloseOnce();
+            }
+          },
+        });
+      } else {
+        let done = Boolean(vinext.__VINEXT_RSC_DONE__);
+        Object.defineProperty(vinext, "__VINEXT_RSC_DONE__", {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return done;
+          },
+          set(value) {
+            done = Boolean(value);
+            if (done) {
+              scheduleCloseOnce();
+            }
+          },
+        });
+      }
 
       if (typeof document !== "undefined") {
         if (document.readyState === "loading") {
