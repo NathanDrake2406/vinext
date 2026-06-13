@@ -210,7 +210,7 @@ async function restorePagesRouterScrollPosition(
   scrollToPagesRouterPosition(scroll);
   if (isAtScrollPosition(scroll)) return;
 
-  let previousScrollY = window.scrollY;
+  let previousScrollPosition = getWindowScrollPosition();
   for (let frame = 0; frame < SCROLL_RESTORE_MAX_FRAMES; frame += 1) {
     await waitForNextAnimationFrame();
     if (!shouldContinue()) return;
@@ -218,13 +218,17 @@ async function restorePagesRouterScrollPosition(
     scrollToPagesRouterPosition(scroll);
     if (isAtScrollPosition(scroll)) return;
 
-    if (window.scrollY === previousScrollY) {
+    const currentScrollPosition = getWindowScrollPosition();
+    if (
+      currentScrollPosition.x === previousScrollPosition.x &&
+      currentScrollPosition.y === previousScrollPosition.y
+    ) {
       // Scroll target is unreachable (e.g. the restored page is shorter than
       // the saved position). Stop retrying so routeChangeComplete is not
       // delayed by the full frame budget.
       break;
     }
-    previousScrollY = window.scrollY;
+    previousScrollPosition = currentScrollPosition;
   }
 }
 

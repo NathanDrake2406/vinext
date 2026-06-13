@@ -29,7 +29,9 @@ async function expectScrollPosition(page: Page, expected: ScrollPosition) {
 }
 
 async function expectPageShowsRouteChangeComplete(page: Page, expectedPath: string): Promise<void> {
-  await expect(page.locator("html")).toContainText(`routeChangeComplete:${expectedPath}`);
+  await expect(
+    page.getByText(`routeChangeComplete:${expectedPath}`, { exact: true }),
+  ).toBeVisible();
 }
 
 async function pushWithPagesRouter(page: Page, href: string): Promise<void> {
