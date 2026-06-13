@@ -14,10 +14,11 @@ test.describe("app dir - front redirect issue", () => {
       }
     });
 
-    await page.goto(`${BASE}/vercel-user`);
+    await page.goto(`${BASE}/vercel-user?tab=latest`);
 
     await expect(page.locator("#home-page h1")).toHaveText("Hello!", { timeout: 10_000 });
-    expect(page.url()).toBe(`${BASE}/vercel-user`);
+    expect(page.url()).toBe(`${BASE}/vercel-user?tab=latest`);
+    await expect(page.locator("#visible-url")).toHaveText("/vercel-user?tab=latest");
 
     const bootstrapSrc = await page.locator('script[type="module"][src]').getAttribute("src");
     expect(bootstrapSrc).toBeTruthy();

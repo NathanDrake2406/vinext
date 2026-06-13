@@ -303,7 +303,6 @@ function isRouterStatePromise(
 }
 
 let latestClientParams: Record<string, string | string[]> = {};
-let latestHydrationPathAndSearch: string | null = null;
 const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
 // Sticky bit: stays true once BrowserRoot has committed at least once. Used by
 // the HMR handler to distinguish "still hydrating" (wait) from "was up, then
@@ -1158,8 +1157,6 @@ function restoreHydrationNavigationContext(
   params: Record<string, string | string[]>,
 ): void {
   const normalizedSearchParams = new URLSearchParams(searchParams);
-  const query = normalizedSearchParams.toString();
-  latestHydrationPathAndSearch = query === "" ? pathname : `${pathname}?${query}`;
   setNavigationContext({
     pathname,
     searchParams: normalizedSearchParams,
@@ -1588,7 +1585,7 @@ async function main(): Promise<void> {
 function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   const root = decodeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
   const initialNavigationSnapshot = createClientNavigationRenderSnapshot(
-    latestHydrationPathAndSearch ?? window.location.href,
+    window.location.href,
     latestClientParams,
   );
   historyController.writeBootstrapHistoryMetadata();
