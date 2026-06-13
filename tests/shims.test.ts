@@ -1126,12 +1126,14 @@ describe("next/navigation shim", () => {
       await import("../packages/vinext/src/shims/ppr-fallback-shell.js");
     const navigation = await import("../packages/vinext/src/shims/navigation.js");
 
-    for (const readHook of [
+    const readHooks: Array<() => unknown> = [
       () => navigation.usePathname(),
       () => navigation.useParams(),
       () => navigation.useSelectedLayoutSegment(),
       () => navigation.useSelectedLayoutSegments(),
-    ]) {
+    ];
+
+    for (const readHook of readHooks) {
       const state = createPprFallbackShellState({
         fallbackParamNames: ["slug"],
         routePattern: "/blog/:slug",
