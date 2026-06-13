@@ -777,16 +777,15 @@ describe("createAppRscHandler", () => {
     }
   });
 
-  it("hides internal RSC cache-busting params from fallback-rewritten route handlers", async () => {
+  it("preserves Node route handler RSC URLs while hiding internal parsed params", async () => {
     // Ported from Next.js:
     // test/e2e/app-dir/front-redirect-issue/front-redirect-issue.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/front-redirect-issue/front-redirect-issue.test.ts
     //
     // The upstream fixture fallback-rewrites a front URL to an App route
-    // handler. That handler mutates `request.nextUrl.pathname` and forwards it
-    // through fetch(), so the userland URL must not expose Next's internal
-    // `_rsc` query. Next strips it before middleware/route userland in
-    // packages/next/src/server/internal-utils.ts and base-server.ts.
+    // handler. Next strips `_rsc` from the parsed query in base-server.ts, but
+    // its Node request adapter rebuilds request.url from initURL and preserves
+    // the original search string.
     const route = createPageRoute({
       isDynamic: true,
       page: null,
@@ -828,7 +827,7 @@ describe("createAppRscHandler", () => {
         route,
       }),
     );
-    expect(new URL(dispatched?.request.url ?? "").searchParams.has("_rsc")).toBe(false);
+    expect(new URL(dispatched?.request.url ?? "").searchParams.has("_rsc")).toBe(true);
     expect(new URL(dispatched?.request.url ?? "").searchParams.get("tab")).toBe("latest");
     expect(dispatched?.searchParams.has("_rsc")).toBe(false);
   });

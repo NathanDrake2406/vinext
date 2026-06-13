@@ -766,9 +766,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     // Next.js edge route handlers run through web/adapter.ts, which strips
     // internal search params from the request URL. Node route handlers only
     // strip `_rsc` from the parsed query object and rebuild request.url from
-    // initURL, preserving it there. RSC requests always use the stripped URL.
-    const routeHandlerRequest =
-      isRscRequest || isEdgeRouteHandler(route.routeHandler) ? userlandRequest : request;
+    // initURL, preserving it there even for RSC requests.
+    const routeHandlerRequest = isEdgeRouteHandler(route.routeHandler) ? userlandRequest : request;
     return options.dispatchMatchedRouteHandler({
       cleanPathname,
       middlewareContext,
