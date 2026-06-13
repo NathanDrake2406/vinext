@@ -1152,7 +1152,12 @@ describe("prerenderApp — cacheComponents PPR fallback-shell artifacts", () => 
         }
       }
 
-      return { renderedPaths, routes: result.routes };
+      const fallbackHtmlPath = path.join(outDir, "en", "blog", "[slug].html");
+      const fallbackHtml = fs.existsSync(fallbackHtmlPath)
+        ? fs.readFileSync(fallbackHtmlPath, "utf8")
+        : null;
+
+      return { fallbackHtml, renderedPaths, routes: result.routes };
     } finally {
       await closeServer(server);
       fs.rmSync(root, { recursive: true, force: true });
@@ -1173,7 +1178,10 @@ describe("prerenderApp — cacheComponents PPR fallback-shell artifacts", () => 
   });
 
   it("queues fallback-shell artifacts only with the internal opt-in", async () => {
-    const { renderedPaths, routes } = await prerenderDynamicRootParamRoute(true, true);
+    const { fallbackHtml, renderedPaths, routes } = await prerenderDynamicRootParamRoute(
+      true,
+      true,
+    );
 
     expect(findRoute(routes, "/en/blog/hello")).toMatchObject({
       route: "/:locale/blog/:slug",
@@ -1187,6 +1195,7 @@ describe("prerenderApp — cacheComponents PPR fallback-shell artifacts", () => 
       fallback: true,
     });
     expect(renderedPaths).toEqual(expect.arrayContaining(["/en/blog/hello", "/en/blog/[slug]"]));
+    expect(fallbackHtml).toContain("<!--vinext-ppr-dynamic-fallback-shell-->");
   });
 
   it("does not queue fallback-shell artifacts when cacheComponents is disabled", async () => {

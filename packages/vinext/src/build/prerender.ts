@@ -54,7 +54,10 @@ import { startProdServer } from "../server/prod-server.js";
 import { readPrerenderSecret } from "./server-manifest.js";
 import { getOutputPath, getRscOutputPath } from "../utils/prerender-output-paths.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
-import { createAppPprFallbackShells } from "../server/app-ppr-fallback-shell.js";
+import {
+  createAppPprFallbackShells,
+  markAppPprDynamicFallbackShellHtml,
+} from "../server/app-ppr-fallback-shell.js";
 export { readPrerenderSecret } from "./server-manifest.js";
 
 const EXPERIMENTAL_PPR_FALLBACK_SHELLS_ENV = "__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS";
@@ -1335,7 +1338,9 @@ export async function prerenderApp({
             error: "RSC handler returned no prerender HTML",
           };
         }
-        const html = htmlRender.html;
+        const html = isFallback
+          ? markAppPprDynamicFallbackShellHtml(htmlRender.html)
+          : htmlRender.html;
 
         // Reconstruct the RSC payload from the inline bootstrap chunks already
         // streamed into the HTML body. The chunks went through fixFlightHints
