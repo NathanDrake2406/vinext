@@ -988,6 +988,9 @@ describe("Pages Router entry template", () => {
       expect(code).toContain("if (nextData.isFallback) {");
       expect(code).toContain("await Router.replace(");
       expect(code).toContain("{ _h: 1, scroll: false },");
+      expect(code).not.toContain("function VinextHydrationMarker");
+      expect(code).not.toContain("React.createElement(VinextHydrationMarker");
+      expect(code).toContain("hydrateRoot(container, element, hydrateRootOptions)");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
