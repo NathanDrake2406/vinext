@@ -413,7 +413,10 @@ describe("app fallback renderer default global error UI", () => {
       { headers: null, status: null },
     );
 
-    expect(response?.status).toBe(200);
+    expect(response?.status).toBe(500);
+    expect(response?.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
     const html = await response?.text();
 
     // 32x32 SVG warning icon (matches the test's `expect width/height === 32`).
@@ -455,7 +458,10 @@ describe("app fallback renderer default global error UI", () => {
       { headers: null, status: null },
     );
 
-    expect(response?.status).toBe(200);
+    expect(response?.status).toBe(500);
+    expect(response?.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
     const html = await response?.text();
     // Server errors still render the same heading.
     expect(html).toContain("This page couldn’t load");
