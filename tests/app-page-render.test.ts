@@ -329,6 +329,10 @@ describe("SSR shell error recovery", () => {
     const response = await renderAppPageLifecycle({
       ...common.options,
       isProduction: true,
+      middlewareContext: {
+        headers: new Headers({ "Cache-Control": "public, max-age=3600" }),
+        status: null,
+      },
       revalidateSeconds: 30,
       loadSsrHandler: async () => ({
         async handleSsr() {

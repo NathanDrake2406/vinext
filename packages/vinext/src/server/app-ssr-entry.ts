@@ -643,8 +643,9 @@ export async function handleSsr(
           // flight payload plus the bootstrap module are still emitted, so the
           // browser recovers by re-rendering the real tree from the embedded
           // RSC data (Next.js shell-error recovery semantics). This resolves
-          // as a successful shell render, so the caller preserves its normal
-          // status and ISR eligibility rather than treating it as a 500.
+          // as a recovered shell render. The caller turns that outcome into an
+          // uncached 500 response; static generation and ISR regeneration use
+          // waitForAllReady and continue to reject instead.
           if (
             options?.fallbackToErrorDocumentOnShellError !== true ||
             options?.waitForAllReady === true ||

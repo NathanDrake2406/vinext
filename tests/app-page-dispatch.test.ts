@@ -1355,6 +1355,51 @@ describe("app page dispatch", () => {
     expect(isrSet).toHaveBeenCalled();
   });
 
+  it("preserves stale HTML when SSR shell rendering fails during regeneration", async () => {
+    const route = createRoute({ pattern: "/posts/[slug]", routeSegments: ["posts", "[slug]"] });
+    let scheduledRender: unknown = null;
+    const scheduleBackgroundRegeneration: DispatchOptions["scheduleBackgroundRegeneration"] = (
+      _key,
+      renderFn,
+    ) => {
+      scheduledRender = renderFn;
+    };
+    const isrSet = vi.fn(async () => {});
+    const shellError = new Error("SSR shell failed");
+    const { options } = createDispatchOptions({
+      buildPageElement: async () => React.createElement("main", null, "fresh"),
+      cleanPathname: "/posts/hello",
+      isProduction: true,
+      isrGet: vi.fn(async () =>
+        buildISRCacheEntry(buildCachedAppPageValue("<html>stale</html>"), true),
+      ),
+      isrSet,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          throw shellError;
+        },
+      }),
+      renderToReadableStream() {
+        return createStream(["flight"]);
+      },
+      revalidateSeconds: 60,
+      route,
+      scheduleBackgroundRegeneration,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(response.headers.get("x-vinext-cache")).toBe("STALE");
+    await expect(response.text()).resolves.toBe("<html>stale</html>");
+    expect(typeof scheduledRender).toBe("function");
+    if (typeof scheduledRender !== "function") {
+      throw new Error("expected stale HTML response to schedule regeneration");
+    }
+
+    await expect(scheduledRender()).rejects.toBe(shellError);
+    expect(isrSet).not.toHaveBeenCalled();
+  });
+
   it("resolves the revalidation target route's dynamic config for force-dynamic fetch defaults", async () => {
     // When regenerating a stale cache entry for a target route that is force-dynamic,
     // the dispatch must resolve the target route's dynamic config so that fetch

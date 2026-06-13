@@ -939,7 +939,7 @@ export async function renderAppPageLifecycle(
   });
 
   if (htmlRender.shellErrorRecovered) {
-    return buildAppPageHtmlResponse(safeHtmlStream, {
+    const response = buildAppPageHtmlResponse(safeHtmlStream, {
       draftCookie,
       linkHeader,
       isEdgeRuntime: options.isEdgeRuntime,
@@ -950,6 +950,8 @@ export async function renderAppPageLifecycle(
       policy: { cacheControl: NO_STORE_CACHE_CONTROL },
       timing: htmlResponseTiming,
     });
+    response.headers.set("Cache-Control", NO_STORE_CACHE_CONTROL);
+    return response;
   }
 
   const shouldSpeculativelyWriteCache =

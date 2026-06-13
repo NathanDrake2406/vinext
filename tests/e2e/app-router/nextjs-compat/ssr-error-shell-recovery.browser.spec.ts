@@ -128,41 +128,6 @@ export default function Client() {
 `,
   );
 
-  // Static prerender variant: no dynamic APIs, so the route is prerendered at
-  // build time. The SSR shell error is resolved to the error-document during
-  // prerender, and the cached HTML is served on the next request. The browser
-  // must still recover the real tree from the embedded flight payload.
-  const staticDir = path.join(appDir, "static-recovery");
-  await fs.mkdir(staticDir, { recursive: true });
-  await fs.writeFile(
-    path.join(staticDir, "page.tsx"),
-    `import React from "react";
-import Client from "./Client";
-
-export default function StaticPage() {
-  return (
-    <>
-      <p id="static-server-content">Hello Static Server</p>
-      <Client />
-    </>
-  );
-}
-`,
-  );
-  await fs.writeFile(
-    path.join(staticDir, "Client.tsx"),
-    `"use client";
-import React from "react";
-
-export default function Client() {
-  if (typeof window === "undefined") {
-    throw new Error("Expected error to opt out of server rendering");
-  }
-  return <p id="static-client-content">Hello Static Client</p>;
-}
-`,
-  );
-
   // Genuine RSC/server error with no custom global-error.tsx. It also uses an
   // __next_error__ document, but must retain the pre-existing hydration path
   // rather than being mistaken for the marked SSR shell-recovery document.
@@ -326,13 +291,6 @@ test.describe("SSR shell-error recovery (no custom global-error.tsx)", () => {
       await page.goto(`${app.baseUrl}/page`, { waitUntil: "load" });
       await expect(page.locator("#server-content")).toHaveText("Hello Server");
       await expect(page.locator("#client-content")).toHaveText("Hello Client");
-
-      // Static prerender variant: the shell error was resolved to the error
-      // document during prerender, cached as HTML, and the browser must still
-      // recover the real tree from the embedded flight payload.
-      await page.goto(`${app.baseUrl}/static-recovery`, { waitUntil: "load" });
-      await expect(page.locator("#static-server-content")).toHaveText("Hello Static Server");
-      await expect(page.locator("#static-client-content")).toHaveText("Hello Static Client");
 
       // A genuine server/RSC error also uses the default __next_error__
       // document, but has no recovery-shell style marker. It must keep the
