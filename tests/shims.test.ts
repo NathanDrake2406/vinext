@@ -2658,6 +2658,33 @@ describe("next/router withRouter HOC", () => {
     );
   });
 
+  it("next/router useRouter falls back to the singleton in a Pages Router browser document", async () => {
+    const React = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { useRouter } = await import("../packages/vinext/src/shims/router.js");
+    const win = (globalThis as { window: Window }).window;
+    const previousPageLoaders = win.__VINEXT_PAGE_LOADERS__;
+
+    try {
+      win.__VINEXT_PAGE_LOADERS__ = {};
+
+      const captured: NextRouter[] = [];
+      function Probe() {
+        captured.push(useRouter());
+        return React.createElement("span", null, "ok");
+      }
+
+      renderToStaticMarkup(React.createElement(Probe));
+
+      const router = captured[0];
+      expect(router).toBeDefined();
+      expect(router?.events).toBeDefined();
+      expect(typeof router?.push).toBe("function");
+    } finally {
+      win.__VINEXT_PAGE_LOADERS__ = previousPageLoaders;
+    }
+  });
+
   it("next/router useRouter does not subscribe once per hook call", async () => {
     const previousWindowForMock = (globalThis as any).window;
     const addEventListener = vi.fn();
@@ -14326,17 +14353,29 @@ describe("Pages Router concurrent navigation", () => {
   // restoration can't position correctly.
   it("popstate restores history-state scroll when manual scroll restoration is off", async () => {
     const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
     const originalFetch = globalThis.fetch;
     const originalCustomEvent = globalThis.CustomEvent;
     const listeners = new Map<string, (event: any) => void>();
     const { win, render } = createNavWindow();
     const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    win.scrollTo.mockImplementation((x: number, y: number) => {
+      win.scrollX = x;
+      win.scrollY = y;
+    });
 
     win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
       listeners.set(type, handler);
     });
 
     (globalThis as any).window = win;
+    (globalThis as any).document = {
+      documentElement: {
+        dataset: {},
+        style: {},
+        getClientRects: vi.fn(),
+      },
+    };
     (globalThis as any).CustomEvent = class CustomEventMock {
       constructor(public type: string) {}
     } as any;
@@ -14374,13 +14413,14 @@ describe("Pages Router concurrent navigation", () => {
           __vinext_scrollY: 345,
         },
       });
-      await routeChangeComplete;
 
       // The scroll target is applied inside the render-commit callback; the
       // mocked root.render never mounts React, so fire the commit manually.
-      expect(render).toHaveBeenCalled();
+      await vi.waitFor(() => expect(render).toHaveBeenCalled());
       const committed = render.mock.calls.at(-1)![0];
       committed.props.onCommit();
+      committed.props.onPassiveCommit();
+      await routeChangeComplete;
 
       expect(win.scrollTo).toHaveBeenCalledWith(12, 345);
     } finally {
@@ -14389,6 +14429,11 @@ describe("Pages Router concurrent navigation", () => {
         delete (globalThis as any).window;
       } else {
         (globalThis as any).window = previousWindow;
+      }
+      if (previousDocument === undefined) {
+        delete (globalThis as any).document;
+      } else {
+        (globalThis as any).document = previousDocument;
       }
       globalThis.fetch = originalFetch;
       (globalThis as any).CustomEvent = originalCustomEvent;

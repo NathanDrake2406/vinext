@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
@@ -11,14 +11,10 @@ const Page = ({ id }) => {
   }
 
   useEffect(() => {
-    const handler = () => {
+    router.events.on("routeChangeComplete", () => {
       setReady(true);
-    };
-    router.events.on("routeChangeComplete", handler);
-    return () => {
-      router.events.off("routeChangeComplete", handler);
-    };
-  }, [router]);
+    });
+  }, [router, ready, setReady]);
 
   return (
     <>
@@ -31,7 +27,7 @@ const Page = ({ id }) => {
       />
       <p>{ready ? "routeChangeComplete" : "loading"}</p>
       <Link
-        href={`/${Number(id) + 1}`}
+        href={`/${id + 1}`}
         id="link"
         style={{
           marginLeft: 5000,
@@ -49,7 +45,7 @@ const Page = ({ id }) => {
 export default Page;
 
 export const getServerSideProps = (context) => {
-  const { id = "0" } = context.query;
+  const { id = 0 } = context.query;
   return {
     props: {
       id,

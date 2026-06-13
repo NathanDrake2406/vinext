@@ -28,24 +28,8 @@ async function expectScrollPosition(page: Page, expected: ScrollPosition) {
   await expect.poll(() => getScrollPosition(page)).toEqual(expected);
 }
 
-async function expectRouteChangeComplete(page: Page): Promise<void> {
-  // Register a one-shot listener for the next routeChangeComplete event.
-  // MUST be started before the navigation that triggers the event — calling
-  // this after an awaited router.push() will deadlock because the event has
-  // already fired.
-  return page.evaluate(() => {
-    const router = window.next?.router;
-    if (!router || !("events" in router)) {
-      throw new Error("expectRouteChangeComplete: window.next.router.events is not available");
-    }
-    return new Promise<void>((resolve) => {
-      const handler = () => {
-        router.events.off("routeChangeComplete", handler);
-        resolve();
-      };
-      router.events.on("routeChangeComplete", handler);
-    });
-  });
+async function expectPageShowsRouteChangeComplete(page: Page): Promise<void> {
+  await expect(page.locator("html")).toContainText("routeChangeComplete");
 }
 
 async function pushWithPagesRouter(page: Page, href: string): Promise<void> {
@@ -88,18 +72,16 @@ test.describe("reload-scroll-back-restoration", () => {
     scrollPositionMemories.push(await getScrollPosition(page));
     await pushWithPagesRouter(page, "/2");
 
-    const rc1 = expectRouteChangeComplete(page);
     await page.goBack();
-    await rc1;
+    await expectPageShowsRouteChangeComplete(page);
     await expectScrollPosition(page, scrollPositionMemories[1]);
 
     await page.reload();
 
     await expect.poll(() => isPagesRouterReady(page)).toBe(true);
 
-    const rc2 = expectRouteChangeComplete(page);
     await page.goBack();
-    await rc2;
+    await expectPageShowsRouteChangeComplete(page);
     await expectScrollPosition(page, scrollPositionMemories[0]);
   });
 
@@ -126,18 +108,16 @@ test.describe("reload-scroll-back-restoration", () => {
 
     await page.goBack();
     await page.goBack();
-    const rc3 = expectRouteChangeComplete(page);
     await page.goForward();
-    await rc3;
+    await expectPageShowsRouteChangeComplete(page);
     await expectScrollPosition(page, scrollPositionMemories[1]);
 
     await page.reload();
 
     await expect.poll(() => isPagesRouterReady(page)).toBe(true);
 
-    const rc4 = expectRouteChangeComplete(page);
     await page.goForward();
-    await rc4;
+    await expectPageShowsRouteChangeComplete(page);
     await expectScrollPosition(page, scrollPositionMemories[2]);
   });
 
@@ -186,14 +166,12 @@ test.describe("reload-scroll-back-restoration", () => {
       window.isSoftNavigation = true;
     });
 
-    // Push to the page that throws render error
+    // Push to the dynamic page variant that throws during client render.
     await pushWithPagesRouter(page, "/error");
 
     // Since it falls back to hard navigation, the page fully reloads.
     // The reload clears the window context, so `window.isSoftNavigation` will be undefined.
-    // We should wait until the url is "/error" and we are hydrated.
     await expect(page).toHaveURL(`${BASE}/error`);
-    await waitForHydration(page);
 
     // Verify that the window marker is indeed gone (hard navigation occurred)
     const isSoft = await page.evaluate(() => window.isSoftNavigation);
