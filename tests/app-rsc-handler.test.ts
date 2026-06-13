@@ -833,6 +833,34 @@ describe("createAppRscHandler", () => {
     expect(dispatched?.searchParams.has("_rsc")).toBe(false);
   });
 
+  it("hides internal RSC cache-busting params from non-RSC route handler requests", async () => {
+    const route = createPageRoute({
+      page: null,
+      pattern: "/api/inspect",
+      routeHandler: { GET: () => new Response("route") },
+      routeSegments: ["api", "inspect"],
+    });
+    const dispatchMatchedRouteHandler = vi.fn<DispatchMatchedRouteHandler>(
+      async () => new Response("route", { status: 200 }),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedRouteHandler,
+      matchRoute: (pathname: string) =>
+        pathname === "/api/inspect" ? { params: {}, route } : null,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/api/inspect?tab=latest&_rsc=user-value"),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    const dispatched = dispatchMatchedRouteHandler.mock.calls[0]?.[0];
+    expect(new URL(dispatched?.request.url ?? "").search).toBe("?tab=latest");
+    expect(dispatched?.searchParams.toString()).toBe("tab=latest");
+  });
+
   it("does not render RSC payloads at HTML URLs marked only by RSC headers", async () => {
     const dispatchMatchedPage = vi.fn(async () => new Response("page", { status: 200 }));
     const handler = createHandler({

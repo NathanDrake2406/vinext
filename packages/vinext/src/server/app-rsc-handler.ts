@@ -492,9 +492,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // Keep cache-busting validation on the real request above, then hide the
   // internal `_rsc` transport query from userland middleware and post-middleware
   // has/missing matching. This mirrors Next.js' navigation middleware fixture.
-  const userlandRequest = isRscRequest
-    ? requestWithoutRscCacheBustingSearchParam(request)
-    : request;
+  const userlandRequest = requestWithoutRscCacheBustingSearchParam(request);
   const middlewareContext: AppRscMiddlewareContext = {
     headers: null,
     requestHeaders: null,
@@ -594,9 +592,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     return publicFileResponse;
   }
 
-  if (isRscRequest) {
-    stripRscCacheBustingSearchParam(url);
-  }
+  stripRscCacheBustingSearchParam(url);
 
   options.setNavigationContext({
     pathname: canonicalPathname,
