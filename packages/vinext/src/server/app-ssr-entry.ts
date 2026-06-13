@@ -52,6 +52,7 @@ import {
   getPprFallbackShellState,
   isPprFallbackShellAbortError,
 } from "vinext/shims/ppr-fallback-shell";
+import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
 /**
  * `@types/react-dom` does not yet type `maxHeadersLength` (it pairs with the
@@ -253,11 +254,11 @@ function renderFontHtml(
   const includeStyles = options.includeStyles ?? true;
 
   for (const url of fontData.links ?? []) {
-    fontHTML += `<link rel="stylesheet"${nonceAttr} href="${escapeHtmlAttr(url)}" />\n`;
+    fontHTML += `<link rel="stylesheet"${nonceAttr} href="${escapeHtmlAttr(appendAssetDeploymentIdQuery(url))}" />\n`;
   }
 
   for (const preload of fontData.preloads ?? []) {
-    fontHTML += `<link rel="preload"${nonceAttr} href="${escapeHtmlAttr(preload.href)}" as="font" type="${escapeHtmlAttr(preload.type)}" crossorigin />\n`;
+    fontHTML += `<link rel="preload"${nonceAttr} href="${escapeHtmlAttr(appendAssetDeploymentIdQuery(preload.href))}" as="font" type="${escapeHtmlAttr(preload.type)}" crossorigin />\n`;
   }
 
   if (includeStyles && fontData.styles && fontData.styles.length > 0) {
@@ -511,7 +512,10 @@ export async function handleSsr(
         const bootstrapScriptContent = await import.meta.viteRsc.loadBootstrapScriptContent(
           "index",
         );
-        const bootstrapModuleUrl = extractBootstrapModuleUrl(bootstrapScriptContent);
+        const rawBootstrapModuleUrl = extractBootstrapModuleUrl(bootstrapScriptContent);
+        const bootstrapModuleUrl = rawBootstrapModuleUrl
+          ? appendAssetDeploymentIdQuery(rawBootstrapModuleUrl)
+          : undefined;
         const errorMetaRenderer = createSsrErrorMetaRenderer({
           basePath: options?.basePath,
         });

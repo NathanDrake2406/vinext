@@ -483,6 +483,17 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES, isI
 import type { ImageConfig } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 
+const imageConfig: ImageConfig = {
+  deviceSizes: JSON.parse(
+    process.env.__VINEXT_IMAGE_DEVICE_SIZES ?? JSON.stringify(DEFAULT_DEVICE_SIZES),
+  ),
+  imageSizes: JSON.parse(
+    process.env.__VINEXT_IMAGE_SIZES ?? JSON.stringify(DEFAULT_IMAGE_SIZES),
+  ),
+  qualities: JSON.parse(process.env.__VINEXT_IMAGE_QUALITIES ?? "[75]"),
+  dangerouslyAllowSVG: process.env.__VINEXT_IMAGE_DANGEROUSLY_ALLOW_SVG === "true",
+};
+
 interface Env {
   ASSETS: Fetcher;
   IMAGES: {
@@ -513,14 +524,17 @@ export default {
     // The parseImageParams validation inside handleImageOptimization
     // normalizes backslashes and validates the origin hasn't changed.
     if (isImageOptimizationPath(url.pathname)) {
-      const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
+      const allowedWidths = [
+        ...(imageConfig.deviceSizes ?? DEFAULT_DEVICE_SIZES),
+        ...(imageConfig.imageSizes ?? DEFAULT_IMAGE_SIZES),
+      ];
       return handleImageOptimization(request, {
         fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
         transformImage: async (body, { width, format, quality }) => {
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
         },
-      }, allowedWidths);
+      }, allowedWidths, imageConfig);
     }
 
     // Delegate everything else to vinext, forwarding ctx so that
@@ -577,6 +591,7 @@ const configRedirects = vinextConfig?.redirects ?? [];
 const configRewrites = vinextConfig?.rewrites ?? { beforeFiles: [], afterFiles: [], fallback: [] };
 const configHeaders = vinextConfig?.headers ?? [];
 const imageConfig: ImageConfig | undefined = vinextConfig?.images ? {
+  qualities: vinextConfig.images.qualities,
   dangerouslyAllowSVG: vinextConfig.images.dangerouslyAllowSVG,
   dangerouslyAllowLocalIP: vinextConfig.images.dangerouslyAllowLocalIP,
   contentDispositionType: vinextConfig.images.contentDispositionType,
@@ -642,7 +657,10 @@ export default {
       // ── Image optimization via Cloudflare Images binding ──────────
       // Checked after basePath stripping so /<basePath>/_next/image works.
       if (isImageOptimizationPath(pathname)) {
-        const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
+        const allowedWidths = [
+          ...(vinextConfig?.images?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
+          ...(vinextConfig?.images?.imageSizes ?? DEFAULT_IMAGE_SIZES),
+        ];
         return handleImageOptimization(request, {
           fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
           transformImage: async (body, { width, format, quality }) => {
@@ -1150,62 +1168,83 @@ type WranglerDeployArgs = {
   env: string | undefined;
 };
 
+export function validateWranglerEnvName(env: string): string {
+  if (env.includes("\0")) {
+    throw new Error("Wrangler environment names cannot contain null bytes.");
+  }
+  return env;
+}
+
 export function buildWranglerDeployArgs(
   options: Pick<DeployOptions, "preview" | "env">,
 ): WranglerDeployArgs {
   const args = ["deploy"];
   const env = options.env || (options.preview ? "preview" : undefined);
   if (env) {
-    args.push("--env", env);
+    args.push("--env", validateWranglerEnvName(env));
   }
   return { args, env };
 }
 
 /**
- * Resolve the wrangler executable in node_modules.
+ * Resolve Wrangler's JavaScript CLI entrypoint in node_modules.
  *
- * Walks up ancestor directories so the binary is found even when node_modules
- * is hoisted to the workspace root in a monorepo.
- *
- * On Windows, `node_modules/.bin/` contains both a Unix shebang script (no
- * extension) and a `.CMD` shim. Node's `execFileSync` uses CreateProcess(),
- * which only resolves PATHEXT extensions (`.cmd`, `.exe`, ...) — spawning the
- * bare-name shebang file fails with ENOENT even though the file exists. So on
- * Windows we prefer the `.CMD` shim and only fall back to the bare name for a
- * clearer error message if neither is present.
+ * Invoking the JavaScript file through `process.execPath` avoids the `.cmd`
+ * shim and command shell that package managers create on Windows.
  */
 export function resolveWranglerBin(
   root: string,
-  platform: NodeJS.Platform = process.platform,
+  resolvePackageJson: (root: string) => string | null = (projectRoot) => {
+    try {
+      return createRequire(path.join(projectRoot, "package.json")).resolve("wrangler/package.json");
+    } catch {
+      return _findInNodeModules(projectRoot, "wrangler/package.json");
+    }
+  },
 ): string {
-  const candidates =
-    platform === "win32"
-      ? [".bin/wrangler.CMD", ".bin/wrangler.cmd", ".bin/wrangler"]
-      : [".bin/wrangler"];
-
-  for (const candidate of candidates) {
-    const found = _findInNodeModules(root, candidate);
-    if (found) return found;
+  const packageJsonPath = resolvePackageJson(root);
+  if (packageJsonPath) {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      bin?: string | Record<string, string>;
+    };
+    const bin = typeof packageJson.bin === "string" ? packageJson.bin : packageJson.bin?.wrangler;
+    if (bin) return path.resolve(path.dirname(packageJsonPath), bin);
   }
 
-  // Not found — return platform-appropriate path under root for error clarity.
-  return path.join(root, "node_modules", ...candidates[0].split("/"));
+  return path.join(root, "node_modules", "wrangler", "bin", "wrangler.js");
 }
 
-function runWranglerDeploy(root: string, options: Pick<DeployOptions, "preview" | "env">): string {
-  const wranglerBin = resolveWranglerBin(root);
+export function buildNodeCliInvocation(
+  scriptPath: string,
+  args: string[],
+  nodeExecutable: string = process.execPath,
+): { file: string; args: string[] } {
+  return { file: nodeExecutable, args: [scriptPath, ...args] };
+}
 
+export function buildWranglerInvocation(
+  root: string,
+  options: Pick<DeployOptions, "preview" | "env">,
+  nodeExecutable: string = process.execPath,
+): { file: string; args: string[]; env: string | undefined } {
+  const wranglerBin = resolveWranglerBin(root);
+  const { args, env } = buildWranglerDeployArgs(options);
+  return { ...buildNodeCliInvocation(wranglerBin, args, nodeExecutable), env };
+}
+
+export function runWranglerDeploy(
+  root: string,
+  options: Pick<DeployOptions, "preview" | "env">,
+  execute: typeof execFileSync = execFileSync,
+): string {
   const execOpts: ExecFileSyncOptions = {
     cwd: root,
     stdio: "pipe",
     encoding: "utf-8",
-    // On Windows, .bin/wrangler is a .cmd wrapper; execFileSync can't run
-    // it without a shell.  Enabling shell only on win32 keeps the
-    // no-shell-injection guarantee on other platforms.
-    shell: process.platform === "win32",
+    shell: false,
   };
 
-  const { args, env } = buildWranglerDeployArgs(options);
+  const { file, args, env } = buildWranglerInvocation(root, options);
 
   if (env) {
     console.log(`\n  Deploying to env: ${env}...`);
@@ -1213,10 +1252,7 @@ function runWranglerDeploy(root: string, options: Pick<DeployOptions, "preview" 
     console.log("\n  Deploying to production...");
   }
 
-  // execFileSync passes args as an array, avoiding shell injection on Unix.
-  // On Windows, shell: true is required for .cmd wrappers but the array form
-  // still prevents trivial injection.
-  const output = execFileSync(wranglerBin, args, execOpts) as string;
+  const output = execute(file, args, execOpts) as string;
 
   // Parse the deployed URL from wrangler output
   // Wrangler prints: "Published <name> (version_id)\n  https://<name>.<subdomain>.workers.dev"
@@ -1280,6 +1316,9 @@ export function injectPregeneratedConcretePaths(root: string): void {
 // ─── Main Entry ──────────────────────────────────────────────────────────────
 
 export async function deploy(options: DeployOptions): Promise<void> {
+  const deployEnv = validateWranglerEnvName(
+    options.env || (options.preview ? "preview" : "production"),
+  );
   const root = path.resolve(options.root);
   loadDotenv({ root, mode: "production" });
 
@@ -1376,10 +1415,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
 
   // Step 5: Build
   if (!options.skipBuild) {
-    // Resolve the env name the same way buildWranglerDeployArgs does, so the
-    // build emits a wrangler.json that matches the env we'll deploy with.
-    const buildEnv = options.env || (options.preview ? "preview" : undefined);
-    await runBuild(info, buildEnv);
+    await runBuild(info, deployEnv === "production" && !options.env ? undefined : deployEnv);
   } else {
     console.log("\n  Skipping build (--skip-build)");
   }
@@ -1427,8 +1463,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
 
   // Step 7: Deploy via wrangler
   const url = runWranglerDeploy(root, {
-    preview: options.preview ?? false,
-    env: options.env,
+    env: deployEnv === "production" && !options.env ? undefined : deployEnv,
   });
 
   console.log("\n  ─────────────────────────────────────────");

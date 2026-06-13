@@ -66,6 +66,8 @@ function createHandler(overrides: Partial<HandlerOptions> = {}) {
     handleProgressiveActionRequest: overrides.handleProgressiveActionRequest ?? (async () => null),
     handleServerActionRequest: overrides.handleServerActionRequest ?? (async () => null),
     i18nConfig: overrides.i18nConfig ?? null,
+    imageConfig: overrides.imageConfig,
+    isDev: overrides.isDev ?? true,
     isMiddlewareProxy: overrides.isMiddlewareProxy ?? false,
     makeThenableParams,
     matchRoute:
@@ -96,6 +98,59 @@ function prerenderRouteParamsHeader(payload: unknown): string {
 }
 
 describe("createAppRscHandler", () => {
+  it.each([
+    "url=%2Fimg.jpg&w=640junk&q=75",
+    "url=%2Fimg.jpg&w=640&q=75&extra=1",
+    "url=%2Fimg.jpg&w=640&w=640&q=75",
+  ])("rejects malformed pure App Router dev image parameters: %s", async (query) => {
+    const handler = createHandler();
+    const response = await handler(
+      new Request(`https://example.test/docs/_next/image?${query}`),
+      null,
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("uses configured image widths and qualities in pure App Router dev", async () => {
+    const handler = createHandler({
+      imageConfig: { deviceSizes: [320], imageSizes: [16], qualities: [60] },
+    });
+    const allowed = await handler(
+      new Request("https://example.test/docs/_next/image?url=%2Fimg.jpg&w=320&q=60"),
+      null,
+    );
+    expect(allowed.status).toBe(302);
+    expect(allowed.headers.get("location")).toBe("https://example.test/img.jpg");
+
+    const defaultOnly = await handler(
+      new Request("https://example.test/docs/_next/image?url=%2Fimg.jpg&w=640&q=75"),
+      null,
+    );
+    expect(defaultOnly.status).toBe(400);
+  });
+
+  it("allows independent Next.js blur width and quality exceptions in pure App Router dev", async () => {
+    const handler = createHandler();
+    for (const query of ["url=%2Fimg.jpg&w=8&q=75", "url=%2Fimg.jpg&w=640&q=70"]) {
+      const response = await handler(
+        new Request(`https://example.test/docs/_next/image?${query}`),
+        null,
+      );
+      expect(response.status).toBe(302);
+    }
+  });
+
+  it("rejects Next.js blur width and quality exceptions in production", async () => {
+    const handler = createHandler({ isDev: false });
+    for (const query of ["url=%2Fimg.jpg&w=8&q=75", "url=%2Fimg.jpg&w=640&q=70"]) {
+      const response = await handler(
+        new Request(`https://example.test/docs/_next/image?${query}`),
+        null,
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+
   it("wraps dispatch responses with request-scoped finalization", async () => {
     const dispatchMatchedPage = vi.fn(async () => new Response("page", { status: 200 }));
     const handler = createHandler({ dispatchMatchedPage });
@@ -963,6 +1018,83 @@ describe("createAppRscHandler", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("max-age=1234");
+    expect(response.headers.get("content-type")).toBe("image/x-icon");
+    await expect(response.text()).resolves.toBe("icon-bytes");
+  });
+
+  it("lets next.config headers override static metadata route defaults", async () => {
+    // Ported from Next.js: test/e2e/app-dir/no-duplicate-headers-next-config/no-duplicate-headers-next-config.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/no-duplicate-headers-next-config/no-duplicate-headers-next-config.test.ts
+    const handler = createHandler({
+      configHeaders: [
+        {
+          source: "/favicon.ico",
+          headers: [
+            { key: "cache-control", value: "max-age=1234" },
+            { key: "content-type", value: "text/plain" },
+          ],
+        },
+      ],
+      matchRoute: () => null,
+      metadataRoutes: [
+        {
+          type: "favicon",
+          isDynamic: false,
+          filePath: "/tmp/app/favicon.ico",
+          routePrefix: "",
+          routeSegments: [],
+          servedUrl: "/favicon.ico",
+          contentType: "image/x-icon",
+          fileDataBase64: btoa("icon-bytes"),
+        },
+      ],
+    });
+
+    const response = await handler(new Request("https://example.test/docs/favicon.ico"), null);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("max-age=1234");
+    expect(response.headers.get("content-type")).toBe("image/x-icon");
+    await expect(response.text()).resolves.toBe("icon-bytes");
+  });
+
+  it("keeps middleware Cache-Control above matching config headers for metadata routes", async () => {
+    const handler = createHandler({
+      configHeaders: [
+        {
+          source: "/favicon.ico",
+          headers: [{ key: "cache-control", value: "max-age=1234" }],
+        },
+      ],
+      matchRoute: () => null,
+      metadataRoutes: [
+        {
+          type: "favicon",
+          isDynamic: false,
+          filePath: "/tmp/app/favicon.ico",
+          routePrefix: "",
+          routeSegments: [],
+          servedUrl: "/favicon.ico",
+          contentType: "image/x-icon",
+          fileDataBase64: btoa("icon-bytes"),
+        },
+      ],
+      middlewareModule: {
+        middleware() {
+          return new Response(null, {
+            headers: {
+              "Cache-Control": "max-age=5678",
+              "x-middleware-next": "1",
+            },
+          });
+        },
+      },
+    });
+
+    const response = await handler(new Request("https://example.test/docs/favicon.ico"), null);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("max-age=5678");
     expect(response.headers.get("content-type")).toBe("image/x-icon");
     await expect(response.text()).resolves.toBe("icon-bytes");
   });
