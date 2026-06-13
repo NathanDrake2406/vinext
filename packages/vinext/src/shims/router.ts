@@ -101,7 +101,6 @@ const useNonWarningLayoutEffect = typeof window === "undefined" ? useEffect : us
 class PagesRouterCommitBoundary extends Component<{
   children?: ReactNode;
   onCommit: () => void;
-  onPassiveCommit: () => void;
   onError: (error: Error) => void;
 }> {
   componentDidCatch(error: Error) {
@@ -111,7 +110,7 @@ class PagesRouterCommitBoundary extends Component<{
   render() {
     return createElement(
       PagesRouterCommitBoundaryHelper,
-      { onCommit: this.props.onCommit, onPassiveCommit: this.props.onPassiveCommit },
+      { onCommit: this.props.onCommit },
       this.props.children,
     );
   }
@@ -120,30 +119,15 @@ class PagesRouterCommitBoundary extends Component<{
 function PagesRouterCommitBoundaryHelper({
   children,
   onCommit,
-  onPassiveCommit,
 }: {
   children?: ReactNode;
   onCommit: () => void;
-  onPassiveCommit: () => void;
 }): ReactElement {
   useNonWarningLayoutEffect(() => {
     onCommit();
   }, [onCommit]);
 
-  return createElement(
-    Fragment,
-    null,
-    children,
-    createElement(PagesRouterPassiveCommitMarker, { onCommit: onPassiveCommit }),
-  );
-}
-
-function PagesRouterPassiveCommitMarker({ onCommit }: { onCommit: () => void }): null {
-  useEffect(() => {
-    onCommit();
-  }, [onCommit]);
-
-  return null;
+  return createElement(Fragment, null, children);
 }
 
 function renderPagesRouterElement(
@@ -158,15 +142,10 @@ function renderPagesRouterElement(
   cancelPreviousRenderCommit();
 
   return new Promise<void>((resolve, reject) => {
-    let resolvePassiveCommit = () => {};
-    const passiveCommitPromise = new Promise<void>((resolve) => {
-      resolvePassiveCommit = resolve;
-    });
     const cancel = () => {
       if (routerRuntimeState.cancelPendingRenderCommit === cancel) {
         routerRuntimeState.cancelPendingRenderCommit = null;
       }
-      resolvePassiveCommit();
       reject(new NavigationCancelledError("superseded"));
     };
     routerRuntimeState.cancelPendingRenderCommit = cancel;
@@ -197,8 +176,6 @@ function renderPagesRouterElement(
             try {
               await scrollHandler();
               if (!isCurrent()) return;
-              await passiveCommitPromise;
-              if (!isCurrent()) return;
               clearIfCurrent();
               resolve();
             } catch (err) {
@@ -208,19 +185,20 @@ function renderPagesRouterElement(
           })();
         },
         (error) => {
-          resolvePassiveCommit();
           clearIfCurrent();
           reject(error);
         },
-        resolvePassiveCommit,
       ),
     );
-    if (typeof document === "undefined") {
-      resolvePassiveCommit();
+    if (!hasBrowserDocument()) {
       clearIfCurrent();
       resolve();
     }
   });
+}
+
+function hasBrowserDocument(): boolean {
+  return typeof document !== "undefined" && document.documentElement !== undefined;
 }
 
 async function restorePagesRouterScrollPosition(
@@ -242,7 +220,7 @@ async function restorePagesRouterScrollPosition(
 }
 
 function scrollToPagesRouterPosition({ x, y }: ScrollPosition): void {
-  if (typeof document === "undefined") {
+  if (!hasBrowserDocument()) {
     window.scrollTo(x, y);
     return;
   }
@@ -406,6 +384,7 @@ function createRouterEvents(): RouterEvents {
 
 type PagesRouterRuntimeState = {
   events: RouterEvents;
+  components?: PagesRouterRuntimeComponents;
   currentHistoryKey?: string;
   historyKeyCounter: number;
   navigationId: number;
@@ -417,6 +396,15 @@ type PagesRouterRuntimeState = {
   routerDidNavigate: boolean;
   deprecatedEventBridgeInstalled: boolean;
   publicRouter?: Record<string, unknown>;
+};
+
+type PagesRouterRuntimeComponents = {
+  CommitBoundary: ComponentType<{
+    children?: ReactNode;
+    onCommit: () => void;
+    onError: (error: Error) => void;
+  }>;
+  Provider: ComponentType<{ children: ReactNode }>;
 };
 
 const PAGES_ROUTER_RUNTIME_STATE_KEY = Symbol.for("vinext.pagesRouter.runtimeState");
@@ -459,6 +447,21 @@ function getPagesRouterRuntimeState(): PagesRouterRuntimeState {
 
 const routerRuntimeState = getPagesRouterRuntimeState();
 const routerEvents = routerRuntimeState.events;
+
+function getPagesRouterRuntimeComponents(): PagesRouterRuntimeComponents {
+  const existing = routerRuntimeState.components;
+  if (existing) return existing;
+
+  // Vite can evaluate next/router in both the client entry and page chunks.
+  // React element types must stay identical across those module instances, or
+  // same-route navigations remount the page and lose Next.js' state continuity.
+  const components: PagesRouterRuntimeComponents = {
+    CommitBoundary: PagesRouterCommitBoundary,
+    Provider: PagesRouterProvider,
+  };
+  routerRuntimeState.components = components;
+  return components;
+}
 
 function resolveUrl(url: string | UrlObject): string {
   if (typeof url === "string") return url;
@@ -1733,12 +1736,16 @@ async function navigateClientHtml(
   }
 
   let pageModule: { default?: unknown; [key: string]: unknown };
-  if (!pageModuleUrl) {
-    const loader = window.__VINEXT_PAGE_LOADERS__?.[nextData.page];
-    if (!loader) {
-      scheduleHardNavigationAndThrow(browserUrl, "Navigation failed: no page module URL found");
-    }
+  const loader = window.__VINEXT_PAGE_LOADERS__?.[nextData.page];
+  if (loader) {
+    // Prefer the generated route loader when it exists, even on the HTML
+    // fallback path. Initial hydration uses the same loader map, so this keeps
+    // React component identity stable for same-route param changes. Importing
+    // the extracted chunk URL directly can evaluate a duplicate module when
+    // the router runtime is split across entry and page chunks.
     pageModule = await loader();
+  } else if (!pageModuleUrl) {
+    scheduleHardNavigationAndThrow(browserUrl, "Navigation failed: no page module URL found");
   } else {
     // Validate the module URL before importing — defense-in-depth against
     // unexpected __NEXT_DATA__ or malformed HTML responses
@@ -2616,9 +2623,9 @@ setPagesRouterPopStateHandler(handlePagesRouterPopState);
  * installing its own global URL-change listener.
  *
  * The PagesRouterCommitBoundary exists for client navigations: its layout
- * callback runs scroll restoration at commit time, its passive callback lets
- * routeChangeComplete wait until remounted page effects can subscribe, and its
- * onError rejection drives the hard-navigation fallback in runNavigateClient.
+ * callback runs scroll restoration at commit time and resolves the navigation
+ * at the same root-commit boundary Next.js awaits before routeChangeComplete.
+ * Its onError rejection drives the hard-navigation fallback in runNavigateClient.
  * The same boundary intentionally also wraps SSR and initial hydration, where
  * callbacks default to noopCommit: a hydration-time render error is caught
  * here (React still console.error's it) instead of propagating, matching the
@@ -2628,12 +2635,12 @@ export function wrapWithRouterContext(
   element: ReactElement,
   onCommit: () => void = noopCommit,
   onError: (error: Error) => void = noopCommit,
-  onPassiveCommit: () => void = noopCommit,
 ): ReactElement {
+  const { CommitBoundary, Provider } = getPagesRouterRuntimeComponents();
   return createElement(
-    PagesRouterCommitBoundary,
-    { onCommit, onError, onPassiveCommit },
-    createElement(PagesRouterProvider, null, element),
+    CommitBoundary,
+    { onCommit, onError },
+    createElement(Provider, null, element),
   );
 }
 
