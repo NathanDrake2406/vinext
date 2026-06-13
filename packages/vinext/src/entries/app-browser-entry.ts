@@ -23,7 +23,6 @@ export function generateBrowserEntry(
     beforeFiles: [],
     fallback: [],
   },
-  hasMiddleware = false,
 ): string {
   const entryPath = resolveRuntimeEntryModule("app-browser-entry");
   const navigationRuntimePath = resolveClientRuntimeModule("navigation-runtime");
@@ -40,7 +39,6 @@ window.__VINEXT_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(prefetchRoutes)};
 // the same — whichever entry runs first emits both globals).
 window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(pagesPrefetchRoutes)};
 window.__VINEXT_CLIENT_REWRITES__ = ${JSON.stringify(rewrites)};
-window.__VINEXT_HAS_MIDDLEWARE__ = ${JSON.stringify(hasMiddleware)};
 registerNavigationRuntimeBootstrap({
     routeManifest: ${buildRouteManifestExpression(routeManifest)}
 });

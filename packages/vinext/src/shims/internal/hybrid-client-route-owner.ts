@@ -18,13 +18,14 @@ import { createRouteTrieCache, matchRouteWithTrie } from "../../routing/route-ma
 import { compareHybridRoutePatterns } from "../../routing/utils.js";
 import {
   isExternalUrl,
-  matchConfigPattern,
   matchRewrite,
+  parseCookies,
   type RequestContext,
 } from "../../config/config-matchers.js";
 import type { NextRewrite } from "../../config/next-config.js";
 import { stripBasePath } from "../../utils/base-path.js";
 import { getLocalePathPrefix } from "../../utils/domain-locale.js";
+import { mergeRewriteQuery } from "../../utils/query.js";
 import type {
   VinextLinkPrefetchRoute,
   VinextPagesLinkPrefetchRoute,
@@ -42,7 +43,6 @@ declare global {
       beforeFiles: NextRewrite[];
       fallback: NextRewrite[];
     };
-    __VINEXT_HAS_MIDDLEWARE__?: boolean;
   }
 }
 
@@ -50,39 +50,38 @@ function resolveClientRewrite(
   href: string,
   basePath: string,
   rewrites: readonly NextRewrite[],
+  continueAfterMatch = false,
 ): { kind: "document" } | { href: string; kind: "rewrite" } | null {
-  const pathname = resolveSameOriginPathname(href, basePath);
-  if (pathname === null) return null;
-  const url = new URL(href, window.location.href);
-  if (
-    rewrites.some(
-      (rewrite) =>
-        (rewrite.has?.length || rewrite.missing?.length) &&
-        matchConfigPattern(pathname, rewrite.source) !== null,
-    )
-  ) {
-    return { kind: "document" };
-  }
-  const context: RequestContext = {
-    cookies: {},
-    headers: new Headers(),
-    host: url.hostname,
-    query: url.searchParams,
+  const initialUrl = new URL(href, window.location.href);
+  const basePathState = {
+    basePath,
+    hadBasePath: basePath
+      ? initialUrl.pathname === basePath || initialUrl.pathname.startsWith(`${basePath}/`)
+      : true,
   };
-  const rewritten = matchRewrite(
-    pathname,
-    rewrites.filter((rewrite) => !rewrite.has?.length && !rewrite.missing?.length),
-    context,
-    {
-      basePath,
-      hadBasePath: basePath
-        ? url.pathname === basePath || url.pathname.startsWith(`${basePath}/`)
-        : true,
-    },
-  );
-  if (rewritten === null) return null;
-  if (isExternalUrl(rewritten)) return { kind: "document" };
-  return { href: rewritten, kind: "rewrite" };
+  let currentHref = href;
+  let matched = false;
+
+  for (const rewrite of rewrites) {
+    const pathname = resolveSameOriginPathname(currentHref, basePath);
+    if (pathname === null) return null;
+    const url = new URL(currentHref, window.location.href);
+    const headers = new Headers({ "user-agent": globalThis.navigator?.userAgent ?? "" });
+    const context: RequestContext = {
+      cookies: parseCookies(globalThis.document?.cookie ?? ""),
+      headers,
+      host: url.hostname,
+      query: url.searchParams,
+    };
+    const rewritten = matchRewrite(pathname, [rewrite], context, basePathState);
+    if (rewritten === null) continue;
+    if (isExternalUrl(rewritten)) return { kind: "document" };
+    currentHref = mergeRewriteQuery(currentHref, rewritten);
+    matched = true;
+    if (!continueAfterMatch) break;
+  }
+
+  return matched ? { href: currentHref, kind: "rewrite" } : null;
 }
 
 const appRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
@@ -164,10 +163,8 @@ export function resolveHybridClientRouteOwner(
   const pagesRoutes = window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__;
   const rewrites = window.__VINEXT_CLIENT_REWRITES__;
 
-  if (window.__VINEXT_HAS_MIDDLEWARE__) return "document";
-
   if (rewrites) {
-    const beforeFilesRewrite = resolveClientRewrite(href, basePath, rewrites.beforeFiles);
+    const beforeFilesRewrite = resolveClientRewrite(href, basePath, rewrites.beforeFiles, true);
     if (beforeFilesRewrite?.kind === "document") return "document";
     if (beforeFilesRewrite?.kind === "rewrite") href = beforeFilesRewrite.href;
   }

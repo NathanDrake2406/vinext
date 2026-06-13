@@ -591,6 +591,32 @@ describe("createAppRscHandler", () => {
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
   });
 
+  it("propagates middleware rewrite query parameters to App pages", async () => {
+    let pageOptions: Parameters<HandlerOptions["dispatchMatchedPage"]>[0] | undefined;
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage: async (options) => {
+        pageOptions = options;
+        return new Response("page");
+      },
+      middlewareModule: {
+        default: () =>
+          new Response(null, {
+            headers: {
+              "x-middleware-rewrite": "https://example.test/docs/about?destination=2&same=new",
+            },
+          }),
+      },
+    });
+
+    await handler(new Request("https://example.test/docs/source?original=1&same=old"), null);
+
+    expect(Object.fromEntries(pageOptions!.searchParams)).toEqual({
+      destination: "2",
+      same: "new",
+    });
+  });
+
   it("does not duplicate additive config headers on non-redirect middleware responses", async () => {
     const handler = createHandler({
       configHeaders: [
@@ -859,6 +885,31 @@ describe("createAppRscHandler", () => {
     const context = setNavigationContext.mock.lastCall?.[0];
     expect(context?.searchParams.get("tab")).toBe("latest");
     expect(context?.searchParams.has("_rsc")).toBe(false);
+  });
+
+  it("preserves beforeFiles destination query while stripping the RSC cache key", async () => {
+    const headers = createRscRequestHeaders();
+    const rscUrl = await createRscRequestUrl("/docs/legacy?original=1", headers);
+    let pageOptions: Parameters<HandlerOptions["dispatchMatchedPage"]>[0] | undefined;
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [{ source: "/legacy", destination: "/about?destination=2" }],
+        afterFiles: [],
+        fallback: [],
+      },
+      dispatchMatchedPage: async (options) => {
+        pageOptions = options;
+        return new Response("page");
+      },
+    });
+
+    await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(Object.fromEntries(pageOptions!.searchParams)).toEqual({
+      destination: "2",
+      original: "1",
+    });
   });
 
   it("runs beforeFiles rewrites before route matching", async () => {

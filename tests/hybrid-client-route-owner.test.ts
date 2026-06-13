@@ -130,7 +130,7 @@ describe("resolveHybridClientRouteOwner", () => {
     },
   );
 
-  it("does not guess ownership for conditional client rewrites", () => {
+  it("evaluates conditional client rewrites against browser-visible context", () => {
     installWindow({
       app: [appRoute(["app-destination"], false)],
       pages: [],
@@ -140,21 +140,32 @@ describe("resolveHybridClientRouteOwner", () => {
           {
             source: "/source",
             destination: "/app-destination",
-            has: [{ type: "header", key: "x-test", value: "1" }],
+            has: [{ type: "query", key: "preview", value: "1" }],
           },
         ],
         fallback: [],
       },
     });
 
-    expect(resolveHybridClientRouteOwner("/source", "")).toBe("document");
+    expect(resolveHybridClientRouteOwner("/source", "")).toBeNull();
+    expect(resolveHybridClientRouteOwner("/source?preview=1", "")).toBe("app");
   });
 
-  it("defers middleware-owned navigation to a document request", () => {
-    installWindow({ app: [appRoute(["source"], false)], pages: [] });
-    (globalThis as any).window.__VINEXT_HAS_MIDDLEWARE__ = true;
+  it("applies every beforeFiles rewrite before choosing ownership", () => {
+    installWindow({
+      app: [],
+      pages: [pagesRoute(["pages-destination"], false)],
+      rewrites: {
+        afterFiles: [],
+        beforeFiles: [
+          { source: "/source", destination: "/intermediate?first=1" },
+          { source: "/intermediate", destination: "/pages-destination?second=2" },
+        ],
+        fallback: [],
+      },
+    });
 
-    expect(resolveHybridClientRouteOwner("/source", "")).toBe("document");
+    expect(resolveHybridClientRouteOwner("/source?original=1", "")).toBe("pages");
   });
 
   it("lets a more specific Pages dynamic route beat an App root catch-all", () => {

@@ -532,6 +532,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (middlewareResult.search !== null) {
       url.search = middlewareResult.search;
     }
+    resolvedUrl = cleanPathname + url.search;
   }
 
   const scriptNonce = getScriptNonceFromHeaderSources(request.headers, middlewareContext.headers);
@@ -605,7 +606,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
 
   if (isRscRequest) {
     stripRscCacheBustingSearchParam(url);
-    resolvedUrl = cleanPathname + url.search;
+    const resolved = new URL(resolvedUrl, url);
+    stripRscCacheBustingSearchParam(resolved);
+    resolvedUrl = resolved.pathname + resolved.search;
   }
 
   options.setNavigationContext({
