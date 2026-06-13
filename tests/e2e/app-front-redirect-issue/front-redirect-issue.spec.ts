@@ -22,7 +22,7 @@ test.describe("app dir - front redirect issue", () => {
 
     const bootstrapScripts = page.locator('script[type="module"][src]');
     await expect(bootstrapScripts).toHaveCount(1);
-    const bootstrapSrc = await bootstrapScripts.getAttribute("src");
+    const bootstrapSrc = await bootstrapScripts.first().getAttribute("src");
     expect(bootstrapSrc).toBeTruthy();
     const bootstrapUrl = new URL(bootstrapSrc ?? "", BASE);
     const bootstrapRequests = scriptRequests.filter(
