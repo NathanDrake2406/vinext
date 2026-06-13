@@ -23,7 +23,7 @@ import {
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
 import { AppElementsWire, type AppElements } from "./app-elements.js";
-import { createAppPageLayoutEntries } from "./app-page-route-wiring.js";
+import { createAppPageLayoutEntries, createAppPageSourcePage } from "./app-page-route-wiring.js";
 
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type AppPageComponent = ComponentType<any>;
@@ -255,6 +255,7 @@ function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
       layoutIds: layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath: layoutEntries[0]?.treePath ?? null,
       routeId,
+      sourcePage: options.route ? createAppPageSourcePage(options.route.routeSegments) : null,
     }),
     [routeId]: options.element,
   };

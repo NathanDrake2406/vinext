@@ -51,6 +51,7 @@ export type AppPageInterceptOptions<TModule extends AppPageModule = AppPageModul
   interceptSlotId?: string | null;
   interceptSlotKey?: string | null;
   interceptSourceMatchedUrl?: string | null;
+  interceptSourcePageSegments?: readonly string[] | null;
 };
 
 export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = {
@@ -180,6 +181,9 @@ export async function buildPageElements<
   // to `pageModule?.default` since `effectivePageModule === pageModule`.
   const EffectivePageComponent = effectivePageModule?.default;
   const effectiveParams = isSiblingIntercept ? (opts!.interceptParams ?? params) : params;
+  const sourcePageSegments = isSiblingIntercept
+    ? opts?.interceptSourcePageSegments
+    : route.routeSegments;
 
   const hasPageModule = !!pageModule;
   const renderIdentity = createAppPageRenderIdentity({
@@ -218,7 +222,7 @@ export async function buildPageElements<
         layoutIds: noExportLayoutIds,
         rootLayoutTreePath: noExportRootLayout,
         routeId: renderIdentity.routeId,
-        sourcePage: createAppPageSourcePage(route.routeSegments),
+        sourcePage: createAppPageSourcePage(sourcePageSegments),
       }),
       [renderIdentity.routeId]: createElement("div", null, "Page has no default export"),
     };
@@ -325,6 +329,7 @@ export async function buildPageElements<
     resolvedViewport,
     renderIdentity,
     routePath,
+    sourcePageSegments,
     rootNotFoundModule: rootNotFoundModule ?? null,
     rootForbiddenModule: rootForbiddenModule ?? null,
     rootUnauthorizedModule: rootUnauthorizedModule ?? null,
