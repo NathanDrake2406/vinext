@@ -732,7 +732,9 @@ describe("createAppRscHandler", () => {
     expect(dispatchMatchedPage).toHaveBeenCalledTimes(1);
   });
 
-  it("hides internal RSC cache-busting params from external rewrite proxies", async () => {
+  it("forwards validated RSC cache-busting params to external rewrite proxies", async () => {
+    // Matches Next.js middleware-rsc-external-rewrite: the destination server
+    // needs `_rsc` because it cannot validate against the original request URL.
     // The fetch-cache instrumentation captures the real `fetch` at module load
     // and reinstalls a patched copy during request handling, so a global
     // `fetch` mock can't intercept the proxied request. Use a real loopback
@@ -770,7 +772,7 @@ describe("createAppRscHandler", () => {
       expect(response.status).toBe(200);
       expect(receivedUrls).toHaveLength(1);
       const forwardedUrl = new URL(`${upstreamBase}${receivedUrls[0]}`);
-      expect(forwardedUrl.searchParams.has(VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM)).toBe(false);
+      expect(forwardedUrl.searchParams.has(VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM)).toBe(true);
       expect(forwardedUrl.searchParams.get("tab")).toBe("latest");
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

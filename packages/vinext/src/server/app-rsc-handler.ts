@@ -554,9 +554,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     {
       basePathState,
       clearRequestContext: options.clearRequestContext,
-      // Forward the `_rsc`-stripped request so external rewrite proxies never
-      // receive the internal RSC transport query (same invariant as middleware).
-      request: userlandRequest,
+      // External RSC rewrites must forward the validated `_rsc` token so the
+      // destination server can validate the request without the original URL.
+      request: normalizedUserlandRequest,
       requestContext: postMiddlewareRequestContext,
       rewrites: options.configRewrites.beforeFiles,
     },
@@ -675,9 +675,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       {
         basePathState,
         clearRequestContext: options.clearRequestContext,
-        // Forward the `_rsc`-stripped request so external rewrite proxies never
-        // receive the internal RSC transport query (same invariant as middleware).
-        request: userlandRequest,
+        // External RSC rewrites must forward the validated `_rsc` token.
+        request: normalizedUserlandRequest,
         requestContext: postMiddlewareRequestContext,
         rewrites: options.configRewrites.afterFiles,
       },
@@ -695,9 +694,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       {
         basePathState,
         clearRequestContext: options.clearRequestContext,
-        // Forward the `_rsc`-stripped request so external rewrite proxies never
-        // receive the internal RSC transport query (same invariant as middleware).
-        request: userlandRequest,
+        // External RSC rewrites must forward the validated `_rsc` token.
+        request: normalizedUserlandRequest,
         requestContext: postMiddlewareRequestContext,
         rewrites: options.configRewrites.fallback,
       },
