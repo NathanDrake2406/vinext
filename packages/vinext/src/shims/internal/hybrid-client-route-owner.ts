@@ -201,6 +201,7 @@ export function resolveHybridClientRouteOwner(
   }
 
   if (appMatch === null && pagesMatch === null) return null;
+  if (appMatch?.documentOnly || pagesMatch?.documentOnly) return "document";
   if (pagesMatch === null) return "app";
   if (appMatch === null) return "pages";
   return compareHybridRoutePatterns(

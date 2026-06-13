@@ -1089,14 +1089,42 @@ export function matchRewrite(
           ? collectConditionParams(rewrite.has, rewrite.missing, ctx)
           : _emptyParams();
       if (!conditionParams) continue;
+      const destinationParams = { ...params, ...conditionParams };
       // Collapse protocol-relative URLs (e.g. //evil.com from decoded %2F in catch-all params).
-      return substituteAndSanitizeDestination(rewrite.destination, {
-        ...params,
-        ...conditionParams,
-      });
+      const destination = substituteAndSanitizeDestination(rewrite.destination, destinationParams);
+      return appendRewriteParamsToQuery(destination, rewrite.destination, destinationParams);
     }
   }
   return null;
+}
+
+function destinationReferencesParam(destination: string, key: string): boolean {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`:${escapedKey}(?:[+*])?(?![A-Za-z0-9_])`).test(destination);
+}
+
+function appendRewriteParamsToQuery(
+  destination: string,
+  destinationTemplate: string,
+  params: Record<string, string>,
+): string {
+  const templatePath = destinationTemplate.split(/[?#]/, 1)[0];
+  if (Object.keys(params).some((key) => destinationReferencesParam(templatePath, key))) {
+    return destination;
+  }
+
+  const hashIndex = destination.indexOf("#");
+  const beforeHash = hashIndex === -1 ? destination : destination.slice(0, hashIndex);
+  const hash = hashIndex === -1 ? "" : destination.slice(hashIndex);
+  const queryIndex = beforeHash.indexOf("?");
+  const destinationQuery = queryIndex === -1 ? "" : beforeHash.slice(queryIndex + 1);
+  const destinationKeys = new Set(new URLSearchParams(destinationQuery).keys());
+  const additions = Object.entries(params)
+    .filter(([key]) => !destinationKeys.has(key))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+  if (additions.length === 0) return destination;
+  const separator = queryIndex === -1 ? "?" : destinationQuery ? "&" : "";
+  return `${beforeHash}${separator}${additions.join("&")}${hash}`;
 }
 
 /**

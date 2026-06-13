@@ -51,6 +51,7 @@ import {
 import {
   generateBrowserEntry,
   isLinkPrefetchRoute,
+  toDocumentOnlyAppRoute,
   toLinkPrefetchRoute,
 } from "./entries/app-browser-entry.js";
 import {
@@ -880,9 +881,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // with `{ __appRouter: true }`. See `pages-client-entry.ts` and issue
     // #1526 for the Next.js parity rationale.
     const appPrefetchRoutes = hasAppDir
-      ? (await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher))
-          .filter(isLinkPrefetchRoute)
-          .map(toLinkPrefetchRoute)
+      ? (await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher)).map((route) =>
+          isLinkPrefetchRoute(route) ? toLinkPrefetchRoute(route) : toDocumentOnlyAppRoute(route),
+        )
       : [];
     return _generateClientEntry(pagesDir, nextConfig, fileMatcher, {
       appPrefetchRoutes,
@@ -2733,13 +2734,23 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // route manifest so a user who lands on an App page can still
           // see Pages ownership from a `<Link>` click.
           const pagesPrefetchRoutes = hasPagesDir
-            ? (await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher)).map(
-                (route) => ({
-                  canPrefetchLoadingShell: false as const,
-                  isDynamic: route.isDynamic,
-                  patternParts: [...route.patternParts],
-                }),
-              )
+            ? [
+                ...(await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher)).map(
+                  (route) => ({
+                    canPrefetchLoadingShell: false as const,
+                    isDynamic: route.isDynamic,
+                    patternParts: [...route.patternParts],
+                  }),
+                ),
+                ...(await apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher)).map(
+                  (route) => ({
+                    canPrefetchLoadingShell: false as const,
+                    documentOnly: true,
+                    isDynamic: route.isDynamic,
+                    patternParts: [...route.patternParts],
+                  }),
+                ),
+              ]
             : [];
           return generateBrowserEntry(
             graph.routes,

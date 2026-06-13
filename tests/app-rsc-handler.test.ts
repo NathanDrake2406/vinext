@@ -1048,6 +1048,36 @@ describe("createAppRscHandler", () => {
     });
   });
 
+  it("exposes unused rewrite source params through App searchParams", async () => {
+    let pageOptions: Parameters<HandlerOptions["dispatchMatchedPage"]>[0] | undefined;
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [
+          {
+            source: "/source/:section/:name",
+            destination: "/about?first=:section&second=:name",
+          },
+        ],
+        afterFiles: [],
+        fallback: [],
+      },
+      dispatchMatchedPage: async (options) => {
+        pageOptions = options;
+        return new Response("page");
+      },
+    });
+
+    await handler(new Request("https://example.test/docs/source/hello/world"), null);
+
+    expect(Object.fromEntries(pageOptions!.searchParams)).toEqual({
+      first: "hello",
+      name: "world",
+      second: "world",
+      section: "hello",
+    });
+  });
+
   it.each(["afterFiles", "fallback"] as const)(
     "continues through unmatched %s rewrite destinations",
     async (rewritePhase) => {

@@ -10,6 +10,7 @@ import { isUnknownRecord } from "../utils/record.js";
 
 export type VinextLinkPrefetchRoute = {
   canPrefetchLoadingShell: boolean;
+  documentOnly?: boolean;
   isDynamic: boolean;
   patternParts: string[];
 };
@@ -26,6 +27,7 @@ export type VinextLinkPrefetchRoute = {
  */
 export type VinextPagesLinkPrefetchRoute = {
   canPrefetchLoadingShell: false;
+  documentOnly?: boolean;
   isDynamic: boolean;
   patternParts: string[];
 };

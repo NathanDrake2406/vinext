@@ -74,6 +74,13 @@ const pagesRoute = (patternParts: string[], isDynamic = true): VinextPagesLinkPr
   patternParts,
 });
 
+const documentRoute = (patternParts: string[], isDynamic = true): VinextLinkPrefetchRoute => ({
+  canPrefetchLoadingShell: false,
+  documentOnly: true,
+  isDynamic,
+  patternParts,
+});
+
 describe("resolveHybridClientRouteOwner", () => {
   it("returns null when neither router has a matching manifest", () => {
     installWindow({ app: [], pages: [] });
@@ -102,6 +109,16 @@ describe("resolveHybridClientRouteOwner", () => {
       pages: [pagesRoute(["b", ":slug"])],
     });
     expect(resolveHybridClientRouteOwner("/b/foobar", "")).toBe("pages");
+  });
+
+  it("returns document ownership for App route handlers and Pages API routes", () => {
+    installWindow({
+      app: [documentRoute(["app-api"], false)],
+      pages: [{ ...pagesRoute(["api", ":slug"]), documentOnly: true }],
+    });
+
+    expect(resolveHybridClientRouteOwner("/app-api", "")).toBe("document");
+    expect(resolveHybridClientRouteOwner("/api/test", "")).toBe("document");
   });
 
   it.each(["beforeFiles", "afterFiles", "fallback"] as const)(
