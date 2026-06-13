@@ -1,12 +1,8 @@
-import { sortRoutes } from "../routing/utils.js";
+import { compareHybridRoutePatterns } from "../routing/utils.js";
 
 export type HybridRoutePriorityRoute = {
   isDynamic: boolean;
   pattern: string;
-};
-
-type PrioritizedRoute = HybridRoutePriorityRoute & {
-  owner: "app" | "pages";
 };
 
 export type HybridOwner = "app" | "pages";
@@ -24,24 +20,23 @@ export type HybridRouteMatch<R extends HybridRoutePriorityRoute> = {
  * dynamic route pathnames together in DefaultRouteMatcherManager. Vinext keeps
  * separate route tries for each router, so the hybrid boundary needs to apply
  * that same cross-router ordering after both routers have produced their best
- * local match.
+ * local match. The decision itself lives in
+ * `routing/utils.ts#compareHybridRoutePatterns` so the server and client
+ * always reach the same answer.
  */
 export function pagesRouteHasPriorityOverAppRoute(
   pagesRoute: HybridRoutePriorityRoute,
   appRoute: HybridRoutePriorityRoute | null,
 ): boolean {
   if (appRoute === null) return true;
-
-  if (!pagesRoute.isDynamic) return appRoute.isDynamic;
-  if (!appRoute.isDynamic) return false;
-
-  const routes: PrioritizedRoute[] = [
-    { owner: "pages", isDynamic: true, pattern: pagesRoute.pattern },
-    { owner: "app", isDynamic: true, pattern: appRoute.pattern },
-  ];
-
-  sortRoutes(routes);
-  return routes[0].owner === "pages";
+  return (
+    compareHybridRoutePatterns(
+      pagesRoute.pattern,
+      pagesRoute.isDynamic,
+      appRoute.pattern,
+      appRoute.isDynamic,
+    ) === "pages"
+  );
 }
 
 /**
@@ -64,5 +59,10 @@ export function resolveHybridRouteOwner<R extends HybridRoutePriorityRoute>(
   if (appMatch === null && pagesMatch === null) return null;
   if (appMatch === null) return "pages";
   if (pagesMatch === null) return "app";
-  return pagesRouteHasPriorityOverAppRoute(pagesMatch.route, appMatch.route) ? "pages" : "app";
+  return compareHybridRoutePatterns(
+    pagesMatch.route.pattern,
+    pagesMatch.route.isDynamic,
+    appMatch.route.pattern,
+    appMatch.route.isDynamic,
+  );
 }

@@ -97,6 +97,56 @@ export function sortRoutes<T extends { pattern: string }>(routes: T[]): T[] {
   });
 }
 
+/**
+ * Single source of truth for hybrid App/Pages route ownership.
+ *
+ * Mirrors Next.js's DefaultRouteMatcherManager ordering: Pages providers
+ * are registered before App providers, then merged dynamic matchers sort
+ * together. Returns the router that should own a request/navigation to
+ * a URL that matched BOTH routers.
+ *
+ * Centralised so the server's request handling and the client's link /
+ * prefetch / programmatic-navigation paths all reach the same owner for
+ * the same (pages pattern, app pattern) pair. Encapsulates the static /
+ * dynamic short-circuits and the `sortRoutes` call (which carries the
+ * static-prefix reduction and the Pages-first equal-pattern tiebreak).
+ *
+ * Usage:
+ *   compareHybridRoutePatterns("/:slug", true, "/:slug", true)  // → "pages"
+ *   compareHybridRoutePatterns("/_sites/:slug*", true, "/:slug*", true)  // → "pages"
+ *   compareHybridRoutePatterns("/:path+", true, "/dashboard", false)  // → "app"
+ *   compareHybridRoutePatterns("/", false, "/", false)  // → "app"
+ */
+export function compareHybridRoutePatterns(
+  pagesPattern: string,
+  pagesIsDynamic: boolean,
+  appPattern: string,
+  appIsDynamic: boolean,
+): "app" | "pages" {
+  // Static-only paths: if Pages is static and App is also static, both have
+  // a literal route, but the App's catch-all is irrelevant — App still owns
+  // the literal hit (Next.js registers App providers after Pages but a
+  // static App segment always beats a static Pages segment when both match
+  // the same URL). If App is dynamic, Pages wins because Pages has the
+  // literal and App only has a catch-all.
+  if (!pagesIsDynamic) return appIsDynamic ? "pages" : "app";
+  // Pages is dynamic, App is static: App's literal always wins.
+  if (!appIsDynamic) return "app";
+  // Both dynamic: insert Pages first, then App, and let `sortRoutes` decide.
+  // The Pages-first insertion is the provider-order tiebreak — when
+  // `routePrecedence` produces equal scores, `sortRoutes`' lexicographic
+  // tiebreak also returns 0 for identical patterns, and the front element
+  // (Pages) is preserved by `Array.prototype.sort`. The static-prefix
+  // reduction inside `routePrecedence` makes
+  // `/_sites/:slug*` (51) beat `/:slug*` (100) and similar.
+  const sorted: { owner: "app" | "pages"; pattern: string }[] = [
+    { owner: "pages", pattern: pagesPattern },
+    { owner: "app", pattern: appPattern },
+  ];
+  sortRoutes(sorted);
+  return sorted[0].owner;
+}
+
 // Matches literal delimiter characters and their percent-encoded equivalents.
 // Literal `/`, `#`, `?` can appear after decodeURIComponent when the input was
 // originally encoded (e.g. `%2F` → `/`); they are re-encoded to preserve their

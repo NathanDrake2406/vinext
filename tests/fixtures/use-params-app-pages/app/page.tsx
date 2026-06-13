@@ -1,6 +1,10 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function Page() {
+  const router = useRouter();
   return (
     <>
       <div>
@@ -17,6 +21,24 @@ export default function Page() {
         <Link href="/pages-dir/foobar" id="to-pages">
           To /pages-dir/foobar (Pages)
         </Link>
+      </div>
+      <div>
+        <button
+          type="button"
+          id="router-push-pages"
+          onClick={() => router.push("/pages-dir/foobar")}
+        >
+          router.push(/pages-dir/foobar)
+        </button>
+      </div>
+      <div>
+        <button
+          type="button"
+          id="router-prefetch-pages"
+          onClick={() => router.prefetch("/pages-dir/foobar")}
+        >
+          router.prefetch(/pages-dir/foobar)
+        </button>
       </div>
     </>
   );

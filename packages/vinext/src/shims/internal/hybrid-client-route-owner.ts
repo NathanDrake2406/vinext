@@ -1,9 +1,9 @@
 /**
  * Client-side resolver that decides whether a URL should be soft-navigated
- * (App Router / RSC) or hard-navigated (Pages Router / document). Mirrors
- * the server-side `pagesRouteHasPriorityOverAppRoute` priority check so the
- * click handler, hover/intent prefetch, and direct document load all reach
- * the same owner for the same (URL, route pair).
+ * (App Router / RSC) or hard-navigated (Pages Router / document). Delegates
+ * the owner decision to `compareHybridRoutePatterns` in `routing/utils.ts`
+ * so the server and the client reach the same answer for the same
+ * (pages pattern, app pattern) pair.
  *
  * Lives in `shims/internal/` because both `link.tsx` and the App Router
  * browser entry import it without pulling in the server route graph.
@@ -15,14 +15,13 @@
  * single-router build only sets its own.
  */
 import { createRouteTrieCache, matchRouteWithTrie } from "../../routing/route-matching.js";
+import { compareHybridRoutePatterns } from "../../routing/utils.js";
 import { stripBasePath } from "../../utils/base-path.js";
 import { getLocalePathPrefix } from "../../utils/domain-locale.js";
 import type {
   VinextLinkPrefetchRoute,
   VinextPagesLinkPrefetchRoute,
 } from "../../client/vinext-next-data.js";
-
-type HybridClientRoute = VinextLinkPrefetchRoute | VinextPagesLinkPrefetchRoute;
 
 export type HybridClientOwner = "app" | "pages";
 
@@ -38,63 +37,15 @@ const appRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 const pagesRouteTrieCache = createRouteTrieCache<VinextPagesLinkPrefetchRoute>();
 
 /**
- * Pure: compare two matched routes and return the owner. Mirrors the
- * server-side `pagesRouteHasPriorityOverAppRoute` rules. Centralising the
- * rules here keeps the link click, prefetch, and direct document load
- * paths agreeing on the same owner.
+ * Build a `/`-joined pattern from a manifest's `patternParts`. Mirrors the
+ * server-side route-graph shape (`{ pattern: string }`) so the same
+ * `sortRoutes` algorithm can score both Pages and App patterns. The
+ * `patternParts` array never includes an empty string for the static `/`
+ * route (the App catch-all handles the bare path), so the simple join is
+ * safe for everything the route trie actually matches.
  */
-function pagesWins(pagesRoute: HybridClientRoute, appRoute: HybridClientRoute): boolean {
-  // Static routes never match a dynamic catch-all on the other router.
-  if (!pagesRoute.isDynamic) return appRoute.isDynamic;
-  if (!appRoute.isDynamic) return false;
-
-  // Both dynamic. Apply Next.js's merged dynamic-route sorting: routes are
-  // compared by their pattern specificity. A path with more static segments
-  // (or static segments closer to the start) wins. We rebuild the pattern
-  // from patternParts because the client manifest is segment-shaped — the
-  // server-side `sortRoutes` works on `{ pattern: string }` shape.
-  // The trie match guarantees both routes are present, so each has at
-  // least one segment; an empty patternParts would be a "/" static match
-  // and the isDynamic guards above would have already short-circuited.
-  const pagesPattern = "/" + pagesRoute.patternParts.join("/");
-  const appPattern = "/" + appRoute.patternParts.join("/");
-  return routePrecedence(pagesPattern) < routePrecedence(appPattern);
-}
-
-/**
- * Inline copy of `routePrecedence` from `routing/utils.ts`. Kept in sync
- * by hand to avoid pulling the entire `utils.ts` module (which transitively
- * depends on Node-only helpers) into the client bundle. The function is
- * pure and self-contained.
- *
- * Matches `packages/vinext/src/routing/utils.ts` `routePrecedence`:
- *   1. Static routes first (scored by segment count, more = more specific)
- *   2. Dynamic segments penalized by position
- *   3. Catch-all comes after dynamic
- *   4. Optional catch-all last
- *   5. Lexicographic tiebreaker for determinism
- */
-function routePrecedence(pattern: string): number {
-  const parts = pattern.split("/").filter(Boolean);
-  let score = 0;
-  let staticPrefixCount = 0;
-  for (const p of parts) {
-    if (p.startsWith(":") || p.endsWith("+") || p.endsWith("*")) break;
-    staticPrefixCount++;
-  }
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i];
-    if (p.endsWith("+")) {
-      score += 1000 + i; // catch-all
-    } else if (p.endsWith("*")) {
-      score += 2000 + i; // optional catch-all
-    } else if (p.startsWith(":")) {
-      score += 100 + i; // dynamic
-    } else if (i >= staticPrefixCount) {
-      score -= 500; // infix static
-    }
-  }
-  return score;
+function patternFromParts(parts: readonly string[]): string {
+  return "/" + parts.join("/");
 }
 
 function resolveSameOriginPathname(href: string, basePath: string): string | null {
@@ -166,5 +117,10 @@ export function resolveHybridClientRouteOwner(
   if (appMatch === null && pagesMatch === null) return null;
   if (pagesMatch === null) return "app";
   if (appMatch === null) return "pages";
-  return pagesWins(pagesMatch, appMatch) ? "pages" : "app";
+  return compareHybridRoutePatterns(
+    patternFromParts(pagesMatch.patternParts),
+    pagesMatch.isDynamic,
+    patternFromParts(appMatch.patternParts),
+    appMatch.isDynamic,
+  );
 }

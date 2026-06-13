@@ -52,6 +52,50 @@ test.describe("use-params", () => {
     await expect(page.locator("#params")).toHaveText('"foobar"');
   });
 
+  test("Pages route wins for useRouter().push from an App page", async ({ page, baseURL }) => {
+    // Same hybrid invariant as the <Link> case, but driven through the
+    // App Router runtime boundary (next/navigation's useRouter). The
+    // ownership check now lives inside `navigateClientSide` so
+    // `router.push`, `router.replace`, and form-driven navigations all
+    // hard-navigate to the Pages document instead of sending an RSC
+    // request that the App catch-all would otherwise answer.
+    await page.goto(`${baseURL}/`);
+    await page.locator("#router-push-pages").click();
+    await expect(page).toHaveURL(/\/pages-dir\/foobar$/);
+    await expect(page.locator("#params")).toHaveText('"foobar"');
+  });
+
+  test("useRouter().prefetch does not issue an RSC request for a Pages-owned URL", async ({
+    page,
+    baseURL,
+  }) => {
+    // The hybrid check in `_appRouter.prefetch` short-circuits RSC URL
+    // construction for Pages-owned targets. Sending an RSC request would
+    // hit the App root catch-all's RSC handler and warm an unusable
+    // cache entry, so the prefetch should be a no-op.
+    await page.goto(`${baseURL}/`);
+
+    const rscRequests: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes(".rsc")) {
+        rscRequests.push(req.url());
+      }
+    });
+
+    await page.locator("#router-prefetch-pages").click();
+
+    // Give the network layer a chance to flush anything the resolver
+    // accidentally started. The assertion is a strict zero RSC requests
+    // against /pages-dir/foobar — the only RSC traffic the page emits
+    // here is the bootstrap hydration (not targeted at the prefetch
+    // URL).
+    await page.waitForTimeout(250);
+    expect(
+      rscRequests.filter((u) => u.includes("/pages-dir/foobar")),
+      `unexpected RSC prefetch: ${rscRequests.join("\n")}`,
+    ).toEqual([]);
+  });
+
   test("shouldn't rerender host component when prefetching", async ({ page, baseURL }) => {
     await page.goto(`${baseURL}/rerenders/foobar`);
     const initialRandom = await page.locator("#random").textContent();
