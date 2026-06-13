@@ -10,7 +10,10 @@ import {
   waitForPprFallbackShellCacheReady,
   type PprFallbackShellState,
 } from "vinext/shims/ppr-fallback-shell";
-import type { AppPagePprFallbackCacheShell } from "./app-ppr-fallback-shell.js";
+import {
+  markAppPprDynamicFallbackShellHtml,
+  type AppPagePprFallbackCacheShell,
+} from "./app-ppr-fallback-shell.js";
 import { readAppPageBinaryStream, type AppPageFontPreload } from "./app-page-execution.js";
 import { discardAppPageRenderState } from "./app-page-render-observation.js";
 import { renderAppPageCacheArtifacts } from "./app-page-cache-render.js";
@@ -214,7 +217,9 @@ async function renderPprFallbackShellCacheEntry({
         route: deps.route,
       });
       return {
-        html: rendered.html,
+        html: fallbackShellState.hasDynamicBoundary
+          ? markAppPprDynamicFallbackShellHtml(rendered.html)
+          : rendered.html,
         htmlRenderObservation: rendered.htmlRenderObservation,
         tags: rendered.tags,
         cacheControl: rendered.cacheControl,

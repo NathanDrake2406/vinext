@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createAppPprFallbackShell,
   createAppPprFallbackShells,
+  isAppPprDynamicFallbackShellHtml,
+  markAppPprDynamicFallbackShellHtml,
   rewriteAppPprFallbackShellHtmlNavigation,
 } from "../packages/vinext/src/server/app-ppr-fallback-shell.js";
 
@@ -150,5 +152,14 @@ describe("rewriteAppPprFallbackShellHtmlNavigation", () => {
     expect(actualIndex).toBeLessThan(headCloseIndex);
     expect(html).toContain('"pathname":"/en/blog/new-post"');
     expect(html).toContain('"searchParams":[["preview","1"]]');
+  });
+});
+
+describe("dynamic fallback shell marker", () => {
+  it("persists the need for request-time resume in prerendered HTML", () => {
+    const html = markAppPprDynamicFallbackShellHtml("<html><body>fallback</body></html>");
+
+    expect(isAppPprDynamicFallbackShellHtml(html)).toBe(true);
+    expect(isAppPprDynamicFallbackShellHtml("<html><body>static</body></html>")).toBe(false);
   });
 });

@@ -19,6 +19,7 @@ import {
   type AppPageRenderObservationState,
 } from "./app-page-render-observation.js";
 import { hasCompleteNegativeRequestApiProof, type RenderObservation } from "./cache-proof.js";
+import { isAppPprDynamicFallbackShellHtml } from "./app-ppr-fallback-shell.js";
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
 type AppPageCacheGetter = (key: string) => Promise<ISRCacheEntry | null>;
@@ -123,13 +124,10 @@ type ReadAppPageFallbackShellCacheResponseOptions = {
   isrDebug?: AppPageDebugLogger;
   isrGet: AppPageCacheGetter;
   isrHtmlKey: (pathname: string) => string;
-  isrSet: AppPageCacheSetter;
   middlewareHeaders?: Headers | null;
   middlewareStatus?: number | null;
   revalidateSeconds: number;
-  renderFreshFallbackShellForCache: () => Promise<AppPageFallbackShellCacheRenderResult>;
   rewriteHtml: (html: string) => string;
-  scheduleBackgroundRegeneration: AppPageBackgroundRegenerator;
 };
 
 type FinalizeAppPageHtmlCacheResponseOptions = {
@@ -594,31 +592,6 @@ export async function readAppPageCacheResponse(
   return null;
 }
 
-function scheduleAppPageFallbackShellRegeneration(
-  isrKey: string,
-  options: ReadAppPageFallbackShellCacheResponseOptions,
-): void {
-  options.scheduleBackgroundRegeneration(isrKey, async () => {
-    const revalidatedShell = await options.renderFreshFallbackShellForCache();
-    const revalidateSeconds =
-      revalidatedShell.cacheControl?.revalidate ?? options.revalidateSeconds;
-    const expireSeconds = revalidatedShell.cacheControl?.expire ?? options.expireSeconds;
-    await options.isrSet(
-      isrKey,
-      buildAppPageCacheValue(
-        revalidatedShell.html,
-        undefined,
-        200,
-        revalidatedShell.htmlRenderObservation,
-      ),
-      revalidateSeconds,
-      revalidatedShell.tags,
-      expireSeconds,
-    );
-    options.isrDebug?.("regen complete (fallback shell)", options.fallbackPathname);
-  });
-}
-
 export async function readAppPageFallbackShellCacheResponse(
   options: ReadAppPageFallbackShellCacheResponseOptions,
 ): Promise<Response | null> {
@@ -629,6 +602,10 @@ export async function readAppPageFallbackShellCacheResponse(
     const cachedValue = getCachedAppPageValue(cached);
     if (!cachedValue) {
       options.isrDebug?.("MISS (fallback shell)", options.fallbackPathname);
+      return null;
+    }
+    if (isAppPprDynamicFallbackShellHtml(cachedValue.html)) {
+      options.isrDebug?.("MISS (dynamic fallback shell requires resume)", options.fallbackPathname);
       return null;
     }
 
@@ -645,7 +622,7 @@ export async function readAppPageFallbackShellCacheResponse(
         middlewareStatus: options.middlewareStatus,
         pathname: options.fallbackPathname,
         revalidateSeconds: options.revalidateSeconds,
-        scheduleRegeneration: () => scheduleAppPageFallbackShellRegeneration(isrKey, options),
+        scheduleRegeneration() {},
         stateDebugLabel: "fallback shell",
       },
       (value) => ({ ...value, html: options.rewriteHtml(value.html) }),

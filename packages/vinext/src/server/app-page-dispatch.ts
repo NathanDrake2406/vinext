@@ -44,11 +44,7 @@ import {
   rewriteAppPprFallbackShellHtmlNavigation,
   type AppPagePprFallbackCacheShell,
 } from "./app-ppr-fallback-shell.js";
-import {
-  renderFreshPprFallbackShellForCache,
-  warmPprFallbackShellCaches,
-  type FallbackShellRenderDeps,
-} from "./app-ppr-fallback-shell-render.js";
+import { warmPprFallbackShellCaches } from "./app-ppr-fallback-shell-render.js";
 import {
   resolveAppPageParentHttpAccessBoundary,
   resolveAppPageParentHttpAccessBoundaryModule,
@@ -507,36 +503,6 @@ function toInterceptOptions(
   };
 }
 
-function buildFallbackShellRenderDeps<TRoute extends AppPageDispatchRoute>(
-  options: DispatchAppPageOptions<TRoute>,
-  route: TRoute,
-): FallbackShellRenderDeps {
-  return {
-    basePath: options.basePath,
-    buildPageElement(_route, params, _opts, searchParams) {
-      return options.buildPageElement(route, params, undefined, searchParams);
-    },
-    clearRequestContext: options.clearRequestContext,
-    clientTraceMetadata: options.clientTraceMetadata,
-    createRscOnErrorHandler: options.createRscOnErrorHandler,
-    draftModeSecret: options.draftModeSecret,
-    dynamicConfig: options.dynamicConfig,
-    fetchCache: options.fetchCache,
-    getFontLinks: options.getFontLinks,
-    getFontPreloads: options.getFontPreloads,
-    getFontStyles: options.getFontStyles,
-    getNavigationContext: options.getNavigationContext,
-    loadSsrHandler: options.loadSsrHandler,
-    renderToReadableStream: options.renderToReadableStream,
-    resolveRouteFetchCacheMode: options.resolveRouteFetchCacheMode
-      ? () => options.resolveRouteFetchCacheMode?.(route) ?? null
-      : undefined,
-    rootParams: options.rootParams,
-    route,
-    setNavigationContext: options.setNavigationContext,
-  };
-}
-
 /**
  * Request-phase fallback-shell gate. Callers must run the exact cache read and
  * static-param validation before this classification step.
@@ -603,30 +569,15 @@ async function probePprFallbackShellCache<TRoute extends AppPageDispatchRoute>(
       isrDebug: options.isrDebug,
       isrGet: options.isrGet,
       isrHtmlKey: options.isrHtmlKey,
-      isrSet: options.isrSet,
       middlewareHeaders: options.middlewareContext.headers,
       middlewareStatus: options.middlewareContext.status,
       revalidateSeconds: currentRevalidateSeconds ?? 0,
-      renderFreshFallbackShellForCache() {
-        return renderFreshPprFallbackShellForCache(
-          buildFallbackShellRenderDeps(options, route),
-          runAppPageRevalidationContext,
-          fallbackShell,
-        );
-      },
       rewriteHtml(html) {
         return rewriteAppPprFallbackShellHtmlNavigation({
           html,
           params: options.params,
           pathname: options.cleanPathname,
           searchParams: options.searchParams,
-        });
-      },
-      scheduleBackgroundRegeneration(key, renderFn) {
-        options.scheduleBackgroundRegeneration(key, renderFn, {
-          routerKind: "App Router",
-          routePath: route.pattern,
-          routeType: "render",
         });
       },
     });

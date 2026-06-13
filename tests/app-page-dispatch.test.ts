@@ -35,7 +35,7 @@ import { connection } from "../packages/vinext/src/shims/server.js";
 import type { AppPageMiddlewareContext } from "../packages/vinext/src/server/app-page-response.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
-import type { NavigationContext } from "../packages/vinext/src/shims/navigation.js";
+import { markAppPprDynamicFallbackShellHtml } from "../packages/vinext/src/server/app-ppr-fallback-shell.js";
 import {
   runWithExecutionContext,
   type ExecutionContextLike,
@@ -1700,46 +1700,12 @@ describe("app page dispatch", () => {
     expect(buildPageElement).toHaveBeenCalled();
   });
 
-  it("serves stale PPR fallback-shell HTML and regenerates the shell key", async () => {
-    let navigationContext: NavigationContext = {
-      pathname: "/en/blog/new-post",
-      searchParams: new URLSearchParams(),
-      params: { slug: "new-post" },
-    };
-    const scheduledRegeneration: {
-      key?: string;
-      render?: () => Promise<void>;
-    } = {};
+  it("serves stale static PPR fallback-shell HTML without regenerating the shell key", async () => {
     const buildPageElement = createParamTextPageElement();
     const isrGet = createPprBlogFallbackShellGetter(true);
     const { options } = createPprBlogDispatchOptions({
       buildPageElement,
-      getNavigationContext() {
-        return navigationContext;
-      },
       isrGet,
-      loadSsrHandler: async () => ({
-        async handleSsr(_rscStream, navContext) {
-          if (
-            !navContext ||
-            typeof navContext !== "object" ||
-            !("pathname" in navContext) ||
-            !("params" in navContext)
-          ) {
-            throw new Error("expected navigation context for fallback shell regeneration");
-          }
-          return createStream([
-            `<html><head></head><body>${String(navContext.pathname)}:${JSON.stringify(navContext.params)}</body></html>`,
-          ]);
-        },
-      }),
-      scheduleBackgroundRegeneration(key, render) {
-        scheduledRegeneration.key = key;
-        scheduledRegeneration.render = render;
-      },
-      setNavigationContext(context) {
-        navigationContext = context;
-      },
     });
 
     const response = await dispatchAppPage(options);
@@ -1751,27 +1717,34 @@ describe("app page dispatch", () => {
     expect(response.headers.get("x-vinext-cache")).toBe("STALE");
     await expect(response.text()).resolves.toContain("Locale: en");
     expect(buildPageElement).not.toHaveBeenCalled();
-    expect(scheduledRegeneration.key).toBe("html:/en/blog/[slug]");
+    expect(options.scheduleBackgroundRegeneration).not.toHaveBeenCalled();
+  });
 
-    if (!scheduledRegeneration.render) {
-      throw new Error("expected fallback shell regeneration to be scheduled");
-    }
-    await scheduledRegeneration.render();
+  it("falls through to a fresh render when the cached fallback shell requires resume", async () => {
+    const buildPageElement = createParamTextPageElement("fresh");
+    const isrGet = vi.fn(async (key: string) => {
+      if (key === "html:/en/blog/[slug]") {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue(
+            markAppPprDynamicFallbackShellHtml(
+              "<html><head></head><body>fallback only</body></html>",
+            ),
+          ),
+        );
+      }
+      return null;
+    });
+    const { options } = createPprBlogDispatchOptions({
+      buildPageElement,
+      isrGet,
+      loadSsrHandler: createFreshBodySsrHandler("fresh new-post content"),
+    });
 
-    expect(buildPageElement).toHaveBeenCalledTimes(2);
-    expect(buildPageElement.mock.calls.map(([, params]) => params)).toEqual([
-      { locale: "en", slug: "[slug]" },
-      { locale: "en", slug: "[slug]" },
-    ]);
-    expect(options.isrSet).toHaveBeenCalledWith(
-      "html:/en/blog/[slug]",
-      expect.objectContaining({
-        html: expect.stringContaining('/en/blog/[slug]:{"locale":"en","slug":"[slug]"}'),
-      }),
-      60,
-      expect.arrayContaining(["/en/blog/[slug]"]),
-      undefined,
-    );
+    const response = await dispatchAppPage(options);
+
+    expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+    await expect(response.text()).resolves.toContain("fresh new-post content");
+    expect(buildPageElement).toHaveBeenCalled();
   });
 
   it("does not serve the fallback shell for a known pregenerated route whose exact cache is absent", async () => {

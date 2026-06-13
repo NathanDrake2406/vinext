@@ -1,6 +1,8 @@
 import { createInlineScriptTag } from "./html.js";
 import { createNavigationRuntimeRscMetadataScript } from "./app-ssr-stream.js";
 
+const PPR_DYNAMIC_FALLBACK_SHELL_MARKER = "<!--vinext-ppr-dynamic-fallback-shell-->";
+
 type AppPprFallbackShellRoute = {
   params: readonly string[];
   pattern: string;
@@ -23,6 +25,14 @@ export type AppPagePprFallbackCacheShell = {
   params: Record<string, string | string[]>;
   pathname: string;
 };
+
+export function markAppPprDynamicFallbackShellHtml(html: string): string {
+  return html + PPR_DYNAMIC_FALLBACK_SHELL_MARKER;
+}
+
+export function isAppPprDynamicFallbackShellHtml(html: string): boolean {
+  return html.includes(PPR_DYNAMIC_FALLBACK_SHELL_MARKER);
+}
 
 function routeRootParamNames(route: AppPprFallbackShellRoute): Set<string> {
   return new Set(route.rootParamNames ?? []);

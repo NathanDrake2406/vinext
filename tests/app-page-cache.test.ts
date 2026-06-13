@@ -20,6 +20,7 @@ import {
   type RenderObservation,
 } from "../packages/vinext/src/server/cache-proof.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
+import { markAppPprDynamicFallbackShellHtml } from "../packages/vinext/src/server/app-ppr-fallback-shell.js";
 import { withEnvVar } from "./env-test-helpers.js";
 
 function buildISRCacheEntry(
@@ -685,15 +686,7 @@ describe("app page cache helpers", () => {
     ]);
   });
 
-  it("serves stale fallback shells and regenerates the fallback shell key", async () => {
-    const scheduledRegenerations: Array<{ key: string; render: () => Promise<void> }> = [];
-    const isrSetCalls: Array<{
-      key: string;
-      html: string;
-      expireSeconds: number | undefined;
-      revalidateSeconds: number;
-      tags: string[];
-    }> = [];
+  it("serves stale static fallback shells without regenerating the shared shell key", async () => {
     const debugCalls: Array<[string, string]> = [];
 
     const response = await readAppPageFallbackShellCacheResponse({
@@ -711,52 +704,55 @@ describe("app page cache helpers", () => {
       isrHtmlKey(pathname) {
         return "html:" + pathname;
       },
-      async isrSet(key, data, revalidateSeconds, tags, expireSeconds) {
-        isrSetCalls.push({
-          key,
-          html: data.html,
-          expireSeconds,
-          revalidateSeconds,
-          tags,
-        });
-      },
       fallbackPathname: "/en/blog/[slug]",
       expireSeconds: 300,
       middlewareHeaders: new Headers({ "X-From-Middleware": "yes" }),
       revalidateSeconds: 60,
-      async renderFreshFallbackShellForCache() {
-        return {
-          cacheControl: { revalidate: 10, expire: 20 },
-          html: "<html><head></head><body>fresh shell</body></html>",
-          tags: ["/en/blog/[slug]", "_N_T_/en/blog/[slug]/page"],
-        };
-      },
       rewriteHtml(html) {
         return html.replace("stale shell", "rewritten stale shell");
-      },
-      scheduleBackgroundRegeneration(key, render) {
-        scheduledRegenerations.push({ key, render });
       },
     });
 
     expect(response?.headers.get("x-vinext-cache")).toBe("STALE");
     expect(response?.headers.get("x-from-middleware")).toBe("yes");
     await expect(response?.text()).resolves.toContain("rewritten stale shell");
-    expect(scheduledRegenerations.map(({ key }) => key)).toEqual(["html:/en/blog/[slug]"]);
     expect(debugCalls).toContainEqual(["STALE (fallback shell)", "/en/blog/[slug]"]);
+  });
 
-    await scheduledRegenerations[0].render();
+  it("falls through when a cached fallback shell requires request-time resume", async () => {
+    const debugCalls: Array<[string, string]> = [];
 
-    expect(isrSetCalls).toEqual([
-      {
-        key: "html:/en/blog/[slug]",
-        html: "<html><head></head><body>fresh shell</body></html>",
-        expireSeconds: 20,
-        revalidateSeconds: 10,
-        tags: ["/en/blog/[slug]", "_N_T_/en/blog/[slug]/page"],
+    const response = await readAppPageFallbackShellCacheResponse({
+      clearRequestContext() {
+        throw new Error("should not clear request context when falling through");
       },
+      async isrGet() {
+        return buildISRCacheEntry(
+          buildCachedAppPageValue(
+            markAppPprDynamicFallbackShellHtml(
+              "<html><head></head><body>dynamic shell</body></html>",
+            ),
+          ),
+        );
+      },
+      isrDebug(event, detail) {
+        debugCalls.push([event, detail]);
+      },
+      isrHtmlKey(pathname) {
+        return "html:" + pathname;
+      },
+      fallbackPathname: "/en/blog/[slug]",
+      revalidateSeconds: 60,
+      rewriteHtml(html) {
+        return html;
+      },
+    });
+
+    expect(response).toBeNull();
+    expect(debugCalls).toContainEqual([
+      "MISS (dynamic fallback shell requires resume)",
+      "/en/blog/[slug]",
     ]);
-    expect(debugCalls).toContainEqual(["regen complete (fallback shell)", "/en/blog/[slug]"]);
   });
 
   it("still schedules stale regeneration when the stale payload is unusable for this request", async () => {
