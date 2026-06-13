@@ -128,6 +128,8 @@ export type AppPageSsrHandler = {
       rootParams?: RootParams;
       sideStream?: ReadableStream<Uint8Array>;
       capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
+      /** Abort signal for a build-time PPR fallback-shell static render. */
+      pprFallbackShellSignal?: AbortSignal;
       /** When true, wait for the full React tree before emitting bytes. */
       waitForAllReady?: boolean;
       /** Dev-only: original server error to surface in the browser overlay. */
@@ -162,6 +164,8 @@ type RenderAppPageHtmlStreamOptions = {
   sideStream?: ReadableStream<Uint8Array>;
   /** Out-parameter filled with accumulated raw RSC bytes after stream consumption. */
   capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
+  /** Abort signal for a build-time PPR fallback-shell static render. */
+  pprFallbackShellSignal?: AbortSignal;
   /** When true, wait for the full React tree before emitting bytes. */
   waitForAllReady?: boolean;
   /** Dev-only: original server error to surface in the browser overlay. */
@@ -225,6 +229,7 @@ export async function renderAppPageHtmlStream(
     rootParams: options.rootParams,
     sideStream: options.sideStream,
     capturedRscDataRef: options.capturedRscDataRef,
+    pprFallbackShellSignal: options.pprFallbackShellSignal,
     waitForAllReady: options.waitForAllReady,
     initialDevServerError: options.initialDevServerError,
   };

@@ -227,6 +227,18 @@ const projectServers = {
       timeout: 60_000,
     },
   },
+  "ppr-impact-demo": {
+    testDir: "./tests/e2e/ppr-impact-demo",
+    use: { baseURL: "http://localhost:4187" },
+    server: {
+      command:
+        "npx vp run vinext#build && node ../../../packages/vinext/dist/cli.js build --prerender-all && node ../../../packages/vinext/dist/cli.js start --port 4187",
+      cwd: "./tests/fixtures/ppr-impact-demo",
+      port: 4187,
+      reuseExistingServer: !process.env.CI,
+      timeout: 90_000,
+    },
+  },
   "app-front-redirect-issue": {
     testDir: "./tests/e2e/app-front-redirect-issue",
     use: { baseURL: "http://localhost:4186" },

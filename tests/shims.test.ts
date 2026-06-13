@@ -15,6 +15,7 @@ import type {
   CacheHandlerValue,
   IncrementalCacheValue,
 } from "../packages/vinext/src/shims/cache.js";
+import { normalizePathSeparators } from "../packages/vinext/src/utils/path.ts";
 
 const FIXTURE_DIR = PAGES_FIXTURE_DIR;
 
@@ -1129,6 +1130,31 @@ describe("next/navigation shim", () => {
     const nav = await import("../packages/vinext/src/shims/navigation.js");
     expect(typeof nav.useSelectedLayoutSegment).toBe("function");
     expect(typeof nav.useSelectedLayoutSegments).toBe("function");
+  });
+
+  it("marks navigation hooks dynamic during fallback-shell prerendering", async () => {
+    const { createPprFallbackShellState, runWithPprFallbackShellState } =
+      await import("../packages/vinext/src/shims/ppr-fallback-shell.js");
+    const navigation = await import("../packages/vinext/src/shims/navigation.js");
+
+    const readHooks: Array<() => unknown> = [
+      () => navigation.usePathname(),
+      () => navigation.useSearchParams(),
+      () => navigation.useParams(),
+      () => navigation.useSelectedLayoutSegment(),
+      () => navigation.useSelectedLayoutSegments(),
+    ];
+
+    for (const readHook of readHooks) {
+      const state = createPprFallbackShellState({
+        fallbackParamNames: ["slug"],
+        routePattern: "/blog/:slug",
+      });
+
+      runWithPprFallbackShellState(state, readHook);
+
+      expect(state.hasDynamicBoundary).toBe(true);
+    }
   });
 
   it("useSelectedLayoutSegment still works when provider and hook are loaded from different module instances", async () => {
@@ -20234,7 +20260,10 @@ describe("@vercel/og compatibility resolution", () => {
 
   it("routes direct @vercel/og app imports through the Next-compatible ImageResponse shim", () => {
     const hook = getResolveIdHook();
-    const expectedShim = path.resolve(import.meta.dirname, "../packages/vinext/src/shims/og.tsx");
+    // resolveId returns Vite-style ids: forward slashes on every platform.
+    const expectedShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/og.tsx"),
+    );
 
     expect(hook.filter.id.test("@vercel/og")).toBe(true);
     expect(hook.filter.id.test("@vercel/og.js")).toBe(true);

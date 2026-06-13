@@ -19,6 +19,7 @@ import {
   type AppPageRenderObservationState,
 } from "./app-page-render-observation.js";
 import { hasCompleteNegativeRequestApiProof, type RenderObservation } from "./cache-proof.js";
+import { isAppPprDynamicFallbackShellHtml } from "./app-ppr-fallback-shell.js";
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
 type AppPageCacheGetter = (key: string) => Promise<ISRCacheEntry | null>;
@@ -106,6 +107,20 @@ type ReadAppPageCacheResponseOptions = {
   revalidateSeconds: number;
   renderFreshPageForCache: () => Promise<AppPageCacheRenderResult>;
   scheduleBackgroundRegeneration: AppPageBackgroundRegenerator;
+};
+
+type ReadAppPageFallbackShellCacheResponseOptions = {
+  clearRequestContext: () => void;
+  expireSeconds?: number;
+  fallbackPathname: string;
+  isEdgeRuntime?: boolean;
+  isrDebug?: AppPageDebugLogger;
+  isrGet: AppPageCacheGetter;
+  isrHtmlKey: (pathname: string) => string;
+  middlewareHeaders?: Headers | null;
+  middlewareStatus?: number | null;
+  revalidateSeconds: number;
+  rewriteHtml: (html: string) => string;
 };
 
 type FinalizeAppPageHtmlCacheResponseOptions = {
@@ -317,6 +332,58 @@ export function buildAppPageCachedResponse(
   });
 }
 
+type ServeAppPageCachedHtmlOptions = {
+  cached: ISRCacheEntry | null;
+  cachedValue: CachedAppPageValue;
+  clearRequestContext: () => void;
+  emptyDebugMessage: string;
+  expireSeconds?: number;
+  isEdgeRuntime?: boolean;
+  isrDebug?: AppPageDebugLogger;
+  middlewareHeaders?: Headers | null;
+  middlewareStatus?: number | null;
+  pathname: string;
+  revalidateSeconds: number;
+  scheduleRegeneration: () => void;
+  stateDebugLabel: string;
+};
+
+async function serveAppPageCachedHtml(
+  options: ServeAppPageCachedHtmlOptions,
+  transformValue?: (value: CachedAppPageValue) => CachedAppPageValue,
+): Promise<Response | null> {
+  if (typeof options.cachedValue.html !== "string" || options.cachedValue.html.length === 0) {
+    if (options.cached?.isStale) {
+      options.scheduleRegeneration();
+    }
+    options.isrDebug?.(options.emptyDebugMessage, options.pathname);
+    return null;
+  }
+
+  const cacheState = options.cached?.isStale ? "STALE" : "HIT";
+  if (options.cached?.isStale) {
+    options.scheduleRegeneration();
+  }
+
+  const responseValue = transformValue ? transformValue(options.cachedValue) : options.cachedValue;
+  const response = buildAppPageCachedResponse(responseValue, {
+    cacheState,
+    cacheControl: options.cached?.value.cacheControl,
+    expireSeconds: options.expireSeconds,
+    isEdgeRuntime: options.isEdgeRuntime,
+    isRscRequest: false,
+    middlewareHeaders: options.middlewareHeaders,
+    middlewareStatus: options.middlewareStatus,
+    revalidateSeconds: options.revalidateSeconds,
+  });
+
+  if (!response) return null;
+
+  options.isrDebug?.(`${cacheState} (${options.stateDebugLabel})`, options.pathname);
+  options.clearRequestContext();
+  return response;
+}
+
 export async function readAppPageCacheResponse(
   options: ReadAppPageCacheResponseOptions,
 ): Promise<Response | null> {
@@ -516,6 +583,48 @@ export async function readAppPageCacheResponse(
   }
 
   return null;
+}
+
+export async function readAppPageFallbackShellCacheResponse(
+  options: ReadAppPageFallbackShellCacheResponseOptions,
+): Promise<Response | null> {
+  const isrKey = options.isrHtmlKey(options.fallbackPathname);
+
+  try {
+    const cached = await options.isrGet(isrKey);
+    const cachedValue = getCachedAppPageValue(cached);
+    if (!cachedValue) {
+      options.isrDebug?.("MISS (fallback shell)", options.fallbackPathname);
+      return null;
+    }
+    if (isAppPprDynamicFallbackShellHtml(cachedValue.html)) {
+      options.isrDebug?.("MISS (dynamic fallback shell requires resume)", options.fallbackPathname);
+      return null;
+    }
+
+    return await serveAppPageCachedHtml(
+      {
+        cached,
+        cachedValue,
+        clearRequestContext: options.clearRequestContext,
+        emptyDebugMessage: "MISS (empty fallback shell)",
+        expireSeconds: options.expireSeconds,
+        isEdgeRuntime: options.isEdgeRuntime,
+        isrDebug: options.isrDebug,
+        middlewareHeaders: options.middlewareHeaders,
+        middlewareStatus: options.middlewareStatus,
+        pathname: options.fallbackPathname,
+        revalidateSeconds: options.revalidateSeconds,
+        scheduleRegeneration() {},
+        stateDebugLabel: "fallback shell",
+      },
+      (value) => ({ ...value, html: options.rewriteHtml(value.html) }),
+    );
+  } catch (isrReadError) {
+    options.isrDebug?.("MISS (fallback shell read error)", options.fallbackPathname);
+    console.error("[vinext] ISR fallback shell cache read error:", isrReadError);
+    return null;
+  }
 }
 
 export function finalizeAppPageHtmlCacheResponse(

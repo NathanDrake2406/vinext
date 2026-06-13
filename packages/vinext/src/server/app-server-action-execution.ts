@@ -30,7 +30,7 @@ import { applyEdgeRuntimeHeader } from "./app-page-response.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
 import { resolveAppPageNavigationParams } from "./app-page-element-builder.js";
 import { deferUntilStreamConsumed } from "./app-page-stream.js";
-import { buildPageCacheTags } from "./implicit-tags.js";
+import { buildAppPageTags } from "./implicit-tags.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import { getSetCookieName } from "./cookie-utils.js";
 import {
@@ -600,7 +600,7 @@ export function applyActionRedirectBasePath(url: string, basePath: string): stri
 }
 
 function buildServerActionPageTags(route: AppServerActionRoute, pathname: string): string[] {
-  return buildPageCacheTags(pathname, [], [...(route.routeSegments ?? [])], "page");
+  return buildAppPageTags(pathname, [], route.routeSegments ?? []);
 }
 
 function resolveInternalActionRedirectTarget(
