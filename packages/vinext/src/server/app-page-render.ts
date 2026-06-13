@@ -951,6 +951,9 @@ export async function renderAppPageLifecycle(
       timing: htmlResponseTiming,
     });
     response.headers.set("Cache-Control", NO_STORE_CACHE_CONTROL);
+    response.headers.delete("CDN-Cache-Control");
+    response.headers.delete("Cloudflare-CDN-Cache-Control");
+    response.headers.delete("Cache-Tag");
     return response;
   }
 

@@ -330,7 +330,12 @@ describe("SSR shell error recovery", () => {
       ...common.options,
       isProduction: true,
       middlewareContext: {
-        headers: new Headers({ "Cache-Control": "public, max-age=3600" }),
+        headers: new Headers({
+          "Cache-Control": "public, max-age=3600",
+          "CDN-Cache-Control": "public, max-age=3600",
+          "Cloudflare-CDN-Cache-Control": "public, max-age=3600",
+          "Cache-Tag": "shell-error",
+        }),
         status: null,
       },
       revalidateSeconds: 30,
@@ -348,6 +353,9 @@ describe("SSR shell error recovery", () => {
 
     expect(response.status).toBe(500);
     expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-tag")).toBeNull();
     await expect(response.text()).resolves.toContain("__next_error__");
     expect(common.isrSet).not.toHaveBeenCalled();
   });
