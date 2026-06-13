@@ -199,6 +199,44 @@ describe("renderPagesFallback", () => {
     expect(await res!.text()).toBe("page-response");
   });
 
+  it("filters static and dynamic Pages matches by ownership phase", async () => {
+    const renderPage = vi.fn(() => new Response("page"));
+    const request = new Request("http://localhost/blog/hello");
+    const url = new URL(request.url);
+    const deps = {
+      ...defaultDeps,
+      loadPagesEntry: () => ({
+        matchPageRoute: () => ({ route: { isDynamic: true, pattern: "/blog/:slug" } }),
+        renderPage,
+      }),
+    };
+
+    expect(
+      await renderPagesFallback(
+        {
+          isRscRequest: false,
+          matchKind: "static",
+          middlewareContext: { headers: null, requestHeaders: null, status: null },
+          request,
+          url,
+        },
+        deps,
+      ),
+    ).toBeNull();
+    expect(
+      await renderPagesFallback(
+        {
+          isRscRequest: false,
+          matchKind: "dynamic",
+          middlewareContext: { headers: null, requestHeaders: null, status: null },
+          request,
+          url,
+        },
+        deps,
+      ),
+    ).not.toBeNull();
+  });
+
   it("appends the middleware draft cookie to an API fallback response (#1520)", async () => {
     const handleApiRoute = vi.fn((_req: Request, _url: string) => new Response("api-response"));
     const deps = {

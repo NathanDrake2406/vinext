@@ -145,7 +145,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     expect(code).toContain("server/app-pages-bridge.js");
     expect(code).toContain("return __renderPagesFallback(");
     expect(code).toContain(
-      "{ appRouteMatch, isRscRequest, middlewareContext, pathname, request, url }",
+      "{ appRouteMatch, isRscRequest, matchKind, middlewareContext, pathname, request, url }",
     );
     expect(code).toContain('return import.meta.viteRsc.loadModule("ssr", "index");');
     expect(code).toContain("buildRequestHeaders: __buildRequestHeadersFromMiddlewareResponse");

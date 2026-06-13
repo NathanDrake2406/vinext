@@ -213,18 +213,12 @@ type RenderNotFoundOptions<TRoute> = {
   scriptNonce?: string;
 };
 
-type RenderPagesFallbackRouteMatch = {
-  route: {
-    isDynamic: boolean;
-    pattern: string;
-  };
-};
-
 type RenderPagesFallbackOptions = {
-  appRouteMatch?: RenderPagesFallbackRouteMatch | null;
+  appRouteMatch?: { route: { isDynamic: boolean; pattern: string } } | null;
   isRscRequest: boolean;
+  matchKind?: "dynamic" | "static";
   middlewareContext: AppRscMiddlewareContext;
-  pathname: string;
+  pathname?: string;
   request: Request;
   url: URL;
 };
@@ -667,22 +661,22 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   if (serverActionResponse) return serverActionResponse;
 
   let match = preActionMatch;
-  const pagesFallbackEligible = match === null || match.route.isDynamic;
-  const pagesFallbackResponse = pagesFallbackEligible
-    ? await options.renderPagesFallback?.({
-        appRouteMatch: match ?? null,
-        isRscRequest,
-        middlewareContext,
-        pathname: cleanPathname,
-        request,
-        url,
-      })
-    : null;
-  if (pagesFallbackResponse) {
+  const staticPagesFallbackResponse =
+    match === null || match.route.isDynamic
+      ? await options.renderPagesFallback?.({
+          appRouteMatch: match ?? null,
+          isRscRequest,
+          matchKind: "static",
+          middlewareContext,
+          pathname: cleanPathname,
+          request,
+          url,
+        })
+      : null;
+  if (staticPagesFallbackResponse) {
     options.clearRequestContext();
-    return pagesFallbackResponse;
+    return staticPagesFallbackResponse;
   }
-
   if (!match || match.route.isDynamic) {
     const afterFilesRewrite = await applyRewrite(
       {
@@ -701,6 +695,23 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       cleanPathname = afterFilesRewrite;
       match = options.matchRoute(cleanPathname);
     }
+  }
+
+  const dynamicPagesFallbackEligible = match === null || match.route.isDynamic;
+  const dynamicPagesFallbackResponse = dynamicPagesFallbackEligible
+    ? await options.renderPagesFallback?.({
+        appRouteMatch: match ?? null,
+        isRscRequest,
+        matchKind: "dynamic",
+        middlewareContext,
+        pathname: cleanPathname,
+        request,
+        url,
+      })
+    : null;
+  if (dynamicPagesFallbackResponse) {
+    options.clearRequestContext();
+    return dynamicPagesFallbackResponse;
   }
 
   if (!match) {

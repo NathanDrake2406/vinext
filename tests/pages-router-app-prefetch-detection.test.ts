@@ -49,6 +49,11 @@ type FakeWindow = {
     patternParts: string[];
     isDynamic: boolean;
   }>;
+  __VINEXT_PAGES_LINK_PREFETCH_ROUTES__?: Array<{
+    canPrefetchLoadingShell: boolean;
+    patternParts: string[];
+    isDynamic: boolean;
+  }>;
   __VINEXT_LOCALES__?: string[];
   __VINEXT_DEFAULT_LOCALE__?: string;
   next?: unknown;
@@ -271,5 +276,27 @@ describe("Pages Router records app routes as detected on prefetch", () => {
       await import("../packages/vinext/src/shims/internal/app-route-detection.js");
 
     expect(matchesAppRoute("https://example.com/about", "")).toBe(false);
+  });
+
+  it("does not mark or hard-navigate a Pages-owned overlap", async () => {
+    const fakeWindow = installFakeBrowserGlobals([
+      { canPrefetchLoadingShell: false, patternParts: [":path+"], isDynamic: true },
+    ]);
+    fakeWindow.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = [
+      {
+        canPrefetchLoadingShell: false,
+        patternParts: ["pages-dir", ":dynamic"],
+        isDynamic: true,
+      },
+    ];
+    const { markAppRouteDetectedOnPrefetch } =
+      await import("../packages/vinext/src/shims/internal/app-route-detection.js");
+    const routerModule = await import("../packages/vinext/src/shims/router.js");
+
+    markAppRouteDetectedOnPrefetch("/pages-dir/foobar", "");
+    expect(routerModule.default.components["/pages-dir/foobar"]).toBeUndefined();
+
+    void routerModule.default.push("/pages-dir/foobar");
+    expect(fakeWindow.location.assign).not.toHaveBeenCalled();
   });
 });

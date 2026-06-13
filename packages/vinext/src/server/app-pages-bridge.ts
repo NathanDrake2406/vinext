@@ -60,6 +60,7 @@ type RenderPagesFallbackDependencies = {
 type RenderPagesFallbackOptions = {
   appRouteMatch?: AppRouteMatch | null;
   isRscRequest: boolean;
+  matchKind?: "dynamic" | "static";
   middlewareContext: AppMiddlewareContext;
   pathname?: string;
   request: Request;
@@ -76,6 +77,7 @@ export async function renderPagesFallback(
   const {
     appRouteMatch = null,
     isRscRequest,
+    matchKind,
     middlewareContext,
     pathname = options.url.pathname,
     request,
@@ -141,6 +143,8 @@ export async function renderPagesFallback(
     ? (pagesEntry.matchPageRoute?.(pagesUrl, pagesRequest) ?? null)
     : null;
   if (hasPageMatcher && pageMatch === null) return null;
+  if (pageMatch !== null && matchKind === "static" && pageMatch.route.isDynamic) return null;
+  if (pageMatch !== null && matchKind === "dynamic" && !pageMatch.route.isDynamic) return null;
   if (
     appRouteMatch !== null &&
     (pageMatch === null || !pagesRouteHasPriorityOverAppRoute(pageMatch.route, appRouteMatch.route))

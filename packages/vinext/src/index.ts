@@ -2434,20 +2434,21 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         sassComposesLoader.setResolvedConfig(config);
 
         if (config.command === "build" && hasAppDir && hasPagesDir) {
-          const [appRoutes, pageRoutes] = await Promise.all([
+          const [appRoutes, pageRoutes, apiRoutes] = await Promise.all([
             appRouter(appDir, nextConfig?.pageExtensions, fileMatcher),
             pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher),
+            apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher),
           ]);
           validateHybridRouteConflicts(
-            pageRoutes.map((route) => ({
+            [...pageRoutes, ...apiRoutes].map((route) => ({
               ...route,
               sourcePath: path.relative(root, route.filePath),
             })),
             appRoutes
-              .filter((route) => route.pagePath !== null)
+              .filter((route) => route.pagePath !== null || route.routePath !== null)
               .map((route) => ({
                 ...route,
-                sourcePath: route.pagePath === null ? null : path.relative(root, route.pagePath),
+                sourcePath: path.relative(root, route.pagePath ?? route.routePath!),
               })),
           );
         }
@@ -3135,6 +3136,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           server.ws.send({ type: "full-reload" });
         }
 
+        function invalidatePagesServerEntry() {
+          for (const env of Object.values(server.environments)) {
+            const mod = env.moduleGraph.getModuleById(RESOLVED_SERVER_ENTRY);
+            if (mod) env.moduleGraph.invalidateModule(mod);
+          }
+          pagesRunner?.clearCache();
+        }
+
         function invalidateAppRoutingModules() {
           invalidateAppRouteCache();
           invalidateRscEntryModule();
@@ -3142,35 +3151,48 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         }
 
         let hybridRouteValidation: Promise<void> = Promise.resolve();
+        let hybridRouteValidationError: Error | null = null;
+        function sendHybridRouteValidationError(error: Error) {
+          server.ws.send({
+            type: "error",
+            err: { message: error.message, stack: error.stack ?? error.message },
+          });
+        }
+        server.ws.on("connection", () => {
+          if (hybridRouteValidationError)
+            sendHybridRouteValidationError(hybridRouteValidationError);
+        });
         function revalidateHybridRoutes() {
           if (!hasAppDir || !hasPagesDir) return;
           hybridRouteValidation = hybridRouteValidation
             .catch(() => {})
             .then(async () => {
-              const [appRoutes, pageRoutes] = await Promise.all([
+              const [appRoutes, pageRoutes, apiRoutes] = await Promise.all([
                 appRouter(appDir, nextConfig?.pageExtensions, fileMatcher),
                 pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher),
+                apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher),
               ]);
               validateHybridRouteConflicts(
-                pageRoutes.map((route) => ({
+                [...pageRoutes, ...apiRoutes].map((route) => ({
                   ...route,
                   sourcePath: path.relative(root, route.filePath),
                 })),
                 appRoutes
-                  .filter((route) => route.pagePath !== null)
+                  .filter((route) => route.pagePath !== null || route.routePath !== null)
                   .map((route) => ({
                     ...route,
-                    sourcePath:
-                      route.pagePath === null ? null : path.relative(root, route.pagePath),
+                    sourcePath: path.relative(root, route.pagePath ?? route.routePath!),
                   })),
               );
+              if (hybridRouteValidationError) {
+                hybridRouteValidationError = null;
+                server.ws.send({ type: "full-reload" });
+              }
             })
             .catch((error) => {
               const err = error instanceof Error ? error : new Error(String(error));
-              server.ws.send({
-                type: "error",
-                err: { message: err.message, stack: err.stack ?? err.message },
-              });
+              hybridRouteValidationError = err;
+              sendHybridRouteValidationError(err);
             });
         }
 
@@ -3235,6 +3257,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             routeChanged = true;
           }
           if (routeChanged) {
+            invalidatePagesServerEntry();
             invalidateHybridClientEntries();
             revalidateHybridRoutes();
           }
@@ -3251,6 +3274,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             routeChanged = true;
           }
           if (routeChanged) {
+            invalidatePagesServerEntry();
             invalidateHybridClientEntries();
             revalidateHybridRoutes();
           }

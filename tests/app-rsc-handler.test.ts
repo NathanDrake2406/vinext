@@ -988,9 +988,55 @@ describe("createAppRscHandler", () => {
     expect(await response.text()).toBe("pages:/about");
     expect(renderPagesFallback).toHaveBeenCalledWith(
       expect.objectContaining({
+        matchKind: "static",
         pathname: "/about",
         appRouteMatch: expect.objectContaining({ route: dynamicRoute }),
       }),
+    );
+  });
+
+  it("runs afterFiles rewrites before dynamic Pages route ownership", async () => {
+    const appDynamicRoute = createPageRoute({
+      isDynamic: true,
+      pattern: "/:slug",
+      routeSegments: ["[slug]"],
+    });
+    const appDestinationRoute = createPageRoute({
+      pattern: "/destination",
+      routeSegments: ["destination"],
+    });
+    const renderPagesFallback = vi.fn(async ({ matchKind }) =>
+      matchKind === "dynamic" ? new Response("pages-dynamic", { status: 200 }) : null,
+    );
+    const dispatchMatchedPage = vi.fn(
+      async ({ route }) => new Response(`app:${route.pattern}`, { status: 200 }),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [],
+        afterFiles: [{ source: "/legacy", destination: "/destination" }],
+        fallback: [],
+      },
+      dispatchMatchedPage,
+      matchRoute: (pathname): ReturnType<HandlerOptions["matchRoute"]> => {
+        if (pathname === "/legacy") {
+          return { params: { slug: "legacy" }, route: appDynamicRoute };
+        }
+        if (pathname === "/destination") return { params: {}, route: appDestinationRoute };
+        return null;
+      },
+      renderPagesFallback,
+    });
+
+    const response = await handler(new Request("https://example.test/docs/legacy"), null);
+
+    expect(await response.text()).toBe("app:/destination");
+    expect(renderPagesFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ matchKind: "static", pathname: "/legacy" }),
+    );
+    expect(renderPagesFallback).not.toHaveBeenCalledWith(
+      expect.objectContaining({ matchKind: "dynamic", pathname: "/legacy" }),
     );
   });
 

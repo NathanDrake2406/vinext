@@ -38,6 +38,7 @@ import type { VinextLinkPrefetchRoute } from "../../client/vinext-next-data.js";
 import { createRouteTrieCache, matchRouteWithTrie } from "../../routing/route-matching.js";
 import { stripBasePath, removeTrailingSlash } from "../../utils/base-path.js";
 import { getLocalePathPrefix } from "../../utils/domain-locale.js";
+import { resolveHybridClientRouteOwner } from "./hybrid-client-route-owner.js";
 
 const appRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 
@@ -130,7 +131,7 @@ export function matchesAppRoute(href: string, basePath: string): boolean {
  */
 export function markAppRouteDetectedOnPrefetch(href: string, basePath: string): void {
   if (typeof window === "undefined") return;
-  if (!matchesAppRoute(href, basePath)) return;
+  if (resolveHybridClientRouteOwner(href, basePath) !== "app") return;
 
   const rawPathname = resolveSameOriginPathname(href, basePath);
   if (rawPathname === null) return;
