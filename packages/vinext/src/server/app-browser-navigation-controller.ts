@@ -1,4 +1,10 @@
-import { startTransition, useLayoutEffect, type Dispatch, type ReactNode } from "react";
+import {
+  startTransition,
+  useInsertionEffect,
+  useLayoutEffect,
+  type Dispatch,
+  type ReactNode,
+} from "react";
 import { flushSync } from "react-dom";
 import {
   activateNavigationSnapshot,
@@ -36,6 +42,7 @@ import {
 } from "./app-browser-action-result.js";
 import type { AppElements } from "./app-elements.js";
 import type { NavigationRuntimeVisibleCommitMode } from "../client/navigation-runtime.js";
+import { clearAppNavigationFailureTarget } from "../client/app-nav-failure-handler.js";
 
 export type HistoryUpdateMode = "push" | "replace";
 
@@ -493,6 +500,10 @@ export function createAppBrowserNavigationController(
       children?: ReactNode;
     },
   ): ReactNode {
+    useInsertionEffect(() => {
+      clearAppNavigationFailureTarget();
+    }, [renderId]);
+
     useLayoutEffect(() => {
       drainPrePaintEffects(renderId);
 

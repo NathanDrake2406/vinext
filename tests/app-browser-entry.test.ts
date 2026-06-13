@@ -6622,37 +6622,11 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
     }
   }
 
-  it("hard-navigates to the recovery href when one is pending", () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      withFakeWindow(({ assignSpy }) => {
-        const handler = createOnUncaughtError(() => "/broken-route");
-        handler(new Error("render boom"), {});
-        expect(assignSpy).toHaveBeenCalledWith("/broken-route");
-      });
-    } finally {
-      consoleSpy.mockRestore();
-    }
-  });
-
-  it("does not navigate when no navigation is in flight (initial hydration error)", () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      withFakeWindow(({ assignSpy }) => {
-        const handler = createOnUncaughtError(() => null);
-        handler(new Error("hydration boom"), {});
-        expect(assignSpy).not.toHaveBeenCalled();
-      });
-    } finally {
-      consoleSpy.mockRestore();
-    }
-  });
-
   it("reports the error globally without writing to console.error", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       withFakeWindow(({ reportErrorSpy }) => {
-        const handler = createOnUncaughtError(() => null);
+        const handler = createOnUncaughtError();
         const err = new Error("boom");
         handler(err, { componentStack: "\n    at Page (page.tsx:10)" });
         expect(reportErrorSpy).toHaveBeenCalledWith(err);
@@ -6663,21 +6637,14 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
     }
   });
 
-  it("reads the recovery href lazily so newer navigations win", () => {
-    // Module-level pendingNavigationRecoveryHref is reassigned across
-    // navigations; the handler must read it at call time, not at construction.
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      withFakeWindow(({ assignSpy }) => {
-        let current: string | null = "/first";
-        const handler = createOnUncaughtError(() => current);
-        current = "/second";
-        handler(new Error("late error"), {});
-        expect(assignSpy).toHaveBeenCalledWith("/second");
-      });
-    } finally {
-      consoleSpy.mockRestore();
-    }
+  it("leaves navigation failure dispatch to the global error listener", () => {
+    withFakeWindow(({ assignSpy, reportErrorSpy }) => {
+      const handler = createOnUncaughtError();
+      const error = new Error("late error");
+      handler(error, {});
+      expect(reportErrorSpy).toHaveBeenCalledWith(error);
+      expect(assignSpy).not.toHaveBeenCalled();
+    });
   });
 });
 

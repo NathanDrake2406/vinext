@@ -451,6 +451,15 @@ test.describe("Next.js compat: App Router autoscroll", () => {
     await expectScroll(page, { x: 0, y: 0 });
   });
 
+  test("uses the next HTML sibling for a non-HTML hash target", async ({ page }) => {
+    await page.goto(`${ROUTE_BASE}`);
+    await waitForControls(page);
+
+    await push(page, "/nextjs-compat/router-autoscroll/uri-fragments#svg-target");
+    await expect(page).toHaveURL(`${ROUTE_BASE}/uri-fragments#svg-target`);
+    await expectActiveElementId(page, "after-svg-target");
+  });
+
   // Ported from Next.js:
   // test/e2e/app-dir/router-autoscroll/router-autoscroll.test.ts
   test("scrolls to top when navigating to a page with new metadata", async ({ page }) => {

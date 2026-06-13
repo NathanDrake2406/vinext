@@ -134,7 +134,12 @@ import {
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
 } from "./app-browser-popstate.js";
-import { DevRecoveryBoundary, RedirectBoundary } from "vinext/shims/error-boundary";
+import {
+  DevRecoveryBoundary,
+  GlobalErrorBoundary,
+  RedirectBoundary,
+} from "vinext/shims/error-boundary";
+import DefaultGlobalError from "vinext/shims/default-global-error";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
@@ -145,13 +150,11 @@ import {
 } from "./app-browser-error.js";
 import {
   clearAppNavigationFailureTarget,
-  handleAppNavigationFailure,
   installAppNavigationFailureListeners,
 } from "../client/app-nav-failure-handler.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
   devOnCaughtError,
-  devOnUncaughtError,
   dismissOverlay,
   installDevErrorOverlay,
   installViteHmrErrorHandler,
@@ -325,6 +328,10 @@ let browserRouterStateHasEverCommitted = false;
 const mpaNavigationScheduler = new AppBrowserMpaNavigationScheduler();
 const unresolvedMpaNavigation = new Promise<never>(() => {});
 const RSC_HMR_SETTLE_DELAY_MS = 150;
+const DEFAULT_GLOBAL_ERROR_COMPONENT = DefaultGlobalError as React.ComponentType<{
+  error: unknown;
+  reset: () => void;
+}>;
 let latestRscHmrUpdateId = 0;
 // Single-slot latch tracking the navId of the most recent synchronous
 // popstate snapshot restore. activeNavigationId is strictly monotonic, so
@@ -1175,16 +1182,21 @@ function BrowserRoot({
     { commitId: treeState.renderId },
     committedTree,
   );
+  const rootErrorTree = createElement(GlobalErrorBoundary, {
+    fallback: DEFAULT_GLOBAL_ERROR_COMPONENT,
+    // oxlint-disable-next-line react/no-children-prop -- This generated browser entry is TypeScript, not TSX.
+    children: scrollScopedTree,
+  });
 
   const ClientNavigationRenderContext = getClientNavigationRenderContext();
   if (!ClientNavigationRenderContext) {
-    return scrollScopedTree;
+    return rootErrorTree;
   }
 
   return createElement(
     ClientNavigationRenderContext.Provider,
     { value: treeState.navigationSnapshot },
-    scrollScopedTree,
+    rootErrorTree,
   );
 }
 
@@ -1627,12 +1639,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   );
   historyController.writeBootstrapHistoryMetadata();
 
-  const onUncaughtError = import.meta.env.DEV
-    ? devOnUncaughtError
-    : createOnUncaughtError(() => {
-        handleAppNavigationFailure(new Error("App Router navigation render failed"));
-        return null;
-      });
+  const onUncaughtError = createOnUncaughtError();
   const formState = consumeInitialFormState(getVinextBrowserGlobal());
   const hydrateRootOptions = import.meta.env.DEV
     ? createVinextHydrateRootOptions({

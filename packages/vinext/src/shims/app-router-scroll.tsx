@@ -59,14 +59,13 @@ function topOfElementInViewport(element: HTMLElement, viewportHeight: number): b
   return elementTop >= 0 && elementTop <= viewportHeight;
 }
 
-function getHashFragmentDomNode(hash: string): HTMLElement | null {
+function getHashFragmentDomNode(hash: string): Element | null {
   const fragment = decodeHashFragment(hash.startsWith("#") ? hash.slice(1) : hash);
   if (fragment === "top") {
     return document.body;
   }
 
-  const element = document.getElementById(fragment) ?? document.getElementsByName(fragment)[0];
-  return element instanceof HTMLElement ? element : null;
+  return document.getElementById(fragment) ?? document.getElementsByName(fragment)[0] ?? null;
 }
 
 function isInDocumentHead(node: Element | Text): boolean {
@@ -141,15 +140,15 @@ export class AppRouterScrollTargetInner extends React.Component<{
     if (intent === null) return;
     if (this.props.commitId === null || intent.commitId !== this.props.commitId) return;
 
-    let target: HTMLElement | null;
+    let node: Element | Text | null;
     if (intent.hash !== null) {
-      target = getHashFragmentDomNode(intent.hash);
+      node = getHashFragmentDomNode(intent.hash);
     } else {
-      target = null;
+      node = null;
     }
-    if (target === null) {
+    if (node === null) {
       // oxlint-disable-next-line react/no-find-dom-node -- Next's default App Router scroll handler targets wrapperless route content after commit.
-      const node = findDOMNode(this);
+      node = findDOMNode(this);
 
       if (node !== null && isInDocumentHead(node)) {
         // React hoisted this navigation's first route DOM node into <head>
@@ -162,12 +161,11 @@ export class AppRouterScrollTargetInner extends React.Component<{
         markAppRouterScrollIntentHeadHoisted(intent, this.props.commitId);
         return;
       }
-
-      const next = findNextScrollTarget(node);
-      if (next === null) return;
-
-      target = next.element;
     }
+
+    const next = findNextScrollTarget(node);
+    if (next === null) return;
+    const target = next.element;
 
     const consumed = consumeAppRouterScrollIntent(intent, this.props.commitId);
     if (consumed === null) return;
