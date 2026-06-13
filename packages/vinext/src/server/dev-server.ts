@@ -65,7 +65,11 @@ import {
   runDocumentRenderPage,
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
-import { hasPagesGetInitialProps, loadPagesGetInitialProps } from "./pages-get-initial-props.js";
+import {
+  hasPagesGetInitialProps,
+  loadDevAppInitialProps,
+  loadPagesGetInitialProps,
+} from "./pages-get-initial-props.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { isUnknownRecord } from "../utils/record.js";
 
@@ -778,43 +782,38 @@ export function createSSRHandler(
 
         const hasAppGetInitialProps = hasPagesGetInitialProps(AppComponent);
 
+        // Thin glue over loadDevAppInitialProps: build the React AppTree closure,
+        // delegate the decision to the tested helper, and apply the result.
+        // Returns true when the App ended the response (caller must stop).
         async function loadAppInitialProps(): Promise<boolean> {
           if (!hasAppGetInitialProps) {
             return false;
           }
-          const initialProps = await loadPagesGetInitialProps(AppComponent, {
-            AppTree: (appTreeProps: Record<string, unknown>) =>
+          const appResult = await loadDevAppInitialProps({
+            appComponent: AppComponent,
+            appTree: (appTreeProps: Record<string, unknown>) =>
               React.createElement(AppComponent, {
                 ...appTreeProps,
                 Component: PageComponent,
                 pageProps: isUnknownRecord(appTreeProps.pageProps) ? appTreeProps.pageProps : {},
               }),
-            Component: PageComponent,
-            router: {
-              pathname: patternToNextFormat(route.pattern),
-              query,
-              asPath: requestAsPath,
-            },
-            ctx: {
-              req,
-              res,
-              pathname: patternToNextFormat(route.pattern),
-              query,
-              asPath: requestAsPath,
-              locale: locale ?? currentDefaultLocale,
-              locales: i18nConfig?.locales,
-              defaultLocale: currentDefaultLocale,
-            },
+            component: PageComponent,
+            req,
+            res,
+            pathname: patternToNextFormat(route.pattern),
+            query,
+            asPath: requestAsPath,
+            locale: locale ?? currentDefaultLocale,
+            locales: i18nConfig?.locales,
+            defaultLocale: currentDefaultLocale,
           });
 
-          if (res.headersSent || res.writableEnded) {
+          if (appResult.kind === "response-sent") {
             return true;
           }
-
-          if (initialProps) {
-            const initialPageProps = initialProps.pageProps;
-            pageProps = isUnknownRecord(initialPageProps) ? initialPageProps : {};
-            renderProps = { ...initialProps, pageProps };
+          if (appResult.kind === "render") {
+            pageProps = appResult.pageProps;
+            renderProps = appResult.renderProps;
           }
           return false;
         }
