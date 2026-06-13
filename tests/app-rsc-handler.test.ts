@@ -22,7 +22,7 @@ type TestRoute = {
   page?: { default?: unknown } | null;
   pattern: string;
   rootParamNames?: readonly string[];
-  routeHandler?: { GET?: () => Response } | null;
+  routeHandler?: { GET?: () => Response; runtime?: string } | null;
   routeSegments: readonly string[];
 };
 
@@ -858,6 +858,34 @@ describe("createAppRscHandler", () => {
     expect(response.status).toBe(200);
     const dispatched = dispatchMatchedRouteHandler.mock.calls[0]?.[0];
     expect(new URL(dispatched?.request.url ?? "").search).toBe("?tab=latest&_rsc=user-value");
+    expect(dispatched?.searchParams.toString()).toBe("tab=latest");
+  });
+
+  it("hides internal RSC params from non-RSC edge route handler request URLs", async () => {
+    const route = createPageRoute({
+      page: null,
+      pattern: "/api/inspect",
+      routeHandler: { GET: () => new Response("route"), runtime: "edge" },
+      routeSegments: ["api", "inspect"],
+    });
+    const dispatchMatchedRouteHandler = vi.fn<DispatchMatchedRouteHandler>(
+      async () => new Response("route", { status: 200 }),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedRouteHandler,
+      matchRoute: (pathname: string) =>
+        pathname === "/api/inspect" ? { params: {}, route } : null,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/api/inspect?tab=latest&_rsc=user-value"),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    const dispatched = dispatchMatchedRouteHandler.mock.calls[0]?.[0];
+    expect(new URL(dispatched?.request.url ?? "").search).toBe("?tab=latest");
     expect(dispatched?.searchParams.toString()).toBe("tab=latest");
   });
 

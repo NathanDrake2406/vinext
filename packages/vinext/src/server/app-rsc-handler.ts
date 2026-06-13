@@ -287,6 +287,11 @@ function hasProperty<TKey extends PropertyKey>(
   return key in value;
 }
 
+function isEdgeRouteHandler(handler: unknown): boolean {
+  if (!handler || typeof handler !== "object" || !hasProperty(handler, "runtime")) return false;
+  return handler.runtime === "edge" || handler.runtime === "experimental-edge";
+}
+
 function isExecutionContextLike(value: unknown): value is ExecutionContextLike {
   if (!value || typeof value !== "object") return false;
   return hasProperty(value, "waitUntil") && typeof value.waitUntil === "function";
@@ -758,7 +763,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     setCurrentFetchSoftTags(
       buildPageCacheTags(cleanPathname, [], [...route.routeSegments], "route"),
     );
-    const routeHandlerRequest = isRscRequest ? userlandRequest : request;
+    const routeHandlerRequest =
+      isRscRequest || isEdgeRouteHandler(route.routeHandler) ? userlandRequest : request;
     return options.dispatchMatchedRouteHandler({
       cleanPathname,
       middlewareContext,
