@@ -122,18 +122,7 @@ export function compareHybridRoutePatterns(
   appPattern: string,
   appIsDynamic: boolean,
 ): "app" | "pages" {
-  const normalizeStructure = (pattern: string): string =>
-    pattern
-      .split("/")
-      .filter(Boolean)
-      .map((segment) => {
-        if (!segment.startsWith(":")) return segment;
-        if (segment.endsWith("*")) return ":*";
-        if (segment.endsWith("+")) return ":+";
-        return ":";
-      })
-      .join("/");
-  if (normalizeStructure(pagesPattern) === normalizeStructure(appPattern)) {
+  if (pagesPattern === appPattern) {
     throw new Error(`Conflicting app and page routes found for "${pagesPattern}"`);
   }
 

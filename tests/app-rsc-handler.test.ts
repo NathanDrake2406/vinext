@@ -965,6 +965,35 @@ describe("createAppRscHandler", () => {
     );
   });
 
+  it("lets a static Pages route win before afterFiles rewrites", async () => {
+    const dynamicRoute = createPageRoute({
+      isDynamic: true,
+      pattern: "/:path+",
+      routeSegments: ["[...path]"],
+    });
+    const renderPagesFallback = vi.fn(async () => new Response("pages:/about", { status: 200 }));
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [],
+        afterFiles: [{ source: "/about", destination: "/rewritten" }],
+        fallback: [],
+      },
+      matchRoute: () => ({ params: { path: ["about"] }, route: dynamicRoute }),
+      renderPagesFallback,
+    });
+
+    const response = await handler(new Request("https://example.test/docs/about"), null);
+
+    expect(await response.text()).toBe("pages:/about");
+    expect(renderPagesFallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: "/about",
+        appRouteMatch: expect.objectContaining({ route: dynamicRoute }),
+      }),
+    );
+  });
+
   it("serves public files before route matching and clears request context", async () => {
     const clearRequestContext = vi.fn();
     const matchRoute = vi.fn(() => null);

@@ -134,14 +134,12 @@ describe("resolveHybridClientRouteOwner", () => {
     expect(() => resolveHybridClientRouteOwner("/", "")).toThrow("Conflicting app and page routes");
   });
 
-  it("rejects structurally identical dynamic App and Pages routes", () => {
+  it("retains Pages provider order after merged route validation", () => {
     installWindow({
       app: [appRoute([":slug"])],
       pages: [pagesRoute([":id"])],
     });
-    expect(() => resolveHybridClientRouteOwner("/anything", "")).toThrow(
-      "Conflicting app and page routes",
-    );
+    expect(resolveHybridClientRouteOwner("/anything", "")).toBe("pages");
   });
 
   it("lets a static-prefix Pages catch-all beat a bare App catch-all", () => {

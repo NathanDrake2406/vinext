@@ -34,10 +34,8 @@ describe("compareHybridRoutePatterns", () => {
     );
   });
 
-  it("rejects structurally identical dynamic App and Pages routes", () => {
-    expect(() => compareHybridRoutePatterns("/:slug", true, "/:id", true)).toThrow(
-      "Conflicting app and page routes",
-    );
+  it("retains Pages provider order after merged route validation", () => {
+    expect(compareHybridRoutePatterns("/:slug", true, "/:id", true)).toBe("pages");
   });
 
   it("lets a static-prefix Pages catch-all beat a bare App catch-all", () => {
@@ -91,13 +89,31 @@ describe("validateHybridRouteConflicts", () => {
     ).toThrow("Conflicting app and page file was found");
   });
 
-  it("rejects structurally identical dynamic routes with different param names", () => {
+  it("uses the Next.js slug-name error for structurally identical dynamic routes", () => {
     expect(() =>
       validateHybridRouteConflicts(
         [{ isDynamic: true, pattern: "/:slug" }],
         [{ isDynamic: true, pattern: "/:id" }],
       ),
-    ).toThrow("Conflicting app and page file was found");
+    ).toThrow("different slug names for the same dynamic path");
+  });
+
+  it("rejects cross-router apex and optional catch-all collisions", () => {
+    expect(() =>
+      validateHybridRouteConflicts(
+        [{ isDynamic: false, pattern: "/" }],
+        [{ isDynamic: true, pattern: "/:all*" }],
+      ),
+    ).toThrow("same specificity as a optional catch-all route");
+  });
+
+  it("reports exact conflict source files", () => {
+    expect(() =>
+      validateHybridRouteConflicts(
+        [{ isDynamic: false, pattern: "/", sourcePath: "pages/index.tsx" }],
+        [{ isDynamic: false, pattern: "/", sourcePath: "app/page.tsx" }],
+      ),
+    ).toThrow('"pages/index.tsx" - "app/page.tsx"');
   });
 });
 
@@ -135,13 +151,13 @@ describe("hybrid App Router + Pages Router route priority", () => {
     ).toThrow("Conflicting app and page routes");
   });
 
-  it("rejects structurally identical dynamic App and Pages routes", () => {
-    expect(() =>
+  it("retains Pages provider order after merged route validation", () => {
+    expect(
       pagesRouteHasPriorityOverAppRoute(
         { isDynamic: true, pattern: "/:slug" },
         { isDynamic: true, pattern: "/:id" },
       ),
-    ).toThrow("Conflicting app and page routes");
+    ).toBe(true);
   });
 });
 
@@ -193,12 +209,12 @@ describe("resolveHybridRouteOwner", () => {
     ).toThrow("Conflicting app and page routes");
   });
 
-  it("rejects structurally identical dynamic App and Pages routes", () => {
-    expect(() =>
+  it("retains Pages provider order after merged route validation", () => {
+    expect(
       resolveHybridRouteOwner(
         { route: { isDynamic: true, pattern: "/:slug" }, params: { slug: "x" } },
         { route: { isDynamic: true, pattern: "/:id" }, params: { id: "x" } },
       ),
-    ).toThrow("Conflicting app and page routes");
+    ).toBe("pages");
   });
 });

@@ -2433,12 +2433,23 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // preprocessor options and `css.modules` settings are in place.
         sassComposesLoader.setResolvedConfig(config);
 
-        if (hasAppDir && hasPagesDir) {
+        if (config.command === "build" && hasAppDir && hasPagesDir) {
           const [appRoutes, pageRoutes] = await Promise.all([
             appRouter(appDir, nextConfig?.pageExtensions, fileMatcher),
             pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher),
           ]);
-          validateHybridRouteConflicts(pageRoutes, appRoutes);
+          validateHybridRouteConflicts(
+            pageRoutes.map((route) => ({
+              ...route,
+              sourcePath: path.relative(root, route.filePath),
+            })),
+            appRoutes
+              .filter((route) => route.pagePath !== null)
+              .map((route) => ({
+                ...route,
+                sourcePath: route.pagePath === null ? null : path.relative(root, route.pagePath),
+              })),
+          );
         }
 
         // When the user sets `ssr.external: true`, strip React entries from
@@ -3113,10 +3124,54 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
         }
 
+        function invalidateHybridClientEntries() {
+          if (!hasAppDir || !hasPagesDir) return;
+          for (const env of Object.values(server.environments)) {
+            for (const id of [RESOLVED_CLIENT_ENTRY, RESOLVED_APP_BROWSER_ENTRY]) {
+              const mod = env.moduleGraph.getModuleById(id);
+              if (mod) env.moduleGraph.invalidateModule(mod);
+            }
+          }
+          server.ws.send({ type: "full-reload" });
+        }
+
         function invalidateAppRoutingModules() {
           invalidateAppRouteCache();
           invalidateRscEntryModule();
           invalidateRootParamsModule();
+        }
+
+        let hybridRouteValidation: Promise<void> = Promise.resolve();
+        function revalidateHybridRoutes() {
+          if (!hasAppDir || !hasPagesDir) return;
+          hybridRouteValidation = hybridRouteValidation
+            .catch(() => {})
+            .then(async () => {
+              const [appRoutes, pageRoutes] = await Promise.all([
+                appRouter(appDir, nextConfig?.pageExtensions, fileMatcher),
+                pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher),
+              ]);
+              validateHybridRouteConflicts(
+                pageRoutes.map((route) => ({
+                  ...route,
+                  sourcePath: path.relative(root, route.filePath),
+                })),
+                appRoutes
+                  .filter((route) => route.pagePath !== null)
+                  .map((route) => ({
+                    ...route,
+                    sourcePath:
+                      route.pagePath === null ? null : path.relative(root, route.pagePath),
+                  })),
+              );
+            })
+            .catch((error) => {
+              const err = error instanceof Error ? error : new Error(String(error));
+              server.ws.send({
+                type: "error",
+                err: { message: err.message, stack: err.stack ?? err.message },
+              });
+            });
         }
 
         let appRouteTypeGeneration: Promise<void> | null = null;
@@ -3154,6 +3209,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         }
 
         regenerateAppRouteTypes();
+        revalidateHybridRoutes();
 
         // Node throws on unhandled 'error' events on sockets. When a browser
         // drops the connection mid-response (common in dev: HMR triggers a
@@ -3168,21 +3224,35 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         });
 
         server.watcher.on("add", (filePath: string) => {
+          let routeChanged = false;
           if (hasPagesDir && filePath.startsWith(pagesDir) && pageExtensions.test(filePath)) {
             invalidateRouteCache(pagesDir);
+            routeChanged = true;
           }
           if (hasAppDir && shouldInvalidateAppRouteFile(appDir, filePath, fileMatcher)) {
             invalidateAppRoutingModules();
             regenerateAppRouteTypes();
+            routeChanged = true;
+          }
+          if (routeChanged) {
+            invalidateHybridClientEntries();
+            revalidateHybridRoutes();
           }
         });
         server.watcher.on("unlink", (filePath: string) => {
+          let routeChanged = false;
           if (hasPagesDir && filePath.startsWith(pagesDir) && pageExtensions.test(filePath)) {
             invalidateRouteCache(pagesDir);
+            routeChanged = true;
           }
           if (hasAppDir && shouldInvalidateAppRouteFile(appDir, filePath, fileMatcher)) {
             invalidateAppRoutingModules();
             regenerateAppRouteTypes();
+            routeChanged = true;
+          }
+          if (routeChanged) {
+            invalidateHybridClientEntries();
+            revalidateHybridRoutes();
           }
         });
 
