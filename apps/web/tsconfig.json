@@ -20,8 +20,7 @@
     ],
     "types": ["@cloudflare/workers-types"],
     "paths": {
-      "@/*": ["./*"],
-      "@vinext/cloudflare/cache/*": ["../../packages/cloudflare/src/cache/*"]
+      "@/*": ["./*"]
     }
   },
   "include": [
