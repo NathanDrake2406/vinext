@@ -6507,6 +6507,13 @@ describe("Pages Router dev ISR regeneration", () => {
       let regenUnifiedExecutionContext: unknown;
       let regenSsrContext: unknown;
       let regenI18nContext: unknown;
+      let appTreeWrapCount = 0;
+      const App = Object.assign(({ Component, pageProps }: any) => Component(pageProps), {
+        getInitialProps: vi.fn(async () => ({
+          appLevel: "preserved",
+          pageProps: { fromApp: true },
+        })),
+      });
       const outerExecutionContext = {
         waitUntil() {},
       };
@@ -6525,9 +6532,14 @@ describe("Pages Router dev ISR regeneration", () => {
               parentRequestTags = [...getRequestContext().currentRequestTags];
             },
             wrapWithRouterContext(element: unknown) {
+              appTreeWrapCount += 1;
               return element;
             },
           };
+        }
+
+        if (id === path.join(FIXTURE_DIR, "pages", "_app")) {
+          return { default: App };
         }
 
         if (id === routeFile) {
@@ -6625,7 +6637,18 @@ describe("Pages Router dev ISR regeneration", () => {
         asPath: "/isr-test",
       });
       expect(regenI18nContext).toBeNull();
+      expect(appTreeWrapCount).toBe(1);
       expect(isrSetSpy).toHaveBeenCalledOnce();
+      expect(isrSetSpy.mock.calls[0]?.[1]).toMatchObject({
+        kind: "PAGES",
+        pageData: {
+          appLevel: "preserved",
+          pageProps: {
+            fromApp: true,
+            message: "fresh",
+          },
+        },
+      });
     } finally {
       vi.doUnmock("../packages/vinext/src/server/isr-cache.js");
       vi.resetModules();

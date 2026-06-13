@@ -805,13 +805,17 @@ export function createSSRHandler(
           }
           const appResult = await loadDevAppInitialProps({
             appComponent: AppComponent,
-            appTree: (appTreeProps: Record<string, unknown>) =>
-              React.createElement(AppComponent, {
+            appTree: (appTreeProps: Record<string, unknown>) => {
+              const appTree = React.createElement(AppComponent, {
                 ...appTreeProps,
                 Component: PageComponent,
                 pageProps: appTreeProps.pageProps,
                 router: routerShim.default,
-              }),
+              });
+              return typeof routerShim.wrapWithRouterContext === "function"
+                ? routerShim.wrapWithRouterContext(appTree)
+                : appTree;
+            },
             component: PageComponent,
             req,
             res,
@@ -1093,13 +1097,17 @@ export function createSSRHandler(
                       },
                     };
                     const initialProps = await loadPagesGetInitialProps(RegenApp, {
-                      AppTree: (appTreeProps: Record<string, unknown>) =>
-                        React.createElement(RegenApp, {
+                      AppTree: (appTreeProps: Record<string, unknown>) => {
+                        const appTree = React.createElement(RegenApp, {
                           ...appTreeProps,
                           Component: pageModule.default,
                           pageProps: appTreeProps.pageProps,
                           router: routerShim.default,
-                        }),
+                        });
+                        return typeof routerShim.wrapWithRouterContext === "function"
+                          ? routerShim.wrapWithRouterContext(appTree)
+                          : appTree;
+                      },
                       Component: pageModule.default,
                       router: {
                         pathname: patternToNextFormat(route.pattern),
@@ -1228,7 +1236,7 @@ export function createSSRHandler(
                       const freshHtml = `<!DOCTYPE html><html><head></head><body><div id="__next">${freshBody}</div>${freshNextData}\n  ${hydrationScript}</body></html>`;
                       await isrSet(
                         cacheKey,
-                        buildPagesCacheValue(freshHtml, freshPageProps),
+                        buildPagesCacheValue(freshHtml, freshRenderProps),
                         revalidate,
                       );
                       setRevalidateDuration(cacheKey, revalidate);
