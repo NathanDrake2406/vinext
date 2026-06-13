@@ -5,6 +5,7 @@ import * as ReactDOM from "react-dom";
 import {
   consumeAppRouterScrollIntent,
   getPendingAppRouterScrollIntent,
+  markAppRouterScrollIntentHeadHoisted,
 } from "./app-router-scroll-state.js";
 import { decodeHashFragment } from "./hash-scroll.js";
 
@@ -135,7 +136,21 @@ export class AppRouterScrollTargetInner extends React.Component<{
       if (target === null) return;
     } else {
       // oxlint-disable-next-line react/no-find-dom-node -- Next's default App Router scroll handler targets wrapperless route content after commit.
-      const next = findNextScrollTarget(findDOMNode(this));
+      const node = findDOMNode(this);
+
+      if (node !== null && isInDocumentHead(node)) {
+        // React hoisted this navigation's first route DOM node into <head>
+        // (e.g. a precedence-ordered stylesheet rendered as the page's first
+        // child). Next's old App Router scroll handler walks the head siblings,
+        // finds nothing scrollable, and gives up without scrolling. Record that
+        // on this navigation's intent — without consuming it — so the
+        // post-commit fallback in next/navigation skips its document-top scroll
+        // for this navigation alone, never for unrelated navigations.
+        markAppRouterScrollIntentHeadHoisted(intent, this.props.commitId);
+        return;
+      }
+
+      const next = findNextScrollTarget(node);
       if (next === null) return;
 
       target = next.element;

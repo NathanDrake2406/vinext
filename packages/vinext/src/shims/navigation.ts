@@ -54,7 +54,6 @@ import {
   beginAppRouterScrollIntent,
   clearAppRouterScrollIntent,
   consumeAppRouterScrollIntent,
-  hasAppRouterHoistedHeadNode,
   type AppRouterScrollIntent,
 } from "./app-router-scroll-state.js";
 
@@ -1678,7 +1677,10 @@ function commitHashOnlyHistoryState(href: string, mode: "push" | "replace", scro
   }
 }
 
-function applyAppRouterScrollFallback(intent: AppRouterScrollIntent): void {
+// Exported for direct unit coverage of the document-top fallback decision; not
+// part of the next/navigation public API. The fallback runs after a committed
+// navigation declined to consume its scroll intent (see navigateClientSide).
+export function applyAppRouterScrollFallback(intent: AppRouterScrollIntent): void {
   if (typeof document === "undefined" || typeof window === "undefined") {
     return;
   }
@@ -1690,9 +1692,12 @@ function applyAppRouterScrollFallback(intent: AppRouterScrollIntent): void {
 
   // Next's legacy App Router scroll handler can fail to scroll when the
   // target route's first DOM child is a React-hoisted stylesheet in <head>.
-  // Vinext's fallback has no segment-local DOM anchor, so it must not mask
-  // that observable old-handler behavior by synthesizing a document-top scroll.
-  if (hasAppRouterHoistedHeadNode()) {
+  // The committed AppRouterScrollTarget detects that case for this navigation
+  // and marks the intent, so we must not mask the observable old-handler
+  // behavior by synthesizing a document-top scroll. The flag is per-intent: a
+  // hoisted stylesheet merely present in <head> for an unrelated navigation
+  // does not suppress this fallback.
+  if (intent.targetHoistedInHead) {
     return;
   }
 
