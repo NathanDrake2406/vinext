@@ -13,6 +13,11 @@ export default function Page() {
           To /a/b
         </Link>
       </div>
+      <div>
+        <Link href="/pages-dir/foobar" id="to-pages">
+          To /pages-dir/foobar (Pages)
+        </Link>
+      </div>
     </>
   );
 }

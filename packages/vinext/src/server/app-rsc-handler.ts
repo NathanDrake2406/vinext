@@ -687,14 +687,22 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
   }
 
-  const pagesFallbackResponse = await options.renderPagesFallback?.({
-    appRouteMatch: match ?? null,
-    isRscRequest,
-    middlewareContext,
-    pathname: cleanPathname,
-    request,
-    url,
-  });
+  // Hybrid ownership: a static App route always wins over any Pages route
+  // (see `pagesRouteHasPriorityOverAppRoute`). When we have matched a static
+  // App route, the Pages fallback cannot own this request, so skip eagerly
+  // loading the Pages entry on every cold-start. The bridge still handles the
+  // `match === null` case (no App match) and the dynamic-App case below.
+  const pagesFallbackEligible = match === null || match.route.isDynamic;
+  const pagesFallbackResponse = pagesFallbackEligible
+    ? await options.renderPagesFallback?.({
+        appRouteMatch: match ?? null,
+        isRscRequest,
+        middlewareContext,
+        pathname: cleanPathname,
+        request,
+        url,
+      })
+    : null;
   if (pagesFallbackResponse) {
     options.clearRequestContext();
     return pagesFallbackResponse;

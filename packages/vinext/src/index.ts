@@ -2706,7 +2706,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         }
         if (id === RESOLVED_APP_BROWSER_ENTRY && hasAppDir) {
           const graph = await appRouteGraph(appDir, nextConfig?.pageExtensions, fileMatcher);
-          return generateBrowserEntry(graph.routes, graph.routeManifest);
+          // In a hybrid build, the App browser entry also exposes the Pages
+          // route manifest so a user who lands on an App page can still
+          // see Pages ownership from a `<Link>` click.
+          const pagesPrefetchRoutes = hasPagesDir
+            ? (await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher)).map(
+                (route) => ({
+                  canPrefetchLoadingShell: false as const,
+                  isDynamic: route.isDynamic,
+                  patternParts: [...route.patternParts],
+                }),
+              )
+            : [];
+          return generateBrowserEntry(graph.routes, graph.routeManifest, pagesPrefetchRoutes);
         }
         if (id.startsWith(RESOLVED_VIRTUAL_GOOGLE_FONTS + "?")) {
           return generateGoogleFontsVirtualModule(id, _fontGoogleShimPath);

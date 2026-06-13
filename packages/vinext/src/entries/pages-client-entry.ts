@@ -16,9 +16,28 @@ import {
 } from "../routing/pages-router.js";
 import { createValidFileMatcher } from "../routing/file-matcher.js";
 import { type ResolvedNextConfig } from "../config/next-config.js";
-import type { VinextLinkPrefetchRoute } from "../client/vinext-next-data.js";
+import type {
+  VinextLinkPrefetchRoute,
+  VinextPagesLinkPrefetchRoute,
+} from "../client/vinext-next-data.js";
 import { findFileWithExts } from "./pages-entry-helpers.js";
 import { normalizePathSeparators } from "../utils/path.js";
+
+/**
+ * Project a Pages `Route` down to the public `VinextPagesLinkPrefetchRoute`
+ * shape used for client-side hybrid ownership decisions. Mirrors
+ * `toLinkPrefetchRoute` in `app-browser-entry.ts`.
+ *
+ * Lives here (not in `routing/pages-router.ts`) so the routing module
+ * stays free of `vitext/client` type imports.
+ */
+function toPagesLinkPrefetchRoute(route: Route): VinextPagesLinkPrefetchRoute {
+  return {
+    canPrefetchLoadingShell: false,
+    isDynamic: route.isDynamic,
+    patternParts: [...route.patternParts],
+  };
+}
 
 export async function generateClientEntry(
   pagesDir: string,
@@ -34,6 +53,8 @@ export async function generateClientEntry(
   const appFilePath = findFileWithExts(pagesDir, "_app", fileMatcher);
   const hasApp = appFilePath !== null;
   const appPrefetchRoutes = options.appPrefetchRoutes ?? [];
+  const pagesPrefetchRoutes: VinextPagesLinkPrefetchRoute[] =
+    pageRoutes.map(toPagesLinkPrefetchRoute);
   const instrumentationClientPath = options.instrumentationClientPath ?? null;
 
   // Build a map of route pattern -> dynamic import.
@@ -129,6 +150,11 @@ window.__VINEXT_APP_LOADER__ = appLoader;
 // when the user lands on an App Router page (see app-browser-entry.ts) — the
 // two writes do not race because only one entry executes per page load.
 window.__VINEXT_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(appPrefetchRoutes)};
+// Pages route manifest, exposed so the App Router runtime can decide when
+// a soft-navigated URL is actually owned by Pages (and must hard-navigate
+// instead of issuing an RSC request). Set here AND in app-browser-entry.ts
+// so whichever entry runs first emits the Pages manifest.
+window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(pagesPrefetchRoutes)};
 
 async function hydrate() {
   const nextData = window.__NEXT_DATA__;

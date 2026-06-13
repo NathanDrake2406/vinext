@@ -14,6 +14,22 @@ export type VinextLinkPrefetchRoute = {
   patternParts: string[];
 };
 
+/**
+ * Pages Router route pattern exposed to the client so the App Router's
+ * navigation runtime can decide whether a soft-navigated URL should be
+ * handled by Pages (hard nav) or App (RSC). Mirrors the public shape of
+ * `VinextLinkPrefetchRoute` so a single trie matcher handles both.
+ *
+ * `canPrefetchLoadingShell` is always `false` for Pages routes — Pages
+ * does not have a separate loading boundary and its prefetch surface is
+ * `_next/data/<buildId>/<page>.json`.
+ */
+export type VinextPagesLinkPrefetchRoute = {
+  canPrefetchLoadingShell: false;
+  isDynamic: boolean;
+  patternParts: string[];
+};
+
 export type VinextNextData = {
   /** vinext-specific additions (not part of Next.js upstream). */
   __vinext?: {

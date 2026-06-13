@@ -1,5 +1,8 @@
 import { resolveClientRuntimeModule, resolveRuntimeEntryModule } from "./runtime-entry-module.js";
-import type { VinextLinkPrefetchRoute } from "../client/vinext-next-data.js";
+import type {
+  VinextLinkPrefetchRoute,
+  VinextPagesLinkPrefetchRoute,
+} from "../client/vinext-next-data.js";
 import type { AppRoute } from "../routing/app-router.js";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 
@@ -13,6 +16,7 @@ import type { RouteManifest } from "../routing/app-route-graph.js";
 export function generateBrowserEntry(
   routes: readonly AppRoute[] = [],
   routeManifest: RouteManifest | null = null,
+  pagesPrefetchRoutes: readonly VinextPagesLinkPrefetchRoute[] = [],
 ): string {
   const entryPath = resolveRuntimeEntryModule("app-browser-entry");
   const navigationRuntimePath = resolveClientRuntimeModule("navigation-runtime");
@@ -23,6 +27,11 @@ export function generateBrowserEntry(
   return `import { registerNavigationRuntimeBootstrap } from ${JSON.stringify(navigationRuntimePath)};
 
 window.__VINEXT_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(prefetchRoutes)};
+// Pages route manifest for hybrid ownership decisions. In a hybrid
+// app+pages build the user can land on an App page, so the App browser
+// entry must also expose the Pages manifest (the Pages client entry does
+// the same — whichever entry runs first emits both globals).
+window.__VINEXT_PAGES_LINK_PREFETCH_ROUTES__ = ${JSON.stringify(pagesPrefetchRoutes)};
 registerNavigationRuntimeBootstrap({
     routeManifest: ${buildRouteManifestExpression(routeManifest)}
 });

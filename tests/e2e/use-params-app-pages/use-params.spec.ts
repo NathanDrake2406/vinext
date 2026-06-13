@@ -38,6 +38,20 @@ test.describe("use-params", () => {
     await expect(page.locator("#params")).toHaveText('"foobar"');
   });
 
+  test("Pages route wins for soft-navigation from an App Link", async ({ page, baseURL }) => {
+    // Hybrid invariant: the App root catch-all app/[...path] matches
+    // /pages-dir/foobar, but Pages dynamic route pages/pages-dir/[dynamic] has
+    // higher priority (Pages providers sort ahead of App providers in
+    // DefaultRouteMatcherManager). The client must not soft-navigate through
+    // the App runtime when Pages owns the URL — the App RSC stream would
+    // render the catch-all's path array. Falls back to a document navigation
+    // so the Pages handler renders the page.
+    await page.goto(`${baseURL}/`);
+    await page.locator("#to-pages").click();
+    await expect(page).toHaveURL(/\/pages-dir\/foobar$/);
+    await expect(page.locator("#params")).toHaveText('"foobar"');
+  });
+
   test("shouldn't rerender host component when prefetching", async ({ page, baseURL }) => {
     await page.goto(`${baseURL}/rerenders/foobar`);
     const initialRandom = await page.locator("#random").textContent();
