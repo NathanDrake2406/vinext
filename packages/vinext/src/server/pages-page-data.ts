@@ -22,7 +22,7 @@ import {
   isResponseSent,
   loadPagesGetInitialProps,
 } from "./pages-get-initial-props.js";
-import { buildNextDataJsonResponse } from "./pages-data-route.js";
+import { buildNextDataPropsJsonResponse } from "./pages-data-route.js";
 import { NEXTJS_DEPLOYMENT_ID_HEADER } from "./headers.js";
 import { isSerializableProps } from "./pages-serializable-props.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
@@ -66,7 +66,7 @@ type PagesGsspContextResponse = {
 };
 
 type PagesRenderProps = Record<string, unknown> & {
-  pageProps: Record<string, unknown>;
+  pageProps: unknown;
 };
 
 export type PagesPageModule = {
@@ -302,7 +302,7 @@ function resolvePagesRedirectStatus(redirect: PagesRedirectResult): number {
 function normalizePagesRenderProps(props: Record<string, unknown>): PagesRenderProps {
   return {
     ...props,
-    pageProps: isUnknownRecord(props.pageProps) ? props.pageProps : {},
+    pageProps: props.pageProps,
   };
 }
 
@@ -371,7 +371,7 @@ async function loadPagesAppInitialRenderProps(
 
   if (initialProps) {
     renderProps = normalizePagesRenderProps(initialProps);
-    pageProps = renderProps.pageProps;
+    pageProps = isUnknownRecord(renderProps.pageProps) ? renderProps.pageProps : {};
   }
 
   return { kind: "props", pageProps, renderProps };
@@ -404,6 +404,7 @@ function buildPagesRedirectResponse(
     ResolvePagesPageDataOptions,
     "isDataReq" | "sanitizeDestination" | "safeJsonStringify" | "deploymentId"
   >,
+  props: PagesRenderProps = { pageProps: {} },
 ): Response {
   const destination = options.sanitizeDestination(redirect.destination);
 
@@ -414,10 +415,14 @@ function buildPagesRedirectResponse(
     if (options.deploymentId) {
       init.headers[NEXTJS_DEPLOYMENT_ID_HEADER] = options.deploymentId;
     }
-    return buildNextDataJsonResponse(
+    return buildNextDataPropsJsonResponse(
       {
-        __N_REDIRECT: destination,
-        __N_REDIRECT_STATUS: resolvePagesRedirectStatus(redirect),
+        ...props,
+        pageProps: {
+          ...(isUnknownRecord(props.pageProps) ? props.pageProps : {}),
+          __N_REDIRECT: destination,
+          __N_REDIRECT_STATUS: resolvePagesRedirectStatus(redirect),
+        },
       },
       options.safeJsonStringify,
       init,
@@ -614,6 +619,7 @@ export async function resolvePagesPageData(
   // (`/_next/data/...json`) still call `getStaticProps` so the client can
   // hydrate the page after the fallback shell ships.
   let isFallback = false;
+  let shouldPersistFallbackData = false;
 
   if (typeof options.pageModule.getStaticPaths === "function" && options.route.isDynamic) {
     const pathsResult = await options.pageModule.getStaticPaths({
@@ -641,21 +647,11 @@ export async function resolvePagesPageData(
     if (fallback === true && !isValidPath && !options.isDataReq && !isBotRequest) {
       isFallback = true;
     }
+    shouldPersistFallbackData = fallback === true && !isValidPath && options.isDataReq === true;
   }
 
   let pageProps: Record<string, unknown> = {};
   let gsspRes: PagesMutableGsspResponse | null = null;
-
-  if (isFallback) {
-    return {
-      kind: "render",
-      gsspRes: null,
-      isrRevalidateSeconds: null,
-      pageProps,
-      props: { pageProps },
-      isFallback: true,
-    };
-  }
 
   let sharedReqRes: PagesGsspContextResponse | null = null;
   function getSharedReqRes(): PagesGsspContextResponse {
@@ -678,11 +674,31 @@ export async function resolvePagesPageData(
     return null;
   }
 
+  if (isFallback) {
+    const pathname = options.routeUrl.split("?")[0];
+    const cached = await options.isrGet(options.isrCacheKey("pages", pathname));
+    if (cached?.value.value?.kind !== "PAGES") {
+      const appShortCircuit = await loadForegroundAppInitialRenderProps();
+      if (appShortCircuit) return appShortCircuit;
+      pageProps = {};
+      renderProps = { ...renderProps, pageProps };
+      return {
+        kind: "render",
+        gsspRes: null,
+        isrRevalidateSeconds: null,
+        pageProps,
+        props: renderProps,
+        isFallback: true,
+      };
+    }
+  }
+
   if (typeof options.pageModule.getServerSideProps === "function") {
     const shortCircuit = await loadForegroundAppInitialRenderProps();
     if (shortCircuit) {
       return shortCircuit;
     }
+    renderProps = { ...renderProps, __N_SSP: true };
     const { req, res, responsePromise } = getSharedReqRes();
     const result = await options.pageModule.getServerSideProps({
       params: userFacingParams,
@@ -717,7 +733,7 @@ export async function resolvePagesPageData(
     if (result?.redirect) {
       return {
         kind: "response",
-        response: buildPagesRedirectResponse(result.redirect, options),
+        response: buildPagesRedirectResponse(result.redirect, options, renderProps),
       };
     }
 
@@ -755,7 +771,9 @@ export async function resolvePagesPageData(
     // handling in render.tsx / base-server.ts.
     if (
       !options.isOnDemandRevalidate &&
+      cached?.isStale === false &&
       cachedValue?.kind === "PAGES" &&
+      !cachedValue.generatedFromDataRequest &&
       cached &&
       !cached.isStale &&
       !options.scriptNonce &&
@@ -785,6 +803,7 @@ export async function resolvePagesPageData(
     if (
       !options.isOnDemandRevalidate &&
       cachedValue?.kind === "PAGES" &&
+      !cachedValue.generatedFromDataRequest &&
       cached &&
       cached.isStale &&
       !options.scriptNonce &&
@@ -794,6 +813,7 @@ export async function resolvePagesPageData(
         cacheKey,
         async function () {
           return options.runInFreshUnifiedContext(async () => {
+            options.applyRequestContexts();
             // Rebuild the full App render props before re-running getStaticProps
             // so the regenerated HTML / __NEXT_DATA__ still contains app-level
             // props from _app.getInitialProps. Mirrors the foreground path.
@@ -826,12 +846,12 @@ export async function resolvePagesPageData(
               freshRenderProps = { ...freshRenderProps, pageProps: freshPageProps };
             }
 
-            if (
-              freshResult?.props &&
-              typeof freshResult.revalidate === "number" &&
-              freshResult.revalidate > 0
-            ) {
-              options.applyRequestContexts();
+            const freshRevalidateSeconds =
+              typeof freshResult?.revalidate === "number" && freshResult.revalidate > 0
+                ? freshResult.revalidate
+                : cached.value.cacheControl?.revalidate;
+
+            if (freshResult?.props && freshRevalidateSeconds && freshRevalidateSeconds > 0) {
               const freshHtml = await renderPagesIsrHtml({
                 buildId: options.buildId,
                 cachedHtml: cachedValue.html,
@@ -849,8 +869,8 @@ export async function resolvePagesPageData(
 
               await options.isrSet(
                 cacheKey,
-                buildPagesCacheValue(freshHtml, freshPageProps, options.statusCode),
-                freshResult.revalidate,
+                buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
+                freshRevalidateSeconds,
                 undefined,
                 options.expireSeconds,
               );
@@ -883,31 +903,36 @@ export async function resolvePagesPageData(
       };
     }
 
-    // Load _app.getInitialProps only when we are actually going to render this
-    // request (cache miss or on-demand revalidation). Fresh and stale cache hits
-    // must return the cached HTML without executing userland App/data code.
-    const shortCircuit = await loadForegroundAppInitialRenderProps();
-    if (shortCircuit) {
-      return shortCircuit;
+    const generatedPageData =
+      !options.isOnDemandRevalidate &&
+      cached?.isStale === false &&
+      cachedValue?.kind === "PAGES" &&
+      cachedValue.generatedFromDataRequest &&
+      isUnknownRecord(cachedValue.pageData)
+        ? cachedValue.pageData
+        : null;
+    if (!generatedPageData) {
+      const shortCircuit = await loadForegroundAppInitialRenderProps();
+      if (shortCircuit) return shortCircuit;
     }
+    const result = generatedPageData
+      ? null
+      : await options.pageModule.getStaticProps({
+          params: userFacingParams,
+          locale: options.i18n.locale,
+          locales: options.i18n.locales,
+          defaultLocale: options.i18n.defaultLocale,
+          revalidateReason: options.isOnDemandRevalidate
+            ? "on-demand"
+            : options.isBuildTimePrerendering
+              ? "build"
+              : "stale",
+        });
 
-    const result = await options.pageModule.getStaticProps({
-      params: userFacingParams,
-      locale: options.i18n.locale,
-      locales: options.i18n.locales,
-      defaultLocale: options.i18n.defaultLocale,
-      // Maps Next.js's resolution in `render.tsx`:
-      //   isOnDemandRevalidate ? "on-demand"
-      //     : isBuildTimeSSG    ? "build"
-      //                         : "stale"
-      // We pick "stale" as the default at runtime so existing-but-missing
-      // (cache evicted) entries surface as a regeneration rather than a build.
-      revalidateReason: options.isOnDemandRevalidate
-        ? "on-demand"
-        : options.isBuildTimePrerendering
-          ? "build"
-          : "stale",
-    });
+    if (generatedPageData) {
+      renderProps = generatedPageData as PagesRenderProps;
+      pageProps = isUnknownRecord(renderProps.pageProps) ? renderProps.pageProps : {};
+    }
 
     if (result?.props) {
       pageProps = { ...pageProps, ...result.props };
@@ -917,7 +942,7 @@ export async function resolvePagesPageData(
     if (result?.redirect) {
       return {
         kind: "response",
-        response: buildPagesRedirectResponse(result.redirect, options),
+        response: buildPagesRedirectResponse(result.redirect, options, renderProps),
       };
     }
 
@@ -939,6 +964,24 @@ export async function resolvePagesPageData(
 
     if (typeof result?.revalidate === "number" && result.revalidate > 0) {
       isrRevalidateSeconds = result.revalidate;
+    } else if (cachedValue?.kind === "PAGES" && cachedValue.generatedFromDataRequest) {
+      isrRevalidateSeconds = cached?.value.cacheControl?.revalidate ?? 31_536_000;
+    }
+
+    if (shouldPersistFallbackData) {
+      const revalidateSeconds = isrRevalidateSeconds ?? 31_536_000;
+      await options.isrSet(
+        cacheKey,
+        {
+          kind: "PAGES",
+          html: "",
+          pageData: renderProps,
+          generatedFromDataRequest: true,
+          headers: undefined,
+          status: undefined,
+        },
+        revalidateSeconds,
+      );
     }
   }
 

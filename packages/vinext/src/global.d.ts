@@ -65,6 +65,8 @@ declare global {
       | React.ComponentType<{
           Component: React.ComponentType<Record<string, unknown>>;
           pageProps: unknown;
+          router?: unknown;
+          [key: string]: unknown;
         }>
       | undefined;
 

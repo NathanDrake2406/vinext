@@ -60,7 +60,7 @@ describe("loadDevAppInitialProps", () => {
     });
   });
 
-  it("normalizes a missing or non-object pageProps to {}", async () => {
+  it("preserves missing pageProps in the App envelope", async () => {
     const appComponent = Object.assign(
       function App() {
         return null;
@@ -78,7 +78,7 @@ describe("loadDevAppInitialProps", () => {
     expect(result).toEqual({
       kind: "render",
       pageProps: {},
-      renderProps: { appProp: "from-app", pageProps: {} },
+      renderProps: { appProp: "from-app", pageProps: undefined },
     });
   });
 

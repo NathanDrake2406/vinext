@@ -591,7 +591,7 @@ export function createPagesPageHandler(
           routeUrl,
           runInFreshUnifiedContext(callback) {
             const revalCtx = createRequestContext({
-              executionContext: getRequestExecutionContext(),
+              executionContext: null,
             });
             return runWithRequestContext(revalCtx, async () => {
               ensureFetchPatch();

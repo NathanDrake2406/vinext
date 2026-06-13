@@ -976,12 +976,18 @@ describe("Pages Router entry template", () => {
       expect(code).toContain(
         'const props = nextData.props && typeof nextData.props === "object" ? nextData.props : {};',
       );
+      expect(code).toContain("const rawPageProps = props.pageProps;");
       expect(code).toContain(
-        'const pageProps = props.pageProps && typeof props.pageProps === "object" ? props.pageProps : {};',
+        'const pageProps = rawPageProps && typeof rawPageProps === "object" ? rawPageProps : {};',
       );
-      expect(code).toContain(
-        "element = React.createElement(AppComponent, { ...props, Component: PageComponent, pageProps });",
-      );
+      expect(code).toContain('import Router, { wrapWithRouterContext } from "next/router";');
+      expect(code).toContain("router: Router,");
+      expect(code).toContain("pageProps: rawPageProps,");
+      expect(code).toContain("element = wrapWithRouterContext(element, resolveHydrationCommit);");
+      expect(code).toContain("await hydrationCommitted;");
+      expect(code).toContain("if (nextData.isFallback) {");
+      expect(code).toContain("await Router.replace(");
+      expect(code).toContain("{ _h: 1, scroll: false },");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

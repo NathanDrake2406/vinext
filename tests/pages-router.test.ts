@@ -192,8 +192,8 @@ class MyApp extends App {
   }
 
   render() {
-    const { Component, pageProps, appProps } = this.props;
-    return <Component {...pageProps} appProps={appProps} />;
+    const { Component, pageProps, appProps, router } = this.props;
+    return <Component {...pageProps} appProps={appProps} appRouter={router} />;
   }
 }
 
@@ -214,7 +214,7 @@ export async function getServerSideProps({ params, resolvedUrl }) {
   };
 }
 
-export default function BlogPost({ post, params, appProps, resolvedUrl }) {
+export default function BlogPost({ post, params, appProps, appRouter, resolvedUrl }) {
   const router = useRouter();
 
   return (
@@ -224,6 +224,7 @@ export default function BlogPost({ post, params, appProps, resolvedUrl }) {
       <div id="query">{JSON.stringify(router.query)}</div>
       <div id="app-query">{JSON.stringify(appProps.query)}</div>
       <div id="app-url">{appProps.url}</div>
+      <div id="app-router-pathname">{appRouter.pathname}</div>
       <div id="resolved-url">{resolvedUrl}</div>
       <div id="as-path">{router.asPath}</div>
     </>
@@ -720,7 +721,12 @@ describe("Pages Router integration", () => {
     expect(res.headers.get("content-type")).toContain("application/json");
     expect(res.headers.get("location")).toBeNull();
 
-    const body = (await res.json()) as { pageProps?: Record<string, unknown> };
+    const body = (await res.json()) as {
+      __N_SSP?: boolean;
+      appProps?: Record<string, unknown>;
+      pageProps?: Record<string, unknown>;
+    };
+    expect((body as { __N_SSP?: boolean }).__N_SSP).toBe(true);
     expect(body.pageProps?.__N_REDIRECT).toBe("/gssp-redirect-target");
     expect(body.pageProps?.__N_REDIRECT_STATUS).toBe(307);
   });
@@ -1509,8 +1515,21 @@ describe("Pages Router integration", () => {
       expectElementJson(dynamicHtml, "query", { post: "post-1" });
       expectElementJson(dynamicHtml, "app-query", { post: "post-1" });
       expectElementText(dynamicHtml, "app-url", "/blog/post-1");
+      expectElementText(dynamicHtml, "app-router-pathname", "/blog/[post]");
       expectElementText(dynamicHtml, "resolved-url", "/blog/post-1");
       expectElementText(dynamicHtml, "as-path", "/blog/post-1");
+      const dynamicNextDataMatch = dynamicHtml.match(
+        /<script>window\.__NEXT_DATA__\s*=\s*({.*?})<\/script>/,
+      );
+      expect(dynamicNextDataMatch).toBeTruthy();
+      const dynamicNextData = JSON.parse(dynamicNextDataMatch![1]!);
+      expect(dynamicNextData.props.__N_SSP).toBe(true);
+      expect(dynamicNextData.props.appProps).toEqual({
+        url: "/blog/post-1",
+        query: { post: "post-1" },
+        asPath: "/blog/post-1",
+        pathname: "/blog/[post]",
+      });
 
       const dataRes = await fetch(
         `${fixtureUrl}/_next/data/test-build-id/blog/post-1.json?hello=world`,
@@ -1518,6 +1537,7 @@ describe("Pages Router integration", () => {
       expect(dataRes.status).toBe(200);
       const data = await dataRes.json();
       expect(data.pageProps.resolvedUrl).toEqual("/blog/post-1?hello=world");
+      expect(data.__N_SSP).toBe(true);
       expect(data.appProps).toEqual({
         url: "/_next/data/test-build-id/blog/post-1.json?hello=world",
         query: { post: "post-1", hello: "world" },
@@ -1820,6 +1840,22 @@ describe("Pages Router integration", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.pageProps).toMatchObject({ pid: "unknown" });
+  });
+
+  it("serves generated content after fallback data hydration", async () => {
+    const slug = `hydrated-${Math.random().toString(36).slice(2)}`;
+    const initialRes = await fetch(`${baseUrl}/products/${slug}`);
+    expect(await initialRes.text()).toContain("Loading product...");
+
+    const dataRes = await fetch(`${baseUrl}/_next/data/test-build-id/products/${slug}.json`, {
+      headers: { "x-nextjs-data": "1" },
+    });
+    expect(dataRes.status).toBe(200);
+
+    const finalRes = await fetch(`${baseUrl}/products/${slug}`);
+    const finalHtml = await finalRes.text();
+    expect(finalHtml).not.toContain("Loading product...");
+    expect(finalHtml).toMatch(new RegExp(`Product ID:.*${slug}`));
   });
 
   // Refs #1543: bot/crawler requests must bypass the `fallback: true` loading
@@ -2343,7 +2379,7 @@ describe("Virtual server entry generation", () => {
 
       // Static import — module-level side effect installs window.next.router.
       expect(code).toMatch(
-        /^import\s+\{[^}]*\bwrapWithRouterContext\b[^}]*\}\s+from\s+["']next\/router["']/m,
+        /^import\s+Router,\s*\{[^}]*\bwrapWithRouterContext\b[^}]*\}\s+from\s+["']next\/router["']/m,
       );
 
       // Defense-in-depth: the original lazy `await import("next/router")`
@@ -6419,6 +6455,8 @@ describe("Pages Router dev ISR regeneration", () => {
       let regenTags: string[] = [];
       let regenExecutionContext: unknown;
       let regenUnifiedExecutionContext: unknown;
+      let regenSsrContext: unknown;
+      let regenI18nContext: unknown;
       const outerExecutionContext = {
         waitUntil() {},
       };
@@ -6452,6 +6490,8 @@ describe("Pages Router dev ISR regeneration", () => {
               regenTags = [...getRequestContext().currentRequestTags];
               regenExecutionContext = getRequestExecutionContext();
               regenUnifiedExecutionContext = getRequestContext().executionContext;
+              regenSsrContext = getRequestContext().ssrContext;
+              regenI18nContext = getRequestContext().i18nContext;
               return {
                 props: {
                   timestamp: Date.now(),
@@ -6529,6 +6569,12 @@ describe("Pages Router dev ISR regeneration", () => {
       expect(regenTags).toEqual([]);
       expect(regenExecutionContext).toBeNull();
       expect(regenUnifiedExecutionContext).toBeNull();
+      expect(regenSsrContext).toMatchObject({
+        pathname: "/isr-test",
+        query: {},
+        asPath: "/isr-test",
+      });
+      expect(regenI18nContext).toBeNull();
       expect(isrSetSpy).toHaveBeenCalledOnce();
     } finally {
       vi.doUnmock("../packages/vinext/src/server/isr-cache.js");

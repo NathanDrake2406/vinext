@@ -63,6 +63,24 @@ function createOptions(
 }
 
 describe("pages page data", () => {
+  it("preserves non-object pageProps returned by custom app getInitialProps", async () => {
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(function App() {}, {
+          getInitialProps() {
+            return { appValue: "preserved", pageProps: null };
+          },
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "render",
+      pageProps: {},
+      props: { appValue: "preserved", pageProps: null },
+    });
+  });
+
   it("renders fresh ISR HTML while preserving custom document gaps and tail scripts", async () => {
     const html = await renderPagesIsrHtml({
       buildId: "build-123",
@@ -93,6 +111,99 @@ describe("pages page data", () => {
     expect(html).toContain('"page":"/posts/[slug]"');
     expect(html).toContain('"slug":"post"');
     expect(html).toContain('"__vinext":{"hasMiddleware":true}');
+  });
+
+  it("preserves custom app props in fallback shells", async () => {
+    const AppComponent = Object.assign(function App() {}, {
+      getInitialProps() {
+        return { appValue: "preserved", pageProps: { discarded: true } };
+      },
+    });
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent,
+        pageModule: {
+          default: function Page() {},
+          getStaticPaths() {
+            return { fallback: true, paths: [] };
+          },
+        },
+        route: { isDynamic: true },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "render",
+      isFallback: true,
+      pageProps: {},
+      props: { appValue: "preserved", pageProps: {} },
+    });
+  });
+
+  it("preserves custom app props during stale ISR regeneration", async () => {
+    const isrSet = vi.fn(async () => {});
+    const createPageElement = vi.fn(() => "page");
+    let requestContextsApplied = false;
+    let appGetInitialPropsCalls = 0;
+    let regenerationPromise: Promise<void> | undefined;
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(function App() {}, {
+          getInitialProps() {
+            appGetInitialPropsCalls += 1;
+            if (appGetInitialPropsCalls > 1) {
+              expect(requestContextsApplied).toBe(true);
+            }
+            return { appValue: "fresh-app", pageProps: { fromApp: true } };
+          },
+        }),
+        applyRequestContexts() {
+          requestContextsApplied = true;
+        },
+        createPageElement,
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: true,
+          value: {
+            cacheControl: { revalidate: 1, expire: undefined },
+            value: {
+              kind: "PAGES",
+              html: '<div id="__next">stale</div><script>window.__NEXT_DATA__ = {}</script>',
+              pageData: {},
+            },
+          },
+        }),
+        isrSet,
+        pageModule: {
+          default: function Page() {},
+          getStaticProps() {
+            expect(requestContextsApplied).toBe(true);
+            return { props: { fromStatic: true }, revalidate: 10 };
+          },
+        },
+        triggerBackgroundRegeneration: vi.fn((_key, callback) => {
+          regenerationPromise = callback();
+        }),
+      }),
+    );
+
+    expect(result.kind).toBe("response");
+    await regenerationPromise;
+    expect(createPageElement).toHaveBeenCalledWith({
+      appValue: "fresh-app",
+      pageProps: { fromApp: true, fromStatic: true },
+    });
+    expect(isrSet).toHaveBeenCalledWith(
+      "pages:/posts/post",
+      expect.objectContaining({
+        pageData: {
+          appValue: "fresh-app",
+          pageProps: { fromApp: true, fromStatic: true },
+        },
+      }),
+      10,
+      undefined,
+      300,
+    );
   });
 
   it("returns a notFound signal when getStaticPaths excludes a dynamic HTML path", async () => {
@@ -347,6 +458,104 @@ describe("pages page data", () => {
     expect(result.pageProps).toEqual({});
   });
 
+  it("skips the fallback shell after its data request generated the path", async () => {
+    const getStaticProps = vi.fn(async () => ({ props: { slug: "regenerated" } }));
+    const result = await resolvePagesPageData(
+      createOptions({
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: false,
+          value: {
+            cacheControl: { revalidate: 60 },
+            lastModified: 1,
+            value: {
+              kind: "PAGES",
+              html: "",
+              pageData: { pageProps: { slug: "unknown" } },
+              generatedFromDataRequest: true,
+              headers: undefined,
+              status: undefined,
+            },
+          },
+        }),
+        pageModule: {
+          async getStaticPaths() {
+            return { fallback: true, paths: [] };
+          },
+          getStaticProps,
+        },
+        params: { slug: "unknown" },
+        query: { slug: "unknown" },
+        route: { isDynamic: true },
+        routeUrl: "/posts/unknown",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "render",
+      isFallback: false,
+      isrRevalidateSeconds: 60,
+      pageProps: { slug: "unknown" },
+    });
+    expect(getStaticProps).not.toHaveBeenCalled();
+  });
+
+  it("reruns getStaticProps for on-demand revalidation of fallback data", async () => {
+    const getStaticProps = vi.fn(async () => ({ props: { slug: "regenerated" }, revalidate: 60 }));
+    const result = await resolvePagesPageData(
+      createOptions({
+        isOnDemandRevalidate: true,
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: false,
+          value: {
+            cacheControl: { revalidate: 60 },
+            lastModified: 1,
+            value: {
+              kind: "PAGES",
+              html: "",
+              pageData: { pageProps: { slug: "cached" } },
+              generatedFromDataRequest: true,
+              headers: undefined,
+              status: undefined,
+            },
+          },
+        }),
+        pageModule: { getStaticProps },
+      }),
+    );
+
+    expect(getStaticProps).toHaveBeenCalledWith(
+      expect.objectContaining({ revalidateReason: "on-demand" }),
+    );
+    expect(result).toMatchObject({ kind: "render", pageProps: { slug: "regenerated" } });
+  });
+
+  it("reruns getStaticProps when generated fallback data is stale", async () => {
+    const getStaticProps = vi.fn(async () => ({ props: { slug: "regenerated" }, revalidate: 60 }));
+    const result = await resolvePagesPageData(
+      createOptions({
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: true,
+          value: {
+            cacheControl: { revalidate: 60 },
+            lastModified: 1,
+            value: {
+              kind: "PAGES",
+              html: "",
+              pageData: { pageProps: { slug: "cached" } },
+              generatedFromDataRequest: true,
+              headers: undefined,
+              status: undefined,
+            },
+          },
+        }),
+        pageModule: { getStaticProps },
+      }),
+    );
+
+    expect(getStaticProps).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ kind: "render", pageProps: { slug: "regenerated" } });
+  });
+
   it("short-circuits getServerSideProps responses after res.end()", async () => {
     const responsePromise = Promise.resolve(
       new Response('{"ok":true}', {
@@ -496,6 +705,7 @@ describe("pages page data", () => {
           value: {
             lastModified: 1,
             cacheState: "stale",
+            cacheControl: { revalidate: 15, expire: 300 },
             value: {
               kind: "PAGES",
               html: '<!DOCTYPE html><html><head><title>cached</title></head><body><div id="__next"><div>stale-body</div></div><div data-gap="1"></div><script>window.__NEXT_DATA__ = {"old":1}</script><script src="/tail.js"></script></body></html>',
@@ -510,7 +720,6 @@ describe("pages page data", () => {
           async getStaticProps() {
             return {
               props: { title: "fresh" },
-              revalidate: 15,
             };
           },
         },
@@ -527,7 +736,9 @@ describe("pages page data", () => {
 
     expect(result.response.status).toBe(200);
     expect(result.response.headers.get("x-vinext-cache")).toBe("STALE");
-    expect(result.response.headers.get("cache-control")).toBe("s-maxage=0, stale-while-revalidate");
+    expect(result.response.headers.get("cache-control")).toBe(
+      "s-maxage=15, stale-while-revalidate=285",
+    );
     expect(result.response.headers.get("link")).toBe(
       "</font.woff2>; rel=preload; as=font; type=font/woff2; crossorigin",
     );
@@ -548,7 +759,7 @@ describe("pages page data", () => {
       expect.objectContaining({
         kind: "PAGES",
         html: expect.stringContaining("<div>fresh-body</div>"),
-        pageData: { title: "fresh" },
+        pageData: { pageProps: { title: "fresh" } },
       }),
       15,
       undefined,
@@ -559,7 +770,7 @@ describe("pages page data", () => {
       expect.objectContaining({
         kind: "PAGES",
         html: expect.stringContaining('"__vinext":{"hasMiddleware":true}'),
-        pageData: { title: "fresh" },
+        pageData: { pageProps: { title: "fresh" } },
       }),
       15,
       undefined,
@@ -646,7 +857,10 @@ describe("pages page data", () => {
     expect(regeneratedCacheValue).toEqual(
       expect.objectContaining({
         kind: "PAGES",
-        pageData: { pageProp: "from-page" },
+        pageData: {
+          appProp: "from-app",
+          pageProps: { pageProp: "from-page" },
+        },
       }),
     );
     expect(regeneratedCacheValue?.html).toContain('"appProp":"from-app"');
@@ -1167,6 +1381,11 @@ describe("pages page data", () => {
   it("includes x-nextjs-deployment-id on redirect data response from getServerSideProps", async () => {
     const result = await resolvePagesPageData(
       createOptions({
+        AppComponent: Object.assign(function App() {}, {
+          getInitialProps() {
+            return { appValue: "preserved", pageProps: {} };
+          },
+        }),
         isDataReq: true,
         deploymentId: "test-deploy-abc",
         pageModule: {
@@ -1181,7 +1400,13 @@ describe("pages page data", () => {
     if (result.kind !== "response") throw new Error("expected response");
     expect(result.response.status).toBe(200);
     expect(result.response.headers.get("x-nextjs-deployment-id")).toBe("test-deploy-abc");
-    const body = (await result.response.json()) as { pageProps: Record<string, unknown> };
+    const body = (await result.response.json()) as {
+      __N_SSP?: boolean;
+      appValue?: string;
+      pageProps: Record<string, unknown>;
+    };
+    expect(body.__N_SSP).toBe(true);
+    expect(body.appValue).toBe("preserved");
     expect(body.pageProps.__N_REDIRECT).toBe("/new-page");
   });
 

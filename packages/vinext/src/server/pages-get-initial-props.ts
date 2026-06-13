@@ -106,7 +106,11 @@ export async function loadPagesGetInitialProps(
 export type DevAppInitialPropsResult =
   | { kind: "skip" }
   | { kind: "response-sent" }
-  | { kind: "render"; pageProps: Record<string, unknown>; renderProps: Record<string, unknown> };
+  | {
+      kind: "render";
+      pageProps: Record<string, unknown>;
+      renderProps: Record<string, unknown> & { pageProps: unknown };
+    };
 
 export type DevAppInitialPropsContext = {
   appComponent: unknown;
@@ -165,10 +169,13 @@ export async function loadDevAppInitialProps(
   }
 
   // Post-guard, loadPagesGetInitialProps always resolves to an object (it only
-  // returns null when getInitialProps is absent, excluded above). Normalize a
-  // missing/non-object `pageProps` to `{}` to mirror Next.js render.tsx.
+  // returns null when getInitialProps is absent, excluded above). Preserve the
+  // raw `pageProps` value in the App envelope; derive an object-safe projection
+  // only for merging data-function props and direct page rendering.
   const initialPageProps = isPropsObject(initialProps) ? initialProps.pageProps : undefined;
   const pageProps = isPropsObject(initialPageProps) ? initialPageProps : {};
-  const renderProps = isPropsObject(initialProps) ? { ...initialProps, pageProps } : { pageProps };
+  const renderProps = isPropsObject(initialProps)
+    ? { ...initialProps, pageProps: initialPageProps }
+    : { pageProps: initialPageProps };
   return { kind: "render", pageProps, renderProps };
 }

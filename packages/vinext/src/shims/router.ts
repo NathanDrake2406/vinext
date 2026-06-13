@@ -280,6 +280,7 @@ type UrlObject = {
 };
 
 type TransitionOptions = {
+  _h?: 1;
   shallow?: boolean;
   scroll?: boolean;
   locale?: string | false;
@@ -1131,7 +1132,7 @@ type NavigateClientOptions = {
 
 /** Wire format of `/_next/data/<id>/<page>.json` response bodies. */
 type PagesDataResponse = {
-  pageProps?: Record<string, unknown>;
+  pageProps?: unknown;
   // Mirrors Next.js's full Pages props envelope. `_app.getInitialProps`
   // can add app-level props beside `pageProps`, and clients must thread
   // that outer envelope through App during hydration/navigation.
@@ -1380,9 +1381,8 @@ async function navigateClientData(
   assertStillCurrent();
 
   const props: Record<string, unknown> = isUnknownRecord(body) ? body : {};
-  const pageProps: Record<string, unknown> = isUnknownRecord(props.pageProps)
-    ? props.pageProps
-    : {};
+  const rawPageProps = props.pageProps;
+  const pageProps: Record<string, unknown> = isUnknownRecord(rawPageProps) ? rawPageProps : {};
 
   // gSSP/gSP redirect marker. When getServerSideProps/getStaticProps returns
   // `{ redirect }`, the data endpoint replies 200 with `__N_REDIRECT` /
@@ -1441,7 +1441,8 @@ async function navigateClientData(
     element = React.createElement(AppComponent, {
       ...props,
       Component: PageComponent,
-      pageProps,
+      pageProps: rawPageProps,
+      router: Router,
     });
   } else {
     element = React.createElement(PageComponent, pageProps);
@@ -1577,9 +1578,8 @@ async function navigateClientHtml(
 
   const nextData = parseVinextNextDataJson(nextDataJson);
   const props = nextData.props && typeof nextData.props === "object" ? nextData.props : {};
-  const pageProps: Record<string, unknown> = isUnknownRecord(props.pageProps)
-    ? props.pageProps
-    : {};
+  const rawPageProps = props.pageProps;
+  const pageProps: Record<string, unknown> = isUnknownRecord(rawPageProps) ? rawPageProps : {};
   // Defer writing window.__NEXT_DATA__ until just before root.render() —
   // writing it here would let a stale navigation briefly pollute the global
   // between this assertStillCurrent() and the next one after await import().
@@ -1651,7 +1651,8 @@ async function navigateClientHtml(
     element = React.createElement(AppComponent, {
       ...props,
       Component: PageComponent,
-      pageProps,
+      pageProps: rawPageProps,
+      router: Router,
     });
   } else {
     element = React.createElement(PageComponent, pageProps);
@@ -2046,7 +2047,7 @@ async function performNavigation(
   const navState = { url: resolvedNoHash, as: resolvedNoHash, options: navStateOptions };
 
   // Hash-only change — no page fetch needed
-  if (isHashOnlyChange(full)) {
+  if (options?._h !== 1 && isHashOnlyChange(full)) {
     // Snapshot the outgoing entry's scroll before updateHistory mints a new
     // key, so a later back-popstate restores the position the user had
     // reached here rather than {x: 0, y: 0}. Upstream snapshots inside
@@ -2094,7 +2095,10 @@ async function performNavigation(
   }
 
   if (mode === "push") saveScrollPosition();
-  routerEvents.emit("routeChangeStart", resolved, { shallow });
+  const isQueryUpdating = options?._h === 1;
+  if (!isQueryUpdating) {
+    routerEvents.emit("routeChangeStart", resolved, { shallow });
+  }
   routerEvents.emit("beforeHistoryChange", resolved, { shallow });
   updateHistory(mode, full, navState);
   if (!shallow) {
@@ -2113,7 +2117,9 @@ async function performNavigation(
     }
   }
   onStateUpdate?.();
-  routerEvents.emit("routeChangeComplete", resolved, { shallow });
+  if (!isQueryUpdating) {
+    routerEvents.emit("routeChangeComplete", resolved, { shallow });
+  }
   // Hash scrolling after routeChangeComplete, matching Next.js ordering:
   // x/y restoration happens during the render commit, then hash scrolling
   // happens after the completion event.
