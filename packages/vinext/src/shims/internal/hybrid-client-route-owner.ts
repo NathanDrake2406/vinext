@@ -177,23 +177,26 @@ export function resolveHybridClientRouteOwner(
     (appMatch === null || appMatch.isDynamic) &&
     (pagesMatch === null || pagesMatch.isDynamic)
   ) {
-    const afterFilesRewrite = resolveClientRewrite(href, basePath, rewrites.afterFiles);
-    if (afterFilesRewrite?.kind === "document") return "document";
-    if (afterFilesRewrite?.kind === "rewrite") {
+    for (const rewrite of rewrites.afterFiles) {
+      const afterFilesRewrite = resolveClientRewrite(href, basePath, [rewrite]);
+      if (afterFilesRewrite?.kind === "document") return "document";
+      if (afterFilesRewrite?.kind !== "rewrite") continue;
       href = afterFilesRewrite.href;
       appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
       pagesMatch = pagesRoutes ? matchPagesRoute(href, basePath, pagesRoutes) : null;
+      if (appMatch || pagesMatch) break;
     }
   }
 
   if (rewrites && appMatch === null && pagesMatch === null) {
-    const fallbackRewrite = resolveClientRewrite(href, basePath, rewrites.fallback);
-    if (fallbackRewrite?.kind === "document") return "document";
-    if (fallbackRewrite?.kind === "rewrite") {
-      appMatch = appRoutes ? matchAppRoute(fallbackRewrite.href, basePath, appRoutes) : null;
-      pagesMatch = pagesRoutes
-        ? matchPagesRoute(fallbackRewrite.href, basePath, pagesRoutes)
-        : null;
+    for (const rewrite of rewrites.fallback) {
+      const fallbackRewrite = resolveClientRewrite(href, basePath, [rewrite]);
+      if (fallbackRewrite?.kind === "document") return "document";
+      if (fallbackRewrite?.kind !== "rewrite") continue;
+      href = fallbackRewrite.href;
+      appMatch = appRoutes ? matchAppRoute(href, basePath, appRoutes) : null;
+      pagesMatch = pagesRoutes ? matchPagesRoute(href, basePath, pagesRoutes) : null;
+      if (appMatch || pagesMatch) break;
     }
   }
 

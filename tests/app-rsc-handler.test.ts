@@ -617,6 +617,43 @@ describe("createAppRscHandler", () => {
     });
   });
 
+  it("evaluates config rewrite conditions against middleware rewrite queries", async () => {
+    let pageOptions: Parameters<HandlerOptions["dispatchMatchedPage"]>[0] | undefined;
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [
+          {
+            source: "/intermediate",
+            destination: "/about?destination=2",
+            has: [{ type: "query", key: "stage", value: "1" }],
+          },
+        ],
+        afterFiles: [],
+        fallback: [],
+      },
+      dispatchMatchedPage: async (options) => {
+        pageOptions = options;
+        return new Response("page");
+      },
+      middlewareModule: {
+        default: () =>
+          new Response(null, {
+            headers: {
+              "x-middleware-rewrite": "https://example.test/docs/intermediate?stage=1",
+            },
+          }),
+      },
+    });
+
+    await handler(new Request("https://example.test/docs/source"), null);
+
+    expect(Object.fromEntries(pageOptions!.searchParams)).toEqual({
+      destination: "2",
+      stage: "1",
+    });
+  });
+
   it("does not duplicate additive config headers on non-redirect middleware responses", async () => {
     const handler = createHandler({
       configHeaders: [
@@ -979,6 +1016,69 @@ describe("createAppRscHandler", () => {
       same: "new",
     });
   });
+
+  it("applies sequential beforeFiles rewrites with accumulated query conditions", async () => {
+    let pageOptions: Parameters<HandlerOptions["dispatchMatchedPage"]>[0] | undefined;
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [
+          { source: "/source", destination: "/intermediate?preview=1" },
+          {
+            source: "/intermediate",
+            destination: "/about?destination=2",
+            has: [{ type: "query", key: "preview", value: "1" }],
+          },
+        ],
+        afterFiles: [],
+        fallback: [],
+      },
+      dispatchMatchedPage: async (options) => {
+        pageOptions = options;
+        return new Response("page");
+      },
+    });
+
+    await handler(new Request("https://example.test/docs/source?original=1"), null);
+
+    expect(Object.fromEntries(pageOptions!.searchParams)).toEqual({
+      destination: "2",
+      original: "1",
+      preview: "1",
+    });
+  });
+
+  it.each(["afterFiles", "fallback"] as const)(
+    "continues through unmatched %s rewrite destinations",
+    async (rewritePhase) => {
+      const handler = createHandler({
+        configHeaders: [],
+        configRewrites: {
+          beforeFiles: [],
+          afterFiles:
+            rewritePhase === "afterFiles"
+              ? [
+                  { source: "/source", destination: "/intermediate" },
+                  { source: "/intermediate", destination: "/about" },
+                ]
+              : [],
+          fallback:
+            rewritePhase === "fallback"
+              ? [
+                  { source: "/source", destination: "/intermediate" },
+                  { source: "/intermediate", destination: "/about" },
+                ]
+              : [],
+        },
+        matchRoute: (pathname) =>
+          pathname === "/about" ? { params: {}, route: createPageRoute() } : null,
+      });
+
+      const response = await handler(new Request("https://example.test/docs/source"), null);
+
+      expect(response.status).toBe(200);
+    },
+  );
 
   it("propagates rewritten query parameters to App route handlers", async () => {
     const route = createPageRoute({

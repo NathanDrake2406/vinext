@@ -335,6 +335,19 @@ async function applyRewrite(
   return rewritten;
 }
 
+function requestContextForResolvedUrl(
+  requestContext: RequestContext,
+  resolvedUrl: string,
+  baseUrl: URL,
+): RequestContext {
+  return {
+    cookies: requestContext.cookies,
+    headers: requestContext.headers,
+    host: requestContext.host,
+    query: new URL(resolvedUrl, baseUrl).searchParams,
+  };
+}
+
 function applyConfigHeadersToMiddlewareRedirect(
   response: Response,
   options: {
@@ -543,22 +556,26 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // itself continues to use the un-prefixed `cleanPathname` because App
   // Router files live under `app/...` with no locale segment. See issue
   // #1336 item 4 / pages-i18n.normalizeDefaultLocalePathname.
-  const beforeFilesRewrite = await applyRewrite(
-    {
-      basePathState,
-      clearRequestContext: options.clearRequestContext,
-      // Forward the `_rsc`-stripped request so external rewrite proxies never
-      // receive the internal RSC transport query (same invariant as middleware).
-      request: userlandRequest,
-      requestContext: postMiddlewareRequestContext,
-      rewrites: options.configRewrites.beforeFiles,
-    },
-    matchPathname(cleanPathname),
-  );
-  if (beforeFilesRewrite instanceof Response) return beforeFilesRewrite;
-  if (beforeFilesRewrite) {
-    resolvedUrl = mergeRewriteQuery(resolvedUrl, beforeFilesRewrite);
-    cleanPathname = resolvedUrl.split("?", 1)[0];
+  for (const rewrite of options.configRewrites.beforeFiles) {
+    const beforeFilesRewrite = await applyRewrite(
+      {
+        basePathState,
+        clearRequestContext: options.clearRequestContext,
+        request: userlandRequest,
+        requestContext: requestContextForResolvedUrl(
+          postMiddlewareRequestContext,
+          resolvedUrl,
+          url,
+        ),
+        rewrites: [rewrite],
+      },
+      matchPathname(cleanPathname),
+    );
+    if (beforeFilesRewrite instanceof Response) return beforeFilesRewrite;
+    if (beforeFilesRewrite) {
+      resolvedUrl = mergeRewriteQuery(resolvedUrl, beforeFilesRewrite);
+      cleanPathname = resolvedUrl.split("?", 1)[0];
+    }
   }
 
   if (isImageOptimizationPath(cleanPathname)) {
@@ -690,34 +707,38 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     options.clearRequestContext();
     return staticPagesFallbackResponse;
   }
-  let didAfterFilesRewrite = false;
   if (!match || match.route.isDynamic) {
-    const afterFilesRewrite = await applyRewrite(
-      {
-        basePathState,
-        clearRequestContext: options.clearRequestContext,
-        // Forward the `_rsc`-stripped request so external rewrite proxies never
-        // receive the internal RSC transport query (same invariant as middleware).
-        request: userlandRequest,
-        requestContext: postMiddlewareRequestContext,
-        rewrites: options.configRewrites.afterFiles,
-      },
-      matchPathname(cleanPathname),
-    );
-    if (afterFilesRewrite instanceof Response) return afterFilesRewrite;
-    if (afterFilesRewrite) {
+    for (const rewrite of options.configRewrites.afterFiles) {
+      const afterFilesRewrite = await applyRewrite(
+        {
+          basePathState,
+          clearRequestContext: options.clearRequestContext,
+          request: userlandRequest,
+          requestContext: requestContextForResolvedUrl(
+            postMiddlewareRequestContext,
+            resolvedUrl,
+            url,
+          ),
+          rewrites: [rewrite],
+        },
+        matchPathname(cleanPathname),
+      );
+      if (afterFilesRewrite instanceof Response) return afterFilesRewrite;
+      if (!afterFilesRewrite) continue;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, afterFilesRewrite);
       cleanPathname = resolvedUrl.split("?", 1)[0];
       match = options.matchRoute(cleanPathname);
-      didAfterFilesRewrite = true;
-    }
-  }
-
-  if (didAfterFilesRewrite) {
-    const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
-    if (rewrittenStaticPagesResponse) {
-      options.clearRequestContext();
-      return rewrittenStaticPagesResponse;
+      const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
+      if (rewrittenStaticPagesResponse) {
+        options.clearRequestContext();
+        return rewrittenStaticPagesResponse;
+      }
+      const rewrittenDynamicPagesResponse = await renderPagesForMatchKind("dynamic");
+      if (rewrittenDynamicPagesResponse) {
+        options.clearRequestContext();
+        return rewrittenDynamicPagesResponse;
+      }
+      if (match) break;
     }
   }
 
@@ -728,20 +749,23 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   }
 
   if (!match) {
-    const fallbackRewrite = await applyRewrite(
-      {
-        basePathState,
-        clearRequestContext: options.clearRequestContext,
-        // Forward the `_rsc`-stripped request so external rewrite proxies never
-        // receive the internal RSC transport query (same invariant as middleware).
-        request: userlandRequest,
-        requestContext: postMiddlewareRequestContext,
-        rewrites: options.configRewrites.fallback,
-      },
-      matchPathname(cleanPathname),
-    );
-    if (fallbackRewrite instanceof Response) return fallbackRewrite;
-    if (fallbackRewrite) {
+    for (const rewrite of options.configRewrites.fallback) {
+      const fallbackRewrite = await applyRewrite(
+        {
+          basePathState,
+          clearRequestContext: options.clearRequestContext,
+          request: userlandRequest,
+          requestContext: requestContextForResolvedUrl(
+            postMiddlewareRequestContext,
+            resolvedUrl,
+            url,
+          ),
+          rewrites: [rewrite],
+        },
+        matchPathname(cleanPathname),
+      );
+      if (fallbackRewrite instanceof Response) return fallbackRewrite;
+      if (!fallbackRewrite) continue;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
       cleanPathname = resolvedUrl.split("?", 1)[0];
       match = options.matchRoute(cleanPathname);
@@ -755,6 +779,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         options.clearRequestContext();
         return rewrittenDynamicPagesResponse;
       }
+      if (match) break;
     }
   }
 

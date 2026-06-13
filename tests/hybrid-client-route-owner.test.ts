@@ -168,6 +168,35 @@ describe("resolveHybridClientRouteOwner", () => {
     expect(resolveHybridClientRouteOwner("/source?original=1", "")).toBe("pages");
   });
 
+  it.each(["afterFiles", "fallback"] as const)(
+    "continues through unmatched %s rewrite destinations",
+    (rewritePhase) => {
+      installWindow({
+        app: [appRoute(["app-destination"], false)],
+        pages: [],
+        rewrites: {
+          afterFiles:
+            rewritePhase === "afterFiles"
+              ? [
+                  { source: "/source", destination: "/intermediate" },
+                  { source: "/intermediate", destination: "/app-destination" },
+                ]
+              : [],
+          beforeFiles: [],
+          fallback:
+            rewritePhase === "fallback"
+              ? [
+                  { source: "/source", destination: "/intermediate" },
+                  { source: "/intermediate", destination: "/app-destination" },
+                ]
+              : [],
+        },
+      });
+
+      expect(resolveHybridClientRouteOwner("/source", "")).toBe("app");
+    },
+  );
+
   it("lets a more specific Pages dynamic route beat an App root catch-all", () => {
     // Mirrors the server test of the same name. /pages-dir/:dynamic
     // (score 51) beats /:path+ (score 1000).
