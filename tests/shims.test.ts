@@ -8718,6 +8718,16 @@ describe("NextURL basePath and locale properties", () => {
     expect(url.pathname).toBe("/about");
   });
 
+  it("does not add locale prefixes when formatting API paths", async () => {
+    // Ported from Next.js: packages/next/src/shared/lib/router/utils/add-locale.ts
+    const { NextURL } = await import("../packages/vinext/src/shims/server.js");
+    const url = new NextURL("https://example.com/fr/api/example", undefined, i18nConfig);
+    expect(url.locale).toBe("fr");
+    expect(url.pathname).toBe("/api/example");
+    expect(url.href).toBe("https://example.com/api/example");
+    expect(url.clone().href).toBe("https://example.com/api/example");
+  });
+
   it("re-analyzes domain locale after href reassignment", async () => {
     const { NextURL } = await import("../packages/vinext/src/shims/server.js");
     const url = new NextURL("https://example.com/about", undefined, {

@@ -1078,6 +1078,19 @@ describe("handleApiRoute", () => {
       });
     });
 
+    it("does not double-prefix an exact basePath edge API rewrite", async () => {
+      const handler = vi.fn((request: Request) => Response.json({ url: request.url }));
+      const server = mockServer({ config: { runtime: "edge" }, default: handler });
+      const req = mockReq("GET", "/docs", undefined, { host: "example.com" });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/hello", [route("/api/hello")], {
+        basePath: "/docs",
+      });
+
+      expect(JSON.parse(res._body.toString())).toEqual({ url: "http://example.com/docs" });
+    });
+
     it("recognises bare \"export const runtime = 'edge'\" as an edge API route", async () => {
       // Ported from Next.js: packages/next/src/build/analysis/get-page-static-info.ts
       // Both `export const runtime = "edge"` and `export const config = { runtime: "edge" }`

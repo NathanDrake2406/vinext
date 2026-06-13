@@ -978,6 +978,11 @@ describe("generatePagesRouterWorkerEntry", () => {
     expect(content).toContain("runPagesRequest(request, deps)");
   });
 
+  it("preserves request metadata when stripping Pages Router basePath", () => {
+    const content = generatePagesRouterWorkerEntry();
+    expect(content).toContain("cloneRequestWithUrl(request, strippedUrl.toString())");
+  });
+
   it("includes error handling", () => {
     const content = generatePagesRouterWorkerEntry();
     expect(content).toContain("catch (error)");

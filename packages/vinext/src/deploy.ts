@@ -551,7 +551,7 @@ import { runPagesRequest, wrapMiddlewareWithBasePath } from "vinext/server/pages
 import type { PagesPipelineDeps } from "vinext/server/pages-request-pipeline";
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES, isImageOptimizationPath } from "vinext/server/image-optimization";
 import type { ImageConfig } from "vinext/server/image-optimization";
-import { cloneRequestWithHeaders, filterInternalHeaders, isOpenRedirectShaped } from "vinext/server/request-pipeline";
+import { cloneRequestWithHeaders, cloneRequestWithUrl, filterInternalHeaders, isOpenRedirectShaped } from "vinext/server/request-pipeline";
 import { notFoundStaticAssetResponse } from "vinext/server/http-error-responses";
 import { assetPrefixPathname, isNextStaticPath } from "vinext/utils/asset-prefix";
 import { hasBasePath, stripBasePath } from "vinext/utils/base-path";
@@ -644,7 +644,7 @@ export default {
         if (stripped !== pathname) {
           const strippedUrl = new URL(request.url);
           strippedUrl.pathname = stripped;
-          request = new Request(strippedUrl, request);
+          request = cloneRequestWithUrl(request, strippedUrl.toString());
           pathname = stripped;
         }
       }

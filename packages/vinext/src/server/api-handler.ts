@@ -29,6 +29,7 @@ import {
 import { resolveRequestProtocol, resolveRequestHost } from "./proxy-trust.js";
 import { performOnDemandRevalidate, type RevalidateOptions } from "./pages-revalidate.js";
 import { NextRequest } from "vinext/shims/server";
+import { hasBasePath } from "../utils/base-path.js";
 
 /**
  * Extend the Node.js request with Next.js-style helpers.
@@ -195,7 +196,7 @@ function createEdgeApiRequest(
   const host = resolveRequestHost(req, "localhost");
   const requestUrl = new URL(req.url ?? url, `${proto}://${host}`);
   const basePath = nextConfig?.basePath;
-  if (basePath && !requestUrl.pathname.startsWith(`${basePath}/`)) {
+  if (basePath && !hasBasePath(requestUrl.pathname, basePath)) {
     requestUrl.pathname = `${basePath}${requestUrl.pathname}`;
   }
   const query = mergeRouteParamsIntoQuery(parseQueryString(url), params);

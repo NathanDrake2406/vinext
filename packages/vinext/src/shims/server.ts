@@ -418,10 +418,11 @@ export class NextURL {
   private _formatPathname(): string {
     // Build prefix: basePath + locale (skip defaultLocale — Next.js omits it)
     let prefix = this._basePath;
-    if (this._locale && this._locale !== this._defaultLocale) {
+    const inner = this._url.pathname;
+    const isApiPath = inner === "/api" || inner.startsWith("/api/");
+    if (!isApiPath && this._locale && this._locale !== this._defaultLocale) {
       prefix += "/" + this._locale;
     }
-    const inner = this._url.pathname;
     const composed = !prefix ? inner : inner === "/" ? prefix : prefix + inner;
     return this._applyTrailingSlash(composed);
   }
