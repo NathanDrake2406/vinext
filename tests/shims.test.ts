@@ -17,6 +17,16 @@ import type {
 } from "../packages/vinext/src/shims/cache.js";
 
 const FIXTURE_DIR = PAGES_FIXTURE_DIR;
+
+function commitRenderedPagesRouterElement(element: unknown): void {
+  if (typeof document === "undefined" || document.documentElement === undefined) return;
+
+  const props = (element as { props?: unknown } | null)?.props;
+  const onCommit =
+    props && typeof props === "object" ? (props as { onCommit?: unknown }).onCommit : undefined;
+  if (typeof onCommit === "function") queueMicrotask(onCommit as () => void);
+}
+
 describe("vinext next data client helpers", () => {
   it("extracts __NEXT_DATA__ after carriage-return whitespace", () => {
     const json = '{"props":{},"page":"/","query":{}}';
@@ -13390,7 +13400,7 @@ describe("Pages Router concurrent navigation", () => {
   function createNavWindow() {
     const pushState = vi.fn();
     const replaceState = vi.fn();
-    const render = vi.fn();
+    const render = vi.fn((element: unknown) => commitRenderedPagesRouterElement(element));
 
     const win = {
       location: {
@@ -14469,7 +14479,7 @@ describe("Pages Router concurrent navigation", () => {
       // The scroll target is applied inside the render-commit callback; the
       // mocked root.render never mounts React, so fire the commit manually.
       await vi.waitFor(() => expect(render).toHaveBeenCalled());
-      const committed = render.mock.calls.at(-1)![0];
+      const committed = render.mock.calls.at(-1)![0] as { props: { onCommit: () => void } };
       committed.props.onCommit();
       await routeChangeComplete;
 
@@ -15960,7 +15970,7 @@ describe("Pages Router _next/data client navigation", () => {
   ) {
     const pushState = vi.fn();
     const replaceState = vi.fn();
-    const render = vi.fn();
+    const render = vi.fn((element: unknown) => commitRenderedPagesRouterElement(element));
     const buildId = opts.buildId ?? "test-build";
 
     const win = {
