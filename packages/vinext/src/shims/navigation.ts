@@ -1504,6 +1504,7 @@ export function usePathname(): string | null {
  */
 export function useSearchParams(): ReadonlyURLSearchParams {
   if (isServer) {
+    markPprFallbackShellDynamicBoundary();
     // During SSR for "use client" components, the navigation context may not be set.
     // getServerSearchParamsSnapshot also covers the Pages Router compat shim.
     return getServerSearchParamsSnapshot();

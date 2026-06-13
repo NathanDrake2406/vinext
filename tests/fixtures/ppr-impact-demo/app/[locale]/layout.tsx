@@ -13,7 +13,10 @@ async function LocaleInfo({ params }: { params: Promise<{ locale: string }> }) {
   return (
     <header id="locale-header">
       <strong>Locale: {config.locale}</strong>
-      <span id="translations"> {config.home} | {config.blog}</span>
+      <span id="translations">
+        {" "}
+        {config.home} | {config.blog}
+      </span>
     </header>
   );
 }
@@ -46,8 +49,8 @@ export default function RootLayout({
       >
         <h1 id="static-header">Vinext PPR impact demo</h1>
         <p>
-          This route mirrors Next.js&apos;s root-param fallback case. Vinext currently renders unknown
-          paths normally until request-time fallback-shell resume is implemented.
+          This route mirrors Next.js&apos;s root-param fallback case. Vinext currently renders
+          unknown paths normally until request-time fallback-shell resume is implemented.
         </p>
         <Suspense fallback={<div id="locale-loading">Loading locale...</div>}>
           <LocaleInfo params={params} />

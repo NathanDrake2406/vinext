@@ -9,11 +9,7 @@ async function getBlogPost(locale: string, slug: string) {
   return { locale, slug, title: `Blog Post: ${slug}` };
 }
 
-async function BlogContent({
-  params,
-}: {
-  params: Promise<{ locale: string; slug: string }>;
-}) {
+async function BlogContent({ params }: { params: Promise<{ locale: string; slug: string }> }) {
   const { locale, slug } = await params;
   const post = await getBlogPost(locale, slug);
   return (
@@ -27,18 +23,16 @@ async function BlogContent({
 async function DynamicComments() {
   const cookieStore = await cookies();
   await new Promise((resolve) => setTimeout(resolve, 6_000));
-  return <section id="comments">Comments for {cookieStore.get("user")?.value ?? "anonymous"}</section>;
+  return (
+    <section id="comments">Comments for {cookieStore.get("user")?.value ?? "anonymous"}</section>
+  );
 }
 
 export function generateStaticParams() {
   return [{ slug: "known" }];
 }
 
-export default function Page({
-  params,
-}: {
-  params: Promise<{ locale: string; slug: string }>;
-}) {
+export default function Page({ params }: { params: Promise<{ locale: string; slug: string }> }) {
   return (
     <main>
       <div id="static-blog-header">Blog Article</div>

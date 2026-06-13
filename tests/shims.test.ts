@@ -1138,6 +1138,7 @@ describe("next/navigation shim", () => {
 
     const readHooks: Array<() => unknown> = [
       () => navigation.usePathname(),
+      () => navigation.useSearchParams(),
       () => navigation.useParams(),
       () => navigation.useSelectedLayoutSegment(),
       () => navigation.useSelectedLayoutSegments(),
