@@ -619,21 +619,8 @@ export function hasPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
-  options: { evictIncompatibleExactEntry?: boolean; notifyInvalidation?: boolean } = {},
+  options: { notifyInvalidation?: boolean } = {},
 ): boolean {
-  if (options.evictIncompatibleExactEntry) {
-    const cache = getPrefetchCache();
-    const exactCacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
-    const exactEntry = cache.get(exactCacheKey);
-    if (
-      exactEntry &&
-      exactEntry.cacheForNavigation !== false &&
-      !isPrefetchCacheEntryCompatibleWithMountedSlots(exactEntry, mountedSlotsHeader)
-    ) {
-      deletePrefetchCacheEntry(cache, getPrefetchedUrls(), exactCacheKey, exactEntry, false);
-    }
-  }
-
   const match = findPrefetchCacheEntryForNavigation(
     rscUrl,
     interceptionContext,

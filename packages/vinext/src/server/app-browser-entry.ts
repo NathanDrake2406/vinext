@@ -1798,7 +1798,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             rscUrl,
             requestInterceptionContext,
             mountedSlotsHeader,
-            { evictIncompatibleExactEntry: true, notifyInvalidation: false },
+            { notifyInvalidation: false },
           );
         const reuseDecision = navigationPlanner.classifyNavigationReuse({
           bypassNavigationCache: shouldBypassNavigationCache,
