@@ -758,6 +758,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     setCurrentFetchSoftTags(
       buildPageCacheTags(cleanPathname, [], [...route.routeSegments], "route"),
     );
+    const routeHandlerRequest = isRscRequest ? userlandRequest : request;
     return options.dispatchMatchedRouteHandler({
       cleanPathname,
       middlewareContext,
@@ -766,7 +767,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       // object (always `{}` for non-dynamic) so `useParams()` etc. still see
       // an object shape; only the user-facing handler context surfaces null.
       params: route.isDynamic ? renderParams : null,
-      request: userlandRequest,
+      request: routeHandlerRequest,
       route,
       searchParams: url.searchParams,
     });

@@ -833,7 +833,7 @@ describe("createAppRscHandler", () => {
     expect(dispatched?.searchParams.has("_rsc")).toBe(false);
   });
 
-  it("hides internal RSC cache-busting params from non-RSC route handler requests", async () => {
+  it("preserves non-RSC route handler request URLs while hiding internal parsed params", async () => {
     const route = createPageRoute({
       page: null,
       pattern: "/api/inspect",
@@ -857,7 +857,7 @@ describe("createAppRscHandler", () => {
 
     expect(response.status).toBe(200);
     const dispatched = dispatchMatchedRouteHandler.mock.calls[0]?.[0];
-    expect(new URL(dispatched?.request.url ?? "").search).toBe("?tab=latest");
+    expect(new URL(dispatched?.request.url ?? "").search).toBe("?tab=latest&_rsc=user-value");
     expect(dispatched?.searchParams.toString()).toBe("tab=latest");
   });
 
