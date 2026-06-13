@@ -777,7 +777,11 @@ export function createSSRHandler(
         const gsspExtraHeaders: Record<string, string | string[]> = {};
 
         const hasAppGetInitialProps = hasPagesGetInitialProps(AppComponent);
-        if (hasAppGetInitialProps) {
+
+        async function loadAppInitialProps(): Promise<boolean> {
+          if (!hasAppGetInitialProps) {
+            return false;
+          }
           const initialProps = await loadPagesGetInitialProps(AppComponent, {
             AppTree: (appTreeProps: Record<string, unknown>) =>
               React.createElement(AppComponent, {
@@ -804,7 +808,7 @@ export function createSSRHandler(
           });
 
           if (res.headersSent || res.writableEnded) {
-            return;
+            return true;
           }
 
           if (initialProps) {
@@ -812,9 +816,13 @@ export function createSSRHandler(
             pageProps = isUnknownRecord(initialPageProps) ? initialPageProps : {};
             renderProps = { ...initialProps, pageProps };
           }
+          return false;
         }
 
         if (typeof pageModule.getServerSideProps === "function" && !isFallbackRender) {
+          if (await loadAppInitialProps()) {
+            return;
+          }
           // Snapshot existing headers so we can detect what gSSP adds.
           const headersBeforeGSSP = new Set(Object.keys(res.getHeaders()));
 
@@ -1233,6 +1241,10 @@ export function createSSRHandler(
           // revalidation request (`res.revalidate()`) instead surfaces as
           // `revalidateReason: "on-demand"`.
           // See `.nextjs-ref/test/e2e/revalidate-reason/revalidate-reason.test.ts`.
+          if (await loadAppInitialProps()) {
+            return;
+          }
+
           const context = {
             params: userFacingParams,
             locale: locale ?? currentDefaultLocale,
@@ -1294,6 +1306,16 @@ export function createSSRHandler(
           // Extract revalidate period for ISR caching after render
           if (typeof result?.revalidate === "number" && result.revalidate > 0) {
             isrRevalidateSeconds = result.revalidate;
+          }
+        }
+
+        if (
+          typeof pageModule.getServerSideProps !== "function" &&
+          typeof pageModule.getStaticProps !== "function" &&
+          hasAppGetInitialProps
+        ) {
+          if (await loadAppInitialProps()) {
+            return;
           }
         }
 

@@ -663,17 +663,26 @@ export async function resolvePagesPageData(
     return sharedReqRes;
   }
 
-  const appInitialPropsResult = await loadPagesAppInitialRenderProps(options, getSharedReqRes);
-  if (appInitialPropsResult.kind === "response") {
-    return {
-      kind: "response",
-      response: await appInitialPropsResult.response,
-    };
+  let renderProps: PagesRenderProps = { pageProps };
+
+  async function loadForegroundAppInitialRenderProps(): Promise<ResolvePagesPageDataResult | null> {
+    const result = await loadPagesAppInitialRenderProps(options, getSharedReqRes);
+    if (result.kind === "response") {
+      return {
+        kind: "response",
+        response: await result.response,
+      };
+    }
+    renderProps = result.renderProps;
+    pageProps = result.pageProps;
+    return null;
   }
-  let renderProps = appInitialPropsResult.renderProps;
-  pageProps = appInitialPropsResult.pageProps;
 
   if (typeof options.pageModule.getServerSideProps === "function") {
+    const shortCircuit = await loadForegroundAppInitialRenderProps();
+    if (shortCircuit) {
+      return shortCircuit;
+    }
     const { req, res, responsePromise } = getSharedReqRes();
     const result = await options.pageModule.getServerSideProps({
       params: userFacingParams,
@@ -874,6 +883,14 @@ export async function resolvePagesPageData(
       };
     }
 
+    // Load _app.getInitialProps only when we are actually going to render this
+    // request (cache miss or on-demand revalidation). Fresh and stale cache hits
+    // must return the cached HTML without executing userland App/data code.
+    const shortCircuit = await loadForegroundAppInitialRenderProps();
+    if (shortCircuit) {
+      return shortCircuit;
+    }
+
     const result = await options.pageModule.getStaticProps({
       params: userFacingParams,
       locale: options.i18n.locale,
@@ -922,6 +939,17 @@ export async function resolvePagesPageData(
 
     if (typeof result?.revalidate === "number" && result.revalidate > 0) {
       isrRevalidateSeconds = result.revalidate;
+    }
+  }
+
+  if (
+    typeof options.pageModule.getServerSideProps !== "function" &&
+    typeof options.pageModule.getStaticProps !== "function" &&
+    hasPagesGetInitialProps(options.AppComponent)
+  ) {
+    const shortCircuit = await loadForegroundAppInitialRenderProps();
+    if (shortCircuit) {
+      return shortCircuit;
     }
   }
 

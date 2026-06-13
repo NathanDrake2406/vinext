@@ -654,6 +654,130 @@ describe("pages page data", () => {
     expect(regeneratedCacheValue?.html).toContain('"page":"/posts/[slug]"');
   });
 
+  it("does not run _app.getInitialProps on a fresh ISR cache HIT", async () => {
+    const appGip = vi.fn().mockResolvedValue({
+      appProp: "from-app",
+      pageProps: {},
+    });
+
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(
+          function App() {
+            return null;
+          },
+          { getInitialProps: appGip },
+        ),
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: false,
+          value: {
+            lastModified: 1,
+            cacheState: "fresh",
+            value: {
+              kind: "PAGES",
+              html: '<!DOCTYPE html><html><body><div id="__next"><div>cached-body</div></div></body></html>',
+              pageData: { pageProp: "cached" },
+              headers: undefined,
+              status: undefined,
+            },
+          },
+        }),
+        pageModule: {
+          async getStaticProps() {
+            return { props: { pageProp: "fresh" }, revalidate: 60 };
+          },
+        },
+        triggerBackgroundRegeneration: vi.fn(),
+      }),
+    );
+
+    expect(result.kind).toBe("response");
+    if (result.kind !== "response") {
+      throw new Error("expected response result");
+    }
+    expect(result.response.headers.get("x-vinext-cache")).toBe("HIT");
+    expect(appGip).not.toHaveBeenCalled();
+  });
+
+  it("only runs _app.getInitialProps in the stale ISR regeneration path, not on the immediate stale response", async () => {
+    let regenPromise: Promise<void> | null = null;
+    const isrSet = vi.fn<ResolvePagesPageDataOptions["isrSet"]>(async () => {});
+    const triggerBackgroundRegeneration = vi.fn((_key: string, renderFn: () => Promise<void>) => {
+      regenPromise = renderFn();
+    });
+
+    let insideRegenContext = false;
+    let foregroundGipCalls = 0;
+    let regenGipCalls = 0;
+    const appGip = vi.fn().mockImplementation(() => {
+      if (insideRegenContext) {
+        regenGipCalls++;
+      } else {
+        foregroundGipCalls++;
+      }
+      return Promise.resolve({ appProp: "from-app", pageProps: {} });
+    });
+
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(
+          function App() {
+            return null;
+          },
+          { getInitialProps: appGip },
+        ),
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: true,
+          value: {
+            lastModified: 1,
+            cacheState: "stale",
+            value: {
+              kind: "PAGES",
+              html: '<!DOCTYPE html><html><body><div id="__next"><div>stale-body</div></div></body></html>',
+              pageData: { stale: true },
+              headers: undefined,
+              status: undefined,
+            },
+          },
+        }),
+        isrSet,
+        pageModule: {
+          async getStaticProps() {
+            return { props: { pageProp: "from-page" }, revalidate: 60 };
+          },
+        },
+        runInFreshUnifiedContext: async (callback) => {
+          insideRegenContext = true;
+          try {
+            return await callback();
+          } finally {
+            insideRegenContext = false;
+          }
+        },
+        triggerBackgroundRegeneration,
+      }),
+    );
+
+    expect(result.kind).toBe("response");
+    if (result.kind !== "response") {
+      throw new Error("expected response result");
+    }
+    expect(result.response.headers.get("x-vinext-cache")).toBe("STALE");
+    // App GIP must not run before serving the stale response.
+    expect(foregroundGipCalls).toBe(0);
+
+    if (!regenPromise) {
+      throw new Error("expected stale ISR regeneration to start");
+    }
+    const pendingRegen: Promise<void> = regenPromise;
+    await pendingRegen;
+
+    // App GIP must run exactly once, inside the background regeneration callback.
+    expect(regenGipCalls).toBe(1);
+    expect(appGip).toHaveBeenCalledOnce();
+    expect(isrSet).toHaveBeenCalledOnce();
+  });
+
   it("preserves vinext module metadata during stale ISR regeneration", async () => {
     let regenPromise: Promise<void> | null = null;
     const isrSet = vi.fn<ResolvePagesPageDataOptions["isrSet"]>(async () => {});
