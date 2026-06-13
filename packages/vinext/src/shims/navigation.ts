@@ -1707,21 +1707,11 @@ export function applyAppRouterScrollFallback(intent: AppRouterScrollIntent): voi
 }
 
 function scheduleAppRouterScrollFallback(intent: AppRouterScrollIntent): void {
-  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+  queueMicrotask(() => {
+    const pendingIntent = getPendingAppRouterScrollIntent();
+    if (pendingIntent === null || pendingIntent.id !== intent.id) return;
     const fallbackIntent = consumeAppRouterScrollIntent(intent);
     if (fallbackIntent) applyAppRouterScrollFallback(fallbackIntent);
-    return;
-  }
-
-  const committedHref = window.location.href;
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      if (window.location.href !== committedHref) return;
-      const pendingIntent = getPendingAppRouterScrollIntent();
-      if (pendingIntent === null || pendingIntent.id !== intent.id) return;
-      const fallbackIntent = consumeAppRouterScrollIntent(intent);
-      if (fallbackIntent) applyAppRouterScrollFallback(fallbackIntent);
-    });
   });
 }
 
@@ -1822,6 +1812,7 @@ export async function navigateClientSide(
     targetHref: fullHref,
   });
   if (earlyIntent.kind === "sameDocumentScroll") {
+    clearAppRouterScrollIntent();
     commitHashOnlyHistoryState(fullHref, earlyIntent.mode, earlyIntent.scroll);
     commitClientNavigationState();
     if (earlyIntent.scroll) {

@@ -125,22 +125,14 @@ export class AppRouterScrollTargetInner extends React.Component<{
   children: React.ReactNode;
   commitId: number | null;
 }> {
-  animationFrame: number | null = null;
+  scheduledCommitId: number | null = null;
 
   schedulePotentialScroll = () => {
-    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+    const commitId = this.props.commitId;
+    this.scheduledCommitId = commitId;
+    queueMicrotask(() => {
+      if (this.scheduledCommitId !== commitId) return;
       this.handlePotentialScroll();
-      return;
-    }
-
-    if (this.animationFrame !== null) {
-      window.cancelAnimationFrame(this.animationFrame);
-    }
-    this.animationFrame = window.requestAnimationFrame(() => {
-      this.animationFrame = window.requestAnimationFrame(() => {
-        this.animationFrame = null;
-        this.handlePotentialScroll();
-      });
     });
   };
 
@@ -152,8 +144,10 @@ export class AppRouterScrollTargetInner extends React.Component<{
     let target: HTMLElement | null;
     if (intent.hash !== null) {
       target = getHashFragmentDomNode(intent.hash);
-      if (target === null) return;
     } else {
+      target = null;
+    }
+    if (target === null) {
       // oxlint-disable-next-line react/no-find-dom-node -- Next's default App Router scroll handler targets wrapperless route content after commit.
       const node = findDOMNode(this);
 
@@ -191,9 +185,7 @@ export class AppRouterScrollTargetInner extends React.Component<{
   }
 
   componentWillUnmount() {
-    if (this.animationFrame !== null && typeof window !== "undefined") {
-      window.cancelAnimationFrame(this.animationFrame);
-    }
+    this.scheduledCommitId = null;
   }
 
   render() {

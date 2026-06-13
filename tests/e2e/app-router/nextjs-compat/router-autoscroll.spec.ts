@@ -423,6 +423,35 @@ test.describe("Next.js compat: App Router autoscroll", () => {
   });
 
   // Ported from Next.js:
+  // test/e2e/app-dir/navigation/navigation.test.ts
+  test("falls back to the navigated segment for a missing cross-route fragment", async ({
+    page,
+  }) => {
+    await page.goto(`${ROUTE_BASE}`);
+    await waitForControls(page);
+    await scrollTo(page, { x: 0, y: 500 });
+
+    await push(page, "/nextjs-compat/router-autoscroll/uri-fragments#missing");
+    await expect(page).toHaveURL(`${ROUTE_BASE}/uri-fragments#missing`);
+    await expectScroll(page, { x: 0, y: 0 });
+  });
+
+  // Ported from Next.js:
+  // test/e2e/app-dir/navigation/navigation.test.ts
+  test("scrolls to top for a missing same-document fragment", async ({ page }) => {
+    await page.goto(`${ROUTE_BASE}/uri-fragments`);
+    await waitForControls(page);
+    await page.evaluate(() => {
+      document.body.style.minHeight = "2000px";
+    });
+    await scrollTo(page, { x: 0, y: 500 });
+
+    await push(page, "/nextjs-compat/router-autoscroll/uri-fragments#missing");
+    await expect(page).toHaveURL(`${ROUTE_BASE}/uri-fragments#missing`);
+    await expectScroll(page, { x: 0, y: 0 });
+  });
+
+  // Ported from Next.js:
   // test/e2e/app-dir/router-autoscroll/router-autoscroll.test.ts
   test("scrolls to top when navigating to a page with new metadata", async ({ page }) => {
     await page.goto(`${ROUTE_BASE}`);

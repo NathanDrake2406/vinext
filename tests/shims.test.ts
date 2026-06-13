@@ -12473,6 +12473,21 @@ describe("app router scroll intent state", () => {
     }
   });
 
+  it("clears a staged scroll intent when a same-document navigation supersedes it", async () => {
+    const {
+      beginAppRouterScrollIntent,
+      clearAppRouterScrollIntent,
+      getPendingAppRouterScrollIntent,
+    } = await import("../packages/vinext/src/shims/app-router-scroll-state.js");
+
+    clearAppRouterScrollIntent();
+    beginAppRouterScrollIntent(null);
+    expect(getPendingAppRouterScrollIntent()).not.toBeNull();
+
+    clearAppRouterScrollIntent();
+    expect(getPendingAppRouterScrollIntent()).toBeNull();
+  });
+
   it("marks only the claimed commit's intent as head-hoisted", async () => {
     const {
       beginAppRouterScrollIntent,
@@ -12667,7 +12682,14 @@ describe("app router scroll document-top fallback", () => {
   // A document head that already contains a React-hoisted precedence stylesheet
   // — exactly the state in which the old global head scan wrongly suppressed the
   // fallback for every navigation.
-  const headWithHoistedStylesheet = { querySelectorAll: () => [{ localName: "link" }] };
+  const headWithHoistedStylesheet = {
+    querySelectorAll: () => [
+      {
+        getAttribute: () => null,
+        localName: "link",
+      },
+    ],
+  };
 
   it("scrolls to the document top even when hoisted stylesheets exist in <head>", async () => {
     const { beginAppRouterScrollIntent, clearAppRouterScrollIntent } =
@@ -12680,7 +12702,10 @@ describe("app router scroll document-top fallback", () => {
     // hoisted stylesheet in <head> for some unrelated reason must not suppress
     // it — the suppression decision is per-intent, not a global head scan.
     clearAppRouterScrollIntent();
-    const intent = beginAppRouterScrollIntent(null);
+    const intent = {
+      ...beginAppRouterScrollIntent(null),
+      hoistedHeadSignatures: ["link\0\0\0\0"],
+    };
     expect(intent.targetHoistedInHead).toBe(false);
 
     withScrollFallbackEnv(headWithHoistedStylesheet, (documentElement) => {
