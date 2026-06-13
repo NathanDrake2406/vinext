@@ -48,6 +48,7 @@ type AppPageBoundaryRscPayloadOptions<TModule extends AppPageModule = AppPageMod
   layoutModules: readonly (TModule | null | undefined)[];
   pathname: string;
   route?: AppPageBoundaryRoute<TModule> | null;
+  sourcePageSegments?: readonly string[] | null;
 };
 
 type AppPageBoundaryLayoutEntry = {
@@ -100,6 +101,7 @@ type AppPageBoundaryRenderCommonOptions<TModule extends AppPageModule = AppPageM
   ) => string[];
   rootLayouts: readonly (TModule | null | undefined)[];
   scriptNonce?: string;
+  sourcePageSegments?: readonly string[] | null;
 };
 
 type RenderAppPageHttpAccessFallbackOptions<TModule extends AppPageModule = AppPageModule> = {
@@ -255,7 +257,9 @@ function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
       layoutIds: layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath: layoutEntries[0]?.treePath ?? null,
       routeId,
-      sourcePage: options.route ? createAppPageSourcePage(options.route.routeSegments) : null,
+      sourcePage: options.route
+        ? createAppPageSourcePage(options.sourcePageSegments ?? options.route.routeSegments)
+        : null,
     }),
     [routeId]: options.element,
   };
@@ -279,6 +283,7 @@ async function renderAppPageBoundaryElementResponse<TModule extends AppPageModul
     layoutModules: options.layoutModules,
     pathname,
     route: options.route,
+    sourcePageSegments: options.sourcePageSegments,
   });
 
   return renderAppPageBoundaryResponse({
