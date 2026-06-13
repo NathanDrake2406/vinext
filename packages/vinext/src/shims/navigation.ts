@@ -624,6 +624,7 @@ export function hasPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
+  options: { notifyInvalidation?: boolean } = {},
 ): boolean {
   const match = findPrefetchCacheEntryForNavigation(
     rscUrl,
@@ -640,7 +641,7 @@ export function hasPrefetchCacheEntryForNavigation(
     getPrefetchedUrls(),
     match.cacheKey,
     match.entry,
-    true,
+    options.notifyInvalidation ?? true,
   );
   return false;
 }

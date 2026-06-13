@@ -205,6 +205,7 @@ type BuildAppPageElementsOptions<
   renderIdentity?: AppPageRenderIdentity;
   renderMode?: AppRscRenderMode;
   routePath: string;
+  sourcePageSegments?: readonly string[] | null;
 };
 
 type AppPageTemplateEntry<TModule extends AppPageModule = AppPageModule> = {
@@ -361,6 +362,12 @@ function createAppPageTemplateEntries<TModule extends AppPageModule>(
       treePosition,
     };
   });
+}
+
+export function createAppPageSourcePage(
+  routeSegments: readonly string[] | null | undefined,
+): string {
+  return `/${[...(routeSegments ?? []), "page"].join("/")}`;
 }
 
 function createAppPageErrorEntries<TErrorModule extends AppPageErrorModule>(
@@ -593,6 +600,7 @@ export function buildAppPageElements<
       layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath,
       routeId,
+      sourcePage: createAppPageSourcePage(options.sourcePageSegments ?? routeSegments),
       slotBindings: createAppPageSlotBindings(options.route, layoutEntries, resolveSlotOverride, {
         interception: renderIdentity?.interception ?? options.interception ?? null,
         interceptionContext,

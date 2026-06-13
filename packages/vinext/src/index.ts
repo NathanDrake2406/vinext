@@ -2003,8 +2003,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           ...(nextConfig.assetPrefix || nextConfig.deploymentId
             ? {
                 experimental: {
-                  renderBuiltUrl: (filename: string) =>
-                    renderVinextBuiltUrl(filename, nextConfig.assetPrefix, nextConfig.deploymentId),
+                  renderBuiltUrl: (filename: string, context) =>
+                    renderVinextBuiltUrl(
+                      filename,
+                      nextConfig.assetPrefix,
+                      nextConfig.deploymentId,
+                      context.hostType,
+                    ),
                 },
               }
             : {}),
@@ -3772,6 +3777,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   res,
                   pipelineResult.apiUrl,
                   apiRoutes,
+                  {
+                    basePath: nextConfig?.basePath,
+                    i18n: nextConfig?.i18n,
+                    trailingSlash: nextConfig?.trailingSlash,
+                  },
                 );
                 if (handled) return;
 

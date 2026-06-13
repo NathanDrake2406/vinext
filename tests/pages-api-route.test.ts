@@ -314,6 +314,147 @@ describe("pages api route", () => {
     });
   });
 
+  it("passes the resolved query while preserving the original edge API pathname", async () => {
+    // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
+    //
+    // Upstream middleware mutates request.nextUrl.searchParams and rewrites to
+    // the same edge Pages API route. The handler's req.nextUrl must reflect the
+    // resolved rewrite URL, not the original incoming Request URL.
+    const response = await handlePagesApiRoute({
+      match: createMatch(
+        (request: Request) => {
+          const nextUrl = (request as Request & { nextUrl?: URL }).nextUrl;
+          if (!nextUrl) {
+            return new Response("missing nextUrl", { status: 500 });
+          }
+          return Response.json({
+            pathname: nextUrl.pathname,
+            query: Object.fromEntries(nextUrl.searchParams),
+          });
+        },
+        {},
+        { runtime: "edge" },
+      ),
+      request: new Request("https://example.com/public-edge-path?a=b"),
+      url: "/api/edge-search-params?a=b&foo=bar",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      pathname: "/public-edge-path",
+      query: {
+        a: "b",
+        foo: "bar",
+      },
+    });
+  });
+
+  it("includes dynamic route params in edge API nextUrl.searchParams", async () => {
+    // Ported from Next.js: test/e2e/edge-pages-support/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/edge-pages-support/index.test.ts
+    const response = await handlePagesApiRoute({
+      match: createMatch(
+        (request: Request) => {
+          const nextUrl = (request as Request & { nextUrl?: URL }).nextUrl;
+          if (!nextUrl) {
+            return new Response("missing nextUrl", { status: 500 });
+          }
+          return Response.json(Object.fromEntries(nextUrl.searchParams));
+        },
+        { id: "id-1" },
+        { runtime: "edge" },
+      ),
+      request: new Request("https://example.com/api/id-1?a=b"),
+      url: "/api/id-1?a=b",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      a: "b",
+      id: "id-1",
+    });
+  });
+
+  it("applies basePath and i18n config to edge API nextUrl", async () => {
+    const response = await handlePagesApiRoute({
+      match: createMatch(
+        (request: Request) => {
+          const nextUrl = (
+            request as Request & {
+              nextUrl?: { basePath: string; locale: string; pathname: string };
+            }
+          ).nextUrl;
+          return Response.json({
+            basePath: nextUrl?.basePath,
+            locale: nextUrl?.locale,
+            pathname: nextUrl?.pathname,
+          });
+        },
+        {},
+        { runtime: "edge" },
+      ),
+      nextConfig: {
+        basePath: "/docs",
+        i18n: { defaultLocale: "en", locales: ["en", "fr"] },
+      },
+      request: new Request("https://example.com/docs/fr/api/hello?a=b"),
+      url: "/fr/api/hello?a=b",
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      basePath: "/docs",
+      locale: "fr",
+      pathname: "/api/hello",
+    });
+  });
+
+  it("preserves edge API request properties when applying the resolved URL", async () => {
+    const request = new Request("https://example.com/api/edge-search-params?a=b", {
+      body: "payload",
+      headers: { "x-test": "1" },
+      method: "POST",
+    });
+    Object.defineProperty(request, "cf", {
+      configurable: true,
+      enumerable: true,
+      value: { country: "US" },
+    });
+    const response = await handlePagesApiRoute({
+      match: createMatch(
+        async (request: Request) => {
+          const nextUrl = (request as Request & { nextUrl?: URL }).nextUrl;
+          if (!nextUrl) {
+            return new Response("missing nextUrl", { status: 500 });
+          }
+          return Response.json({
+            body: await request.text(),
+            header: request.headers.get("x-test"),
+            method: request.method,
+            query: Object.fromEntries(nextUrl.searchParams),
+            cf: Reflect.get(request, "cf"),
+          });
+        },
+        {},
+        { runtime: "edge" },
+      ),
+      request,
+      url: "/api/edge-search-params?a=b&foo=bar",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      body: "payload",
+      cf: { country: "US" },
+      header: "1",
+      method: "POST",
+      query: {
+        a: "b",
+        foo: "bar",
+      },
+    });
+  });
+
   it("recognises bare \"export const runtime = 'edge'\" as an edge API route", async () => {
     // Ported from Next.js: packages/next/src/build/analysis/get-page-static-info.ts
     // Both `export const runtime = "edge"` and `export const config = { runtime: "edge" }`

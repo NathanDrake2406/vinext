@@ -1029,6 +1029,68 @@ describe("handleApiRoute", () => {
       });
     });
 
+    it("applies basePath and i18n config to edge API nextUrl", async () => {
+      const handler = vi.fn((request: Request) => {
+        const nextUrl = (
+          request as Request & {
+            nextUrl?: { basePath: string; locale: string; pathname: string };
+          }
+        ).nextUrl;
+        return Response.json({
+          basePath: nextUrl?.basePath,
+          locale: nextUrl?.locale,
+          pathname: nextUrl?.pathname,
+        });
+      });
+      const server = mockServer({ config: { runtime: "edge" }, default: handler });
+      const req = mockReq("GET", "/docs/fr/api/hello?a=b", undefined, { host: "example.com" });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/fr/api/hello?a=b", [route("/fr/api/hello")], {
+        basePath: "/docs",
+        i18n: { defaultLocale: "en", locales: ["en", "fr"] },
+      });
+
+      expect(JSON.parse(res._body.toString())).toMatchObject({
+        basePath: "/docs",
+        locale: "fr",
+        pathname: "/api/hello",
+      });
+    });
+
+    it("reconstructs Vite-stripped basePath for edge API nextUrl", async () => {
+      const handler = vi.fn((request: Request) => {
+        const nextUrl = (request as Request & { nextUrl?: { basePath: string; pathname: string } })
+          .nextUrl;
+        return Response.json({ basePath: nextUrl?.basePath, pathname: nextUrl?.pathname });
+      });
+      const server = mockServer({ config: { runtime: "edge" }, default: handler });
+      const req = mockReq("GET", "/api/hello?a=b", undefined, { host: "example.com" });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/hello?a=b", [route("/api/hello")], {
+        basePath: "/docs",
+      });
+
+      expect(JSON.parse(res._body.toString())).toEqual({
+        basePath: "/docs",
+        pathname: "/api/hello",
+      });
+    });
+
+    it("does not double-prefix an exact basePath edge API rewrite", async () => {
+      const handler = vi.fn((request: Request) => Response.json({ url: request.url }));
+      const server = mockServer({ config: { runtime: "edge" }, default: handler });
+      const req = mockReq("GET", "/docs", undefined, { host: "example.com" });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/hello", [route("/api/hello")], {
+        basePath: "/docs",
+      });
+
+      expect(JSON.parse(res._body.toString())).toEqual({ url: "http://example.com/docs" });
+    });
+
     it("recognises bare \"export const runtime = 'edge'\" as an edge API route", async () => {
       // Ported from Next.js: packages/next/src/build/analysis/get-page-static-info.ts
       // Both `export const runtime = "edge"` and `export const config = { runtime: "edge" }`
