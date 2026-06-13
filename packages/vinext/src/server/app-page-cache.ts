@@ -74,13 +74,6 @@ type AppPageCacheRenderResult = {
   tags: string[];
 };
 
-export type AppPageFallbackShellCacheRenderResult = {
-  cacheControl?: CacheControlMetadata;
-  html: string;
-  htmlRenderObservation?: RenderObservation;
-  tags: string[];
-};
-
 type BuildAppPageCachedResponseOptions = {
   cacheControl?: CacheControlMetadata;
   cacheState: "HIT" | "STALE";
