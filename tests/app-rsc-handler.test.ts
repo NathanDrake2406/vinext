@@ -1040,6 +1040,56 @@ describe("createAppRscHandler", () => {
     );
   });
 
+  it("rechecks static Pages routes after an afterFiles rewrite", async () => {
+    const renderPagesFallback = vi.fn(async ({ matchKind, pathname }) =>
+      matchKind === "static" && pathname === "/pages-static"
+        ? new Response("pages-static", { status: 200 })
+        : null,
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [],
+        afterFiles: [{ source: "/legacy", destination: "/pages-static" }],
+        fallback: [],
+      },
+      matchRoute: () => null,
+      renderPagesFallback,
+    });
+
+    const response = await handler(new Request("https://example.test/docs/legacy"), null);
+
+    expect(await response.text()).toBe("pages-static");
+  });
+
+  it("rechecks static and dynamic Pages routes after a fallback rewrite", async () => {
+    const renderPagesFallback = vi.fn(async ({ matchKind, pathname }) =>
+      pathname === "/pages-dynamic" && matchKind === "dynamic"
+        ? new Response("pages-dynamic", { status: 200 })
+        : null,
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [],
+        afterFiles: [],
+        fallback: [{ source: "/legacy", destination: "/pages-dynamic" }],
+      },
+      matchRoute: () => null,
+      renderPagesFallback,
+    });
+
+    const response = await handler(new Request("https://example.test/docs/legacy"), null);
+
+    expect(await response.text()).toBe("pages-dynamic");
+    expect(renderPagesFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ matchKind: "static", pathname: "/pages-dynamic" }),
+    );
+    expect(renderPagesFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ matchKind: "dynamic", pathname: "/pages-dynamic" }),
+    );
+  });
+
   it("serves public files before route matching and clears request context", async () => {
     const clearRequestContext = vi.fn();
     const matchRoute = vi.fn(() => null);

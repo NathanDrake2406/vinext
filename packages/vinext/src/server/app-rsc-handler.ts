@@ -661,22 +661,26 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   if (serverActionResponse) return serverActionResponse;
 
   let match = preActionMatch;
-  const staticPagesFallbackResponse =
+  const renderPagesForMatchKind = async (
+    matchKind: "dynamic" | "static",
+  ): Promise<Response | null> =>
     match === null || match.route.isDynamic
-      ? await options.renderPagesFallback?.({
+      ? ((await options.renderPagesFallback?.({
           appRouteMatch: match ?? null,
           isRscRequest,
-          matchKind: "static",
+          matchKind,
           middlewareContext,
           pathname: cleanPathname,
           request,
           url,
-        })
+        })) ?? null)
       : null;
+  const staticPagesFallbackResponse = await renderPagesForMatchKind("static");
   if (staticPagesFallbackResponse) {
     options.clearRequestContext();
     return staticPagesFallbackResponse;
   }
+  let didAfterFilesRewrite = false;
   if (!match || match.route.isDynamic) {
     const afterFilesRewrite = await applyRewrite(
       {
@@ -694,21 +698,19 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (afterFilesRewrite) {
       cleanPathname = afterFilesRewrite;
       match = options.matchRoute(cleanPathname);
+      didAfterFilesRewrite = true;
     }
   }
 
-  const dynamicPagesFallbackEligible = match === null || match.route.isDynamic;
-  const dynamicPagesFallbackResponse = dynamicPagesFallbackEligible
-    ? await options.renderPagesFallback?.({
-        appRouteMatch: match ?? null,
-        isRscRequest,
-        matchKind: "dynamic",
-        middlewareContext,
-        pathname: cleanPathname,
-        request,
-        url,
-      })
-    : null;
+  if (didAfterFilesRewrite) {
+    const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
+    if (rewrittenStaticPagesResponse) {
+      options.clearRequestContext();
+      return rewrittenStaticPagesResponse;
+    }
+  }
+
+  const dynamicPagesFallbackResponse = await renderPagesForMatchKind("dynamic");
   if (dynamicPagesFallbackResponse) {
     options.clearRequestContext();
     return dynamicPagesFallbackResponse;
@@ -731,6 +733,16 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (fallbackRewrite) {
       cleanPathname = fallbackRewrite;
       match = options.matchRoute(cleanPathname);
+      const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
+      if (rewrittenStaticPagesResponse) {
+        options.clearRequestContext();
+        return rewrittenStaticPagesResponse;
+      }
+      const rewrittenDynamicPagesResponse = await renderPagesForMatchKind("dynamic");
+      if (rewrittenDynamicPagesResponse) {
+        options.clearRequestContext();
+        return rewrittenDynamicPagesResponse;
+      }
     }
   }
 
