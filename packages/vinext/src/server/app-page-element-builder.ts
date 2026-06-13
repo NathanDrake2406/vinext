@@ -4,6 +4,7 @@ import { resolveActiveParallelRouteHeadInputs, resolveAppPageHead } from "./app-
 import { SIBLING_PAGE_INTERCEPT_SLOT_KEY } from "./app-rsc-route-matching.js";
 import {
   buildAppPageElements,
+  createAppPageSourcePage,
   createAppPageTreePath,
   type AppPageErrorModule,
   type AppPageModule,
@@ -217,6 +218,7 @@ export async function buildPageElements<
         layoutIds: noExportLayoutIds,
         rootLayoutTreePath: noExportRootLayout,
         routeId: renderIdentity.routeId,
+        sourcePage: createAppPageSourcePage(route.routeSegments),
       }),
       [renderIdentity.routeId]: createElement("div", null, "Page has no default export"),
     };

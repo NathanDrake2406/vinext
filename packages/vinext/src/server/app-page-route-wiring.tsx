@@ -360,6 +360,12 @@ function createAppPageTemplateEntries<TModule extends AppPageModule>(
   });
 }
 
+export function createAppPageSourcePage(
+  routeSegments: readonly string[] | null | undefined,
+): string {
+  return `/${[...(routeSegments ?? []), "page"].join("/")}`;
+}
+
 function createAppPageErrorEntries<TErrorModule extends AppPageErrorModule>(
   route: Pick<
     AppPageRouteWiringRoute<AppPageModule, TErrorModule>,
@@ -590,6 +596,7 @@ export function buildAppPageElements<
       layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath,
       routeId,
+      sourcePage: createAppPageSourcePage(routeSegments),
       slotBindings: createAppPageSlotBindings(options.route, layoutEntries, resolveSlotOverride, {
         interception: renderIdentity?.interception ?? options.interception ?? null,
         interceptionContext,
