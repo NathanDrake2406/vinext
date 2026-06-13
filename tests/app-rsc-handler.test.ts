@@ -654,6 +654,32 @@ describe("createAppRscHandler", () => {
     });
   });
 
+  it("allows middleware-rewritten RSC requests to hand off to Pages HTML", async () => {
+    const headers = createRscRequestHeaders();
+    const rscUrl = await createRscRequestUrl("/docs/source", headers);
+    const renderPagesFallback = vi.fn(async ({ allowRscDocumentFallback, pathname }) =>
+      allowRscDocumentFallback && pathname === "/pages"
+        ? new Response("pages", { headers: { "content-type": "text/html" } })
+        : null,
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      matchRoute: () => null,
+      middlewareModule: {
+        default: () =>
+          new Response(null, {
+            headers: { "x-middleware-rewrite": "https://example.test/docs/pages" },
+          }),
+      },
+      renderPagesFallback,
+    });
+
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.headers.get("content-type")).toBe("text/html");
+    expect(await response.text()).toBe("pages");
+  });
+
   it("does not duplicate additive config headers on non-redirect middleware responses", async () => {
     const handler = createHandler({
       configHeaders: [

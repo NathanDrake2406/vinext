@@ -215,6 +215,7 @@ type RenderNotFoundOptions<TRoute> = {
 };
 
 type RenderPagesFallbackOptions = {
+  allowRscDocumentFallback?: boolean;
   appRouteMatch?: { route: { isDynamic: boolean; pattern: string } } | null;
   isRscRequest: boolean;
   matchKind?: "dynamic" | "static";
@@ -519,6 +520,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     requestHeaders: null,
     status: null,
   };
+  let didMiddlewareRewrite = false;
 
   if (options.middlewareModule) {
     const middlewareResult = await applyAppMiddleware({
@@ -542,6 +544,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
 
     cleanPathname = middlewareResult.cleanPathname;
+    didMiddlewareRewrite = cleanPathname !== normalized.cleanPathname;
     if (middlewareResult.search !== null) {
       url.search = middlewareResult.search;
     }
@@ -694,6 +697,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     match === null || match.route.isDynamic
       ? ((await options.renderPagesFallback?.({
           appRouteMatch: match ?? null,
+          allowRscDocumentFallback: didMiddlewareRewrite,
           isRscRequest,
           matchKind,
           middlewareContext,

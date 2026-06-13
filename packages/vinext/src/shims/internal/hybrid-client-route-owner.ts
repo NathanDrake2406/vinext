@@ -201,13 +201,14 @@ export function resolveHybridClientRouteOwner(
   }
 
   if (appMatch === null && pagesMatch === null) return null;
-  if (appMatch?.documentOnly || pagesMatch?.documentOnly) return "document";
-  if (pagesMatch === null) return "app";
-  if (appMatch === null) return "pages";
-  return compareHybridRoutePatterns(
+  if (pagesMatch === null) return appMatch!.documentOnly ? "document" : "app";
+  if (appMatch === null) return pagesMatch.documentOnly ? "document" : "pages";
+  const owner = compareHybridRoutePatterns(
     patternFromParts(pagesMatch.patternParts),
     pagesMatch.isDynamic,
     patternFromParts(appMatch.patternParts),
     appMatch.isDynamic,
   );
+  const winningRoute = owner === "app" ? appMatch : pagesMatch;
+  return winningRoute.documentOnly ? "document" : owner;
 }

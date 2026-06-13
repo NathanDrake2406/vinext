@@ -58,6 +58,7 @@ type RenderPagesFallbackDependencies = {
 };
 
 type RenderPagesFallbackOptions = {
+  allowRscDocumentFallback?: boolean;
   appRouteMatch?: AppRouteMatch | null;
   isRscRequest: boolean;
   matchKind?: "dynamic" | "static";
@@ -75,6 +76,7 @@ export async function renderPagesFallback(
   dependencies: RenderPagesFallbackDependencies,
 ): Promise<Response | null> {
   const {
+    allowRscDocumentFallback = false,
     appRouteMatch = null,
     isRscRequest,
     matchKind,
@@ -91,7 +93,7 @@ export async function renderPagesFallback(
     getDraftModeCookieHeader,
   } = dependencies;
 
-  if (isRscRequest) return null;
+  if (isRscRequest && !allowRscDocumentFallback) return null;
 
   const pagesEntry = await loadPagesEntry();
 

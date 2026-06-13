@@ -49,6 +49,25 @@ describe("renderPagesFallback", () => {
     expect(loadPagesEntry).not.toHaveBeenCalled();
   });
 
+  it("allows middleware-rewritten RSC requests to return a Pages document", async () => {
+    const renderPage = vi.fn(
+      () => new Response("pages", { headers: { "content-type": "text/html" } }),
+    );
+    const response = await renderPagesFallback(
+      {
+        allowRscDocumentFallback: true,
+        isRscRequest: true,
+        middlewareContext: { headers: null, requestHeaders: null, status: null },
+        pathname: "/pages",
+        request: new Request("http://localhost/source"),
+        url: new URL("http://localhost/source"),
+      },
+      { ...defaultDeps, loadPagesEntry: () => ({ renderPage }) },
+    );
+
+    expect(await response!.text()).toBe("pages");
+  });
+
   it("rebuilds request when middleware request headers are present", async () => {
     const handleApiRoute = vi.fn((_req: Request, _url: string) => new Response("api"));
     const deps = {

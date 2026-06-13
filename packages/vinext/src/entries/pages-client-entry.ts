@@ -10,6 +10,7 @@
  * Extracted from index.ts.
  */
 import {
+  apiRouter,
   pagesRouter,
   patternToNextFormat as pagesPatternToNextFormat,
   type Route,
@@ -49,12 +50,15 @@ export async function generateClientEntry(
   } = {},
 ): Promise<string> {
   const pageRoutes = await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
+  const apiRoutes = await apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
 
   const appFilePath = findFileWithExts(pagesDir, "_app", fileMatcher);
   const hasApp = appFilePath !== null;
   const appPrefetchRoutes = options.appPrefetchRoutes ?? [];
-  const pagesPrefetchRoutes: VinextPagesLinkPrefetchRoute[] =
-    pageRoutes.map(toPagesLinkPrefetchRoute);
+  const pagesPrefetchRoutes: VinextPagesLinkPrefetchRoute[] = [
+    ...pageRoutes.map(toPagesLinkPrefetchRoute),
+    ...apiRoutes.map((route) => ({ ...toPagesLinkPrefetchRoute(route), documentOnly: true })),
+  ];
   const instrumentationClientPath = options.instrumentationClientPath ?? null;
 
   // Build a map of route pattern -> dynamic import.

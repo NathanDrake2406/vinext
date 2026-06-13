@@ -26,9 +26,9 @@ export function generateBrowserEntry(
 ): string {
   const entryPath = resolveRuntimeEntryModule("app-browser-entry");
   const navigationRuntimePath = resolveClientRuntimeModule("navigation-runtime");
-  const prefetchRoutes: VinextLinkPrefetchRoute[] = routes
-    .filter(isLinkPrefetchRoute)
-    .map(toLinkPrefetchRoute);
+  const prefetchRoutes: VinextLinkPrefetchRoute[] = routes.map((route) =>
+    isLinkPrefetchRoute(route) ? toLinkPrefetchRoute(route) : toDocumentOnlyAppRoute(route),
+  );
 
   return `import { registerNavigationRuntimeBootstrap } from ${JSON.stringify(navigationRuntimePath)};
 

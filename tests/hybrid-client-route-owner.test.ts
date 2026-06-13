@@ -121,6 +121,20 @@ describe("resolveHybridClientRouteOwner", () => {
     expect(resolveHybridClientRouteOwner("/api/test", "")).toBe("document");
   });
 
+  it("applies document ownership only after choosing the most specific route", () => {
+    installWindow({
+      app: [appRoute(["api", "settings"], false)],
+      pages: [{ ...pagesRoute(["api", ":slug"]), documentOnly: true }],
+    });
+    expect(resolveHybridClientRouteOwner("/api/settings", "")).toBe("app");
+
+    installWindow({
+      app: [documentRoute(["api", ":slug"])],
+      pages: [pagesRoute(["api", "settings"], false)],
+    });
+    expect(resolveHybridClientRouteOwner("/api/settings", "")).toBe("pages");
+  });
+
   it.each(["beforeFiles", "afterFiles", "fallback"] as const)(
     "resolves %s rewrites before choosing the route owner",
     (rewritePhase) => {
