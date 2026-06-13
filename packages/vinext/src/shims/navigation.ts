@@ -47,6 +47,7 @@ import { navigationPlanner } from "../server/navigation-planner.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
+import { markPprFallbackShellDynamicBoundary } from "./ppr-fallback-shell.js";
 import { AppRouterContext, type AppRouterInstance } from "./internal/app-router-context.js";
 import { getPagesNavigationContext as _getPagesNavigationContext } from "./internal/pages-router-accessor.js";
 import { retryScrollTo, scrollToHashTarget } from "./hash-scroll.js";
@@ -1468,6 +1469,7 @@ function subscribeToNavigation(cb: () => void): () => void {
  */
 export function usePathname(): string | null {
   if (isServer) {
+    markPprFallbackShellDynamicBoundary();
     // During SSR of "use client" components, the navigation context may not be set.
     // Return a safe fallback — the client will hydrate with the real value.
     const ctx = _getServerContext();
@@ -1526,6 +1528,7 @@ export function useParams<
   T extends Record<string, string | string[]> = Record<string, string | string[]>,
 >(): T | null {
   if (isServer) {
+    markPprFallbackShellDynamicBoundary();
     // During SSR for "use client" components, the navigation context may not be set.
     // getServerParamsSnapshot covers both App Router and Pages Router compat.
     return getServerParamsSnapshot() as T | null;
@@ -2168,6 +2171,9 @@ export function useSelectedLayoutSegment(parallelRoutesKey?: string): string | n
  * @param parallelRoutesKey - Which parallel route to read (default: "children")
  */
 export function useSelectedLayoutSegments(parallelRoutesKey?: string): string[] {
+  if (isServer) {
+    markPprFallbackShellDynamicBoundary();
+  }
   return useChildSegments(parallelRoutesKey);
 }
 

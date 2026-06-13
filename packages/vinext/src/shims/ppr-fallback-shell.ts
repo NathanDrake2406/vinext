@@ -196,6 +196,20 @@ export function createPprFallbackShellSuspensePromiseForState<T>(
   state: PprFallbackShellState,
   expression: string,
 ): Promise<T> {
+  markPprFallbackShellDynamicBoundaryForState(state);
+  if (state.phase === "final") {
+    scheduleAbortIfReady(state);
+  }
+  const promise = makeHangingPromise<T>(
+    state.abortController.signal,
+    state.routePattern,
+    expression,
+  );
+  promise.catch(noop);
+  return promise;
+}
+
+function markPprFallbackShellDynamicBoundaryForState(state: PprFallbackShellState): void {
   state.hasDynamicBoundary = true;
   for (const task of pprFallbackShellCacheTaskStackAls.getStore() ?? []) {
     ignoreCacheTask(state, task);
@@ -208,16 +222,12 @@ export function createPprFallbackShellSuspensePromiseForState<T>(
   // `waitForPprFallbackShellCacheReady` settle. The call is a no-op while
   // `pendingCacheTasks > 0`, so in-scope work still holds the shell open.
   scheduleCacheReadyIfSettled(state);
-  if (state.phase === "final") {
-    scheduleAbortIfReady(state);
-  }
-  const promise = makeHangingPromise<T>(
-    state.abortController.signal,
-    state.routePattern,
-    expression,
-  );
-  promise.catch(noop);
-  return promise;
+}
+
+export function markPprFallbackShellDynamicBoundary(): void {
+  const state = getPprFallbackShellState();
+  if (state === null || state.fallbackParamNames.size === 0) return;
+  markPprFallbackShellDynamicBoundaryForState(state);
 }
 
 export function createPprFallbackShellSuspensePromise<T>(expression: string): Promise<T> | null {
