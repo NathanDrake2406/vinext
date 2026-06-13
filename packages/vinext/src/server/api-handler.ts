@@ -194,6 +194,8 @@ function createEdgeApiRequest(
   // TLS-terminated. See: Finding F-PROD-7 in SECURITY-AUDIT-2026-05.md.
   const proto = resolveRequestProtocol(req);
   const host = resolveRequestHost(req, "localhost");
+  // Keep this in sync with pages-api-route.ts: preserve the visible incoming
+  // pathname while replacing only the resolved query and dynamic params.
   const requestUrl = new URL(req.url ?? url, `${proto}://${host}`);
   const basePath = nextConfig?.basePath;
   if (basePath && !hasBasePath(requestUrl.pathname, basePath)) {

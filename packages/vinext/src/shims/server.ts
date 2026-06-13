@@ -419,7 +419,8 @@ export class NextURL {
     // Build prefix: basePath + locale (skip defaultLocale — Next.js omits it)
     let prefix = this._basePath;
     const inner = this._url.pathname;
-    const isApiPath = inner === "/api" || inner.startsWith("/api/");
+    const innerLower = inner.toLowerCase();
+    const isApiPath = innerLower === "/api" || innerLower.startsWith("/api/");
     if (!isApiPath && this._locale && this._locale !== this._defaultLocale) {
       prefix += "/" + this._locale;
     }

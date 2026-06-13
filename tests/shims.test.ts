@@ -8728,6 +8728,12 @@ describe("NextURL basePath and locale properties", () => {
     expect(url.clone().href).toBe("https://example.com/api/example");
   });
 
+  it("detects API paths case-insensitively when formatting locale URLs", async () => {
+    const { NextURL } = await import("../packages/vinext/src/shims/server.js");
+    const url = new NextURL("https://example.com/fr/API/example", undefined, i18nConfig);
+    expect(url.href).toBe("https://example.com/API/example");
+  });
+
   it("re-analyzes domain locale after href reassignment", async () => {
     const { NextURL } = await import("../packages/vinext/src/shims/server.js");
     const url = new NextURL("https://example.com/about", undefined, {
