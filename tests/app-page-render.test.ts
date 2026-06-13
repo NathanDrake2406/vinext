@@ -323,6 +323,32 @@ describe("clearRequestContext timing — issue #660", () => {
   });
 });
 
+describe("SSR shell error recovery", () => {
+  it("returns an uncached 500 response for a recovered dynamic shell error", async () => {
+    const common = createCommonOptions();
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      isProduction: true,
+      revalidateSeconds: 30,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          return {
+            htmlStream: createStream(['<html id="__next_error__"></html>']),
+            metadataReady: Promise.resolve(),
+            capturedRscData: null,
+            shellErrorRecovered: true,
+          };
+        },
+      }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    await expect(response.text()).resolves.toContain("__next_error__");
+    expect(common.isrSet).not.toHaveBeenCalled();
+  });
+});
+
 describe("form state rendering", () => {
   it("passes action form state to SSR and disables HTML cache writes", async () => {
     const common = createCommonOptions();

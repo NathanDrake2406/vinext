@@ -623,6 +623,7 @@ export async function handleSsr(
 
         let renderedHtmlStream: Awaited<ReturnType<typeof renderToReadableStream>> | undefined;
         let htmlStream: ReadableStream<Uint8Array>;
+        let shellErrorRecovered = false;
         try {
           renderedHtmlStream = await renderToReadableStream(ssrRoot, ssrRenderOptions);
           if (options?.waitForAllReady === true) {
@@ -646,10 +647,12 @@ export async function handleSsr(
           // status and ISR eligibility rather than treating it as a 500.
           if (
             options?.fallbackToErrorDocumentOnShellError !== true ||
+            options?.waitForAllReady === true ||
             typeof (error as { digest?: unknown } | null)?.digest === "string"
           ) {
             throw error;
           }
+          shellErrorRecovered = true;
           htmlStream = renderSsrErrorDocumentShell(bootstrapModuleUrl, options?.scriptNonce);
         }
 
@@ -670,6 +673,7 @@ export async function handleSsr(
 
         return {
           htmlStream: finalStream,
+          shellErrorRecovered,
           // `metadataReady` resolves eagerly precisely *because* `allReady` was
           // already awaited above when `waitForAllReady` is set (the prerender
           // path). At that point the React tree is fully rendered, so all

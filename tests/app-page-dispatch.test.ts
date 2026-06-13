@@ -1351,7 +1351,7 @@ describe("app page dispatch", () => {
     await scheduledRender();
 
     expect(capturedWaitForAllReady).toBe(true);
-    expect(capturedFallbackToErrorDocument).toBe(true);
+    expect(capturedFallbackToErrorDocument).toBeUndefined();
     expect(isrSet).toHaveBeenCalled();
   });
 

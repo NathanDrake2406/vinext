@@ -938,6 +938,20 @@ export async function renderAppPageLifecycle(
     responseKind: "html",
   });
 
+  if (htmlRender.shellErrorRecovered) {
+    return buildAppPageHtmlResponse(safeHtmlStream, {
+      draftCookie,
+      linkHeader,
+      isEdgeRuntime: options.isEdgeRuntime,
+      middlewareContext: {
+        headers: options.middlewareContext.headers,
+        status: 500,
+      },
+      policy: { cacheControl: NO_STORE_CACHE_CONTROL },
+      timing: htmlResponseTiming,
+    });
+  }
+
   const shouldSpeculativelyWriteCache =
     options.isProduction &&
     shouldCaptureRscForCacheMetadata &&

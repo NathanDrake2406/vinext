@@ -22,6 +22,7 @@ export type AppSsrRenderResult = {
   htmlStream: ReadableStream<Uint8Array>;
   metadataReady: Promise<void>;
   capturedRscData: Promise<ArrayBuffer> | null;
+  shellErrorRecovered?: boolean;
   /**
    * Preload `Link` header value emitted by React during SSR (via `onHeaders`),
    * already capped to `reactMaxHeadersLength`. Empty/undefined when React
@@ -50,6 +51,7 @@ function normalizeAppSsrRenderResult(
     htmlStream: raw,
     metadataReady: resolvedMetadataReady,
     capturedRscData: fallbackCapturedRscData,
+    shellErrorRecovered: false,
   };
 }
 
@@ -189,6 +191,7 @@ type AppPageHtmlStreamRecoveryResult = {
   response: Response | null;
   metadataReady: Promise<void>;
   capturedRscData: Promise<ArrayBuffer> | null;
+  shellErrorRecovered: boolean;
   /** React-emitted preload `Link` header (already capped). */
   linkHeader?: string;
 };
@@ -237,7 +240,8 @@ export async function renderAppPageHtmlStream(
     initialDevServerError: options.initialDevServerError,
     // Only when the caller affirmatively knows there is no custom
     // global-error.tsx; undefined (unknown) keeps reject semantics.
-    fallbackToErrorDocumentOnShellError: options.hasCustomGlobalError === false,
+    fallbackToErrorDocumentOnShellError:
+      options.waitForAllReady !== true && options.hasCustomGlobalError === false,
   };
 
   const rawResult = await options.ssrHandler.handleSsr(
@@ -342,7 +346,7 @@ export async function renderAppPageHtmlStreamWithRecovery<TSpecialError>(
 ): Promise<AppPageHtmlStreamRecoveryResult> {
   try {
     const rawResult = await options.renderHtmlStream();
-    const { htmlStream, metadataReady, capturedRscData, linkHeader } =
+    const { htmlStream, metadataReady, capturedRscData, linkHeader, shellErrorRecovered } =
       normalizeAppSsrRenderResult(rawResult);
     options.onShellRendered?.();
     return {
@@ -350,6 +354,7 @@ export async function renderAppPageHtmlStreamWithRecovery<TSpecialError>(
       response: null,
       metadataReady,
       capturedRscData,
+      shellErrorRecovered: shellErrorRecovered === true,
       linkHeader,
     };
   } catch (error) {
@@ -360,6 +365,7 @@ export async function renderAppPageHtmlStreamWithRecovery<TSpecialError>(
         response: await options.renderSpecialErrorResponse(specialError),
         metadataReady: resolvedMetadataReady,
         capturedRscData: null,
+        shellErrorRecovered: false,
       };
     }
 
@@ -370,6 +376,7 @@ export async function renderAppPageHtmlStreamWithRecovery<TSpecialError>(
         response: boundaryResponse,
         metadataReady: resolvedMetadataReady,
         capturedRscData: null,
+        shellErrorRecovered: false,
       };
     }
 
