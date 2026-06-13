@@ -442,6 +442,9 @@ export async function runPagesRequest(
   if (apiLookupPathname.startsWith("/api/") || apiLookupPathname === "/api") {
     if (typeof deps.handleApi === "function") {
       let apiRequest = request;
+      // Prod re-adds basePath only when the original request carried it.
+      // Dev reconstructs Vite's stripped basePath in api-handler.ts; the paths
+      // differ only for an out-of-basePath request config-rewritten into an API.
       if (basePath && hadBasePath) {
         const apiRequestUrl = new URL(request.url);
         apiRequestUrl.pathname = addBasePathToPathname(apiRequestUrl.pathname, basePath);
