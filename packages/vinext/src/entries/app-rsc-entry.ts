@@ -255,9 +255,14 @@ import {
   loadServerAction,
   createTemporaryReferenceSet,
 } from "@vitejs/plugin-rsc/rsc";
-import { createRscRenderer } from ${JSON.stringify(rscStreamHintsPath)};
+import { createClientManifest as _createClientManifest } from "@vitejs/plugin-rsc/core/rsc";
+import { prerender as _prerender } from "@vitejs/plugin-rsc/vendor/react-server-dom/static.edge";
+import { createRscPrerenderer, createRscRenderer } from ${JSON.stringify(rscStreamHintsPath)};
 
 const renderToReadableStream = createRscRenderer(_renderToReadableStream);
+const prerenderToReadableStream = createRscPrerenderer(async (model, options) =>
+  _prerender(model, _createClientManifest(), options),
+);
 import { createElement } from "react";
 import { getNavigationContext as _getNavigationContext } from "next/navigation";
 import { configureMemoryCacheHandler as __configureMemoryCacheHandler } from "next/cache";
@@ -776,6 +781,7 @@ export default __createAppRscHandler({
         return __fallbackRenderer.renderHttpAccessFallback(route, statusCode, isRscRequest, request, opts, scriptNonce, currentMiddlewareContext, { isEdgeRuntime: __isEdgeRuntime(__segmentConfig.runtime) });
       },
       renderToReadableStream,
+      prerenderToReadableStream,
       request,
       revalidateSeconds: __segmentConfig.revalidateSeconds,
       resolveRouteFetchCacheMode(targetRoute) {

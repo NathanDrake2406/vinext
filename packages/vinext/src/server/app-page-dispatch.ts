@@ -21,6 +21,7 @@ import {
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { createRequestContext, runWithRequestContext } from "vinext/shims/unified-request-context";
 import {
+  beginPprFallbackShellFinalRender,
   createPprFallbackShellState,
   getPprFallbackShellState,
   runWithPprFallbackShellState,
@@ -305,8 +306,12 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   ) => Promise<Response | null>;
   renderToReadableStream: (
     element: AppPageRenderableElement,
-    options: { onError: AppPageBoundaryOnError },
+    options: { onError: AppPageBoundaryOnError; signal?: AbortSignal },
   ) => ReadableStream<Uint8Array>;
+  prerenderToReadableStream?: (
+    element: AppPageRenderableElement,
+    options: { onError: AppPageBoundaryOnError; signal?: AbortSignal },
+  ) => Promise<{ prelude: ReadableStream<Uint8Array> }>;
   request: Request;
   revalidateSeconds: number | null;
   resolveRouteFetchCacheMode?: (route: TRoute) => FetchCacheMode | null;
@@ -1007,6 +1012,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     route,
     options.debugClassification,
   );
+  const activeFallbackShellState = getPprFallbackShellState();
+  const pprFallbackShellSignal = activeFallbackShellState?.abortController.signal;
+  const pprFallbackShellReactSignal = activeFallbackShellState?.reactAbortController.signal;
 
   return renderAppPageLifecycle({
     basePath: options.basePath,
@@ -1063,6 +1071,13 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     middlewareContext: options.middlewareContext,
     navigationParams,
     params: options.params,
+    pprFallbackShellSignal,
+    pprFallbackShellReactSignal,
+    abortPprFallbackShell: activeFallbackShellState
+      ? () => {
+          beginPprFallbackShellFinalRender(activeFallbackShellState);
+        }
+      : undefined,
     layoutParamAccess,
     rootParams: options.rootParams,
     peekRenderObservationState() {
@@ -1118,6 +1133,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       return renderPageSpecialError(options, specialError);
     },
     renderToReadableStream: options.renderToReadableStream,
+    prerenderToReadableStream: options.prerenderToReadableStream,
     routePattern: route.pattern,
     runWithSuppressedHookWarning(probe) {
       return options.runWithSuppressedHookWarning(probe);

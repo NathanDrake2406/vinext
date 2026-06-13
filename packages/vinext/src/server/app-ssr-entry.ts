@@ -48,10 +48,7 @@ import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/s
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
-import {
-  getPprFallbackShellState,
-  isPprFallbackShellAbortError,
-} from "vinext/shims/ppr-fallback-shell";
+import { isPprFallbackShellAbortError } from "vinext/shims/ppr-fallback-shell";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
 /**
@@ -357,6 +354,7 @@ export async function handleSsr(
     sideStream?: ReadableStream<Uint8Array>;
     /** Out-parameter: filled with accumulated raw RSC bytes when sideStream is consumed. */
     capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
+    pprFallbackShellSignal?: AbortSignal;
     formState?: ReactFormState | null;
     basePath?: string;
     /**
@@ -520,7 +518,7 @@ export async function handleSsr(
           basePath: options?.basePath,
         });
 
-        const fallbackShellState = getPprFallbackShellState();
+        const pprFallbackShellSignal = options?.pprFallbackShellSignal;
         // React emits a preload `Link` header (capped to `maxHeadersLength`)
         // via `onHeaders`. It fires before the shell resolves, so `linkHeader`
         // is populated by the time `renderToReadableStream` resolves below.
@@ -561,7 +559,7 @@ export async function handleSsr(
             : undefined,
           maxHeadersLength: captureHeaders ? maxHeadersLength : undefined,
           onError(error: unknown) {
-            if (fallbackShellState && isPprFallbackShellAbortError(error)) {
+            if (pprFallbackShellSignal && isPprFallbackShellAbortError(error)) {
               return undefined;
             }
 
@@ -582,14 +580,15 @@ export async function handleSsr(
         };
 
         let htmlStream: ReadableStream<Uint8Array>;
-        if (fallbackShellState) {
+        if (pprFallbackShellSignal) {
           const prerender = await loadStaticPrerender();
-          htmlStream = (
-            await prerender(ssrRoot, {
-              ...renderOptions,
-              signal: fallbackShellState.abortController.signal,
-            })
-          ).prelude;
+          const htmlAbortController = new AbortController();
+          const pendingHtml = prerender(ssrRoot, {
+            ...renderOptions,
+            signal: htmlAbortController.signal,
+          });
+          setTimeout(() => htmlAbortController.abort(), 0);
+          htmlStream = (await pendingHtml).prelude;
         } else {
           const streamingHtmlStream = await renderToReadableStream(ssrRoot, {
             ...renderOptions,

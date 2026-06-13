@@ -57,6 +57,14 @@ import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import { createAppPprFallbackShells } from "../server/app-ppr-fallback-shell.js";
 export { readPrerenderSecret } from "./server-manifest.js";
 
+const EXPERIMENTAL_PPR_FALLBACK_SHELLS_ENV = "__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS";
+
+export function isExperimentalPprFallbackShellGenerationEnabled(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  return env[EXPERIMENTAL_PPR_FALLBACK_SHELLS_ENV] === "1";
+}
+
 function getErrorMessageWithStack(err: Error): string {
   // Include the full stack trace for sourcemap-aware error reporting during
   // prerender. When Node.js has sourcemaps enabled via process.setSourceMapsEnabled(true)
@@ -1181,7 +1189,14 @@ export async function prerenderApp({
               isSpeculative: false,
             });
 
-            if (config.cacheComponents === true) {
+            // These artifacts contain a partial HTML/RSC shell that requires
+            // request-time resume. Keep generation internal-only until vinext
+            // implements that resume lifecycle; serving one as complete HTML
+            // causes hydration to fall into the global error boundary.
+            if (
+              config.cacheComponents === true &&
+              isExperimentalPprFallbackShellGenerationEnabled()
+            ) {
               for (const fallbackShell of createAppPprFallbackShells(route, params)) {
                 if (queuedRouteUrls.has(fallbackShell.pathname)) continue;
                 queuedRouteUrls.add(fallbackShell.pathname);

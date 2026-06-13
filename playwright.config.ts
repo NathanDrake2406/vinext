@@ -227,6 +227,18 @@ const projectServers = {
       timeout: 60_000,
     },
   },
+  "ppr-impact-demo": {
+    testDir: "./tests/e2e/ppr-impact-demo",
+    use: { baseURL: "http://localhost:4186" },
+    server: {
+      command:
+        "npx vp run vinext#build && node ../../packages/vinext/dist/cli.js build --prerender-all && node ../../packages/vinext/dist/cli.js start --port 4186",
+      cwd: "./examples/ppr-impact-demo",
+      port: 4186,
+      reuseExistingServer: !process.env.CI,
+      timeout: 90_000,
+    },
+  },
 };
 
 type ProjectName = keyof typeof projectServers;

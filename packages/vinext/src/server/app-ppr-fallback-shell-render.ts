@@ -20,12 +20,13 @@ export async function warmPprFallbackShellCaches(options: {
   onError: AppPageBoundaryOnError;
   renderToReadableStream: (
     element: AppPageRenderableElement,
-    options: { onError: AppPageBoundaryOnError },
+    options: { onError: AppPageBoundaryOnError; signal?: AbortSignal },
   ) => ReadableStream<Uint8Array>;
   state: PprFallbackShellState;
 }): Promise<void> {
   let warmupError: unknown = null;
   const warmupStream = options.renderToReadableStream(options.element, {
+    signal: options.state.abortController.signal,
     onError(error, requestInfo, errorContext) {
       if (options.state.abortController.signal.aborted || isPprFallbackShellAbortError(error)) {
         return undefined;
