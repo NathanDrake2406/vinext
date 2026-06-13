@@ -54,6 +54,8 @@ function getNavigationRuntimeRscBootstrap(): NavigationRuntimeRscBootstrap | nul
  * immediately instead of polling with setTimeout.
  */
 export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
+  let cancelStream: (() => void) | undefined;
+
   return new ReadableStream<Uint8Array>({
     start(controller) {
       const vinext = getVinextBrowserGlobal();
@@ -95,6 +97,12 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
           closed = true;
           cancelPendingDocumentCompletionCheck();
           controller.error(createUnexpectedRscStreamCloseError());
+        }
+      };
+      cancelStream = () => {
+        if (!closed) {
+          closed = true;
+          cancelPendingDocumentCompletionCheck();
         }
       };
 
@@ -161,6 +169,9 @@ export function createProgressiveRscStream(): ReadableStream<Uint8Array> {
           cancelDocumentCompletionCheck = () => clearTimeout(timeoutId);
         }
       }
+    },
+    cancel() {
+      cancelStream?.();
     },
   });
 }

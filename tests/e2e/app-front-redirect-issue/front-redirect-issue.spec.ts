@@ -7,15 +7,27 @@ const BASE = "http://localhost:4186";
 
 test.describe("app dir - front redirect issue", () => {
   test("should redirect with a single bootstrap hydration", async ({ page }) => {
+    const scriptRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.resourceType() === "script") {
+        scriptRequests.push(request.url());
+      }
+    });
+
     await page.goto(`${BASE}/vercel-user`);
 
     await expect(page.locator("#home-page h1")).toHaveText("Hello!", { timeout: 10_000 });
     expect(page.url()).toBe(`${BASE}/vercel-user`);
 
-    // Assert that only one module graph won the bootstrap claim and completed hydration.
-    // If the bug regresses (e.g. deployment-id query on the ESM bootstrap URL creates a
-    // duplicate module identity), the second instance would find __VINEXT_RSC_BOOTSTRAP_STATE__
-    // already set and bail out, leaving it at "starting" or undefined — not "hydrated".
+    const bootstrapSrc = await page.locator('script[type="module"][src]').getAttribute("src");
+    expect(bootstrapSrc).toBeTruthy();
+    const bootstrapUrl = new URL(bootstrapSrc ?? "", BASE);
+    const bootstrapRequests = scriptRequests.filter(
+      (requestUrl) => new URL(requestUrl).pathname === bootstrapUrl.pathname,
+    );
+    expect(bootstrapRequests).toHaveLength(1);
+    expect(new URL(bootstrapRequests[0] ?? BASE).searchParams.has("dpl")).toBe(false);
+
     const bootstrapState = await page.evaluate(() => window.__VINEXT_RSC_BOOTSTRAP_STATE__);
     expect(bootstrapState).toBe("hydrated");
 

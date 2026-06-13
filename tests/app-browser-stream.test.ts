@@ -187,6 +187,29 @@ describe("App browser stream helpers", () => {
     expect(Reflect.has(runtimeWindow, NAVIGATION_RUNTIME_KEY)).toBe(true);
   });
 
+  it("ignores done markers and chunks after the stream is cancelled", async () => {
+    const removeEventListener = vi.fn();
+    setGlobalDocument({
+      readyState: "loading",
+      addEventListener: vi.fn(),
+      removeEventListener,
+    } as unknown as Document);
+
+    vinext.__VINEXT_RSC_CHUNKS__ = [];
+    vinext.__VINEXT_RSC_DONE__ = false;
+
+    const reader = createProgressiveRscStream().getReader();
+    await reader.cancel();
+
+    expect(() => {
+      vinext.__VINEXT_RSC_DONE__ = true;
+      vinext.__VINEXT_RSC_CHUNKS__!.push("late");
+    }).not.toThrow();
+    await Promise.resolve();
+
+    expect(removeEventListener).toHaveBeenCalledWith("DOMContentLoaded", expect.any(Function));
+  });
+
   it("streams every chunk when push receives multiple arguments", async () => {
     setGlobalDocument({
       readyState: "loading",
