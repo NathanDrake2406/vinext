@@ -96,6 +96,11 @@ function buildPagesApiQuery(url: string, params: PagesRequestQuery): PagesReques
   return mergeRouteParamsIntoQuery(parseQueryString(url), params);
 }
 
+function createEdgeApiRequest(request: Request, url: string): Request {
+  const resolvedUrl = new URL(url, request.url).toString();
+  return resolvedUrl === request.url ? request : new Request(resolvedUrl, request);
+}
+
 function isEdgeApiRouteModule(
   module: PagesApiRouteModule,
 ): module is PagesApiRouteModule & { default: PagesEdgeApiRouteHandler } {
@@ -127,7 +132,7 @@ async function _handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promis
       // Next.js wraps the incoming Request in a NextRequest before invoking
       // edge API handlers, so handlers can use `req.nextUrl.searchParams`,
       // `req.cookies`, etc. (Cf. NextRequestHint in next/src/server/web/adapter.ts.)
-      const nextRequest = new NextRequest(options.request);
+      const nextRequest = new NextRequest(createEdgeApiRequest(options.request, options.url));
       const response = await route.module.default(nextRequest);
       if (response instanceof Response) {
         return response;
