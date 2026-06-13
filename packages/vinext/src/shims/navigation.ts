@@ -55,7 +55,6 @@ import {
   clearAppRouterScrollIntent,
   consumeAppRouterScrollIntent,
   getPendingAppRouterScrollIntent,
-  hasNewAppRouterHoistedHeadNode,
   type AppRouterScrollIntent,
 } from "./app-router-scroll-state.js";
 
@@ -1699,7 +1698,7 @@ export function applyAppRouterScrollFallback(intent: AppRouterScrollIntent): voi
   // behavior by synthesizing a document-top scroll. The flag is per-intent: a
   // hoisted stylesheet merely present in <head> for an unrelated navigation
   // does not suppress this fallback.
-  if (intent.targetHoistedInHead || hasNewAppRouterHoistedHeadNode(intent)) {
+  if (intent.targetHoistedInHead) {
     return;
   }
 

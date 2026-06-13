@@ -1,7 +1,6 @@
 export type AppRouterScrollIntent = Readonly<{
   commitId: number | null;
   hash: string | null;
-  hoistedHeadSignatures: readonly string[];
   id: number;
   // Set by the committed `AppRouterScrollTarget` when this navigation's first
   // route DOM node was a React-hoisted resource in `<head>` (e.g. a
@@ -24,8 +23,6 @@ export type AppRouterScrollIntent = Readonly<{
 // Store the single pending intent and the id counter on a Symbol.for global so
 // every instance shares one slot, matching the rest of the navigation state.
 const _SCROLL_INTENT_KEY = Symbol.for("vinext.appRouterScrollIntent");
-const hoistedHeadElementSelector =
-  "style[href][precedence],style[href][data-precedence],style[data-href][precedence],style[data-href][data-precedence],link[href][precedence],link[href][data-precedence]";
 
 type ScrollIntentStore = {
   nextId: number;
@@ -42,37 +39,12 @@ function getScrollIntentStore(): ScrollIntentStore {
   return globalState[_SCROLL_INTENT_KEY]!;
 }
 
-function createHoistedHeadSignature(element: Element): string {
-  return [
-    element.localName,
-    element.getAttribute("href") ?? "",
-    element.getAttribute("data-href") ?? "",
-    element.getAttribute("precedence") ?? "",
-    element.getAttribute("data-precedence") ?? "",
-  ].join("\0");
-}
-
-export function readAppRouterHoistedHeadSignatures(
-  doc: Pick<Document, "head"> | undefined = typeof document === "undefined" ? undefined : document,
-): readonly string[] {
-  if (doc?.head == null) return [];
-  return Array.from(doc.head.querySelectorAll(hoistedHeadElementSelector))
-    .map(createHoistedHeadSignature)
-    .sort();
-}
-
-export function hasNewAppRouterHoistedHeadNode(intent: AppRouterScrollIntent): boolean {
-  const previous = new Set(intent.hoistedHeadSignatures);
-  return readAppRouterHoistedHeadSignatures().some((signature) => !previous.has(signature));
-}
-
 export function beginAppRouterScrollIntent(hash: string | null): AppRouterScrollIntent {
   const store = getScrollIntentStore();
   store.nextId += 1;
   const intent = {
     commitId: null,
     hash,
-    hoistedHeadSignatures: readAppRouterHoistedHeadSignatures(),
     id: store.nextId,
     targetHoistedInHead: false,
   };

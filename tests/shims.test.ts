@@ -12439,40 +12439,6 @@ describe("next/amp shim", () => {
 });
 
 describe("app router scroll intent state", () => {
-  it("detects only precedence resources added after navigation begins", async () => {
-    const {
-      beginAppRouterScrollIntent,
-      clearAppRouterScrollIntent,
-      hasNewAppRouterHoistedHeadNode,
-    } = await import("../packages/vinext/src/shims/app-router-scroll-state.js");
-    const originalDocument = globalThis.document;
-    const elements: Element[] = [];
-    Object.defineProperty(globalThis, "document", {
-      configurable: true,
-      value: { head: { querySelectorAll: () => elements } },
-    });
-
-    try {
-      const element = (href: string) =>
-        ({
-          localName: "style",
-          getAttribute: (name: string) =>
-            name === "data-href" ? href : name === "data-precedence" ? "alpha" : null,
-        }) as unknown as Element;
-      elements.push(element("existing"));
-      const intent = beginAppRouterScrollIntent(null);
-      expect(hasNewAppRouterHoistedHeadNode(intent)).toBe(false);
-      elements.push(element("navigation"));
-      expect(hasNewAppRouterHoistedHeadNode(intent)).toBe(true);
-    } finally {
-      clearAppRouterScrollIntent();
-      Object.defineProperty(globalThis, "document", {
-        configurable: true,
-        value: originalDocument,
-      });
-    }
-  });
-
   it("clears a staged scroll intent when a same-document navigation supersedes it", async () => {
     const {
       beginAppRouterScrollIntent,
@@ -12702,10 +12668,7 @@ describe("app router scroll document-top fallback", () => {
     // hoisted stylesheet in <head> for some unrelated reason must not suppress
     // it — the suppression decision is per-intent, not a global head scan.
     clearAppRouterScrollIntent();
-    const intent = {
-      ...beginAppRouterScrollIntent(null),
-      hoistedHeadSignatures: ["link\0\0\0\0"],
-    };
+    const intent = beginAppRouterScrollIntent(null);
     expect(intent.targetHoistedInHead).toBe(false);
 
     withScrollFallbackEnv(headWithHoistedStylesheet, (documentElement) => {
@@ -12721,7 +12684,6 @@ describe("app router scroll document-top fallback", () => {
     const intent = {
       commitId: 1,
       hash: null,
-      hoistedHeadSignatures: [],
       id: 1,
       targetHoistedInHead: true,
     };

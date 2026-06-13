@@ -47,6 +47,8 @@ export type PendingBrowserRouterState = {
 export type NavigationPayloadOutcome = "committed" | "no-commit" | "hard-navigate";
 type HardNavigationMode = "assign" | "replace";
 
+type BrowserNavigationCommitEffect = { (): void; discard?: () => void };
+
 type BrowserNavigationCommitEffectFactory = (options: {
   bfcacheIds: Readonly<Record<string, string>>;
   href: string;
@@ -55,7 +57,7 @@ type BrowserNavigationCommitEffectFactory = (options: {
   params: Record<string, string | string[]>;
   previousNextUrl: string | null;
   targetHistoryIndex?: number | null;
-}) => () => void;
+}) => BrowserNavigationCommitEffect;
 
 type BrowserRouterStateRef = {
   current: AppRouterState;
@@ -269,7 +271,7 @@ export function createAppBrowserNavigationController(
   let nextNavigationRenderId = 0;
   let activeNavigationId = 0;
   const pendingNavigationCommits = new Map<number, () => void>();
-  const pendingNavigationPrePaintEffects = new Map<number, () => void>();
+  const pendingNavigationPrePaintEffects = new Map<number, BrowserNavigationCommitEffect>();
 
   let setBrowserRouterState: Dispatch<AppRouterState | Promise<AppRouterState>> | null = null;
   let browserRouterStateRef: BrowserRouterStateRef | null = null;
@@ -431,6 +433,7 @@ export function createAppBrowserNavigationController(
       if (id === upToRenderId) {
         effect();
       } else {
+        effect.discard?.();
         // Superseded navigations still need to balance the snapshot counter.
         commitClientNavigationStateImpl(undefined, { releaseSnapshot: true });
       }
@@ -728,7 +731,9 @@ export function createAppBrowserNavigationController(
         options.visibleCommitMode ?? "transition",
       );
     } catch (error) {
+      const discardedEffect = pendingNavigationPrePaintEffects.get(renderId);
       pendingNavigationPrePaintEffects.delete(renderId);
+      discardedEffect?.discard?.();
       pendingNavigationCommits.delete(renderId);
       if (snapshotActivated) {
         commitClientNavigationStateImpl(options.navId);

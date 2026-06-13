@@ -138,6 +138,7 @@ import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
+  createNavigationErrorRecoveryTarget,
   createOnUncaughtError,
   createProdOnCaughtError,
   prodOnRecoverableError,
@@ -304,7 +305,7 @@ let browserRouterStateHasEverCommitted = false;
 // can land the browser on the URL the user was actually navigating to, instead
 // of stranding them on the previous URL with a blank page. Cleared once the
 // commit effect runs (URL update succeeded) or the navigation is superseded.
-let pendingNavigationRecoveryHref: string | null = null;
+const navigationErrorRecoveryTarget = createNavigationErrorRecoveryTarget();
 const mpaNavigationScheduler = new AppBrowserMpaNavigationScheduler();
 const unresolvedMpaNavigation = new Promise<never>(() => {});
 const RSC_HMR_SETTLE_DELAY_MS = 150;
@@ -545,7 +546,7 @@ function createNavigationCommitEffect(options: {
     });
 
     // URL has been updated; the recovery hard-nav target is no longer needed.
-    pendingNavigationRecoveryHref = null;
+    navigationErrorRecoveryTarget.clear(navId);
     commitClientNavigationState(navId);
   };
 }
@@ -573,8 +574,11 @@ async function renderNavigationPayload(
     return await browserNavigationController.renderNavigationPayload({
       actionType,
       createNavigationCommitEffect: (options) => {
-        pendingNavigationRecoveryHref = options.href;
-        return createNavigationCommitEffect(options);
+        navigationErrorRecoveryTarget.stage(options.href, options.navId);
+        const effect: (() => void) & { discard?: () => void } =
+          createNavigationCommitEffect(options);
+        effect.discard = () => navigationErrorRecoveryTarget.clear(options.navId);
+        return effect;
       },
       historyUpdateMode,
       navigationSnapshot,
@@ -593,7 +597,7 @@ async function renderNavigationPayload(
       visibleCommitMode,
     });
   } catch (error) {
-    pendingNavigationRecoveryHref = null;
+    navigationErrorRecoveryTarget.clear(navId);
     throw error;
   }
 }
@@ -1585,7 +1589,11 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   // user lands on a renderable URL with the actual error UI.
   const onUncaughtError = import.meta.env.DEV
     ? devOnUncaughtError
-    : createOnUncaughtError(() => pendingNavigationRecoveryHref);
+    : createOnUncaughtError(() =>
+        navigationErrorRecoveryTarget.getHref((navId) =>
+          browserNavigationController.isCurrentNavigation(navId),
+        ),
+      );
   const formState = consumeInitialFormState(getVinextBrowserGlobal());
   const hydrateRootOptions = import.meta.env.DEV
     ? createVinextHydrateRootOptions({

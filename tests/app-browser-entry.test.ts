@@ -1,6 +1,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  createNavigationErrorRecoveryTarget,
   createOnUncaughtError,
   createProdOnCaughtError,
   prodOnCaughtError,
@@ -2630,7 +2631,7 @@ describe("app browser navigation controller", () => {
       void controller.renderNavigationPayload({
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
-        createNavigationCommitEffect: () => vi.fn(),
+        createNavigationCommitEffect: () => () => {},
         historyUpdateMode: "push",
         navigationSnapshot: stateRef.current.navigationSnapshot,
         nextElements,
@@ -2683,7 +2684,7 @@ describe("app browser navigation controller", () => {
       const result = controller.renderNavigationPayload({
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
-        createNavigationCommitEffect: () => vi.fn(),
+        createNavigationCommitEffect: () => () => {},
         historyUpdateMode: "push",
         navigationSnapshot: createClientNavigationRenderSnapshot(
           "https://example.com/marketing",
@@ -2931,6 +2932,71 @@ describe("app browser navigation controller", () => {
         Promise.resolve().then(() => false),
       ]);
       expect(settled).toBe(false);
+    } finally {
+      detach();
+    }
+  });
+
+  it("discards superseded navigation pre-paint effects", async () => {
+    const { controller, detach, stateRef } = createControllerHarness();
+    const discarded = vi.fn();
+
+    try {
+      const firstNavId = controller.beginNavigation();
+      const firstEffect = Object.assign(vi.fn(), { discard: discarded });
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => firstEffect,
+        historyUpdateMode: "push",
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements: Promise.resolve(
+          createResolvedElements("route:/first", "/", null, {
+            "page:/first": React.createElement("main", null, "first"),
+          }),
+        ),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/first",
+        navId: firstNavId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const secondNavId = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: "push",
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements: Promise.resolve(
+          createResolvedElements("route:/second", "/", null, {
+            "page:/second": React.createElement("main", null, "second"),
+          }),
+        ),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/second",
+        navId: secondNavId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      controller.drainPrePaintEffects(Number.MAX_SAFE_INTEGER);
+
+      expect(discarded).toHaveBeenCalledOnce();
+      expect(firstEffect).not.toHaveBeenCalled();
     } finally {
       detach();
     }
@@ -6673,6 +6739,24 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
     } finally {
       consoleSpy.mockRestore();
     }
+  });
+});
+
+describe("navigation error recovery target", () => {
+  it("drops a superseded navigation target before an unrelated root error", () => {
+    const recovery = createNavigationErrorRecoveryTarget();
+    recovery.stage("/superseded", 1);
+
+    expect(recovery.getHref((navId) => navId === 2)).toBeNull();
+    expect(recovery.getHref(() => true)).toBeNull();
+  });
+
+  it("clears only the matching navigation target", () => {
+    const recovery = createNavigationErrorRecoveryTarget();
+    recovery.stage("/latest", 2);
+    recovery.clear(1);
+
+    expect(recovery.getHref((navId) => navId === 2)).toBe("/latest");
   });
 });
 
