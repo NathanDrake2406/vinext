@@ -1,5 +1,6 @@
 import "./server-globals.js";
 import type { Route } from "../routing/pages-router.js";
+import type { NextI18nConfig } from "../config/next-config.js";
 import {
   mergeRouteParamsIntoQuery,
   parseQueryString,
@@ -94,6 +95,11 @@ type HandlePagesApiRouteOptions = {
   reportRequestError?: (error: Error, routePattern: string) => void | Promise<void>;
   request: Request;
   url: string;
+  nextConfig?: {
+    basePath?: string;
+    i18n?: NextI18nConfig | null;
+    trailingSlash?: boolean;
+  };
 };
 
 function buildPagesApiQuery(url: string, params: PagesRequestQuery): PagesRequestQuery {
@@ -140,6 +146,15 @@ async function _handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promis
       // `req.cookies`, etc. (Cf. NextRequestHint in next/src/server/web/adapter.ts.)
       const nextRequest = new NextRequest(
         createEdgeApiRequest(options.request, options.url, params),
+        options.nextConfig
+          ? {
+              nextConfig: {
+                basePath: options.nextConfig.basePath,
+                i18n: options.nextConfig.i18n ?? undefined,
+                trailingSlash: options.nextConfig.trailingSlash,
+              },
+            }
+          : undefined,
       );
       const response = await route.module.default(nextRequest);
       if (response instanceof Response) {

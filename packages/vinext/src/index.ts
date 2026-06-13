@@ -3769,6 +3769,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   res,
                   pipelineResult.apiUrl,
                   apiRoutes,
+                  {
+                    basePath: nextConfig?.basePath,
+                    i18n: nextConfig?.i18n,
+                    trailingSlash: nextConfig?.trailingSlash,
+                  },
                 );
                 if (handled) return;
 

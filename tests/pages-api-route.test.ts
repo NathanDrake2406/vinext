@@ -376,6 +376,39 @@ describe("pages api route", () => {
     });
   });
 
+  it("applies basePath and i18n config to edge API nextUrl", async () => {
+    const response = await handlePagesApiRoute({
+      match: createMatch(
+        (request: Request) => {
+          const nextUrl = (
+            request as Request & {
+              nextUrl?: { basePath: string; locale: string; pathname: string };
+            }
+          ).nextUrl;
+          return Response.json({
+            basePath: nextUrl?.basePath,
+            locale: nextUrl?.locale,
+            pathname: nextUrl?.pathname,
+          });
+        },
+        {},
+        { runtime: "edge" },
+      ),
+      nextConfig: {
+        basePath: "/docs",
+        i18n: { defaultLocale: "en", locales: ["en", "fr"] },
+      },
+      request: new Request("https://example.com/docs/fr/api/hello?a=b"),
+      url: "/fr/api/hello?a=b",
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      basePath: "/docs",
+      locale: "fr",
+      pathname: "/api/hello",
+    });
+  });
+
   it("preserves edge API request properties when applying the resolved URL", async () => {
     const response = await handlePagesApiRoute({
       match: createMatch(

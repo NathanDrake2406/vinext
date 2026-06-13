@@ -9,6 +9,7 @@
  */
 import "./server-globals.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { NextI18nConfig } from "../config/next-config.js";
 import { decode as decodeQueryString } from "node:querystring";
 import { Buffer } from "node:buffer";
 import { type Route, matchRoute } from "../routing/pages-router.js";
@@ -340,6 +341,11 @@ export async function handleApiRoute(
   res: ServerResponse,
   url: string,
   apiRoutes: Route[],
+  nextConfig?: {
+    basePath?: string;
+    i18n?: NextI18nConfig | null;
+    trailingSlash?: boolean;
+  },
 ): Promise<boolean> {
   const match = matchRoute(url, apiRoutes);
   if (!match) return false;
@@ -353,7 +359,18 @@ export async function handleApiRoute(
       // Next.js wraps the incoming Request in a NextRequest before invoking
       // edge API handlers, so handlers can use `req.nextUrl.searchParams`,
       // `req.cookies`, etc. (Cf. NextRequestHint in next/src/server/web/adapter.ts.)
-      const nextRequest = new NextRequest(createEdgeApiRequest(req, url, params));
+      const nextRequest = new NextRequest(
+        createEdgeApiRequest(req, url, params),
+        nextConfig
+          ? {
+              nextConfig: {
+                basePath: nextConfig.basePath,
+                i18n: nextConfig.i18n ?? undefined,
+                trailingSlash: nextConfig.trailingSlash,
+              },
+            }
+          : undefined,
+      );
       const response = await apiModule.default(nextRequest);
       if (!(response instanceof Response)) {
         throw new Error("Edge API route did not return a Response");
