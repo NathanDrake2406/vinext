@@ -66,6 +66,7 @@ import {
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { loadPagesGetInitialProps } from "./pages-get-initial-props.js";
+import { isBotUserAgent } from "../utils/html-limited-bots.js";
 
 /**
  * Render a React element to a string using renderToReadableStream.
@@ -409,11 +410,12 @@ export function createSSRHandler(
    * `next.config`. When undefined or empty, no meta tags are emitted.
    */
   clientTraceMetadata?: readonly string[],
+  htmlLimitedBots?: string,
 ) {
   const matcher = fileMatcher ?? createValidFileMatcher();
 
   // Page route patterns in Next.js bracket format, sorted by specificity
-  // (compareRoutes via pagesRouter). Mirrors the production client entry's
+  // (sortRoutes via pagesRouter). Mirrors the production client entry's
   // `window.__VINEXT_PAGE_PATTERNS__ = Object.keys(pageLoaders)` so the
   // `next/navigation` compat hooks (resolvePagesRoutePatternForPath in
   // shims/router.ts) can resolve a dynamic pattern from a resolved path in
@@ -740,7 +742,10 @@ export function createSSRHandler(
           // Render the loading shell for `fallback: true` when the path
           // wasn't pre-rendered. Data requests still resolve real props so
           // the client can swap in after the shell ships.
-          if (fallback === true && !isValidPath && !isDataReq) {
+          const userAgentHeader = req.headers["user-agent"];
+          const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
+          const isBotRequest = !!userAgent && isBotUserAgent(userAgent, htmlLimitedBots);
+          if (fallback === true && !isValidPath && !isDataReq && !isBotRequest) {
             isFallbackRender = true;
             if (typeof routerShim.setSSRContext === "function") {
               routerShim.setSSRContext({
@@ -1351,7 +1356,6 @@ export function createSSRHandler(
 import "vinext/instrumentation-client";
 import React from "react";
 import { hydrateRoot } from "react-dom/client";
-import { installPagesRouterRuntime } from "vinext/pages-router-runtime";
 import { wrapWithRouterContext } from "next/router";
 
 const nextData = window.__NEXT_DATA__;
@@ -1388,7 +1392,6 @@ async function hydrate() {
   element = wrapWithRouterContext(element);
   const root = hydrateRoot(document.getElementById("__next"), element, hydrateRootOptions);
   window.__VINEXT_ROOT__ = root;
-  installPagesRouterRuntime();
   const hydratedAt = performance.now();
   window.__VINEXT_HYDRATED_AT = hydratedAt;
   window.__NEXT_HYDRATED = true;

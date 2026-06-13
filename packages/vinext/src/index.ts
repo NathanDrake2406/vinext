@@ -19,12 +19,19 @@ import { appRouteGraph, appRouter, invalidateAppRouteCache } from "./routing/app
 import type { NitroRouteRuleConfig } from "./build/nitro-route-rules.js";
 import {
   buildViteResolveExtensions,
+  normalizeViteResolveExtensions,
   createValidFileMatcher,
   findFileWithExts,
 } from "./routing/file-matcher.js";
 import { createSSRHandler } from "./server/dev-server.js";
 import { handleApiRoute } from "./server/api-handler.js";
-import { isImageOptimizationPath } from "./server/image-optimization.js";
+import {
+  DEFAULT_DEVICE_SIZES,
+  DEFAULT_IMAGE_QUALITIES,
+  DEFAULT_IMAGE_SIZES,
+  isImageOptimizationPath,
+  resolveDevImageRedirect,
+} from "./server/image-optimization.js";
 
 import { installSocketErrorBackstop } from "./server/socket-error-backstop.js";
 import { shouldInvalidateAppRouteFile } from "./server/dev-route-files.js";
@@ -99,11 +106,8 @@ import {
 import { proxyExternalRequest } from "./config/config-matchers.js";
 import { detectPackageManager } from "./utils/project.js";
 import { isUnknownRecord as isRecord } from "./utils/record.js";
-import {
-  ASSET_PREFIX_URL_DIR,
-  resolveAssetUrlPrefix,
-  resolveAssetsDir,
-} from "./utils/asset-prefix.js";
+import { ASSET_PREFIX_URL_DIR, resolveAssetsDir } from "./utils/asset-prefix.js";
+import { renderVinextBuiltUrl } from "./utils/built-asset-url.js";
 import { asyncHooksStubPlugin } from "./plugins/async-hooks-stub.js";
 import { clientReferenceDedupPlugin } from "./plugins/client-reference-dedup.js";
 import { dataUrlCssPlugin } from "./plugins/css-data-url.js";
@@ -172,7 +176,9 @@ import { stripServerExports } from "./plugins/strip-server-exports.js";
 import { removeConsoleCalls } from "./plugins/remove-console.js";
 import { createImportMetaUrlPlugin } from "./plugins/import-meta-url.js";
 import { createRequireContextPlugin } from "./plugins/require-context.js";
+import { createExtensionlessDynamicImportPlugin } from "./plugins/extensionless-dynamic-import.js";
 import { createWasmModuleImportPlugin } from "./plugins/wasm-module-import.js";
+import { getTypeofWindowReplacement, replaceTypeofWindow } from "./plugins/typeof-window.js";
 import { hasMdxFiles } from "./utils/mdx-scan.js";
 import { scanPublicFileRoutes } from "./utils/public-routes.js";
 import { getViteMajorVersion } from "./utils/vite-version.js";
@@ -647,6 +653,8 @@ const _reactServerShims = new Map<string, string>([
   ["next/navigation", "navigation"],
   ["next/navigation.js", "navigation"],
   ["next/dist/client/components/navigation", "navigation"],
+  ["next/error", "error"],
+  ["next/error.js", "error"],
 ]);
 
 const clientManualChunks = createClientManualChunks(_shimsDir);
@@ -1159,12 +1167,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             process.env[key] = value;
           }
         }
-        // Align NODE_ENV with Next.js semantics: build -> production, serve -> development.
-        // Next.js unconditionally forces NODE_ENV during build/dev, so we do the same.
+        // Align NODE_ENV with Next.js semantics: build/preview -> production,
+        // development server -> development. Next.js unconditionally forces
+        // NODE_ENV during build/dev, so we do the same.
         let resolvedNodeEnv: string;
         if (mode === "test") {
           resolvedNodeEnv = "test";
-        } else if (env?.command === "build") {
+        } else if (env?.command === "build" || env?.isPreview === true) {
           resolvedNodeEnv = "production";
         } else {
           resolvedNodeEnv = "development";
@@ -1229,7 +1238,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           } else {
             rawConfig = await loadNextConfig(root, phase);
           }
-          nextConfig = await resolveNextConfig(rawConfig, root);
+          nextConfig = await resolveNextConfig(rawConfig, root, {
+            dev: env?.command === "serve" && env?.isPreview !== true,
+          });
 
           // Build-ID coordination across plugin instances.
           //
@@ -1329,6 +1340,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         defines["process.env.__NEXT_GESTURE_TRANSITION"] = JSON.stringify(
           nextConfig.gestureTransition,
         );
+        // Expose experimental.scrollRestoration to the Pages Router client.
+        // Next.js defines this from config.experimental.scrollRestoration in
+        // packages/next/src/build/define-env.ts.
+        defines["process.env.__NEXT_SCROLL_RESTORATION"] = JSON.stringify(
+          nextConfig.scrollRestoration ? "true" : "false",
+        );
         // Expose trailingSlash to client-side code so <Link> can render hrefs
         // in the canonical form and avoid an unnecessary 308 redirect bounce.
         defines["process.env.__VINEXT_TRAILING_SLASH"] = JSON.stringify(
@@ -1353,6 +1370,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             JSON.stringify(deviceSizes),
           );
           defines["process.env.__VINEXT_IMAGE_SIZES"] = JSON.stringify(JSON.stringify(imageSizes));
+          defines["process.env.__VINEXT_IMAGE_QUALITIES"] = JSON.stringify(
+            JSON.stringify(nextConfig.images?.qualities ?? DEFAULT_IMAGE_QUALITIES),
+          );
         }
         // Expose dangerouslyAllowSVG flag for the image shim's auto-skip logic.
         // When false (default), .svg sources bypass the optimization endpoint.
@@ -1374,8 +1394,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // generate a separate token so RSC headers do not expose
         // generateBuildId() verbatim.
         defines["process.env.__VINEXT_RSC_COMPATIBILITY_ID"] = JSON.stringify(rscCompatibilityId);
-        // Deployment ID — mirrors Next.js' NEXT_DEPLOYMENT_ID seed for shared
-        // "use cache" entries, falling back to build ID when absent.
+        // Deployment ID — mirrors Next.js' configured NEXT_DEPLOYMENT_ID.
+        // This remains empty when deploymentId is not configured; the separate
+        // "use cache" key builder falls back to __VINEXT_BUILD_ID when needed.
         defines["process.env.__VINEXT_DEPLOYMENT_ID"] = JSON.stringify(
           nextConfig.deploymentId ?? "",
         );
@@ -1499,7 +1520,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             "next/web-vitals": path.join(shimsDir, "web-vitals"),
             "next/amp": path.join(shimsDir, "amp"),
             "next/offline": path.join(shimsDir, "offline"),
-            "next/error": path.join(shimsDir, "error"),
+            // "next/error" is NOT here — it's in _reactServerShims so Server
+            // Components receive Next.js's client-only throwing stub.
             "next/constants": path.join(shimsDir, "constants"),
             // Internal next/dist/* paths used by popular libraries
             // (next-intl, @clerk/nextjs, @sentry/nextjs, next-nprogress-bar, etc.)
@@ -1920,13 +1942,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               ...nextConfig.aliases,
               ...nextShimMap,
             },
-            // Mirror Next.js `pageExtensions` into Vite's `resolve.extensions`
-            // so extensionless imports of files with custom extensions
-            // (`.mdx`, `.platform.tsx`, `.web.tsx`, etc.) resolve. Without
-            // this the build crashes with "Custom deploy script failed:
-            // undefined (1)" when the user configures pageExtensions beyond
-            // Vite's default set. See cloudflare/vinext#1502.
-            extensions: buildViteResolveExtensions(nextConfig.pageExtensions),
             // Dedupe React packages to prevent dual-instance errors.
             // When vinext is linked (npm link / bun link) or any dependency
             // brings its own React copy, multiple React instances can load,
@@ -1982,28 +1997,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // See packages/vinext/src/utils/asset-prefix.ts for the helpers
           // and Next.js docs for the contract:
           // https://nextjs.org/docs/app/api-reference/config/next-config-js/assetPrefix
-          ...(nextConfig.assetPrefix
+          ...(nextConfig.assetPrefix || nextConfig.deploymentId
             ? {
                 experimental: {
-                  renderBuiltUrl: (filename: string) => {
-                    // `filename` is the bundler-relative output path,
-                    // e.g. `_next/static/chunk-abc.js` or
-                    // `<assetPrefix-pathname>/_next/static/chunk-abc.js`
-                    // when assetPrefix is a path prefix. Re-anchor it under
-                    // the configured asset URL prefix.
-                    const urlPrefix = resolveAssetUrlPrefix(nextConfig.assetPrefix);
-                    // Strip any leading on-disk `assetsDir` segment so we
-                    // don't double-prefix when the on-disk layout already
-                    // mirrors the URL path.
-                    const onDiskDir = resolveAssetsDir(nextConfig.assetPrefix);
-                    const dirPrefix = onDiskDir + "/";
-                    const stripped = filename.startsWith(dirPrefix)
-                      ? filename.slice(dirPrefix.length)
-                      : filename.startsWith(`${ASSET_PREFIX_URL_DIR}/`)
-                        ? filename.slice(ASSET_PREFIX_URL_DIR.length + 1)
-                        : filename;
-                    return urlPrefix + stripped;
-                  },
+                  renderBuiltUrl: (filename: string) =>
+                    renderVinextBuiltUrl(filename, nextConfig.assetPrefix, nextConfig.deploymentId),
                 },
               }
             : {}),
@@ -2027,6 +2025,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // cause LightningCSS to fail with "Invalid empty selector" during
           // the production minification step.  See issue #1825.
           css: {
+            ...(nextConfig.useLightningcss
+              ? {
+                  transformer: "lightningcss" as const,
+                  lightningcss: {
+                    ...(nextConfig.lightningCssFeatures.include
+                      ? { include: nextConfig.lightningCssFeatures.include }
+                      : {}),
+                    ...(nextConfig.lightningCssFeatures.exclude
+                      ? { exclude: nextConfig.lightningCssFeatures.exclude }
+                      : {}),
+                  },
+                }
+              : {}),
             ...(postcssOverride ? { postcss: postcssOverride } : {}),
             preprocessorOptions: (() => {
               // Tilde importer: strip the leading ~ and resolve the rest
@@ -2387,6 +2398,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         return viteConfig;
       },
 
+      configEnvironment(name, config) {
+        const configuredExtensions =
+          name === "client" ? nextConfig.resolveExtensions : nextConfig.serverResolveExtensions;
+        const extensions =
+          configuredExtensions === null
+            ? buildViteResolveExtensions(nextConfig.pageExtensions, config.resolve?.extensions)
+            : normalizeViteResolveExtensions(configuredExtensions);
+        config.resolve ??= {};
+        config.resolve.extensions = extensions;
+        return null;
+      },
+
       configResolved(config) {
         // Provide the resolved config to the Sass-aware CSS Modules Loader so
         // it can call Vite's `preprocessCSS` when processing SCSS files
@@ -2663,6 +2686,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               cacheMaxMemorySize: nextConfig?.cacheMaxMemorySize,
               inlineCss: nextConfig?.inlineCss,
               i18n: nextConfig?.i18n,
+              imageConfig: {
+                deviceSizes: nextConfig?.images?.deviceSizes,
+                imageSizes: nextConfig?.images?.imageSizes,
+                qualities: nextConfig?.images?.qualities,
+              },
               hasPagesDir,
               publicFiles: scanPublicFileRoutes(root),
               globalNotFoundPath,
@@ -3379,35 +3407,21 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // ── Image optimization passthrough (dev mode) ─────────────
               // In dev, redirect to the original asset URL so Vite serves it.
               if (isImageOptimizationPath(url.split("?")[0]!)) {
-                const imgParams = new URLSearchParams(url.split("?")[1] ?? "");
-                const rawImgUrl = imgParams.get("url");
-                // Normalize backslashes: browsers and the URL constructor treat
-                // /\evil.com as //evil.com, bypassing the // check.
-                const imgUrl = rawImgUrl?.replaceAll("\\", "/") ?? null;
-                // Allowlist: must start with "/" but not "//" — blocks absolute
-                // URLs, protocol-relative, backslash variants, and exotic schemes.
-                // Also block internal Vite paths (/@*, /__vite*, /node_modules*)
-                // to prevent redirecting to dev server endpoints.
-                if (
-                  !imgUrl ||
-                  !imgUrl.startsWith("/") ||
-                  imgUrl.startsWith("//") ||
-                  imgUrl.startsWith("/@") ||
-                  imgUrl.startsWith("/__vite") ||
-                  imgUrl.startsWith("/node_modules")
-                ) {
+                const imageRequestUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
+                const allowedWidths = [
+                  ...(nextConfig.images?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
+                  ...(nextConfig.images?.imageSizes ?? DEFAULT_IMAGE_SIZES),
+                ];
+                const encodedLocation = resolveDevImageRedirect(
+                  imageRequestUrl,
+                  allowedWidths,
+                  nextConfig.images?.qualities ?? DEFAULT_IMAGE_QUALITIES,
+                );
+                if (!encodedLocation) {
                   res.writeHead(400);
-                  res.end(!rawImgUrl ? "Missing url parameter" : "Only relative URLs allowed");
+                  res.end("Invalid image optimization parameters");
                   return;
                 }
-                // Validate the constructed URL's origin hasn't changed (defense in depth).
-                const resolvedImg = new URL(imgUrl, `http://${req.headers.host || "localhost"}`);
-                if (resolvedImg.origin !== `http://${req.headers.host || "localhost"}`) {
-                  res.writeHead(400);
-                  res.end("Only relative URLs allowed");
-                  return;
-                }
-                const encodedLocation = resolvedImg.pathname + resolvedImg.search;
                 res.writeHead(302, { Location: encodedLocation });
                 res.end();
                 return;
@@ -3810,6 +3824,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     (nextConfig?.rewrites.afterFiles.length ?? 0) > 0 ||
                     (nextConfig?.rewrites.fallback.length ?? 0) > 0,
                   nextConfig?.clientTraceMetadata,
+                  nextConfig?.htmlLimitedBots,
                 );
                 flushStagedHeaders();
                 flushRequestHeaders();
@@ -3922,8 +3937,21 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         },
       },
     },
-    // Inject server-environment defines (NEXT_RUNTIME + user `compiler.defineServer`
-    // entries) into non-client environments only.  The universal
+    // Fold `typeof window` like Next.js before Rolldown resolves imports. This
+    // removes browser-only dynamic imports from server bundles before package
+    // conditional exports are evaluated.
+    {
+      name: "vinext:typeof-window",
+      enforce: "post",
+      transform: {
+        filter: { code: /typeof\s+window/ },
+        handler(code) {
+          return replaceTypeofWindow(code, getTypeofWindowReplacement(this.environment));
+        },
+      },
+    },
+    // Inject server-environment defines. Server environments receive
+    // NEXT_RUNTIME + user `compiler.defineServer` entries. The universal
     // `compiler.define` map is already merged into the top-level Vite
     // `define` config above, so it applies to both client and server bundles.
     // Server-only defines MUST NOT leak into the browser bundle (they can
@@ -3937,11 +3965,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     {
       name: "vinext:compiler-define-server",
       configEnvironment(name) {
-        // The client environment is NEVER given server-only defines. Returning
-        // early here is what makes every define in `serverDefines` below
-        // structurally guaranteed to stay out of the browser bundle. All other
-        // environments (rsc, ssr, custom worker envs, etc.) are server-side per
-        // Vite's `consumer: "server"` default and receive the substitutions.
         if (name === "client") return null;
 
         const serverDefines: Record<string, string> = { ...nextConfig.compilerDefineServer };
@@ -4382,6 +4405,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     createImportMetaUrlPlugin({
       getRoot: () => root,
     }),
+    createExtensionlessDynamicImportPlugin(),
     // Expand Webpack's build-time `require.context(...)` into a static module
     // map backed by `import.meta.glob` — see src/plugins/require-context.ts
     createRequireContextPlugin(),
@@ -4414,6 +4438,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (!outDir) return;
 
           const imageConfig = {
+            deviceSizes: nextConfig?.images?.deviceSizes,
+            imageSizes: nextConfig?.images?.imageSizes,
+            qualities: nextConfig?.images?.qualities,
             dangerouslyAllowSVG: nextConfig?.images?.dangerouslyAllowSVG,
             contentDispositionType: nextConfig?.images?.contentDispositionType,
             contentSecurityPolicy: nextConfig?.images?.contentSecurityPolicy,

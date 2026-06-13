@@ -37,6 +37,7 @@
 import type { VinextLinkPrefetchRoute } from "../../client/vinext-next-data.js";
 import { createRouteTrieCache, matchRouteWithTrie } from "../../routing/route-matching.js";
 import { stripBasePath, removeTrailingSlash } from "../../utils/base-path.js";
+import { getLocalePathPrefix } from "../../utils/domain-locale.js";
 
 const appRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 
@@ -91,7 +92,12 @@ function resolveSameOriginPathname(href: string, basePath: string): string | nul
     return null;
   }
   if (url.origin !== window.location.origin) return null;
-  return stripBasePath(url.pathname, basePath);
+  const pathname = stripBasePath(url.pathname, basePath);
+  const locale = getLocalePathPrefix(pathname, window.__VINEXT_LOCALES__);
+  if (!locale) return pathname;
+
+  const localePrefixLength = locale.length + 1;
+  return pathname.length === localePrefixLength ? "/" : pathname.slice(localePrefixLength);
 }
 
 /**
@@ -99,7 +105,7 @@ function resolveSameOriginPathname(href: string, basePath: string): string | nul
  * prefetch manifest (static or dynamic). Returns false when the manifest is
  * absent (Pages-Router-only build), the URL is external, or no route matches.
  */
-function matchesAppRoute(href: string, basePath: string): boolean {
+export function matchesAppRoute(href: string, basePath: string): boolean {
   if (typeof window === "undefined") return false;
   const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
   if (!routes || routes.length === 0) return false;

@@ -10,6 +10,9 @@ import {
   useEffect,
   useMemo,
   useContext,
+  useLayoutEffect,
+  Fragment,
+  Component,
   createElement,
   type ReactElement,
   type ReactNode,
@@ -33,6 +36,7 @@ import { buildPagesDataHref } from "./internal/pages-data-url.js";
 import {
   getPagesRouterComponentsMap,
   markAppRouteDetectedOnPrefetch,
+  matchesAppRoute,
 } from "./internal/app-route-detection.js";
 import { dedupedPagesDataFetch } from "./internal/pages-data-fetch-dedup.js";
 import { installWindowNext, type PagesRouterPublicInstance } from "../client/window-next.js";
@@ -65,16 +69,162 @@ import {
 import { matchRoutePattern, routePatternParts } from "../routing/route-pattern.js";
 import { scrollToHashTarget } from "./hash-scroll.js";
 import {
+  installPagesRouterRuntime,
   setPagesRouterPopStateHandler,
   setStampInitialHistoryState,
 } from "./pages-router-runtime.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
 import { getCurrentBrowserLocale } from "./client-locale.js";
+import { getDeploymentId, NEXT_DEPLOYMENT_ID_HEADER } from "../utils/deployment-id.js";
 
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
 /** trailingSlash from next.config.js, injected by the plugin at build time */
 const __trailingSlash: boolean = process.env.__VINEXT_TRAILING_SLASH === "true";
+/** experimental.scrollRestoration from next.config.js, injected by the plugin at build time */
+const __scrollRestoration: boolean = process.env.__NEXT_SCROLL_RESTORATION === "true";
+
+type ScrollPosition = { x: number; y: number };
+const noopCommit = (): void => {};
+
+/**
+ * A version of useLayoutEffect that doesn't warn during SSR.
+ * `wrapWithRouterContext` is shared with the server-side Pages Router render
+ * path, where a raw useLayoutEffect would log React's "useLayoutEffect does
+ * nothing on the server" warning on every render. Same pattern as
+ * `shims/image.tsx`; Next.js only runs the commit callback on the client.
+ */
+const useNonWarningLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+class PagesRouterCommitBoundary extends Component<{
+  children?: ReactNode;
+  onCommit: () => void;
+  onError: (error: Error) => void;
+}> {
+  componentDidCatch(error: Error) {
+    this.props.onError(error);
+  }
+
+  render() {
+    return createElement(
+      PagesRouterCommitBoundaryHelper,
+      { onCommit: this.props.onCommit },
+      this.props.children,
+    );
+  }
+}
+
+function PagesRouterCommitBoundaryHelper({
+  children,
+  onCommit,
+}: {
+  children?: ReactNode;
+  onCommit: () => void;
+}): ReactElement {
+  useNonWarningLayoutEffect(() => {
+    onCommit();
+  }, [onCommit]);
+
+  return createElement(Fragment, null, children);
+}
+
+function renderPagesRouterElement(
+  element: ReactElement,
+  scroll?: ScrollPosition | null,
+): Promise<void> {
+  const root = window.__VINEXT_ROOT__;
+  if (!root) {
+    return Promise.resolve();
+  }
+
+  cancelPreviousRenderCommit();
+
+  return new Promise<void>((resolve, reject) => {
+    const cancel = () => {
+      if (_cancelPendingRenderCommit === cancel) _cancelPendingRenderCommit = null;
+      reject(new NavigationCancelledError("superseded"));
+    };
+    _cancelPendingRenderCommit = cancel;
+
+    // Only clear the module-level canceller if it still belongs to this
+    // render; a superseded tree can commit late and must not null out the
+    // canceller installed by a newer navigation.
+    const clearIfCurrent = () => {
+      if (_cancelPendingRenderCommit === cancel) _cancelPendingRenderCommit = null;
+    };
+
+    const scrollHandler = () => {
+      if (scroll) {
+        window.scrollTo(scroll.x, scroll.y);
+      }
+    };
+
+    root.render(
+      wrapWithRouterContext(
+        element,
+        () => {
+          clearIfCurrent();
+          try {
+            scrollHandler();
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        },
+        (error) => {
+          clearIfCurrent();
+          reject(error);
+        },
+      ),
+    );
+    if (typeof document === "undefined") {
+      clearIfCurrent();
+      resolve();
+    }
+  });
+}
+
+function canUseSessionStorageForScrollRestoration(): boolean {
+  if (typeof window === "undefined") return false;
+
+  try {
+    const key = "__next";
+    window.sessionStorage.setItem(key, key);
+    window.sessionStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The `experimental.scrollRestoration` manual opt-in is Pages-Router-only.
+// Next.js sets `history.scrollRestoration = "manual"` inside the Router
+// class constructor (.nextjs-ref/packages/next/src/shared/lib/router/
+// router.ts around L892), which only runs when client/index.tsx hydrates a
+// Pages Router document — a bare value import of next/router never flips
+// it, and App Router owns its own scroll behavior. The vinext shim installs
+// at module eval instead, so an App Router app that value-imports
+// next/router for compat would otherwise disable the browser's native
+// restoration. The App Router bootstrap stamps `window.next.appDir = true`
+// at entry eval, before any client-component module (and therefore this
+// shim) can evaluate, so it is a reliable router-mode gate even though this
+// constant is computed at module eval. Folding the check into the constant
+// (rather than only into installManualScrollRestoration) keeps every
+// consumer Pages-Router-only — including the popstate handler's
+// sessionStorage save/read branches, which would otherwise rely solely on
+// the `__N: true` state filter to stay inert on App Router documents.
+const manualScrollRestoration =
+  __scrollRestoration &&
+  typeof window !== "undefined" &&
+  window.next?.appDir !== true &&
+  "scrollRestoration" in window.history &&
+  canUseSessionStorageForScrollRestoration();
+
+function installManualScrollRestoration(): void {
+  if (manualScrollRestoration) {
+    window.history.scrollRestoration = "manual";
+  }
+}
 
 type BeforePopStateCallback = (state: {
   url: string;
@@ -346,6 +496,8 @@ export function isHashOnlyChange(href: string): boolean {
   return isHashOnlyBrowserUrlChange(href, window.location.href, __basePath);
 }
 
+let _currentHistoryKey: string | undefined;
+
 /**
  * Build router-shaped state for the initial document entry. Captures the
  * active locale (from `window.__VINEXT_LOCALE__`) so a back-navigation
@@ -372,8 +524,19 @@ function buildInitialRouterState(): VinextHistoryState {
  * locale stamped before any push could overwrite the active locale global.
  */
 function stampInitialHistoryState(): void {
-  if (window.history.state !== null && window.history.state !== undefined) return;
-  window.history.replaceState(buildInitialRouterState(), "");
+  installManualScrollRestoration();
+
+  if (!window.history) return;
+
+  const existingState = window.history.state;
+  if (existingState !== null && existingState !== undefined) {
+    _currentHistoryKey = getRouterStateKey(existingState) ?? _currentHistoryKey;
+    return;
+  }
+
+  const initialState = buildInitialRouterState();
+  _currentHistoryKey = initialState.key;
+  window.history.replaceState(initialState, "");
 }
 
 setStampInitialHistoryState(stampInitialHistoryState);
@@ -386,26 +549,65 @@ setStampInitialHistoryState(stampInitialHistoryState);
  * minting the same shape here so the entry isn't treated as foreign.
  */
 function saveScrollPosition(): void {
-  const existing =
-    typeof window.history.state === "object" && window.history.state !== null
-      ? (window.history.state as Record<string, unknown>)
-      : null;
+  const position = getWindowScrollPosition();
+  const existing = isUnknownRecord(window.history.state) ? window.history.state : null;
   const scroll = {
-    __vinext_scrollX: window.scrollX,
-    __vinext_scrollY: window.scrollY,
+    __vinext_scrollX: position.x,
+    __vinext_scrollY: position.y,
   };
   const base: Record<string, unknown> = existing ?? buildInitialRouterState();
+  const key = getRouterStateKey(base);
+  if (key !== undefined) {
+    _currentHistoryKey = key;
+    saveScrollPositionToSessionStorage(key, position);
+  }
   window.history.replaceState({ ...base, ...scroll }, "");
 }
 
-/** Restore scroll position from history state */
-function restoreScrollPosition(state: unknown): void {
-  if (state && typeof state === "object" && "__vinext_scrollY" in state) {
-    const { __vinext_scrollX: x, __vinext_scrollY: y } = state as {
-      __vinext_scrollX: number;
-      __vinext_scrollY: number;
-    };
-    requestAnimationFrame(() => window.scrollTo(x, y));
+function getWindowScrollPosition(): ScrollPosition {
+  return { x: window.scrollX, y: window.scrollY };
+}
+
+function getScrollStorageKey(historyKey: string): string {
+  return `__next_scroll_${historyKey}`;
+}
+
+function readScrollPosition(value: unknown): ScrollPosition | null {
+  if (!isUnknownRecord(value)) return null;
+
+  const nextX = value.x;
+  const nextY = value.y;
+  if (typeof nextX === "number" && typeof nextY === "number") {
+    return { x: nextX, y: nextY };
+  }
+
+  const vinextX = value.__vinext_scrollX;
+  const vinextY = value.__vinext_scrollY;
+  if (typeof vinextX === "number" && typeof vinextY === "number") {
+    return { x: vinextX, y: vinextY };
+  }
+
+  return null;
+}
+
+function saveScrollPositionToSessionStorage(key: string, position: ScrollPosition): void {
+  if (!manualScrollRestoration) return;
+
+  try {
+    window.sessionStorage.setItem(getScrollStorageKey(key), JSON.stringify(position));
+  } catch {}
+}
+
+function readScrollPositionFromSessionStorage(key: string): ScrollPosition | null {
+  if (!manualScrollRestoration) return null;
+
+  try {
+    const value = window.sessionStorage.getItem(getScrollStorageKey(key));
+    if (value === null) return null;
+    const parsed: unknown = JSON.parse(value);
+    return readScrollPosition(parsed);
+  } catch {
+    return null;
   }
 }
 
@@ -895,6 +1097,18 @@ let _navigationId = 0;
 /** AbortController for the in-flight fetch, so superseded navigations abort network I/O. */
 let _activeAbortController: AbortController | null = null;
 
+/**
+ * Pending render-commit rejection, so superseded navigations settle their
+ * render-commit Promise instead of hanging when a newer root.render() call
+ * starts before the previous tree commits.
+ */
+let _cancelPendingRenderCommit: (() => void) | null = null;
+
+function cancelPreviousRenderCommit(): void {
+  _cancelPendingRenderCommit?.();
+  _cancelPendingRenderCommit = null;
+}
+
 function scheduleHardNavigationAndThrow(url: string, message: string): never {
   if (typeof window === "undefined") {
     throw new HardNavigationScheduledError(message);
@@ -912,6 +1126,7 @@ type NavigateClientOptions = {
    * Next.js's `this.change(method, ...)` re-dispatch.
    */
   mode?: "push" | "replace";
+  scroll?: ScrollPosition | null;
 };
 
 /** Wire format of `/_next/data/<id>/<page>.json` response bodies. */
@@ -1121,9 +1336,10 @@ async function navigateClientData(
   }
   let res: Response;
   try {
-    res = await dedupedPagesDataFetch(target.dataHref, {
-      headers: { Accept: "application/json", "x-nextjs-data": "1" },
-    });
+    const headers: Record<string, string> = { Accept: "application/json", "x-nextjs-data": "1" };
+    const deploymentId = getDeploymentId();
+    if (deploymentId) headers[NEXT_DEPLOYMENT_ID_HEADER] = deploymentId;
+    res = await dedupedPagesDataFetch(target.dataHref, { headers });
   } catch (err: unknown) {
     if (err instanceof DOMException && err.name === "AbortError") {
       throw new NavigationCancelledError(url);
@@ -1227,8 +1443,6 @@ async function navigateClientData(
   } else {
     element = React.createElement(PageComponent, pageProps);
   }
-  element = wrapWithRouterContext(element);
-
   // Build the updated __NEXT_DATA__. The JSON envelope is intentionally
   // minimal (just `pageProps`), so we synthesise the surrounding fields
   // from the data we already have: the matched pattern, the params, and
@@ -1272,12 +1486,14 @@ async function navigateClientData(
     ...(nextLocale !== undefined ? { locale: nextLocale } : {}),
   } as unknown as NonNullable<Window["__NEXT_DATA__"]> & VinextNextData;
 
-  // INVARIANT: Everything between the final assertStillCurrent() above and
-  // root.render() must be synchronous. If a future change introduces another
-  // await, add an assertStillCurrent() before mutating window.__NEXT_DATA__.
+  // INVARIANT: __NEXT_DATA__ is mutated only after all pre-render async work
+  // has passed assertStillCurrent(). The post-render await below waits for the
+  // stable Pages Router commit boundary before routeChangeComplete, matching
+  // Next.js's client Root callback without remounting the page tree.
   window.__NEXT_DATA__ = nextData;
   applyVinextLocaleGlobals(window, nextData);
-  root.render(element);
+  await renderPagesRouterElement(element, options.scroll);
+  assertStillCurrent();
 }
 
 /**
@@ -1434,22 +1650,20 @@ async function navigateClientHtml(
     element = React.createElement(PageComponent, pageProps);
   }
 
-  // Wrap with RouterContext.Provider so next/router and next/compat/router work.
-  element = wrapWithRouterContext(element);
-
   // Commit __NEXT_DATA__ only after all assertStillCurrent() checks have passed,
   // so a stale navigation can never pollute the global.
-  // INVARIANT: Everything after the final assertStillCurrent() above (the
-  // checkpoint immediately after the optional _app import) through
-  // root.render() is synchronous. If any step here ever becomes async, add
-  // another assertStillCurrent() before writing __NEXT_DATA__.
+  // INVARIANT: __NEXT_DATA__ is mutated only after all pre-render async work
+  // has passed assertStillCurrent(). The post-render await below waits for the
+  // stable Pages Router commit boundary before routeChangeComplete, matching
+  // Next.js's client Root callback without remounting the page tree.
   if (pendingRedirectHistoryUrl) {
     window.history.replaceState(window.history.state ?? {}, "", pendingRedirectHistoryUrl);
     _lastPathnameAndSearch = window.location.pathname + window.location.search;
   }
   window.__NEXT_DATA__ = nextData;
   applyVinextLocaleGlobals(window, nextData);
-  root.render(element);
+  await renderPagesRouterElement(element, options.scroll);
+  assertStillCurrent();
 }
 
 /**
@@ -1473,8 +1687,9 @@ async function navigateClient(
 ): Promise<void> {
   if (typeof window === "undefined") return;
 
-  // Cancel any in-flight navigation (abort its fetch, mark it stale)
+  // Cancel any in-flight navigation (abort its fetch, settle its render-commit wait)
   _activeAbortController?.abort();
+  cancelPreviousRenderCommit();
   const controller = new AbortController();
   _activeAbortController = controller;
 
@@ -1679,11 +1894,11 @@ function updateHistory(
   fullUrl: string,
   navState?: { url?: string; as?: string; options?: { locale?: string; shallow?: boolean } },
 ): void {
-  const previousState =
-    typeof window.history.state === "object" && window.history.state !== null
-      ? (window.history.state as { key?: string })
-      : null;
-  const key = mode === "push" ? createHistoryKey() : (previousState?.key ?? createHistoryKey());
+  const previousKey = getRouterStateKey(window.history.state);
+  const key =
+    mode === "push"
+      ? createHistoryKey()
+      : (previousKey ?? _currentHistoryKey ?? createHistoryKey());
   const stateUrl = navState?.url ?? fullUrl;
   const stateAs = navState?.as ?? fullUrl;
   const options = navState?.options ?? {};
@@ -1696,6 +1911,7 @@ function updateHistory(
   };
   if (mode === "push") window.history.pushState(state, "", fullUrl);
   else window.history.replaceState(state, "", fullUrl);
+  _currentHistoryKey = key;
   _lastPathnameAndSearch = window.location.pathname + window.location.search;
   _routerDidNavigate = true;
 }
@@ -1801,11 +2017,17 @@ async function performNavigation(
   );
   const errorRouteHtmlFetchUrl = resolvePagesErrorHtmlFetchUrl(url, navigationLocale);
   const htmlFetchUrl = errorRouteHtmlFetchUrl ?? getPagesHtmlFetchUrl(full, navigationLocale);
-  const navigateOptions: NavigateClientOptions = errorRouteHtmlFetchUrl
-    ? { allowNotFoundResponse: true, mode }
-    : { mode };
   const shallow = options?.shallow ?? false;
   const doScroll = options?.scroll !== false;
+  const hash = extractHash(resolved);
+  // Only pass {x, y} restoration through renderPagesRouterElement's commit
+  // callback. Hash scrolling is deferred until after routeChangeComplete so
+  // the event ordering matches Next.js: x/y reset before completion, hash
+  // scroll after completion.
+  const scrollTarget = doScroll ? { x: 0, y: 0 } : null;
+  const navigateOptions: NavigateClientOptions = errorRouteHtmlFetchUrl
+    ? { allowNotFoundResponse: true, mode, scroll: scrollTarget }
+    : { mode, scroll: scrollTarget };
 
   // History state metadata — surfaces the active locale to popstate and the
   // Safari-replay filter. `as` is the canonical app-relative path (no
@@ -1818,6 +2040,14 @@ async function performNavigation(
 
   // Hash-only change — no page fetch needed
   if (isHashOnlyChange(full)) {
+    // Snapshot the outgoing entry's scroll before updateHistory mints a new
+    // key, so a later back-popstate restores the position the user had
+    // reached here rather than {x: 0, y: 0}. Upstream snapshots inside
+    // Router.push() itself — before change()'s onlyAHashChange short-circuit
+    // — so hash-only pushes still write `__next_scroll_<key>` for the
+    // departed entry.
+    // Mirrors Next.js: packages/next/src/shared/lib/router/router.ts:1034-1046.
+    if (mode === "push") saveScrollPosition();
     const eventUrl = resolveHashUrl(full);
     routerEvents.emit("hashChangeStart", eventUrl, { shallow });
     updateHistory(mode, resolved.startsWith("#") ? resolved : full, navState);
@@ -1847,7 +2077,10 @@ async function performNavigation(
   const appPathNorm = appPath !== null ? removeTrailingSlash(appPath) : null;
   const appPathEntry =
     appPathNorm !== null ? getPagesRouterComponentsMap()[appPathNorm] : undefined;
-  if (appPathEntry !== undefined && "__appRouter" in appPathEntry && appPathEntry.__appRouter) {
+  const appRouteDetected =
+    (appPathEntry !== undefined && "__appRouter" in appPathEntry && appPathEntry.__appRouter) ||
+    matchesAppRoute(resolved, __basePath);
+  if (appRouteDetected) {
     if (mode === "push") window.location.assign(full);
     else window.location.replace(full);
     return new Promise<boolean>(() => {});
@@ -1861,14 +2094,24 @@ async function performNavigation(
     const result = await runNavigateClient(full, resolved, htmlFetchUrl, navigateOptions);
     if (result === "cancelled") return true;
     if (result === "failed") return false;
+  } else {
+    // Shallow navigations skip the render-commit path, so apply the scroll
+    // reset synchronously here — before routeChangeComplete. This matches the
+    // non-shallow path, where the x/y reset runs inside the render-commit
+    // callback (also ahead of routeChangeComplete), mirroring Next.js's
+    // ordering of scroll-during-commit, then completion event.
+    if (doScroll) {
+      if (hash) scrollToHashTarget(hash);
+      else window.scrollTo(0, 0);
+    }
   }
   onStateUpdate?.();
   routerEvents.emit("routeChangeComplete", resolved, { shallow });
-
-  const hash = extractHash(resolved);
-  if (doScroll) {
-    if (hash) scrollToHashTarget(hash);
-    else window.scrollTo(0, 0);
+  // Hash scrolling after routeChangeComplete, matching Next.js ordering:
+  // x/y restoration happens during the render commit, then hash scrolling
+  // happens after the completion event.
+  if (doScroll && hash && !shallow) {
+    scrollToHashTarget(hash);
   }
   dispatchNavigateEvent();
   return true;
@@ -2049,6 +2292,11 @@ function isNextRouterState(state: unknown): state is {
   );
 }
 
+function getRouterStateKey(state: unknown): string | undefined {
+  if (!isNextRouterState(state)) return undefined;
+  return typeof state.key === "string" ? state.key : undefined;
+}
+
 function handlePagesRouterPopState(e: PopStateEvent): void {
   const browserUrl = window.location.pathname + window.location.search;
   const appUrl = stripBasePath(window.location.pathname, __basePath) + window.location.search;
@@ -2106,6 +2354,28 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
 
   // Detect hash-only back/forward: pathname+search unchanged, only hash differs.
   const isHashOnly = browserUrl === _lastPathnameAndSearch;
+  const targetKey = getRouterStateKey(state);
+  let forcedScroll: ScrollPosition | undefined;
+
+  if (manualScrollRestoration) {
+    const currentKey = _currentHistoryKey;
+    if (currentKey !== undefined && currentKey !== targetKey) {
+      // Reading window scroll here is only correct because manualScrollRestoration
+      // implies history.scrollRestoration = "manual", so the browser hasn't yet
+      // moved the viewport to the target entry's position when popstate fires.
+      // Snapshotting eagerly (before the beforePopState gate below) is
+      // intentional: if the traversal is cancelled the app stays on
+      // `currentKey`, so the saved value is still that entry's live scroll.
+      saveScrollPositionToSessionStorage(currentKey, getWindowScrollPosition());
+    }
+
+    if (targetKey !== undefined && currentKey !== targetKey) {
+      // `?? {x: 0, y: 0}` is the missing-snapshot fallback, not just a type
+      // guard: with no saved position for the target entry, top is the only
+      // safe default under manual restoration.
+      forcedScroll = readScrollPositionFromSessionStorage(targetKey) ?? { x: 0, y: 0 };
+    }
+  }
 
   // Check beforePopState callback
   if (_beforePopStateCb !== undefined) {
@@ -2117,13 +2387,29 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     if (!shouldContinue) return;
   }
 
-  // Update tracker only after beforePopState confirms navigation proceeds.
-  // If beforePopState cancels, the tracker must retain the previous value
-  // so the next popstate compares against the correct baseline.
+  // Update trackers only after beforePopState confirms navigation proceeds.
+  // If beforePopState cancels, the app stays on the previous history entry,
+  // so both must retain their previous values: `_lastPathnameAndSearch` so
+  // the next popstate compares against the correct baseline, and
+  // `_currentHistoryKey` so subsequent scroll bookkeeping keys off the entry
+  // the app is actually on.
+  if (targetKey !== undefined) {
+    _currentHistoryKey = targetKey;
+  }
   _lastPathnameAndSearch = browserUrl;
 
   if (isHashOnly) {
-    // Hash-only back/forward — no page fetch needed
+    // Hash-only back/forward — no page fetch needed.
+    //
+    // `forcedScroll` is intentionally discarded here: only the hash anchor is
+    // honoured, never the target entry's `__next_scroll_<key>` snapshot. This
+    // matches Next.js, where `change()`'s onlyAHashChange branch calls
+    // `this.set(nextState, this.components[nextState.route], null)` and only
+    // `scrollToHash` runs — `forcedScroll` is consumed solely by the later
+    // `upcomingScrollState = forcedScroll ?? resetScroll` full-navigation
+    // path (.nextjs-ref/packages/next/src/shared/lib/router/router.ts around
+    // L1381-1403 and L1780). The snapshot stays in sessionStorage, so a later
+    // non-hash popstate to this entry still restores the saved position.
     const hashUrl = appUrl + window.location.hash;
     routerEvents.emit("hashChangeStart", hashUrl, { shallow: false });
     scrollToHashTarget(window.location.hash);
@@ -2147,14 +2433,29 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   // compatibility.
   routerEvents.emit("beforeHistoryChange", fullAppUrl, { shallow: false });
   void (async () => {
+    // When manual scroll restoration is enabled we drive the position from the
+    // sessionStorage snapshot keyed by history key. When it is disabled we
+    // still restore the per-entry scroll saved in history state on push, since
+    // a soft popstate re-renders content the browser's native restoration
+    // can't position correctly. The fallbacks differ on purpose: with manual
+    // restoration the browser is hands-off, so we default to { x: 0, y: 0 };
+    // with it disabled, an entry we never stamped resolves to null (no scroll
+    // from us) and native "auto" restoration — still enabled — handles it,
+    // matching the old restoreScrollPosition no-op on main.
+    // The manual chain is not three independent fallbacks: keyed entries always
+    // resolve via forcedScroll (already `?? { x: 0, y: 0 }`), so the middle term
+    // only handles entries without a router key, via the history-state shape.
+    const scrollTarget = manualScrollRestoration
+      ? (forcedScroll ?? readScrollPosition(state) ?? { x: 0, y: 0 })
+      : readScrollPosition(state);
     const result = await runNavigateClient(
       browserUrl,
       fullAppUrl,
       getPagesHtmlFetchUrl(browserUrl, effectiveLocale),
+      { scroll: scrollTarget },
     );
     if (result === "completed") {
       routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: false });
-      restoreScrollPosition(e.state);
       dispatchNavigateEvent();
     }
     // "cancelled": superseded by a newer navigation, so this popstate no longer wins.
@@ -2171,9 +2472,25 @@ setPagesRouterPopStateHandler(handlePagesRouterPopState);
  * The provider owns the reactive Pages Router snapshot so next/router and
  * next/compat/router consumers share one context value instead of each hook
  * installing its own global URL-change listener.
+ *
+ * The PagesRouterCommitBoundary exists for client navigations: its onCommit
+ * callback resolves the render-commit promise (so scroll restoration runs at
+ * commit time) and its onError rejection drives the hard-navigation fallback
+ * in runNavigateClient. The same boundary intentionally also wraps SSR and
+ * initial hydration, where both callbacks default to noopCommit: a
+ * hydration-time render error is caught here (React still console.error's
+ * it) instead of propagating, matching the navigation-path containment.
  */
-export function wrapWithRouterContext(element: ReactElement): ReactElement {
-  return createElement(PagesRouterProvider, null, element);
+export function wrapWithRouterContext(
+  element: ReactElement,
+  onCommit: () => void = noopCommit,
+  onError: (error: Error) => void = noopCommit,
+): ReactElement {
+  return createElement(
+    PagesRouterCommitBoundary,
+    { onCommit, onError },
+    createElement(PagesRouterProvider, null, element),
+  );
 }
 
 /**
@@ -2465,6 +2782,17 @@ for (const event of deprecatedRouterEvents) {
 // singleton is constructed synchronously here, so by the time this module
 // finishes loading the value is final.
 if (typeof window !== "undefined") {
+  // Match Next.js's Router constructor: stamp the initial history entry and
+  // attach the popstate listener while next/router itself is evaluating,
+  // before window.next.router is exposed to userland. This install is
+  // intentionally unconditional at module eval — any value import of
+  // next/router (even from an App Router app) triggers it, mirroring
+  // Next.js where the Router singleton's constructor runs at module eval.
+  // The one Pages-Router-only side effect it carries — flipping
+  // `history.scrollRestoration` to "manual" under
+  // `experimental.scrollRestoration` — is gated on the document not being
+  // an App Router one (see installManualScrollRestoration).
+  installPagesRouterRuntime();
   // Cast: `NextRouter.push`/`replace` are typed with narrow parameters
   // (UrlObject | string) while `PagesRouterPublicInstance` accepts unknown
   // args. The two are structurally compatible at runtime; TypeScript flags

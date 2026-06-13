@@ -17,6 +17,7 @@ import type {
   NextRedirect,
   NextRewrite,
 } from "../config/next-config.js";
+import type { ImageConfig } from "../server/image-optimization.js";
 import type { AppRoute } from "../routing/app-router.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
@@ -149,6 +150,7 @@ type AppRouterConfig = {
   cacheComponents?: boolean;
   /** Internationalization routing config for middleware matcher locale handling. */
   i18n?: NextI18nConfig | null;
+  imageConfig?: ImageConfig;
   /**
    * Absolute path to `app/global-not-found.{tsx,ts,js,jsx}` when present.
    * When provided, route-miss 404s render this module standalone (it owns its
@@ -386,6 +388,13 @@ function __resolveRouteFetchCacheMode(route) {
   });
 }
 
+function __resolveRouteDynamicConfig(route) {
+  return __resolveAppPageSegmentConfig({
+    layouts: route.layouts,
+    page: route.page,
+  }).dynamicConfig ?? null;
+}
+
 function __resolveRouteRuntime(route) {
   return __resolveAppPageSegmentConfig({
     layouts: route.layouts,
@@ -535,6 +544,7 @@ const __i18nConfig = ${JSON.stringify(i18nConfig)};
 const __configRedirects = ${JSON.stringify(redirects)};
 const __configRewrites = ${JSON.stringify(rewrites)};
 const __configHeaders = ${JSON.stringify(headers)};
+const __imageConfig = ${JSON.stringify(config?.imageConfig)};
 const __publicFiles = new Set(${JSON.stringify(publicFiles)});
 const __allowedOrigins = ${JSON.stringify(allowedOrigins)};
 const __expireTime = ${JSON.stringify(expireTime)};
@@ -600,6 +610,8 @@ export default __createAppRscHandler({
   configHeaders: __configHeaders,
   configRedirects: __configRedirects,
   configRewrites: __configRewrites,
+  imageConfig: __imageConfig,
+  isDev: process.env.NODE_ENV !== "production",
   draftModeSecret: __draftModeSecret,
   dispatchMatchedPage({
     clientReuseManifest,
@@ -747,6 +759,9 @@ export default __createAppRscHandler({
       revalidateSeconds: __segmentConfig.revalidateSeconds,
       resolveRouteFetchCacheMode(targetRoute) {
         return __resolveRouteFetchCacheMode(targetRoute);
+      },
+      resolveRouteDynamicConfig(targetRoute) {
+        return __resolveRouteDynamicConfig(targetRoute);
       },
       rootForbiddenModule,
       rootNotFoundModule,
@@ -944,6 +959,12 @@ export default __createAppRscHandler({
       readFormDataWithLimit: __readFormDataWithLimit,
       renderToReadableStream,
       reportRequestError: _reportRequestError,
+      resolveRouteFetchCacheMode(targetRoute) {
+        return __resolveRouteFetchCacheMode(targetRoute);
+      },
+      resolveRouteDynamicConfig(targetRoute) {
+        return __resolveRouteDynamicConfig(targetRoute);
+      },
       resolveRouteRuntime: __resolveRouteRuntime,
       request,
       sanitizeErrorForClient(error) {
