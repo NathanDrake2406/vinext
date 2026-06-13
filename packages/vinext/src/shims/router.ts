@@ -210,12 +210,21 @@ async function restorePagesRouterScrollPosition(
   scrollToPagesRouterPosition(scroll);
   if (isAtScrollPosition(scroll)) return;
 
+  let previousScrollY = window.scrollY;
   for (let frame = 0; frame < SCROLL_RESTORE_MAX_FRAMES; frame += 1) {
     await waitForNextAnimationFrame();
     if (!shouldContinue()) return;
 
     scrollToPagesRouterPosition(scroll);
     if (isAtScrollPosition(scroll)) return;
+
+    if (window.scrollY === previousScrollY) {
+      // Scroll target is unreachable (e.g. the restored page is shorter than
+      // the saved position). Stop retrying so routeChangeComplete is not
+      // delayed by the full frame budget.
+      break;
+    }
+    previousScrollY = window.scrollY;
   }
 }
 
@@ -2328,6 +2337,15 @@ export function useRouter(): NextRouter {
     return router;
   }
 
+  // Fallback for the split-chunk compat case: when `useRouter()` is called
+  // outside `PagesRouterProvider` (e.g. from a page chunk that evaluates a
+  // separate `next/router` module before the provider has mounted), return
+  // the module-local Router singleton. This is intentionally non-reactive:
+  // it derives pathname/query from `window.__NEXT_DATA__` and does not
+  // subscribe to `vinext:navigate`, so it won't re-render on navigation.
+  // `wrapWithRouterContext` always provides the reactive context value in
+  // normal usage, so this path only activates in edge cases where the
+  // router module is evaluated outside the provider tree.
   if (typeof window !== "undefined" && window.__VINEXT_PAGE_LOADERS__ !== undefined) {
     return Router;
   }
