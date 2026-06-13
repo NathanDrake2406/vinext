@@ -391,6 +391,16 @@ function requestWithoutRscCacheBustingSearchParam(request: Request): Request {
   return cloneRequestWithUrl(source, url.toString());
 }
 
+function requestWithoutRscSuffix(request: Request): Request {
+  const url = new URL(request.url);
+  const pathname = stripRscSuffix(url.pathname);
+  if (pathname === url.pathname) return request;
+
+  url.pathname = pathname;
+  const source = request.body ? request.clone() : request;
+  return cloneRequestWithUrl(source, url.toString());
+}
+
 async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   options: CreateAppRscHandlerOptions<TRoute>,
   request: Request,
@@ -497,7 +507,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // Keep cache-busting validation on the real request above, then hide the
   // internal `_rsc` transport query from userland middleware and post-middleware
   // has/missing matching. This mirrors Next.js' navigation middleware fixture.
-  const userlandRequest = requestWithoutRscCacheBustingSearchParam(request);
+  const normalizedUserlandRequest = requestWithoutRscSuffix(request);
+  const userlandRequest = requestWithoutRscCacheBustingSearchParam(normalizedUserlandRequest);
   const middlewareContext: AppRscMiddlewareContext = {
     headers: null,
     requestHeaders: null,
@@ -767,7 +778,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     // internal search params from the request URL. Node route handlers only
     // strip `_rsc` from the parsed query object and rebuild request.url from
     // initURL, preserving it there even for RSC requests.
-    const routeHandlerRequest = isEdgeRouteHandler(route.routeHandler) ? userlandRequest : request;
+    const routeHandlerRequest = isEdgeRouteHandler(route.routeHandler)
+      ? userlandRequest
+      : normalizedUserlandRequest;
     return options.dispatchMatchedRouteHandler({
       cleanPathname,
       middlewareContext,

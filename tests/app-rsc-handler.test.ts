@@ -827,9 +827,42 @@ describe("createAppRscHandler", () => {
         route,
       }),
     );
-    expect(new URL(dispatched?.request.url ?? "").searchParams.has("_rsc")).toBe(true);
-    expect(new URL(dispatched?.request.url ?? "").searchParams.get("tab")).toBe("latest");
+    const dispatchedUrl = new URL(dispatched?.request.url ?? "");
+    expect(dispatchedUrl.pathname).toBe("/docs/vercel-user");
+    expect(dispatchedUrl.searchParams.has("_rsc")).toBe(true);
+    expect(dispatchedUrl.searchParams.get("tab")).toBe("latest");
     expect(dispatched?.searchParams.has("_rsc")).toBe(false);
+  });
+
+  it("normalizes edge route handler RSC URLs and hides internal params", async () => {
+    // Next.js normalizes `.rsc` in web/adapter.ts before stripping internal
+    // search params from the Edge NextRequest.
+    const route = createPageRoute({
+      page: null,
+      pattern: "/api/inspect",
+      routeHandler: { GET: () => new Response("route"), runtime: "edge" },
+      routeSegments: ["api", "inspect"],
+    });
+    const dispatchMatchedRouteHandler = vi.fn<DispatchMatchedRouteHandler>(
+      async () => new Response("route", { status: 200 }),
+    );
+    const headers = createRscRequestHeaders({ mountedSlotsHeader: "slot:modal:/" });
+    const rscUrl = await createRscRequestUrl("/docs/api/inspect?tab=latest", headers);
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedRouteHandler,
+      matchRoute: (pathname: string) =>
+        pathname === "/api/inspect" ? { params: {}, route } : null,
+    });
+
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(200);
+    const dispatched = dispatchMatchedRouteHandler.mock.calls[0]?.[0];
+    const dispatchedUrl = new URL(dispatched?.request.url ?? "");
+    expect(dispatchedUrl.pathname).toBe("/docs/api/inspect");
+    expect(dispatchedUrl.search).toBe("?tab=latest");
+    expect(dispatched?.searchParams.toString()).toBe("tab=latest");
   });
 
   it("preserves non-RSC route handler request URLs while hiding internal parsed params", async () => {
