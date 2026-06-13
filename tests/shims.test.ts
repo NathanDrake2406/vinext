@@ -11048,6 +11048,17 @@ describe("matchRewrite with external URLs", () => {
 
     expect(result).toBe("/target?mode=draft");
   });
+
+  it("does not append rewrite params consumed by the destination fragment", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    const result = matchRewrite(
+      "/docs/500",
+      [{ source: "/docs/:code", destination: "/status#:code" }],
+      emptyCtx,
+    );
+
+    expect(result).toBe("/status#500");
+  });
 });
 
 describe("matchRedirect destination param substitution", () => {

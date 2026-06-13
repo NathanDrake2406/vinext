@@ -1108,8 +1108,8 @@ function appendRewriteParamsToQuery(
   destinationTemplate: string,
   params: Record<string, string>,
 ): string {
-  const templatePath = destinationTemplate.split(/[?#]/, 1)[0];
-  if (Object.keys(params).some((key) => destinationReferencesParam(templatePath, key))) {
+  const templateWithoutQuery = destinationTemplate.replace(/\?[^#]*/, "");
+  if (Object.keys(params).some((key) => destinationReferencesParam(templateWithoutQuery, key))) {
     return destination;
   }
 
