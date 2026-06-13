@@ -1037,7 +1037,8 @@ export function createSSRHandler(
                     const revalidate =
                       typeof freshResult.revalidate === "number" ? freshResult.revalidate : 0;
                     if (revalidate > 0) {
-                      const freshProps = freshResult.props;
+                      let freshPageProps: Record<string, unknown> = freshResult.props;
+                      let freshRenderProps: Record<string, unknown> = { pageProps: freshPageProps };
 
                       if (typeof routerShim.setSSRContext === "function") {
                         routerShim.setSSRContext({
@@ -1079,12 +1080,67 @@ export function createSSRHandler(
                         }
                       }
 
+                      // Re-run _app.getInitialProps during background
+                      // regeneration so the regenerated HTML / __NEXT_DATA__
+                      // still carries app-level props. Mirrors the foreground
+                      // render path in pages-page-data.ts.
+                      if (RegenApp && hasPagesGetInitialProps(RegenApp)) {
+                        const regenReq = {
+                          url: req.url,
+                          headers: req.headers,
+                          method: req.method,
+                        };
+                        const regenRes = {
+                          headersSent: false,
+                          writableEnded: false,
+                          statusCode: 200,
+                          getHeaders() {
+                            return {};
+                          },
+                        };
+                        const initialProps = await loadPagesGetInitialProps(RegenApp, {
+                          AppTree: (appTreeProps: Record<string, unknown>) =>
+                            React.createElement(RegenApp, {
+                              ...appTreeProps,
+                              Component: pageModule.default,
+                              pageProps: isUnknownRecord(appTreeProps.pageProps)
+                                ? appTreeProps.pageProps
+                                : {},
+                            }),
+                          Component: pageModule.default,
+                          router: {
+                            pathname: patternToNextFormat(route.pattern),
+                            query,
+                            asPath: requestAsPath,
+                          },
+                          ctx: {
+                            req: regenReq,
+                            res: regenRes,
+                            pathname: patternToNextFormat(route.pattern),
+                            query,
+                            asPath: requestAsPath,
+                            locale: locale ?? currentDefaultLocale,
+                            locales: i18nConfig?.locales,
+                            defaultLocale: currentDefaultLocale,
+                          },
+                        });
+
+                        if (!regenRes.headersSent && !regenRes.writableEnded && initialProps) {
+                          const initialPageProps = initialProps.pageProps;
+                          freshPageProps = {
+                            ...(isUnknownRecord(initialPageProps) ? initialPageProps : {}),
+                            ...freshResult.props,
+                          };
+                          freshRenderProps = { ...initialProps, pageProps: freshPageProps };
+                        }
+                      }
+
                       let el = RegenApp
                         ? React.createElement(RegenApp, {
+                            ...freshRenderProps,
                             Component: pageModule.default,
-                            pageProps: freshProps,
                           })
-                        : React.createElement(pageModule.default, freshProps);
+                        : React.createElement(pageModule.default, freshPageProps);
                       if (routerShim.wrapWithRouterContext) {
                         el = routerShim.wrapWithRouterContext(el);
                       }
@@ -1115,7 +1171,7 @@ export function createSSRHandler(
                       };
 
                       const freshNextData = `<script>window.__NEXT_DATA__ = ${safeJsonStringify({
-                        props: { pageProps: freshProps },
+                        props: freshRenderProps,
                         page: patternToNextFormat(route.pattern),
                         query: params,
                         buildId: process.env.__VINEXT_BUILD_ID,
@@ -1135,7 +1191,7 @@ export function createSSRHandler(
                       const freshHtml = `<!DOCTYPE html><html><head></head><body><div id="__next">${freshBody}</div>${freshNextData}\n  ${hydrationScript}</body></html>`;
                       await isrSet(
                         cacheKey,
-                        buildPagesCacheValue(freshHtml, freshProps),
+                        buildPagesCacheValue(freshHtml, freshPageProps),
                         revalidate,
                       );
                       setRevalidateDuration(cacheKey, revalidate);

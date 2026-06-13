@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   renderPagesIsrHtml,
@@ -564,6 +565,93 @@ describe("pages page data", () => {
       undefined,
       300,
     );
+  });
+
+  it("preserves _app.getInitialProps app-level props during stale ISR regeneration", async () => {
+    let regenPromise: Promise<void> | null = null;
+    const isrSet = vi.fn<ResolvePagesPageDataOptions["isrSet"]>(async () => {});
+    const triggerBackgroundRegeneration = vi.fn((_key: string, renderFn: () => Promise<void>) => {
+      regenPromise = renderFn();
+    });
+    let capturedRenderProps: Record<string, unknown> | undefined;
+    function createPageElement(props: Record<string, unknown>): ReactNode {
+      capturedRenderProps = props;
+      return null;
+    }
+
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(
+          function App() {
+            return null;
+          },
+          {
+            getInitialProps() {
+              return {
+                appProp: "from-app",
+                pageProps: {},
+              };
+            },
+          },
+        ),
+        createPageElement,
+        isrGet: vi.fn().mockResolvedValue({
+          isStale: true,
+          value: {
+            lastModified: 1,
+            cacheState: "stale",
+            value: {
+              kind: "PAGES",
+              html: '<!DOCTYPE html><html><body><div id="__next"><div>stale-body</div></div><script>window.__NEXT_DATA__ = {"old":1}</script></body></html>',
+              pageData: { stale: true },
+              headers: undefined,
+              status: undefined,
+            },
+          },
+        }),
+        isrSet,
+        pageModule: {
+          async getStaticProps() {
+            return {
+              props: { pageProp: "from-page" },
+              revalidate: 60,
+            };
+          },
+        },
+        triggerBackgroundRegeneration,
+      }),
+    );
+
+    expect(result.kind).toBe("response");
+    if (result.kind !== "response") {
+      throw new Error("expected response result");
+    }
+    expect(result.response.headers.get("x-vinext-cache")).toBe("STALE");
+
+    if (!regenPromise) {
+      throw new Error("expected stale ISR regeneration to start");
+    }
+    const pendingRegen: Promise<void> = regenPromise;
+    await pendingRegen;
+
+    expect(capturedRenderProps).toEqual(
+      expect.objectContaining({
+        appProp: "from-app",
+        pageProps: { pageProp: "from-page" },
+      }),
+    );
+
+    expect(isrSet).toHaveBeenCalledOnce();
+    const regeneratedCacheValue = isrSet.mock.calls[0]?.[1];
+    expect(regeneratedCacheValue).toEqual(
+      expect.objectContaining({
+        kind: "PAGES",
+        pageData: { pageProp: "from-page" },
+      }),
+    );
+    expect(regeneratedCacheValue?.html).toContain('"appProp":"from-app"');
+    expect(regeneratedCacheValue?.html).toContain('"pageProp":"from-page"');
+    expect(regeneratedCacheValue?.html).toContain('"page":"/posts/[slug]"');
   });
 
   it("preserves vinext module metadata during stale ISR regeneration", async () => {

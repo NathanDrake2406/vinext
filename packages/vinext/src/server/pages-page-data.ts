@@ -306,6 +306,77 @@ function normalizePagesRenderProps(props: Record<string, unknown>): PagesRenderP
   };
 }
 
+type PagesAppInitialPropsResult =
+  | { kind: "props"; pageProps: Record<string, unknown>; renderProps: PagesRenderProps }
+  | { kind: "response"; response: Promise<Response> };
+
+/**
+ * Load `_app.getInitialProps` and return the normalized render props and the
+ * extracted `pageProps`. This is shared between the foreground render path and
+ * the stale-while-revalidate background regeneration path so both produce the
+ * same full props envelope (app-level props plus the page's `pageProps`).
+ *
+ * `getSharedReqRes` lets callers share the same mock req/res with other
+ * data-fetching steps (e.g. `getServerSideProps`) when they run in the same
+ * request context.
+ */
+async function loadPagesAppInitialRenderProps(
+  options: Pick<
+    ResolvePagesPageDataOptions,
+    | "AppComponent"
+    | "createAppTree"
+    | "createPageElement"
+    | "err"
+    | "i18n"
+    | "pageModule"
+    | "query"
+    | "routePattern"
+    | "routeUrl"
+    | "asPath"
+  >,
+  getSharedReqRes: () => PagesGsspContextResponse,
+): Promise<PagesAppInitialPropsResult> {
+  let pageProps: Record<string, unknown> = {};
+  let renderProps: PagesRenderProps = { pageProps };
+
+  if (!hasPagesGetInitialProps(options.AppComponent)) {
+    return { kind: "props", pageProps, renderProps };
+  }
+
+  const { req, res, responsePromise } = getSharedReqRes();
+  const initialProps = await loadPagesGetInitialProps(options.AppComponent, {
+    AppTree: options.createAppTree ?? options.createPageElement,
+    Component: options.pageModule.default,
+    router: {
+      pathname: options.routePattern,
+      query: options.query,
+      asPath: options.asPath ?? options.routeUrl,
+    },
+    ctx: {
+      req,
+      res,
+      err: options.err,
+      pathname: options.routePattern,
+      query: options.query,
+      asPath: options.asPath ?? options.routeUrl,
+      locale: options.i18n.locale,
+      locales: options.i18n.locales,
+      defaultLocale: options.i18n.defaultLocale,
+    },
+  });
+
+  if (isResponseSent(res)) {
+    return { kind: "response", response: responsePromise };
+  }
+
+  if (initialProps) {
+    renderProps = normalizePagesRenderProps(initialProps);
+    pageProps = renderProps.pageProps;
+  }
+
+  return { kind: "props", pageProps, renderProps };
+}
+
 /**
  * Build the response for a `getServerSideProps` / `getStaticProps`
  * `{ redirect }` result.
@@ -586,49 +657,21 @@ export async function resolvePagesPageData(
     };
   }
 
-  let renderProps: PagesRenderProps = { pageProps };
   let sharedReqRes: PagesGsspContextResponse | null = null;
   function getSharedReqRes(): PagesGsspContextResponse {
     sharedReqRes ??= options.createGsspReqRes();
     return sharedReqRes;
   }
 
-  const hasAppGetInitialProps = hasPagesGetInitialProps(options.AppComponent);
-  if (hasAppGetInitialProps) {
-    const { req, res, responsePromise } = getSharedReqRes();
-    const initialProps = await loadPagesGetInitialProps(options.AppComponent, {
-      AppTree: options.createAppTree ?? options.createPageElement,
-      Component: options.pageModule.default,
-      router: {
-        pathname: options.routePattern,
-        query: options.query,
-        asPath: options.asPath ?? options.routeUrl,
-      },
-      ctx: {
-        req,
-        res,
-        err: options.err,
-        pathname: options.routePattern,
-        query: options.query,
-        asPath: options.asPath ?? options.routeUrl,
-        locale: options.i18n.locale,
-        locales: options.i18n.locales,
-        defaultLocale: options.i18n.defaultLocale,
-      },
-    });
-
-    if (isResponseSent(res)) {
-      return {
-        kind: "response",
-        response: await responsePromise,
-      };
-    }
-
-    if (initialProps) {
-      renderProps = normalizePagesRenderProps(initialProps);
-      pageProps = renderProps.pageProps;
-    }
+  const appInitialPropsResult = await loadPagesAppInitialRenderProps(options, getSharedReqRes);
+  if (appInitialPropsResult.kind === "response") {
+    return {
+      kind: "response",
+      response: await appInitialPropsResult.response,
+    };
   }
+  let renderProps = appInitialPropsResult.renderProps;
+  pageProps = appInitialPropsResult.pageProps;
 
   if (typeof options.pageModule.getServerSideProps === "function") {
     const { req, res, responsePromise } = getSharedReqRes();
@@ -742,6 +785,21 @@ export async function resolvePagesPageData(
         cacheKey,
         async function () {
           return options.runInFreshUnifiedContext(async () => {
+            // Rebuild the full App render props before re-running getStaticProps
+            // so the regenerated HTML / __NEXT_DATA__ still contains app-level
+            // props from _app.getInitialProps. Mirrors the foreground path.
+            const freshAppResult = await loadPagesAppInitialRenderProps(options, () =>
+              options.createGsspReqRes(),
+            );
+            if (freshAppResult.kind === "response") {
+              // _app.getInitialProps short-circuited the request during background
+              // regeneration. We cannot turn that into an HTTP response here, so
+              // skip the cache write and let the stale entry remain.
+              return;
+            }
+            let freshPageProps = freshAppResult.pageProps;
+            let freshRenderProps = freshAppResult.renderProps;
+
             const freshResult = await options.pageModule.getStaticProps?.({
               params: userFacingParams,
               locale: options.i18n.locale,
@@ -754,6 +812,11 @@ export async function resolvePagesPageData(
               revalidateReason: "stale",
             });
 
+            if (freshResult?.props) {
+              freshPageProps = { ...freshPageProps, ...freshResult.props };
+              freshRenderProps = { ...freshRenderProps, pageProps: freshPageProps };
+            }
+
             if (
               freshResult?.props &&
               typeof freshResult.revalidate === "number" &&
@@ -765,7 +828,8 @@ export async function resolvePagesPageData(
                 cachedHtml: cachedValue.html,
                 createPageElement: options.createPageElement,
                 i18n: options.i18n,
-                pageProps: freshResult.props,
+                pageProps: freshPageProps,
+                props: freshRenderProps,
                 params: options.params,
                 renderIsrPassToStringAsync: options.renderIsrPassToStringAsync,
                 routePattern: options.routePattern,
@@ -776,7 +840,7 @@ export async function resolvePagesPageData(
 
               await options.isrSet(
                 cacheKey,
-                buildPagesCacheValue(freshHtml, freshResult.props, options.statusCode),
+                buildPagesCacheValue(freshHtml, freshPageProps, options.statusCode),
                 freshResult.revalidate,
                 undefined,
                 options.expireSeconds,
@@ -864,7 +928,7 @@ export async function resolvePagesPageData(
   if (
     typeof options.pageModule.getServerSideProps !== "function" &&
     typeof options.pageModule.getStaticProps !== "function" &&
-    !hasAppGetInitialProps &&
+    !hasPagesGetInitialProps(options.AppComponent) &&
     hasPagesGetInitialProps(options.pageModule.default)
   ) {
     const { req, res, responsePromise } = getSharedReqRes();
