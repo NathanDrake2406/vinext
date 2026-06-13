@@ -1122,10 +1122,8 @@ describe("next/navigation shim", () => {
   });
 
   it("marks navigation hooks dynamic during fallback-shell prerendering", async () => {
-    const {
-      createPprFallbackShellState,
-      runWithPprFallbackShellState,
-    } = await import("../packages/vinext/src/shims/ppr-fallback-shell.js");
+    const { createPprFallbackShellState, runWithPprFallbackShellState } =
+      await import("../packages/vinext/src/shims/ppr-fallback-shell.js");
     const navigation = await import("../packages/vinext/src/shims/navigation.js");
 
     for (const readHook of [
