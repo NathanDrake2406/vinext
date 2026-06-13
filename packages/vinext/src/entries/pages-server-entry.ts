@@ -452,6 +452,7 @@ export async function handleApiRoute(request, url, ctx) {
   return __handlePagesApiRoute({
     ctx,
     match,
+    nextConfig: vinextConfig,
     request,
     url,
     reportRequestError(error, routePattern) {

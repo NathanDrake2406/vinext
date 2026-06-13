@@ -29,7 +29,11 @@ import {
   proxyExternalRequest,
   sanitizeDestination,
 } from "../config/config-matchers.js";
-import { applyConfigHeadersToHeaderRecord, normalizeTrailingSlash } from "./request-pipeline.js";
+import {
+  applyConfigHeadersToHeaderRecord,
+  cloneRequestWithUrl,
+  normalizeTrailingSlash,
+} from "./request-pipeline.js";
 import type { HeaderRecord } from "./request-pipeline.js";
 import { mergeHeaders } from "./worker-utils.js";
 import { normalizeDefaultLocalePathname, stripI18nLocaleForApiRoute } from "./pages-i18n.js";
@@ -437,7 +441,16 @@ export async function runPagesRequest(
   const apiLookupPathname = apiLookupUrl.split("?")[0];
   if (apiLookupPathname.startsWith("/api/") || apiLookupPathname === "/api") {
     if (typeof deps.handleApi === "function") {
-      const response = await deps.handleApi(request, apiLookupUrl, deps.ctx ?? null);
+      let apiRequest = request;
+      // Prod re-adds basePath only when the original request carried it.
+      // Dev reconstructs Vite's stripped basePath in api-handler.ts; the paths
+      // differ only for an out-of-basePath request config-rewritten into an API.
+      if (basePath && hadBasePath) {
+        const apiRequestUrl = new URL(request.url);
+        apiRequestUrl.pathname = addBasePathToPathname(apiRequestUrl.pathname, basePath);
+        apiRequest = cloneRequestWithUrl(request, apiRequestUrl.toString());
+      }
+      const response = await deps.handleApi(apiRequest, apiLookupUrl, deps.ctx ?? null);
       return {
         type: "response",
         // API routes return arbitrary data; default a missing content-type to

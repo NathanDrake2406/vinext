@@ -43,6 +43,7 @@ import {
   resolveInvalidRscCacheBustingRequest,
   stripRscCacheBustingSearchParam,
   stripRscSuffix,
+  VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM,
 } from "./app-rsc-cache-busting.js";
 import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
@@ -292,6 +293,11 @@ function hasProperty<TKey extends PropertyKey>(
   return key in value;
 }
 
+function isEdgeRouteHandler(handler: unknown): boolean {
+  if (!handler || typeof handler !== "object" || !hasProperty(handler, "runtime")) return false;
+  return handler.runtime === "edge" || handler.runtime === "experimental-edge";
+}
+
 function isExecutionContextLike(value: unknown): value is ExecutionContextLike {
   if (!value || typeof value !== "object") return false;
   return hasProperty(value, "waitUntil") && typeof value.waitUntil === "function";
@@ -349,6 +355,10 @@ function requestContextForResolvedUrl(
   };
 }
 
+function pathnameForResolvedUrl(resolvedUrl: string): string {
+  return resolvedUrl.split("#", 1)[0].split("?", 1)[0];
+}
+
 function applyConfigHeadersToMiddlewareRedirect(
   response: Response,
   options: {
@@ -400,6 +410,16 @@ function requestWithoutRscCacheBustingSearchParam(request: Request): Request {
   // reconstruct via `cloneRequestWithUrl` rather than a bare `new Request` so
   // the Workers `cf` metadata is preserved (user middleware reads it directly)
   // and `duplex: "half"` is set for streaming bodies.
+  const source = request.body ? request.clone() : request;
+  return cloneRequestWithUrl(source, url.toString());
+}
+
+function requestWithoutRscSuffix(request: Request): Request {
+  const url = new URL(request.url);
+  const pathname = stripRscSuffix(url.pathname);
+  if (pathname === url.pathname) return request;
+
+  url.pathname = pathname;
   const source = request.body ? request.clone() : request;
   return cloneRequestWithUrl(source, url.toString());
 }
@@ -512,9 +532,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // Keep cache-busting validation on the real request above, then hide the
   // internal `_rsc` transport query from userland middleware and post-middleware
   // has/missing matching. This mirrors Next.js' navigation middleware fixture.
-  const userlandRequest = isRscRequest
-    ? requestWithoutRscCacheBustingSearchParam(request)
-    : request;
+  const normalizedUserlandRequest = requestWithoutRscSuffix(request);
+  const userlandRequest = requestWithoutRscCacheBustingSearchParam(normalizedUserlandRequest);
   const middlewareContext: AppRscMiddlewareContext = {
     headers: null,
     requestHeaders: null,
@@ -564,7 +583,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       {
         basePathState,
         clearRequestContext: options.clearRequestContext,
-        request: userlandRequest,
+        // External RSC rewrites must forward the validated `_rsc` token so the
+        // destination server can validate the request without the original URL.
+        request: normalizedUserlandRequest,
         requestContext: requestContextForResolvedUrl(
           postMiddlewareRequestContext,
           resolvedUrl,
@@ -577,7 +598,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (beforeFilesRewrite instanceof Response) return beforeFilesRewrite;
     if (beforeFilesRewrite) {
       resolvedUrl = mergeRewriteQuery(resolvedUrl, beforeFilesRewrite);
-      cleanPathname = resolvedUrl.split("?", 1)[0];
+      cleanPathname = pathnameForResolvedUrl(resolvedUrl);
     }
   }
 
@@ -624,12 +645,10 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     return publicFileResponse;
   }
 
-  if (isRscRequest) {
-    stripRscCacheBustingSearchParam(url);
-    const resolved = new URL(resolvedUrl, url);
-    stripRscCacheBustingSearchParam(resolved);
-    resolvedUrl = resolved.pathname + resolved.search;
-  }
+  stripRscCacheBustingSearchParam(url);
+  const resolved = new URL(resolvedUrl, url);
+  stripRscCacheBustingSearchParam(resolved);
+  resolvedUrl = resolved.pathname + resolved.search + resolved.hash;
 
   options.setNavigationContext({
     pathname: canonicalPathname,
@@ -717,7 +736,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         {
           basePathState,
           clearRequestContext: options.clearRequestContext,
-          request: userlandRequest,
+          // External RSC rewrites must forward the validated `_rsc` token.
+          request: normalizedUserlandRequest,
           requestContext: requestContextForResolvedUrl(
             postMiddlewareRequestContext,
             resolvedUrl,
@@ -730,7 +750,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       if (afterFilesRewrite instanceof Response) return afterFilesRewrite;
       if (!afterFilesRewrite) continue;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, afterFilesRewrite);
-      cleanPathname = resolvedUrl.split("?", 1)[0];
+      cleanPathname = pathnameForResolvedUrl(resolvedUrl);
       match = options.matchRoute(cleanPathname);
       const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
       if (rewrittenStaticPagesResponse) {
@@ -758,7 +778,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         {
           basePathState,
           clearRequestContext: options.clearRequestContext,
-          request: userlandRequest,
+          // External RSC rewrites must forward the validated `_rsc` token.
+          request: normalizedUserlandRequest,
           requestContext: requestContextForResolvedUrl(
             postMiddlewareRequestContext,
             resolvedUrl,
@@ -771,7 +792,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       if (fallbackRewrite instanceof Response) return fallbackRewrite;
       if (!fallbackRewrite) continue;
       resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
-      cleanPathname = resolvedUrl.split("?", 1)[0];
+      cleanPathname = pathnameForResolvedUrl(resolvedUrl);
       match = options.matchRoute(cleanPathname);
       const rewrittenStaticPagesResponse = await renderPagesForMatchKind("static");
       if (rewrittenStaticPagesResponse) {
@@ -838,11 +859,24 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   setRootParams(rootParams);
 
   if (route.routeHandler) {
-    const routeHandlerUrl = new URL(request.url);
-    routeHandlerUrl.search = resolvedSearchParams.toString();
     setCurrentFetchSoftTags(
       buildPageCacheTags(cleanPathname, [], [...route.routeSegments], "route"),
     );
+    // Next.js edge route handlers run through web/adapter.ts, which strips
+    // internal search params from the request URL. Node route handlers only
+    // strip `_rsc` from the parsed query object and rebuild request.url from
+    // initURL, preserving it there even for RSC requests.
+    const routeHandlerRequest = isEdgeRouteHandler(route.routeHandler)
+      ? userlandRequest
+      : normalizedUserlandRequest;
+    const routeHandlerUrl = new URL(routeHandlerRequest.url);
+    const internalRscValues = isEdgeRouteHandler(route.routeHandler)
+      ? []
+      : routeHandlerUrl.searchParams.getAll(VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM);
+    routeHandlerUrl.search = resolvedSearchParams.toString();
+    for (const internalRscValue of internalRscValues) {
+      routeHandlerUrl.searchParams.append(VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM, internalRscValue);
+    }
     return options.dispatchMatchedRouteHandler({
       cleanPathname,
       middlewareContext,
@@ -851,7 +885,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       // object (always `{}` for non-dynamic) so `useParams()` etc. still see
       // an object shape; only the user-facing handler context surfaces null.
       params: route.isDynamic ? renderParams : null,
-      request: new Request(routeHandlerUrl, request),
+      request: new Request(routeHandlerUrl, routeHandlerRequest),
       route,
       searchParams: resolvedSearchParams,
     });

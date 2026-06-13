@@ -93,7 +93,15 @@ export class NextRequest extends Request {
     init?: RequestInit & {
       nextConfig?: {
         basePath?: string;
-        i18n?: { locales: string[]; defaultLocale: string };
+        i18n?: {
+          locales: string[];
+          defaultLocale: string;
+          domains?: Array<{
+            domain: string;
+            defaultLocale: string;
+            locales?: string[];
+          }>;
+        };
         trailingSlash?: boolean;
       };
     },
@@ -115,6 +123,14 @@ export class NextRequest extends Request {
       const requestInput =
         requestInit.body === undefined && input.body && !input.bodyUsed ? input.clone() : input;
       super(requestInput, requestInit);
+      const cf = Reflect.get(input, "cf");
+      if (cf !== undefined) {
+        Object.defineProperty(this, "cf", {
+          value: cf,
+          enumerable: true,
+          configurable: true,
+        });
+      }
     } else {
       super(input, requestInit);
     }
@@ -296,6 +312,11 @@ export type NextURLConfig = {
     i18n?: {
       locales: string[];
       defaultLocale: string;
+      domains?: Array<{
+        domain: string;
+        defaultLocale: string;
+        locales?: string[];
+      }>;
     };
     /**
      * When true, `href`/`toString()` formats non-root, non-file-like pathnames
@@ -319,8 +340,13 @@ export class NextURL {
   private _basePath: string;
   private _trailingSlash: boolean;
   private _locale: string | undefined;
+  private _configDefaultLocale: string | undefined;
   private _defaultLocale: string | undefined;
   private _locales: string[] | undefined;
+  private _domains: NonNullable<NonNullable<NextURLConfig["nextConfig"]>["i18n"]>["domains"];
+  private _domainLocale:
+    | NonNullable<NonNullable<NonNullable<NextURLConfig["nextConfig"]>["i18n"]>["domains"]>[number]
+    | undefined;
 
   constructor(input: string | URL, base?: string | URL, config?: NextURLConfig) {
     this._url = new URL(input.toString(), base);
@@ -331,8 +357,12 @@ export class NextURL {
     const i18n = config?.nextConfig?.i18n;
     if (i18n) {
       this._locales = [...i18n.locales];
-      this._defaultLocale = i18n.defaultLocale;
-      this._analyzeLocale(this._locales);
+      this._domains = i18n.domains?.map((domain) => ({
+        ...domain,
+        locales: domain.locales ? [...domain.locales] : undefined,
+      }));
+      this._configDefaultLocale = i18n.defaultLocale;
+      this._analyzeI18n();
     }
   }
 
@@ -358,16 +388,29 @@ export class NextURL {
   }
 
   /** Extract locale from pathname, stripping it from the internal URL. */
-  private _analyzeLocale(locales: string[]): void {
+  private _detectPathnameLocale(locales: string[]): string | undefined {
     const segments = this._url.pathname.split("/");
     const candidate = segments[1]?.toLowerCase();
     const match = locales.find((l) => l.toLowerCase() === candidate);
     if (match) {
-      this._locale = match;
       this._url.pathname = "/" + segments.slice(2).join("/");
-    } else {
-      this._locale = this._defaultLocale;
     }
+    return match;
+  }
+
+  private _analyzeI18n(): void {
+    if (!this._locales || !this._configDefaultLocale) return;
+    const detectedLocale = this._detectPathnameLocale(this._locales);
+    const detectedLocaleLower = detectedLocale?.toLowerCase();
+    const hostname = this._url.hostname.toLowerCase();
+    this._domainLocale = this._domains?.find(
+      (domain) =>
+        domain.domain.split(":", 1)[0].toLowerCase() === hostname ||
+        detectedLocaleLower === domain.defaultLocale.toLowerCase() ||
+        domain.locales?.some((locale) => locale.toLowerCase() === detectedLocaleLower),
+    );
+    this._defaultLocale = this._domainLocale?.defaultLocale ?? this._configDefaultLocale;
+    this._locale = detectedLocale ?? this._defaultLocale;
   }
 
   /**
@@ -378,10 +421,12 @@ export class NextURL {
   private _formatPathname(): string {
     // Build prefix: basePath + locale (skip defaultLocale — Next.js omits it)
     let prefix = this._basePath;
-    if (this._locale && this._locale !== this._defaultLocale) {
+    const inner = this._url.pathname;
+    const innerLower = inner.toLowerCase();
+    const isApiPath = innerLower === "/api" || innerLower.startsWith("/api/");
+    if (!isApiPath && this._locale && this._locale !== this._defaultLocale) {
       prefix += "/" + this._locale;
     }
-    const inner = this._url.pathname;
     const composed = !prefix ? inner : inner === "/" ? prefix : prefix + inner;
     return this._applyTrailingSlash(composed);
   }
@@ -413,7 +458,7 @@ export class NextURL {
   set href(value: string) {
     this._url.href = value;
     this._stripBasePath();
-    if (this._locales) this._analyzeLocale(this._locales);
+    this._analyzeI18n();
   }
 
   get origin(): string {
@@ -517,6 +562,14 @@ export class NextURL {
     return this._defaultLocale;
   }
 
+  get domainLocale(): typeof this._domainLocale {
+    if (!this._domainLocale) return undefined;
+    return {
+      ...this._domainLocale,
+      locales: this._domainLocale.locales ? [...this._domainLocale.locales] : undefined,
+    };
+  }
+
   get locales(): string[] | undefined {
     return this._locales ? [...this._locales] : undefined;
   }
@@ -524,7 +577,14 @@ export class NextURL {
   clone(): NextURL {
     const nextConfig: NonNullable<NextURLConfig["nextConfig"]> = {};
     if (this._locales) {
-      nextConfig.i18n = { locales: [...this._locales], defaultLocale: this._defaultLocale! };
+      nextConfig.i18n = {
+        locales: [...this._locales],
+        defaultLocale: this._configDefaultLocale!,
+        domains: this._domains?.map((domain) => ({
+          ...domain,
+          locales: domain.locales ? [...domain.locales] : undefined,
+        })),
+      };
     }
     if (this._trailingSlash) {
       nextConfig.trailingSlash = true;
