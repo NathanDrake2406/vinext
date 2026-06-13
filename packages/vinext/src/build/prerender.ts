@@ -59,7 +59,7 @@ export { readPrerenderSecret } from "./server-manifest.js";
 
 const EXPERIMENTAL_PPR_FALLBACK_SHELLS_ENV = "__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS";
 
-export function isExperimentalPprFallbackShellGenerationEnabled(
+function isExperimentalPprFallbackShellGenerationEnabled(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
   return env[EXPERIMENTAL_PPR_FALLBACK_SHELLS_ENV] === "1";
