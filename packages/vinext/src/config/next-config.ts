@@ -393,6 +393,8 @@ export type ResolvedNextConfig = {
   reactMaxHeadersLength: number;
   /** Serialized htmlLimitedBots regexp source from next.config. */
   htmlLimitedBots: string | undefined;
+  /** Packages that should stay bundled/transpiled instead of being loaded natively. */
+  transpilePackages: string[];
   /**
    * Packages that should be treated as server-external (not bundled by Vite).
    * Sourced from `serverExternalPackages` or the legacy
@@ -1296,6 +1298,7 @@ export async function resolveNextConfig(
       expireTime: DEFAULT_EXPIRE_TIME,
       reactMaxHeadersLength: DEFAULT_REACT_MAX_HEADERS_LENGTH,
       htmlLimitedBots: undefined,
+      transpilePackages: [],
       serverExternalPackages: [],
       cacheHandler: undefined,
       cacheMaxMemorySize: undefined,
@@ -1463,6 +1466,19 @@ export async function resolveNextConfig(
     experimental?.serverComponentsExternalPackages,
   );
   const serverExternalPackages = topLevelServerExternalPackages ?? legacyServerComponentsExternal;
+  const transpilePackages = Array.isArray(config.transpilePackages)
+    ? readStringArray(config.transpilePackages)
+    : [];
+  const externalPackageConflicts = transpilePackages.filter((pkg) =>
+    serverExternalPackages.includes(pkg),
+  );
+  if (externalPackageConflicts.length > 0) {
+    throw new Error(
+      `The packages specified in the 'transpilePackages' conflict with the 'serverExternalPackages': ${externalPackageConflicts.join(
+        ", ",
+      )}`,
+    );
+  }
 
   // Warn about unsupported experimental.swcEnvOptions. vinext uses Vite for
   // transforms, not SWC, so automatic polyfill injection is not applicable.
@@ -1616,6 +1632,7 @@ export async function resolveNextConfig(
         ? config.reactMaxHeadersLength
         : DEFAULT_REACT_MAX_HEADERS_LENGTH,
     htmlLimitedBots,
+    transpilePackages,
     serverExternalPackages,
     cacheHandler,
     cacheMaxMemorySize,

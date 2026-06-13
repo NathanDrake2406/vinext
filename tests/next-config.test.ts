@@ -1369,6 +1369,17 @@ describe("resolveNextConfig serverExternalPackages", () => {
     });
     expect(resolved.serverExternalPackages).toEqual(["payload"]);
   });
+
+  it("throws when serverExternalPackages conflicts with transpilePackages", async () => {
+    await expect(
+      resolveNextConfig({
+        serverExternalPackages: ["payload", "sharp"],
+        transpilePackages: ["payload"],
+      }),
+    ).rejects.toThrow(
+      "The packages specified in the 'transpilePackages' conflict with the 'serverExternalPackages': payload",
+    );
+  });
 });
 
 describe("resolveNextConfig serverActionsBodySizeLimit", () => {
@@ -1846,6 +1857,7 @@ describe("detectNextIntlConfig", () => {
       serverActionsBodySizeLimit: 1 * 1024 * 1024,
       serverActionsBodySizeLimitLabel: "1 MB",
       htmlLimitedBots: undefined,
+      transpilePackages: [],
       serverExternalPackages: [],
       cacheHandler: undefined,
       cacheMaxMemorySize: undefined,

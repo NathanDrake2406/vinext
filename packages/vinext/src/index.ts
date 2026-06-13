@@ -118,6 +118,7 @@ import {
   INSTRUMENTATION_CLIENT_EMPTY_MODULE,
 } from "./client/instrumentation-client-inject.js";
 import { createMiddlewareServerOnlyPlugin } from "./plugins/middleware-server-only.js";
+import { createServerNodeExternalsPlugin } from "./plugins/server-node-externals.js";
 import { createOptimizeImportsPlugin } from "./plugins/optimize-imports.js";
 import { createDynamicPreloadMetadataPlugin } from "./plugins/dynamic-preload-metadata.js";
 import { createOgInlineFetchAssetsPlugin, createOgAssetsPlugin } from "./plugins/og-assets.js";
@@ -1137,6 +1138,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         middlewarePath ? (tryRealpathSync(middlewarePath) ?? middlewarePath) : null,
       serverOnlyShimPath: resolveShimModulePath(shimsDir, "server-only"),
     }),
+    createServerNodeExternalsPlugin({
+      getAppDir: () => (hasAppDir ? appDir : null),
+      getPagesDir: () => (hasPagesDir ? pagesDir : null),
+      getServerExternalPackages: () => nextConfig?.serverExternalPackages ?? [],
+      getTranspilePackages: () => nextConfig?.transpilePackages ?? [],
+      isEnabled: () => !hasCloudflarePlugin && !hasNitroPlugin,
+    }),
     // Resolve `data:text/css[+module],...` imports into virtual CSS files so
     // Vite's CSS pipeline (LightningCSS, CSS modules) processes them instead
     // of leaving the data URL as a runtime import that Node/workerd cannot
@@ -1427,6 +1435,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // `vinext:compiler-define-server` configEnvironment hook below, which
         // Vite merges over this base value for server environments only.
         defines["process.env.NEXT_RUNTIME"] = '""';
+        // Legacy Next.js browser sentinel. Client bundles receive `true`, and
+        // server environments override it to `false` below. Some packages still
+        // branch on this instead of `typeof window`.
+        //
+        // Mirrors Next.js: packages/next/src/build/define-env.ts.
+        defines["process.browser"] = JSON.stringify(true);
         // Next.js version compat — mirrors Next.js' `process.env.__NEXT_VERSION`,
         // which is substituted by their webpack DefinePlugin at build time
         // (see `packages/next/src/client/next.ts` line 5 and
@@ -3967,6 +3981,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // `process.env.NEXT_RUNTIME` to construct revalidation paths would then
         // compute `'/nodejs'` correctly instead of `''` (issue #1365).
         serverDefines["process.env.NEXT_RUNTIME"] = JSON.stringify("nodejs");
+        serverDefines["process.browser"] = JSON.stringify(false);
 
         // On-demand ISR revalidation secret — baked SERVER-ONLY (the `client`
         // early-return above guarantees it never reaches the browser bundle) so
