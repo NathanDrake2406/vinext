@@ -1791,14 +1791,14 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           navigationKind,
           visitedResponse,
         });
-        const routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
+        let routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
         const hasPrefetchCandidate =
           prefetchProbeDecision.kind === "probe" &&
           hasPrefetchCacheEntryForNavigation(
             rscUrl,
             requestInterceptionContext,
             mountedSlotsHeader,
-            { notifyInvalidation: false },
+            { evictIncompatibleExactEntry: true, notifyInvalidation: false },
           );
         const reuseDecision = navigationPlanner.classifyNavigationReuse({
           bypassNavigationCache: shouldBypassNavigationCache,
@@ -1917,6 +1917,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             navResponseUrl = prefetchedResponse.url;
           }
           if (!navResponse) {
+            routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
             fallbackReuseDecision = navigationPlanner.classifyNavigationReuse({
               bypassNavigationCache: shouldBypassNavigationCache,
               navigationKind,

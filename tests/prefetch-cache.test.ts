@@ -299,6 +299,37 @@ describe("prefetch cache eviction", () => {
     expect(prefetched.has(originalRscUrl)).toBe(false);
   });
 
+  it("can evict a slot-incompatible exact navigation candidate before fallback", () => {
+    const cache = getPrefetchCache();
+    const prefetched = getPrefetchedUrls();
+    const rscUrl = "/parallel-slots.rsc";
+    const prefetchedSlotsHeader = "slot:slotA:/parallel-slots";
+    const navigationSlotsHeader = "slot:slotB:/parallel-slots";
+
+    cache.set(rscUrl, {
+      mountedSlotsHeader: prefetchedSlotsHeader,
+      outcome: "cache-seeded",
+      snapshot: {
+        buffer: new TextEncoder().encode("parallel-flight").buffer,
+        contentType: "text/x-component",
+        mountedSlotsHeader: prefetchedSlotsHeader,
+        paramsHeader: null,
+        url: rscUrl,
+      },
+      timestamp: Date.now(),
+    });
+    prefetched.add(rscUrl);
+
+    expect(
+      hasPrefetchCacheEntryForNavigation(rscUrl, null, navigationSlotsHeader, {
+        evictIncompatibleExactEntry: true,
+        notifyInvalidation: false,
+      }),
+    ).toBe(false);
+    expect(cache.has(rscUrl)).toBe(false);
+    expect(prefetched.has(rscUrl)).toBe(false);
+  });
+
   it("keeps learning-only prefetch responses out of navigation consumption", () => {
     const cache = getPrefetchCache();
     const prefetched = getPrefetchedUrls();

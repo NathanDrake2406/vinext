@@ -259,7 +259,7 @@ declare module "next/navigation" {
     rscUrl: string,
     interceptionContext?: string | null,
     mountedSlotsHeader?: string | null,
-    options?: { notifyInvalidation?: boolean },
+    options?: { evictIncompatibleExactEntry?: boolean; notifyInvalidation?: boolean },
   ): boolean;
   export function storePrefetchResponse(
     rscUrl: string,
