@@ -708,9 +708,7 @@ function readArtifactCompatibilityMetadata(value: unknown): ArtifactCompatibilit
 
 function readSourcePageMetadata(value: unknown): string | null {
   if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || !value.startsWith("/")) {
-    throw new Error("[vinext] Invalid __sourcePage in App Router payload: expected absolute path");
-  }
+  if (typeof value !== "string" || !value.startsWith("/")) return null;
   return value;
 }
 

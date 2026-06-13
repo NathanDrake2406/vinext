@@ -88,6 +88,16 @@ describe("AppElementsWire", () => {
     });
   });
 
+  it("degrades malformed optional source-page metadata to null", () => {
+    const decoded = AppElementsWire.decode({
+      [APP_ROOT_LAYOUT_KEY]: "/",
+      [APP_ROUTE_KEY]: AppElementsWire.encodeRouteId("/dashboard", null),
+      [APP_SOURCE_PAGE_KEY]: "dashboard/page",
+    });
+
+    expect(AppElementsWire.readMetadata(decoded).sourcePage).toBeNull();
+  });
+
   it("creates the canonical metadata entries for outgoing AppElements records", () => {
     const metadata = AppElementsWire.createMetadataEntries({
       interceptionContext: null,
