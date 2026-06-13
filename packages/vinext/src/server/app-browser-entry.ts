@@ -31,6 +31,7 @@ import {
   getClientNavigationRenderContext,
   getBfcacheIdMapContext,
   getPrefetchCache,
+  hasPrefetchCacheEntryForNavigation,
   invalidatePrefetchCache,
   decodeRedirectError,
   isRedirectError,
@@ -64,7 +65,7 @@ import {
   consumeAppRouterScrollIntent,
   type AppRouterScrollIntent,
 } from "vinext/shims/app-router-scroll-state";
-import { installWindowNext } from "../client/window-next.js";
+import { installWindowNext, setWindowNextInternalSourcePage } from "../client/window-next.js";
 import {
   chunksToReadableStream,
   createProgressiveRscStream,
@@ -174,7 +175,11 @@ import {
   VINEXT_RSC_REDIRECT_HEADER,
 } from "./headers.js";
 import { removeStylesheetLinksCoveredByInlineCss } from "./app-inline-css-client.js";
-import { navigationPlanner } from "./navigation-planner.js";
+import {
+  navigationPlanner,
+  type NavigationReuseFactsV0,
+  type VisitedResponseCacheCandidateFactsV0,
+} from "./navigation-planner.js";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
 
@@ -214,6 +219,19 @@ const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
 const optimisticRouteTemplates = new Map<string, OptimisticRouteTemplate>();
 const optimisticRouteTemplateSources = new Set<string>();
 const optimisticRouteTemplateLearning = new Map<string, Promise<void>>();
+
+function claimInitialAppRouterBootstrap(): boolean {
+  if (window.__VINEXT_RSC_ROOT__ || window.__VINEXT_RSC_BOOTSTRAP_STATE__) {
+    return false;
+  }
+  window.__VINEXT_RSC_BOOTSTRAP_STATE__ = "starting";
+  return true;
+}
+
+function markInitialAppRouterBootstrapHydrated(): void {
+  window.__VINEXT_RSC_BOOTSTRAP_STATE__ = "hydrated";
+}
+
 function getBrowserRouteManifest(): RouteManifest | null {
   return getNavigationRuntime()?.bootstrap.routeManifest ?? null;
 }
@@ -692,43 +710,73 @@ function evictVisitedResponseCacheIfNeeded(): void {
   }
 }
 
-function getVisitedResponse(
+type VisitedResponseCacheCandidate =
+  | {
+      cacheKey: string;
+      entry: VisitedResponseCacheEntry;
+      facts: Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "present" }>;
+    }
+  | {
+      cacheKey: string;
+      entry: null;
+      facts: Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "missing" }>;
+    };
+
+function readVisitedResponseCacheCandidate(
   rscUrl: string,
   interceptionContext: string | null,
   mountedSlotsHeader: string | null,
   navigationKind: NavigationKind,
-): VisitedResponseCacheEntry | null {
+): VisitedResponseCacheCandidate {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
   const cached = visitedResponseCache.get(cacheKey);
   if (!cached) {
-    return null;
+    return {
+      cacheKey,
+      entry: null,
+      facts: {
+        candidate: "missing",
+        navigationKind,
+      },
+    };
   }
 
-  if ((cached.response.mountedSlotsHeader ?? null) !== mountedSlotsHeader) {
-    visitedResponseCache.delete(cacheKey);
-    return null;
-  }
-
-  // `isVisitedResponseCacheEntryFresh` is the single source of truth for
-  // freshness and returns `false` for `navigationKind === "refresh"`, so a
-  // refresh falls through to the miss path below.
-  if (
-    isVisitedResponseCacheEntryFresh(cached, {
+  return {
+    cacheKey,
+    entry: cached,
+    facts: {
+      candidate: "present",
+      fresh: isVisitedResponseCacheEntryFresh(cached, {
+        navigationKind,
+        now: Date.now(),
+      }),
+      mountedSlotsMatch: (cached.response.mountedSlotsHeader ?? null) === mountedSlotsHeader,
       navigationKind,
-      now: Date.now(),
-    })
-  ) {
-    // LRU: promote to most-recently-used
-    visitedResponseCache.delete(cacheKey);
-    visitedResponseCache.set(cacheKey, cached);
-    return cached;
+    },
+  };
+}
+
+function applyVisitedResponseCacheCandidateDecision(
+  candidate: VisitedResponseCacheCandidate,
+  decision: ReturnType<typeof navigationPlanner.classifyVisitedResponseCacheCandidate>,
+): VisitedResponseCacheEntry | null {
+  if (candidate.entry === null) {
+    return null;
   }
 
-  // Stale (or refresh) entries are evicted on read. A refresh intentionally
-  // drops any prior snapshot here — the navigation re-fetches and re-stores a
-  // fresh one, so leaving the old entry around would only risk a later
-  // non-refresh navigation reusing a snapshot the user explicitly refreshed.
-  visitedResponseCache.delete(cacheKey);
+  if (decision.kind === "reuse") {
+    // LRU: promote to most-recently-used
+    visitedResponseCache.delete(candidate.cacheKey);
+    visitedResponseCache.set(candidate.cacheKey, candidate.entry);
+    return candidate.entry;
+  }
+
+  // Stale, slot-mismatched, and refresh entries are evicted on read. A refresh
+  // intentionally drops any prior snapshot here — the navigation re-fetches and
+  // re-stores a fresh one, so leaving the old entry around would only risk a
+  // later non-refresh navigation reusing a snapshot the user explicitly
+  // refreshed.
+  visitedResponseCache.delete(candidate.cacheKey);
   return null;
 }
 
@@ -1042,6 +1090,10 @@ function BrowserRoot({
   useLayoutEffect(() => {
     historyController.rememberHistoryStateSnapshot(treeState);
   }, [treeState]);
+
+  useEffect(() => {
+    setWindowNextInternalSourcePage(AppElementsWire.readMetadata(treeState.elements).sourcePage);
+  }, [treeState.elements]);
 
   useLayoutEffect(() => {
     setMountedSlotsHeader(getMountedSlotIdsHeader(stateRef.current.elements));
@@ -1546,6 +1598,8 @@ function registerServerActionCallback(): void {
 }
 
 async function main(): Promise<void> {
+  if (!claimInitialAppRouterBootstrap()) return;
+
   registerServerActionCallback();
 
   if (import.meta.env.DEV) {
@@ -1560,6 +1614,8 @@ async function main(): Promise<void> {
   // persistently broken (post-reload). Bootstrap is a separate synchronous
   // helper so the null-branch structurally cannot reach any RSC bootstrap
   // global assignment, even if a future refactor interposes async work here.
+  // The recovery path reloads the document, which resets the "starting" claim;
+  // this module instance is intentionally not eligible to retry bootstrap.
   if (rscStream === null) return;
   bootstrapHydration(rscStream);
 }
@@ -1596,11 +1652,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     initialNavigationSnapshot,
   });
   const errorShellStyles = document.querySelectorAll("style[data-vinext-error-shell-style]");
-  // Only the SSR shell-error recovery document carries the style marker.
-  // Legacy server-rendered default-error pages also use `__next_error__`, but
-  // keep their existing hydration path so the serialized server error digest
-  // remains available to DefaultGlobalError.
-  if (document.documentElement.id === "__next_error__" && errorShellStyles.length > 0) {
+  if (document.documentElement.id === "__next_error__") {
+    // Next.js client/app-index.tsx uses the document id alone to select CSR
+    // after any failed App Router server render. The style marker only scopes
+    // cleanup to vinext's shell-recovery placeholder styles.
     // There is no server-rendered form to hydrate in this client-render path;
     // reuse only the shared root error callbacks and related root options.
     const { formState: _inertFormState, ...createRootOptions } = hydrateRootOptions;
@@ -1621,6 +1676,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       startTransition,
     });
   }
+  markInitialAppRouterBootstrapHydrated();
 
   const navigateRsc: NavigationRuntimeNavigate = async function navigateRsc(
     href: string,
@@ -1747,15 +1803,56 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             navigationKind === "refresh" ? APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI : undefined,
         });
         const rscUrl = await createRscRequestUrl(url.pathname + url.search, requestHeaders);
-        const cachedRoute = shouldBypassNavigationCache
-          ? null
-          : getVisitedResponse(
+        const visitedResponseCandidate = shouldBypassNavigationCache
+          ? {
+              cacheKey: AppElementsWire.encodeCacheKey(rscUrl, requestInterceptionContext),
+              entry: null,
+              facts: {
+                candidate: "missing",
+                navigationKind,
+              } satisfies Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "missing" }>,
+            }
+          : readVisitedResponseCacheCandidate(
               rscUrl,
               requestInterceptionContext,
               mountedSlotsHeader,
               navigationKind,
             );
-        if (cachedRoute) {
+        const visitedResponseDecision = navigationPlanner.classifyVisitedResponseCacheCandidate(
+          visitedResponseCandidate.facts,
+        );
+        const cachedRoute = applyVisitedResponseCacheCandidateDecision(
+          visitedResponseCandidate,
+          visitedResponseDecision,
+        );
+        const visitedResponse: NavigationReuseFactsV0["visitedResponse"] =
+          cachedRoute === null ? { status: "unavailable" } : { status: "available" };
+        const prefetchProbeDecision = navigationPlanner.classifyNavigationPrefetchProbe({
+          bypassNavigationCache: shouldBypassNavigationCache,
+          navigationKind,
+          visitedResponse,
+        });
+        let routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
+        const hasPrefetchCandidate =
+          prefetchProbeDecision.kind === "probe" &&
+          hasPrefetchCacheEntryForNavigation(
+            rscUrl,
+            requestInterceptionContext,
+            mountedSlotsHeader,
+            { notifyInvalidation: false },
+          );
+        const reuseDecision = navigationPlanner.classifyNavigationReuse({
+          bypassNavigationCache: shouldBypassNavigationCache,
+          navigationKind,
+          optimisticRouteShell:
+            routeManifest === null
+              ? { reason: "routeManifestMissing", status: "unavailable" }
+              : { status: "available" },
+          prefetch: hasPrefetchCandidate ? { status: "available" } : { status: "unavailable" },
+          targetHref: currentHref,
+          visitedResponse,
+        });
+        if (reuseDecision.kind === "reuseVisitedResponse" && cachedRoute) {
           const cachedFetchDecision = navigationPlanner.classifyRscFetchResult({
             clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
             compatibilityIdHeader: cachedRoute.response.compatibilityIdHeader ?? null,
@@ -1844,7 +1941,8 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         let navResponse: Response | undefined;
         let navResponseExpiresAt: number | undefined;
         let navResponseUrl: string | null = null;
-        if (navigationKind !== "refresh" && !shouldBypassNavigationCache) {
+        let fallbackReuseDecision = reuseDecision;
+        if (reuseDecision.kind === "consumePrefetch") {
           const prefetchedResponse = await consumePrefetchResponseForNavigation(
             rscUrl,
             requestInterceptionContext,
@@ -1859,6 +1957,20 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
             navResponseExpiresAt = prefetchedResponse.expiresAt;
             navResponseUrl = prefetchedResponse.url;
           }
+          if (!navResponse) {
+            routeManifest = navigationKind === "navigate" ? getBrowserRouteManifest() : null;
+            fallbackReuseDecision = navigationPlanner.classifyNavigationReuse({
+              bypassNavigationCache: shouldBypassNavigationCache,
+              navigationKind,
+              optimisticRouteShell:
+                routeManifest === null
+                  ? { reason: "routeManifestMissing", status: "unavailable" }
+                  : { status: "available" },
+              prefetch: { status: "unavailable" },
+              targetHref: currentHref,
+              visitedResponse: { status: "unavailable" },
+            });
+          }
         }
 
         // The optimistic shell is intentionally not gated by
@@ -1867,8 +1979,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         // real fetch commits, but that shell is a detached commit (see below)
         // that is always superseded by the authoritative fetch — the same as
         // cross-route navigations — so it never persists stale page content.
-        if (!navResponse && navigationKind === "navigate") {
-          const routeManifest = getBrowserRouteManifest();
+        if (!navResponse && fallbackReuseDecision.kind === "attemptOptimisticRouteShell") {
           await learnOptimisticRouteTemplatesFromPrefetchCache({
             interceptionContext: requestInterceptionContext,
             mountedSlotsHeader,

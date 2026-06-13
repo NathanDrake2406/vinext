@@ -144,8 +144,8 @@ export default function Client() {
   // Local error.tsx routes: the shell fallback must not swallow local
   // boundary semantics. Local boundaries for shell errors materialize
   // client-side from the flight payload (Next.js parity):
-  // - /boundary-ssr-only: throw recurs only on the server, so the browser
-  //   re-render succeeds and the content (not the boundary) appears.
+  // - /boundary-ssr-only: the SSR render error remains represented in the
+  //   initial tree, so the local boundary handles it after client rendering.
   // - /boundary-always: the browser re-render throws again and React catches
   //   it in the local error.tsx delivered in the flight payload.
   const boundarySsrOnlyDir = path.join(appDir, "boundary-ssr-only");
@@ -163,8 +163,10 @@ export default function LocalError() {
   await fs.writeFile(
     path.join(boundarySsrOnlyDir, "page.tsx"),
     `import React from "react";
+import { cookies } from "next/headers";
 import Client from "./Client";
-export default function BoundarySsrOnlyPage() {
+export default async function BoundarySsrOnlyPage() {
+  await cookies();
   return <Client />;
 }
 `,
@@ -186,8 +188,10 @@ export default function Client() {
   await fs.writeFile(
     path.join(boundaryAlwaysDir, "page.tsx"),
     `import React from "react";
+import { cookies } from "next/headers";
 import Client from "./Client";
-export default function BoundaryAlwaysPage() {
+export default async function BoundaryAlwaysPage() {
+  await cookies();
   return <Client />;
 }
 `,
@@ -212,8 +216,10 @@ export default function Client(): React.ReactNode {
   await fs.writeFile(
     path.join(noBoundaryAlwaysDir, "page.tsx"),
     `import React from "react";
+import { cookies } from "next/headers";
 import Client from "./Client";
-export default function NoBoundaryAlwaysPage() {
+export default async function NoBoundaryAlwaysPage() {
+  await cookies();
   return <Client />;
 }
 `,
@@ -293,8 +299,8 @@ test.describe("SSR shell-error recovery (no custom global-error.tsx)", () => {
       await expect(page.locator("#client-content")).toHaveText("Hello Client");
 
       // A genuine server/RSC error also uses the default __next_error__
-      // document, but has no recovery-shell style marker. It must keep the
-      // existing hydrated default-error card instead of entering createRoot.
+      // document and follows Next.js's createRoot recovery path. Unlike the
+      // SSR-only recovery shell, it has no placeholder style marker to remove.
       await page.goto(`${app.baseUrl}/server-error`, { waitUntil: "load" });
       await expect(page.getByRole("heading", { name: "This page couldn’t load" })).toBeVisible();
       await expect(page.getByText("Reload to try again, or go back.")).toBeVisible();
@@ -302,13 +308,11 @@ test.describe("SSR shell-error recovery (no custom global-error.tsx)", () => {
       await expect(page.getByRole("button", { name: "Back" })).toBeVisible();
       await expect(page.locator("style[data-vinext-error-shell-style]")).toHaveCount(0);
 
-      // SSR-only throw with a local error.tsx: browser re-render succeeds, so
-      // the content (not the boundary) appears.
+      // SSR-only throw with a local error.tsx: the error remains represented
+      // in the initial tree and the local boundary provides the visible UX.
       await page.goto(`${app.baseUrl}/boundary-ssr-only`, { waitUntil: "load" });
-      await expect(page.locator("#boundary-ssr-only-content")).toHaveText(
-        "Recovered client render",
-      );
-      await expect(page.locator("#local-error-boundary")).toHaveCount(0);
+      await expect(page.locator("#local-error-boundary")).toHaveText("Local boundary caught it");
+      await expect(page.locator("#boundary-ssr-only-content")).toHaveCount(0);
 
       // Unconditional client throw: the browser re-render throws again and the
       // local error.tsx from the flight payload catches it.
@@ -333,6 +337,9 @@ test.describe("SSR shell-error recovery (no custom global-error.tsx)", () => {
           !message.includes("always no boundary throw") &&
           !message.includes("genuine server digest error") &&
           !message.includes("Expected error to opt out of server rendering") &&
+          // The recovery and global-error documents intentionally preserve
+          // their HTTP 500 status, which browsers report as a resource error.
+          !message.includes("Failed to load resource: the server responded with a status of 500") &&
           // React's companion log for an error caught by a boundary.
           !message.startsWith("The above error occurred in a React component"),
       );

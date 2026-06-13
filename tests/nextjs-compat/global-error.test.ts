@@ -89,7 +89,9 @@ describe("Next.js compat: global-error", () => {
     // Source: index.test.ts#L29-L49
     const { res, html } = await fetchHtml(baseUrl, "/nextjs-compat/global-error-rsc");
     expect(res.status).toBe(500);
-    expect(res.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    expect(res.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
     expect(html).toContain("global-error");
     expect(html).toContain("server page error");
   });
@@ -105,7 +107,9 @@ describe("Next.js compat: global-error", () => {
     // Source: index.test.ts#L51-L66
     const { res, html } = await fetchHtml(baseUrl, "/nextjs-compat/global-error-ssr");
     expect(res.status).toBe(500);
-    expect(res.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    expect(res.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
     expect(html).toContain("global-error");
     expect(html).toContain("client page error");
   });
