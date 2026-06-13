@@ -1,17 +1,7 @@
 import type { ReactNode } from "react";
 import type { NavigationContext } from "vinext/shims/navigation";
 import type { RootParams } from "vinext/shims/root-params";
-import {
-  consumeDynamicUsage,
-  consumeInvalidDynamicUsageError,
-  consumeRenderRequestApiUsage,
-} from "vinext/shims/headers";
-import { _consumeRequestScopedCacheLife } from "vinext/shims/cache";
-import {
-  consumeDynamicFetchObservations,
-  type FetchCacheMode,
-  getCollectedFetchTags,
-} from "vinext/shims/fetch-cache";
+import { type FetchCacheMode } from "vinext/shims/fetch-cache";
 import {
   createPprFallbackShellState,
   isPprFallbackShellAbortError,
@@ -21,18 +11,10 @@ import {
   type PprFallbackShellState,
 } from "vinext/shims/ppr-fallback-shell";
 import type { AppPagePprFallbackCacheShell } from "./app-ppr-fallback-shell.js";
-import { buildPageCacheTags } from "./implicit-tags.js";
-import { readStreamAsText } from "../utils/text-stream.js";
-import {
-  readAppPageBinaryStream,
-  teeAppPageRscStreamForCapture,
-  type AppPageFontPreload,
-} from "./app-page-execution.js";
-import {
-  createAppPageHtmlOutputScope,
-  createAppPageRenderObservation,
-} from "./app-page-render-observation.js";
-import { isAppSsrRenderResult, type AppPageSsrHandler } from "./app-page-stream.js";
+import { readAppPageBinaryStream, type AppPageFontPreload } from "./app-page-execution.js";
+import { discardAppPageRenderState } from "./app-page-render-observation.js";
+import { renderAppPageCacheArtifacts } from "./app-page-cache-render.js";
+import type { AppPageSsrHandler } from "./app-page-stream.js";
 import type { AppPageFallbackShellCacheRenderResult } from "./app-page-cache.js";
 
 type AppPageParams = Record<string, string | string[]>;
@@ -44,7 +26,6 @@ type AppPageBoundaryOnError = (
 ) => unknown;
 
 type AppPageRenderableElement = ReactNode | Record<string, ReactNode>;
-type RequestScopedCacheLife = ReturnType<typeof _consumeRequestScopedCacheLife>;
 type FallbackShellRoute = {
   pattern: string;
   routeSegments: readonly string[];
@@ -107,14 +88,6 @@ export type FallbackShellRenderDeps = {
   }) => void;
 };
 
-function buildAppPageTags(
-  cleanPathname: string,
-  extraTags: string[],
-  routeSegments: readonly string[],
-): string[] {
-  return buildPageCacheTags(cleanPathname, extraTags, [...routeSegments], "page");
-}
-
 export async function warmPprFallbackShellCaches(options: {
   element: AppPageRenderableElement;
   onError: AppPageBoundaryOnError;
@@ -149,115 +122,6 @@ export async function warmPprFallbackShellCaches(options: {
   if (warmupError) {
     throw warmupError;
   }
-}
-
-function discardPprFallbackShellRenderState(): void {
-  _consumeRequestScopedCacheLife();
-  consumeDynamicFetchObservations();
-  consumeRenderRequestApiUsage();
-  consumeInvalidDynamicUsageError();
-  consumeDynamicUsage();
-}
-
-async function renderFinalPprFallbackShellHtml({
-  deps,
-  element,
-  onError,
-}: {
-  deps: FallbackShellRenderDeps;
-  element: AppPageRenderableElement;
-  onError: AppPageBoundaryOnError;
-}): Promise<string> {
-  const finalRscStream = deps.renderToReadableStream(element, {
-    onError,
-  });
-  const finalRscCapture = teeAppPageRscStreamForCapture(finalRscStream, true);
-  const capturedRscDataRef: { value: Promise<ArrayBuffer> | null } = {
-    value: null,
-  };
-  const ssrHandler = await deps.loadSsrHandler();
-  const htmlStream = await ssrHandler.handleSsr(
-    finalRscCapture.ssrStream,
-    deps.getNavigationContext(),
-    {
-      links: deps.getFontLinks(),
-      styles: deps.getFontStyles(),
-      preloads: deps.getFontPreloads(),
-    },
-    {
-      basePath: deps.basePath,
-      clientTraceMetadata: deps.clientTraceMetadata,
-      rootParams: deps.rootParams,
-      ...(finalRscCapture.sideStream
-        ? {
-            sideStream: finalRscCapture.sideStream,
-            capturedRscDataRef,
-          }
-        : {}),
-    },
-  );
-  const htmlStreamNormalized = isAppSsrRenderResult(htmlStream)
-    ? htmlStream.htmlStream
-    : htmlStream;
-  const html = await readStreamAsText(htmlStreamNormalized);
-  try {
-    await capturedRscDataRef.value;
-  } catch {
-    // HTML rendering owns the user-visible error path. The fallback-shell
-    // regeneration only writes HTML, but observing the capture promise
-    // prevents a secondary unhandled rejection from the tee side stream.
-  }
-  return html;
-}
-
-function buildPprFallbackShellCacheResult({
-  cacheLife,
-  deps,
-  element,
-  fallbackShell,
-  html,
-}: {
-  cacheLife: RequestScopedCacheLife;
-  deps: FallbackShellRenderDeps;
-  element: AppPageRenderableElement;
-  fallbackShell: AppPagePprFallbackCacheShell;
-  html: string;
-}): AppPageFallbackShellCacheRenderResult {
-  const tags = buildAppPageTags(
-    fallbackShell.pathname,
-    getCollectedFetchTags(),
-    deps.route.routeSegments,
-  );
-  const observationState = {
-    dynamicFetches: consumeDynamicFetchObservations(),
-    requestApis: consumeRenderRequestApiUsage(),
-  };
-  consumeInvalidDynamicUsageError();
-  consumeDynamicUsage();
-
-  return {
-    html,
-    htmlRenderObservation: createAppPageRenderObservation({
-      boundaryOutcome: { kind: "success" },
-      cacheability: "public",
-      cacheTags: tags,
-      cleanPathname: fallbackShell.pathname,
-      completeness: "complete",
-      output: createAppPageHtmlOutputScope({
-        element,
-        renderEpoch: null,
-        rootBoundaryId: null,
-        routePattern: deps.route.pattern,
-      }),
-      params: fallbackShell.params,
-      state: observationState,
-    }),
-    tags,
-    cacheControl:
-      typeof cacheLife?.revalidate === "number"
-        ? { revalidate: cacheLife.revalidate, expire: cacheLife.expire }
-        : undefined,
-  };
 }
 
 function createPprFallbackShellRevalidationOptions(
@@ -324,7 +188,7 @@ async function renderPprFallbackShellCacheEntry({
         renderToReadableStream: deps.renderToReadableStream,
         state: fallbackShellState,
       });
-      discardPprFallbackShellRenderState();
+      discardAppPageRenderState();
 
       setPprFallbackShellNavigationContext(deps, fallbackShell, fallbackSearchParams);
       const finalElement = await buildPprFallbackShellElement(
@@ -332,21 +196,31 @@ async function renderPprFallbackShellCacheEntry({
         fallbackShell,
         fallbackSearchParams,
       );
-      const html = await renderFinalPprFallbackShellHtml({
-        deps,
+      const rendered = await renderAppPageCacheArtifacts({
+        basePath: deps.basePath,
+        captureRscData: false,
+        cleanPathname: fallbackShell.pathname,
+        clientTraceMetadata: deps.clientTraceMetadata,
         element: finalElement,
+        getFontLinks: deps.getFontLinks,
+        getFontPreloads: deps.getFontPreloads,
+        getFontStyles: deps.getFontStyles,
+        getNavigationContext: deps.getNavigationContext,
+        loadSsrHandler: deps.loadSsrHandler,
+        navigationParams: fallbackShell.params,
         onError,
+        renderToReadableStream: deps.renderToReadableStream,
+        rootParams: deps.rootParams,
+        route: deps.route,
       });
-      const cacheLife = _consumeRequestScopedCacheLife();
-      return buildPprFallbackShellCacheResult({
-        cacheLife,
-        deps,
-        element: finalElement,
-        fallbackShell,
-        html,
-      });
+      return {
+        html: rendered.html,
+        htmlRenderObservation: rendered.htmlRenderObservation,
+        tags: rendered.tags,
+        cacheControl: rendered.cacheControl,
+      };
     } finally {
-      discardPprFallbackShellRenderState();
+      discardAppPageRenderState();
       deps.clearRequestContext();
     }
   });

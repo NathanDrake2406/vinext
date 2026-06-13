@@ -11,7 +11,6 @@ import type { RootParams } from "vinext/shims/root-params";
 import {
   consumeDynamicUsage,
   consumeInvalidDynamicUsageError,
-  consumeRenderRequestApiUsage,
   getAndClearPendingCookies,
   getDraftModeCookieHeader,
   isDraftModeRequest,
@@ -28,7 +27,6 @@ import {
 } from "vinext/shims/ppr-fallback-shell";
 import {
   ensureFetchPatch,
-  consumeDynamicFetchObservations,
   type FetchCacheMode,
   getCollectedFetchTags,
   peekDynamicFetchObservations,
@@ -55,12 +53,10 @@ import {
   resolveAppPageParentHttpAccessBoundary,
   resolveAppPageParentHttpAccessBoundaryModule,
 } from "./app-page-boundary.js";
-import { readStreamAsText } from "../utils/text-stream.js";
 import {
   buildAppPageSpecialErrorResponse,
   probeAppPageThrownError,
   resolveAppPageSpecialError,
-  teeAppPageRscStreamForCapture,
   type AppPageFontPreload,
   type AppPageSpecialError,
   type LayoutClassificationOptions,
@@ -76,10 +72,10 @@ import {
 } from "./app-page-request.js";
 import { renderAppPageLifecycle } from "./app-page-render.js";
 import {
-  createAppPageHtmlOutputScope,
-  createAppPageRenderObservation,
-  createAppPageRscOutputScope,
+  consumeAppPageRenderObservationState,
+  discardAppPageRenderState,
 } from "./app-page-render-observation.js";
+import { renderAppPageCacheArtifacts } from "./app-page-cache-render.js";
 import {
   mergeMiddlewareResponseHeaders,
   type AppPageMiddlewareContext,
@@ -96,10 +92,10 @@ import {
 } from "./app-rsc-render-mode.js";
 import { shouldServeStreamingMetadata } from "./streaming-metadata.js";
 import { createAppPageTreePath } from "./app-page-route-wiring.js";
-import { isAppSsrRenderResult, type AppPageSsrHandler } from "./app-page-stream.js";
+import type { AppPageSsrHandler } from "./app-page-stream.js";
 import type { ClientReuseManifestParseResult } from "./client-reuse-manifest.js";
 import { createStaticGenerationHeadersContext } from "./app-static-generation.js";
-import { buildPageCacheTags } from "./implicit-tags.js";
+import { buildAppPageTags } from "./implicit-tags.js";
 import type { ISRCacheEntry } from "./isr-cache.js";
 import {
   createAppLayoutParamAccessTracker,
@@ -439,14 +435,6 @@ function hasSearchParams(searchParams: URLSearchParams | null | undefined): bool
   return searchParams !== null && searchParams !== undefined && searchParams.size > 0;
 }
 
-function buildAppPageTags(
-  cleanPathname: string,
-  extraTags: string[],
-  routeSegments: readonly string[],
-): string[] {
-  return buildPageCacheTags(cleanPathname, extraTags, [...routeSegments], "page");
-}
-
 async function runAppPageRevalidationContext<
   TResult extends {
     html: string;
@@ -490,18 +478,6 @@ async function runAppPageRevalidationContext<
     });
     return await runWithFetchDedupe(renderFn);
   });
-}
-
-function getCapturedRscDataPromise(
-  capturedRscDataPromise: Promise<ArrayBuffer> | null,
-): Promise<ArrayBuffer> {
-  if (!capturedRscDataPromise) {
-    throw new Error(
-      "[vinext] Expected captured RSC data while regenerating an app page cache entry",
-    );
-  }
-
-  return capturedRscDataPromise;
 }
 
 type PprFallbackShellEligibility =
@@ -857,93 +833,34 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
             );
             // No inner runWithFetchDedupe here: this renderFn is already
             // wrapped in runWithFetchDedupe by runAppPageRevalidationContext.
-            const revalidatedRscStream = options.renderToReadableStream(revalidatedElement, {
+            const rendered = await renderAppPageCacheArtifacts({
+              basePath: options.basePath,
+              captureRscData: true,
+              cleanPathname: options.cleanPathname,
+              clientTraceMetadata: options.clientTraceMetadata,
+              element: revalidatedElement,
+              getFontLinks: options.getFontLinks,
+              getFontPreloads: options.getFontPreloads,
+              getFontStyles: options.getFontStyles,
+              getNavigationContext: options.getNavigationContext,
+              loadSsrHandler: options.loadSsrHandler,
+              mountedSlotsHeader: options.mountedSlotsHeader,
+              navigationParams: revalidationTarget.navigationParams,
               onError: revalidatedOnError,
+              reactMaxHeadersLength: options.reactMaxHeadersLength,
+              renderToReadableStream: options.renderToReadableStream,
+              rootParams: options.rootParams,
+              route: revalidationTarget.route,
+              waitForAllReady: true,
             });
-            const revalidatedRscCapture = teeAppPageRscStreamForCapture(revalidatedRscStream, true);
-            const revalidatedSsrEntry = await options.loadSsrHandler();
-            const revalidatedCapturedRscRef: { value: Promise<ArrayBuffer> | null } = {
-              value: null,
-            };
-            const revalidatedHtmlResult = await revalidatedSsrEntry.handleSsr(
-              revalidatedRscCapture.ssrStream,
-              options.getNavigationContext(),
-              {
-                links: options.getFontLinks(),
-                styles: options.getFontStyles(),
-                preloads: options.getFontPreloads(),
-              },
-              {
-                basePath: options.basePath,
-                clientTraceMetadata: options.clientTraceMetadata,
-                reactMaxHeadersLength: options.reactMaxHeadersLength,
-                rootParams: options.rootParams,
-                waitForAllReady: true,
-                ...(revalidatedRscCapture.sideStream
-                  ? {
-                      sideStream: revalidatedRscCapture.sideStream,
-                      capturedRscDataRef: revalidatedCapturedRscRef,
-                    }
-                  : {}),
-              },
-            );
-            const revalidatedHtmlStream = isAppSsrRenderResult(revalidatedHtmlResult)
-              ? revalidatedHtmlResult.htmlStream
-              : revalidatedHtmlResult;
-            const html = await readStreamAsText(revalidatedHtmlStream);
-            const rscData = await getCapturedRscDataPromise(revalidatedCapturedRscRef.value);
-            const cacheLife = _consumeRequestScopedCacheLife();
             options.clearRequestContext();
-            const tags = buildAppPageTags(
-              options.cleanPathname,
-              getCollectedFetchTags(),
-              revalidationTarget.route.routeSegments,
-            );
-            // Consume once: HTML and RSC artifacts are produced by the same
-            // regeneration render and should carry the same observation set.
-            const observationState = {
-              dynamicFetches: consumeDynamicFetchObservations(),
-              requestApis: consumeRenderRequestApiUsage(),
-            };
             return {
-              html,
-              htmlRenderObservation: createAppPageRenderObservation({
-                boundaryOutcome: { kind: "success" },
-                cacheability: "public",
-                cacheTags: tags,
-                cleanPathname: options.cleanPathname,
-                completeness: "complete",
-                output: createAppPageHtmlOutputScope({
-                  element: revalidatedElement,
-                  renderEpoch: null,
-                  rootBoundaryId: null,
-                  routePattern: revalidationTarget.route.pattern,
-                }),
-                params: revalidationTarget.navigationParams,
-                state: observationState,
-              }),
-              rscData,
-              rscRenderObservation: createAppPageRenderObservation({
-                boundaryOutcome: { kind: "success" },
-                cacheability: "public",
-                cacheTags: tags,
-                cleanPathname: options.cleanPathname,
-                completeness: "complete",
-                output: createAppPageRscOutputScope({
-                  element: revalidatedElement,
-                  mountedSlotsHeader: options.mountedSlotsHeader,
-                  renderEpoch: null,
-                  rootBoundaryId: null,
-                  routePattern: revalidationTarget.route.pattern,
-                }),
-                params: revalidationTarget.navigationParams,
-                state: observationState,
-              }),
-              tags,
-              cacheControl:
-                typeof cacheLife?.revalidate === "number"
-                  ? { revalidate: cacheLife.revalidate, expire: cacheLife.expire }
-                  : undefined,
+              html: rendered.html,
+              htmlRenderObservation: rendered.htmlRenderObservation,
+              rscData: rendered.rscData!,
+              rscRenderObservation: rendered.rscRenderObservation,
+              tags: rendered.tags,
+              cacheControl: rendered.cacheControl,
             };
           },
         );
@@ -1116,11 +1033,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       renderToReadableStream: options.renderToReadableStream,
       state: fallbackShellState,
     });
-    _consumeRequestScopedCacheLife();
-    consumeDynamicFetchObservations();
-    consumeRenderRequestApiUsage();
-    consumeInvalidDynamicUsageError();
-    consumeDynamicUsage();
+    discardAppPageRenderState();
   }
 
   const pageBuildResult = await buildCurrentPageElement();
@@ -1152,12 +1065,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     clearRequestContext: options.clearRequestContext,
     consumeDynamicUsage,
     consumeInvalidDynamicUsageError,
-    consumeRenderObservationState() {
-      return {
-        dynamicFetches: consumeDynamicFetchObservations(),
-        requestApis: consumeRenderRequestApiUsage(),
-      };
-    },
+    consumeRenderObservationState: consumeAppPageRenderObservationState,
     createRscOnErrorHandler(pathname, routePath) {
       return options.createRscOnErrorHandler(pathname, routePath);
     },
