@@ -654,7 +654,8 @@ export function createPagesPageHandler(
 
         // ── _next/data JSON envelope short-circuit ─────────────────────────
         // For client-side navigations Next.js fetches /_next/data/<buildId>/<page>.json
-        // and expects { pageProps } as JSON instead of the full HTML page.
+        // and expects the full props envelope (pageProps plus any app-level
+        // props like __N_SSP, __N_SSG) as JSON instead of the full HTML page.
         if (isDataReq) {
           const init: ResponseInit & { headers: Record<string, string> } = { headers: {} };
           if (gsspRes && typeof gsspRes.getHeaders === "function") {
