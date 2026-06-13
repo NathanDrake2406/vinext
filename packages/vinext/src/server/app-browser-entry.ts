@@ -1579,6 +1579,8 @@ async function main(): Promise<void> {
   // persistently broken (post-reload). Bootstrap is a separate synchronous
   // helper so the null-branch structurally cannot reach any RSC bootstrap
   // global assignment, even if a future refactor interposes async work here.
+  // The recovery path reloads the document, which resets the "starting" claim;
+  // this module instance is intentionally not eligible to retry bootstrap.
   if (rscStream === null) return;
   bootstrapHydration(rscStream);
 }
