@@ -6555,10 +6555,10 @@ describe("Pages Router dev ISR regeneration", () => {
               regenSsrContext = getRequestContext().ssrContext;
               regenI18nContext = getRequestContext().i18nContext;
               return {
-                props: {
+                props: Promise.resolve({
                   timestamp: Date.now(),
                   message: "fresh",
-                },
+                }),
                 revalidate: 1,
               };
             },

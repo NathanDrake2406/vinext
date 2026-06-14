@@ -1149,7 +1149,10 @@ export function createSSRHandler(
                         ? freshResult.revalidate
                         : (cached.value.cacheControl?.revalidate ?? 0);
                     if (revalidate > 0) {
-                      freshPageProps = { ...freshPageProps, ...freshResult.props };
+                      freshPageProps = {
+                        ...freshPageProps,
+                        ...(await Promise.resolve(freshResult.props)),
+                      };
                       freshRenderProps = { ...freshRenderProps, pageProps: freshPageProps };
 
                       if (typeof routerShim.setSSRContext === "function") {

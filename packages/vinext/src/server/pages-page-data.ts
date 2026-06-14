@@ -49,7 +49,7 @@ type PagesStaticPathsResult = {
 };
 
 type PagesPagePropsResult = {
-  props?: Record<string, unknown>;
+  props?: Record<string, unknown> | Promise<Record<string, unknown>>;
   redirect?: PagesRedirectResult;
   notFound?: boolean;
   revalidate?: number;
@@ -842,7 +842,10 @@ export async function resolvePagesPageData(
             });
 
             if (freshResult?.props) {
-              freshPageProps = { ...freshPageProps, ...freshResult.props };
+              freshPageProps = {
+                ...freshPageProps,
+                ...((await Promise.resolve(freshResult.props)) as Record<string, unknown>),
+              };
               freshRenderProps = { ...freshRenderProps, pageProps: freshPageProps };
             }
 
@@ -935,7 +938,10 @@ export async function resolvePagesPageData(
     }
 
     if (result?.props) {
-      pageProps = { ...pageProps, ...result.props };
+      pageProps = {
+        ...pageProps,
+        ...((await Promise.resolve(result.props)) as Record<string, unknown>),
+      };
       renderProps = { ...renderProps, pageProps };
     }
 
