@@ -199,6 +199,30 @@ describe("middleware", () => {
     expect(result.response.headers.get("x-nextjs-rewrite")).toBeNull();
   });
 
+  it("exposes the final config rewrite URL with appended source params", async () => {
+    const result = await runPagesRequest(
+      makeRequest("/config-rewrite-to-dynamic-static/post-2"),
+      baseDeps({
+        isDataRequest: true,
+        configRewrites: {
+          beforeFiles: [
+            {
+              source: "/config-rewrite-to-dynamic-static/:rewriteSlug",
+              destination: "/ssg",
+            },
+          ],
+          afterFiles: [],
+          fallback: [],
+        },
+        renderPage: makeRenderPage(200),
+      }),
+    );
+
+    expect(result.type).toBe("response");
+    if (result.type !== "response") return;
+    expect(result.response.headers.get("x-nextjs-rewrite")).toBe("/ssg?rewriteSlug=post-2");
+  });
+
   // 6. Middleware response short-circuit → {type:"response"} with middleware response
   it("middleware response short-circuit returns the middleware response", async () => {
     const middlewareResponse = new Response("blocked", { status: 403 });

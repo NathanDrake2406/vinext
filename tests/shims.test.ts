@@ -15200,10 +15200,10 @@ describe("Pages Router concurrent navigation", () => {
       __vinext: { ...win.__NEXT_DATA__.__vinext, hasMiddleware: true },
     });
     Object.assign(win, {
-      __VINEXT_PAGE_PATTERNS__: ["/source/[slug]", "/destination/[slug]"],
+      __VINEXT_PAGE_PATTERNS__: ["/source/[slug]", "/destination"],
       __VINEXT_PAGE_LOADERS__: {
         "/source/[slug]": sourceLoader,
-        "/destination/[slug]": destinationLoader,
+        "/destination": destinationLoader,
       },
     });
     (globalThis as any).window = win;
@@ -15213,7 +15213,7 @@ describe("Pages Router concurrent navigation", () => {
         new Response(JSON.stringify({ pageProps: { slug: "post", rewritten: true } }), {
           headers: {
             "content-type": "application/json",
-            "x-nextjs-rewrite": "/destination/post",
+            "x-nextjs-rewrite": "/destination?rewriteSlug=post",
           },
         }),
     );
@@ -15232,8 +15232,8 @@ describe("Pages Router concurrent navigation", () => {
       expect(destinationLoader).toHaveBeenCalledOnce();
       expect(win.location.pathname).toBe("/source/post");
       expect(win.__NEXT_DATA__).toMatchObject({
-        page: "/destination/[slug]",
-        query: { slug: "post" },
+        page: "/destination",
+        query: { rewriteSlug: "post" },
         props: { pageProps: { slug: "post", rewritten: true } },
       });
       expect(render).toHaveBeenCalled();
