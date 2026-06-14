@@ -551,6 +551,9 @@ export function createSSRHandler(
     }
 
     const { route, params } = match;
+    // Implements the Next.js `req.url` contract: data-fetching methods observe
+    // the original request URL. For ordinary page requests this defaults to
+    // `url`, so the assignment is a no-op.
     req.url = originalUrl;
     const parsedResolvedUrl = new URL(localeStrippedUrl, "http://vinext.local");
     const originalRequestSearch = new URL(originalUrl, "http://vinext.local").search;
