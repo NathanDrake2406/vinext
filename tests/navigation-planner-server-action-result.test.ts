@@ -5,15 +5,13 @@ import {
 } from "../packages/vinext/src/server/navigation-trace.js";
 import {
   navigationPlanner,
-  type RscNavigationErrorDecisionV0,
-  type RscNavigationErrorFactsV0,
-  type ServerActionResultDecisionV0,
-  type ServerActionResultFactsV0,
+  type RscNavigationErrorDecision,
+  type RscNavigationErrorFacts,
+  type ServerActionResultDecision,
+  type ServerActionResultFacts,
 } from "../packages/vinext/src/server/navigation-planner.js";
 
-function createFacts(
-  overrides: Partial<ServerActionResultFactsV0> = {},
-): ServerActionResultFactsV0 {
+function createFacts(overrides: Partial<ServerActionResultFacts> = {}): ServerActionResultFacts {
   return {
     actionRedirectHref: null,
     actionRedirectType: "replace",
@@ -27,14 +25,12 @@ function createFacts(
   };
 }
 
-function classify(
-  overrides: Partial<ServerActionResultFactsV0> = {},
-): ServerActionResultDecisionV0 {
+function classify(overrides: Partial<ServerActionResultFacts> = {}): ServerActionResultDecision {
   return navigationPlanner.classifyServerActionResult(createFacts(overrides));
 }
 
 function expectSingleTraceEntry(
-  decision: ServerActionResultDecisionV0 | RscNavigationErrorDecisionV0,
+  decision: ServerActionResultDecision | RscNavigationErrorDecision,
   code: string,
   fields: Record<string, string | number | boolean | null>,
 ): void {
@@ -158,8 +154,8 @@ describe("navigationPlanner server-action result classification", () => {
 
 describe("navigationPlanner RSC navigation error classification", () => {
   function classifyError(
-    overrides: Partial<RscNavigationErrorFactsV0> = {},
-  ): RscNavigationErrorDecisionV0 {
+    overrides: Partial<RscNavigationErrorFacts> = {},
+  ): RscNavigationErrorDecision {
     return navigationPlanner.classifyRscNavigationError({
       currentHref: "https://example.com/current",
       ...overrides,

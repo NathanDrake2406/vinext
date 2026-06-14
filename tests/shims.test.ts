@@ -20630,6 +20630,53 @@ describe("@vercel/og compatibility resolution", () => {
   });
 });
 
+describe("vinext shim package-subpath resolution", () => {
+  type ResolveIdHook = {
+    filter: { id: RegExp };
+    handler: (
+      this: { environment?: { name?: string } },
+      id: string,
+      importer?: string,
+    ) => string | undefined;
+  };
+
+  function getResolveIdHook(): ResolveIdHook {
+    const plugins = vinext() as Plugin[];
+    const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
+    if (!configPlugin?.resolveId || typeof configPlugin.resolveId === "function") {
+      throw new Error("vinext:config resolveId hook not found");
+    }
+    return configPlugin.resolveId as ResolveIdHook;
+  }
+
+  it("strips JavaScript extensions and Vite queries from package subpaths", () => {
+    const hook = getResolveIdHook();
+    const expectedShim = path.resolve(
+      import.meta.dirname,
+      "../packages/vinext/src/shims/navigation.ts",
+    );
+    const expectedReactServerShim = path.resolve(
+      import.meta.dirname,
+      "../packages/vinext/src/shims/navigation.react-server.ts",
+    );
+    const expectedOgShim = path.resolve(import.meta.dirname, "../packages/vinext/src/shims/og.tsx");
+
+    expect(hook.filter.id.test("vinext/shims/navigation.js?v=123")).toBe(true);
+    expect(hook.filter.id.test("\0vinext/shims/navigation.js?v=123")).toBe(true);
+    expect(hook.filter.id.test("\0next/navigation")).toBe(true);
+    expect(hook.filter.id.test("\0@vercel/og")).toBe(true);
+    expect(hook.handler.call({}, "unrelated-next/navigation")).toBeUndefined();
+    expect(hook.handler.call({}, "vinext/shims/navigation.js?v=123")).toBe(expectedShim);
+    expect(hook.handler.call({}, "\0vinext/shims/navigation.js?v=123")).toBe(expectedShim);
+    expect(hook.handler.call({ environment: { name: "rsc" } }, "\0next/navigation")).toBe(
+      expectedReactServerShim,
+    );
+    expect(
+      hook.handler.call({}, "\0@vercel/og", path.join(FIXTURE_DIR, "app/opengraph-image.tsx")),
+    ).toBe(expectedOgShim);
+  });
+});
+
 // ── next/head attribute name validation ─────────────────────────────────────
 
 describe("isSafeAttrName", () => {

@@ -57,7 +57,11 @@ import type {
   ClientReuseManifestSkipDisposition,
   ClientReuseManifestTraceFields,
 } from "./client-reuse-manifest.js";
-import { NO_STORE_CACHE_CONTROL } from "./cache-control.js";
+import {
+  applyCdnResponseHeaders,
+  NEVER_CACHE_CONTROL,
+  NO_STORE_CACHE_CONTROL,
+} from "./cache-control.js";
 import {
   createClientReuseSkipTransportPlan,
   createStaticLayoutClientReuseArtifactCompatibility,
@@ -127,6 +131,7 @@ type RenderAppPageLifecycleOptions = {
   peekRequestCacheLife?: () => AppPageRequestCacheLife | null;
   getDraftModeCookieHeader: () => string | null | undefined;
   handlerStart: number;
+  hasCustomGlobalError?: boolean;
   hasLoadingBoundary: boolean;
   dynamicStaleTimeSeconds?: number;
   isDynamicError: boolean;
@@ -868,6 +873,7 @@ export async function renderAppPageLifecycle(
       return renderAppPageHtmlStream({
         capturedRscDataRef,
         fontData,
+        hasCustomGlobalError: options.hasCustomGlobalError,
         navigationContext: options.getNavigationContext(),
         basePath: options.basePath,
         clientTraceMetadata: options.clientTraceMetadata,
@@ -974,6 +980,22 @@ export async function renderAppPageLifecycle(
     renderEnd,
     responseKind: "html",
   });
+
+  if (htmlRender.shellErrorRecovered) {
+    const response = buildAppPageHtmlResponse(safeHtmlStream, {
+      draftCookie,
+      linkHeader,
+      isEdgeRuntime: options.isEdgeRuntime,
+      middlewareContext: {
+        headers: options.middlewareContext.headers,
+        status: 500,
+      },
+      policy: { cacheControl: NEVER_CACHE_CONTROL },
+      timing: htmlResponseTiming,
+    });
+    applyCdnResponseHeaders(response.headers, { cacheControl: NEVER_CACHE_CONTROL });
+    return response;
+  }
 
   const shouldSpeculativelyWriteCache =
     options.isProduction &&

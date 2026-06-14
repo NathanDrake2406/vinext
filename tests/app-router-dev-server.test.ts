@@ -1151,7 +1151,7 @@ describe("App Router integration", () => {
   // instead of silently returning a fallback value.
   it("errors when client hook is used in a Server Component without 'use client' (#834)", async () => {
     const { res, html } = await fetchHtml(baseUrl, "/missing-use-client-test");
-    expect(res.status).toBe(200); // error boundary renders, not a 500
+    expect(res.status).toBe(500);
     // The error message should be clear and actionable
     expect(html).toContain("usePathname()");
     expect(html).toContain("Client Components");
@@ -1162,7 +1162,7 @@ describe("App Router integration", () => {
 
   it("errors when React client hook is used in a Server Component without 'use client' (#834)", async () => {
     const { res, html } = await fetchHtml(baseUrl, "/missing-use-client-react-hook");
-    expect(res.status).toBe(200); // error boundary renders, not a 500
+    expect(res.status).toBe(500);
     // The error message should be clear and actionable
     expect(html).toContain("useState()");
     expect(html).toContain("Client Components");
@@ -1852,7 +1852,7 @@ describe("App Router integration", () => {
 
   it("applies dynamic = 'error' as only-cache fetch policy", async () => {
     const res = await fetch(`${baseUrl}/layout-segment-config/dynamic-error-fetch`);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(500);
     expect(await res.text()).toContain("only-cache");
   });
 

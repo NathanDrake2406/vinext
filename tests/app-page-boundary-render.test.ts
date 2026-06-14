@@ -652,7 +652,10 @@ describe("app page boundary render helpers", () => {
       },
     });
 
-    expect(response?.status).toBe(200);
+    expect(response?.status).toBe(500);
+    expect(response?.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
 
     const html = await response?.text();
     expect(html).toContain('data-boundary="global-error"');
@@ -666,7 +669,7 @@ describe("app page boundary render helpers", () => {
     // When the resolved global-error boundary itself throws while rendering, the
     // SSR render rejects; renderAppPageErrorBoundary catches it and re-renders
     // with the built-in default global-error so the request still produces a
-    // usable document (HTTP 200) instead of a raw 500. Locks in the server-side
+    // usable error document with the original HTTP 500 semantics. Locks in the server-side
     // retry directly (the integration test in tests/nextjs-compat/global-error
     // exercises the same path through the dev/preview server). Fixes #1548.
     const common = createCommonOptions();
@@ -686,7 +689,10 @@ describe("app page boundary render helpers", () => {
       },
     });
 
-    expect(response?.status).toBe(200);
+    expect(response?.status).toBe(500);
+    expect(response?.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
 
     const html = await response?.text();
     // The built-in default global-error UI from

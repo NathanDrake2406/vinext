@@ -5,12 +5,12 @@ import {
 } from "../packages/vinext/src/server/navigation-trace.js";
 import {
   navigationPlanner,
-  type NavigationReuseDecisionV0,
-  type NavigationReuseFactsV0,
-  type VisitedResponseCacheCandidateFactsV0,
+  type NavigationReuseDecision,
+  type NavigationReuseFacts,
+  type VisitedResponseCacheCandidateFacts,
 } from "../packages/vinext/src/server/navigation-planner.js";
 
-function createReuseFacts(overrides: Partial<NavigationReuseFactsV0> = {}): NavigationReuseFactsV0 {
+function createReuseFacts(overrides: Partial<NavigationReuseFacts> = {}): NavigationReuseFacts {
   return {
     bypassNavigationCache: false,
     navigationKind: "navigate",
@@ -22,7 +22,7 @@ function createReuseFacts(overrides: Partial<NavigationReuseFactsV0> = {}): Navi
   };
 }
 
-function classifyReuse(overrides: Partial<NavigationReuseFactsV0> = {}): NavigationReuseDecisionV0 {
+function classifyReuse(overrides: Partial<NavigationReuseFacts> = {}): NavigationReuseDecision {
   return navigationPlanner.classifyNavigationReuse(createReuseFacts(overrides));
 }
 
@@ -202,9 +202,7 @@ describe("navigationPlanner prefetch reuse classification", () => {
 
 describe("navigationPlanner visited-response cache candidate classification", () => {
   function classifyVisited(
-    overrides: Partial<
-      Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "present" }>
-    > = {},
+    overrides: Partial<Extract<VisitedResponseCacheCandidateFacts, { candidate: "present" }>> = {},
   ) {
     return navigationPlanner.classifyVisitedResponseCacheCandidate({
       candidate: "present",
