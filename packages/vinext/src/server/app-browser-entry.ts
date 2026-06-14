@@ -1697,7 +1697,11 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         : null;
     const performHardNavigationForScrollIntent = (targetHref: string): boolean => {
       consumeAppRouterScrollIntent(scrollIntent ?? null);
-      return browserNavigationController.performHardNavigation(targetHref);
+      const didNavigate = browserNavigationController.performHardNavigation(targetHref);
+      if (!didNavigate) {
+        clearAppNavigationFailureTarget(targetHref);
+      }
+      return didNavigate;
     };
     // Traversal restores history-state ids before identity matching. Any
     // redirect hop that changes currentHref must null this before commit so
