@@ -164,6 +164,41 @@ describe("middleware", () => {
     );
   });
 
+  it("exposes the middleware rewrite target on Pages data responses", async () => {
+    const result = await runPagesRequest(
+      makeRequest("/to-blog/post"),
+      baseDeps({
+        isDataRequest: true,
+        runMiddleware: makeMiddleware({
+          continue: true,
+          rewriteUrl: "/fallback-true-blog/post",
+        }),
+        renderPage: makeRenderPage(200, '{"pageProps":{"slug":"post"}}'),
+      }),
+    );
+
+    expect(result.type).toBe("response");
+    if (result.type !== "response") return;
+    expect(result.response.headers.get("x-nextjs-rewrite")).toBe("/fallback-true-blog/post");
+  });
+
+  it("does not expose the middleware rewrite target on HTML responses", async () => {
+    const result = await runPagesRequest(
+      makeRequest("/to-blog/post"),
+      baseDeps({
+        runMiddleware: makeMiddleware({
+          continue: true,
+          rewriteUrl: "/fallback-true-blog/post",
+        }),
+        renderPage: makeRenderPage(200),
+      }),
+    );
+
+    expect(result.type).toBe("response");
+    if (result.type !== "response") return;
+    expect(result.response.headers.get("x-nextjs-rewrite")).toBeNull();
+  });
+
   // 6. Middleware response short-circuit → {type:"response"} with middleware response
   it("middleware response short-circuit returns the middleware response", async () => {
     const middlewareResponse = new Response("blocked", { status: 403 });

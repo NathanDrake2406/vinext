@@ -1392,10 +1392,16 @@ function getMiddlewarePagesDataFetchUrl(browserUrl: string): string | null {
   return buildPagesDataHref(__basePath, buildId, appPathname, parsed.search);
 }
 
-async function resolveMiddlewareDataRedirect(
+type MiddlewareDataEffect = {
+  redirectLocation: string | null;
+  rewriteTarget: string | null;
+  response: Response;
+};
+
+async function resolveMiddlewareDataEffect(
   browserUrl: string,
   signal: AbortSignal,
-): Promise<string | null> {
+): Promise<MiddlewareDataEffect | null> {
   const dataUrl = getMiddlewarePagesDataFetchUrl(browserUrl);
   if (!dataUrl) return null;
 
@@ -1414,7 +1420,11 @@ async function resolveMiddlewareDataRedirect(
         "x-nextjs-data": "1",
       },
     });
-    return res.headers.get("x-nextjs-redirect");
+    return {
+      redirectLocation: res.headers.get("x-nextjs-redirect"),
+      rewriteTarget: res.headers.get("x-nextjs-rewrite"),
+      response: res,
+    };
   } catch {
     return null;
   }
@@ -1472,6 +1482,7 @@ async function navigateClientData(
   navId: number,
   assertStillCurrent: () => void,
   options: NavigateClientOptions = {},
+  prefetchedResponse?: Response,
 ): Promise<void> {
   const root = window.__VINEXT_ROOT__;
   if (!root) {
@@ -1495,17 +1506,22 @@ async function navigateClientData(
   if (controller.signal.aborted) {
     throw new NavigationCancelledError(url);
   }
-  let res: Response;
-  try {
-    const headers: Record<string, string> = { Accept: "application/json", "x-nextjs-data": "1" };
-    const deploymentId = getDeploymentId();
-    if (deploymentId) headers[NEXT_DEPLOYMENT_ID_HEADER] = deploymentId;
-    res = await dedupedPagesDataFetch(target.dataHref, { headers });
-  } catch (err: unknown) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      throw new NavigationCancelledError(url);
+  let res = prefetchedResponse;
+  if (!res) {
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        "x-nextjs-data": "1",
+      };
+      const deploymentId = getDeploymentId();
+      if (deploymentId) headers[NEXT_DEPLOYMENT_ID_HEADER] = deploymentId;
+      res = await dedupedPagesDataFetch(target.dataHref, { headers });
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new NavigationCancelledError(url);
+      }
+      throw err;
     }
-    throw err;
   }
   assertStillCurrent();
 
@@ -1885,11 +1901,12 @@ async function navigateClient(
     } else {
       let browserUrl = url;
       let htmlFetchUrl = fetchUrl;
-      const dataTarget = resolvePagesDataNavigationTarget(browserUrl, __basePath);
+      let dataTarget = resolvePagesDataNavigationTarget(browserUrl, __basePath);
+      let middlewareDataResponse: Response | undefined;
       if (!dataTarget) {
-        let redirectLocation: string | null;
+        let middlewareEffect: MiddlewareDataEffect | null;
         try {
-          redirectLocation = await resolveMiddlewareDataRedirect(browserUrl, controller.signal);
+          middlewareEffect = await resolveMiddlewareDataEffect(browserUrl, controller.signal);
         } catch (err: unknown) {
           if (err instanceof DOMException && err.name === "AbortError") {
             throw new NavigationCancelledError(browserUrl);
@@ -1897,6 +1914,7 @@ async function navigateClient(
           throw err;
         }
         assertStillCurrent();
+        const redirectLocation = middlewareEffect?.redirectLocation ?? null;
         if (redirectLocation) {
           const redirectedUrl = resolveLocalRedirectUrl(redirectLocation);
           if (!redirectedUrl) {
@@ -1907,6 +1925,9 @@ async function navigateClient(
             window.location.pathname + window.location.search;
           browserUrl = redirectedUrl;
           htmlFetchUrl = redirectedUrl;
+        } else if (middlewareEffect?.rewriteTarget) {
+          dataTarget = resolvePagesDataNavigationTarget(middlewareEffect.rewriteTarget, __basePath);
+          if (dataTarget) middlewareDataResponse = middlewareEffect.response;
         }
       }
 
@@ -1918,6 +1939,7 @@ async function navigateClient(
           navId,
           assertStillCurrent,
           options,
+          middlewareDataResponse,
         );
       } else {
         await navigateClientHtml(

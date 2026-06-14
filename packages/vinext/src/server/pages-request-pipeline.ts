@@ -273,6 +273,7 @@ export async function runPagesRequest(
   // Step 5: Middleware
   let resolvedUrl = pathname + search;
   const middlewareHeaders: HeaderRecord = {};
+  let middlewareRewriteUrl: string | undefined;
   let middlewareStatus: number | undefined;
 
   if (typeof deps.runMiddleware === "function") {
@@ -349,6 +350,7 @@ export async function runPagesRequest(
 
     if (result.rewriteUrl) {
       resolvedUrl = result.rewriteUrl;
+      middlewareRewriteUrl = result.rewriteUrl;
     }
 
     // Reconciled superset: result.status takes priority over result.rewriteStatus
@@ -362,6 +364,9 @@ export async function runPagesRequest(
     { preserveCredentialHeaders: isExternalUrl(resolvedUrl) },
   );
   request = postMwReq;
+  if (isDataRequest && middlewareRewriteUrl && !isExternalUrl(middlewareRewriteUrl)) {
+    middlewareHeaders["x-nextjs-rewrite"] = middlewareRewriteUrl;
+  }
   let resolvedPathname = resolvedUrl.split("?")[0];
 
   const matchResolvedPathname = (p: string): string =>

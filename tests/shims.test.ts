@@ -15120,6 +15120,74 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("hydrates middleware rewrites to fallback pages from the data response", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win, render } = createNavWindow();
+    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    Object.assign(win.location, { origin: "http://localhost" });
+    Object.assign(win.__NEXT_DATA__, {
+      buildId: "build-1",
+      __vinext: { ...win.__NEXT_DATA__.__vinext, hasMiddleware: true },
+    });
+    Object.assign(win, {
+      __VINEXT_PAGE_PATTERNS__: ["/fallback-true-blog/[slug]"],
+      __VINEXT_PAGE_LOADERS__: {
+        "/fallback-true-blog/[slug]": async () => import(pageModuleUrl),
+      },
+    });
+    (globalThis as any).window = win;
+
+    const fetch = vi.fn(async (url: RequestInfo | URL) => {
+      const href = getFetchHref(url);
+      if (href === "/_next/data/build-1/to-blog/another-post.json") {
+        return new Response(
+          JSON.stringify({ pageProps: { slug: "another-post", generated: true } }),
+          {
+            headers: {
+              "content-type": "application/json",
+              "x-nextjs-rewrite": "/fallback-true-blog/another-post",
+            },
+          },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${href}`);
+    });
+    globalThis.fetch = fetch;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push("/to-blog/another-post");
+
+      expect(result).toBe(true);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(win.history.pushState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ __N: true }),
+        "",
+        "/to-blog/another-post",
+      );
+      expect(win.location.pathname).toBe("/to-blog/another-post");
+      expect(win.__NEXT_DATA__).toMatchObject({
+        page: "/fallback-true-blog/[slug]",
+        query: { slug: "another-post" },
+        props: { pageProps: { slug: "another-post", generated: true } },
+        isFallback: false,
+      });
+      expect(render).toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("does not double-prefix basePath for middleware data redirects", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
