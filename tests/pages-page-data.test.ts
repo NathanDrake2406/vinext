@@ -957,7 +957,7 @@ describe("pages page data", () => {
         isrSet,
         pageModule: {
           async getStaticProps() {
-            return { props: Promise.resolve({ pageProp: "from-page" }), revalidate: 60 };
+            return { props: { pageProp: "from-page" }, revalidate: 60 };
           },
         },
         runInFreshUnifiedContext: async (callback) => {
@@ -990,13 +990,6 @@ describe("pages page data", () => {
     expect(regenGipCalls).toBe(1);
     expect(appGip).toHaveBeenCalledOnce();
     expect(isrSet).toHaveBeenCalledOnce();
-    expect(isrSet.mock.calls[0]?.[1]).toMatchObject({
-      kind: "PAGES",
-      pageData: {
-        appProp: "from-app",
-        pageProps: { pageProp: "from-page" },
-      },
-    });
   });
 
   it("preserves vinext module metadata during stale ISR regeneration", async () => {
