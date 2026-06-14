@@ -10,11 +10,19 @@ export function stageAppNavigationFailureTarget(href: string): void {
   installWindowNext({ __pendingUrl: new URL(href, window.location.href) });
 }
 
-export function clearAppNavigationFailureTarget(href?: string): void {
+export function getAppNavigationFailureTarget(href: string): URL | null {
+  const pendingUrl = getPendingUrl();
+  if (pendingUrl === null || typeof window === "undefined") return null;
+  return pendingUrl.href === new URL(href, window.location.href).href ? pendingUrl : null;
+}
+
+export function clearAppNavigationFailureTarget(target?: string | URL): void {
   if (typeof window === "undefined" || window.next?.__pendingUrl === undefined) return;
-  if (
-    href !== undefined &&
-    window.next.__pendingUrl.href !== new URL(href, window.location.href).href
+  if (target instanceof URL) {
+    if (window.next.__pendingUrl !== target) return;
+  } else if (
+    target !== undefined &&
+    window.next.__pendingUrl.href !== new URL(target, window.location.href).href
   ) {
     return;
   }
@@ -23,6 +31,7 @@ export function clearAppNavigationFailureTarget(href?: string): void {
 
 export function handleAppNavigationFailure(error: unknown): boolean {
   if (!process.env.__NEXT_APP_NAV_FAIL_HANDLING || typeof window === "undefined") return false;
+  if (!error) return false;
   const pendingUrl = getPendingUrl();
   if (pendingUrl === null || pendingUrl.href === window.location.href) return false;
   console.error("Error occurred during navigation, falling back to hard navigation", error);

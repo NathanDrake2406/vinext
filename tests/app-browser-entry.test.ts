@@ -2898,6 +2898,52 @@ describe("app browser navigation controller", () => {
     }
   });
 
+  it("preserves a newer same-URL failure target when an older navigation is discarded", async () => {
+    const { controller, detach } = createControllerHarness();
+    stubWindow("https://example.com/initial");
+    vi.stubEnv("__NEXT_APP_NAV_FAIL_HANDLING", "true");
+    let resolveNextElements!: (value: AppElements) => void;
+
+    try {
+      stageAppNavigationFailureTarget("/dashboard");
+      const olderTarget = window.next?.__pendingUrl;
+      const olderNavId = controller.beginNavigation();
+      const renderPromise = controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/initial", {}),
+        nextElements: new Promise<AppElements>((resolve) => {
+          resolveNextElements = resolve;
+        }),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/dashboard",
+        navId: olderNavId,
+      });
+
+      controller.beginNavigation();
+      stageAppNavigationFailureTarget("/dashboard");
+      const newerTarget = window.next?.__pendingUrl;
+      expect(newerTarget).not.toBe(olderTarget);
+
+      resolveNextElements(
+        createResolvedElements("route:/dashboard", "/", null, {
+          "page:/dashboard": React.createElement("main", null, "dashboard"),
+        }),
+      );
+
+      await expect(renderPromise).resolves.toBe("no-commit");
+      expect(window.next?.__pendingUrl).toBe(newerTarget);
+    } finally {
+      detach();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("renderNavigationPayload stays pending until NavigationCommitSignal settles the commit", async () => {
     const { controller, detach, stateRef } = createControllerHarness();
     const commitEffect = vi.fn();
@@ -2958,6 +3004,7 @@ describe("app browser navigation controller", () => {
     });
 
     try {
+      stageAppNavigationFailureTarget("/older");
       const olderNavId = controller.beginNavigation();
       void controller.renderNavigationPayload({
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
@@ -2982,6 +3029,7 @@ describe("app browser navigation controller", () => {
       await Promise.resolve();
 
       let resolveNewer!: (elements: AppElements) => void;
+      stageAppNavigationFailureTarget("/newer");
       const newerNavId = controller.beginNavigation();
       void controller.renderNavigationPayload({
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
@@ -3000,7 +3048,6 @@ describe("app browser navigation controller", () => {
         navId: newerNavId,
       });
 
-      stageAppNavigationFailureTarget("/newer");
       controller.clearCommittedNavigationFailureTargets(1);
       expect(window.next?.__pendingUrl?.pathname).toBe("/newer");
 
@@ -6762,6 +6809,26 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
 });
 
 describe("app navigation failure handling", () => {
+  it("ignores navigation failures without an error value", () => {
+    vi.stubEnv("__NEXT_APP_NAV_FAIL_HANDLING", "true");
+    const originalWindow = globalThis.window;
+    const assign = vi.fn();
+    globalThis.window = {
+      location: { assign, href: "https://example.com/current" },
+      next: { version: "vinext" },
+    } as unknown as Window & typeof globalThis;
+
+    try {
+      stageAppNavigationFailureTarget("/latest");
+      expect(handleAppNavigationFailure(undefined)).toBe(false);
+      expect(handleAppNavigationFailure(null)).toBe(false);
+      expect(assign).not.toHaveBeenCalled();
+    } finally {
+      globalThis.window = originalWindow;
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("hard-navigates to the latest pending URL when enabled", () => {
     vi.stubEnv("__NEXT_APP_NAV_FAIL_HANDLING", "true");
     const originalWindow = globalThis.window;

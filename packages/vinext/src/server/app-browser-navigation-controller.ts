@@ -42,7 +42,10 @@ import {
 } from "./app-browser-action-result.js";
 import type { AppElements } from "./app-elements.js";
 import type { NavigationRuntimeVisibleCommitMode } from "../client/navigation-runtime.js";
-import { clearAppNavigationFailureTarget } from "../client/app-nav-failure-handler.js";
+import {
+  clearAppNavigationFailureTarget,
+  getAppNavigationFailureTarget,
+} from "../client/app-nav-failure-handler.js";
 
 export type HistoryUpdateMode = "push" | "replace";
 
@@ -279,7 +282,7 @@ export function createAppBrowserNavigationController(
   let nextNavigationRenderId = 0;
   let activeNavigationId = 0;
   const pendingNavigationCommits = new Map<number, () => void>();
-  const pendingNavigationFailureTargets = new Map<number, string>();
+  const pendingNavigationFailureTargets = new Map<number, URL>();
   const pendingNavigationPrePaintEffects = new Map<number, BrowserNavigationCommitEffect>();
 
   let setBrowserRouterState: Dispatch<AppRouterState | Promise<AppRouterState>> | null = null;
@@ -682,7 +685,10 @@ export function createAppBrowserNavigationController(
     visibleCommitMode?: NavigationRuntimeVisibleCommitMode;
   }): Promise<NavigationPayloadOutcome> {
     const renderId = allocateRenderId();
-    pendingNavigationFailureTargets.set(renderId, options.targetHref);
+    const failureTarget = getAppNavigationFailureTarget(options.targetHref);
+    if (failureTarget) {
+      pendingNavigationFailureTargets.set(renderId, failureTarget);
+    }
     let resolveCommitted: (() => void) | undefined;
     const committed = new Promise<void>((resolve) => {
       resolveCommitted = resolve;
@@ -717,7 +723,9 @@ export function createAppBrowserNavigationController(
       if (approval.decision.disposition === "no-commit") {
         settlePendingBrowserRouterState(options.pendingRouterState);
         pendingNavigationFailureTargets.delete(renderId);
-        clearAppNavigationFailureTarget(options.targetHref);
+        if (failureTarget) {
+          clearAppNavigationFailureTarget(failureTarget);
+        }
         pendingNavigationCommits.delete(renderId);
         resolveCommitted?.();
         consumeAppRouterScrollIntent(options.scrollIntent ?? null);
@@ -732,7 +740,9 @@ export function createAppBrowserNavigationController(
         if (performHardNavigation(options.targetHref)) {
           return "hard-navigate";
         }
-        clearAppNavigationFailureTarget(options.targetHref);
+        if (failureTarget) {
+          clearAppNavigationFailureTarget(failureTarget);
+        }
         return "no-commit";
       }
 
