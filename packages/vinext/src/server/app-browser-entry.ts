@@ -18,7 +18,7 @@ import {
   setServerCallback,
 } from "@vitejs/plugin-rsc/browser";
 import { flushSync } from "react-dom";
-import { hydrateRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
 import "../client/instrumentation-client.js";
 import { notifyAppRouterTransitionStart } from "../client/instrumentation-client-state.js";
 import {
@@ -177,8 +177,8 @@ import {
 import { removeStylesheetLinksCoveredByInlineCss } from "./app-inline-css-client.js";
 import {
   navigationPlanner,
-  type NavigationReuseFactsV0,
-  type VisitedResponseCacheCandidateFactsV0,
+  type NavigationReuseFacts,
+  type VisitedResponseCacheCandidateFacts,
 } from "./navigation-planner.js";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
@@ -714,12 +714,12 @@ type VisitedResponseCacheCandidate =
   | {
       cacheKey: string;
       entry: VisitedResponseCacheEntry;
-      facts: Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "present" }>;
+      facts: Extract<VisitedResponseCacheCandidateFacts, { candidate: "present" }>;
     }
   | {
       cacheKey: string;
       entry: null;
-      facts: Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "missing" }>;
+      facts: Extract<VisitedResponseCacheCandidateFacts, { candidate: "missing" }>;
     };
 
 function readVisitedResponseCacheCandidate(
@@ -1647,16 +1647,35 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
         onCaughtError: prodOnCaughtError,
         onUncaughtError,
       });
-  window.__VINEXT_RSC_ROOT__ = hydrateRootInTransition({
-    children: createElement(BrowserRoot, {
-      initialElements: root,
-      initialNavigationSnapshot,
-    }),
-    container: document,
-    hydrateRoot,
-    options: hydrateRootOptions,
-    startTransition,
+  const children = createElement(BrowserRoot, {
+    initialElements: root,
+    initialNavigationSnapshot,
   });
+  const errorShellStyles = document.querySelectorAll("style[data-vinext-error-shell-style]");
+  if (document.documentElement.id === "__next_error__") {
+    // Next.js client/app-index.tsx uses the document id alone to select CSR
+    // after any failed App Router server render. The style marker only scopes
+    // cleanup to vinext's shell-recovery placeholder styles.
+    // There is no server-rendered form to hydrate in this client-render path;
+    // reuse only the shared root error callbacks and related root options.
+    const { formState: _inertFormState, ...createRootOptions } = hydrateRootOptions;
+    for (const style of errorShellStyles) {
+      style.remove();
+    }
+    startTransition(() => {
+      const clientRoot = createRoot(document, createRootOptions);
+      clientRoot.render(children);
+      window.__VINEXT_RSC_ROOT__ = clientRoot;
+    });
+  } else {
+    window.__VINEXT_RSC_ROOT__ = hydrateRootInTransition({
+      children,
+      container: document,
+      hydrateRoot,
+      options: hydrateRootOptions,
+      startTransition,
+    });
+  }
   markInitialAppRouterBootstrapHydrated();
 
   const navigateRsc: NavigationRuntimeNavigate = async function navigateRsc(
@@ -1791,7 +1810,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
               facts: {
                 candidate: "missing",
                 navigationKind,
-              } satisfies Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "missing" }>,
+              } satisfies Extract<VisitedResponseCacheCandidateFacts, { candidate: "missing" }>,
             }
           : readVisitedResponseCacheCandidate(
               rscUrl,
@@ -1806,7 +1825,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           visitedResponseCandidate,
           visitedResponseDecision,
         );
-        const visitedResponse: NavigationReuseFactsV0["visitedResponse"] =
+        const visitedResponse: NavigationReuseFacts["visitedResponse"] =
           cachedRoute === null ? { status: "unavailable" } : { status: "available" };
         const prefetchProbeDecision = navigationPlanner.classifyNavigationPrefetchProbe({
           bypassNavigationCache: shouldBypassNavigationCache,
@@ -2293,6 +2312,9 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
       // original document from there, so let the next HMR update reload the
       // current URL. If the edit fixed the error the page comes back clean; if
       // not, initial dev server errors re-populate the overlay.
+      //
+      // Reloading is safe for any default-error document because the dev
+      // server will render the current state of the source after the edit.
       if (document.documentElement.id === "__next_error__") {
         window.location.reload();
         return;

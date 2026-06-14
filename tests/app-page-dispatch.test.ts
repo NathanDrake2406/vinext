@@ -266,6 +266,7 @@ type CreateDispatchOptionsOverrides = {
   dynamicConfig?: DispatchOptions["dynamicConfig"];
   findIntercept?: DispatchOptions["findIntercept"];
   generateStaticParams?: DispatchOptions["generateStaticParams"];
+  hasCustomGlobalError?: DispatchOptions["hasCustomGlobalError"];
   formState?: DispatchOptions["formState"];
   getSourceRoute?: DispatchOptions["getSourceRoute"];
   getNavigationContext?: DispatchOptions["getNavigationContext"];
@@ -344,6 +345,7 @@ function createDispatchOptions(overrides: CreateDispatchOptionsOverrides = {}) {
       })),
     getSourceRoute: overrides.getSourceRoute ?? (() => undefined),
     hasGenerateStaticParams: typeof overrides.generateStaticParams === "function",
+    hasCustomGlobalError: overrides.hasCustomGlobalError,
     hasPageDefaultExport: true,
     hasPageModule: true,
     handlerStart: 10,
@@ -1371,6 +1373,7 @@ describe("app page dispatch", () => {
       scheduledRender = renderFn;
     };
     let capturedWaitForAllReady: boolean | undefined;
+    let capturedFallbackToErrorDocument: boolean | undefined;
     const isrSet = vi.fn(async () => {});
     const { options } = createDispatchOptions({
       buildPageElement: async () => React.createElement("main", null, "fresh"),
@@ -1380,9 +1383,11 @@ describe("app page dispatch", () => {
         buildISRCacheEntry(buildCachedAppPageValue("<html>stale</html>"), true),
       ),
       isrSet,
+      hasCustomGlobalError: false,
       loadSsrHandler: async () => ({
         async handleSsr(_rscStream, _navigationContext, _fontData, captureOptions) {
           capturedWaitForAllReady = captureOptions?.waitForAllReady;
+          capturedFallbackToErrorDocument = captureOptions?.fallbackToErrorDocumentOnShellError;
           if (captureOptions?.capturedRscDataRef) {
             captureOptions.capturedRscDataRef.value = Promise.resolve(
               new TextEncoder().encode("fresh-flight").buffer,
@@ -1412,7 +1417,53 @@ describe("app page dispatch", () => {
     await scheduledRender();
 
     expect(capturedWaitForAllReady).toBe(true);
+    expect(capturedFallbackToErrorDocument).toBeUndefined();
     expect(isrSet).toHaveBeenCalled();
+  });
+
+  it("preserves stale HTML when SSR shell rendering fails during regeneration", async () => {
+    const route = createRoute({ pattern: "/posts/[slug]", routeSegments: ["posts", "[slug]"] });
+    let scheduledRender: unknown = null;
+    const scheduleBackgroundRegeneration: DispatchOptions["scheduleBackgroundRegeneration"] = (
+      _key,
+      renderFn,
+    ) => {
+      scheduledRender = renderFn;
+    };
+    const isrSet = vi.fn(async () => {});
+    const shellError = new Error("SSR shell failed");
+    const { options } = createDispatchOptions({
+      buildPageElement: async () => React.createElement("main", null, "fresh"),
+      cleanPathname: "/posts/hello",
+      isProduction: true,
+      isrGet: vi.fn(async () =>
+        buildISRCacheEntry(buildCachedAppPageValue("<html>stale</html>"), true),
+      ),
+      isrSet,
+      loadSsrHandler: async () => ({
+        async handleSsr() {
+          throw shellError;
+        },
+      }),
+      renderToReadableStream() {
+        return createStream(["flight"]);
+      },
+      revalidateSeconds: 60,
+      route,
+      scheduleBackgroundRegeneration,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(response.headers.get("x-vinext-cache")).toBe("STALE");
+    await expect(response.text()).resolves.toBe("<html>stale</html>");
+    expect(typeof scheduledRender).toBe("function");
+    if (typeof scheduledRender !== "function") {
+      throw new Error("expected stale HTML response to schedule regeneration");
+    }
+
+    await expect(scheduledRender()).rejects.toBe(shellError);
+    expect(isrSet).not.toHaveBeenCalled();
   });
 
   it("resolves the revalidation target route's dynamic config for force-dynamic fetch defaults", async () => {

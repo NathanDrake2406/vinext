@@ -1,6 +1,6 @@
 import { ACTION_REVALIDATED_HEADER } from "./headers.js";
 import { VINEXT_RSC_CONTENT_TYPE } from "./app-rsc-cache-busting.js";
-import { ServerActionResultFactsV0 } from "./navigation-planner.js";
+import { ServerActionResultFacts } from "./navigation-planner.js";
 
 export type AppBrowserServerActionResult<TRoot> = {
   root?: TRoot;
@@ -124,7 +124,7 @@ export type ServerActionResultResponseFactsInput = {
  */
 export function createServerActionResultFacts(
   input: ServerActionResultResponseFactsInput,
-): ServerActionResultFactsV0 {
+): ServerActionResultFacts {
   return {
     actionRedirectHref: input.actionRedirectHref,
     actionRedirectType: input.actionRedirectType === "push" ? "push" : "replace",

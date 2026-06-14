@@ -51,21 +51,21 @@ export type OperationToken = {
   cacheVariantFingerprint?: string;
 };
 
-export type RouteSnapshotV0 = {
-  interception: InterceptionSnapshotV0 | null;
+export type RouteSnapshot = {
+  interception: InterceptionSnapshot | null;
   interceptionContext: string | null;
   routeId: string;
   // Ordered ancestor-first, with the root layout at index 0. Same-layout
   // persistence uses prefix comparison, so callers must preserve this order.
   layoutIds: readonly string[];
-  mountedParallelSlots: readonly MountedParallelSlotSnapshotV0[];
+  mountedParallelSlots: readonly MountedParallelSlotSnapshot[];
   rootBoundaryId: string | null;
   displayUrl: string;
   matchedUrl: string;
-  slotBindings: readonly ParallelSlotBindingSnapshotV0[];
+  slotBindings: readonly ParallelSlotBindingSnapshot[];
 };
 
-export type InterceptionSnapshotV0 = {
+export type InterceptionSnapshot = {
   sourceMatchedUrl: string;
   sourceRouteId: string;
   slotId: string;
@@ -73,7 +73,7 @@ export type InterceptionSnapshotV0 = {
   targetRouteId: string;
 };
 
-export type MountedParallelSlotSnapshotV0 = {
+export type MountedParallelSlotSnapshot = {
   slotId: string;
   ownerLayoutId: string | null;
 };
@@ -82,20 +82,20 @@ export type MountedParallelSlotSnapshotV0 = {
 // AppElements metadata. Keep the alias explicit so route-state and transport
 // readers cannot drift into structurally identical but semantically separate
 // shapes.
-export type ParallelSlotBindingSnapshotV0 = AppElementsSlotBinding;
+export type ParallelSlotBindingSnapshot = AppElementsSlotBinding;
 
-export type NavigationPlannerStateV0 = {
-  // V0 keeps a single state shape so intent events and result events can move
-  // through one planner surface. flightResponseArrived uses event.token; later
-  // #726 slices can split this by event kind once more result paths are routed
-  // through the planner.
+export type NavigationPlannerState = {
+  // A single state shape lets intent events and result events move through one
+  // planner surface. flightResponseArrived uses event.token; later #726 slices
+  // can split this by event kind once more result paths are routed through the
+  // planner.
   nextOperationToken: OperationToken;
   // Callers that have lifecycle authority should pass the complete trace
   // context. When absent, the planner emits the stable root-boundary facts it
   // can derive from the event and visible snapshot.
   traceFields?: NavigationTraceFields;
   visibleCommitVersion: number;
-  visibleSnapshot: RouteSnapshotV0;
+  visibleSnapshot: RouteSnapshot;
 };
 
 export type RefreshScope = "visible";
@@ -106,7 +106,7 @@ export type NavigationEvent =
   | { kind: "refresh"; scope: RefreshScope }
   | { kind: "traverse"; direction: TraverseDirection; historyState: unknown }
   | { kind: "prefetch"; href: string }
-  | { kind: "flightResponseArrived"; token: OperationToken; result: FlightResultV0 };
+  | { kind: "flightResponseArrived"; token: OperationToken; result: FlightResult };
 
 type RequestedWork =
   | { kind: "flight"; href: string; mode: "push" | "replace" | "refresh" }
@@ -119,7 +119,7 @@ type CommitProposal = {
   preserveElementIds: readonly string[];
   preservePreviousSlotIds: readonly string[];
   reason: "currentRootBoundary" | "interceptedCurrentRootBoundary" | "unprovenTopologyFallback";
-  targetSnapshot: RouteSnapshotV0;
+  targetSnapshot: RouteSnapshot;
 };
 
 type NoCommitReason = "prefetchOnly";
@@ -132,7 +132,7 @@ export type RootBoundaryTransition =
   | "rootBoundaryChanged"
   | "rootBoundaryUnknown";
 
-export type NavigationDecisionV0 =
+export type NavigationDecision =
   | {
       kind: "requestWork";
       token: OperationToken;
@@ -159,16 +159,16 @@ export type NavigationDecisionV0 =
       trace: NavigationTrace;
     };
 
-export type FlightResultV0 = {
+export type FlightResult = {
   cacheEntryReuseProof?: CacheEntryReuseProof;
   href: string;
-  targetSnapshot: RouteSnapshotV0;
+  targetSnapshot: RouteSnapshot;
 };
 
 type RscFetchResultSource = "cached" | "live";
 type RscRedirectSignal = "response-url" | "streamed-header";
 
-export type RscFetchResultFactsV0 = {
+export type RscFetchResultFacts = {
   source: RscFetchResultSource;
   currentHref: string;
   origin: string;
@@ -184,7 +184,7 @@ export type RscFetchResultFactsV0 = {
   streamedRedirectTarget: string | null;
 };
 
-type RscRedirectFollowV0 = {
+type RscRedirectFollow = {
   href: string;
   historyUpdateMode: "push" | "replace";
   previousNextUrl: string | null;
@@ -198,12 +198,12 @@ type RscFetchResultHardNavReason =
   | "redirectDepthExhausted"
   | "streamedRedirectLoop";
 
-export type RscFetchResultDecisionV0 =
+export type RscFetchResultDecision =
   | { kind: "proceedToCommit"; discardBody: false; trace: NavigationTrace }
   | {
       kind: "followRedirect";
       discardBody: boolean;
-      redirect: RscRedirectFollowV0;
+      redirect: RscRedirectFollow;
       trace: NavigationTrace;
     }
   | {
@@ -220,10 +220,10 @@ export type RscFetchResultDecisionV0 =
 // outcome (same-document scroll vs cache-bypassing flight vs ordinary flight),
 // the executor owns the effects (history mutation, scroll, RSC fetch).
 //
-// V0 only needs the URL delta plus history/scroll intent. Richer planner inputs
-// (route manifest, mounted slots) join later slices once prefetch reuse and the
-// remaining hard-navigation causes route through this surface.
-export type EarlyNavigationIntentFactsV0 = {
+// This surface only needs the URL delta plus history/scroll intent. Richer
+// planner inputs (route manifest, mounted slots) join later slices once prefetch
+// reuse and the remaining hard-navigation causes route through this surface.
+export type EarlyNavigationIntentFacts = {
   // App basePath, stripped from both pathnames before comparison.
   basePath: string;
   // The current visible document URL (window.location.href at navigation start),
@@ -237,7 +237,7 @@ export type EarlyNavigationIntentFactsV0 = {
   targetHref: string;
 };
 
-export type EarlyNavigationIntentDecisionV0 =
+export type EarlyNavigationIntentDecision =
   | {
       kind: "sameDocumentScroll";
       // Always non-empty: same-document scroll is only chosen for a hash target.
@@ -256,7 +256,7 @@ export type EarlyNavigationIntentDecisionV0 =
 
 type NavigationReuseNavigationKind = "navigate" | "refresh" | "traverse";
 
-export type VisitedResponseCacheCandidateFactsV0 =
+export type VisitedResponseCacheCandidateFacts =
   | {
       candidate: "missing";
       navigationKind: NavigationReuseNavigationKind;
@@ -268,7 +268,7 @@ export type VisitedResponseCacheCandidateFactsV0 =
       navigationKind: NavigationReuseNavigationKind;
     };
 
-type VisitedResponseCacheCandidateDecisionV0 =
+type VisitedResponseCacheCandidateDecision =
   | { kind: "miss" }
   | {
       kind: "evict";
@@ -281,7 +281,7 @@ type OptimisticRouteShellCandidateAvailability =
   | { status: "available" }
   | { status: "unavailable"; reason: "routeManifestMissing" };
 
-export type NavigationReuseFactsV0 = {
+export type NavigationReuseFacts = {
   bypassNavigationCache: boolean;
   navigationKind: NavigationReuseNavigationKind;
   optimisticRouteShell: OptimisticRouteShellCandidateAvailability;
@@ -292,19 +292,19 @@ export type NavigationReuseFactsV0 = {
 
 type FreshFetchReason = "cacheBypassed" | "cacheMiss" | "refresh" | "routeManifestMissing";
 
-export type NavigationReuseDecisionV0 =
+export type NavigationReuseDecision =
   | { kind: "reuseVisitedResponse"; trace: NavigationTrace }
   | { kind: "consumePrefetch"; trace: NavigationTrace }
   | { kind: "attemptOptimisticRouteShell"; trace: NavigationTrace }
   | { kind: "fetchFresh"; reason: FreshFetchReason; trace: NavigationTrace };
 
-type NavigationPrefetchProbeFactsV0 = {
+type NavigationPrefetchProbeFacts = {
   bypassNavigationCache: boolean;
   navigationKind: NavigationReuseNavigationKind;
   visitedResponse: NavigationReuseCandidateAvailability;
 };
 
-type NavigationPrefetchProbeDecisionV0 =
+type NavigationPrefetchProbeDecision =
   | { kind: "probe" }
   | { kind: "skip"; reason: "cacheBypassed" | "refresh" | "visitedResponseAvailable" };
 
@@ -313,7 +313,7 @@ export type NavigationPlannerInput = {
   // decisions whenever the caller can supply it. Null keeps the legacy
   // snapshot-only path for low-level tests and unknown route shapes.
   routeManifest: RouteManifest | null;
-  state: NavigationPlannerStateV0;
+  state: NavigationPlannerState;
   event: NavigationEvent;
 };
 
@@ -321,7 +321,7 @@ type RouteTopologySnapshot = {
   layoutIds: readonly string[];
   rootBoundaryId: string | null;
   rootLayoutTreePath: string | null;
-  slotBindings: readonly ParallelSlotBindingSnapshotV0[];
+  slotBindings: readonly ParallelSlotBindingSnapshot[];
 };
 
 type RouteTopologyResolution =
@@ -352,9 +352,9 @@ const CACHE_ENTRY_PROOF_MISSING_CODE =
 
 function createRequestWorkDecision(options: {
   eventKind: NavigationEvent["kind"];
-  state: NavigationPlannerStateV0;
+  state: NavigationPlannerState;
   work: RequestedWork;
-}): NavigationDecisionV0 {
+}): NavigationDecision {
   const traverseFields =
     options.work.kind === "traverseFlight" ? { traverseDirection: options.work.direction } : {};
   return {
@@ -384,7 +384,7 @@ function getRequestedWorkTargetHref(work: RequestedWork): string | null {
 }
 
 function createRscFetchResultTraceFields(
-  facts: RscFetchResultFactsV0,
+  facts: RscFetchResultFacts,
   fields: NavigationTraceFields = {},
 ): NavigationTraceFields {
   return {
@@ -395,12 +395,12 @@ function createRscFetchResultTraceFields(
 
 function createRscFetchResultHardNavigationDecision(options: {
   discardBody: boolean;
-  facts: RscFetchResultFactsV0;
+  facts: RscFetchResultFacts;
   reason: RscFetchResultHardNavReason;
   reasonCode: NavigationTraceReasonCode;
   redirectSignal?: RscRedirectSignal;
   url: string;
-}): RscFetchResultDecisionV0 {
+}): RscFetchResultDecision {
   return {
     discardBody: options.discardBody,
     kind: "hardNavigate",
@@ -421,10 +421,10 @@ function createRscFetchResultHardNavigationDecision(options: {
 
 function createRscFetchResultFollowRedirectDecision(options: {
   discardBody: boolean;
-  facts: RscFetchResultFactsV0;
-  redirect: RscRedirectFollowV0;
+  facts: RscFetchResultFacts;
+  redirect: RscRedirectFollow;
   redirectSignal: RscRedirectSignal;
-}): RscFetchResultDecisionV0 {
+}): RscFetchResultDecision {
   return {
     discardBody: options.discardBody,
     kind: "followRedirect",
@@ -462,7 +462,7 @@ function mapRscRedirectTerminalReason(reason: "externalRedirect" | "maxRedirects
   }
 }
 
-function classifyRscFetchResult(facts: RscFetchResultFactsV0): RscFetchResultDecisionV0 {
+function classifyRscFetchResult(facts: RscFetchResultFacts): RscFetchResultDecision {
   if (!facts.responseOk || !facts.isRscContentType || !facts.hasBody) {
     const url = resolveHardNavigationTargetFromRscResponse(
       facts.responseUrl,
@@ -586,14 +586,14 @@ function classifyRscFetchResult(facts: RscFetchResultFactsV0): RscFetchResultDec
 
 function createEarlyNavigationIntentTrace(
   reasonCode: NavigationTraceReasonCode,
-  facts: EarlyNavigationIntentFactsV0,
+  facts: EarlyNavigationIntentFacts,
 ): NavigationTrace {
   return createNavigationTrace(reasonCode, { targetHref: facts.targetHref });
 }
 
 function classifyEarlyNavigationIntent(
-  facts: EarlyNavigationIntentFactsV0,
-): EarlyNavigationIntentDecisionV0 {
+  facts: EarlyNavigationIntentFacts,
+): EarlyNavigationIntentDecision {
   let current: URL;
   let next: URL;
   try {
@@ -656,8 +656,8 @@ function classifyEarlyNavigationIntent(
 }
 
 function classifyVisitedResponseCacheCandidate(
-  facts: VisitedResponseCacheCandidateFactsV0,
-): VisitedResponseCacheCandidateDecisionV0 {
+  facts: VisitedResponseCacheCandidateFacts,
+): VisitedResponseCacheCandidateDecision {
   if (facts.candidate === "missing") {
     return { kind: "miss" };
   }
@@ -688,7 +688,7 @@ function classifyVisitedResponseCacheCandidate(
 
 function createNavigationReuseTrace(
   code: NavigationTraceReasonCode,
-  facts: NavigationReuseFactsV0,
+  facts: NavigationReuseFacts,
   fields: NavigationTraceFields = {},
 ): NavigationTrace {
   return createNavigationTrace(code, {
@@ -699,9 +699,9 @@ function createNavigationReuseTrace(
 }
 
 function createFreshFetchDecision(
-  facts: NavigationReuseFactsV0,
+  facts: NavigationReuseFacts,
   reason: FreshFetchReason,
-): NavigationReuseDecisionV0 {
+): NavigationReuseDecision {
   return {
     kind: "fetchFresh",
     reason,
@@ -711,7 +711,7 @@ function createFreshFetchDecision(
   };
 }
 
-function classifyNavigationReuse(facts: NavigationReuseFactsV0): NavigationReuseDecisionV0 {
+function classifyNavigationReuse(facts: NavigationReuseFacts): NavigationReuseDecision {
   if (facts.navigationKind === "refresh") {
     return createFreshFetchDecision(facts, "refresh");
   }
@@ -752,8 +752,8 @@ function classifyNavigationReuse(facts: NavigationReuseFactsV0): NavigationReuse
 }
 
 function classifyNavigationPrefetchProbe(
-  facts: NavigationPrefetchProbeFactsV0,
-): NavigationPrefetchProbeDecisionV0 {
+  facts: NavigationPrefetchProbeFacts,
+): NavigationPrefetchProbeDecision {
   if (facts.visitedResponse.status === "available") {
     return { kind: "skip", reason: "visitedResponseAvailable" };
   }
@@ -769,7 +769,7 @@ function classifyNavigationPrefetchProbe(
   return { kind: "probe" };
 }
 
-function createSnapshotRouteTopology(snapshot: RouteSnapshotV0): RouteTopologySnapshot {
+function createSnapshotRouteTopology(snapshot: RouteSnapshot): RouteTopologySnapshot {
   return {
     layoutIds: snapshot.layoutIds,
     rootBoundaryId: snapshot.rootBoundaryId,
@@ -835,7 +835,7 @@ function findRouteManifestRouteByIdOrMatchedUrl(options: {
 
 function findRouteManifestRouteForSnapshot(
   routeManifest: RouteManifest,
-  snapshot: RouteSnapshotV0,
+  snapshot: RouteSnapshot,
 ): RouteManifestRoute | null {
   if (snapshot.interception !== null) {
     return findRouteManifestRouteByIdOrMatchedUrl({
@@ -855,8 +855,8 @@ function findRouteManifestRouteForSnapshot(
 function resolveRouteManifestSlotBindings(
   routeManifest: RouteManifest,
   route: RouteManifestRoute,
-): readonly ParallelSlotBindingSnapshotV0[] {
-  const bindings: ParallelSlotBindingSnapshotV0[] = [];
+): readonly ParallelSlotBindingSnapshot[] {
+  const bindings: ParallelSlotBindingSnapshot[] = [];
   for (const slotId of route.slotIds) {
     const binding = routeManifest.segmentGraph.slotBindings.get(`${route.id}::${slotId}`);
     if (!binding) continue;
@@ -881,7 +881,7 @@ function resolveRouteManifestRootLayoutTreePath(
 function resolveRouteTopologySnapshot(options: {
   routeManifest: RouteManifest | null;
   slotBindingSource: RouteTopologySlotBindingSource;
-  snapshot: RouteSnapshotV0;
+  snapshot: RouteSnapshot;
 }): RouteTopologyResolution {
   const route =
     options.routeManifest === null
@@ -911,7 +911,7 @@ function resolveRouteTopologySnapshot(options: {
 
 function findRouteManifestInterceptionForProof(
   routeManifest: RouteManifest,
-  proof: InterceptionSnapshotV0,
+  proof: InterceptionSnapshot,
 ): RouteManifestInterception | null {
   const sourceParts = splitMatchedUrlIntoRouteParts(proof.sourceMatchedUrl);
   const targetParts = splitMatchedUrlIntoRouteParts(proof.targetMatchedUrl);
@@ -951,7 +951,7 @@ function createRootBoundaryTraceFields(options: {
   currentRootLayoutTreePath: string | null;
   event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
   nextRootLayoutTreePath: string | null;
-  state: NavigationPlannerStateV0;
+  state: NavigationPlannerState;
 }): NavigationTraceFields {
   // Browser commit approval supplies lifecycle trace context before calling
   // the planner. This fallback exists for pure planner callers and tests; it
@@ -986,8 +986,8 @@ function classifyRootBoundaryTransition(
 }
 
 function resolveSameLayoutAncestorPersistence(
-  currentSnapshot: RouteSnapshotV0,
-  targetSnapshot: RouteSnapshotV0,
+  currentSnapshot: RouteSnapshot,
+  targetSnapshot: RouteSnapshot,
 ): readonly string[] {
   return resolveSameLayoutAncestorPersistenceForTopologies(
     createSnapshotRouteTopology(currentSnapshot),
@@ -1019,15 +1019,15 @@ function resolveSameLayoutAncestorPersistenceForTopologies(
 }
 
 function resolveMountedParallelSlotPersistence(
-  currentSnapshot: RouteSnapshotV0,
-  targetSnapshot: RouteSnapshotV0,
+  currentSnapshot: RouteSnapshot,
+  targetSnapshot: RouteSnapshot,
 ): readonly string[] {
   const preservedLayoutIds = resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot);
   return resolveMountedParallelSlotPersistenceForLayouts(currentSnapshot, preservedLayoutIds);
 }
 
 function resolveMountedParallelSlotPersistenceForLayouts(
-  currentSnapshot: RouteSnapshotV0,
+  currentSnapshot: RouteSnapshot,
   preservedLayoutIds: readonly string[],
 ): readonly string[] {
   if (preservedLayoutIds.length === 0) return [];
@@ -1047,8 +1047,8 @@ function resolveMountedParallelSlotPersistenceForLayouts(
 }
 
 function resolveCurrentRootBoundaryElementPersistence(
-  currentSnapshot: RouteSnapshotV0,
-  targetSnapshot: RouteSnapshotV0,
+  currentSnapshot: RouteSnapshot,
+  targetSnapshot: RouteSnapshot,
 ): readonly string[] {
   const preservedLayoutIds = resolveSameLayoutAncestorPersistence(currentSnapshot, targetSnapshot);
   // Non-commit consumers still receive the legacy mounted-slot element list.
@@ -1108,9 +1108,9 @@ function resolveCurrentRootBoundaryCommitSlotPersistence(options: {
  * Wire absence and UNMATCHED_SLOT markers are not semantic proof.
  */
 export function resolveDefaultOrUnmatchedSlotPersistenceForLayouts(options: {
-  currentSlotBindings: readonly ParallelSlotBindingSnapshotV0[];
+  currentSlotBindings: readonly ParallelSlotBindingSnapshot[];
   preservedLayoutIds: readonly string[];
-  targetSlotBindings: readonly ParallelSlotBindingSnapshotV0[];
+  targetSlotBindings: readonly ParallelSlotBindingSnapshot[];
 }): readonly string[] {
   const preservedLayoutIdSet = new Set(options.preservedLayoutIds);
   const slotIdsWithContent = new Set<string>();
@@ -1151,7 +1151,7 @@ type InterceptedPreservationValidation =
     };
 
 function getVisibleInterceptionSourceIdentity(
-  snapshot: RouteSnapshotV0,
+  snapshot: RouteSnapshot,
 ): VisibleInterceptionSourceIdentity {
   if (snapshot.interception) {
     return {
@@ -1169,7 +1169,7 @@ function createInterceptionProofRejectedDecision(options: {
   event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
   reasonCode: NavigationTraceReasonCode;
   traceFields: NavigationTraceFields;
-}): NavigationDecisionV0 {
+}): NavigationDecision {
   return {
     kind: "hardNavigate",
     reason: "interceptionProofRejected",
@@ -1232,7 +1232,7 @@ function createCacheProofRejectedDecision(options: {
   event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
   rejection: Extract<CacheEntryProofEvaluation, { kind: "rejected" }>;
   traceFields: NavigationTraceFields;
-}): NavigationDecisionV0 {
+}): NavigationDecision {
   return {
     kind: "hardNavigate",
     reason: "cacheProofRejected",
@@ -1267,10 +1267,10 @@ function createCacheEntryProposalFields(
 }
 
 function validateInterceptedPreservation(options: {
-  currentSnapshot: RouteSnapshotV0;
+  currentSnapshot: RouteSnapshot;
   currentTopology: RouteTopologySnapshot;
   routeManifest: RouteManifest | null;
-  targetSnapshot: RouteSnapshotV0;
+  targetSnapshot: RouteSnapshot;
   targetTopology: RouteTopologySnapshot;
 }): InterceptedPreservationValidation {
   const proof = options.targetSnapshot.interception;
@@ -1362,8 +1362,8 @@ function validateInterceptedPreservation(options: {
 function planFlightResponseArrived(options: {
   event: Extract<NavigationEvent, { kind: "flightResponseArrived" }>;
   routeManifest: RouteManifest | null;
-  state: NavigationPlannerStateV0;
-}): NavigationDecisionV0 {
+  state: NavigationPlannerState;
+}): NavigationDecision {
   const targetSnapshot = options.event.result.targetSnapshot;
   const currentTopology = resolveRouteTopologySnapshot({
     routeManifest: options.routeManifest,
@@ -1526,7 +1526,7 @@ function planFlightResponseArrived(options: {
   };
 }
 
-function planNavigation(input: NavigationPlannerInput): NavigationDecisionV0 {
+function planNavigation(input: NavigationPlannerInput): NavigationDecision {
   switch (input.event.kind) {
     case "navigate":
       return createRequestWorkDecision({
@@ -1580,7 +1580,7 @@ function planNavigation(input: NavigationPlannerInput): NavigationDecisionV0 {
   }
 }
 
-export type ServerActionResultFactsV0 = {
+export type ServerActionResultFacts = {
   actionRedirectHref: string | null;
   actionRedirectType: "push" | "replace";
   clientCompatibilityId: string | null;
@@ -1591,7 +1591,7 @@ export type ServerActionResultFactsV0 = {
   responseUrl: string | null;
 };
 
-export type ServerActionResultDecisionV0 =
+export type ServerActionResultDecision =
   | { kind: "proceed"; trace: NavigationTrace }
   | {
       kind: "hardNavigate";
@@ -1602,20 +1602,18 @@ export type ServerActionResultDecisionV0 =
       trace: NavigationTrace;
     };
 
-export type RscNavigationErrorFactsV0 = {
+export type RscNavigationErrorFacts = {
   currentHref: string;
 };
 
-export type RscNavigationErrorDecisionV0 = {
+export type RscNavigationErrorDecision = {
   kind: "hardNavigate";
   url: string;
   reason: "rscNavigationError";
   trace: NavigationTrace;
 };
 
-function classifyServerActionResult(
-  facts: ServerActionResultFactsV0,
-): ServerActionResultDecisionV0 {
+function classifyServerActionResult(facts: ServerActionResultFacts): ServerActionResultDecision {
   // A client without a compatibility id cannot prove skew.
   if (facts.clientCompatibilityId === null) {
     return {
@@ -1682,9 +1680,7 @@ function classifyServerActionResult(
   };
 }
 
-function classifyRscNavigationError(
-  facts: RscNavigationErrorFactsV0,
-): RscNavigationErrorDecisionV0 {
+function classifyRscNavigationError(facts: RscNavigationErrorFacts): RscNavigationErrorDecision {
   return {
     kind: "hardNavigate",
     url: facts.currentHref,

@@ -253,6 +253,7 @@ type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   getNavigationContext: () => NavigationContext | null;
   getSourceRoute: (sourceRouteIndex: number) => TRoute | undefined;
   hasGenerateStaticParams: boolean;
+  hasCustomGlobalError?: boolean;
   hasPageDefaultExport: boolean;
   hasPageModule: boolean;
   handlerStart: number;
@@ -1136,6 +1137,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       return renderPageSpecialError(options, specialError);
     },
     renderToReadableStream: options.renderToReadableStream,
+    hasCustomGlobalError: options.hasCustomGlobalError,
     prerenderToReadableStream: options.prerenderToReadableStream,
     routePattern: route.pattern,
     runWithSuppressedHookWarning(probe) {

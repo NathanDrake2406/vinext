@@ -49,6 +49,7 @@ import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 import { isPprFallbackShellAbortError } from "vinext/shims/ppr-fallback-shell";
+import DefaultGlobalError from "vinext/shims/default-global-error";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
 /**
@@ -144,6 +145,49 @@ async function loadStaticPrerender(): Promise<StaticPrerender> {
   }
 
   throw new Error("[vinext] react-dom/static.edge did not expose prerender().");
+}
+
+function createUtf8Stream(html: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(html));
+      controller.close();
+    },
+  });
+}
+
+function buildBootstrapModuleScript(bootstrapModuleUrl?: string, nonce?: string): string {
+  if (!bootstrapModuleUrl) return "";
+  return (
+    `<script type="module"${createNonceAttribute(nonce)} src="` +
+    escapeHtmlAttr(bootstrapModuleUrl) +
+    '" id="_R_" async=""></script>'
+  );
+}
+
+function renderSsrErrorDocumentShell(
+  bootstrapModuleUrl?: string,
+  nonce?: string,
+): ReadableStream<Uint8Array> {
+  const html = renderToStaticMarkup(
+    createReactElement(DefaultGlobalError, {
+      error: null,
+    }),
+  ).replace("<style>", '<style data-vinext-error-shell-style="">');
+  const bootstrapScript = buildBootstrapModuleScript(bootstrapModuleUrl, nonce);
+  if (!bootstrapScript) {
+    return createUtf8Stream(`<!DOCTYPE html>${html}`);
+  }
+
+  const documentClose = "</body></html>";
+  if (!html.endsWith(documentClose)) {
+    return createUtf8Stream(`<!DOCTYPE html>${html}${bootstrapScript}`);
+  }
+
+  return createUtf8Stream(
+    `<!DOCTYPE html>${html.slice(0, -documentClose.length)}${bootstrapScript}${documentClose}`,
+  );
 }
 
 const clientReferencePreloader = createClientReferencePreloader({
@@ -376,6 +420,7 @@ export async function handleSsr(
      *  to resolve before returning the HTML stream. Used for static prerender
      *  and ISR cache writes to avoid caching fallback content. */
     waitForAllReady?: boolean;
+    fallbackToErrorDocumentOnShellError?: boolean;
   },
 ): Promise<AppSsrRenderResult> {
   return runWithNavigationContext(async () => {
@@ -584,6 +629,7 @@ export async function handleSsr(
         };
 
         let htmlStream: ReadableStream<Uint8Array>;
+        let shellErrorRecovered = false;
         if (pprFallbackShellSignal) {
           const prerender = await loadStaticPrerender();
           const htmlAbortController = new AbortController();
@@ -594,19 +640,29 @@ export async function handleSsr(
           setTimeout(() => htmlAbortController.abort(), 0);
           htmlStream = (await pendingHtml).prelude;
         } else {
-          const streamingHtmlStream = await renderToReadableStream(ssrRoot, {
-            ...renderOptions,
-          });
+          let streamingHtmlStream: Awaited<ReturnType<typeof renderToReadableStream>> | undefined;
+          try {
+            streamingHtmlStream = await renderToReadableStream(ssrRoot, {
+              ...renderOptions,
+            });
 
-          // When producing static output (prerender / ISR cache writes), wait for
-          // the full React tree to resolve before emitting bytes. This prevents
-          // Suspense fallback content from being serialized to the cache.
-          // Matches Next.js waitForAllReady forkpoint in renderToNodeFizzStream.
-          if (options?.waitForAllReady === true) {
-            await streamingHtmlStream.allReady;
+            if (options?.waitForAllReady === true) {
+              await streamingHtmlStream.allReady;
+            }
+
+            htmlStream = streamingHtmlStream;
+          } catch (error) {
+            void streamingHtmlStream?.cancel().catch(() => {});
+            if (
+              options?.fallbackToErrorDocumentOnShellError !== true ||
+              options?.waitForAllReady === true ||
+              typeof (error as { digest?: unknown } | null)?.digest === "string"
+            ) {
+              throw error;
+            }
+            shellErrorRecovered = true;
+            htmlStream = renderSsrErrorDocumentShell(bootstrapModuleUrl, options?.scriptNonce);
           }
-
-          htmlStream = streamingHtmlStream;
         }
 
         // Populated before any SSR request runs: at prod-server startup
@@ -693,6 +749,7 @@ export async function handleSsr(
           // this promise expecting it to be load-bearing in production.
           metadataReady: Promise.resolve(),
           capturedRscData: options?.capturedRscDataRef?.value ?? null,
+          shellErrorRecovered,
           linkHeader: reactLinkHeader,
         };
       } catch (error) {

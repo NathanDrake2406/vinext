@@ -24,6 +24,7 @@ import {
 } from "./app-page-stream.js";
 import { AppElementsWire, type AppElements } from "./app-elements.js";
 import { createAppPageLayoutEntries, createAppPageSourcePage } from "./app-page-route-wiring.js";
+import { NEVER_CACHE_CONTROL } from "./cache-control.js";
 
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type AppPageComponent = ComponentType<any>;
@@ -500,8 +501,8 @@ export async function renderAppPageErrorBoundary<TModule extends AppPageModule>(
     });
   };
 
-  const renderWith = (BoundaryComponent: AppPageComponent): Promise<Response> =>
-    renderAppPageBoundaryElementResponse({
+  const renderWith = async (BoundaryComponent: AppPageComponent): Promise<Response> => {
+    const response = await renderAppPageBoundaryElementResponse({
       ...options,
       element: buildElement(BoundaryComponent),
       initialDevServerError: rawError,
@@ -509,8 +510,16 @@ export async function renderAppPageErrorBoundary<TModule extends AppPageModule>(
       navigationParams: matchedParams,
       route: options.route,
       routePattern: options.route?.pattern,
-      status: 200,
+      status: errorBoundary.isGlobalError ? 500 : 200,
     });
+    if (errorBoundary.isGlobalError) {
+      response.headers.set("Cache-Control", NEVER_CACHE_CONTROL);
+      response.headers.delete("CDN-Cache-Control");
+      response.headers.delete("Cloudflare-CDN-Cache-Control");
+      response.headers.delete("Cache-Tag");
+    }
+    return response;
+  };
 
   try {
     return await renderWith(errorBoundary.component);

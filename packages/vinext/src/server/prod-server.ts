@@ -294,6 +294,11 @@ function appendWebHeader(
   value: string | string[] | undefined,
 ): void {
   if (value === undefined) return;
+  // HTTP/2 requests expose RFC 7540 §8.1.2.1 pseudo-headers (`:method`,
+  // `:authority`, `:path`, `:scheme`) on `req.headers`. WHATWG `Headers`
+  // rejects any name containing `:`, so they must be dropped before building
+  // a `Headers` object. See: https://github.com/cloudflare/vinext/issues/2013
+  if (key.startsWith(":")) return;
   if (Array.isArray(value)) {
     for (const item of value) headers.append(key, item);
     return;
@@ -1682,6 +1687,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       // here — stale clients can fall back to a hard navigation without
       // accidentally triggering middleware/SSR on a bogus path.
       let isDataReq = false;
+      const originalRenderUrl = url;
       if (isNextDataPathname(pathname)) {
         const dataMatch = pagesBuildId ? parseNextDataPathname(pathname, pagesBuildId) : null;
         if (!dataMatch) {
@@ -1747,7 +1753,11 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
                 resolvedUrl: string,
                 options?: PagesRenderOptions,
                 stagedHeaders?: Headers,
-              ) => renderPage(request, resolvedUrl, ssrManifest, undefined, stagedHeaders, options)
+              ) =>
+                renderPage(request, resolvedUrl, ssrManifest, undefined, stagedHeaders, {
+                  ...options,
+                  originalUrl: originalRenderUrl,
+                })
             : null,
         handleApi:
           typeof handleApi === "function"

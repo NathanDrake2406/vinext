@@ -200,7 +200,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
-import { normalizePathSeparators, stripViteModuleQuery } from "./utils/path.js";
+import { normalizePathSeparators, stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
 import { getViteMajorVersion } from "./utils/vite-version.js";
 
 // Install the process-level peer-disconnect backstop at module load.
@@ -2534,7 +2534,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // direct @vercel/og imports in metadata routes, and \0-prefixed
         // re-imports from @vitejs/plugin-rsc.
         filter: {
-          id: /(?:next\/|virtual:vinext-|^@vercel\/og(?:\.js)?$)/,
+          id: /(?:next\/|vinext\/shims\/|virtual:vinext-|@vercel\/og(?:\.js)?$)/,
         },
         handler(id, importer) {
           // Strip \0 prefix if present — @vitejs/plugin-rsc's generated
@@ -2545,6 +2545,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
           if (isVercelOgImport(cleanId) && !isVinextOgShimImporter(importer)) {
             return resolveShimModulePath(_shimsDir, "og");
+          }
+
+          const vinextShimPrefix = "vinext/shims/";
+          if (cleanId.startsWith(vinextShimPrefix)) {
+            return resolveShimModulePath(
+              _shimsDir,
+              stripJsExtension(stripViteModuleQuery(cleanId.slice(vinextShimPrefix.length))),
+            );
           }
 
           // Pages Router virtual modules
@@ -3461,6 +3469,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           ): Promise<void> => {
             try {
               let url: string = req.url ?? "/";
+              const originalRequestUrl = url;
 
               // If no pages directory, skip this middleware entirely
               // (app router is handled by @vitejs/plugin-rsc's built-in middleware)
@@ -3669,7 +3678,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               const rawHeaders = new Headers(
                 Object.fromEntries(
                   Object.entries(req.headers)
-                    .filter(([, v]) => v !== undefined)
+                    // Drop `undefined` values and HTTP/2 pseudo-headers
+                    // (`:method`/`:authority`/`:path`/`:scheme`, RFC 7540
+                    // §8.1.2.1) — WHATWG `Headers` rejects `:`-prefixed names.
+                    // See: https://github.com/cloudflare/vinext/issues/2013
+                    .filter(([k, v]) => v !== undefined && !k.startsWith(":"))
                     .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)]),
                 ),
               );
@@ -3974,6 +3987,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   pipelineResult.resolvedUrl,
                   req.__vinextMiddlewareStatus,
                   pipelineResult.isDataReq,
+                  originalRequestUrl,
                 );
               }
             } catch (e) {

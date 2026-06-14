@@ -32,8 +32,8 @@ import {
 import { pickRootParams, setRootParams, type RootParams } from "vinext/shims/root-params";
 import { createRequestContext, runWithRequestContext } from "vinext/shims/unified-request-context";
 import { flattenErrorCauses } from "../utils/error-cause.js";
-import { mergeRewriteQuery } from "../utils/query.js";
 import { hasBasePath } from "../utils/base-path.js";
+import { mergeRewriteQuery } from "../utils/query.js";
 import { applyAppMiddleware, type AppMiddlewareContext } from "./app-middleware.js";
 import { mergeMiddlewareResponseHeaders } from "./app-page-response.js";
 import { handleAppPrerenderEndpoint } from "./app-prerender-endpoints.js";
