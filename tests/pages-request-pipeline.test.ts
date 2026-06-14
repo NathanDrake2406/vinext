@@ -376,6 +376,35 @@ describe("beforeFiles rewrites", () => {
       expect.any(Headers),
     );
   });
+
+  it("applies every matching beforeFiles rewrite in sequence", async () => {
+    const renderPage = makeRenderPage(200);
+    const result = await runPagesRequest(
+      makeRequest("/start"),
+      baseDeps({
+        isDataRequest: true,
+        configRewrites: {
+          beforeFiles: [
+            { source: "/start", destination: "/middle?first=1" },
+            { source: "/middle", destination: "/destination?second=2" },
+          ],
+          afterFiles: [],
+          fallback: [],
+        },
+        renderPage,
+      }),
+    );
+
+    expect(result.type).toBe("response");
+    if (result.type !== "response") return;
+    expect(renderPage).toHaveBeenCalledWith(
+      expect.any(Request),
+      "/destination?first=1&second=2",
+      undefined,
+      expect.any(Headers),
+    );
+    expect(result.response.headers.get("x-nextjs-rewrite")).toBe("/destination?first=1&second=2");
+  });
 });
 
 // 10. Out-of-basePath reject when basePath: "/base" and hadBasePath: false and no configRewrite fired
@@ -701,6 +730,40 @@ describe("deferred error page re-render on 404", () => {
     // Rendered exactly once with no defer option, and the fallback never fired.
     expect(renderPage).toHaveBeenCalledTimes(1);
     expect(renderPage.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it("resolves fallback rewrites before rendering a production data request", async () => {
+    const renderPage = vi.fn(
+      async (_request: Request, url: string) => new Response(`data ${url}`, { status: 200 }),
+    );
+    const matchPageRoute = vi.fn((pathname: string) =>
+      pathname === "/fallback-target" ? ({ route: { isDynamic: false } } as any) : null,
+    );
+
+    const result = await runPagesRequest(
+      makeRequest("/missing-page"),
+      baseDeps({
+        isDataRequest: true,
+        matchPageRoute,
+        configRewrites: {
+          beforeFiles: [],
+          afterFiles: [],
+          fallback: [{ source: "/missing-page", destination: "/fallback-target?from=fallback" }],
+        },
+        renderPage,
+      }),
+    );
+
+    expect(result.type).toBe("response");
+    if (result.type !== "response") return;
+    expect(renderPage).toHaveBeenCalledOnce();
+    expect(renderPage).toHaveBeenCalledWith(
+      expect.any(Request),
+      "/fallback-target?from=fallback",
+      undefined,
+      expect.any(Headers),
+    );
+    expect(result.response.headers.get("x-nextjs-rewrite")).toBe("/fallback-target?from=fallback");
   });
 });
 

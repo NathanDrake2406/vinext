@@ -533,8 +533,9 @@ export function createPagesPageHandler(
         } catch {
           /* font preloads not available */
         }
-        const routePathname = routeUrl.split("?")[0] || "/";
-        const pagesResolvedUrl = routePathname + originalRequestUrl.search;
+        const parsedRouteUrl = new URL(routeUrl, originalRequestUrl);
+        const routePathname = parsedRouteUrl.pathname || "/";
+        const pagesResolvedUrl = routePathname + parsedRouteUrl.search;
 
         const pageDataResult = await resolvePagesPageData({
           isDataReq,
