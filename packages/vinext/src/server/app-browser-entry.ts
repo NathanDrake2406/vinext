@@ -177,8 +177,8 @@ import {
 import { removeStylesheetLinksCoveredByInlineCss } from "./app-inline-css-client.js";
 import {
   navigationPlanner,
-  type NavigationReuseFactsV0,
-  type VisitedResponseCacheCandidateFactsV0,
+  type NavigationReuseFacts,
+  type VisitedResponseCacheCandidateFacts,
 } from "./navigation-planner.js";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
@@ -714,12 +714,12 @@ type VisitedResponseCacheCandidate =
   | {
       cacheKey: string;
       entry: VisitedResponseCacheEntry;
-      facts: Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "present" }>;
+      facts: Extract<VisitedResponseCacheCandidateFacts, { candidate: "present" }>;
     }
   | {
       cacheKey: string;
       entry: null;
-      facts: Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "missing" }>;
+      facts: Extract<VisitedResponseCacheCandidateFacts, { candidate: "missing" }>;
     };
 
 function readVisitedResponseCacheCandidate(
@@ -1791,7 +1791,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
               facts: {
                 candidate: "missing",
                 navigationKind,
-              } satisfies Extract<VisitedResponseCacheCandidateFactsV0, { candidate: "missing" }>,
+              } satisfies Extract<VisitedResponseCacheCandidateFacts, { candidate: "missing" }>,
             }
           : readVisitedResponseCacheCandidate(
               rscUrl,
@@ -1806,7 +1806,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           visitedResponseCandidate,
           visitedResponseDecision,
         );
-        const visitedResponse: NavigationReuseFactsV0["visitedResponse"] =
+        const visitedResponse: NavigationReuseFacts["visitedResponse"] =
           cachedRoute === null ? { status: "unavailable" } : { status: "available" };
         const prefetchProbeDecision = navigationPlanner.classifyNavigationPrefetchProbe({
           bypassNavigationCache: shouldBypassNavigationCache,
