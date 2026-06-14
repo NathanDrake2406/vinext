@@ -6809,26 +6809,6 @@ describe("createOnUncaughtError (hydrateRoot uncaught handler)", () => {
 });
 
 describe("app navigation failure handling", () => {
-  it("ignores navigation failures without an error value", () => {
-    vi.stubEnv("__NEXT_APP_NAV_FAIL_HANDLING", "true");
-    const originalWindow = globalThis.window;
-    const assign = vi.fn();
-    globalThis.window = {
-      location: { assign, href: "https://example.com/current" },
-      next: { version: "vinext" },
-    } as unknown as Window & typeof globalThis;
-
-    try {
-      stageAppNavigationFailureTarget("/latest");
-      expect(handleAppNavigationFailure(undefined)).toBe(false);
-      expect(handleAppNavigationFailure(null)).toBe(false);
-      expect(assign).not.toHaveBeenCalled();
-    } finally {
-      globalThis.window = originalWindow;
-      vi.unstubAllEnvs();
-    }
-  });
-
   it("hard-navigates to the latest pending URL when enabled", () => {
     vi.stubEnv("__NEXT_APP_NAV_FAIL_HANDLING", "true");
     const originalWindow = globalThis.window;

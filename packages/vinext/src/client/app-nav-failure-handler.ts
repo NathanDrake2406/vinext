@@ -31,7 +31,6 @@ export function clearAppNavigationFailureTarget(target?: string | URL): void {
 
 export function handleAppNavigationFailure(error: unknown): boolean {
   if (!process.env.__NEXT_APP_NAV_FAIL_HANDLING || typeof window === "undefined") return false;
-  if (!error) return false;
   const pendingUrl = getPendingUrl();
   if (pendingUrl === null || pendingUrl.href === window.location.href) return false;
   console.error("Error occurred during navigation, falling back to hard navigation", error);

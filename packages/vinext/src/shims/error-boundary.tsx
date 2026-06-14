@@ -193,11 +193,7 @@ export class ErrorBoundaryInner extends React.Component<
     state: ErrorBoundaryState,
   ): ErrorBoundaryState | null {
     const nextResetState = readBoundaryResetState(props);
-    if (
-      props.isImplicitRootErrorBoundary &&
-      state.error &&
-      handleAppNavigationFailure(state.error.thrownValue)
-    ) {
+    if (state.error && handleAppNavigationFailure(state.error.thrownValue)) {
       return { error: null, ...nextResetState };
     }
     if (state.error && shouldResetBoundary(nextResetState, state)) {
