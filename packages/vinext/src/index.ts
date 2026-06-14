@@ -3924,7 +3924,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // and an app/ dir exists, defer to the RSC plugin (app routes live
                 // there). If both routers match, apply Next.js's merged route
                 // precedence before choosing which plugin owns the request.
-                const renderMatch = matchRoute(pipelineResult.resolvedUrl.split("?")[0], routes);
+                const resolvedPathname = pipelineResult.resolvedUrl
+                  .split("#", 1)[0]
+                  .split("?", 1)[0];
+                const renderMatch = matchRoute(resolvedPathname, routes);
                 if (hasAppDir && appDir) {
                   if (!renderMatch) {
                     return next();
@@ -3934,7 +3937,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     nextConfig?.pageExtensions,
                     fileMatcher,
                   );
-                  const appMatch = matchAppRoute(pipelineResult.resolvedUrl, appRoutes);
+                  const appMatch = matchAppRoute(resolvedPathname, appRoutes);
                   if (
                     appMatch &&
                     !pagesRouteHasPriorityOverAppRoute(renderMatch.route, appMatch.route)

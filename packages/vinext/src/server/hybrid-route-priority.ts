@@ -7,13 +7,6 @@ export type HybridRoutePriorityRoute = {
   sourcePath?: string | null;
 };
 
-export type HybridOwner = "app" | "pages";
-
-export type HybridRouteMatch<R extends HybridRoutePriorityRoute> = {
-  route: R;
-  params: Record<string, string | string[]>;
-};
-
 export function validateHybridRouteConflicts(
   pagesRoutes: readonly HybridRoutePriorityRoute[],
   appRoutes: readonly HybridRoutePriorityRoute[],
@@ -65,33 +58,5 @@ export function pagesRouteHasPriorityOverAppRoute(
       appRoute.pattern,
       appRoute.isDynamic,
     ) === "pages"
-  );
-}
-
-/**
- * Compare two already-matched routes (one from each router) and decide which
- * router should own the request.
- *
- * Returns the owning router, or `null` when both routers missed. This is the
- * shape the client-side link/prefetch pipeline needs: a single answer it can
- * switch on to choose between an RSC navigation (App) and a document/Pages
- * navigation (Pages).
- *
- * Centralises the same `pagesRouteHasPriorityOverAppRoute` comparison the
- * server uses so client navigations, prefetch detection, and direct document
- * loads all reach the same answer for the same route pair.
- */
-export function resolveHybridRouteOwner<R extends HybridRoutePriorityRoute>(
-  appMatch: HybridRouteMatch<R> | null,
-  pagesMatch: HybridRouteMatch<R> | null,
-): HybridOwner | null {
-  if (appMatch === null && pagesMatch === null) return null;
-  if (appMatch === null) return "pages";
-  if (pagesMatch === null) return "app";
-  return compareHybridRoutePatterns(
-    pagesMatch.route.pattern,
-    pagesMatch.route.isDynamic,
-    appMatch.route.pattern,
-    appMatch.route.isDynamic,
   );
 }

@@ -107,8 +107,10 @@ export function sortRoutes<T extends { pattern: string }>(routes: T[]): T[] {
  *
  * Centralised so the server's request handling and the client's link /
  * prefetch / programmatic-navigation paths all reach the same owner for
- * the same (pages pattern, app pattern) pair. Encapsulates the static /
- * dynamic short-circuits and Next.js's segment-by-segment route ordering.
+ * the same (pages pattern, app pattern) pair. This intentionally implements
+ * Next.js's segment-tree ordering directly instead of vinext's broader
+ * `sortRoutes()` score heuristic. It only arbitrates two routes that already
+ * matched the same URL; each router's own trie ordering remains unchanged.
  *
  * Usage:
  *   compareHybridRoutePatterns("/:slug", true, "/:slug", true)  // → "pages"

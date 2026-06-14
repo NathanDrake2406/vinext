@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { compareHybridRoutePatterns } from "../packages/vinext/src/routing/utils.js";
 import {
   pagesRouteHasPriorityOverAppRoute,
-  resolveHybridRouteOwner,
   validateHybridRouteConflicts,
 } from "../packages/vinext/src/server/hybrid-route-priority.js";
 
@@ -43,7 +42,7 @@ describe("compareHybridRoutePatterns", () => {
     // static-prefix score by 50 per segment, so the Pages route scores
     // 1951 and the App route scores 2000. The hand-copied client
     // comparator missed this reduction and reversed the answer; the
-    // shared comparator (which delegates to `sortRoutes`) gets it right.
+    // shared comparator's Next.js-style segment ordering gets it right.
     expect(compareHybridRoutePatterns("/_sites/:slug*", true, "/:slug*", true)).toBe("pages");
   });
 
@@ -158,63 +157,5 @@ describe("hybrid App Router + Pages Router route priority", () => {
         { isDynamic: true, pattern: "/:id" },
       ),
     ).toBe(true);
-  });
-});
-
-describe("resolveHybridRouteOwner", () => {
-  it("returns null when neither router matched", () => {
-    expect(resolveHybridRouteOwner(null, null)).toBeNull();
-  });
-
-  it("returns the matched router when only one router matched", () => {
-    const matched = {
-      route: { isDynamic: true, pattern: "/a" },
-      params: { id: "1" },
-    };
-    expect(resolveHybridRouteOwner(matched, null)).toBe("app");
-    expect(resolveHybridRouteOwner(null, matched)).toBe("pages");
-  });
-
-  it("lets a more specific Pages dynamic route beat an App root catch-all", () => {
-    // /pages-dir/[dynamic] owns /pages-dir/foobar ahead of app/[...path].
-    expect(
-      resolveHybridRouteOwner(
-        {
-          route: { isDynamic: true, pattern: "/:path+" },
-          params: { path: ["pages-dir", "foobar"] },
-        },
-        {
-          route: { isDynamic: true, pattern: "/pages-dir/:dynamic" },
-          params: { dynamic: "foobar" },
-        },
-      ),
-    ).toBe("pages");
-  });
-
-  it("lets an App static route own the request when Pages only has a catch-all", () => {
-    expect(
-      resolveHybridRouteOwner(
-        { route: { isDynamic: false, pattern: "/dashboard" }, params: {} },
-        { route: { isDynamic: true, pattern: "/:path+" }, params: { path: "dashboard" } },
-      ),
-    ).toBe("app");
-  });
-
-  it("rejects an identical static App and Pages route", () => {
-    expect(() =>
-      resolveHybridRouteOwner(
-        { route: { isDynamic: false, pattern: "/" }, params: {} },
-        { route: { isDynamic: false, pattern: "/" }, params: {} },
-      ),
-    ).toThrow("Conflicting app and page routes");
-  });
-
-  it("retains Pages provider order after merged route validation", () => {
-    expect(
-      resolveHybridRouteOwner(
-        { route: { isDynamic: true, pattern: "/:slug" }, params: { slug: "x" } },
-        { route: { isDynamic: true, pattern: "/:id" }, params: { id: "x" } },
-      ),
-    ).toBe("pages");
   });
 });

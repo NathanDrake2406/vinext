@@ -411,6 +411,8 @@ export async function runPagesRequest(
   }
 
   // Step 9: beforeFiles rewrites
+  // Next.js server-utils.ts applies every beforeFiles rule in sequence and
+  // continues afterFiles/fallback rules until a destination resolves.
   let configRewriteFired = false;
   for (const rewrite of configRewrites.beforeFiles ?? []) {
     const rewritten = matchRewrite(
