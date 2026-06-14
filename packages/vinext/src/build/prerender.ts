@@ -54,8 +54,19 @@ import { startProdServer } from "../server/prod-server.js";
 import { readPrerenderSecret } from "./server-manifest.js";
 import { getOutputPath, getRscOutputPath } from "../utils/prerender-output-paths.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
-import { createAppPprFallbackShells } from "../server/app-ppr-fallback-shell.js";
+import {
+  createAppPprFallbackShells,
+  markAppPprDynamicFallbackShellHtml,
+} from "../server/app-ppr-fallback-shell.js";
 export { readPrerenderSecret } from "./server-manifest.js";
+
+const EXPERIMENTAL_PPR_FALLBACK_SHELLS_ENV = "__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS";
+
+function isExperimentalPprFallbackShellGenerationEnabled(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  return env[EXPERIMENTAL_PPR_FALLBACK_SHELLS_ENV] === "1";
+}
 
 function getErrorMessageWithStack(err: Error): string {
   // Include the full stack trace for sourcemap-aware error reporting during
@@ -90,6 +101,8 @@ export type PrerenderRouteResult =
       path?: string;
       /** Which router produced this route. Used by cache seeding. */
       router: "app" | "pages";
+      /** Set to true when this is a PPR fallback shell. */
+      fallback?: boolean;
     }
   | {
       route: string;
@@ -1029,6 +1042,7 @@ export async function prerenderApp({
       prerenderRouteParams: PrerenderRouteParamsPayload | null;
       revalidate: number | false;
       isSpeculative: boolean; // 'unknown' route — mark skipped if render fails
+      isFallback?: boolean;
     };
     const urlsToRender: UrlToRender[] = [];
 
@@ -1178,7 +1192,14 @@ export async function prerenderApp({
               isSpeculative: false,
             });
 
-            if (config.cacheComponents === true) {
+            // These artifacts contain a partial HTML/RSC shell that requires
+            // request-time resume. Keep generation internal-only until vinext
+            // implements that resume lifecycle; serving one as complete HTML
+            // causes hydration to fall into the global error boundary.
+            if (
+              config.cacheComponents === true &&
+              isExperimentalPprFallbackShellGenerationEnabled()
+            ) {
               for (const fallbackShell of createAppPprFallbackShells(route, params)) {
                 if (queuedRouteUrls.has(fallbackShell.pathname)) continue;
                 queuedRouteUrls.add(fallbackShell.pathname);
@@ -1192,6 +1213,7 @@ export async function prerenderApp({
                   ),
                   revalidate,
                   isSpeculative: false,
+                  isFallback: true,
                 });
               }
             }
@@ -1242,6 +1264,7 @@ export async function prerenderApp({
       prerenderRouteParams,
       revalidate,
       isSpeculative,
+      isFallback,
     }: UrlToRender): Promise<PrerenderRouteResult> {
       try {
         // Invoke RSC handler directly with a synthetic Request.
@@ -1315,7 +1338,9 @@ export async function prerenderApp({
             error: "RSC handler returned no prerender HTML",
           };
         }
-        const html = htmlRender.html;
+        const html = isFallback
+          ? markAppPprDynamicFallbackShellHtml(htmlRender.html)
+          : htmlRender.html;
 
         // Reconstruct the RSC payload from the inline bootstrap chunks already
         // streamed into the HTML body. The chunks went through fixFlightHints
@@ -1386,6 +1411,7 @@ export async function prerenderApp({
             : {}),
           router: "app",
           ...(urlPath !== routePattern ? { path: urlPath } : {}),
+          ...(isFallback ? { fallback: true } : {}),
         };
       } catch (e) {
         if (isSpeculative) {
@@ -1538,6 +1564,7 @@ export function writePrerenderIndex(
         ...(typeof r.revalidate === "number" ? { expire: r.expire } : {}),
         router: r.router,
         ...(r.path ? { path: r.path } : {}),
+        ...(r.fallback ? { fallback: true } : {}),
       };
     }
     if (r.status === "skipped") {

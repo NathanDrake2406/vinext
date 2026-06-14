@@ -127,6 +127,7 @@ type RenderAppPageLifecycleOptions = {
   peekRequestCacheLife?: () => AppPageRequestCacheLife | null;
   getDraftModeCookieHeader: () => string | null | undefined;
   handlerStart: number;
+  hasCustomGlobalError?: boolean;
   hasLoadingBoundary: boolean;
   dynamicStaleTimeSeconds?: number;
   isDynamicError: boolean;
@@ -153,6 +154,9 @@ type RenderAppPageLifecycleOptions = {
   middlewareContext: AppPageMiddlewareContext;
   navigationParams: Record<string, unknown>;
   params: Record<string, unknown>;
+  pprFallbackShellSignal?: AbortSignal;
+  pprFallbackShellReactSignal?: AbortSignal;
+  abortPprFallbackShell?: () => void;
   rootParams?: RootParams;
   peekRenderObservationState?: () => AppPageRenderObservationState;
   probeLayoutAt: (layoutIndex: number) => unknown;
@@ -168,12 +172,12 @@ type RenderAppPageLifecycleOptions = {
   renderPageSpecialError: (specialError: AppPageSpecialError) => Promise<Response>;
   renderToReadableStream: (
     element: ReactNode | AppOutgoingElements,
-    options: { onError: AppPageBoundaryOnError },
+    options: { onError: AppPageBoundaryOnError; signal?: AbortSignal },
   ) => ReadableStream<Uint8Array>;
-  /** True when the app supplies a custom global-error.tsx. When false, SSR
-   *  shell render errors fall back to the default `__next_error__` recovery
-   *  document instead of a server-side boundary re-render. */
-  hasCustomGlobalError?: boolean;
+  prerenderToReadableStream?: (
+    element: ReactNode | AppOutgoingElements,
+    options: { onError: AppPageBoundaryOnError; signal?: AbortSignal },
+  ) => Promise<{ prelude: ReadableStream<Uint8Array> }>;
   routePattern: string;
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
   scriptNonce?: string;
@@ -577,6 +581,7 @@ export async function renderAppPageLifecycle(
 ): Promise<Response> {
   const preRenderResult = await probeAppPageBeforeRender({
     hasLoadingBoundary: options.hasLoadingBoundary,
+    skipProbes: options.pprFallbackShellSignal !== undefined,
     layoutCount: options.layoutCount,
     probeLayoutAt(layoutIndex) {
       return options.probeLayoutAt(layoutIndex);
@@ -668,11 +673,28 @@ export async function renderAppPageLifecycle(
   // standalone call would establish here is only effective if the caller has
   // an outer runWithRequestContext / runWithFetchDedupe scope keeping the ALS
   // store alive across that consumption.
-  const rscStream = runWithFetchDedupe(() =>
-    options.renderToReadableStream(outgoingElement, {
+  let rscStream = await runWithFetchDedupe(async () => {
+    if (options.pprFallbackShellSignal && options.prerenderToReadableStream) {
+      const reactSignal = options.pprFallbackShellReactSignal ?? options.pprFallbackShellSignal;
+      const pendingResult = options.prerenderToReadableStream(outgoingElement, {
+        onError: rscErrorTracker.onRenderError,
+        signal: reactSignal,
+      });
+      if (options.abortPprFallbackShell) {
+        setTimeout(options.abortPprFallbackShell, 0);
+      }
+      return (await pendingResult).prelude;
+    }
+
+    return options.renderToReadableStream(outgoingElement, {
       onError: rscErrorTracker.onRenderError,
-    }),
-  );
+    });
+  });
+
+  let pprFallbackShellRsc: Uint8Array | null = null;
+  if (options.pprFallbackShellSignal) {
+    pprFallbackShellRsc = new Uint8Array(await readAppPageBinaryStream(rscStream));
+  }
 
   let revalidateSeconds = options.revalidateSeconds;
   let expireSeconds = options.expireSeconds;
@@ -683,7 +705,23 @@ export async function renderAppPageLifecycle(
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;
-  const rscCapture = teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscForCacheMetadata);
+  const createBufferedRscStream = (close: boolean): ReadableStream<Uint8Array> =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (pprFallbackShellRsc) {
+          controller.enqueue(pprFallbackShellRsc);
+        }
+        if (close) {
+          controller.close();
+        }
+      },
+    });
+  const rscCapture = pprFallbackShellRsc
+    ? {
+        ssrStream: createBufferedRscStream(false),
+        ...(shouldCaptureRscForCacheMetadata ? { sideStream: createBufferedRscStream(true) } : {}),
+      }
+    : teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscForCacheMetadata);
   const rscForResponse = rscCapture.ssrStream;
 
   // When the fused tee (#981) is active, the sideStream carries both the embed
@@ -831,18 +869,19 @@ export async function renderAppPageLifecycle(
       return renderAppPageHtmlStream({
         capturedRscDataRef,
         fontData,
+        hasCustomGlobalError: options.hasCustomGlobalError,
         navigationContext: options.getNavigationContext(),
         basePath: options.basePath,
         clientTraceMetadata: options.clientTraceMetadata,
         reactMaxHeadersLength: options.reactMaxHeadersLength,
         rootParams: options.rootParams,
+        pprFallbackShellSignal: options.pprFallbackShellSignal,
         formState: options.formState ?? null,
         rscStream: rscForResponse,
         scriptNonce: options.scriptNonce,
         sideStream: rscCapture.sideStream,
-        hasCustomGlobalError: options.hasCustomGlobalError,
         ssrHandler,
-        waitForAllReady: options.isPrerender,
+        waitForAllReady: options.isPrerender === true,
       });
     },
     renderSpecialErrorResponse(specialError) {

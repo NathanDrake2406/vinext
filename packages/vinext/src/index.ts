@@ -181,7 +181,6 @@ import { createWasmModuleImportPlugin } from "./plugins/wasm-module-import.js";
 import { getTypeofWindowReplacement, replaceTypeofWindow } from "./plugins/typeof-window.js";
 import { hasMdxFiles } from "./utils/mdx-scan.js";
 import { scanPublicFileRoutes } from "./utils/public-routes.js";
-import { getViteMajorVersion } from "./utils/vite-version.js";
 import tsconfigPaths from "vite-tsconfig-paths";
 import type { Options as VitePluginReactOptions } from "@vitejs/plugin-react";
 import MagicString from "magic-string";
@@ -192,6 +191,7 @@ import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
 import { normalizePathSeparators, stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
+import { getViteMajorVersion } from "./utils/vite-version.js";
 
 // Install the process-level peer-disconnect backstop at module load.
 // Vite plugin lifecycle hooks (config / configureServer) proved
@@ -208,29 +208,6 @@ function isInsideDirectory(dir: string, filePath: string): boolean {
   return relativePath !== "" && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
-// Detect a module-level `"use server"` directive (a Server Actions module).
-// Directives form the leading prologue of string-literal ExpressionStatements,
-// so we only scan until the first non-directive statement.
-function hasModuleLevelUseServerDirective(body: ReturnType<typeof parseAst>["body"]): boolean {
-  for (const node of body) {
-    if (node.type !== "ExpressionStatement") break;
-    const directive = (node as ASTNode & { directive?: unknown }).directive;
-    const expression = (node as ASTNode & { expression?: { type?: string; value?: unknown } })
-      .expression;
-    const value =
-      typeof directive === "string"
-        ? directive
-        : expression?.type === "Literal"
-          ? expression.value
-          : undefined;
-    if (value === "use server") return true;
-    // Keep scanning through other directives (e.g. "use strict"); a
-    // non-string-literal statement ends the directive prologue.
-    if (typeof value !== "string") break;
-  }
-  return false;
-}
-
 function hasServerOnlyMarkerImport(code: string): boolean {
   if (!code.includes("server-only")) return false;
 
@@ -240,15 +217,6 @@ function hasServerOnlyMarkerImport(code: string): boolean {
   } catch {
     return false;
   }
-
-  // Server Actions modules (`"use server"`) live in the server/action layer,
-  // not the client layer. Next.js allows them to `import "server-only"` even
-  // though the client bundle holds references used to invoke the actions
-  // (see test/e2e/app-dir/actions/app/client/actions.js, which does exactly
-  // this). Treating them as client-reachable here is a false positive that
-  // breaks the entire client build, so exempt them while still rejecting
-  // genuine client modules below.
-  if (hasModuleLevelUseServerDirective(ast.body)) return false;
 
   function walk(node: ASTNode | ASTNode[] | null | undefined): boolean {
     if (!node) return false;
@@ -570,15 +538,15 @@ function isVirtualEntryFacade(id: string | null | undefined, virtualId: string):
 }
 
 /**
- * Returns true when `code` starts with a React `"use client"` or `"use server"`
- * directive (after stripping leading comments, hashbang, and whitespace).
+ * Returns the leading React `"use client"` or `"use server"` directive after
+ * stripping leading comments, hashbang, and whitespace.
  *
  * Used by `vinext:jsx-in-js` to opt `.js` files inside `node_modules` into the
  * JSX transform. We mirror `@vitejs/plugin-rsc`'s detection by looking at the
  * directive prologue rather than scanning the whole file — `code.includes`
  * alone would match incidental occurrences in template literals or comments.
  */
-function hasReactDirective(code: string): boolean {
+function getLeadingReactDirective(code: string): "use client" | "use server" | null {
   let i = 0;
   const len = code.length;
   // Strip BOM.
@@ -586,42 +554,46 @@ function hasReactDirective(code: string): boolean {
   // Strip hashbang.
   if (code[i] === "#" && code[i + 1] === "!") {
     const nl = code.indexOf("\n", i);
-    if (nl === -1) return false;
+    if (nl === -1) return null;
     i = nl + 1;
   }
   while (i < len) {
     // Skip whitespace.
     while (i < len && /\s/.test(code[i] ?? "")) i++;
-    if (i >= len) return false;
+    if (i >= len) return null;
     // Skip line comments.
     if (code[i] === "/" && code[i + 1] === "/") {
       const nl = code.indexOf("\n", i + 2);
-      if (nl === -1) return false;
+      if (nl === -1) return null;
       i = nl + 1;
       continue;
     }
     // Skip block comments.
     if (code[i] === "/" && code[i + 1] === "*") {
       const end = code.indexOf("*/", i + 2);
-      if (end === -1) return false;
+      if (end === -1) return null;
       i = end + 2;
       continue;
     }
     // At first non-comment, non-whitespace token. Must be a string literal
     // directive to qualify (per ECMA-262 Directive Prologue grammar).
     const quote = code[i];
-    if (quote !== '"' && quote !== "'") return false;
+    if (quote !== '"' && quote !== "'") return null;
     const closing = code.indexOf(quote, i + 1);
-    if (closing === -1) return false;
+    if (closing === -1) return null;
     const directive = code.slice(i + 1, closing);
-    if (directive === "use client" || directive === "use server") return true;
+    if (directive === "use client" || directive === "use server") return directive;
     // Other directives (e.g., "use strict") may precede the React directive.
     // Continue scanning past the statement-terminating `;` or newline.
     i = closing + 1;
     while (i < len && (code[i] === ";" || code[i] === " " || code[i] === "\t")) i++;
     if (code[i] === "\n") i++;
   }
-  return false;
+  return null;
+}
+
+function hasReactDirective(code: string): boolean {
+  return getLeadingReactDirective(code) !== null;
 }
 
 function generateRootParamsModule(rootParamNames: Iterable<string>): string {
@@ -2528,12 +2500,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
       resolveId: {
         // Hook filter: only invoke JS for handled Next/Vinext compatibility modules.
-        // Matches "next/navigation", "next/router.js", internal
-        // "vinext/shims/*" package subpaths, "virtual:vinext-rsc-entry",
+        // Matches "next/navigation", "next/router.js", "virtual:vinext-rsc-entry",
         // direct @vercel/og imports in metadata routes, and \0-prefixed
         // re-imports from @vitejs/plugin-rsc.
         filter: {
-          id: /(?:next\/|vinext\/shims\/|virtual:vinext-|@vercel\/og(?:\.js)?$)/,
+          id: /(?:next\/|vinext\/shims\/|virtual:vinext-|^@vercel\/og(?:\.js)?$)/,
         },
         handler(id, importer) {
           // Strip \0 prefix if present — @vitejs/plugin-rsc's generated
@@ -2544,6 +2515,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
           if (isVercelOgImport(cleanId) && !isVinextOgShimImporter(importer)) {
             return resolveShimModulePath(_shimsDir, "og");
+          }
+
+          const vinextShimPrefix = "vinext/shims/";
+          if (cleanId.startsWith(vinextShimPrefix)) {
+            return resolveShimModulePath(
+              _shimsDir,
+              stripJsExtension(stripViteModuleQuery(cleanId.slice(vinextShimPrefix.length))),
+            );
           }
 
           // Pages Router virtual modules
@@ -2604,23 +2583,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             return (
               RESOLVED_VIRTUAL_GOOGLE_FONTS +
               cleanId.slice(queryIndex + VIRTUAL_GOOGLE_FONTS.length)
-            );
-          }
-
-          // Runtime helper modules embedded into generated entries import
-          // vinext's own shims by package subpath (for example
-          // `vinext/shims/headers`). Source checkouts also alias userland
-          // `next/*` imports to the local shim files. Resolve both forms
-          // through this plugin so request-scoped singleton state is not split
-          // between source shims and the package export copy. These internal
-          // package subpaths deliberately resolve to the plain shim today; if
-          // one gains an environment-specific variant, handle it here before
-          // returning rather than relying on the userland `next/*` map below.
-          const vinextShimPrefix = "vinext/shims/";
-          if (cleanId.startsWith(vinextShimPrefix)) {
-            return resolveShimModulePath(
-              _shimsDir,
-              stripJsExtension(stripViteModuleQuery(cleanId.slice(vinextShimPrefix.length))),
             );
           }
 
@@ -2690,6 +2652,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               reactMaxHeadersLength: nextConfig?.reactMaxHeadersLength,
               cacheMaxMemorySize: nextConfig?.cacheMaxMemorySize,
               inlineCss: nextConfig?.inlineCss,
+              cacheComponents: nextConfig?.cacheComponents,
               i18n: nextConfig?.i18n,
               imageConfig: {
                 deviceSizes: nextConfig?.images?.deviceSizes,
@@ -3878,6 +3841,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         handler(code, id) {
           if (this.environment?.name !== "client") return null;
           if (id.startsWith("\0")) return null;
+          if (getLeadingReactDirective(code) === "use server") return null;
           if (!hasServerOnlyMarkerImport(code)) return null;
 
           throw new Error(

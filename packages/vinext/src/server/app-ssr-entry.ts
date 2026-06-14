@@ -48,6 +48,7 @@ import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/s
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
+import { isPprFallbackShellAbortError } from "vinext/shims/ppr-fallback-shell";
 import DefaultGlobalError from "vinext/shims/default-global-error";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
 
@@ -79,6 +80,116 @@ export type FontData = {
   preloads?: FontPreload[];
 };
 
+type StaticPrerender = typeof import("react-dom/static.edge").prerender;
+
+function isReactDevelopmentRuntime(): boolean {
+  if (process.env.NODE_ENV === "production") {
+    return false;
+  }
+  if (process.env.NODE_ENV === "development") {
+    return true;
+  }
+  return Function.prototype.toString.call(createReactElement).includes("getOwner");
+}
+
+function isStaticPrerenderModule(value: unknown): value is { prerender: StaticPrerender } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "prerender" in value &&
+    typeof value.prerender === "function"
+  );
+}
+
+async function loadStaticPrerender(): Promise<StaticPrerender> {
+  // Prefer the stable ESM entry in all environments. Future React dev builds
+  // may export prerender() here, so this is the first path we attempt.
+  const staticRenderer: unknown = await import("react-dom/static.edge");
+  if (isStaticPrerenderModule(staticRenderer)) {
+    return staticRenderer.prerender;
+  }
+
+  // Fallback: React development builds historically did not export prerender()
+  // from the ESM entry, so reach into the CJS artifact. The path is fragile
+  // because it depends on React's internal file layout, but it is only used
+  // when the stable ESM entry does not provide prerender().
+  if (isReactDevelopmentRuntime()) {
+    try {
+      const [{ createRequire }, path] = await Promise.all([
+        import("node:module"),
+        import("node:path"),
+      ]);
+      const require = createRequire(import.meta.url);
+      const reactDomPackageJson = require.resolve("react-dom/package.json");
+      const reactDomDir = path.dirname(reactDomPackageJson);
+      const devRendererPath = path.join(reactDomDir, "cjs/react-dom-server.edge.development.js");
+      const devRenderer: unknown = await import(devRendererPath);
+      if (isStaticPrerenderModule(devRenderer)) {
+        return devRenderer.prerender;
+      }
+      // Node.js ESM import of a CJS module wraps the exports in `default`.
+      const devRendererDefault =
+        typeof devRenderer === "object" &&
+        devRenderer !== null &&
+        "default" in devRenderer &&
+        devRenderer.default;
+      if (isStaticPrerenderModule(devRendererDefault)) {
+        return devRendererDefault.prerender;
+      }
+      throw new Error("react-dom development renderer did not expose prerender().");
+    } catch (error) {
+      throw new Error("[vinext] Failed to load React static development renderer.", {
+        cause: error,
+      });
+    }
+  }
+
+  throw new Error("[vinext] react-dom/static.edge did not expose prerender().");
+}
+
+function createUtf8Stream(html: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(html));
+      controller.close();
+    },
+  });
+}
+
+function buildBootstrapModuleScript(bootstrapModuleUrl?: string, nonce?: string): string {
+  if (!bootstrapModuleUrl) return "";
+  return (
+    `<script type="module"${createNonceAttribute(nonce)} src="` +
+    escapeHtmlAttr(bootstrapModuleUrl) +
+    '" id="_R_" async=""></script>'
+  );
+}
+
+function renderSsrErrorDocumentShell(
+  bootstrapModuleUrl?: string,
+  nonce?: string,
+): ReadableStream<Uint8Array> {
+  const html = renderToStaticMarkup(
+    createReactElement(DefaultGlobalError, {
+      error: null,
+    }),
+  ).replace("<style>", '<style data-vinext-error-shell-style="">');
+  const bootstrapScript = buildBootstrapModuleScript(bootstrapModuleUrl, nonce);
+  if (!bootstrapScript) {
+    return createUtf8Stream(`<!DOCTYPE html>${html}`);
+  }
+
+  const documentClose = "</body></html>";
+  if (!html.endsWith(documentClose)) {
+    return createUtf8Stream(`<!DOCTYPE html>${html}${bootstrapScript}`);
+  }
+
+  return createUtf8Stream(
+    `<!DOCTYPE html>${html.slice(0, -documentClose.length)}${bootstrapScript}${documentClose}`,
+  );
+}
+
 const clientReferencePreloader = createClientReferencePreloader({
   getReferences() {
     return clientReferences;
@@ -106,58 +217,6 @@ function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return Object.prototype.toString.call(error);
-}
-
-function createUtf8Stream(html: string): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(html));
-      controller.close();
-    },
-  });
-}
-
-function buildBootstrapModuleScript(bootstrapModuleUrl?: string, nonce?: string): string {
-  if (!bootstrapModuleUrl) return "";
-  return (
-    `<script type="module"${createNonceAttribute(nonce)} src="` +
-    escapeHtmlAttr(bootstrapModuleUrl) +
-    '" id="_R_" async=""></script>'
-  );
-}
-
-function markErrorShellStyle(html: string): string {
-  // DefaultGlobalError intentionally emits one style tag. If that changes,
-  // update this marker logic without touching styles inserted later by the
-  // stream transforms.
-  return html.replace("<style>", '<style data-vinext-error-shell-style="">');
-}
-
-function renderSsrErrorDocumentShell(
-  bootstrapModuleUrl?: string,
-  nonce?: string,
-): ReadableStream<Uint8Array> {
-  const html = markErrorShellStyle(
-    renderToStaticMarkup(
-      createReactElement(DefaultGlobalError, {
-        error: null,
-      }),
-    ),
-  );
-  const bootstrapScript = buildBootstrapModuleScript(bootstrapModuleUrl, nonce);
-  if (!bootstrapScript) {
-    return createUtf8Stream(`<!DOCTYPE html>${html}`);
-  }
-
-  const documentClose = "</body></html>";
-  if (!html.endsWith(documentClose)) {
-    return createUtf8Stream(`<!DOCTYPE html>${html}${bootstrapScript}`);
-  }
-
-  return createUtf8Stream(
-    `<!DOCTYPE html>${html.slice(0, -documentClose.length)}${bootstrapScript}${documentClose}`,
-  );
 }
 
 function renderInsertedHtml(insertedElements: readonly unknown[]): string {
@@ -339,6 +398,7 @@ export async function handleSsr(
     sideStream?: ReadableStream<Uint8Array>;
     /** Out-parameter: filled with accumulated raw RSC bytes when sideStream is consumed. */
     capturedRscDataRef?: { value: Promise<ArrayBuffer> | null };
+    pprFallbackShellSignal?: AbortSignal;
     formState?: ReactFormState | null;
     basePath?: string;
     /**
@@ -360,11 +420,6 @@ export async function handleSsr(
      *  to resolve before returning the HTML stream. Used for static prerender
      *  and ISR cache writes to avoid caching fallback content. */
     waitForAllReady?: boolean;
-    /** When true, an SSR-phase shell render error (no RSC-originated `digest`)
-     *  resolves to the default `__next_error__` error-document shell with the
-     *  original flight payload and bootstrap module, instead of rejecting.
-     *  Callers set this only when the app has no custom global-error.tsx, so
-     *  boundary re-render semantics are unaffected. */
     fallbackToErrorDocumentOnShellError?: boolean;
   },
 ): Promise<AppSsrRenderResult> {
@@ -512,6 +567,7 @@ export async function handleSsr(
           basePath: options?.basePath,
         });
 
+        const pprFallbackShellSignal = options?.pprFallbackShellSignal;
         // React emits a preload `Link` header (capped to `maxHeadersLength`)
         // via `onHeaders`. It fires before the shell resolves, so `linkHeader`
         // is populated by the time `renderToReadableStream` resolves below.
@@ -523,16 +579,7 @@ export async function handleSsr(
         const maxHeadersLength = options?.reactMaxHeadersLength ?? DEFAULT_REACT_MAX_HEADERS_LENGTH;
         const captureHeaders = maxHeadersLength > 0;
 
-        const ssrRenderOptions: SsrRenderOptions = {
-          onHeaders: captureHeaders
-            ? (headers: Headers) => {
-                const link = headers.get("Link");
-                if (link) {
-                  reactLinkHeader = link;
-                }
-              }
-            : undefined,
-          maxHeadersLength: captureHeaders ? maxHeadersLength : undefined,
+        const renderOptions: SsrRenderOptions = {
           // `bootstrapScriptContent` was previously how vinext injected the
           // dynamic-import call. `bootstrapModules` performs the same work
           // natively (and exposes the URL in the DOM), so passing both would
@@ -551,7 +598,20 @@ export async function handleSsr(
           bootstrapModules: bootstrapModuleUrl ? [bootstrapModuleUrl] : undefined,
           formState: options?.formState ?? null,
           nonce: options?.scriptNonce,
-          onError(error) {
+          onHeaders: captureHeaders
+            ? (headers: Headers) => {
+                const link = headers.get("Link");
+                if (link) {
+                  reactLinkHeader = link;
+                }
+              }
+            : undefined,
+          maxHeadersLength: captureHeaders ? maxHeadersLength : undefined,
+          onError(error: unknown) {
+            if (pprFallbackShellSignal && isPprFallbackShellAbortError(error)) {
+              return undefined;
+            }
+
             errorMetaRenderer.capture(error);
 
             if (error && typeof error === "object" && "digest" in error) {
@@ -567,6 +627,43 @@ export async function handleSsr(
             return undefined;
           },
         };
+
+        let htmlStream: ReadableStream<Uint8Array>;
+        let shellErrorRecovered = false;
+        if (pprFallbackShellSignal) {
+          const prerender = await loadStaticPrerender();
+          const htmlAbortController = new AbortController();
+          const pendingHtml = prerender(ssrRoot, {
+            ...renderOptions,
+            signal: htmlAbortController.signal,
+          });
+          setTimeout(() => htmlAbortController.abort(), 0);
+          htmlStream = (await pendingHtml).prelude;
+        } else {
+          let streamingHtmlStream: Awaited<ReturnType<typeof renderToReadableStream>> | undefined;
+          try {
+            streamingHtmlStream = await renderToReadableStream(ssrRoot, {
+              ...renderOptions,
+            });
+
+            if (options?.waitForAllReady === true) {
+              await streamingHtmlStream.allReady;
+            }
+
+            htmlStream = streamingHtmlStream;
+          } catch (error) {
+            void streamingHtmlStream?.cancel().catch(() => {});
+            if (
+              options?.fallbackToErrorDocumentOnShellError !== true ||
+              options?.waitForAllReady === true ||
+              typeof (error as { digest?: unknown } | null)?.digest === "string"
+            ) {
+              throw error;
+            }
+            shellErrorRecovered = true;
+            htmlStream = renderSsrErrorDocumentShell(bootstrapModuleUrl, options?.scriptNonce);
+          }
+        }
 
         // Populated before any SSR request runs: at prod-server startup
         // (prod-server.ts) or via build-time bundle injection (index.ts). Left
@@ -625,42 +722,6 @@ export async function handleSsr(
         const getBeforeInteractiveHeadHTML = (): string =>
           renderBeforeInteractiveInlineScripts(beforeInteractiveInlineScripts);
 
-        let renderedHtmlStream: Awaited<ReturnType<typeof renderToReadableStream>> | undefined;
-        let htmlStream: ReadableStream<Uint8Array>;
-        let shellErrorRecovered = false;
-        try {
-          renderedHtmlStream = await renderToReadableStream(ssrRoot, ssrRenderOptions);
-          if (options?.waitForAllReady === true) {
-            await renderedHtmlStream.allReady;
-          }
-          htmlStream = renderedHtmlStream;
-        } catch (error) {
-          void renderedHtmlStream?.cancel().catch(() => {});
-          // Contract with renderAppPageHtmlStreamWithRecovery (app-page-stream.ts):
-          // a rejected handleSsr drives redirect()/notFound() responses and
-          // local/global error.tsx boundary re-renders. Errors that originate in
-          // the RSC render (rethrown here through the flight deserializer) carry
-          // a string `digest` and must always propagate so those semantics stay
-          // intact. Only an SSR-phase-only shell error — and only when the app
-          // has no custom global-error.tsx (the caller sets the flag) — falls
-          // back to the default `__next_error__` document shell: the original
-          // flight payload plus the bootstrap module are still emitted, so the
-          // browser recovers by re-rendering the real tree from the embedded
-          // RSC data (Next.js shell-error recovery semantics). This resolves
-          // as a recovered shell render. The caller turns that outcome into an
-          // uncached 500 response; static generation and ISR regeneration use
-          // waitForAllReady and continue to reject instead.
-          if (
-            options?.fallbackToErrorDocumentOnShellError !== true ||
-            options?.waitForAllReady === true ||
-            typeof (error as { digest?: unknown } | null)?.digest === "string"
-          ) {
-            throw error;
-          }
-          shellErrorRecovered = true;
-          htmlStream = renderSsrErrorDocumentShell(bootstrapModuleUrl, options?.scriptNonce);
-        }
-
         const finalStream = deferUntilStreamConsumed(
           htmlStream.pipeThrough(
             createTickBufferedTransform(
@@ -678,7 +739,6 @@ export async function handleSsr(
 
         return {
           htmlStream: finalStream,
-          shellErrorRecovered,
           // `metadataReady` resolves eagerly precisely *because* `allReady` was
           // already awaited above when `waitForAllReady` is set (the prerender
           // path). At that point the React tree is fully rendered, so all
@@ -689,6 +749,7 @@ export async function handleSsr(
           // this promise expecting it to be load-bearing in production.
           metadataReady: Promise.resolve(),
           capturedRscData: options?.capturedRscDataRef?.value ?? null,
+          shellErrorRecovered,
           linkHeader: reactLinkHeader,
         };
       } catch (error) {
