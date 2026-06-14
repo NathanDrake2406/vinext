@@ -1073,7 +1073,10 @@ describe("runPrerender — hybrid app+pages (app-basic)", () => {
 });
 
 describe("prerenderApp — cacheComponents PPR fallback-shell artifacts", () => {
-  async function prerenderDynamicRootParamRoute(cacheComponents: boolean) {
+  async function prerenderDynamicRootParamRoute(
+    cacheComponents: boolean,
+    experimentalFallbackShells = false,
+  ) {
     const root = tmpDir("vinext-prerender-ppr-shell-");
     const outDir = path.join(root, "out");
     const appDir = path.join(root, "app");
@@ -1122,24 +1125,63 @@ describe("prerenderApp — cacheComponents PPR fallback-shell artifacts", () => 
       const routes = await appRouter(appDir);
       const config = await resolveNextConfig({ cacheComponents });
 
-      const result = await prerenderApp({
-        mode: "default",
-        rscBundlePath: path.join(root, "dist", "server", "index.js"),
-        routes,
-        outDir,
-        config,
-        _prodServer: { server, port },
-      });
+      const previousExperimentalFallbackShells =
+        process.env.__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS;
+      if (experimentalFallbackShells) {
+        process.env.__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS = "1";
+      } else {
+        delete process.env.__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS;
+      }
 
-      return { renderedPaths, routes: result.routes };
+      let result;
+      try {
+        result = await prerenderApp({
+          mode: "default",
+          rscBundlePath: path.join(root, "dist", "server", "index.js"),
+          routes,
+          outDir,
+          config,
+          _prodServer: { server, port },
+        });
+      } finally {
+        if (previousExperimentalFallbackShells === undefined) {
+          delete process.env.__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS;
+        } else {
+          process.env.__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS =
+            previousExperimentalFallbackShells;
+        }
+      }
+
+      const fallbackHtmlPath = path.join(outDir, "en", "blog", "[slug].html");
+      const fallbackHtml = fs.existsSync(fallbackHtmlPath)
+        ? fs.readFileSync(fallbackHtmlPath, "utf8")
+        : null;
+
+      return { fallbackHtml, renderedPaths, routes: result.routes };
     } finally {
       await closeServer(server);
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
 
-  it("queues fallback-shell artifacts when cacheComponents is enabled", async () => {
+  it("does not queue incomplete fallback-shell artifacts by default", async () => {
     const { renderedPaths, routes } = await prerenderDynamicRootParamRoute(true);
+
+    expect(findRoute(routes, "/en/blog/hello")).toMatchObject({
+      route: "/:locale/blog/:slug",
+      path: "/en/blog/hello",
+      status: "rendered",
+    });
+    expect(findRoute(routes, "/en/blog/[slug]")).toBeUndefined();
+    expect(renderedPaths).toContain("/en/blog/hello");
+    expect(renderedPaths).not.toContain("/en/blog/[slug]");
+  });
+
+  it("queues fallback-shell artifacts only with the internal opt-in", async () => {
+    const { fallbackHtml, renderedPaths, routes } = await prerenderDynamicRootParamRoute(
+      true,
+      true,
+    );
 
     expect(findRoute(routes, "/en/blog/hello")).toMatchObject({
       route: "/:locale/blog/:slug",
@@ -1150,8 +1192,10 @@ describe("prerenderApp — cacheComponents PPR fallback-shell artifacts", () => 
       route: "/:locale/blog/:slug",
       path: "/en/blog/[slug]",
       status: "rendered",
+      fallback: true,
     });
     expect(renderedPaths).toEqual(expect.arrayContaining(["/en/blog/hello", "/en/blog/[slug]"]));
+    expect(fallbackHtml).toContain("<!--vinext-ppr-dynamic-fallback-shell-->");
   });
 
   it("does not queue fallback-shell artifacts when cacheComponents is disabled", async () => {

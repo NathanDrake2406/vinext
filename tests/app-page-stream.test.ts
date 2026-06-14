@@ -93,6 +93,31 @@ describe("app page stream helpers", () => {
     );
   });
 
+  it("forwards the PPR fallback-shell abort signal to the SSR handler", async () => {
+    const abortController = new AbortController();
+    const ssrHandler = vi.fn(async () => createStream(["<html>fallback-shell</html>"]));
+
+    const { htmlStream } = await renderAppPageHtmlStream({
+      fontData: createAppPageFontData({
+        getLinks: () => [],
+        getPreloads: () => [],
+        getStyles: () => [],
+      }),
+      navigationContext: null,
+      pprFallbackShellSignal: abortController.signal,
+      rscStream: createStream(["flight"]),
+      ssrHandler: { handleSsr: ssrHandler },
+    });
+
+    await expect(new Response(htmlStream).text()).resolves.toBe("<html>fallback-shell</html>");
+    expect(ssrHandler).toHaveBeenCalledWith(
+      expect.anything(),
+      null,
+      expect.anything(),
+      expect.objectContaining({ pprFallbackShellSignal: abortController.signal }),
+    );
+  });
+
   it("forwards form state to the SSR handler", async () => {
     const formState = ["action-result", "key-path", "reference-id", 1] as never;
     const ssrHandler = vi.fn(async () => createStream(["<html>form-state</html>"]));

@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vite-plus/test";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import {
   detectProject,
@@ -30,6 +31,7 @@ import {
   hasWranglerConfig,
   formatMissingCloudflarePluginError,
   formatMissingCacheAdapterError,
+  injectPregeneratedConcretePaths,
 } from "../packages/vinext/src/deploy.js";
 import {
   detectPackageManager,
@@ -49,6 +51,7 @@ import {
   resolveStaticAssetSignal,
 } from "../packages/vinext/src/server/worker-utils.js";
 import { domainCandidates, parseWranglerConfig } from "../packages/vinext/src/cloudflare/tpr.js";
+import { clearPregeneratedConcretePaths } from "../packages/vinext/src/server/pregenerated-concrete-paths.js";
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -3158,5 +3161,171 @@ describe("parseWranglerConfig — custom domain extraction", () => {
     );
     const config = parseWranglerConfig(tmpDir);
     expect(config?.kvNamespaceId).toBe("abc123");
+  });
+});
+
+describe("injectPregeneratedConcretePaths", () => {
+  it("second call replaces first injection", () => {
+    const sourceCode = `import { handler } from "vinext/server/app-router-entry";\n`;
+    const manifestA = {
+      buildId: "build-a",
+      routes: [
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-a",
+          revalidate: 60,
+        },
+      ],
+    };
+    const manifestB = {
+      buildId: "build-b",
+      routes: [
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-b",
+          revalidate: 60,
+        },
+      ],
+    };
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", sourceCode);
+
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifestA));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const afterA = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    expect(afterA).toContain("post-a");
+    expect(afterA).not.toContain("post-b");
+
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifestB));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const afterB = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    expect(afterB).toContain("post-b");
+    expect(afterB).not.toContain("post-a");
+    expect(afterB).toContain('import { handler } from "vinext/server/app-router-entry"');
+  });
+
+  it("missing manifest strips prior injection", () => {
+    const priorInjection = [
+      "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */",
+      'globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/blog/:slug",["/blog/post-a"]]];',
+      "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */",
+      'import { handler } from "vinext/server/app-router-entry";',
+      "",
+    ].join("\n");
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", priorInjection);
+
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const after = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    expect(after).not.toContain("__VINEXT_PREGENERATED_CONCRETE_PATHS");
+    expect(after).toContain('import { handler } from "vinext/server/app-router-entry"');
+  });
+
+  it("excludes fallback-shell placeholder paths from injection", () => {
+    const sourceCode = 'export default { fetch(request) { return new Response("ok"); } };\n';
+    const manifest = {
+      buildId: "test",
+      routes: [
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-a",
+          revalidate: 60,
+        },
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/[slug]",
+          revalidate: 60,
+          fallback: true,
+        },
+      ],
+    };
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", sourceCode);
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifest));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const code = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    const match = code.match(/globalThis\.__VINEXT_PREGENERATED_CONCRETE_PATHS = (\[.*?\]);/);
+    expect(match).not.toBeNull();
+    const table: unknown = JSON.parse(match![1]);
+    expect(table).toEqual([["/blog/:slug", ["/blog/post-a"]]]);
+  });
+
+  it("hydrates the concrete-path registry when the generated Worker entry is imported", async () => {
+    const registryModuleUrl = pathToFileURL(
+      path.resolve("packages/vinext/src/server/pregenerated-concrete-paths.ts"),
+    ).href;
+    const sourceCode = [
+      `import { getRenderedConcreteUrlPathsForRoute, initPregeneratedPathsFromGlobals } from ${JSON.stringify(registryModuleUrl)};`,
+      "initPregeneratedPathsFromGlobals();",
+      'export const renderedPaths = [...(getRenderedConcreteUrlPathsForRoute("/blog/:slug") ?? [])];',
+      'export default { fetch(request) { return new Response("ok"); } };',
+      "",
+    ].join("\n");
+    const manifest = {
+      buildId: "test",
+      routes: [
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-a",
+          revalidate: 60,
+        },
+      ],
+    };
+
+    clearPregeneratedConcretePaths();
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", sourceCode);
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifest));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const entryUrl = pathToFileURL(path.join(tmpDir, "dist/server/index.js")).href;
+    const workerEntry: unknown = await import(`${entryUrl}?t=${Date.now()}`);
+
+    expect(workerEntry).toMatchObject({
+      renderedPaths: ["/blog/post-a"],
+    });
+  });
+
+  it("corrupt manifest strips prior injection", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const priorInjection = [
+      "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */",
+      'globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/",["/"]]];',
+      "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */",
+      'export default { fetch(request) { return new Response("ok"); } };',
+      "",
+    ].join("\n");
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", priorInjection);
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", "{invalid json}");
+
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const after = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    expect(after).not.toContain("__VINEXT_PREGENERATED_CONCRETE_PATHS");
+    expect(after).toContain('export default { fetch(request) { return new Response("ok"); } }');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[vinext] Failed to read prerender manifest"),
+      expect.any(SyntaxError),
+    );
+    warnSpy.mockRestore();
   });
 });
