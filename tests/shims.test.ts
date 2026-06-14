@@ -15236,6 +15236,7 @@ describe("Pages Router concurrent navigation", () => {
         query: { rewriteSlug: "post" },
         props: { pageProps: { slug: "post", rewritten: true } },
       });
+      expect(Router.query).toEqual({ rewriteSlug: "post" });
       expect(render).toHaveBeenCalled();
     } finally {
       vi.resetModules();

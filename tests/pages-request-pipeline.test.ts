@@ -577,6 +577,31 @@ describe("render intent", () => {
     expect(result.isDataReq).toBe(true);
     expect(result.renderOptions).toEqual({ isDataReq: true });
   });
+
+  it("stages the final dev fallback rewrite target for data navigation", async () => {
+    const result = await runPagesRequest(
+      makeRequest("/to-blog/post"),
+      baseDeps({
+        isDataReq: true,
+        matchPageRoute: () => null,
+        configRewrites: {
+          beforeFiles: [],
+          afterFiles: [],
+          fallback: [
+            {
+              source: "/to-blog/:slug",
+              destination: "/fallback-true-blog/:slug",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result.type).toBe("render");
+    if (result.type !== "render") return;
+    expect(result.resolvedUrl).toBe("/fallback-true-blog/post");
+    expect(result.stagedHeaders["x-nextjs-rewrite"]).toBe("/fallback-true-blog/post");
+  });
 });
 
 // 15. {type:"response"} from renderPage (happy path)

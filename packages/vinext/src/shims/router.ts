@@ -1089,6 +1089,17 @@ function getRouteQueryFromNextData(
   const routeQuery: Record<string, string | string[]> = {};
   if (!nextData?.query || !nextData.page) return routeQuery;
 
+  if (extractRouteParamsFromPath(nextData.page, resolvedPath) === null) {
+    for (const [key, value] of Object.entries(nextData.query)) {
+      if (typeof value === "string") {
+        routeQuery[key] = value;
+      } else if (Array.isArray(value)) {
+        routeQuery[key] = [...value];
+      }
+    }
+    return routeQuery;
+  }
+
   const routeParamNames = extractRouteParamNames(nextData.page);
   if (routeParamNames.length === 0) return routeQuery;
 

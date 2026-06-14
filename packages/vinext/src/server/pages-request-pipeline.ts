@@ -495,13 +495,18 @@ export async function runPagesRequest(
     }
   }
 
-  if (
-    (isDataReq || isDataRequest) &&
-    resolvedUrl !== originalResolvedUrl &&
-    !isExternalUrl(resolvedUrl)
-  ) {
-    middlewareHeaders["x-nextjs-rewrite"] = resolvedUrl;
-  }
+  const refreshDataRewriteHeader = () => {
+    if (
+      (isDataReq || isDataRequest) &&
+      resolvedUrl !== originalResolvedUrl &&
+      !isExternalUrl(resolvedUrl)
+    ) {
+      middlewareHeaders["x-nextjs-rewrite"] = resolvedUrl;
+    } else {
+      delete middlewareHeaders["x-nextjs-rewrite"];
+    }
+  };
+  refreshDataRewriteHeader();
 
   // Step 13: Render + fallback rewrites
   if (typeof deps.renderPage === "function") {
@@ -608,6 +613,7 @@ export async function runPagesRequest(
       resolvedUrl = mergeRewriteQuery(resolvedUrl, fallbackRewrite);
     }
   }
+  refreshDataRewriteHeader();
 
   return {
     type: "render",
