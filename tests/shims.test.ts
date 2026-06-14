@@ -15188,6 +15188,66 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("uses the rewritten page loader when the visible URL also matches a page", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const { win, render } = createNavWindow();
+    const sourceLoader = vi.fn(async () => ({ default: () => null }));
+    const destinationLoader = vi.fn(async () => ({ default: () => null }));
+    Object.assign(win.location, { origin: "http://localhost" });
+    Object.assign(win.__NEXT_DATA__, {
+      buildId: "build-1",
+      __vinext: { ...win.__NEXT_DATA__.__vinext, hasMiddleware: true },
+    });
+    Object.assign(win, {
+      __VINEXT_PAGE_PATTERNS__: ["/source/[slug]", "/destination/[slug]"],
+      __VINEXT_PAGE_LOADERS__: {
+        "/source/[slug]": sourceLoader,
+        "/destination/[slug]": destinationLoader,
+      },
+    });
+    (globalThis as any).window = win;
+
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ pageProps: { slug: "post", rewritten: true } }), {
+          headers: {
+            "content-type": "application/json",
+            "x-nextjs-rewrite": "/destination/post",
+          },
+        }),
+    );
+    globalThis.fetch = fetch;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+
+      const result = await Router.push("/source/post");
+
+      expect(result).toBe(true);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(sourceLoader).not.toHaveBeenCalled();
+      expect(destinationLoader).toHaveBeenCalledOnce();
+      expect(win.location.pathname).toBe("/source/post");
+      expect(win.__NEXT_DATA__).toMatchObject({
+        page: "/destination/[slug]",
+        query: { slug: "post" },
+        props: { pageProps: { slug: "post", rewritten: true } },
+      });
+      expect(render).toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("does not double-prefix basePath for middleware data redirects", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;

@@ -1477,7 +1477,7 @@ function handleDataRedirect(
  */
 async function navigateClientData(
   url: string,
-  target: PagesDataTarget,
+  initialTarget: PagesDataTarget,
   controller: AbortController,
   navId: number,
   assertStillCurrent: () => void,
@@ -1515,7 +1515,7 @@ async function navigateClientData(
       };
       const deploymentId = getDeploymentId();
       if (deploymentId) headers[NEXT_DEPLOYMENT_ID_HEADER] = deploymentId;
-      res = await dedupedPagesDataFetch(target.dataHref, { headers });
+      res = await dedupedPagesDataFetch(initialTarget.dataHref, { headers });
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") {
         throw new NavigationCancelledError(url);
@@ -1546,6 +1546,17 @@ async function navigateClientData(
     // treated the same way per the user-configured "always hard reload"
     // fallback policy.
     scheduleHardNavigationAndThrow(url, `Data navigation failed: ${res.status} ${res.statusText}`);
+  }
+
+  const rewriteTarget = res.headers.get("x-nextjs-rewrite");
+  const target = rewriteTarget
+    ? resolvePagesDataNavigationTarget(rewriteTarget, __basePath)
+    : initialTarget;
+  if (!target) {
+    scheduleHardNavigationAndThrow(
+      url,
+      "Data navigation failed: rewrite target has no page loader",
+    );
   }
 
   let body: PagesDataResponse;
