@@ -57,7 +57,11 @@ import type {
   ClientReuseManifestSkipDisposition,
   ClientReuseManifestTraceFields,
 } from "./client-reuse-manifest.js";
-import { NEVER_CACHE_CONTROL, NO_STORE_CACHE_CONTROL } from "./cache-control.js";
+import {
+  applyCdnResponseHeaders,
+  NEVER_CACHE_CONTROL,
+  NO_STORE_CACHE_CONTROL,
+} from "./cache-control.js";
 import {
   createClientReuseSkipTransportPlan,
   createStaticLayoutClientReuseArtifactCompatibility,
@@ -989,10 +993,7 @@ export async function renderAppPageLifecycle(
       policy: { cacheControl: NEVER_CACHE_CONTROL },
       timing: htmlResponseTiming,
     });
-    response.headers.set("Cache-Control", NEVER_CACHE_CONTROL);
-    response.headers.delete("CDN-Cache-Control");
-    response.headers.delete("Cloudflare-CDN-Cache-Control");
-    response.headers.delete("Cache-Tag");
+    applyCdnResponseHeaders(response.headers, { cacheControl: NEVER_CACHE_CONTROL });
     return response;
   }
 

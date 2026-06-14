@@ -29,11 +29,16 @@ import {
 } from "../packages/vinext/src/server/client-reuse-manifest.js";
 import { VINEXT_DYNAMIC_STALE_TIME_HEADER } from "../packages/vinext/src/server/headers.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
+import {
+  DefaultCdnCacheAdapter,
+  setCdnCacheAdapter,
+} from "../packages/vinext/src/shims/cdn-cache.js";
 import { markDynamicUsage } from "../packages/vinext/src/shims/headers.js";
 import {
   createRequestContext,
   runWithRequestContext,
 } from "../packages/vinext/src/shims/unified-request-context.js";
+import { CloudflareCdnCacheAdapter } from "../packages/cloudflare/src/cache/cdn-adapter.runtime.js";
 
 function captureRecord(value: ReactNode | AppOutgoingElements): Record<string, unknown> {
   if (!isAppElementsRecord(value)) {
@@ -325,41 +330,46 @@ describe("clearRequestContext timing — issue #660", () => {
 
 describe("SSR shell error recovery", () => {
   it("returns an uncached 500 response for a recovered dynamic shell error", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
     const common = createCommonOptions();
-    const response = await renderAppPageLifecycle({
-      ...common.options,
-      isProduction: true,
-      middlewareContext: {
-        headers: new Headers({
-          "Cache-Control": "public, max-age=3600",
-          "CDN-Cache-Control": "public, max-age=3600",
-          "Cloudflare-CDN-Cache-Control": "public, max-age=3600",
-          "Cache-Tag": "shell-error",
-        }),
-        status: null,
-      },
-      revalidateSeconds: 30,
-      loadSsrHandler: async () => ({
-        async handleSsr() {
-          return {
-            htmlStream: createStream(['<html id="__next_error__"></html>']),
-            metadataReady: Promise.resolve(),
-            capturedRscData: null,
-            shellErrorRecovered: true,
-          };
+    try {
+      const response = await renderAppPageLifecycle({
+        ...common.options,
+        isProduction: true,
+        middlewareContext: {
+          headers: new Headers({
+            "Cache-Control": "public, max-age=3600",
+            "CDN-Cache-Control": "public, max-age=3600",
+            "Cloudflare-CDN-Cache-Control": "public, max-age=3600",
+            "Cache-Tag": "shell-error",
+          }),
+          status: null,
         },
-      }),
-    });
+        revalidateSeconds: 30,
+        loadSsrHandler: async () => ({
+          async handleSsr() {
+            return {
+              htmlStream: createStream(['<html id="__next_error__"></html>']),
+              metadataReady: Promise.resolve(),
+              capturedRscData: null,
+              shellErrorRecovered: true,
+            };
+          },
+        }),
+      });
 
-    expect(response.status).toBe(500);
-    expect(response.headers.get("cache-control")).toBe(
-      "private, no-cache, no-store, max-age=0, must-revalidate",
-    );
-    expect(response.headers.get("cdn-cache-control")).toBeNull();
-    expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
-    expect(response.headers.get("cache-tag")).toBeNull();
-    await expect(response.text()).resolves.toContain("__next_error__");
-    expect(common.isrSet).not.toHaveBeenCalled();
+      expect(response.status).toBe(500);
+      expect(response.headers.get("cache-control")).toBe(
+        "private, no-cache, no-store, max-age=0, must-revalidate",
+      );
+      expect(response.headers.get("cdn-cache-control")).toBeNull();
+      expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
+      expect(response.headers.get("cache-tag")).toBeNull();
+      await expect(response.text()).resolves.toContain("__next_error__");
+      expect(common.isrSet).not.toHaveBeenCalled();
+    } finally {
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    }
   });
 });
 
