@@ -35,12 +35,9 @@
  * Issue: https://github.com/cloudflare/vinext/issues/1526
  */
 import type { VinextLinkPrefetchRoute } from "../../client/vinext-next-data.js";
-import { createRouteTrieCache, matchRouteWithTrie } from "../../routing/route-matching.js";
 import { stripBasePath, removeTrailingSlash } from "../../utils/base-path.js";
 import { getLocalePathPrefix } from "../../utils/domain-locale.js";
 import { resolveHybridClientRouteOwner } from "./hybrid-client-route-owner.js";
-
-const appRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 
 declare global {
   // oxlint-disable-next-line typescript-eslint/consistent-type-definitions
@@ -99,22 +96,6 @@ function resolveSameOriginPathname(href: string, basePath: string): string | nul
 
   const localePrefixLength = locale.length + 1;
   return pathname.length === localePrefixLength ? "/" : pathname.slice(localePrefixLength);
-}
-
-/**
- * Returns true when the prefetch href matches any route in the App Router
- * prefetch manifest (static or dynamic). Returns false when the manifest is
- * absent (Pages-Router-only build), the URL is external, or no route matches.
- */
-export function matchesAppRoute(href: string, basePath: string): boolean {
-  if (typeof window === "undefined") return false;
-  const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
-  if (!routes || routes.length === 0) return false;
-
-  const pathname = resolveSameOriginPathname(href, basePath);
-  if (pathname === null) return false;
-
-  return matchRouteWithTrie(pathname, routes, appRouteTrieCache) !== null;
 }
 
 /**
