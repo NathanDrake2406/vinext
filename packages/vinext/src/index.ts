@@ -3330,6 +3330,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           ): Promise<void> => {
             try {
               let url: string = req.url ?? "/";
+              const originalRequestUrl = url;
 
               // If no pages directory, skip this middleware entirely
               // (app router is handled by @vitejs/plugin-rsc's built-in middleware)
@@ -3812,6 +3813,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   pipelineResult.resolvedUrl,
                   req.__vinextMiddlewareStatus,
                   pipelineResult.isDataReq,
+                  originalRequestUrl,
                 );
               }
             } catch (e) {
