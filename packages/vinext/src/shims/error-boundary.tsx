@@ -533,6 +533,7 @@ export function UnauthorizedBoundary({ fallback, children, resetKey }: Unauthori
 // ---------------------------------------------------------------------------
 
 export type DevRecoveryBoundaryProps = {
+  isImplicitRootErrorBoundary?: boolean;
   resetKey: number;
   // Called from componentDidCatch with the current resetKey so the host can
   // run any pending side effects that NavigationCommitSignal would normally

@@ -62,6 +62,19 @@ export function createProdOnCaughtError(
   };
 }
 
+export function createDevOnCaughtError(
+  onCaughtError: HydrateRootErrorHandler,
+  onImplicitRootError: HydrateRootErrorHandler,
+): HydrateRootErrorHandler {
+  return (error, errorInfo) => {
+    if (isImplicitRootErrorBoundary(errorInfo)) {
+      onImplicitRootError(error, errorInfo);
+      return;
+    }
+    onCaughtError(error, errorInfo);
+  };
+}
+
 export function prodOnCaughtError(error: unknown, errorInfo: VinextHydrateRootErrorInfo): void {
   if (isNavigationSignalError(error)) return;
   logCaughtError(error, errorInfo);

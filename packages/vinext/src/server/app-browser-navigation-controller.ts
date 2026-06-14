@@ -729,7 +729,11 @@ export function createAppBrowserNavigationController(
         pendingNavigationFailureTargets.delete(renderId);
         pendingNavigationCommits.delete(renderId);
         consumeAppRouterScrollIntent(options.scrollIntent ?? null);
-        return performHardNavigation(options.targetHref) ? "hard-navigate" : "no-commit";
+        if (performHardNavigation(options.targetHref)) {
+          return "hard-navigate";
+        }
+        clearAppNavigationFailureTarget(options.targetHref);
+        return "no-commit";
       }
 
       const approvedCommit = approval.approvedCommit;

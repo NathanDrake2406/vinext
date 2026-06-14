@@ -1,6 +1,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  createDevOnCaughtError,
   createOnUncaughtError,
   createProdOnCaughtError,
   prodOnCaughtError,
@@ -6130,6 +6131,38 @@ describe("app browser RSC redirect lifecycle", () => {
 });
 
 describe("devOnCaughtError (hydrateRoot dev handler)", () => {
+  it("routes the framework dev recovery boundary through the uncaught handler", () => {
+    const onCaughtError = vi.fn();
+    const onImplicitRootError = vi.fn();
+    const handler = createDevOnCaughtError(onCaughtError, onImplicitRootError);
+    const error = new Error("navigation render failed");
+    const errorInfo = {
+      componentStack: "\n    at Lazy",
+      errorBoundary: { props: { isImplicitRootErrorBoundary: true } },
+    };
+
+    handler(error, errorInfo);
+
+    expect(onImplicitRootError).toHaveBeenCalledWith(error, errorInfo);
+    expect(onCaughtError).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit dev error boundaries on the caught-error path", () => {
+    const onCaughtError = vi.fn();
+    const onImplicitRootError = vi.fn();
+    const handler = createDevOnCaughtError(onCaughtError, onImplicitRootError);
+    const error = new Error("route error");
+    const errorInfo = {
+      componentStack: "\n    at Page",
+      errorBoundary: { props: { isImplicitRootErrorBoundary: false } },
+    };
+
+    handler(error, errorInfo);
+
+    expect(onCaughtError).toHaveBeenCalledWith(error, errorInfo);
+    expect(onImplicitRootError).not.toHaveBeenCalled();
+  });
+
   it("ignores redirect sentinels handled by RedirectBoundary", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {

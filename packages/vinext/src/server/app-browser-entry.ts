@@ -144,6 +144,7 @@ import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
+  createDevOnCaughtError,
   createOnUncaughtError,
   createProdOnCaughtError,
   prodOnRecoverableError,
@@ -1170,6 +1171,7 @@ function BrowserRoot({
     ? createElement(
         DevRecoveryBoundary,
         {
+          isImplicitRootErrorBoundary: true,
           resetKey: treeState.renderId,
           onCatch: handleDevRecoveryBoundaryCatch,
         },
@@ -1644,7 +1646,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   const hydrateRootOptions = import.meta.env.DEV
     ? createVinextHydrateRootOptions({
         formState,
-        onCaughtError: devOnCaughtError,
+        onCaughtError: createDevOnCaughtError(devOnCaughtError, onUncaughtError),
         onUncaughtError,
       })
     : createVinextHydrateRootOptions({
