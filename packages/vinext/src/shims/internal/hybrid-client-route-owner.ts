@@ -89,8 +89,9 @@ const pagesRouteTrieCache = createRouteTrieCache<VinextPagesLinkPrefetchRoute>()
 
 /**
  * Build a `/`-joined pattern from a manifest's `patternParts`. Mirrors the
- * server-side route-graph shape (`{ pattern: string }`) so the same
- * `sortRoutes` algorithm can score both Pages and App patterns. The
+ * server-side route-graph shape (`{ pattern: string }`) so the
+ * `compareHybridRoutePatterns` segment-rank comparator can score both Pages
+ * and App patterns. The
  * `patternParts` array never includes an empty string for the static `/`
  * route (the App catch-all handles the bare path), so the simple join is
  * safe for everything the route trie actually matches.
