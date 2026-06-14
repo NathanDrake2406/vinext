@@ -2941,6 +2941,82 @@ describe("app browser navigation controller", () => {
     }
   });
 
+  it("does not clear a newer navigation failure target when an older render commits", async () => {
+    const { controller, detach, stateRef } = createControllerHarness();
+    vi.stubEnv("__NEXT_APP_NAV_FAIL_HANDLING", "true");
+    vi.stubGlobal("window", {
+      location: {
+        href: "https://example.com/initial",
+        origin: "https://example.com",
+      },
+      next: {},
+    });
+
+    try {
+      const olderNavId = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: "push",
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements: Promise.resolve(
+          createResolvedElements("route:/older", "/", null, {
+            "page:/older": React.createElement("main", null, "older"),
+          }),
+        ),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/older",
+        navId: olderNavId,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      let resolveNewer!: (elements: AppElements) => void;
+      const newerNavId = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: "push",
+        navigationSnapshot: stateRef.current.navigationSnapshot,
+        nextElements: new Promise<AppElements>((resolve) => {
+          resolveNewer = resolve;
+        }),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/newer",
+        navId: newerNavId,
+      });
+
+      stageAppNavigationFailureTarget("/newer");
+      controller.clearCommittedNavigationFailureTargets(1);
+      expect(window.next?.__pendingUrl?.pathname).toBe("/newer");
+
+      resolveNewer(
+        createResolvedElements("route:/newer", "/", null, {
+          "page:/newer": React.createElement("main", null, "newer"),
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      controller.clearCommittedNavigationFailureTargets(2);
+      expect(window.next?.__pendingUrl).toBeUndefined();
+    } finally {
+      detach();
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("dispatches same-URL server action payloads into the browser router state", async () => {
     const initialState = createState({
       rootLayoutTreePath: "/",
