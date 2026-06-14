@@ -2397,7 +2397,7 @@ describe("Plugin config", () => {
       { command: "serve", mode: "development" },
     );
 
-    expect(() =>
+    await expect(
       configPlugin.configResolved({
         command: "serve",
         configFile: false,
@@ -2408,7 +2408,7 @@ describe("Plugin config", () => {
           { name: "vite:react-refresh" },
         ],
       }),
-    ).toThrow("Duplicate @vitejs/plugin-react detected");
+    ).rejects.toThrow("Duplicate @vitejs/plugin-react detected");
   });
 
   it("adds resolve.dedupe for React packages to prevent dual instance errors", async () => {
