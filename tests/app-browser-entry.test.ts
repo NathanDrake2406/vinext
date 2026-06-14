@@ -2851,6 +2851,7 @@ describe("app browser navigation controller", () => {
   it("skips stale browser navigations before committing their payload", async () => {
     const { controller, detach } = createControllerHarness();
     const { assign } = stubWindow("https://example.com/initial");
+    vi.stubEnv("__NEXT_APP_NAV_FAIL_HANDLING", "true");
     const createNavigationCommitEffect = vi.fn(() => vi.fn());
     let resolveNextElements: ((value: AppElements) => void) | undefined;
     const nextElements = new Promise<AppElements>((resolve) => {
@@ -2859,6 +2860,7 @@ describe("app browser navigation controller", () => {
 
     try {
       const navId = controller.beginNavigation();
+      stageAppNavigationFailureTarget("/dashboard");
       const renderPromise = controller.renderNavigationPayload({
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
@@ -2888,8 +2890,10 @@ describe("app browser navigation controller", () => {
       await expect(renderPromise).resolves.toBe("no-commit");
       expect(createNavigationCommitEffect).not.toHaveBeenCalled();
       expect(assign).not.toHaveBeenCalled();
+      expect(window.next?.__pendingUrl).toBeUndefined();
     } finally {
       detach();
+      vi.unstubAllEnvs();
     }
   });
 
