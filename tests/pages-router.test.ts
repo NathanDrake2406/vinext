@@ -1576,7 +1576,7 @@ describe("Pages Router integration", () => {
       const rewriteHtml = await rewriteRes.text();
       expectElementText(rewriteHtml, "app-url", "/blog-post-2");
       expectElementJson(rewriteHtml, "app-query", { post: "post-2", hello: "world" });
-      expectElementText(rewriteHtml, "resolved-url", "/blog/post-2?hello=world");
+      expectElementText(rewriteHtml, "resolved-url", "/blog/post-2");
       expectElementText(rewriteHtml, "as-path", "/blog-post-2");
 
       const rewriteParamRes = await fetch(`${fixtureUrl}/blog-post-3`);
@@ -1587,7 +1587,7 @@ describe("Pages Router integration", () => {
         post: "post-3",
         param: "post-3",
       });
-      expectElementText(rewriteParamHtml, "resolved-url", "/blog/post-3?param=post-3");
+      expectElementText(rewriteParamHtml, "resolved-url", "/blog/post-3");
       expectElementText(rewriteParamHtml, "as-path", "/blog-post-3");
 
       const sourceRewriteRes = await fetch(`${fixtureUrl}/rewrite-source/foo`);

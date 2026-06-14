@@ -535,7 +535,7 @@ export function createPagesPageHandler(
         }
         const parsedRouteUrl = new URL(routeUrl, originalRequestUrl);
         const routePathname = parsedRouteUrl.pathname || "/";
-        const pagesResolvedUrl = routePathname + parsedRouteUrl.search;
+        const pagesResolvedUrl = routePathname + originalRequestUrl.search;
 
         const pageDataResult = await resolvePagesPageData({
           isDataReq,
