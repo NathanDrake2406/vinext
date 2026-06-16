@@ -5578,6 +5578,14 @@ describe("app browser entry previousNextUrl helpers", () => {
       slotId: modalSlotId,
       state: "active",
     } satisfies AppElementsSlotBinding;
+    const currentSegmentStateKeys = {
+      "layout:/": "/",
+      "layout:/feed": "/feed",
+    };
+    const nextSegmentStateKeys = {
+      ...currentSegmentStateKeys,
+      "page:/feed/comments": "/feed/comments",
+    };
     const state = createState({
       bfcacheIds: {
         "layout:/": "0",
@@ -5592,6 +5600,7 @@ describe("app browser entry previousNextUrl helpers", () => {
           "layout:/": React.createElement("div", null, "root layout"),
           "layout:/feed": feedLayout,
           [modalSlotId]: React.createElement("div", null, "modal"),
+          [APP_SEGMENT_STATE_KEYS_KEY]: currentSegmentStateKeys,
         },
         ["layout:/", "layout:/feed"],
         [modalSlotBinding],
@@ -5611,6 +5620,7 @@ describe("app browser entry previousNextUrl helpers", () => {
           null,
           {
             "page:/feed/comments": React.createElement("main", null, "comments"),
+            [APP_SEGMENT_STATE_KEYS_KEY]: nextSegmentStateKeys,
           },
           ["layout:/", "layout:/feed", "layout:/feed/comments"],
           [
@@ -5923,13 +5933,14 @@ describe("app browser entry bfcacheId helpers", () => {
     pageId: string,
     options: {
       graphVersion?: string | null;
-      segmentStateKeys?: Record<string, string>;
+      segmentStateKeys?: Record<string, string> | null;
     } = {},
   ): AppElements {
-    const extraEntries: Record<string, unknown> = {
-      [APP_SEGMENT_STATE_KEYS_KEY]:
-        options.segmentStateKeys ?? createDefaultBfcacheSegmentStateKeys(pageId),
-    };
+    const extraEntries: Record<string, unknown> = {};
+    if (options.segmentStateKeys !== null) {
+      extraEntries[APP_SEGMENT_STATE_KEYS_KEY] =
+        options.segmentStateKeys ?? createDefaultBfcacheSegmentStateKeys(pageId);
+    }
     if (options.graphVersion !== undefined) {
       extraEntries[APP_ARTIFACT_COMPATIBILITY_KEY] = createArtifactCompatibilityEnvelope({
         graphVersion: options.graphVersion,
@@ -6016,6 +6027,48 @@ describe("app browser entry bfcacheId helpers", () => {
       elements: createBfcacheElements(dynamicPageId, { segmentStateKeys }),
     });
 
+    expect(next[dynamicPageId]).toBe("_b_5_");
+  });
+
+  it("mints fresh segment ids when carried segment state keys are absent", () => {
+    const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
+    const next = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [groupLayoutId]: "_b_4_",
+        [dynamicPageId]: "_b_5_",
+      },
+      currentElements: createBfcacheElements(dynamicPageId, { segmentStateKeys: null }),
+      elements: createBfcacheElements(dynamicPageId, { segmentStateKeys: null }),
+    });
+
+    expect(next[rootLayoutId]).toMatch(/^_b_\d+_$/);
+    expect(next[rootLayoutId]).not.toBe("0");
+    expect(next[groupLayoutId]).toMatch(/^_b_\d+_$/);
+    expect(next[groupLayoutId]).not.toBe("_b_4_");
+    expect(next[dynamicPageId]).toMatch(/^_b_\d+_$/);
+    expect(next[dynamicPageId]).not.toBe("_b_5_");
+  });
+
+  it("preserves segment ids when an empty bound segment key is explicitly carried", () => {
+    const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
+    const segmentStateKeys = {
+      [rootLayoutId]: "",
+      [groupLayoutId]: "/page",
+      [dynamicPageId]: "/page/[n]?n=1",
+    };
+    const next = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [groupLayoutId]: "_b_4_",
+        [dynamicPageId]: "_b_5_",
+      },
+      currentElements: createBfcacheElements(dynamicPageId, { segmentStateKeys }),
+      elements: createBfcacheElements(dynamicPageId, { segmentStateKeys }),
+    });
+
+    expect(next[rootLayoutId]).toBe("0");
+    expect(next[groupLayoutId]).toBe("_b_4_");
     expect(next[dynamicPageId]).toBe("_b_5_");
   });
 
