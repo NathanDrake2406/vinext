@@ -283,6 +283,7 @@ type AppElementsWireKeys = {
   readonly renderObservation: typeof APP_RENDER_OBSERVATION_KEY;
   readonly rootLayout: typeof APP_ROOT_LAYOUT_KEY;
   readonly route: typeof APP_ROUTE_KEY;
+  readonly segmentStateKeys: typeof APP_SEGMENT_STATE_KEYS_KEY;
   readonly skippedLayoutIds: typeof APP_SKIPPED_LAYOUT_IDS_KEY;
   readonly slotBindings: typeof APP_SLOT_BINDINGS_KEY;
   readonly sourcePage: typeof APP_SOURCE_PAGE_KEY;
@@ -915,6 +916,7 @@ export const AppElementsWire: AppElementsWireCodec = {
     renderObservation: APP_RENDER_OBSERVATION_KEY,
     rootLayout: APP_ROOT_LAYOUT_KEY,
     route: APP_ROUTE_KEY,
+    segmentStateKeys: APP_SEGMENT_STATE_KEYS_KEY,
     skippedLayoutIds: APP_SKIPPED_LAYOUT_IDS_KEY,
     slotBindings: APP_SLOT_BINDINGS_KEY,
     sourcePage: APP_SOURCE_PAGE_KEY,

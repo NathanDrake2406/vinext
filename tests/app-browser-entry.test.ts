@@ -6046,7 +6046,7 @@ describe("app browser entry bfcacheId helpers", () => {
     expect(next[dynamicPageId]).not.toBe("_b_5_");
   });
 
-  it("mints a fresh segment id when the route graph version changes", () => {
+  it("mints a fresh segment id when the artifact-compatibility graphVersion changes", () => {
     const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
     const segmentStateKeys = {
       [rootLayoutId]: "/",
