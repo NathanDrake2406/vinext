@@ -205,7 +205,11 @@ import fs from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import commonjs from "vite-plugin-commonjs";
 import { normalizePathSeparators, stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
-import { getViteMajorVersion } from "./utils/vite-version.js";
+import {
+  getDepOptimizeNodeEnvOptions,
+  getViteMajorVersion,
+  serializeViteDefine,
+} from "./utils/vite-version.js";
 
 // Install the process-level peer-disconnect backstop at module load.
 // Vite plugin lifecycle hooks (config / configureServer) proved
@@ -1336,12 +1340,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
         // Merge env from next.config.js with NEXT_PUBLIC_* env vars
         const defines = getNextPublicEnvDefines();
-        if (
-          !config.define ||
-          typeof config.define !== "object" ||
-          !("process.env.NODE_ENV" in config.define)
-        ) {
-          defines["process.env.NODE_ENV"] = JSON.stringify(resolvedNodeEnv);
+        const userNodeEnvDefine = config.define?.["process.env.NODE_ENV"];
+        const hasUserNodeEnvDefine = Object.hasOwn(config.define ?? {}, "process.env.NODE_ENV");
+        const nodeEnvDefine = hasUserNodeEnvDefine
+          ? serializeViteDefine(userNodeEnvDefine)
+          : JSON.stringify(resolvedNodeEnv);
+        if (!hasUserNodeEnvDefine) {
+          defines["process.env.NODE_ENV"] = nodeEnvDefine;
         }
         for (const [key, value] of Object.entries(nextConfig.env)) {
           // Skip NODE_ENV from next.config.js env — Next.js ignores it too,
@@ -2171,13 +2176,23 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             }
           },
         };
+        const depOptimizeNodeEnvOptions = getDepOptimizeNodeEnvOptions(
+          viteMajorVersion,
+          nodeEnvDefine,
+        );
+        // Apply the define to the default optimizer and explicitly to server
+        // environments, where Vite's keepProcessEnv default prevents replacement.
         viteConfig.optimizeDeps = {
           // @tailwindcss/oxide contains native .node bindings that Rolldown cannot process
           exclude: mergeOptimizeDepsExclude(incomingExclude, VINEXT_OPTIMIZE_DEPS_EXCLUDE, [
             "@tailwindcss/oxide",
           ]),
           ...(incomingInclude.length > 0 ? { include: incomingInclude } : {}),
-          rolldownOptions: { plugins: [depOptimizeAliasPlugin] },
+          ...depOptimizeNodeEnvOptions,
+          rolldownOptions: {
+            ...depOptimizeNodeEnvOptions.rolldownOptions,
+            plugins: [depOptimizeAliasPlugin],
+          },
         };
         const pagesOptimizeEntries = !hasAppDir
           ? [
@@ -2238,6 +2253,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               optimizeDeps: {
                 exclude: mergeOptimizeDepsExclude(incomingExclude, VINEXT_OPTIMIZE_DEPS_EXCLUDE),
                 entries: optimizeEntries,
+                ...depOptimizeNodeEnvOptions,
               },
               build: {
                 outDir: options.rscOutDir ?? "dist/server",
@@ -2292,6 +2308,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   userSsrExternal === true ? SSR_EXTERNAL_REACT_ENTRIES : [],
                 ),
                 entries: optimizeEntries,
+                ...depOptimizeNodeEnvOptions,
               },
               build: {
                 outDir: options.ssrOutDir ?? "dist/server/ssr",
@@ -2419,6 +2436,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // reload the first time a Pages Router page renders an
                 // <Image>.
                 exclude: ["ipaddr.js"],
+                ...depOptimizeNodeEnvOptions,
               },
               build: {
                 outDir: "dist/server",

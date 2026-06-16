@@ -1,4 +1,5 @@
 import http from "node:http";
+import fsp from "node:fs/promises";
 import { type ViteDevServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { APP_FIXTURE_DIR, fetchHtml, startFixtureServer } from "./helpers.js";
@@ -2003,6 +2004,33 @@ describe("App Router integration", () => {
     expect(clientInclude).toContain("react");
     expect(clientInclude).toContain("react-dom");
     expect(clientInclude).toContain("react-dom/client");
+  });
+
+  it("drops unused NODE_ENV branches from optimized server dependencies", async () => {
+    expect(server.config.environments.rsc?.keepProcessEnv).toBe(true);
+    expect(server.config.environments.ssr?.keepProcessEnv).toBe(true);
+
+    const response = await fetch(`${baseUrl}/`);
+    expect(response.status).toBe(200);
+    await response.arrayBuffer();
+
+    for (const envName of ["rsc", "ssr"]) {
+      const environment = server.environments[envName];
+      await environment.waitForRequestsIdle();
+
+      const depInfos = environment.depsOptimizer?.metadata.depInfoList ?? [];
+      await Promise.all(depInfos.flatMap((dep) => (dep.processing ? [dep.processing] : [])));
+      const files = [...new Set(depInfos.map((dep) => dep.file))];
+      expect(files.length, `${envName} optimized dependencies`).toBeGreaterThan(0);
+
+      const optimizedCode = (
+        await Promise.all(files.map((file) => fsp.readFile(file, "utf8")))
+      ).join("\n");
+      expect(optimizedCode, `${envName} NODE_ENV references`).not.toContain("process.env.NODE_ENV");
+      expect(optimizedCode, `${envName} production branches`).not.toMatch(
+        /react(?:-dom|-server-dom-webpack)?[^"\n]*\.production\.js/,
+      );
+    }
   });
 
   // ── CSRF protection for server actions ───────────────────────────────
