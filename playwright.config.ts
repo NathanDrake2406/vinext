@@ -1,11 +1,19 @@
 import { defineConfig } from "@playwright/test";
 
-if (process.env.FORCE_COLOR) {
+// Playwright sets FORCE_COLOR when writing to a TTY. Clear a conflicting NO_COLOR so worker
+// processes inherit color, but treat FORCE_COLOR=0/false as "disable color" (npm/Playwright
+// convention) and leave NO_COLOR in place for those.
+const forceColor = process.env.FORCE_COLOR;
+if (forceColor && forceColor !== "0" && forceColor !== "false") {
   delete process.env.NO_COLOR;
 }
 
 if (!process.env.CI && process.env.VINEXT_E2E_NODE_WARNINGS !== "1") {
-  process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, "--no-warnings"].filter(Boolean).join(" ");
+  const nodeOptions = process.env.NODE_OPTIONS ?? "";
+  // Guard against duplicating the flag when NODE_OPTIONS already carries it.
+  if (!/(?:^|\s)--no-warnings(?:\s|$)/.test(nodeOptions)) {
+    process.env.NODE_OPTIONS = [nodeOptions, "--no-warnings"].filter(Boolean).join(" ");
+  }
 }
 
 const appRouterBrowserSpecificTests = "**/app-router/**/*.browser.spec.ts";
@@ -288,8 +296,12 @@ const projectServers = {
 type ProjectName = keyof typeof projectServers;
 
 const selected = process.env.PLAYWRIGHT_PROJECT;
-const webServerOutput: "pipe" | "ignore" =
-  process.env.CI || process.env.VINEXT_E2E_WEB_SERVER_LOGS === "1" ? "pipe" : "ignore";
+
+// Preserve Playwright's defaults in CI (stdout "ignore", stderr "pipe") so CI diagnostics are
+// unchanged; locally suppress both unless VINEXT_E2E_WEB_SERVER_LOGS opts back in.
+const wantWebServerLogs = process.env.VINEXT_E2E_WEB_SERVER_LOGS === "1";
+const webServerStdout: "pipe" | "ignore" = wantWebServerLogs ? "pipe" : "ignore";
+const webServerStderr: "pipe" | "ignore" = process.env.CI || wantWebServerLogs ? "pipe" : "ignore";
 
 if (selected && !(selected in projectServers)) {
   throw new Error(
@@ -335,8 +347,8 @@ export default defineConfig({
           server.port,
           {
             ...server,
-            stdout: webServerOutput,
-            stderr: webServerOutput,
+            stdout: webServerStdout,
+            stderr: webServerStderr,
           },
         ]),
     ).values(),
