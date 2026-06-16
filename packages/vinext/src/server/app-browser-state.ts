@@ -666,9 +666,7 @@ export async function createPendingNavigationCommit(options: {
       bfcacheIds: createNextBfcacheIdMap({
         current: options.currentState.bfcacheIds,
         currentElements: options.currentState.elements,
-        currentPathname: options.currentState.navigationSnapshot.pathname,
         elements,
-        nextPathname: options.navigationSnapshot.pathname,
         restored: options.restoredBfcacheIds,
         reuseCurrent: options.reuseCurrentBfcacheIds,
       }),

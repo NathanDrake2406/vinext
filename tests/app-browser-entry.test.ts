@@ -65,10 +65,12 @@ import {
 import { VINEXT_DEV_ERROR_RECOVERY_EVENT } from "../packages/vinext/src/utils/dev-error-recovery-event.js";
 import {
   APP_CACHE_ENTRY_REUSE_PROOF_KEY,
+  APP_ARTIFACT_COMPATIBILITY_KEY,
   AppElementsWire,
   APP_LAYOUT_FLAGS_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
+  APP_SEGMENT_STATE_KEYS_KEY,
   APP_SKIPPED_LAYOUT_IDS_KEY,
   UNMATCHED_SLOT,
   getMountedSlotIds,
@@ -83,7 +85,6 @@ import * as navigationShim from "../packages/vinext/src/shims/navigation.js";
 import {
   createHistoryStateWithNavigationMetadata,
   createHistoryStateWithPreviousNextUrl,
-  createBfcacheSegmentStateKeyMap,
   createInitialBfcacheIdMap,
   createNextBfcacheIdMap,
   FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
@@ -104,6 +105,7 @@ import {
   type OperationLane,
 } from "../packages/vinext/src/server/app-browser-state.js";
 import { createInitialBfcacheMaps } from "../packages/vinext/src/server/app-bfcache-identity.js";
+import { createArtifactCompatibilityEnvelope } from "../packages/vinext/src/server/artifact-compatibility.js";
 import {
   HistoryStateSnapshotCache,
   RestorableClientStateController,
@@ -5907,7 +5909,33 @@ describe("app browser entry bfcacheId helpers", () => {
   const docsCatchAllPageId = AppElementsWire.encodePageId("/docs/[...slug]", null);
   const docsOptionalCatchAllPageId = AppElementsWire.encodePageId("/docs/[[...slug]]", null);
 
-  function createBfcacheElements(pageId: string): AppElements {
+  function createDefaultBfcacheSegmentStateKeys(pageId: string): Record<string, string> {
+    const routePath = pageId.slice("page:".length);
+    const firstVisibleSegment = routePath.split("/").filter(Boolean)[0] ?? "";
+    return {
+      [rootLayoutId]: "/",
+      [groupLayoutId]: firstVisibleSegment ? `/${firstVisibleSegment}` : "/",
+      [pageId]: routePath,
+    };
+  }
+
+  function createBfcacheElements(
+    pageId: string,
+    options: {
+      graphVersion?: string | null;
+      segmentStateKeys?: Record<string, string>;
+    } = {},
+  ): AppElements {
+    const extraEntries: Record<string, unknown> = {
+      [APP_SEGMENT_STATE_KEYS_KEY]:
+        options.segmentStateKeys ?? createDefaultBfcacheSegmentStateKeys(pageId),
+    };
+    if (options.graphVersion !== undefined) {
+      extraEntries[APP_ARTIFACT_COMPATIBILITY_KEY] = createArtifactCompatibilityEnvelope({
+        graphVersion: options.graphVersion,
+      });
+    }
+
     return createResolvedElements(
       `route:${pageId.slice("page:".length)}`,
       "/",
@@ -5916,6 +5944,7 @@ describe("app browser entry bfcacheId helpers", () => {
         [rootLayoutId]: React.createElement("div", null),
         [groupLayoutId]: React.createElement("div", null),
         [pageId]: React.createElement("main", null),
+        ...extraEntries,
       },
       [rootLayoutId, groupLayoutId],
     );
@@ -5935,14 +5964,12 @@ describe("app browser entry bfcacheId helpers", () => {
     const maps = createInitialBfcacheMaps({
       elements,
       metadata,
-      pathname: "/x/1",
     });
 
     expect(maps.bfcacheIds).toEqual(createInitialBfcacheIdMap(elements));
     expect(maps.stateKeys).toEqual(
       createBfcacheSegmentStateKeyMap({
         elements,
-        pathname: "/x/1",
       }),
     );
   });
@@ -5958,7 +5985,6 @@ describe("app browser entry bfcacheId helpers", () => {
     const maps = createInitialBfcacheMaps({
       elements,
       metadata,
-      pathname: "/x/1",
     });
     const state = createHistoryStateWithNavigationMetadata(null, {
       bfcacheIds: maps.bfcacheIds,
@@ -5973,73 +5999,208 @@ describe("app browser entry bfcacheId helpers", () => {
     expect(readHistoryStateBfcacheIds(state)).toEqual(maps.bfcacheIds);
   });
 
-  it("derives page segment state keys from pathname, not history bfcache ids", () => {
+  it("preserves segment ids when carried segment state keys match", () => {
     const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
-    const pageOneKeys = createBfcacheSegmentStateKeyMap({
-      elements: createBfcacheElements(dynamicPageId),
-      pathname: "/page/1",
-    });
-    const pageTwoKeys = createBfcacheSegmentStateKeyMap({
-      elements: createBfcacheElements(dynamicPageId),
-      pathname: "/page/2",
-    });
-
-    expect(pageOneKeys[dynamicPageId]).toBe(`${dynamicPageId}@/page/1`);
-    expect(pageTwoKeys[dynamicPageId]).toBe(`${dynamicPageId}@/page/2`);
-    expect(pageOneKeys[dynamicPageId]).not.toBe(pageTwoKeys[dynamicPageId]);
-  });
-
-  it("preserves encoded path delimiters when deriving segment state keys", () => {
-    const pageId = AppElementsWire.encodePageId("/files/[...slug]", null);
-    const encodedKeys = createBfcacheSegmentStateKeyMap({
-      elements: createBfcacheElements(pageId),
-      pathname: "/files/a%2Fb",
-    });
-    const nestedKeys = createBfcacheSegmentStateKeyMap({
-      elements: createBfcacheElements(pageId),
-      pathname: "/files/a/b",
-    });
-
-    expect(encodedKeys[pageId]).toBe(`${pageId}@/files/a%2Fb`);
-    expect(nestedKeys[pageId]).toBe(`${pageId}@/files/a/b`);
-    expect(encodedKeys[pageId]).not.toBe(nestedKeys[pageId]);
-  });
-
-  it("uses route-safe pathname normalization when preserving bfcache ids", () => {
-    const pageId = AppElementsWire.encodePageId("/files/[...slug]", null);
-    const current = {
-      [rootLayoutId]: "0",
-      [groupLayoutId]: "_b_4_",
-      [pageId]: "_b_5_",
+    const segmentStateKeys = {
+      [rootLayoutId]: "/",
+      [groupLayoutId]: "/page",
+      [dynamicPageId]: "/page/[n]?n=1",
     };
-
-    const equivalentEncoding = createNextBfcacheIdMap({
-      current,
-      currentElements: createBfcacheElements(pageId),
-      currentPathname: "/files/%61",
-      elements: createBfcacheElements(pageId),
-      nextPathname: "/files/a",
-    });
-    const encodedDelimiter = createNextBfcacheIdMap({
-      current,
-      currentElements: createBfcacheElements(pageId),
-      currentPathname: "/files/a%2Fb",
-      elements: createBfcacheElements(pageId),
-      nextPathname: "/files/a/b",
+    const next = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [groupLayoutId]: "_b_4_",
+        [dynamicPageId]: "_b_5_",
+      },
+      currentElements: createBfcacheElements(dynamicPageId, { segmentStateKeys }),
+      elements: createBfcacheElements(dynamicPageId, { segmentStateKeys }),
     });
 
-    expect(equivalentEncoding[pageId]).toBe("_b_5_");
-    expect(encodedDelimiter[pageId]).not.toBe("_b_5_");
+    expect(next[dynamicPageId]).toBe("_b_5_");
   });
 
-  it("falls back to raw pathname for malformed encoded state-key paths", () => {
+  it("mints a fresh segment id when the carried segment state key changes", () => {
     const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
-    const keys = createBfcacheSegmentStateKeyMap({
-      elements: createBfcacheElements(dynamicPageId),
-      pathname: "/page/%",
+    const currentKeys = {
+      [rootLayoutId]: "/",
+      [groupLayoutId]: "/page",
+      [dynamicPageId]: "/page/[n]?n=1",
+    };
+    const nextKeys = {
+      [rootLayoutId]: "/",
+      [groupLayoutId]: "/page",
+      [dynamicPageId]: "/page/[n]?n=2",
+    };
+    const next = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [groupLayoutId]: "_b_4_",
+        [dynamicPageId]: "_b_5_",
+      },
+      currentElements: createBfcacheElements(dynamicPageId, { segmentStateKeys: currentKeys }),
+      elements: createBfcacheElements(dynamicPageId, { segmentStateKeys: nextKeys }),
     });
 
-    expect(keys[dynamicPageId]).toBe(`${dynamicPageId}@/page/%`);
+    expect(next[groupLayoutId]).toBe("_b_4_");
+    expect(next[dynamicPageId]).toMatch(/^_b_\d+_$/);
+    expect(next[dynamicPageId]).not.toBe("_b_5_");
+  });
+
+  it("mints a fresh segment id when the route graph version changes", () => {
+    const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
+    const segmentStateKeys = {
+      [rootLayoutId]: "/",
+      [groupLayoutId]: "/page",
+      [dynamicPageId]: "/page/[n]?n=1",
+    };
+    const next = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [groupLayoutId]: "_b_4_",
+        [dynamicPageId]: "_b_5_",
+      },
+      currentElements: createBfcacheElements(dynamicPageId, {
+        graphVersion: "graph:one",
+        segmentStateKeys,
+      }),
+      elements: createBfcacheElements(dynamicPageId, {
+        graphVersion: "graph:two",
+        segmentStateKeys,
+      }),
+    });
+
+    expect(next[dynamicPageId]).toMatch(/^_b_\d+_$/);
+    expect(next[dynamicPageId]).not.toBe("_b_5_");
+  });
+
+  it("uses carried catch-all and optional catch-all keys as canonical identity", () => {
+    const currentCatchAllKeys = {
+      [rootLayoutId]: "/",
+      [catchAllLayoutId]: "/docs/[...slug]?slug=a/b",
+      [docsCatchAllPageId]: "/docs/[...slug]?slug=a/b",
+    };
+    const nextCatchAllKeys = {
+      [rootLayoutId]: "/",
+      [catchAllLayoutId]: "/docs/[...slug]?slug=a%2Fb",
+      [docsCatchAllPageId]: "/docs/[...slug]?slug=a%2Fb",
+    };
+    const catchAllCurrent = createResolvedElements(
+      "route:/docs/[...slug]",
+      "/",
+      null,
+      {
+        [catchAllLayoutId]: React.createElement("div", null),
+        [docsCatchAllPageId]: React.createElement("main", null),
+        [APP_SEGMENT_STATE_KEYS_KEY]: currentCatchAllKeys,
+      },
+      [rootLayoutId, catchAllLayoutId],
+    );
+    const catchAllNext = createResolvedElements(
+      "route:/docs/[...slug]",
+      "/",
+      null,
+      {
+        [catchAllLayoutId]: React.createElement("div", null),
+        [docsCatchAllPageId]: React.createElement("main", null),
+        [APP_SEGMENT_STATE_KEYS_KEY]: nextCatchAllKeys,
+      },
+      [rootLayoutId, catchAllLayoutId],
+    );
+    const optionalKeys = {
+      [rootLayoutId]: "/",
+      [optionalCatchAllTemplateId]: "/docs/[[...slug]]?slug=",
+      [docsOptionalCatchAllPageId]: "/docs/[[...slug]]?slug=",
+    };
+    const optionalCurrent = createResolvedElements(
+      "route:/docs/[[...slug]]",
+      "/",
+      null,
+      {
+        [optionalCatchAllTemplateId]: React.createElement("div", null),
+        [docsOptionalCatchAllPageId]: React.createElement("main", null),
+        [APP_SEGMENT_STATE_KEYS_KEY]: optionalKeys,
+      },
+      [rootLayoutId],
+    );
+    const optionalNext = createResolvedElements(
+      "route:/docs/[[...slug]]",
+      "/",
+      null,
+      {
+        [optionalCatchAllTemplateId]: React.createElement("div", null),
+        [docsOptionalCatchAllPageId]: React.createElement("main", null),
+        [APP_SEGMENT_STATE_KEYS_KEY]: optionalKeys,
+      },
+      [rootLayoutId],
+    );
+
+    const catchAll = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [catchAllLayoutId]: "_b_4_",
+        [docsCatchAllPageId]: "_b_5_",
+      },
+      currentElements: catchAllCurrent,
+      elements: catchAllNext,
+    });
+    const optional = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [optionalCatchAllTemplateId]: "_b_8_",
+        [docsOptionalCatchAllPageId]: "_b_9_",
+      },
+      currentElements: optionalCurrent,
+      elements: optionalNext,
+    });
+
+    expect(catchAll[catchAllLayoutId]).toMatch(/^_b_\d+_$/);
+    expect(catchAll[catchAllLayoutId]).not.toBe("_b_4_");
+    expect(optional[optionalCatchAllTemplateId]).toBe("_b_8_");
+  });
+
+  it("distinguishes default and unmatched parallel slot state", () => {
+    const feedLayoutId = AppElementsWire.encodeLayoutId("/feed");
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/feed");
+    const segmentStateKeys = {
+      [rootLayoutId]: "/",
+      [feedLayoutId]: "/feed",
+      [modalSlotId]: "/feed/@modal",
+    };
+    const createSlotElements = (state: "default" | "unmatched") =>
+      createResolvedElements(
+        "route:/feed",
+        "/",
+        null,
+        {
+          [rootLayoutId]: React.createElement("div", null),
+          [feedLayoutId]: React.createElement("div", null),
+          [modalSlotId]:
+            state === "unmatched" ? UNMATCHED_SLOT : React.createElement("aside", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: segmentStateKeys,
+        },
+        [rootLayoutId, feedLayoutId],
+        [
+          {
+            ownerLayoutId: feedLayoutId,
+            slotId: modalSlotId,
+            state,
+          },
+        ],
+      );
+
+    const next = createNextBfcacheIdMap({
+      current: {
+        [rootLayoutId]: "0",
+        [feedLayoutId]: "_b_4_",
+        [modalSlotId]: "_b_5_",
+      },
+      currentElements: createSlotElements("default"),
+      elements: createSlotElements("unmatched"),
+    });
+
+    expect(next[feedLayoutId]).toBe("_b_4_");
+    expect(next[modalSlotId]).toMatch(/^_b_\d+_$/);
+    expect(next[modalSlotId]).not.toBe("_b_5_");
   });
 
   it("does not seed hydration bfcache ids from previously minted ids", () => {
@@ -6059,9 +6220,7 @@ describe("app browser entry bfcacheId helpers", () => {
         [pageX2Id]: "_b_5_",
       },
       currentElements: createBfcacheElements(pageX2Id),
-      currentPathname: "/x/2",
       elements: createBfcacheElements(pageX1Id),
-      nextPathname: "/x/1",
     });
     expect(minted[pageX1Id]).toMatch(/^_b_\d+_$/);
 
@@ -6085,9 +6244,7 @@ describe("app browser entry bfcacheId helpers", () => {
     const next = createNextBfcacheIdMap({
       current,
       currentElements: createBfcacheElements(pageX1Id),
-      currentPathname: "/x/1",
       elements: createBfcacheElements(pageX2Id),
-      nextPathname: "/x/2",
     });
 
     expect(next[rootLayoutId]).toBe("0");
@@ -6107,9 +6264,7 @@ describe("app browser entry bfcacheId helpers", () => {
     const next = createNextBfcacheIdMap({
       current,
       currentElements: createBfcacheElements(pageX1Id),
-      currentPathname: "/x/1",
       elements: createBfcacheElements(pageY1Id),
-      nextPathname: "/y/1",
     });
 
     expect(next[rootLayoutId]).toBe("0");
@@ -6132,20 +6287,28 @@ describe("app browser entry bfcacheId helpers", () => {
         null,
         {
           [pageX1Id]: React.createElement("main", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            [rootLayoutId]: "/",
+            [nestedGroupLayoutId]: "/nextjs-compat/use-router-bfcache-id/x",
+            [pageX1Id]: "/nextjs-compat/use-router-bfcache-id/x/1",
+          },
         },
         [rootLayoutId, nestedGroupLayoutId],
       ),
-      currentPathname: "/nextjs-compat/use-router-bfcache-id/x/1",
       elements: createResolvedElements(
         "route:/nextjs-compat/use-router-bfcache-id/y/1",
         "/",
         null,
         {
           [pageY1Id]: React.createElement("main", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            [rootLayoutId]: "/",
+            [nestedGroupLayoutId]: "/nextjs-compat/use-router-bfcache-id/y",
+            [pageY1Id]: "/nextjs-compat/use-router-bfcache-id/y/1",
+          },
         },
         [rootLayoutId, nestedGroupLayoutId],
       ),
-      nextPathname: "/nextjs-compat/use-router-bfcache-id/y/1",
     });
 
     expect(next[nestedGroupLayoutId]).toMatch(/^_b_\d+_$/);
@@ -6177,10 +6340,14 @@ describe("app browser entry bfcacheId helpers", () => {
         {
           [modalPhotosLayoutId]: React.createElement("div", null),
           [photo1Id]: React.createElement("main", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            [rootLayoutId]: "/",
+            [modalPhotosLayoutId]: "/feed/@modal/photos",
+            [photo1Id]: "/feed/@modal/photos/[id]?id=1",
+          },
         },
         [rootLayoutId, modalPhotosLayoutId],
       ),
-      currentPathname: "/feed/photos/1",
       elements: createResolvedElements(
         "route:/feed/@modal/photos/[id]",
         "/",
@@ -6188,10 +6355,14 @@ describe("app browser entry bfcacheId helpers", () => {
         {
           [modalPhotosLayoutId]: React.createElement("div", null),
           [photo2Id]: React.createElement("main", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            [rootLayoutId]: "/",
+            [modalPhotosLayoutId]: "/feed/@modal/photos",
+            [photo2Id]: "/feed/@modal/photos/[id]?id=2",
+          },
         },
         [rootLayoutId, modalPhotosLayoutId],
       ),
-      nextPathname: "/feed/photos/2",
     });
 
     // The layout persists across the navigation, so its id must be preserved.
@@ -6217,10 +6388,14 @@ describe("app browser entry bfcacheId helpers", () => {
         {
           [catchAllLayoutId]: React.createElement("div", null),
           [docsCatchAllPageId]: React.createElement("main", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            [rootLayoutId]: "/",
+            [catchAllLayoutId]: "/docs/[...slug]?slug=a/b",
+            [docsCatchAllPageId]: "/docs/[...slug]?slug=a/b",
+          },
         },
         [rootLayoutId, catchAllLayoutId],
       ),
-      currentPathname: "/docs/a/b",
       elements: createResolvedElements(
         "route:/docs/[...slug]",
         "/",
@@ -6228,10 +6403,14 @@ describe("app browser entry bfcacheId helpers", () => {
         {
           [catchAllLayoutId]: React.createElement("div", null),
           [docsCatchAllPageId]: React.createElement("main", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            [rootLayoutId]: "/",
+            [catchAllLayoutId]: "/docs/[...slug]?slug=a/c",
+            [docsCatchAllPageId]: "/docs/[...slug]?slug=a/c",
+          },
         },
         [rootLayoutId, catchAllLayoutId],
       ),
-      nextPathname: "/docs/a/c",
     });
 
     expect(next[rootLayoutId]).toBe("0");
@@ -6255,10 +6434,14 @@ describe("app browser entry bfcacheId helpers", () => {
         {
           [optionalCatchAllTemplateId]: React.createElement("div", null),
           [docsOptionalCatchAllPageId]: React.createElement("main", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            [rootLayoutId]: "/",
+            [optionalCatchAllTemplateId]: "/docs/[[...slug]]?slug=a/b",
+            [docsOptionalCatchAllPageId]: "/docs/[[...slug]]?slug=a/b",
+          },
         },
         [rootLayoutId],
       ),
-      currentPathname: "/docs/a/b",
       elements: createResolvedElements(
         "route:/docs/[[...slug]]",
         "/",
@@ -6266,10 +6449,14 @@ describe("app browser entry bfcacheId helpers", () => {
         {
           [optionalCatchAllTemplateId]: React.createElement("div", null),
           [docsOptionalCatchAllPageId]: React.createElement("main", null),
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            [rootLayoutId]: "/",
+            [optionalCatchAllTemplateId]: "/docs/[[...slug]]?slug=a/c",
+            [docsOptionalCatchAllPageId]: "/docs/[[...slug]]?slug=a/c",
+          },
         },
         [rootLayoutId],
       ),
-      nextPathname: "/docs/a/c",
     });
 
     expect(next[rootLayoutId]).toBe("0");
@@ -6293,6 +6480,11 @@ describe("app browser entry bfcacheId helpers", () => {
         [rootLayoutId]: React.createElement("div", null),
         [feedLayoutId]: React.createElement("div", null),
         [modalSlotId]: React.createElement("aside", null),
+        [APP_SEGMENT_STATE_KEYS_KEY]: {
+          [rootLayoutId]: "/",
+          [feedLayoutId]: "/feed",
+          [modalSlotId]: "/feed/@modal",
+        },
       },
       [rootLayoutId, feedLayoutId],
       [modalSlotBinding],
@@ -6306,6 +6498,11 @@ describe("app browser entry bfcacheId helpers", () => {
         [rootLayoutId]: React.createElement("div", null),
         [feedLayoutId]: React.createElement("div", null),
         [modalSlotId]: React.createElement("aside", null),
+        [APP_SEGMENT_STATE_KEYS_KEY]: {
+          [rootLayoutId]: "/",
+          [feedLayoutId]: "/feed",
+          [modalSlotId]: "/feed/@modal",
+        },
       },
       [rootLayoutId, feedLayoutId],
       [modalSlotBinding],
@@ -6319,9 +6516,7 @@ describe("app browser entry bfcacheId helpers", () => {
         [modalSlotId]: "_b_5_",
       },
       currentElements,
-      currentPathname: "/photos/42",
       elements: nextElements,
-      nextPathname: "/photos/43",
     });
 
     expect(next[rootLayoutId]).toBe("0");
@@ -6701,9 +6896,7 @@ describe("app browser entry bfcacheId helpers", () => {
     const next = createNextBfcacheIdMap({
       current: createInitialBfcacheIdMap(createBfcacheElements(pageX1Id)),
       currentElements: createBfcacheElements(pageX1Id),
-      currentPathname: "/x/1",
       elements: createBfcacheElements(pageX2Id),
-      nextPathname: "/x/2",
       restored: {
         [pageX1Id]: "_b_900000_",
       },

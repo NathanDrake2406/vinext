@@ -6,6 +6,7 @@ import {
   normalizeAppElementsSlotBindings,
   type AppElements,
   type AppElementsInterception,
+  type AppElementsSegmentStateKeys,
   type AppElementsSlotBinding,
 } from "./app-elements.js";
 import {
@@ -636,12 +637,40 @@ export function buildAppPageElements<
 
     return undefined;
   };
+  // Per-segment canonical bound-segment keys carried on the wire so BFCache
+  // identity derives from the same route-graph param binding used for React reset
+  // keys, instead of from pathname segment counting on the client. Each key uses
+  // the segment's own tree path (routeSegments up to its tree position); the page
+  // reuses the full-route reset key. Slot keys mirror the per-slot reset key
+  // computed in the slot loop below from the same (slot.routeSegments, slotParams).
+  const segmentStateKeys: Record<string, string> = { [pageId]: routeResetKey };
+  for (const layoutEntry of layoutEntries) {
+    segmentStateKeys[layoutEntry.id] = resolveAppPageRouteStateKey(
+      routeSegments.slice(0, layoutEntry.treePosition),
+      options.matchedParams,
+    );
+  }
+  for (const templateEntry of templateEntries) {
+    segmentStateKeys[templateEntry.id] = resolveAppPageRouteStateKey(
+      routeSegments.slice(0, templateEntry.treePosition),
+      options.matchedParams,
+    );
+  }
+  for (const [slotKey, slot] of Object.entries(options.route.slots ?? {})) {
+    const targetIndex = slot.layoutIndex >= 0 ? slot.layoutIndex : layoutEntries.length - 1;
+    const slotId = resolveAppPageSlotId(slot, layoutEntries[targetIndex]?.treePath ?? "/");
+    segmentStateKeys[slotId] = resolveAppPageRouteStateKey(
+      slot.routeSegments ?? [],
+      resolveSlotOverride(slotKey, slot.name)?.params ?? options.matchedParams,
+    );
+  }
   const elements: Record<
     string,
     | ReactNode
     | string
     | null
     | AppElementsInterception
+    | AppElementsSegmentStateKeys
     | readonly AppElementsSlotBinding[]
     | readonly string[]
   > = {
@@ -651,6 +680,7 @@ export function buildAppPageElements<
       layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
       rootLayoutTreePath,
       routeId,
+      segmentStateKeys,
       sourcePage: createAppPageSourcePage(options.sourcePageSegments ?? routeSegments),
       slotBindings: createAppPageSlotBindings(options.route, layoutEntries, resolveSlotOverride, {
         interception: renderIdentity?.interception ?? options.interception ?? null,
