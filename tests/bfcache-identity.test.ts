@@ -25,7 +25,6 @@ const templateDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "template" }
   graphVersion: "g1",
   graphId: "template:/p/[n]",
   rootBoundaryId: "rb1",
-  ownerLayoutId: "layout:/p/[n]",
   boundSegmentKey: "n|1|d",
 };
 
@@ -39,14 +38,6 @@ const slotDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "slot" }> = {
   activeRouteId: "route:/dashboard/@modal/photo/[id]",
   interceptionTargetRouteId: null,
   boundSegmentKey: "id|7|d",
-};
-
-const defaultDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "default" }> = {
-  kind: "default",
-  graphVersion: "g1",
-  graphId: "default:slot:modal:/dashboard",
-  slotId: "slot:modal:/dashboard",
-  ownerLayoutId: "layout:/dashboard",
 };
 
 describe("deriveBfcacheSegmentIdentity", () => {
@@ -69,7 +60,7 @@ describe("deriveBfcacheSegmentIdentity", () => {
     const identities = [
       deriveBfcacheSegmentIdentity({ ...pageDescriptor, graphId: "x" }),
       deriveBfcacheSegmentIdentity({ ...layoutDescriptor, graphId: "x" }),
-      deriveBfcacheSegmentIdentity({ ...templateDescriptor, graphId: "x", ownerLayoutId: null }),
+      deriveBfcacheSegmentIdentity({ ...templateDescriptor, graphId: "x" }),
     ];
     expect(new Set(identities).size).toBe(identities.length);
   });
@@ -80,12 +71,6 @@ describe("deriveBfcacheSegmentIdentity", () => {
     );
     expect(deriveBfcacheSegmentIdentity(layoutDescriptor)).not.toBe(
       deriveBfcacheSegmentIdentity({ ...layoutDescriptor, graphId: "layout:/p/[other]" }),
-    );
-  });
-
-  it("includes owner layout in template identity so a remounted owner re-keys the template", () => {
-    expect(deriveBfcacheSegmentIdentity(templateDescriptor)).not.toBe(
-      deriveBfcacheSegmentIdentity({ ...templateDescriptor, ownerLayoutId: "layout:/other" }),
     );
   });
 
@@ -102,15 +87,6 @@ describe("deriveBfcacheSegmentIdentity", () => {
         ...slotDescriptor,
         interceptionTargetRouteId: "route:/dashboard/photo/[id]",
       }),
-    );
-  });
-
-  it("derives default-slot identity without a bound segment key", () => {
-    expect(deriveBfcacheSegmentIdentity(defaultDescriptor)).toBe(
-      deriveBfcacheSegmentIdentity({ ...defaultDescriptor }),
-    );
-    expect(deriveBfcacheSegmentIdentity(defaultDescriptor)).not.toBe(
-      deriveBfcacheSegmentIdentity({ ...defaultDescriptor, slotId: "slot:other:/dashboard" }),
     );
   });
 

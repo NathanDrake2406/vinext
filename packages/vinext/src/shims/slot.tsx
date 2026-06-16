@@ -346,10 +346,10 @@ function BfcacheSlotBoundary({ content, id }: { content: React.ReactNode; id: st
 
   // Without cacheComponents there is no Activity retention, so this boundary must
   // reconcile in place exactly like the baseline router. The segment stateKey
-  // tracks the pathname (see createBfcacheSegmentIdentity), so keying the active
-  // entry by it would remount every slot whose identity moves with the URL —
-  // shared layouts and interception source slots included — discarding client
-  // state that survives a normal navigation. Reset for genuinely fresh entries is
+  // tracks the carried route-graph binding (see createBfcacheSegmentIdentity), so
+  // keying the active entry by it would remount every slot whose identity moves
+  // across navigations — shared layouts and interception source slots included —
+  // discarding client state that survives a normal navigation. Reset for genuinely fresh entries is
   // driven by userland bfcacheId keying, not by remounting the slot subtree, so
   // the active entry renders unkeyed here.
   // NOTE: This diverges from Next.js, which keys the active child by stateKey

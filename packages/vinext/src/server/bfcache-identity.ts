@@ -47,7 +47,6 @@ export type BfcacheSegmentDescriptor =
       graphVersion: string | null;
       graphId: string;
       rootBoundaryId: string | null;
-      ownerLayoutId: string | null;
       boundSegmentKey: string;
     }
   | {
@@ -60,13 +59,6 @@ export type BfcacheSegmentDescriptor =
       activeRouteId: string | null;
       interceptionTargetRouteId: string | null;
       boundSegmentKey: string;
-    }
-  | {
-      kind: "default";
-      graphVersion: string | null;
-      graphId: string;
-      slotId: string;
-      ownerLayoutId: string | null;
     };
 
 // Deterministic, collision-resistant encoding. The leading kind tag plus a
@@ -97,7 +89,6 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
         descriptor.graphVersion,
         descriptor.graphId,
         descriptor.rootBoundaryId,
-        descriptor.ownerLayoutId,
         descriptor.boundSegmentKey,
       ]);
     case "slot":
@@ -111,14 +102,6 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
         descriptor.activeRouteId,
         descriptor.interceptionTargetRouteId,
         descriptor.boundSegmentKey,
-      ]);
-    case "default":
-      return JSON.stringify([
-        "default",
-        descriptor.graphVersion,
-        descriptor.graphId,
-        descriptor.slotId,
-        descriptor.ownerLayoutId,
       ]);
   }
 }
