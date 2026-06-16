@@ -8,9 +8,9 @@
 // Identity is composed from route-graph semantic facts rather than reverse-
 // engineered from wire-key strings + pathname segment counting:
 //
-//   - graphVersion        — the route graph generation that produced the render;
-//                           a deploy that changes it re-mints, matching the
-//                           document-scoped BFCache invalidation on reload
+//   - graphVersion        — the artifact-compatibility graphVersion
+//                           (routePattern/rootBoundaryId fingerprint today);
+//                           equality-only for this identity, not reject authority
 //   - graphId             — the segment's stable semantic id (page/layout/...)
 //   - boundSegmentKey     — canonical param binding (the resolveAppPageRouteStateKey
 //                           family already used for React reset keys), so /p/1 and

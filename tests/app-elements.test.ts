@@ -40,6 +40,10 @@ import {
 } from "../packages/vinext/src/server/cache-proof.js";
 
 describe("AppElementsWire", () => {
+  it("exposes stable metadata keys through the codec boundary", () => {
+    expect(AppElementsWire.keys.segmentStateKeys).toBe(APP_SEGMENT_STATE_KEYS_KEY);
+  });
+
   it("encodes outgoing record payloads without mutating caller-owned records", () => {
     const element = {
       "layout:/": "root-layout",

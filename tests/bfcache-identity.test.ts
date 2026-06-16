@@ -59,7 +59,7 @@ describe("deriveBfcacheSegmentIdentity", () => {
     );
   });
 
-  it("folds graphVersion into identity so a deploy re-mints structurally-identical segments", () => {
+  it("folds artifact-compatibility graphVersion into segment equality", () => {
     expect(deriveBfcacheSegmentIdentity(pageDescriptor)).not.toBe(
       deriveBfcacheSegmentIdentity({ ...pageDescriptor, graphVersion: "g2" }),
     );
