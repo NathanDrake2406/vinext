@@ -123,7 +123,6 @@ function createBfcacheSegmentIdentity(
       graphVersion,
       graphId: id,
       rootBoundaryId,
-      ownerLayoutId: null,
       boundSegmentKey,
     });
   }
@@ -158,6 +157,9 @@ export function createBfcacheSegmentStateKeyMap(options: {
   const stateKeys: Record<string, string> = {};
   for (const id of collectBfcacheSegmentIds(options.elements, metadata)) {
     const stateKey = createBfcacheSegmentIdentity(id, { metadata });
+    // A null identity means the segment carried no proven route-graph key.
+    // Omit it so the boundary uses the deliberate remint path instead of
+    // preserving a segment against an unproven binding.
     if (stateKey !== null) stateKeys[id] = stateKey;
   }
   return stateKeys;
