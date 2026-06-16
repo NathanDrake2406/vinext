@@ -61,7 +61,9 @@ function readAppElementsMetadata(elements: AppElements): ParsedAppElementsMetada
 /**
  * Derive a BFCache segment identity from route-graph facts: the segment's
  * semantic wire id, the carried canonical bound-segment key (__segmentStateKeys),
- * the route graph version, and per-kind facts such as slot state.
+ * the artifact-compatibility graphVersion, and per-kind facts such as slot
+ * state. A segment whose key was not carried returns no comparable identity, so
+ * it re-mints rather than colliding with a real binding.
  */
 function createBfcacheSegmentIdentity(
   id: string,
@@ -73,7 +75,11 @@ function createBfcacheSegmentIdentity(
   const metadata = options.metadata?.metadata;
   const graphVersion = metadata?.artifactCompatibility.graphVersion ?? null;
   const rootBoundaryId = metadata?.rootLayoutTreePath ?? null;
-  const boundSegmentKey = metadata?.segmentStateKeys[id] ?? "";
+  const segmentStateKeys = metadata?.segmentStateKeys;
+  if (!segmentStateKeys || !Object.hasOwn(segmentStateKeys, id)) {
+    return null;
+  }
+  const boundSegmentKey = segmentStateKeys[id];
 
   if (parsed.kind === "page") {
     return deriveBfcacheSegmentIdentity({
@@ -191,7 +197,8 @@ export function createNextBfcacheIdMap(options: {
   for (const id of collectBfcacheSegmentIds(options.elements, nextMetadata)) {
     const currentIdentity = createBfcacheSegmentIdentity(id, { metadata: currentMetadata });
     const nextIdentity = createBfcacheSegmentIdentity(id, { metadata: nextMetadata });
-    const currentValue = currentIdentity === nextIdentity ? current[id] : undefined;
+    const currentValue =
+      currentIdentity !== null && currentIdentity === nextIdentity ? current[id] : undefined;
     // History restoration wins, then identity-compatible reuse, then a fresh
     // id. Redirected traversals must clear stale restored ids before this call.
     const value = options.restored?.[id] ?? currentValue ?? mintBfcacheId();
