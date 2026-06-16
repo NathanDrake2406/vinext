@@ -15,6 +15,7 @@ import {
   APP_RENDER_OBSERVATION_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
+  APP_SEGMENT_STATE_KEYS_KEY,
   APP_SKIPPED_LAYOUT_IDS_KEY,
   APP_SOURCE_PAGE_KEY,
   APP_SLOT_BINDINGS_KEY,
@@ -83,6 +84,7 @@ describe("AppElementsWire", () => {
       layoutFlags: {},
       rootLayoutTreePath: "/",
       routeId: "route:/photos/42\0/feed",
+      segmentStateKeys: {},
       skippedLayoutIds: [],
       slotBindings: [],
       sourcePage: null,
@@ -105,6 +107,10 @@ describe("AppElementsWire", () => {
       layoutIds: ["layout:/(dashboard)"],
       rootLayoutTreePath: "/(dashboard)",
       routeId: AppElementsWire.encodeRouteId("/dashboard", null),
+      segmentStateKeys: {
+        [AppElementsWire.encodeLayoutId("/(dashboard)")]: "/dashboard",
+        [AppElementsWire.encodePageId("/dashboard", null)]: "/dashboard",
+      },
       sourcePage: "/(dashboard)/page",
     });
 
@@ -113,6 +119,10 @@ describe("AppElementsWire", () => {
       [APP_LAYOUT_IDS_KEY]: ["layout:/(dashboard)"],
       [APP_ROOT_LAYOUT_KEY]: "/(dashboard)",
       [APP_ROUTE_KEY]: "route:/dashboard",
+      [APP_SEGMENT_STATE_KEYS_KEY]: {
+        "layout:/(dashboard)": "/dashboard",
+        "page:/dashboard": "/dashboard",
+      },
       [APP_SOURCE_PAGE_KEY]: "/(dashboard)/page",
     });
   });
@@ -314,6 +324,7 @@ describe("AppElementsWire", () => {
       layoutFlags: { [AppElementsWire.encodeLayoutId("/")]: "s" },
       rootLayoutTreePath: "/",
       routeId: "route:/dashboard",
+      segmentStateKeys: {},
       skippedLayoutIds: [],
       slotBindings: [],
       sourcePage: null,
