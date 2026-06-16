@@ -1,5 +1,13 @@
 import { defineConfig } from "@playwright/test";
 
+if (process.env.FORCE_COLOR) {
+  delete process.env.NO_COLOR;
+}
+
+if (!process.env.CI && process.env.VINEXT_E2E_NODE_WARNINGS !== "1") {
+  process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, "--no-warnings"].filter(Boolean).join(" ");
+}
+
 const appRouterBrowserSpecificTests = "**/app-router/**/*.browser.spec.ts";
 const appRouterServer = {
   command: "npx vp dev --port 4174",
@@ -280,6 +288,8 @@ const projectServers = {
 type ProjectName = keyof typeof projectServers;
 
 const selected = process.env.PLAYWRIGHT_PROJECT;
+const webServerOutput: "pipe" | "ignore" =
+  process.env.CI || process.env.VINEXT_E2E_WEB_SERVER_LOGS === "1" ? "pipe" : "ignore";
 
 if (selected && !(selected in projectServers)) {
   throw new Error(
@@ -321,7 +331,14 @@ export default defineConfig({
           (server): server is NonNullable<(typeof projectServers)[ProjectName]["server"]> =>
             server !== null,
         )
-        .map((server) => [server.port, server]),
+        .map((server) => [
+          server.port,
+          {
+            ...server,
+            stdout: webServerOutput,
+            stderr: webServerOutput,
+          },
+        ]),
     ).values(),
   ],
 });
