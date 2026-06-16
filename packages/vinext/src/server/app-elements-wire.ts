@@ -33,6 +33,15 @@ export const APP_SKIPPED_LAYOUT_IDS_KEY = "__skippedLayoutIds";
 export const APP_SOURCE_PAGE_KEY = "__sourcePage";
 export const APP_SLOT_BINDINGS_KEY = "__slotBindings";
 /**
+ * Per-segment canonical bound-segment keys, keyed by element id (page / layout /
+ * template / slot). The value is the `resolveAppPageRouteStateKey`-family key the
+ * server already computes for React reset keys, carrying the route-graph param
+ * binding (catch-all / optional-catch-all / route-group canonical) onto the wire
+ * so SSR, hydration, and client navigation derive BFCache segment identity from
+ * one source instead of re-deriving it from pathname segment counting.
+ */
+export const APP_SEGMENT_STATE_KEYS_KEY = "__segmentStateKeys";
+/**
  * Static sibling segment names for the matched route, surfaced so the client
  * router can determine if a cached prefetch of a dynamic route can be reused
  * when navigating to a static sibling URL.
@@ -152,6 +161,7 @@ export type AppElementValue =
   | string
   | null
   | LayoutFlags
+  | AppElementsSegmentStateKeys
   | ArtifactCompatibilityEnvelope
   | CacheEntryReuseProof
   | AppElementsInterception
@@ -162,6 +172,7 @@ type AppWireElementValue =
   | string
   | null
   | LayoutFlags
+  | AppElementsSegmentStateKeys
   | ArtifactCompatibilityEnvelope
   | CacheEntryReuseProof
   | AppElementsInterception
@@ -190,6 +201,8 @@ export type AppWireElements = Readonly<Record<string, AppWireElementValue>>;
  */
 export type LayoutFlags = Readonly<Record<string, "s" | "d">>;
 
+export type AppElementsSegmentStateKeys = Readonly<Record<string, string>>;
+
 type AppElementsMetadata = {
   artifactCompatibility: ArtifactCompatibilityEnvelope;
   cacheEntryReuseProof?: CacheEntryReuseProof;
@@ -200,6 +213,7 @@ type AppElementsMetadata = {
   layoutFlags: LayoutFlags;
   routeId: string;
   rootLayoutTreePath: string | null;
+  segmentStateKeys: AppElementsSegmentStateKeys;
   skippedLayoutIds: readonly string[];
   slotBindings: readonly AppElementsSlotBinding[];
   sourcePage: string | null;
@@ -219,6 +233,7 @@ type AppElementsWireMetadataInput = {
   layoutIds?: readonly string[];
   routeId: string;
   rootLayoutTreePath: string | null;
+  segmentStateKeys?: AppElementsSegmentStateKeys;
   slotBindings?: readonly AppElementsSlotBinding[];
   sourcePage?: string | null;
 };
@@ -230,6 +245,7 @@ type AppElementsWireMetadataEntries = Readonly<{
   [APP_INTERCEPTION_CONTEXT_KEY]: string | null;
   [APP_LAYOUT_IDS_KEY]: readonly string[];
   [APP_ROOT_LAYOUT_KEY]: string | null;
+  [APP_SEGMENT_STATE_KEYS_KEY]?: AppElementsSegmentStateKeys;
   [APP_SOURCE_PAGE_KEY]?: string;
   [APP_SLOT_BINDINGS_KEY]?: readonly AppElementsSlotBinding[];
 }>;
@@ -245,6 +261,7 @@ export type AppOutgoingElements = Readonly<
     string,
     | ReactNode
     | LayoutFlags
+    | AppElementsSegmentStateKeys
     | ArtifactCompatibilityEnvelope
     | CacheEntryReuseProof
     | AppElementsInterception
@@ -406,6 +423,12 @@ function createAppElementsWireMetadataEntries(
     ...(input.dynamicStaleTimeSeconds === undefined
       ? {}
       : { [APP_DYNAMIC_STALE_TIME_KEY]: input.dynamicStaleTimeSeconds }),
+    // Omitted when empty: an absent map round-trips as {} and means "no carried
+    // identity binding", so consumers fall back to a fresh-mint identity rather
+    // than inferring a binding from transport shape.
+    ...(input.segmentStateKeys && Object.keys(input.segmentStateKeys).length > 0
+      ? { [APP_SEGMENT_STATE_KEYS_KEY]: input.segmentStateKeys }
+      : {}),
     ...(input.sourcePage === null || input.sourcePage === undefined
       ? {}
       : { [APP_SOURCE_PAGE_KEY]: input.sourcePage }),
@@ -663,6 +686,7 @@ export function buildOutgoingAppPayload(input: {
     string,
     | ReactNode
     | LayoutFlags
+    | AppElementsSegmentStateKeys
     | ArtifactCompatibilityEnvelope
     | CacheEntryReuseProof
     | AppElementsInterception
@@ -802,6 +826,18 @@ function parseCacheEntryReuseProofMetadata(value: unknown): CacheEntryReuseProof
   return createMissingCacheEntryReuseProof();
 }
 
+function parseSegmentStateKeys(value: unknown): AppElementsSegmentStateKeys {
+  // Absent metadata round-trips as {}. A malformed map degrades to {} rather than
+  // throwing: a missing carried key resolves to a fresh-mint identity downstream,
+  // which is safe, so a bad value should not crash render paths that do not read it.
+  if (!isUnknownRecord(value)) return {};
+  const parsed: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "string") parsed[key] = entry;
+  }
+  return parsed;
+}
+
 export function readAppElementsMetadata(
   elements: Readonly<Record<string, unknown>>,
 ): AppElementsMetadata {
@@ -846,6 +882,7 @@ export function readAppElementsMetadata(
       ? dynamicStaleTime
       : undefined;
   const sourcePage = readSourcePageMetadata(elements[APP_SOURCE_PAGE_KEY]);
+  const segmentStateKeys = parseSegmentStateKeys(elements[APP_SEGMENT_STATE_KEYS_KEY]);
 
   return {
     artifactCompatibility,
@@ -857,6 +894,7 @@ export function readAppElementsMetadata(
     layoutFlags,
     routeId,
     rootLayoutTreePath,
+    segmentStateKeys,
     skippedLayoutIds,
     slotBindings,
     sourcePage,

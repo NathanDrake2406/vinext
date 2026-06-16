@@ -456,9 +456,6 @@ export async function handleSsr(
           const bfcacheMaps = createInitialBfcacheMaps({
             elements,
             metadata,
-            // Normalized inside the function to match the client navigation
-            // snapshot pathname (SSR/client Activity key parity).
-            pathname: ssrNavigationContext.pathname,
           });
           const routeTree = createReactElement(
             ElementsContext.Provider,

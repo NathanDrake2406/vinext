@@ -1141,12 +1141,8 @@ function BrowserRoot({
     ),
   );
   const bfcacheStateKeys = useMemo(
-    () =>
-      createBfcacheSegmentStateKeyMap({
-        elements: treeState.elements,
-        pathname: treeState.navigationSnapshot.pathname,
-      }),
-    [treeState.elements, treeState.navigationSnapshot.pathname],
+    () => createBfcacheSegmentStateKeyMap({ elements: treeState.elements }),
+    [treeState.elements],
   );
   const stateKeyTree = createElement(
     BfcacheStateKeyMapContext.Provider,

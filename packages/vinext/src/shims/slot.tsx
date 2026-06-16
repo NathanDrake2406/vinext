@@ -2,12 +2,14 @@
 
 import * as React from "react";
 import {
+  APP_SEGMENT_STATE_KEYS_KEY,
   APP_SKIPPED_LAYOUT_IDS_KEY,
   AppElementsWire,
   UNMATCHED_SLOT,
   type AppElementValue,
   type AppElements,
   type AppElementsInterception,
+  type AppElementsSegmentStateKeys,
   type AppElementsSlotBinding,
   type LayoutFlags,
 } from "../server/app-elements.js";
@@ -158,6 +160,13 @@ function isSkippedLayoutIdsMetadataValue(id: string, value: unknown): value is r
   );
 }
 
+function isSegmentStateKeysMetadataValue(
+  id: string,
+  value: unknown,
+): value is AppElementsSegmentStateKeys {
+  return id === APP_SEGMENT_STATE_KEYS_KEY && typeof value === "object" && value !== null;
+}
+
 function isInterceptionMetadataValue(value: unknown): value is AppElementsInterception {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   return (
@@ -184,6 +193,7 @@ function isTransportMetadataValue(
   value: AppElementValue | undefined,
 ): value is
   | LayoutFlags
+  | AppElementsSegmentStateKeys
   | ArtifactCompatibilityEnvelope
   | CacheEntryReuseProof
   | AppElementsInterception
@@ -191,6 +201,7 @@ function isTransportMetadataValue(
   | readonly AppElementsSlotBinding[] {
   return (
     isLayoutFlagsValue(value) ||
+    isSegmentStateKeysMetadataValue(id, value) ||
     isArtifactCompatibilityEnvelopeValue(value) ||
     isCacheEntryReuseProofValue(value) ||
     isInterceptionMetadataValue(value) ||
