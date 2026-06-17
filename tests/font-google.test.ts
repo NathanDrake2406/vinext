@@ -1387,6 +1387,78 @@ describe("vinext:google-fonts plugin", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("does not rewrite calls to shadowed font identifiers", async () => {
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-shadowed");
+    initPlugin(plugin, { command: "build", root });
+
+    mockGoogleFontsCSS("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }");
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Inter } from 'next/font/google';`,
+        `function myComponent(Inter: any) {`,
+        `  return Inter({ weight: '400', subsets: ['latin'] });`,
+        `}`,
+        `const realInter = Inter({ weight: '400', subsets: ['latin'] });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      // The outer call realInter must be self-hosted
+      expect(result.code).toContain(
+        "const realInter = Inter({ weight: '400', subsets: ['latin'] , _vinext: {",
+      );
+      // The inner call to shadowed Inter must NOT be rewritten
+      expect(result.code).toContain("return Inter({ weight: '400', subsets: ['latin'] });");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles comments inside import statement containing 'from'", async () => {
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-import-comment");
+    initPlugin(plugin, { command: "build", root });
+
+    mockGoogleFontsCSS("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }");
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Inter /* comment with from here */ } from 'next/font/google';`,
+        `const inter = Inter({ weight: '400', subsets: ['latin'] });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain("virtual:vinext-google-fonts?");
+      expect(result.code).toContain("selfHostedCSS");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles comments inside export statement containing 'from'", async () => {
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-export-comment");
+    initPlugin(plugin, { command: "build", root });
+
+    mockGoogleFontsCSS("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }");
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [`export { Inter /* comment with from */ } from 'next/font/google';`].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain("virtual:vinext-google-fonts?");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── fetchAndCacheFont integration ─────────────────────────────

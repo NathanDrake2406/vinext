@@ -166,6 +166,46 @@ describe("vinext:local-fonts plugin", () => {
     expect(result.code).toContain(`const unrelated = { src: "./unrelated.woff2" };`);
   });
 
+  it("does not rewrite font-looking paths in nested metadata objects", () => {
+    const plugin = getLocalFontsPlugin();
+    const transform = unwrapHook(plugin.transform);
+    const code = [
+      `import localFont from 'next/font/local';`,
+      `const myFont = localFont({`,
+      `  src: "./real-font.woff2",`,
+      `  metadata: {`,
+      `    path: "./do-not-bundle.woff2",`,
+      `  },`,
+      `});`,
+    ].join("\n");
+
+    const result = transform.call(plugin, code, "/app/layout.tsx");
+
+    expect(result).not.toBeNull();
+    expectImported(result.code, "./real-font.woff2");
+    expect(result.code).not.toContain(`"./do-not-bundle.woff2";`);
+    expect(result.code).toContain(`path: "./do-not-bundle.woff2"`);
+  });
+
+  it("does not rewrite shadowed local font calls", () => {
+    const plugin = getLocalFontsPlugin();
+    const transform = unwrapHook(plugin.transform);
+    const code = [
+      `import localFont from 'next/font/local';`,
+      `function render(localFont: any) {`,
+      `  return localFont({ src: "./not-a-next-font.woff2" });`,
+      `}`,
+      `const realFont = localFont({ src: "./real-font.woff2" });`,
+    ].join("\n");
+
+    const result = transform.call(plugin, code, "/app/layout.tsx");
+
+    expect(result).not.toBeNull();
+    expectImported(result.code, "./real-font.woff2");
+    expect(result.code).not.toContain(`"./not-a-next-font.woff2";`);
+    expect(result.code).toContain(`return localFont({ src: "./not-a-next-font.woff2" });`);
+  });
+
   // ── Helper: assert a font file string was promoted to an ESM import ──
   // The transform's contract is that font path strings get rewritten to ESM
   // imports so Vite can fingerprint and serve them. We don't care about the

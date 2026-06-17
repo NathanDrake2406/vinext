@@ -34,6 +34,7 @@ import {
   type AstRecord,
   forEachAstChild,
   getAstName,
+  getBindingsInScope,
   hasRange,
   isAstRecord,
   nodeArray,
@@ -380,6 +381,78 @@ function getStringProperty(node: AstRecord, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function reconstructImportClause(node: AstRecord): string {
+  const specifiers = nodeArray(node.specifiers);
+  let defaultImportStr = "";
+  let namespaceImportStr = "";
+  const namedImports: string[] = [];
+
+  for (const specVal of specifiers) {
+    if (!isAstRecord(specVal)) continue;
+    const spec = specVal;
+    if (spec.type === "ImportDefaultSpecifier") {
+      const local = getAstName(spec.local);
+      if (local) defaultImportStr = local;
+    } else if (spec.type === "ImportNamespaceSpecifier") {
+      const local = getAstName(spec.local);
+      if (local) namespaceImportStr = `* as ${local}`;
+    } else if (spec.type === "ImportSpecifier") {
+      const imported = getAstName(spec.imported);
+      const local = getAstName(spec.local);
+      if (!imported || !local) continue;
+
+      const isType = spec.importKind === "type";
+      const typePrefix = isType ? "type " : "";
+
+      if (imported === local) {
+        namedImports.push(`${typePrefix}${imported}`);
+      } else {
+        namedImports.push(`${typePrefix}${imported} as ${local}`);
+      }
+    }
+  }
+
+  const parts: string[] = [];
+  if (defaultImportStr) {
+    parts.push(defaultImportStr);
+  }
+  if (namespaceImportStr) {
+    parts.push(namespaceImportStr);
+  }
+  if (namedImports.length > 0) {
+    const isTypeDecl = node.importKind === "type";
+    const typePrefix = isTypeDecl ? "type " : "";
+    parts.push(`${typePrefix}{ ${namedImports.join(", ")} }`);
+  }
+
+  return parts.join(", ");
+}
+
+function reconstructExportSpecifiers(node: AstRecord): string {
+  const specifiers = nodeArray(node.specifiers);
+  const parts: string[] = [];
+
+  for (const specVal of specifiers) {
+    if (!isAstRecord(specVal) || specVal.type !== "ExportSpecifier") continue;
+    const local = getAstName(specVal.local);
+    const exported = getAstName(specVal.exported) ?? local;
+    if (!local || !exported) continue;
+
+    const isType = specVal.exportKind === "type";
+    const typePrefix = isType ? "type " : "";
+
+    if (local === exported) {
+      parts.push(`${typePrefix}${local}`);
+    } else {
+      parts.push(`${typePrefix}${local} as ${exported}`);
+    }
+  }
+
+  const isTypeDecl = node.exportKind === "type";
+  const typePrefix = isTypeDecl ? "type " : "";
+  return `${typePrefix}{ ${parts.join(", ")} }`;
+}
+
 function getSourceValue(node: AstRecord): string | null {
   const source = node.source;
   if (!isAstRecord(source)) return null;
@@ -395,36 +468,14 @@ function isTypeOnlySpecifier(node: AstRecord, parent: AstRecord): boolean {
   return isTypeOnlyDeclaration(parent) || node.importKind === "type" || node.exportKind === "type";
 }
 
-function importClauseForNode(code: string, node: AstRange): string | null {
-  const source = isAstRecord(node.source) && hasRange(node.source) ? node.source : null;
-  if (!source) return null;
-  const beforeSource = code.slice(node.start, source.start);
-  const fromIndex = beforeSource.lastIndexOf("from");
-  if (fromIndex === -1) return null;
-  return beforeSource.slice("import".length, fromIndex).trim();
-}
-
-function namedBlockForNode(code: string, node: AstRange): string | null {
-  const source = isAstRecord(node.source) && hasRange(node.source) ? node.source : null;
-  if (!source) return null;
-  const beforeSource = code.slice(node.start, source.start);
-  const open = beforeSource.indexOf("{");
-  const close = beforeSource.lastIndexOf("}");
-  if (open === -1 || close === -1 || close < open) return null;
-  return beforeSource.slice(open + 1, close);
-}
-
-function collectGoogleFontImports(
-  ast: ReturnType<typeof parseAst>,
-  code: string,
-): GoogleFontImportInfo[] {
+function collectGoogleFontImports(ast: ReturnType<typeof parseAst>): GoogleFontImportInfo[] {
   const imports: GoogleFontImportInfo[] = [];
   for (const item of ast.body) {
     if (item.type !== "ImportDeclaration") continue;
     const node = item as unknown as AstRecord;
     if (getSourceValue(node) !== "next/font/google") continue;
     if (!hasRange(node)) continue;
-    const clause = importClauseForNode(code, node);
+    const clause = reconstructImportClause(node);
     if (!clause) continue;
 
     let defaultLocal: string | null = null;
@@ -434,23 +485,23 @@ function collectGoogleFontImports(
 
     for (const specifierValue of nodeArray(node.specifiers)) {
       if (!isAstRecord(specifierValue) || !hasRange(specifierValue)) continue;
-      const specifier = specifierValue;
-      if (specifier.type === "ImportDefaultSpecifier") {
-        if (!declarationIsType) defaultLocal = getAstName(specifier.local);
+      const spec = specifierValue;
+      if (spec.type === "ImportDefaultSpecifier") {
+        if (!declarationIsType) defaultLocal = getAstName(spec.local);
         continue;
       }
-      if (specifier.type === "ImportNamespaceSpecifier") {
-        if (!declarationIsType) namespaceLocal = getAstName(specifier.local);
+      if (spec.type === "ImportNamespaceSpecifier") {
+        if (!declarationIsType) namespaceLocal = getAstName(spec.local);
         continue;
       }
-      if (specifier.type !== "ImportSpecifier") continue;
-      const imported = getAstName(specifier.imported) ?? getAstName(specifier.local);
-      const local = getAstName(specifier.local) ?? imported;
+      if (spec.type !== "ImportSpecifier") continue;
+      const imported = getAstName(spec.imported) ?? getAstName(spec.local);
+      const local = getAstName(spec.local) ?? imported;
       if (!imported || !local) continue;
       named.push({
         imported,
         local,
-        isType: isTypeOnlySpecifier(specifier, node),
+        isType: isTypeOnlySpecifier(spec, node),
       });
     }
 
@@ -466,18 +517,14 @@ function collectGoogleFontImports(
   return imports;
 }
 
-function collectGoogleFontExports(
-  ast: ReturnType<typeof parseAst>,
-  code: string,
-): GoogleFontExportInfo[] {
+function collectGoogleFontExports(ast: ReturnType<typeof parseAst>): GoogleFontExportInfo[] {
   const exports: GoogleFontExportInfo[] = [];
   for (const item of ast.body) {
     if (item.type !== "ExportNamedDeclaration") continue;
     const node = item as unknown as AstRecord;
     if (getSourceValue(node) !== "next/font/google") continue;
     if (!hasRange(node)) continue;
-    const specifiers = namedBlockForNode(code, node);
-    if (specifiers === null) continue;
+    const specifiers = reconstructExportSpecifiers(node);
 
     const named: GoogleFontNamedSpecifier[] = [];
     for (const specifierValue of nodeArray(node.specifiers)) {
@@ -507,32 +554,58 @@ function isIdentifierReference(node: unknown, name: string): boolean {
   return isAstRecord(node) && node.type === "Identifier" && node.name === name;
 }
 
-function isFontPathProperty(node: AstRecord): boolean {
-  if (node.type !== "Property" || node.computed) return false;
-  const key = getAstName(node.key);
-  if (key !== "src" && key !== "path") return false;
-  const value = node.value;
-  return (
-    isAstRecord(value) &&
-    hasRange(value) &&
-    value.type === "Literal" &&
-    typeof value.value === "string" &&
-    FONT_FILE_EXTENSION_RE.test(value.value)
-  );
-}
-
 function collectLocalFontPathLiterals(options: AstRange): Array<{ node: AstRange; path: string }> {
   const paths: Array<{ node: AstRange; path: string }> = [];
-  function visit(node: AstRecord): void {
-    if (isFontPathProperty(node)) {
-      const value = node.value;
-      if (isAstRecord(value) && hasRange(value) && typeof value.value === "string") {
+
+  for (const prop of nodeArray(options.properties)) {
+    if (!isAstRecord(prop) || prop.type !== "Property" || prop.computed) continue;
+    if (getAstName(prop.key) !== "src") continue;
+
+    const value = prop.value;
+    if (!isAstRecord(value)) continue;
+
+    if (value.type === "Literal" && typeof value.value === "string" && hasRange(value)) {
+      if (FONT_FILE_EXTENSION_RE.test(value.value)) {
         paths.push({ node: value, path: value.value });
       }
+    } else if (value.type === "ObjectExpression") {
+      for (const subProp of nodeArray(value.properties)) {
+        if (!isAstRecord(subProp) || subProp.type !== "Property" || subProp.computed) continue;
+        if (getAstName(subProp.key) !== "path") continue;
+        const pathVal = subProp.value;
+        if (
+          isAstRecord(pathVal) &&
+          hasRange(pathVal) &&
+          pathVal.type === "Literal" &&
+          typeof pathVal.value === "string"
+        ) {
+          if (FONT_FILE_EXTENSION_RE.test(pathVal.value)) {
+            paths.push({ node: pathVal, path: pathVal.value });
+          }
+        }
+      }
+    } else if (value.type === "ArrayExpression") {
+      for (const elem of nodeArray(value.elements)) {
+        if (!isAstRecord(elem) || elem.type !== "ObjectExpression") continue;
+        for (const subProp of nodeArray(elem.properties)) {
+          if (!isAstRecord(subProp) || subProp.type !== "Property" || subProp.computed) continue;
+          if (getAstName(subProp.key) !== "path") continue;
+          const pathVal = subProp.value;
+          if (
+            isAstRecord(pathVal) &&
+            hasRange(pathVal) &&
+            pathVal.type === "Literal" &&
+            typeof pathVal.value === "string"
+          ) {
+            if (FONT_FILE_EXTENSION_RE.test(pathVal.value)) {
+              paths.push({ node: pathVal, path: pathVal.value });
+            }
+          }
+        }
+      }
     }
-    forEachAstChild(node, visit);
   }
-  visit(options);
+
   return paths;
 }
 
@@ -583,34 +656,59 @@ function collectLocalFontCalls(
   localFontIdentifier: string,
 ): LocalFontCallInfo[] {
   const calls: LocalFontCallInfo[] = [];
-  function visit(node: AstRecord): void {
+
+  function visit(node: AstRecord, shadowed: Set<string>): void {
+    const isScope =
+      node.type === "FunctionDeclaration" ||
+      node.type === "FunctionExpression" ||
+      node.type === "ArrowFunctionExpression" ||
+      node.type === "BlockStatement" ||
+      node.type === "CatchClause" ||
+      node.type === "ForStatement" ||
+      node.type === "ForInStatement" ||
+      node.type === "ForOfStatement";
+
+    const nextShadowed = isScope ? new Set([...shadowed, ...getBindingsInScope(node)]) : shadowed;
+
     if (node.type === "VariableDeclarator") {
-      const localCall = localFontCallFromInitializer(node.init, localFontIdentifier);
-      if (localCall) {
-        calls.push({
-          ...localCall,
-          bindingName: getAstName(node.id),
-        });
+      if (!nextShadowed.has(localFontIdentifier)) {
+        const localCall = localFontCallFromInitializer(node.init, localFontIdentifier);
+        if (localCall) {
+          calls.push({
+            ...localCall,
+            bindingName: getAstName(node.id),
+          });
+        }
       }
+      visit(node.id as AstRecord, nextShadowed);
+      if (node.init) visit(node.init as AstRecord, nextShadowed);
       return;
     }
 
     if (
       node.type === "CallExpression" &&
       hasRange(node) &&
+      !nextShadowed.has(localFontIdentifier) &&
       isIdentifierReference(node.callee, localFontIdentifier)
     ) {
       const options = firstObjectArgument(node);
       if (options) {
         calls.push({ call: node, options, bindingName: null });
       }
-      return;
     }
 
-    forEachAstChild(node, visit);
+    forEachAstChild(node, (child) => visit(child, nextShadowed));
   }
 
-  for (const item of ast.body) visit(item as AstRecord);
+  const initialShadowed = new Set<string>();
+  const programBindings = getBindingsInScope(ast as unknown as AstRecord);
+  for (const name of programBindings) {
+    initialShadowed.add(name);
+  }
+
+  for (const item of ast.body) {
+    visit(item as AstRecord, initialShadowed);
+  }
   return calls;
 }
 
@@ -622,14 +720,26 @@ function collectGoogleFontCalls(
   const calls: Array<{ call: AstRange; options: AstRange; family: string; calleeSource: string }> =
     [];
 
-  function visit(node: AstRecord): void {
+  function visit(node: AstRecord, shadowed: Set<string>): void {
+    const isScope =
+      node.type === "FunctionDeclaration" ||
+      node.type === "FunctionExpression" ||
+      node.type === "ArrowFunctionExpression" ||
+      node.type === "BlockStatement" ||
+      node.type === "CatchClause" ||
+      node.type === "ForStatement" ||
+      node.type === "ForInStatement" ||
+      node.type === "ForOfStatement";
+
+    const nextShadowed = isScope ? new Set([...shadowed, ...getBindingsInScope(node)]) : shadowed;
+
     if (node.type === "CallExpression" && hasRange(node)) {
       const options = firstObjectArgument(node);
       const callee = isAstRecord(node.callee) && hasRange(node.callee) ? node.callee : null;
       if (options && callee?.type === "Identifier") {
         const localName = getStringProperty(callee, "name");
         const importedName = localName ? fontLocals.get(localName) : undefined;
-        if (localName && importedName) {
+        if (localName && importedName && !nextShadowed.has(localName)) {
           calls.push({
             call: node,
             options,
@@ -643,7 +753,12 @@ function collectGoogleFontCalls(
       if (options && callee?.type === "MemberExpression" && !callee.computed) {
         const objectName = getAstName(callee.object);
         const propName = getAstName(callee.property);
-        if (objectName && propName && proxyObjectLocals.has(objectName)) {
+        if (
+          objectName &&
+          propName &&
+          proxyObjectLocals.has(objectName) &&
+          !nextShadowed.has(objectName)
+        ) {
           calls.push({
             call: node,
             options,
@@ -655,10 +770,18 @@ function collectGoogleFontCalls(
       }
     }
 
-    forEachAstChild(node, visit);
+    forEachAstChild(node, (child) => visit(child, nextShadowed));
   }
 
-  for (const item of ast.body) visit(item as AstRecord);
+  const initialShadowed = new Set<string>();
+  const programBindings = getBindingsInScope(ast as unknown as AstRecord);
+  for (const name of programBindings) {
+    initialShadowed.add(name);
+  }
+
+  for (const item of ast.body) {
+    visit(item as AstRecord, initialShadowed);
+  }
   return calls;
 }
 
@@ -990,7 +1113,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
         const fontLocals = new Map<string, string>();
         const proxyObjectLocals = new Set<string>();
 
-        for (const parsed of collectGoogleFontImports(ast, code)) {
+        for (const parsed of collectGoogleFontImports(ast)) {
           const utilityImports = parsed.named.filter(
             (spec) => !spec.isType && GOOGLE_FONT_UTILITY_EXPORTS.has(spec.imported),
           );
@@ -1037,7 +1160,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
           }
         }
 
-        for (const parsed of collectGoogleFontExports(ast, code)) {
+        for (const parsed of collectGoogleFontExports(ast)) {
           const namedExports = parsed.named;
           const utilityExports = namedExports.filter(
             (spec) => !spec.isType && GOOGLE_FONT_UTILITY_EXPORTS.has(spec.imported),
