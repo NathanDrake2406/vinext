@@ -1088,6 +1088,64 @@ describe("treeshake config integration", () => {
       await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   }, 15000);
+
+  it("adds Next.js default server external packages to App Router server environments", async () => {
+    // Ported from Next.js: test/e2e/twoslash/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/twoslash/index.test.ts
+    //
+    // The twoslash fixture imports `typescript` without listing it in
+    // `serverExternalPackages`; Next.js still externalizes it via its default
+    // server-external package list.
+    const vinext = (await import("../packages/vinext/src/index.js")).default;
+    const plugins = vinext();
+
+    const mainPlugin = plugins.find(
+      (p: any) => p.name === "vinext:config" && typeof p.config === "function",
+    );
+    expect(mainPlugin).toBeDefined();
+
+    const os = await import("node:os");
+    const fsp = await import("node:fs/promises");
+    const path = await import("node:path");
+
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-default-externals-"));
+    const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");
+    await fsp.symlink(rootNodeModules, path.join(tmpDir, "node_modules"), "junction");
+    await fsp.mkdir(path.join(tmpDir, "app"), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDir, "app", "route.ts"),
+      `import ts from "typescript";
+
+export function GET() {
+  return Response.json({ target: ts.ScriptTarget.ESNext });
+}
+`,
+    );
+    await fsp.writeFile(
+      path.join(tmpDir, "next.config.mjs"),
+      `export default { serverExternalPackages: ["twoslash"] };`,
+    );
+
+    try {
+      const result = await (mainPlugin as any).config(
+        {
+          root: tmpDir,
+          build: {},
+          plugins: [],
+        },
+        { command: "build" },
+      );
+
+      expect(result.environments.rsc.resolve.external).toEqual(
+        expect.arrayContaining(["typescript", "twoslash"]),
+      );
+      expect(result.environments.ssr.resolve.external).toEqual(
+        expect.arrayContaining(["typescript", "twoslash"]),
+      );
+    } finally {
+      await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 15000);
 });
 
 // ─── computeLazyChunks ────────────────────────────────────────────────────────

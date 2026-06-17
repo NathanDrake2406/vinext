@@ -246,6 +246,154 @@ export default function proxy(request: NextRequest) {
     }
   }, 120000);
 
+  it("serves a route handler that imports TypeScript as a default server external", async () => {
+    // Ported from Next.js: test/e2e/twoslash/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/twoslash/index.test.ts
+    //
+    // The upstream fixture uses `twoslash` to expose these TypeScript hover
+    // facts. `twoslash` is not a vinext workspace dependency, so this regression
+    // exercises the same route-handler + TypeScript runtime contract directly.
+    // The full upstream deploy-suite remains the end-to-end twoslash check.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-twoslash-typescript-"));
+
+    try {
+      fs.writeFileSync(path.join(tmpDir, "package.json"), `{"type":"module"}`);
+      fs.symlinkSync(
+        path.resolve(import.meta.dirname, "../node_modules"),
+        path.join(tmpDir, "node_modules"),
+        "junction",
+      );
+      fs.mkdirSync(path.join(tmpDir, "app"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "route.ts"),
+        `import ts from "typescript";
+
+const code = "type X = Promise<number>;\\n'hello'.toUpperCase()";
+
+function createLanguageService(compilerOptions) {
+  const fileName = "input.ts";
+  const host = {
+    getCompilationSettings: () => compilerOptions,
+    getScriptFileNames: () => [fileName],
+    getScriptVersion: () => "0",
+    getScriptSnapshot: (name) => {
+      if (name === fileName) {
+        return ts.ScriptSnapshot.fromString(code);
+      }
+      if (!ts.sys.fileExists(name)) return undefined;
+      return ts.ScriptSnapshot.fromString(ts.sys.readFile(name));
+    },
+    getCurrentDirectory: () => process.cwd(),
+    getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
+    fileExists: ts.sys.fileExists,
+    readFile: ts.sys.readFile,
+    readDirectory: ts.sys.readDirectory,
+  };
+  return { fileName, sourceFile: ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest), service: ts.createLanguageService(host) };
+}
+
+function hoverNodes(compilerOptions) {
+  const { fileName, sourceFile, service } = createLanguageService(compilerOptions);
+  return [
+    { position: 5, target: "X" },
+    { position: 9, target: "Promise" },
+    { position: 34, target: "toUpperCase" },
+  ].map(({ position, target }) => {
+    const info = service.getQuickInfoAtPosition(fileName, position);
+    if (!info) {
+      throw new Error("Missing quick info for " + target);
+    }
+    const docs = ts.displayPartsToString(info.documentation);
+    const location = sourceFile.getLineAndCharacterOfPosition(info.textSpan.start);
+    return {
+      character: location.character,
+      ...(docs ? { docs } : {}),
+      length: info.textSpan.length,
+      line: location.line,
+      start: info.textSpan.start,
+      target,
+      text: ts.displayPartsToString(info.displayParts),
+      type: "hover",
+    };
+  });
+}
+
+export function GET(request) {
+  const compilerOptions = request.nextUrl.searchParams.has("esnext")
+    ? { target: ts.ScriptTarget.ESNext }
+    : {};
+  return Response.json({ code, nodes: hoverNodes(compilerOptions) });
+}
+`,
+      );
+
+      const builder = await createBuilder({
+        root: tmpDir,
+        configFile: false,
+        plugins: [vinext({ appDir: tmpDir })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+
+      const externals = JSON.parse(
+        fs.readFileSync(path.join(tmpDir, "dist", "server", "vinext-externals.json"), "utf-8"),
+      );
+      expect(externals).toContain("typescript");
+
+      const built: { default?: unknown } = await import(
+        `${pathToFileURL(path.join(tmpDir, "dist", "server", "index.js")).href}?t=${Date.now()}`
+      );
+      expect(isBuiltAppHandler(built.default)).toBe(true);
+      if (!isBuiltAppHandler(built.default)) return;
+
+      for (const mode of ["default", "esnext"]) {
+        const response = await built.default(new Request(`http://localhost/?${mode}`));
+        expect(response).toBeInstanceOf(Response);
+        if (!(response instanceof Response)) return;
+        expect(response.status).toBe(200);
+
+        const { code, nodes, error } = await response.json();
+        expect({ code, nodes, error }).toEqual({
+          code: "type X = Promise<number>;\n'hello'.toUpperCase()",
+          error: undefined,
+          nodes: [
+            {
+              character: 5,
+              length: 1,
+              line: 0,
+              start: 5,
+              target: "X",
+              text: "type X = Promise<number>",
+              type: "hover",
+            },
+            {
+              character: 9,
+              docs: "Represents the completion of an asynchronous operation",
+              length: 7,
+              line: 0,
+              start: 9,
+              target: "Promise",
+              text: "interface Promise<T>",
+              type: "hover",
+            },
+            {
+              character: 8,
+              docs: "Converts all the alphabetic characters in a string to uppercase.",
+              length: 11,
+              line: 1,
+              start: 34,
+              target: "toUpperCase",
+              text: "(method) String.toUpperCase(): string",
+              type: "hover",
+            },
+          ],
+        });
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 120000);
+
   it("serves production build via preview server", async () => {
     const { preview } = await import("vite");
 
