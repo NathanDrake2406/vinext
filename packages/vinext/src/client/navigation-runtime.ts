@@ -122,7 +122,8 @@ function isNavigationRuntimeFunctions(value: unknown): value is NavigationRuntim
     isOptionalRuntimeFunction(Reflect.get(value, "navigateExternal")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "navigate")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "notifyLinkNavigationStart")) &&
-    isOptionalRuntimeFunction(Reflect.get(value, "pingVisibleLinks"))
+    isOptionalRuntimeFunction(Reflect.get(value, "pingVisibleLinks")) &&
+    isOptionalRuntimeFunction(Reflect.get(value, "getRscStateTreeHeaderValue"))
   );
 }
 
