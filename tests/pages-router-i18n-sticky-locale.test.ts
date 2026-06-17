@@ -114,6 +114,118 @@ function buildNavHtml(
 
 const PAGE_MODULE_URL = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
 
+// Ported from Next.js:
+// test/e2e/ignore-invalid-popstateevent/without-i18n.test.ts
+// https://github.com/vercel/next.js/blob/canary/test/e2e/ignore-invalid-popstateevent/without-i18n.test.ts
+describe("Pages Router popstate stale-state filter (non-i18n parity)", () => {
+  async function installRuntime(win: ReturnType<typeof createNavWindow>["win"]) {
+    const listeners = new Map<string, (event: any) => void>();
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    }) as any;
+    (globalThis as any).window = win;
+    vi.resetModules();
+    await import("../packages/vinext/src/shims/router.js");
+    const { installPagesRouterRuntime } =
+      await import("../packages/vinext/src/shims/pages-router-runtime.js");
+    installPagesRouterRuntime();
+    return listeners;
+  }
+
+  async function expectFirstStalePopstateIgnoredThenSecondUsesStateUrl({
+    initialPath,
+    state,
+    expectedFetchUrl,
+  }: {
+    initialPath: string;
+    state: { url: string; as: string; options: {}; __N: true; key: string };
+    expectedFetchUrl: string;
+  }) {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const originalCustomEvent = globalThis.CustomEvent;
+    const { win } = createNavWindow();
+    const initialUrl = new URL(initialPath, "http://localhost");
+    win.location.pathname = initialUrl.pathname;
+    win.location.search = initialUrl.search;
+    win.location.href = initialUrl.href;
+    win.__NEXT_DATA__ = {
+      ...win.__NEXT_DATA__,
+      page: "/static",
+      __vinext: { pageModuleUrl: "/@fs/pages/static.js" },
+    };
+
+    let routeChangeStartCount = 0;
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(buildNavHtml("/[dynamic]", PAGE_MODULE_URL), { status: 200 }),
+    );
+    globalThis.fetch = fetchMock;
+    (globalThis as any).CustomEvent = class CustomEventMock {
+      constructor(public type: string) {}
+    } as any;
+
+    try {
+      const listeners = await installRuntime(win);
+      const popstateHandler = listeners.get("popstate");
+      expect(popstateHandler).toBeDefined();
+
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      routerModule.default.events.on("routeChangeStart", () => {
+        routeChangeStartCount += 1;
+      });
+
+      popstateHandler!({ state });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(routeChangeStartCount).toBe(0);
+      expect(win.__NEXT_DATA__.page).toBe("/static");
+
+      popstateHandler!({ state });
+      await vi.waitFor(() => expect(win.__NEXT_DATA__.page).toBe("/[dynamic]"));
+      expect(routeChangeStartCount).toBe(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]![0]).toBe(expectedFetchUrl);
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+      (globalThis as any).CustomEvent = originalCustomEvent;
+    }
+  }
+
+  it("ignores the first stale event without query params and processes the second", async () => {
+    await expectFirstStalePopstateIgnoredThenSecondUsesStateUrl({
+      initialPath: "/static",
+      state: {
+        url: "/[dynamic]?",
+        as: "/static",
+        options: {},
+        __N: true,
+        key: "",
+      },
+      expectedFetchUrl: "/[dynamic]",
+    });
+  });
+
+  it("ignores the first stale event with query params and processes the second", async () => {
+    await expectFirstStalePopstateIgnoredThenSecondUsesStateUrl({
+      initialPath: "/static?param=1",
+      state: {
+        url: "/[dynamic]?param=1",
+        as: "/static?param=1",
+        options: {},
+        __N: true,
+        key: "",
+      },
+      expectedFetchUrl: "/[dynamic]?param=1",
+    });
+  });
+});
+
 // Ported from Next.js test/e2e/ignore-invalid-popstateevent — Next.js writes
 // `{ url, as, options, __N: true, key }` on every pushState/replaceState so
 // the popstate handler can detect stale or non-Next events.

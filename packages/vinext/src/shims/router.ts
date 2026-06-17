@@ -1439,6 +1439,13 @@ function scheduleHardNavigationAndThrow(url: string, message: string): never {
 type NavigateClientOptions = {
   allowNotFoundResponse?: boolean;
   /**
+   * Popstate can carry a Next.js history state whose `url` is the page route
+   * to load while `as` is the visible browser URL. The JSON fast path keys off
+   * the browser URL, so masked popstate transitions must use the HTML path
+   * against the explicit route URL instead.
+   */
+  forceHtmlFetch?: boolean;
+  /**
    * The history mode of the originating navigation. Used when a gSSP/gSP data
    * response carries a `__N_REDIRECT` marker so the re-entrant navigation to
    * the redirect destination preserves push-vs-replace semantics, matching
@@ -2071,7 +2078,7 @@ async function navigateClient(
     // data endpoint. Skip data navigation and middleware-redirect probing
     // (both would target the fictional masked URL) and fetch the resolved
     // error HTML directly, allowing a 404 response to hydrate.
-    if (options.allowNotFoundResponse === true) {
+    if (options.allowNotFoundResponse === true || options.forceHtmlFetch === true) {
       await navigateClientHtml(url, fetchUrl, controller, navId, assertStillCurrent, options);
     } else {
       let browserUrl = url;
@@ -2698,10 +2705,55 @@ function getRouterStateKey(state: unknown): string | undefined {
   return typeof state.key === "string" ? state.key : undefined;
 }
 
-function handlePagesRouterPopState(e: PopStateEvent): void {
-  const browserUrl = window.location.pathname + window.location.search;
-  const appUrl = stripBasePath(window.location.pathname, __basePath) + window.location.search;
+type PopStatePath = {
+  browserUrl: string;
+  appUrl: string;
+  hash: string;
+};
 
+type PopStateNavigationTarget = {
+  visible: PopStatePath;
+  route: PopStatePath;
+  isMaskedRoute: boolean;
+};
+
+function resolvePopStatePath(path: string): PopStatePath | null {
+  try {
+    const href = normalizePathTrailingSlash(
+      toBrowserNavigationHref(path, window.location.href, __basePath),
+      __trailingSlash,
+    );
+    const parsed = new URL(href, window.location.href);
+    const origin = getWindowOrigin();
+    if (origin && parsed.origin !== origin) return null;
+
+    return {
+      browserUrl: parsed.pathname + parsed.search,
+      appUrl: stripBasePath(parsed.pathname, __basePath) + parsed.search,
+      hash: parsed.hash,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolvePopStateNavigationTarget(state: unknown): PopStateNavigationTarget | null {
+  if (!isNextRouterState(state) || typeof state.as !== "string" || typeof state.url !== "string") {
+    return null;
+  }
+
+  const visible = resolvePopStatePath(state.as);
+  const route = resolvePopStatePath(state.url);
+  if (!visible || !route) return null;
+
+  return {
+    visible,
+    route,
+    isMaskedRoute: visible.browserUrl !== route.browserUrl,
+  };
+}
+
+function handlePagesRouterPopState(e: PopStateEvent): void {
   const state = e.state as unknown;
   const wasFirst = routerRuntimeState.isFirstPopStateEvent;
   routerRuntimeState.isFirstPopStateEvent = false;
@@ -2753,8 +2805,18 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     }
   }
 
+  const stateTarget = resolvePopStateNavigationTarget(state);
+  const browserUrl =
+    stateTarget?.visible.browserUrl ?? window.location.pathname + window.location.search;
+  const appUrl =
+    stateTarget?.visible.appUrl ??
+    stripBasePath(window.location.pathname, __basePath) + window.location.search;
+  const routeBrowserUrl = stateTarget?.route.browserUrl ?? browserUrl;
+  const visibleHash = stateTarget?.visible.hash || window.location.hash;
+
   // Detect hash-only back/forward: pathname+search unchanged, only hash differs.
-  const isHashOnly = browserUrl === routerRuntimeState.lastPathnameAndSearch;
+  const isHashOnly =
+    stateTarget?.isMaskedRoute !== true && browserUrl === routerRuntimeState.lastPathnameAndSearch;
   const targetKey = getRouterStateKey(state);
   let forcedScroll: ScrollPosition | undefined;
 
@@ -2781,7 +2843,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   // Check beforePopState callback
   if (routerRuntimeState.beforePopStateCb !== undefined) {
     const shouldContinue = routerRuntimeState.beforePopStateCb({
-      url: appUrl,
+      url: stateTarget?.route.appUrl ?? appUrl,
       as: appUrl,
       options: { shallow: false },
     });
@@ -2810,9 +2872,9 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     // path (.nextjs-ref/packages/next/src/shared/lib/router/router.ts around
     // L1381-1403 and L1780). The snapshot stays in sessionStorage, so a later
     // non-hash popstate to this entry still restores the saved position.
-    const hashUrl = appUrl + window.location.hash;
+    const hashUrl = appUrl + visibleHash;
     routerEvents.emit("hashChangeStart", hashUrl, { shallow: false });
-    scrollToHashTarget(window.location.hash);
+    scrollToHashTarget(visibleHash);
     routerEvents.emit("hashChangeComplete", hashUrl, { shallow: false });
     dispatchNavigateEvent();
     return;
@@ -2824,7 +2886,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   const stateLocale = isNextRouterState(state) ? state.options?.locale : undefined;
   const effectiveLocale = stateLocale ?? window.__VINEXT_LOCALE__;
 
-  const fullAppUrl = appUrl + window.location.hash;
+  const fullAppUrl = appUrl + visibleHash;
   routerEvents.emit("routeChangeStart", fullAppUrl, { shallow: false });
   // Note: The browser has already updated window.location by the time popstate
   // fires, so this is not truly "before" the URL change. In Next.js the popstate
@@ -2851,8 +2913,8 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     const result = await runNavigateClient(
       browserUrl,
       fullAppUrl,
-      getPagesHtmlFetchUrl(browserUrl, effectiveLocale),
-      { scroll: scrollTarget },
+      getPagesHtmlFetchUrl(routeBrowserUrl, effectiveLocale),
+      { scroll: scrollTarget, forceHtmlFetch: stateTarget?.isMaskedRoute === true },
     );
     if (result === "completed") {
       routerEvents.emit("routeChangeComplete", fullAppUrl, { shallow: false });
