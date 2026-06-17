@@ -40,6 +40,7 @@ import { normalizeDefaultLocalePathname, stripI18nLocaleForApiRoute } from "./pa
 import { mergeRewriteQuery } from "../utils/query.js";
 import { addBasePathToPathname, hasBasePath } from "../utils/base-path.js";
 import { patternToNextFormat } from "../routing/route-validation.js";
+import { addLocalePrefix, getLocalePathPrefix } from "../utils/domain-locale.js";
 
 // All "render options" that are passed through to the renderPage callback
 export type PagesRenderOptions = {
@@ -417,13 +418,10 @@ export async function runPagesRequest(
   const localizeMatchedPathname = (routePathname: string, concretePathname: string): string => {
     if (!i18nConfig) return routePathname;
 
-    const routeLocale = routePathname.split("/", 3)[1];
-    if (routeLocale && i18nConfig.locales.includes(routeLocale)) return routePathname;
+    if (getLocalePathPrefix(routePathname, i18nConfig.locales)) return routePathname;
 
-    const concreteLocale = concretePathname.split("/", 3)[1];
-    if (concreteLocale && i18nConfig.locales.includes(concreteLocale)) {
-      return routePathname === "/" ? `/${concreteLocale}` : `/${concreteLocale}${routePathname}`;
-    }
+    const concreteLocale = getLocalePathPrefix(concretePathname, i18nConfig.locales);
+    if (concreteLocale) return addLocalePrefix(routePathname, concreteLocale, "");
 
     return normalizeDefaultLocalePathname(routePathname, i18nConfig, {
       hostname: requestHostname,
