@@ -1207,7 +1207,7 @@ describe("Pages Router entry template", () => {
         createValidFileMatcher(),
       );
 
-      expect(code).toContain('window.__VINEXT_PAGES_SSG_PATTERNS__ = ["/local-alias","/ssg"]');
+      expect(code).toContain('window.__VINEXT_PAGES_SSG_PATTERNS__ = ["/public-alias","/ssg"]');
       expect(code).toContain('window.__VINEXT_PAGES_SSP_PATTERNS__ = ["/dynamic"]');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1385,4 +1385,5 @@ describe("Pages Router entry template", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
 });
