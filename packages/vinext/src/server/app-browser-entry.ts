@@ -183,6 +183,7 @@ import {
   ACTION_REDIRECT_HEADER,
   ACTION_REDIRECT_STATUS_HEADER,
   ACTION_REDIRECT_TYPE_HEADER,
+  NEXT_ROUTER_STATE_TREE_HEADER,
   VINEXT_CLIENT_REUSE_MANIFEST_HEADER,
   VINEXT_PARAMS_HEADER,
   VINEXT_RSC_REDIRECT_HEADER,
@@ -312,6 +313,22 @@ function parseEncodedJsonHeader<T>(value: string | null): T | null {
   } catch {
     return null;
   }
+}
+
+function createNavigationStateTreeHeaderValue(state: AppRouterState): string {
+  const snapshot = state.navigationSnapshot;
+  // Next.js always sends an encoded current router tree on RSC navigations.
+  // Vinext's server does not parse the value, but the cache-busting hash must
+  // still vary on a stable representation of the visible router state.
+  return encodeURIComponent(
+    JSON.stringify([
+      state.routeId,
+      state.rootLayoutTreePath,
+      state.layoutIds,
+      snapshot.pathname,
+      snapshot.searchParams.toString(),
+    ]),
+  );
 }
 
 function isRouterStatePromise(
@@ -1819,6 +1836,10 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           renderMode:
             navigationKind === "refresh" ? APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI : undefined,
         });
+        requestHeaders.set(
+          NEXT_ROUTER_STATE_TREE_HEADER,
+          createNavigationStateTreeHeaderValue(routerStateAtNavStart),
+        );
         const rscUrl = await createRscRequestUrl(url.pathname + url.search, requestHeaders);
         const visitedResponseCandidate = shouldBypassNavigationCache
           ? {
