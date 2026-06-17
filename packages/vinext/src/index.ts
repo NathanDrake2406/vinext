@@ -30,6 +30,7 @@ import {
 } from "./routing/file-matcher.js";
 import { createSSRHandler } from "./server/dev-server.js";
 import { handleApiRoute } from "./server/api-handler.js";
+import { resolvePagesI18nRequest } from "./server/pages-i18n.js";
 import {
   DEFAULT_DEVICE_SIZES,
   DEFAULT_IMAGE_SIZES,
@@ -3972,8 +3973,20 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // Raw query so redirect Locations aren't re-encoded by URL parsing.
                 rawSearch: url.includes("?") ? url.slice(url.indexOf("?")) : "",
                 runMiddleware: devRunMiddlewareAdapter,
-                matchPageRoute: (resolvedPathname) => {
-                  const m = matchRoute(resolvedPathname, devPageRoutes);
+                matchPageRoute: (resolvedPathname, request) => {
+                  const routeUrl =
+                    nextConfig?.i18n && request
+                      ? resolvePagesI18nRequest(
+                          resolvedPathname,
+                          nextConfig.i18n,
+                          request.headers,
+                          new URL(request.url).hostname,
+                          bp,
+                          nextConfig.trailingSlash ?? false,
+                        ).url
+                      : resolvedPathname;
+
+                  const m = matchRoute(routeUrl, devPageRoutes);
                   return m
                     ? { route: { isDynamic: m.route.isDynamic, pattern: m.route.pattern } }
                     : null;

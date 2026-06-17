@@ -145,6 +145,48 @@ export default function middleware() {
   );
 }
 
+/**
+ * Fixture: Pages Router app with i18n (en/fr) and a `/posts/[id]` dynamic
+ * route. Used to verify that dev `matchPageRoute` strips the locale prefix
+ * before route matching so `x-nextjs-matched-path` is `/fr/posts/[id]` rather
+ * than falling back to the concrete `/fr/posts/first` path.
+ */
+function writeI18nDynamicDataRouteFixture(rootDir: string): void {
+  fs.mkdirSync(path.join(rootDir, "pages", "posts"), { recursive: true });
+  const nmLink = path.join(rootDir, "node_modules");
+  if (!fs.existsSync(nmLink)) {
+    fs.symlinkSync(path.join(process.cwd(), "node_modules"), nmLink);
+  }
+  fs.writeFileSync(path.join(rootDir, "pages", "_app.tsx"), PAGES_APP_COMPONENT);
+  fs.writeFileSync(
+    path.join(rootDir, "pages", "posts", "[id].tsx"),
+    `export const getServerSideProps = ({ params, query }) => ({
+  props: { id: params.id ?? null, query },
+});
+export default function Post({ id, query }: { id: string | null; query: Record<string, string | string[]> }) {
+  return (
+    <div>
+      <p id="post">Post page</p>
+      <p id="id">{id}</p>
+      <p id="query">{JSON.stringify(query)}</p>
+    </div>
+  );
+}
+`,
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "next.config.js"),
+    `module.exports = {
+  generateBuildId: () => "test-build-id",
+  i18n: {
+    locales: ["en", "fr"],
+    defaultLocale: "en",
+  },
+};
+`,
+  );
+}
+
 function writeGsspAppInitialPropsContextFixture(rootDir: string): void {
   fs.mkdirSync(path.join(rootDir, "pages", "blog", "[post]"), { recursive: true });
   fs.mkdirSync(path.join(rootDir, "pages", "rewrite-target"), { recursive: true });
@@ -2081,6 +2123,35 @@ describe("Pages Router integration", () => {
         pageProps: { query: Record<string, string | string[]> };
       };
       expect(json.pageProps.query).toMatchObject({ id: "first", hello: "world" });
+    });
+
+    // Regression: dev `matchPageRoute` must strip the i18n locale prefix
+    // before matching, just like the generated production/worker matcher,
+    // otherwise locale-prefixed dynamic data responses fall back to the
+    // concrete pathname for `x-nextjs-matched-path`.
+    it("adds a locale-prefixed dynamic route matched-path in dev (i18n)", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-i18n-dynamic-data-dev-"));
+      writeI18nDynamicDataRouteFixture(tmpDir);
+
+      let tempServer: ViteDevServer | undefined;
+      try {
+        const started = await startFixtureServer(tmpDir);
+        tempServer = started.server;
+
+        const res = await fetch(
+          `${started.baseUrl}/_next/data/${BUILD_ID}/fr/posts/first.json?hello=world`,
+        );
+        expect(res.status).toBe(200);
+        expect(res.headers.get("x-nextjs-rewrite")).toBeNull();
+        expect(res.headers.get("x-nextjs-matched-path")).toBe("/fr/posts/[id]");
+        const json = (await res.json()) as {
+          pageProps: { query: Record<string, string | string[]> };
+        };
+        expect(json.pageProps.query).toMatchObject({ id: "first", hello: "world" });
+      } finally {
+        await tempServer?.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
 
     it("returns { pageProps } JSON for a getServerSideProps page", async () => {
