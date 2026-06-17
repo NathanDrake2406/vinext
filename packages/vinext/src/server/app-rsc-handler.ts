@@ -103,6 +103,10 @@ type AppRscHandlerRoute = {
   routeSegments: readonly string[];
 };
 
+type EnsureRouteLoadedOptions = {
+  includeParallelSlotPages?: boolean;
+};
+
 type AppRscRouteMatch<TRoute> = {
   params: AppPageParams;
   route: TRoute;
@@ -268,11 +272,13 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
     options: DispatchMatchedRouteHandlerOptions<TRoute>,
   ) => Promise<Response>;
   /**
-   * Hydrate a matched route's lazily-loaded page/route-handler modules before
-   * any synchronous read of `route.page` / `route.routeHandler`. Idempotent and
-   * dedup'd. Provided by the generated RSC entry; absent in older entries.
+   * Hydrate a matched route's lazily-loaded modules before synchronous route
+   * module reads. Pre-dispatch callers can exclude parallel-slot page modules
+   * so route-handler requests do not evaluate unrelated UI pages.
+   * Idempotent and dedup'd. Provided by the generated RSC entry; absent in
+   * older entries.
    */
-  ensureRouteLoaded?: (route: TRoute) => unknown;
+  ensureRouteLoaded?: (route: TRoute, options?: EnsureRouteLoadedOptions) => unknown;
   ensureInstrumentation?: () => Promise<void>;
   /**
    * Register cache adapters configured via the vinext() `cache` option. Wired
@@ -884,8 +890,11 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
 
   const { route, params } = match;
   // Hydrate lazy page/route-handler modules before the page-vs-handler dispatch
-  // branch and any downstream synchronous module reads.
-  if (options.ensureRouteLoaded) await options.ensureRouteLoaded(route);
+  // branch. Keep parallel-slot UI pages unloaded until we know this request is
+  // going through page rendering rather than route-handler dispatch.
+  if (options.ensureRouteLoaded) {
+    await options.ensureRouteLoaded(route, { includeParallelSlotPages: false });
+  }
   const prerenderRouteParamsPayload = readTrustedPrerenderRouteParams(request);
   const prerenderRouteParamsMatch = matchPrerenderRouteParamsPayload(
     prerenderRouteParamsPayload,
@@ -951,6 +960,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       searchParams: resolvedSearchParams,
     });
   }
+
+  if (options.ensureRouteLoaded) await options.ensureRouteLoaded(route);
 
   const pageResponse = await options.dispatchMatchedPage({
     clientReuseManifest,

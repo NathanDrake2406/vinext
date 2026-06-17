@@ -87,8 +87,9 @@ type ImportAllocator = {
   /**
    * Emit a `const load_N = () => import(path)` lazy loader thunk for a module
    * that should be code-split out of the RSC entry's top-level evaluation
-   * (page modules of static routes, and all route-handler modules). Returns the
-   * loader variable name. Deduplicated independently of eager imports.
+   * (route page modules, parallel-slot page modules, intercepting page modules,
+   * and route-handler modules). Returns the loader variable name. Deduplicated
+   * independently of eager imports.
    */
   getLazyLoaderVar(filePath: string): string;
   importMap: ReadonlyMap<string, string>;
@@ -182,7 +183,7 @@ function registerRouteModules(routes: AppRoute[], imports: ImportAllocator): voi
       }
     }
     for (const slot of route.parallelSlots) {
-      if (slot.pagePath) imports.getImportVar(slot.pagePath);
+      if (slot.pagePath) imports.getLazyLoaderVar(slot.pagePath);
       if (slot.defaultPath) imports.getImportVar(slot.defaultPath);
       if (slot.layoutPath) imports.getImportVar(slot.layoutPath);
       if (slot.loadingPath) imports.getImportVar(slot.loadingPath);
@@ -253,7 +254,8 @@ function buildRouteEntries(routes: AppRoute[], imports: ImportAllocator): string
       return `      ${JSON.stringify(slot.key)}: {
         id: ${JSON.stringify(slot.id ?? null)},
         name: ${JSON.stringify(slot.name)},
-        page: ${slot.pagePath ? imports.getImportVar(slot.pagePath) : "null"},
+        page: null,
+        __loadPage: ${slot.pagePath ? imports.getLazyLoaderVar(slot.pagePath) : "null"},
         default: ${slot.defaultPath ? imports.getImportVar(slot.defaultPath) : "null"},
         layout: ${slot.layoutPath ? imports.getImportVar(slot.layoutPath) : "null"},
         loading: ${slot.loadingPath ? imports.getImportVar(slot.loadingPath) : "null"},
