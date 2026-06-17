@@ -2069,10 +2069,26 @@ describe("Pages Router integration", () => {
       expect(res.headers.get("x-middleware-rewrite")).toBeNull();
     });
 
+    it("adds a dynamic route matched-path for a data URL rewritten by middleware", async () => {
+      const res = await fetch(
+        `${baseUrl}/_next/data/${BUILD_ID}/mw-rewrite-dynamic-query.json?hello=world`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get("x-nextjs-rewrite")).toBe("/posts/first?hello=world");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/posts/[id]");
+      expect(res.headers.get("x-middleware-rewrite")).toBeNull();
+      const json = (await res.json()) as {
+        pageProps: { query: Record<string, string | string[]> };
+      };
+      expect(json.pageProps.query).toMatchObject({ id: "first", hello: "world" });
+    });
+
     it("returns { pageProps } JSON for a getServerSideProps page", async () => {
       const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/ssr.json`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/ssr");
+      expect(res.headers.get("x-nextjs-rewrite")).toBeNull();
       const json = (await res.json()) as { pageProps: { message: string } };
       expect(json.pageProps.message).toBe("Hello from getServerSideProps");
     });
@@ -2084,6 +2100,8 @@ describe("Pages Router integration", () => {
       const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/isr-test.json`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/isr-test");
+      expect(res.headers.get("x-nextjs-rewrite")).toBeNull();
       const json = (await res.json()) as { pageProps: Record<string, unknown> };
       expect(json).toHaveProperty("pageProps");
       expect(typeof json.pageProps).toBe("object");
@@ -5388,10 +5406,26 @@ describe("Production server middleware (Pages Router)", () => {
       expect(res.headers.get("x-middleware-rewrite")).toBeNull();
     });
 
+    it("adds a dynamic route matched-path for a data URL rewritten by middleware", async () => {
+      const res = await fetch(
+        `${prodUrl}/_next/data/${BUILD_ID}/mw-rewrite-dynamic-query.json?hello=world`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get("x-nextjs-rewrite")).toBe("/posts/first?hello=world");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/posts/[id]");
+      expect(res.headers.get("x-middleware-rewrite")).toBeNull();
+      const json = (await res.json()) as {
+        pageProps: { query: Record<string, string | string[]> };
+      };
+      expect(json.pageProps.query).toMatchObject({ id: "first", hello: "world" });
+    });
+
     it("returns { pageProps } JSON for a getServerSideProps page", async () => {
       const res = await fetch(`${prodUrl}/_next/data/${BUILD_ID}/ssr.json`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/ssr");
+      expect(res.headers.get("x-nextjs-rewrite")).toBeNull();
       const json = (await res.json()) as { pageProps: { message: string } };
       expect(json.pageProps.message).toBe("Hello from getServerSideProps");
     });
@@ -5404,6 +5438,8 @@ describe("Production server middleware (Pages Router)", () => {
       const res = await fetch(`${prodUrl}/_next/data/${BUILD_ID}/isr-test.json`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/isr-test");
+      expect(res.headers.get("x-nextjs-rewrite")).toBeNull();
       const json = (await res.json()) as { pageProps: Record<string, unknown> };
       expect(json).toHaveProperty("pageProps");
       expect(typeof json.pageProps).toBe("object");

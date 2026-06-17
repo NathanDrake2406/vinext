@@ -39,6 +39,7 @@ import { mergeHeaders } from "./worker-utils.js";
 import { normalizeDefaultLocalePathname, stripI18nLocaleForApiRoute } from "./pages-i18n.js";
 import { mergeRewriteQuery } from "../utils/query.js";
 import { addBasePathToPathname, hasBasePath } from "../utils/base-path.js";
+import { patternToNextFormat } from "../routing/route-validation.js";
 
 // All "render options" that are passed through to the renderPage callback
 export type PagesRenderOptions = {
@@ -82,6 +83,10 @@ export type MiddlewareResult = {
   waitUntilPromises?: Promise<unknown>[];
 };
 
+type PagesRouteMatch = {
+  route: { isDynamic: boolean; pattern: string };
+};
+
 // The deps object injected by each runtime adapter
 export type PagesPipelineDeps = {
   // Config values
@@ -108,9 +113,7 @@ export type PagesPipelineDeps = {
   rawSearch?: string;
 
   // Route + render/api callbacks (optional — if absent, emit intent instead of Response)
-  matchPageRoute?:
-    | ((pathname: string, request: Request) => { route: { isDynamic: boolean } } | null)
-    | null;
+  matchPageRoute?: ((pathname: string, request: Request) => PagesRouteMatch | null) | null;
   runMiddleware?:
     | ((
         request: Request,
@@ -411,9 +414,27 @@ export async function runPagesRequest(
 
   const matchResolvedPathname = (p: string): string =>
     i18nConfig ? normalizeDefaultLocalePathname(p, i18nConfig, { hostname: requestHostname }) : p;
-  const matchedPathnameForDataResponse = (): string => {
-    const matchedPathname = pathnameForResolvedUrl(resolvedUrl);
-    return matchResolvedPathname(matchedPathname);
+  const localizeMatchedPathname = (routePathname: string, concretePathname: string): string => {
+    if (!i18nConfig) return routePathname;
+
+    const routeLocale = routePathname.split("/", 3)[1];
+    if (routeLocale && i18nConfig.locales.includes(routeLocale)) return routePathname;
+
+    const concreteLocale = concretePathname.split("/", 3)[1];
+    if (concreteLocale && i18nConfig.locales.includes(concreteLocale)) {
+      return routePathname === "/" ? `/${concreteLocale}` : `/${concreteLocale}${routePathname}`;
+    }
+
+    return normalizeDefaultLocalePathname(routePathname, i18nConfig, {
+      hostname: requestHostname,
+    });
+  };
+  const matchedPathnameForDataResponse = (routeMatch: PagesRouteMatch | null): string => {
+    const concretePathname = pathnameForResolvedUrl(resolvedUrl);
+    const routePathname = routeMatch
+      ? patternToNextFormat(routeMatch.route.pattern)
+      : concretePathname;
+    return localizeMatchedPathname(routePathname, concretePathname);
   };
 
   // Step 7: Config headers staging
@@ -561,7 +582,7 @@ export async function runPagesRequest(
     }
   }
 
-  const refreshDataRoutingHeaders = () => {
+  const refreshDataRoutingHeaders = (routeMatch: PagesRouteMatch | null) => {
     const isPagesDataRequest = isDataReq || isDataRequest;
     if (!isPagesDataRequest || isExternalUrl(resolvedUrl)) {
       delete middlewareHeaders["x-nextjs-rewrite"];
@@ -574,7 +595,7 @@ export async function runPagesRequest(
     // - base-server.ts sets x-nextjs-matched-path to the rendered route pathname.
     //
     // Keep both in the shared pipeline so prod, dev, and Worker adapters agree.
-    middlewareHeaders["x-nextjs-matched-path"] = matchedPathnameForDataResponse();
+    middlewareHeaders["x-nextjs-matched-path"] = matchedPathnameForDataResponse(routeMatch);
 
     if (resolvedUrl !== originalResolvedUrl) {
       middlewareHeaders["x-nextjs-rewrite"] = resolvedUrl;
@@ -582,7 +603,7 @@ export async function runPagesRequest(
       delete middlewareHeaders["x-nextjs-rewrite"];
     }
   };
-  refreshDataRoutingHeaders();
+  refreshDataRoutingHeaders(pageMatch);
 
   // Step 13: Render + fallback rewrites
   if (typeof deps.renderPage === "function") {
@@ -612,7 +633,7 @@ export async function runPagesRequest(
         renderPageMatch = deps.matchPageRoute
           ? deps.matchPageRoute(resolvedPathname, request)
           : null;
-        refreshDataRoutingHeaders();
+        refreshDataRoutingHeaders(renderPageMatch);
         if (renderPageMatch) break;
       }
     }
@@ -697,7 +718,8 @@ export async function runPagesRequest(
       ? deps.matchPageRoute(resolvedPathname, request)
       : null
     : pageMatch;
-  if (!devPageMatch && configRewrites.fallback?.length) {
+  let finalDevPageMatch = devPageMatch;
+  if (!finalDevPageMatch && configRewrites.fallback?.length) {
     for (const rewrite of configRewrites.fallback) {
       const fallbackRewrite = matchRewrite(
         matchResolvedPathname(resolvedPathname),
@@ -716,10 +738,13 @@ export async function runPagesRequest(
       if (fallbackFilesystemResult) return fallbackFilesystemResult;
       const fallbackApiResult = await handleResolvedApiRoute();
       if (fallbackApiResult) return fallbackApiResult;
-      if (deps.matchPageRoute?.(resolvedPathname, request)) break;
+      finalDevPageMatch = deps.matchPageRoute
+        ? deps.matchPageRoute(resolvedPathname, request)
+        : null;
+      if (finalDevPageMatch) break;
     }
   }
-  refreshDataRoutingHeaders();
+  refreshDataRoutingHeaders(finalDevPageMatch);
 
   return {
     type: "render",

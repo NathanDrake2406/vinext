@@ -3974,7 +3974,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 runMiddleware: devRunMiddlewareAdapter,
                 matchPageRoute: (resolvedPathname) => {
                   const m = matchRoute(resolvedPathname, devPageRoutes);
-                  return m ? { route: { isDynamic: m.route.isDynamic } } : null;
+                  return m
+                    ? { route: { isDynamic: m.route.isDynamic, pattern: m.route.pattern } }
+                    : null;
                 },
                 // Dev adapter: forward body from the Node req when proxying
                 // external rewrite targets. The pipeline's webRequest is
