@@ -28,6 +28,8 @@ export { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 export type NormalizedRscRequest = {
   /** Parsed URL. Callers may mutate `url.search` after middleware runs. */
   url: URL;
+  /** True when the incoming pathname was originally under the configured basePath. */
+  hadBasePath: boolean;
   /** Normalized pathname with basePath stripped. Used for all internal routing. */
   pathname: string;
   /** Pathname with `.rsc` suffix removed. Used for route matching and navigation context. */
@@ -59,8 +61,9 @@ export type NormalizedRscRequest = {
  *   3. Strict percent-decode each segment — throws on malformed sequences (→ 400). Must
  *      run before basePath check so %2F-encoded slashes cannot create fake basePath prefixes.
  *   4. Collapse double-slashes, resolve `.` and `..` segments (normalizePath)
- *   5. basePath check + strip — 404 when pathname lacks the basePath prefix.
- *      `/__vinext/` bypasses this for internal prerender endpoints.
+ *   5. basePath check + strip — 404 when pathname lacks the basePath prefix,
+ *      unless the caller opts into delayed rejection so config `basePath:false`
+ *      rules can match. `/__vinext/` bypasses this for internal prerender endpoints.
  *   6. RSC detection: `.rsc` suffix, or Next-style `RSC: 1` plus the internal
  *      `_rsc` cache-busting query. The header alone does not select payload
  *      rendering at the canonical HTML URL, so caches that ignore Vary cannot
@@ -77,6 +80,7 @@ export type NormalizedRscRequest = {
 export function normalizeRscRequest(
   request: Request,
   basePath: string,
+  options: { allowOutOfBasePath?: boolean } = {},
 ): Response | NormalizedRscRequest {
   const url = new URL(request.url);
 
@@ -101,13 +105,24 @@ export function normalizeRscRequest(
 
   // Step 5: basePath check and strip.
   // Skipped when basePath is empty (no basePath configured).
+  // When allowOutOfBasePath is set, keep out-of-basePath paths unstripped and
+  // report hadBasePath=false so the caller can evaluate basePath:false rules
+  // before deciding whether to 404.
   // /__vinext/ prefix bypasses the check for internal prerender endpoints
   // that must be reachable regardless of basePath configuration.
+  let hadBasePath = true;
   if (basePath) {
-    if (!hasBasePath(pathname, basePath) && !pathname.startsWith("/__vinext/")) {
-      return notFoundResponse();
+    hadBasePath = hasBasePath(pathname, basePath);
+    if (!hadBasePath && !pathname.startsWith("/__vinext/")) {
+      if (!options.allowOutOfBasePath) {
+        return notFoundResponse();
+      }
+    } else if (hadBasePath) {
+      pathname = stripBasePath(pathname, basePath);
     }
-    pathname = stripBasePath(pathname, basePath);
+    if (pathname.startsWith("/__vinext/")) {
+      hadBasePath = true;
+    }
   }
 
   // Steps 6-7: RSC detection and cleanPathname.
@@ -141,6 +156,7 @@ export function normalizeRscRequest(
 
   return {
     clientReuseManifest,
+    hadBasePath,
     url,
     pathname,
     cleanPathname,

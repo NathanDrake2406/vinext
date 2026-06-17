@@ -900,6 +900,46 @@ describe("createAppRscHandler", () => {
     }
   });
 
+  it("applies basePath:false external rewrites to App Router requests outside basePath", async () => {
+    // Ported from Next.js: test/e2e/app-dir/app-basepath/index.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app-basepath/index.test.ts
+    const receivedUrls: string[] = [];
+    const server = createServer((req, res) => {
+      receivedUrls.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("outside basePath");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const upstreamBase = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const handler = createHandler({
+        configHeaders: [],
+        configRewrites: {
+          beforeFiles: [],
+          afterFiles: [
+            {
+              source: "/outsideBasePath",
+              destination: `${upstreamBase}/`,
+              basePath: false,
+            },
+          ],
+          fallback: [],
+        },
+        matchRoute: () => null,
+      });
+
+      const response = await handler(new Request("https://example.test/outsideBasePath"), null);
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("outside basePath");
+      expect(receivedUrls).toEqual(["/"]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("preserves Node route handler RSC URLs while hiding internal parsed params", async () => {
     // Ported from Next.js:
     // test/e2e/app-dir/front-redirect-issue/front-redirect-issue.test.ts
@@ -1812,6 +1852,38 @@ describe("createAppRscHandler", () => {
     expect(response.headers.get("vary")).toBeNull();
     expect(clearRequestContext).toHaveBeenCalledTimes(1);
     expect(matchRoute).not.toHaveBeenCalled();
+  });
+
+  it("does not expose filesystem endpoints for out-of-basePath App Router requests", async () => {
+    const handler = createHandler({
+      configHeaders: [],
+      imageConfig: { deviceSizes: [320], imageSizes: [], qualities: [75] },
+      matchRoute: () => null,
+      metadataRoutes: [
+        {
+          type: "favicon",
+          isDynamic: false,
+          filePath: "/tmp/app/favicon.ico",
+          routePrefix: "",
+          routeSegments: [],
+          servedUrl: "/favicon.ico",
+          contentType: "image/x-icon",
+          fileDataBase64: btoa("icon-bytes"),
+        },
+      ],
+      publicFiles: new Set(["/logo.svg"]),
+    });
+
+    const publicFileResponse = await handler(new Request("https://example.test/logo.svg"), null);
+    const imageResponse = await handler(
+      new Request("https://example.test/_next/image?url=%2Fimg.jpg&w=320&q=75"),
+      null,
+    );
+    const metadataResponse = await handler(new Request("https://example.test/favicon.ico"), null);
+
+    expect(publicFileResponse.status).toBe(404);
+    expect(imageResponse.status).toBe(404);
+    expect(metadataResponse.status).toBe(404);
   });
 
   it("lets middleware Cache-Control override static metadata route defaults", async () => {

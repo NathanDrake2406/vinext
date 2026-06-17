@@ -135,8 +135,18 @@ describe("normalizeRscRequest — basePath", () => {
     expect((result as Response).status).toBe(404);
   });
 
+  it("can preserve out-of-basePath pathname for delayed basePath:false rule evaluation", () => {
+    const result = normalized(
+      normalizeRscRequest(req("/outsideBasePath"), "/app", { allowOutOfBasePath: true }),
+    );
+    expect(result.hadBasePath).toBe(false);
+    expect(result.pathname).toBe("/outsideBasePath");
+    expect(result.cleanPathname).toBe("/outsideBasePath");
+  });
+
   it("strips basePath prefix so internal routing sees basePath-free pathname", () => {
     const result = normalized(normalizeRscRequest(req("/app/dashboard"), "/app"));
+    expect(result.hadBasePath).toBe(true);
     expect(result.pathname).toBe("/dashboard");
   });
 

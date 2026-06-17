@@ -19,6 +19,7 @@ export type ApplyAppMiddlewareOptions = {
   basePath?: string;
   cleanPathname: string;
   context: AppMiddlewareContext;
+  hadBasePath?: boolean;
   i18nConfig?: NextI18nConfig | null;
   /**
    * Whether the inbound request was a `_next/data` fetch. Captured from the
@@ -236,12 +237,10 @@ export async function applyAppMiddleware(
   if (!forwarded.applied) {
     const result = await executeMiddleware({
       basePath: options.basePath,
-      // The App Router only reaches middleware when the request was under
-      // basePath (already stripped by normalizeRscRequest) or basePath is
-      // empty — see the basePathState comment in app-rsc-handler.ts. The
-      // request URL here is basePath-stripped, so hadBasePath cannot be
-      // derived from it and must be asserted explicitly.
-      hadBasePath: true,
+      // App Router requests may be basePath-stripped before middleware, so the
+      // URL itself is not always enough to infer whether the original request
+      // carried the configured basePath.
+      hadBasePath: options.hadBasePath ?? true,
       i18nConfig: options.i18nConfig,
       isDataRequest: options.isDataRequest,
       isProxy: options.isProxy,
