@@ -462,7 +462,7 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
           }
 
           const existing = getPrefetchCache().get(cacheKey);
-          if (existing?.cacheForNavigation === false) {
+          if (existing?.cacheForNavigation === false && existing.optimisticRouteShell !== true) {
             existing.cacheForNavigation = true;
           }
         }
@@ -1040,7 +1040,10 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       hasAppNavigationRuntime &&
       ["pages", "document"].includes(resolveHybridClientRouteOwner(navigateHref, __basePath) ?? "")
     ) {
-      if (replace) {
+      const externalNavigate = getNavigationRuntime()?.functions.navigateExternal;
+      if (externalNavigate) {
+        void externalNavigate(absoluteFullHref, replace ? "replace" : "push");
+      } else if (replace) {
         window.location.replace(absoluteFullHref);
       } else {
         window.location.assign(absoluteFullHref);

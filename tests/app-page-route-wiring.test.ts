@@ -450,6 +450,56 @@ describe("app page route wiring helpers", () => {
     expect(html).toContain('<div hidden=""><title>generated page</title></div>');
   });
 
+  it("omits destination metadata from loading-shell prefetch payloads", async () => {
+    // Ported from Next.js: test/e2e/app-dir/navigation/navigation.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/navigation/navigation.test.ts
+    //
+    // A completed loading-shell prefetch must not advance the destination
+    // <title> ahead of the full navigation payload. Otherwise the title
+    // assertion can pass while the body is still waiting for a second
+    // generateMetadata() pass.
+    const elements = await buildResolvedPageElements({
+      route: {
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: RootLayout }],
+        loading: { default: RouteLoadingProbe },
+        notFound: null,
+        notFounds: [null],
+        page: {
+          default: PageProbe,
+          async generateMetadata() {
+            return { title: "generated page" };
+          },
+        },
+        params: [],
+        pattern: "/generated",
+        routeSegments: ["generated"],
+        slots: {},
+        templateTreePositions: [],
+        templates: [],
+      },
+      params: {},
+      routePath: "/generated",
+      pageRequest: {
+        isRscRequest: true,
+        mountedSlotsHeader: null,
+        renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+        request: new Request("http://localhost/generated"),
+        searchParams: null,
+      },
+      metadataRoutes: [],
+    });
+
+    expect(elements["page:/generated"]).toBeNull();
+    expect(elements[APP_PREFETCH_LOADING_SHELL_MARKER_KEY]).toBe("LoadingBoundary");
+    const html = await renderRouteEntry(elements, "route:/generated");
+
+    expect(html).toContain("Route loading");
+    expect(html).not.toContain("<title>generated page</title>");
+  });
+
   it("resolves child segments from tree positions and preserves route groups", () => {
     expect(
       resolveAppPageChildSegments(["(marketing)", "blog", "[slug]", "[...parts]"], 1, {

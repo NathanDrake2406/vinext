@@ -822,6 +822,7 @@ function mergeSkippedLayoutSlotPreservation(options: {
 
 export async function createPendingNavigationCommit(options: {
   currentState: AppRouterState;
+  getCurrentStateAfterElementsReady?: () => AppRouterState;
   nextElements: Promise<AppElements>;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   operationLane: OperationLane;
@@ -835,6 +836,7 @@ export async function createPendingNavigationCommit(options: {
   type: "navigate" | "replace" | "traverse";
 }): Promise<PendingNavigationCommit> {
   const elements = await options.nextElements;
+  const currentState = options.getCurrentStateAfterElementsReady?.() ?? options.currentState;
   const metadata = AppElementsWire.readMetadata(elements);
   const cacheEntryReuseProof =
     metadata.cacheEntryReuseProof ??
@@ -842,17 +844,15 @@ export async function createPendingNavigationCommit(options: {
       ? createCacheEntryReuseProof(null)
       : undefined);
   const requestedPreviousNextUrl =
-    options.previousNextUrl !== undefined
-      ? options.previousNextUrl
-      : options.currentState.previousNextUrl;
+    options.previousNextUrl !== undefined ? options.previousNextUrl : currentState.previousNextUrl;
   const previousNextUrl = metadata.interception === null ? null : requestedPreviousNextUrl;
 
   return {
     action: {
       bfcacheIds: createNextBfcacheIdMap({
-        current: options.currentState.bfcacheIds,
-        currentElements: options.currentState.elements,
-        currentPathname: options.currentState.navigationSnapshot.pathname,
+        current: currentState.bfcacheIds,
+        currentElements: currentState.elements,
+        currentPathname: currentState.navigationSnapshot.pathname,
         elements,
         nextPathname: options.navigationSnapshot.pathname,
         restored: options.restoredBfcacheIds,
@@ -869,7 +869,7 @@ export async function createPendingNavigationCommit(options: {
       operation: createOperationRecord({
         id: options.renderId,
         lane: options.operationLane,
-        startedVisibleCommitVersion: options.currentState.visibleCommitVersion,
+        startedVisibleCommitVersion: currentState.visibleCommitVersion,
       }),
       previousNextUrl,
       renderId: options.renderId,

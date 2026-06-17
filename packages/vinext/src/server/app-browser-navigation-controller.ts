@@ -114,6 +114,7 @@ type BrowserNavigationController = {
   renderNavigationPayload(options: {
     actionType: "navigate" | "replace" | "traverse";
     createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
+    currentStateTiming?: "render-start" | "payload-ready";
     historyUpdateMode: HistoryUpdateMode | undefined;
     navigationSnapshot: ClientNavigationRenderSnapshot;
     nextElements: Promise<AppElements>;
@@ -665,9 +666,61 @@ export function createAppBrowserNavigationController(
     lifecycleOptions?.onDiscardedRevalidation?.();
   }
 
+  function isSamePathSearchHashCommit(targetHref: string): boolean {
+    if (typeof window === "undefined") return false;
+
+    try {
+      const currentUrl = new URL(window.location.href);
+      const targetUrl = new URL(targetHref, currentUrl.href);
+      return (
+        targetUrl.origin === currentUrl.origin &&
+        targetUrl.pathname === currentUrl.pathname &&
+        targetUrl.search !== currentUrl.search &&
+        targetUrl.hash !== ""
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function shouldResolveWithoutCommitSignal(options: {
+    actionType: "navigate" | "replace" | "traverse";
+    historyUpdateMode: HistoryUpdateMode | undefined;
+    scrollIntent?: AppRouterScrollIntent | null;
+    targetHref: string;
+  }): boolean {
+    if (options.actionType === "traverse") return false;
+    if (options.historyUpdateMode === undefined) return false;
+    if (options.scrollIntent?.hash == null) return false;
+    return isSamePathSearchHashCommit(options.targetHref);
+  }
+
+  function drainAndResolveCommitWithoutSignal(renderId: number): void {
+    if (!pendingNavigationCommits.has(renderId)) return;
+    clearCommittedNavigationFailureTargets(renderId);
+    drainPrePaintEffects(renderId);
+    resolveCommittedNavigations(renderId);
+  }
+
+  function scheduleCommitSignalFallback(renderId: number): void {
+    const run = () => drainAndResolveCommitWithoutSignal(renderId);
+    const requestFrame =
+      typeof window === "undefined" ? undefined : window.requestAnimationFrame?.bind(window);
+
+    if (requestFrame) {
+      requestFrame(() => {
+        requestFrame(run);
+      });
+      return;
+    }
+
+    setTimeout(run, 0);
+  }
+
   async function renderNavigationPayload(options: {
     actionType: "navigate" | "replace" | "traverse";
     createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
+    currentStateTiming?: "render-start" | "payload-ready";
     historyUpdateMode: HistoryUpdateMode | undefined;
     navigationSnapshot: ClientNavigationRenderSnapshot;
     nextElements: Promise<AppElements>;
@@ -700,6 +753,8 @@ export function createAppBrowserNavigationController(
       const startedState = getBrowserRouterState();
       const pending = await createPendingNavigationCommit({
         currentState: startedState,
+        getCurrentStateAfterElementsReady:
+          options.currentStateTiming === "payload-ready" ? getBrowserRouterState : undefined,
         nextElements: options.nextElements,
         navigationSnapshot: options.navigationSnapshot,
         operationLane: options.operationLane,
@@ -771,6 +826,9 @@ export function createAppBrowserNavigationController(
         options.pendingRouterState,
         options.visibleCommitMode ?? "transition",
       );
+      if (shouldResolveWithoutCommitSignal(options)) {
+        scheduleCommitSignalFallback(renderId);
+      }
     } catch (error) {
       pendingNavigationFailureTargets.delete(renderId);
       pendingNavigationPrePaintEffects.delete(renderId);

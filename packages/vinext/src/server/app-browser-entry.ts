@@ -592,11 +592,13 @@ async function renderNavigationPayload(
   restoredBfcacheIds: Readonly<Record<string, string>> | null = null,
   reuseCurrentBfcacheIds: boolean = true,
   visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
+  currentStateTiming: "render-start" | "payload-ready" = "render-start",
 ): Promise<NavigationPayloadOutcome> {
   syncServerActionHttpFallbackHead(null);
   return browserNavigationController.renderNavigationPayload({
     actionType,
     createNavigationCommitEffect,
+    currentStateTiming,
     historyUpdateMode,
     navigationSnapshot,
     nextElements: payload,
@@ -2180,6 +2182,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
           restoredBfcacheIds,
           reuseCurrentBfcacheIds,
           visibleCommitMode,
+          detachedNavigationCommits ? "payload-ready" : "render-start",
         );
         if (renderOutcome !== "committed") return;
         // Don't cache the response if this navigation was superseded during

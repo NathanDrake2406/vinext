@@ -18,6 +18,7 @@ import { matchRoutePattern } from "../routing/route-pattern.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
 import {
   APP_RSC_RENDER_MODE_NAVIGATION,
+  APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
   shouldSuppressLoadingBoundaries,
   type AppRscRenderMode,
 } from "./app-rsc-render-mode.js";
@@ -161,6 +162,7 @@ export async function buildPageElements<
     mountedSlotsHeader,
     renderMode = APP_RSC_RENDER_MODE_NAVIGATION,
   } = pageRequest;
+  const isPrefetchLoadingShell = renderMode === APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL;
 
   const pageModule: AppPageModule | null | undefined = route.page;
 
@@ -276,6 +278,7 @@ export async function buildPageElements<
     )
       ? "body"
       : "head";
+  const payloadMetadata = isPrefetchLoadingShell ? null : resolvedMetadata;
 
   // For sibling intercepts, wrap the intercepting page in any layouts that
   // live under the interception marker directory (interceptLayouts). In Next.js
@@ -324,7 +327,7 @@ export async function buildPageElements<
     makeThenableParams,
     matchedParams: params,
     metadataPlacement,
-    resolvedMetadata,
+    resolvedMetadata: payloadMetadata,
     resolvedMetadataPathname: routePath,
     resolvedViewport,
     renderIdentity,

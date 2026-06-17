@@ -77,6 +77,10 @@ import {
   type AppElementsSlotBinding,
 } from "../packages/vinext/src/server/app-elements.js";
 import { createClientNavigationRenderSnapshot } from "../packages/vinext/src/shims/navigation.js";
+import {
+  beginAppRouterScrollIntent,
+  clearAppRouterScrollIntent,
+} from "../packages/vinext/src/shims/app-router-scroll-state.js";
 import * as navigationShim from "../packages/vinext/src/shims/navigation.js";
 import {
   createHistoryStateWithNavigationMetadata,
@@ -2904,6 +2908,77 @@ describe("app browser navigation controller", () => {
     }
   });
 
+  it("lets an authoritative payload replace a same-navigation optimistic shell", async () => {
+    const pageId = "page:/metadata-await-promise/nested";
+    const shellPage = React.createElement("div", { id: "loading" }, "Loading");
+    const finalPage = React.createElement("div", { id: "page-content" }, "Content");
+    const initialState = createState({
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/metadata-await-promise",
+        {},
+      ),
+      routeId: "route:/metadata-await-promise",
+    });
+    const { controller, detach, stateRef } = createControllerHarness(initialState);
+    let resolveFinalPayload!: (value: AppElements) => void;
+
+    try {
+      const navId = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        currentStateTiming: "payload-ready",
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot(
+          "https://example.com/metadata-await-promise/nested",
+          {},
+        ),
+        nextElements: new Promise<AppElements>((resolve) => {
+          resolveFinalPayload = resolve;
+        }),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/metadata-await-promise/nested",
+        navId,
+      });
+
+      stateRef.current = await applyApprovedTestCommit(stateRef.current, {
+        activeNavigationId: navId,
+        extraEntries: { [pageId]: shellPage },
+        renderId: 100,
+        rootLayoutTreePath: "/",
+        routeId: "route:/metadata-await-promise/nested",
+        startedNavigationId: navId,
+        targetHref: "https://example.com/metadata-await-promise/nested",
+      });
+      expect(stateRef.current.visibleCommitVersion).toBe(1);
+      expect(stateRef.current.elements[pageId]).toBe(shellPage);
+
+      resolveFinalPayload(
+        createResolvedElements("route:/metadata-await-promise/nested", "/", null, {
+          [pageId]: finalPage,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(stateRef.current.visibleCommitVersion).toBe(2);
+      expect(stateRef.current.elements[pageId]).toBe(finalPage);
+      expect(stateRef.current.activeOperation).toMatchObject({
+        lane: "navigation",
+        startedVisibleCommitVersion: 1,
+        state: "committed",
+        visibleCommitVersion: 2,
+      });
+    } finally {
+      detach();
+    }
+  });
+
   it("preserves a newer same-URL failure target when an older navigation is discarded", async () => {
     const { controller, detach } = createControllerHarness();
     stubWindow("https://example.com/initial");
@@ -2994,6 +3069,61 @@ describe("app browser navigation controller", () => {
       ]);
       expect(settled).toBe(false);
     } finally {
+      detach();
+    }
+  });
+
+  it("resolves same-path search and hash commits when the visible tree is unchanged", async () => {
+    const initialElements = createResolvedElements("route:/hash", "/", null, {
+      "page:/hash": React.createElement("main", null, "hash page"),
+    });
+    const initialState = createState({
+      elements: initialElements,
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/hash#non-existent",
+        {},
+      ),
+      routeId: "route:/hash",
+    });
+    const { controller, detach } = createControllerHarness(initialState);
+    const commitEffect = vi.fn();
+    const scrollIntent = beginAppRouterScrollIntent("#hash-160");
+
+    stubWindow("https://example.com/hash#non-existent");
+
+    try {
+      const navId = controller.beginNavigation();
+      const pendingRouterState = controller.beginPendingBrowserRouterState();
+      const renderPromise = controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => commitEffect,
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot(
+          "https://example.com/hash?with-query-param#hash-160",
+          {},
+        ),
+        nextElements: Promise.resolve(initialElements),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState,
+        previousNextUrl: null,
+        scrollIntent,
+        targetHref: "https://example.com/hash?with-query-param#hash-160",
+        navId,
+      });
+
+      const outcome = await Promise.race([
+        renderPromise,
+        new Promise<"timeout">((resolve) => {
+          setTimeout(() => resolve("timeout"), 50);
+        }),
+      ]);
+
+      expect(outcome).toBe("committed");
+      expect(commitEffect).toHaveBeenCalledTimes(1);
+    } finally {
+      clearAppRouterScrollIntent();
       detach();
     }
   });
