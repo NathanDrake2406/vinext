@@ -95,30 +95,45 @@ export function collectBindingNames(pattern: unknown, target: Set<string>): void
   }
 }
 
+// Add every name bound by a VariableDeclaration's declarators (handles
+// destructuring patterns) to the target set.
+function addDeclarationBindings(declaration: AstRecord, target: Set<string>): void {
+  for (const decl of nodeArray(declaration.declarations)) {
+    if (isAstRecord(decl)) collectBindingNames(decl.id, target);
+  }
+}
+
+function isFunctionScopeNode(node: AstRecord): boolean {
+  switch (node.type) {
+    case "FunctionDeclaration":
+    case "FunctionExpression":
+    case "ArrowFunctionExpression":
+    case "Program":
+      return true;
+    default:
+      return false;
+  }
+}
+
 // `var` is function-scoped: a `var` declared inside nested blocks/loops/switch/
 // catch belongs to the nearest enclosing function (or the module/program), not
 // the block. Collect those hoisted `var` names without crossing into nested
 // function scopes (whose own `var`s belong to them) or claiming block-scoped
 // `let`/`const`/`class`.
 function collectHoistedVars(node: AstRecord, target: Set<string>): void {
-  if (
-    node.type === "FunctionDeclaration" ||
-    node.type === "FunctionExpression" ||
-    node.type === "ArrowFunctionExpression" ||
-    node.type === "ClassDeclaration" ||
-    node.type === "ClassExpression"
-  ) {
-    return;
+  switch (node.type) {
+    case "FunctionDeclaration":
+    case "FunctionExpression":
+    case "ArrowFunctionExpression":
+    case "ClassDeclaration":
+    case "ClassExpression":
+      return;
+    case "VariableDeclaration":
+      if (node.kind === "var") addDeclarationBindings(node, target);
+      return;
+    default:
+      forEachAstChild(node, (child) => collectHoistedVars(child, target));
   }
-  if (node.type === "VariableDeclaration") {
-    if (node.kind === "var") {
-      for (const decl of nodeArray(node.declarations)) {
-        if (isAstRecord(decl)) collectBindingNames(decl.id, target);
-      }
-    }
-    return;
-  }
-  forEachAstChild(node, (child) => collectHoistedVars(child, target));
 }
 
 export function getBindingsInScope(scopeNode: AstRecord): Set<string> {
@@ -126,99 +141,71 @@ export function getBindingsInScope(scopeNode: AstRecord): Set<string> {
 
   // Only function/program scopes own hoisted `var`s. A block scope leaves its
   // nested `var`s to the enclosing function.
-  const isFunctionScope =
-    scopeNode.type === "FunctionDeclaration" ||
-    scopeNode.type === "FunctionExpression" ||
-    scopeNode.type === "ArrowFunctionExpression" ||
-    scopeNode.type === "Program";
+  const isFunctionScope = isFunctionScopeNode(scopeNode);
 
-  // 1. Collect parameters if scopeNode is a function
-  if (
-    scopeNode.type === "FunctionDeclaration" ||
-    scopeNode.type === "FunctionExpression" ||
-    scopeNode.type === "ArrowFunctionExpression"
-  ) {
-    if (scopeNode.id && scopeNode.type === "FunctionExpression") {
-      const name = getAstName(scopeNode.id);
-      if (name) bindings.add(name);
-    }
-    for (const param of nodeArray(scopeNode.params)) {
-      collectBindingNames(param, bindings);
-    }
-  }
-
-  // 2. Collect catch param if scopeNode is a CatchClause
-  if (scopeNode.type === "CatchClause") {
-    if (scopeNode.param) {
-      collectBindingNames(scopeNode.param, bindings);
-    }
-  }
-
-  // 3. Collect loop variables if scopeNode is a loop
-  if (scopeNode.type === "ForStatement") {
-    const init = scopeNode.init as AstRecord | null;
-    if (init && init.type === "VariableDeclaration") {
-      for (const decl of nodeArray(init.declarations)) {
-        if (isAstRecord(decl)) collectBindingNames(decl.id, bindings);
+  // 1. Collect the bindings the scope node itself introduces: function params,
+  //    a named function expression, a catch param, or loop-header variables.
+  switch (scopeNode.type) {
+    case "FunctionDeclaration":
+    case "FunctionExpression":
+    case "ArrowFunctionExpression": {
+      if (scopeNode.type === "FunctionExpression" && scopeNode.id) {
+        const name = getAstName(scopeNode.id);
+        if (name) bindings.add(name);
       }
-    }
-  }
-  if (scopeNode.type === "ForInStatement" || scopeNode.type === "ForOfStatement") {
-    const left = scopeNode.left as AstRecord | null;
-    if (left && left.type === "VariableDeclaration") {
-      for (const decl of nodeArray(left.declarations)) {
-        if (isAstRecord(decl)) collectBindingNames(decl.id, bindings);
+      for (const param of nodeArray(scopeNode.params)) {
+        collectBindingNames(param, bindings);
       }
+      break;
+    }
+    case "CatchClause":
+      if (scopeNode.param) collectBindingNames(scopeNode.param, bindings);
+      break;
+    case "ForStatement": {
+      const init = scopeNode.init as AstRecord | null;
+      if (init && init.type === "VariableDeclaration") addDeclarationBindings(init, bindings);
+      break;
+    }
+    case "ForInStatement":
+    case "ForOfStatement": {
+      const left = scopeNode.left as AstRecord | null;
+      if (left && left.type === "VariableDeclaration") addDeclarationBindings(left, bindings);
+      break;
     }
   }
 
-  // 4. Traverse the scopeNode's body to collect declared variables/functions/classes,
-  // but do NOT cross nested scope boundaries (like nested functions, classes).
+  // 2. Traverse the scopeNode's body to collect declared variables/functions/
+  //    classes, but do NOT cross nested scope boundaries.
   function walk(node: AstRecord) {
-    if (node.type === "FunctionDeclaration") {
-      const name = getAstName(node.id);
-      if (name) bindings.add(name);
-      return; // Do not traverse inside nested function
-    }
-    if (node.type === "ClassDeclaration") {
-      const name = getAstName(node.id);
-      if (name) bindings.add(name);
-      return; // Do not traverse inside nested class
-    }
-    if (
-      node.type === "FunctionExpression" ||
-      node.type === "ArrowFunctionExpression" ||
-      node.type === "ClassExpression"
-    ) {
-      return; // Expression bindings do not declare anything in the outer scope.
-    }
-
-    // Nested block scopes, catch, switch, and loops are separate lexical scopes:
-    // their `let`/`const`/`class`/function declarations do not belong to the
-    // outer scope. But `var` is function-scoped, so a function/program scope
-    // must still descend to collect hoisted `var`s from them.
-    if (
-      node.type === "BlockStatement" ||
-      node.type === "CatchClause" ||
-      node.type === "ForStatement" ||
-      node.type === "ForInStatement" ||
-      node.type === "ForOfStatement" ||
-      node.type === "SwitchStatement"
-    ) {
-      if (isFunctionScope) collectHoistedVars(node, bindings);
-      return;
-    }
-
-    if (node.type === "VariableDeclaration") {
-      for (const decl of nodeArray(node.declarations)) {
-        if (isAstRecord(decl)) {
-          collectBindingNames(decl.id, bindings);
-        }
+    switch (node.type) {
+      case "FunctionDeclaration":
+      case "ClassDeclaration": {
+        // The name binds the outer scope; the body is a nested scope we skip.
+        const name = getAstName(node.id);
+        if (name) bindings.add(name);
+        return;
       }
-      return;
+      case "FunctionExpression":
+      case "ArrowFunctionExpression":
+      case "ClassExpression":
+        return; // Expression bindings declare nothing in the outer scope.
+      case "BlockStatement":
+      case "CatchClause":
+      case "ForStatement":
+      case "ForInStatement":
+      case "ForOfStatement":
+      case "SwitchStatement":
+        // Separate lexical scopes: their `let`/`const`/`class`/function
+        // declarations stay local. But `var` is function-scoped, so a
+        // function/program scope still hoists nested `var`s out of them.
+        if (isFunctionScope) collectHoistedVars(node, bindings);
+        return;
+      case "VariableDeclaration":
+        addDeclarationBindings(node, bindings);
+        return;
+      default:
+        forEachAstChild(node, walk);
     }
-
-    forEachAstChild(node, walk);
   }
 
   const body = scopeNode.body;
