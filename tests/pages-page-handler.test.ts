@@ -21,6 +21,14 @@ function makePageModule(overrides: Record<string, unknown> = {}): Record<string,
   return { default: () => null, ...overrides };
 }
 
+function readNextData(html: string): Record<string, unknown> {
+  const match = html.match(
+    /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/,
+  );
+  if (!match) throw new Error(`missing __NEXT_DATA__ in HTML: ${html}`);
+  return JSON.parse(match[1]) as Record<string, unknown>;
+}
+
 type PageRoute = {
   pattern: string;
   patternParts: string[];
@@ -396,6 +404,86 @@ describe("createPagesPageHandler — SSR context", () => {
     expect(setSSRContext).toHaveBeenCalled();
     const ctx = setSSRContext.mock.calls[0][0] as Record<string, unknown>;
     expect(ctx.pathname).toBe("/about");
+  });
+
+  it("uses route params, not URL search params, as the getStaticProps router query", async () => {
+    // Ported from Next.js: test/e2e/prerender.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/prerender.test.ts
+    const setSSRContext = vi.fn();
+    const somethingGetStaticProps = vi.fn(async ({ params }) => ({
+      props: { params: params || {}, world: "world" },
+    }));
+    const blogGetStaticProps = vi.fn(async ({ params }) => ({
+      props: { params: params || {}, post: params?.post },
+    }));
+    const somethingRoute = makeRoute(
+      "/something",
+      makePageModule({ getStaticProps: somethingGetStaticProps }),
+    );
+    const blogRoute = makeRoute(
+      "/blog/:post",
+      makePageModule({ getStaticProps: blogGetStaticProps }),
+    );
+    const routes = [somethingRoute, blogRoute];
+    const emptyParams: Record<string, string | string[]> = {};
+    const blogParams: Record<string, string | string[]> = { post: "post-1" };
+    const handler = createPagesPageHandler(
+      makeOpts({
+        pageRoutes: routes,
+        setSSRContext,
+        matchRoute: (url) => {
+          const pathname = url.split("?")[0];
+          if (pathname === "/something") return { route: somethingRoute, params: emptyParams };
+          if (pathname === "/blog/post-1") {
+            return { route: blogRoute, params: blogParams };
+          }
+          return null;
+        },
+      }),
+    );
+
+    const nonDynamicRes = await handler(
+      makeRequest("/something?hello=world"),
+      "/something?hello=world",
+      null,
+      null,
+      null,
+    );
+    expect(nonDynamicRes.status).toBe(200);
+    const nonDynamicCtx = setSSRContext.mock.calls.find(
+      ([ctx]) => ctx && (ctx as Record<string, unknown>).pathname === "/something",
+    )?.[0] as Record<string, unknown>;
+    expect(nonDynamicCtx.query).toEqual({});
+    const nonDynamicNextData = readNextData(await nonDynamicRes.text());
+    expect(nonDynamicNextData.query).toEqual({});
+    expect(somethingGetStaticProps.mock.calls[0][0].params).toBeNull();
+
+    const dataRes = await handler(
+      makeRequest("/_next/data/test-build-id/something.json?hello=world"),
+      "/_next/data/test-build-id/something.json?hello=world",
+      null,
+      null,
+      null,
+    );
+    expect(dataRes.status).toBe(200);
+    const data = (await dataRes.json()) as { pageProps: { params: unknown } };
+    expect(data.pageProps.params).toEqual({});
+
+    setSSRContext.mockClear();
+    const dynamicRes = await handler(
+      makeRequest("/blog/post-1?hello=world"),
+      "/blog/post-1?hello=world",
+      null,
+      null,
+      null,
+    );
+    expect(dynamicRes.status).toBe(200);
+    const dynamicCtx = setSSRContext.mock.calls.find(
+      ([ctx]) => ctx && (ctx as Record<string, unknown>).pathname === "/blog/[post]",
+    )?.[0] as Record<string, unknown>;
+    expect(dynamicCtx.query).toEqual({ post: "post-1" });
+    const dynamicNextData = readNextData(await dynamicRes.text());
+    expect(dynamicNextData.query).toEqual({ post: "post-1" });
   });
 });
 
