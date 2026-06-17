@@ -43,7 +43,7 @@ import {
   stripRscSuffix,
 } from "../server/app-rsc-cache-busting.js";
 import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "../server/app-rsc-render-mode.js";
-import { VINEXT_MOUNTED_SLOTS_HEADER } from "../server/headers.js";
+import { NEXT_ROUTER_STATE_TREE_HEADER, VINEXT_MOUNTED_SLOTS_HEADER } from "../server/headers.js";
 import { isDangerousScheme, reportBlockedDangerousNavigation } from "./url-safety.js";
 import {
   canLinkIntentPrefetch,
@@ -451,6 +451,15 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
         if (mountedSlotsHeader) {
           headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
         }
+        // Set Next-Router-State-Tree so the prefetch URL hash varies on the same
+        // state projection as navigation RSC requests. This keeps prefetch and
+        // navigation cache keys derived from the same variant inputs, matching
+        // Next.js behavior where the current router tree is always sent on flight
+        // requests (both navigation and prefetch).
+        const stateTree = getNavigationRuntime()?.functions.getRscStateTreeHeaderValue?.();
+        if (stateTree) {
+          headers.set(NEXT_ROUTER_STATE_TREE_HEADER, stateTree);
+        }
         // Distinguish the same visible URL when it is prefetched from different
         // request contexts such as /feed vs /gallery or different mounted slots.
         const rscUrl = await createRscRequestUrl(fullHref, headers);
@@ -489,6 +498,11 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
                 });
                 if (mountedSlotsHeader) {
                   shellHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
+                }
+                const shellStateTree =
+                  getNavigationRuntime()?.functions.getRscStateTreeHeaderValue?.();
+                if (shellStateTree) {
+                  shellHeaders.set(NEXT_ROUTER_STATE_TREE_HEADER, shellStateTree);
                 }
                 const shellRscUrl = await createRscRequestUrl(fullHref, shellHeaders);
                 const shellResponse = await fetch(shellRscUrl, {
