@@ -933,6 +933,33 @@ describe("vinext:google-fonts plugin", () => {
     }
   });
 
+  it("does not shadow outer scope font imports when redeclared inside nested blocks", async () => {
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-shadow-nested");
+    initPlugin(plugin, { command: "build", root });
+
+    mockGoogleFontsCSS("@font-face { font-family: 'Inter'; }");
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Inter } from 'next/font/google';`,
+        `if (process.env.NODE_ENV === "test") {`,
+        `  const Inter = () => null;`,
+        `}`,
+        `const inter = Inter({ weight: '400', subsets: ['latin'] });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain("virtual:vinext-google-fonts?");
+      const matches = result.code.match(/selfHostedCSS/g);
+      expect(matches?.length).toBe(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not inject self-host metadata into commented-out font calls", async () => {
     // Next.js discovers next/font calls by walking the SWC AST:
     // crates/next-custom-transforms/src/transforms/fonts/font_imports_generator.rs

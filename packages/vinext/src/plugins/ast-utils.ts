@@ -159,12 +159,25 @@ export function getBindingsInScope(scopeNode: AstRecord): Set<string> {
       return; // Expression bindings do not declare anything in the outer scope.
     }
 
+    // ponytail: nested block scopes, catch, switch, loops are separate lexical scopes, so block-scoped variables (const/let) inside them do not belong to the outer scope
+    if (
+      node.type === "BlockStatement" ||
+      node.type === "CatchClause" ||
+      node.type === "ForStatement" ||
+      node.type === "ForInStatement" ||
+      node.type === "ForOfStatement" ||
+      node.type === "SwitchStatement"
+    ) {
+      return;
+    }
+
     if (node.type === "VariableDeclaration") {
       for (const decl of nodeArray(node.declarations)) {
         if (isAstRecord(decl)) {
           collectBindingNames(decl.id, bindings);
         }
       }
+      return;
     }
 
     forEachAstChild(node, walk);
@@ -176,14 +189,46 @@ export function getBindingsInScope(scopeNode: AstRecord): Set<string> {
     scopeNode.type === "ArrowFunctionExpression"
   ) {
     if (isAstRecord(scopeNode.body)) {
-      walk(scopeNode.body);
+      if (scopeNode.body.type === "BlockStatement") {
+        for (const stmt of nodeArray(scopeNode.body.body)) {
+          if (isAstRecord(stmt)) walk(stmt);
+        }
+      } else {
+        walk(scopeNode.body);
+      }
     }
   } else if (scopeNode.type === "BlockStatement") {
     for (const stmt of nodeArray(scopeNode.body)) {
       if (isAstRecord(stmt)) walk(stmt);
     }
   } else if (scopeNode.type === "CatchClause") {
-    if (isAstRecord(scopeNode.body)) walk(scopeNode.body);
+    if (isAstRecord(scopeNode.body)) {
+      if (scopeNode.body.type === "BlockStatement") {
+        for (const stmt of nodeArray(scopeNode.body.body)) {
+          if (isAstRecord(stmt)) walk(stmt);
+        }
+      } else {
+        walk(scopeNode.body);
+      }
+    }
+  } else if (
+    scopeNode.type === "ForStatement" ||
+    scopeNode.type === "ForInStatement" ||
+    scopeNode.type === "ForOfStatement"
+  ) {
+    if (isAstRecord(scopeNode.body)) {
+      if (scopeNode.body.type === "BlockStatement") {
+        for (const stmt of nodeArray(scopeNode.body.body)) {
+          if (isAstRecord(stmt)) walk(stmt);
+        }
+      } else {
+        walk(scopeNode.body);
+      }
+    }
+  } else if (Array.isArray(scopeNode.body)) {
+    for (const stmt of scopeNode.body) {
+      if (isAstRecord(stmt)) walk(stmt);
+    }
   } else {
     forEachAstChild(scopeNode, walk);
   }
