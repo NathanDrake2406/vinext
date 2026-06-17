@@ -12,8 +12,9 @@
  * `packages/next/src/shared/lib/router/router.ts` and the `inflightCache`
  * parameter. The first call seeds `inflightCache[cacheKey]` with the fetch
  * Promise; subsequent concurrent calls for the same key reuse that Promise
- * instead of starting a new network request. The entry is dropped once the
- * fetch settles (success or failure) so the next navigation re-fetches fresh.
+ * instead of starting a new network request. The normal navigation path drops
+ * gSSP (`__N_SSP`) entries after consuming them, while SSG prefetch entries
+ * can persist like Next.js' `sdc` cache.
  *
  * This file pins the parity fix at the helper level: concurrent calls to
  * `dedupedPagesDataFetch()` for the same URL must share a single `fetch()`
@@ -23,12 +24,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test"
 
 let dedupedPagesDataFetch: (typeof import("../packages/vinext/src/shims/internal/pages-data-fetch-dedup.js"))["dedupedPagesDataFetch"];
 let clearPagesDataInflight: (typeof import("../packages/vinext/src/shims/internal/pages-data-fetch-dedup.js"))["clearPagesDataInflight"];
+let evictPagesDataCache: (typeof import("../packages/vinext/src/shims/internal/pages-data-fetch-dedup.js"))["evictPagesDataCache"];
 
 beforeEach(async () => {
   vi.resetModules();
   const mod = await import("../packages/vinext/src/shims/internal/pages-data-fetch-dedup.js");
   dedupedPagesDataFetch = mod.dedupedPagesDataFetch;
   clearPagesDataInflight = mod.clearPagesDataInflight;
+  evictPagesDataCache = mod.evictPagesDataCache;
   clearPagesDataInflight();
 });
 
@@ -230,6 +233,33 @@ describe("dedupedPagesDataFetch", () => {
 
     const res = await dedupedPagesDataFetch(url);
     expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts a persisted OK entry by request identity", async () => {
+    let fetchCount = 0;
+    const fetchSpy = vi.fn(() => {
+      fetchCount += 1;
+      return Promise.resolve(
+        new Response(JSON.stringify({ pageProps: { count: fetchCount } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    (globalThis as unknown as { fetch: unknown }).fetch = fetchSpy;
+
+    const url = "/_next/data/build-id/persist.json";
+    const init = { headers: { Accept: "application/json", "x-deployment-id": "deployment-a" } };
+    const first = await dedupedPagesDataFetch(url, { ...init, persist: true });
+    const second = await dedupedPagesDataFetch(url, { ...init, persist: true });
+    expect(await first.json()).toEqual({ pageProps: { count: 1 } });
+    expect(await second.json()).toEqual({ pageProps: { count: 1 } });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    evictPagesDataCache(url, init);
+    const afterEvict = await dedupedPagesDataFetch(url, { ...init, persist: true });
+    expect(await afterEvict.json()).toEqual({ pageProps: { count: 2 } });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });

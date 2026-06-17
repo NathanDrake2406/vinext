@@ -2122,6 +2122,7 @@ async function navigateClientData(
     throw new NavigationCancelledError(url);
   }
   let res = prefetchedResponse;
+  let dataFetchHeaders: Record<string, string> | undefined;
   if (!res) {
     try {
       const headers: Record<string, string> = {
@@ -2130,12 +2131,19 @@ async function navigateClientData(
       };
       const deploymentId = getDeploymentId();
       if (deploymentId) headers[NEXT_DEPLOYMENT_ID_HEADER] = deploymentId;
-      const dataFetch =
-        initialTarget.dataKind === "static" ? fetchStaticPagesData : dedupedPagesDataFetch;
-      res = await dataFetch(initialTarget.dataHref, {
-        headers,
-        signal: controller.signal,
-      });
+      if (initialTarget.dataKind === "static") {
+        res = await fetchStaticPagesData(initialTarget.dataHref, {
+          headers,
+          signal: controller.signal,
+        });
+      } else {
+        dataFetchHeaders = headers;
+        res = await dedupedPagesDataFetch(initialTarget.dataHref, {
+          headers,
+          persist: true,
+          signal: controller.signal,
+        });
+      }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") {
         throw new NavigationCancelledError(url);
@@ -2155,6 +2163,7 @@ async function navigateClientData(
   // when middleware (or gSSP/gSP) chose a redirect for this URL.
   const softRedirect = res.headers.get("x-nextjs-redirect");
   if (softRedirect) {
+    evictPagesDataCache(initialTarget.dataHref, { headers: dataFetchHeaders });
     const redirectedUrl = resolveLocalRedirectUrl(softRedirect);
     if (!redirectedUrl) {
       scheduleHardNavigationAndThrow(softRedirect, "Navigation redirected externally");
@@ -2190,6 +2199,7 @@ async function navigateClientData(
   try {
     body = (await res.json()) as PagesDataResponse;
   } catch {
+    evictPagesDataCache(initialTarget.dataHref, { headers: dataFetchHeaders });
     scheduleHardNavigationAndThrow(url, "Data navigation failed: invalid JSON response");
   }
   assertStillCurrent();
@@ -2197,8 +2207,8 @@ async function navigateClientData(
   const props: Record<string, unknown> = isUnknownRecord(body) ? body : {};
   const rawPageProps = props.pageProps;
   const pageProps: Record<string, unknown> = isUnknownRecord(rawPageProps) ? rawPageProps : {};
-  if (initialTarget.dataKind === "server") {
-    evictPagesDataCache(initialTarget.dataHref);
+  if (initialTarget.dataKind === "server" || (isUnknownRecord(body) && body.__N_SSP === true)) {
+    evictPagesDataCache(initialTarget.dataHref, { headers: dataFetchHeaders });
   }
 
   // gSSP/gSP redirect marker. When getServerSideProps/getStaticProps returns
