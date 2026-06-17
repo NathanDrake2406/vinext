@@ -183,52 +183,17 @@ export function getBindingsInScope(scopeNode: AstRecord): Set<string> {
     forEachAstChild(node, walk);
   }
 
-  if (
-    scopeNode.type === "FunctionDeclaration" ||
-    scopeNode.type === "FunctionExpression" ||
-    scopeNode.type === "ArrowFunctionExpression"
-  ) {
-    if (isAstRecord(scopeNode.body)) {
-      if (scopeNode.body.type === "BlockStatement") {
-        for (const stmt of nodeArray(scopeNode.body.body)) {
-          if (isAstRecord(stmt)) walk(stmt);
-        }
-      } else {
-        walk(scopeNode.body);
-      }
-    }
-  } else if (scopeNode.type === "BlockStatement") {
-    for (const stmt of nodeArray(scopeNode.body)) {
+  const body = scopeNode.body;
+  if (isAstRecord(body) && body.type === "BlockStatement") {
+    for (const stmt of nodeArray(body.body)) {
       if (isAstRecord(stmt)) walk(stmt);
     }
-  } else if (scopeNode.type === "CatchClause") {
-    if (isAstRecord(scopeNode.body)) {
-      if (scopeNode.body.type === "BlockStatement") {
-        for (const stmt of nodeArray(scopeNode.body.body)) {
-          if (isAstRecord(stmt)) walk(stmt);
-        }
-      } else {
-        walk(scopeNode.body);
-      }
-    }
-  } else if (
-    scopeNode.type === "ForStatement" ||
-    scopeNode.type === "ForInStatement" ||
-    scopeNode.type === "ForOfStatement"
-  ) {
-    if (isAstRecord(scopeNode.body)) {
-      if (scopeNode.body.type === "BlockStatement") {
-        for (const stmt of nodeArray(scopeNode.body.body)) {
-          if (isAstRecord(stmt)) walk(stmt);
-        }
-      } else {
-        walk(scopeNode.body);
-      }
-    }
-  } else if (Array.isArray(scopeNode.body)) {
-    for (const stmt of scopeNode.body) {
+  } else if (Array.isArray(body)) {
+    for (const stmt of body) {
       if (isAstRecord(stmt)) walk(stmt);
     }
+  } else if (isAstRecord(body)) {
+    walk(body);
   } else {
     forEachAstChild(scopeNode, walk);
   }
