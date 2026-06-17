@@ -2952,8 +2952,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         },
       },
     },
-    // CSS url() asset parity with Next.js. Build-only and client-scoped: dev CSS
-    // is untouched, and server environments keep Vite's default asset handling.
+    // CSS url() asset parity with Next.js. Build-only: dev CSS is untouched.
+    // Apply the transient marker in every environment so CSS Modules receives
+    // identical source text and generates identical class names for server and
+    // client builds. Restore it in every output so server-emitted CSS also keeps
+    // distinct asset filenames and never exposes the private marker.
     {
       name: "vinext:css-url-assets-mark",
       enforce: "pre",
@@ -2965,7 +2968,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           code: "url(",
         },
         handler(code, id) {
-          if (this.environment?.name !== "client") return null;
           const marked = markCssUrlAssetReferences(code, id);
           if (marked === null) return null;
           // No source map: the marker is transient — it's stripped before final
@@ -3023,7 +3025,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       apply: "build",
 
       generateBundle(_options, bundle) {
-        if (this.environment?.name !== "client") return;
         restoreDedupedCssAssetReferences(bundle, (asset) => {
           this.emitFile({ type: "asset", fileName: asset.fileName, source: asset.source });
         });
