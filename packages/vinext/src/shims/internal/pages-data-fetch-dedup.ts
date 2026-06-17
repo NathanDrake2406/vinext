@@ -227,7 +227,8 @@ export function dedupedPagesDataFetch(
 
 /**
  * Drop every cached in-flight entry. Intended for tests; production code
- * does not need to call this because entries self-evict on settle.
+ * does not need to call this because non-persisted entries self-evict on
+ * settle, while persisted entries are retained intentionally.
  */
 export function clearPagesDataInflight(): void {
   for (const entry of inflight.values()) entry.controller.abort();
