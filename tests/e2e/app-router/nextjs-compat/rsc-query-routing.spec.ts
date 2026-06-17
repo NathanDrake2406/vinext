@@ -39,7 +39,7 @@ test.describe("rsc-query-routing", () => {
       }
     });
 
-    // Click redirect link
+    // Click rewrite link
     await page.locator("a").click();
 
     // Wait for the page load to be completed

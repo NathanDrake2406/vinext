@@ -2270,6 +2270,7 @@ function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
     clearNavigationCaches: clearClientNavigationCaches,
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
+    getRscStateTreeHeaderValue: () => createNavigationStateTreeHeaderValue(getBrowserRouterState()),
     navigate: navigateRsc,
   });
 
