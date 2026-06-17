@@ -2121,7 +2121,6 @@ async function navigateClientData(
     throw new NavigationCancelledError(url);
   }
   let res = prefetchedResponse;
-  let dataFetchHeaders: Record<string, string> | undefined;
   if (!res) {
     try {
       const headers: Record<string, string> = {
@@ -2136,7 +2135,6 @@ async function navigateClientData(
           signal: controller.signal,
         });
       } else {
-        dataFetchHeaders = headers;
         res = await dedupedPagesDataFetch(initialTarget.dataHref, {
           headers,
           persist: true,
@@ -2165,7 +2163,7 @@ async function navigateClientData(
     // A redirect response must not be retained in the data cache: the
     // redirect may be conditional on request state, and replaying it on a
     // later navigation would skip the server decision.
-    evictPagesDataCache(initialTarget.dataHref, { headers: dataFetchHeaders });
+    evictPagesDataCache(initialTarget.dataHref);
     const redirectedUrl = resolveLocalRedirectUrl(softRedirect);
     if (!redirectedUrl) {
       scheduleHardNavigationAndThrow(softRedirect, "Navigation redirected externally");
@@ -2201,7 +2199,7 @@ async function navigateClientData(
   try {
     body = (await res.json()) as PagesDataResponse;
   } catch {
-    evictPagesDataCache(initialTarget.dataHref, { headers: dataFetchHeaders });
+    evictPagesDataCache(initialTarget.dataHref);
     scheduleHardNavigationAndThrow(url, "Data navigation failed: invalid JSON response");
   }
   assertStillCurrent();
@@ -2210,7 +2208,7 @@ async function navigateClientData(
   const rawPageProps = props.pageProps;
   const pageProps: Record<string, unknown> = isUnknownRecord(rawPageProps) ? rawPageProps : {};
   if (initialTarget.dataKind === "server" || (isUnknownRecord(body) && body.__N_SSP === true)) {
-    evictPagesDataCache(initialTarget.dataHref, { headers: dataFetchHeaders });
+    evictPagesDataCache(initialTarget.dataHref);
   }
 
   // gSSP/gSP redirect marker. When getServerSideProps/getStaticProps returns

@@ -114,34 +114,23 @@ describe("dedupedPagesDataFetch", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps locale, basePath, deployment, and query request identities distinct", async () => {
-    let resolveFetch: (response: Response) => void = () => {};
-    const fetchPromise = new Promise<Response>((resolve) => {
-      resolveFetch = resolve;
-    });
-    const fetchSpy = vi.fn(() => fetchPromise);
+  it("keeps locale, basePath, and query request identities distinct", async () => {
+    const fetchSpy = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolve(new Response(JSON.stringify({ pageProps: {} })));
+        }),
+    );
     (globalThis as unknown as { fetch: unknown }).fetch = fetchSpy;
 
     const requests = [
-      dedupedPagesDataFetch("/_next/data/id/about.json?tab=one", {
-        headers: { "x-deployment-id": "deployment-a" },
-      }),
-      dedupedPagesDataFetch("/_next/data/id/fr/about.json?tab=one", {
-        headers: { "x-deployment-id": "deployment-a" },
-      }),
-      dedupedPagesDataFetch("/docs/_next/data/id/about.json?tab=one", {
-        headers: { "x-deployment-id": "deployment-a" },
-      }),
-      dedupedPagesDataFetch("/_next/data/id/about.json?tab=two", {
-        headers: { "x-deployment-id": "deployment-a" },
-      }),
-      dedupedPagesDataFetch("/_next/data/id/about.json?tab=one", {
-        headers: { "x-deployment-id": "deployment-b" },
-      }),
+      dedupedPagesDataFetch("/_next/data/id/about.json?tab=one"),
+      dedupedPagesDataFetch("/_next/data/id/fr/about.json?tab=one"),
+      dedupedPagesDataFetch("/docs/_next/data/id/about.json?tab=one"),
+      dedupedPagesDataFetch("/_next/data/id/about.json?tab=two"),
     ];
 
-    expect(fetchSpy).toHaveBeenCalledTimes(5);
-    resolveFetch(new Response(JSON.stringify({ pageProps: {} })));
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
     await Promise.all(requests);
   });
 
@@ -257,7 +246,7 @@ describe("dedupedPagesDataFetch", () => {
     expect(await second.json()).toEqual({ pageProps: { count: 1 } });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-    evictPagesDataCache(url, init);
+    evictPagesDataCache(url);
     const afterEvict = await dedupedPagesDataFetch(url, { ...init, persist: true });
     expect(await afterEvict.json()).toEqual({ pageProps: { count: 2 } });
     expect(fetchSpy).toHaveBeenCalledTimes(2);

@@ -31,7 +31,7 @@
  *   browser only, so a single `Map` is sufficient.
  */
 
-import { getDeploymentId, NEXT_DEPLOYMENT_ID_HEADER } from "../../utils/deployment-id.js";
+import { getDeploymentId } from "../../utils/deployment-id.js";
 
 type InflightEntry = {
   controller: AbortController;
@@ -126,14 +126,14 @@ export function fetchStaticPagesData(dataHref: string, init?: RequestInit): Prom
   return fetchCachedPagesData(dataHref, init);
 }
 
-export function evictPagesDataCache(dataHref: string, init?: PagesDataFetchInit): void {
+export function evictPagesDataCache(dataHref: string): void {
   const key = getStaticDataKey(dataHref);
   delete staticDataCache[key];
   staticDataSources.delete(key);
-  inflight.delete(getInflightKey(dataHref, init));
+  inflight.delete(getInflightKey(dataHref));
 }
 
-function getInflightKey(dataHref: string, init?: PagesDataFetchInit): string {
+function getInflightKey(dataHref: string): string {
   let resolvedHref = dataHref;
   if (typeof window !== "undefined") {
     try {
@@ -141,12 +141,11 @@ function getInflightKey(dataHref: string, init?: PagesDataFetchInit): string {
     } catch {}
   }
 
-  const deploymentId = new Headers(init?.headers).get(NEXT_DEPLOYMENT_ID_HEADER) ?? "";
-  return `${resolvedHref}\n${deploymentId}`;
+  return `${resolvedHref}\n${getDeploymentId() ?? ""}`;
 }
 
 function responseFromBuffered(buffered: BufferedResponse): Response {
-  return new Response(buffered.body.byteLength === 0 ? undefined : buffered.body.slice(0), {
+  return new Response(buffered.body, {
     headers: buffered.headers,
     status: buffered.status,
     statusText: buffered.statusText,
@@ -189,7 +188,7 @@ export function dedupedPagesDataFetch(
   dataHref: string,
   init?: PagesDataFetchInit,
 ): Promise<Response> {
-  const key = getInflightKey(dataHref, init);
+  const key = getInflightKey(dataHref);
   const signal = init?.signal ?? undefined;
   if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
 
