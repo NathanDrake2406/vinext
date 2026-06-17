@@ -174,7 +174,7 @@ type GoogleFontNamedSpecifier = {
 type GoogleFontImportInfo = {
   start: number;
   end: number;
-  clause: string;
+  source: AstRange;
   defaultLocal: string | null;
   namespaceLocal: string | null;
   named: GoogleFontNamedSpecifier[];
@@ -183,7 +183,7 @@ type GoogleFontImportInfo = {
 type GoogleFontExportInfo = {
   start: number;
   end: number;
-  specifiers: string;
+  source: AstRange;
   named: GoogleFontNamedSpecifier[];
 };
 
@@ -381,78 +381,6 @@ function getStringProperty(node: AstRecord, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function reconstructImportClause(node: AstRecord): string {
-  const specifiers = nodeArray(node.specifiers);
-  let defaultImportStr = "";
-  let namespaceImportStr = "";
-  const namedImports: string[] = [];
-
-  for (const specVal of specifiers) {
-    if (!isAstRecord(specVal)) continue;
-    const spec = specVal;
-    if (spec.type === "ImportDefaultSpecifier") {
-      const local = getAstName(spec.local);
-      if (local) defaultImportStr = local;
-    } else if (spec.type === "ImportNamespaceSpecifier") {
-      const local = getAstName(spec.local);
-      if (local) namespaceImportStr = `* as ${local}`;
-    } else if (spec.type === "ImportSpecifier") {
-      const imported = getAstName(spec.imported);
-      const local = getAstName(spec.local);
-      if (!imported || !local) continue;
-
-      const isType = spec.importKind === "type";
-      const typePrefix = isType ? "type " : "";
-
-      if (imported === local) {
-        namedImports.push(`${typePrefix}${imported}`);
-      } else {
-        namedImports.push(`${typePrefix}${imported} as ${local}`);
-      }
-    }
-  }
-
-  const parts: string[] = [];
-  if (defaultImportStr) {
-    parts.push(defaultImportStr);
-  }
-  if (namespaceImportStr) {
-    parts.push(namespaceImportStr);
-  }
-  if (namedImports.length > 0) {
-    const isTypeDecl = node.importKind === "type";
-    const typePrefix = isTypeDecl ? "type " : "";
-    parts.push(`${typePrefix}{ ${namedImports.join(", ")} }`);
-  }
-
-  return parts.join(", ");
-}
-
-function reconstructExportSpecifiers(node: AstRecord): string {
-  const specifiers = nodeArray(node.specifiers);
-  const parts: string[] = [];
-
-  for (const specVal of specifiers) {
-    if (!isAstRecord(specVal) || specVal.type !== "ExportSpecifier") continue;
-    const local = getAstName(specVal.local);
-    const exported = getAstName(specVal.exported) ?? local;
-    if (!local || !exported) continue;
-
-    const isType = specVal.exportKind === "type";
-    const typePrefix = isType ? "type " : "";
-
-    if (local === exported) {
-      parts.push(`${typePrefix}${local}`);
-    } else {
-      parts.push(`${typePrefix}${local} as ${exported}`);
-    }
-  }
-
-  const isTypeDecl = node.exportKind === "type";
-  const typePrefix = isTypeDecl ? "type " : "";
-  return `${typePrefix}{ ${parts.join(", ")} }`;
-}
-
 function getSourceValue(node: AstRecord): string | null {
   const source = node.source;
   if (!isAstRecord(source)) return null;
@@ -475,8 +403,8 @@ function collectGoogleFontImports(ast: ReturnType<typeof parseAst>): GoogleFontI
     const node = item as unknown as AstRecord;
     if (getSourceValue(node) !== "next/font/google") continue;
     if (!hasRange(node)) continue;
-    const clause = reconstructImportClause(node);
-    if (!clause) continue;
+    const sourceNode = node.source as AstRecord | null;
+    if (!sourceNode || !hasRange(sourceNode)) continue;
 
     let defaultLocal: string | null = null;
     let namespaceLocal: string | null = null;
@@ -508,7 +436,7 @@ function collectGoogleFontImports(ast: ReturnType<typeof parseAst>): GoogleFontI
     imports.push({
       start: node.start,
       end: node.end,
-      clause,
+      source: sourceNode,
       defaultLocal,
       namespaceLocal,
       named,
@@ -524,7 +452,8 @@ function collectGoogleFontExports(ast: ReturnType<typeof parseAst>): GoogleFontE
     const node = item as unknown as AstRecord;
     if (getSourceValue(node) !== "next/font/google") continue;
     if (!hasRange(node)) continue;
-    const specifiers = reconstructExportSpecifiers(node);
+    const sourceNode = node.source as AstRecord | null;
+    if (!sourceNode || !hasRange(sourceNode)) continue;
 
     const named: GoogleFontNamedSpecifier[] = [];
     for (const specifierValue of nodeArray(node.specifiers)) {
@@ -543,7 +472,7 @@ function collectGoogleFontExports(ast: ReturnType<typeof parseAst>): GoogleFontE
     exports.push({
       start: node.start,
       end: node.end,
-      specifiers,
+      source: sourceNode,
       named,
     });
   }
@@ -568,26 +497,16 @@ function collectLocalFontPathLiterals(options: AstRange): Array<{ node: AstRange
       if (FONT_FILE_EXTENSION_RE.test(value.value)) {
         paths.push({ node: value, path: value.value });
       }
-    } else if (value.type === "ObjectExpression") {
-      for (const subProp of nodeArray(value.properties)) {
-        if (!isAstRecord(subProp) || subProp.type !== "Property" || subProp.computed) continue;
-        if (getAstName(subProp.key) !== "path") continue;
-        const pathVal = subProp.value;
-        if (
-          isAstRecord(pathVal) &&
-          hasRange(pathVal) &&
-          pathVal.type === "Literal" &&
-          typeof pathVal.value === "string"
-        ) {
-          if (FONT_FILE_EXTENSION_RE.test(pathVal.value)) {
-            paths.push({ node: pathVal, path: pathVal.value });
-          }
-        }
-      }
-    } else if (value.type === "ArrayExpression") {
-      for (const elem of nodeArray(value.elements)) {
-        if (!isAstRecord(elem) || elem.type !== "ObjectExpression") continue;
-        for (const subProp of nodeArray(elem.properties)) {
+    } else {
+      const objects =
+        value.type === "ObjectExpression"
+          ? [value]
+          : value.type === "ArrayExpression"
+            ? nodeArray(value.elements).filter(isAstRecord)
+            : [];
+      for (const obj of objects) {
+        if (obj.type !== "ObjectExpression") continue;
+        for (const subProp of nodeArray(obj.properties)) {
           if (!isAstRecord(subProp) || subProp.type !== "Property" || subProp.computed) continue;
           if (getAstName(subProp.key) !== "path") continue;
           const pathVal = subProp.value;
@@ -595,11 +514,10 @@ function collectLocalFontPathLiterals(options: AstRange): Array<{ node: AstRange
             isAstRecord(pathVal) &&
             hasRange(pathVal) &&
             pathVal.type === "Literal" &&
-            typeof pathVal.value === "string"
+            typeof pathVal.value === "string" &&
+            FONT_FILE_EXTENSION_RE.test(pathVal.value)
           ) {
-            if (FONT_FILE_EXTENSION_RE.test(pathVal.value)) {
-              paths.push({ node: pathVal, path: pathVal.value });
-            }
+            paths.push({ node: pathVal, path: pathVal.value });
           }
         }
       }
@@ -1134,11 +1052,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
               fonts: Array.from(new Set(fontImports.map((spec) => spec.imported))),
               utilities: Array.from(new Set(utilityImports.map((spec) => spec.imported))),
             });
-            s.overwrite(
-              parsed.start,
-              parsed.end,
-              `import ${parsed.clause} from ${JSON.stringify(virtualId)};`,
-            );
+            s.overwrite(parsed.source.start, parsed.source.end, JSON.stringify(virtualId));
             overwrittenRanges.push([parsed.start, parsed.end]);
             hasChanges = true;
             continue;
@@ -1175,11 +1089,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
             fonts: Array.from(new Set(fontExports.map((spec) => spec.imported))),
             utilities: Array.from(new Set(utilityExports.map((spec) => spec.imported))),
           });
-          s.overwrite(
-            parsed.start,
-            parsed.end,
-            `export { ${parsed.specifiers.trim()} } from ${JSON.stringify(virtualId)};`,
-          );
+          s.overwrite(parsed.source.start, parsed.source.end, JSON.stringify(virtualId));
           overwrittenRanges.push([parsed.start, parsed.end]);
           hasChanges = true;
         }
