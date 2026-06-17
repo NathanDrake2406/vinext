@@ -48,6 +48,7 @@ export function injectPregeneratedConcretePaths(root: string): void {
 
   if (code === originalCode) return;
 
+  const beforeRewriteMtime = fs.statSync(workerEntry).mtimeMs;
   fs.writeFileSync(workerEntry, code);
-  acknowledgeServerEntryMetadataRewrite(workerEntry);
+  acknowledgeServerEntryMetadataRewrite(workerEntry, beforeRewriteMtime);
 }
