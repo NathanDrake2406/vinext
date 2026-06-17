@@ -483,6 +483,25 @@ function isIdentifierReference(node: unknown, name: string): boolean {
   return isAstRecord(node) && node.type === "Identifier" && node.name === name;
 }
 
+// Node types that open a new scope for shadowing purposes during the font-call
+// traversal. getBindingsInScope is merged into the shadow set when descending
+// into these.
+function isScopeNode(node: AstRecord): boolean {
+  switch (node.type) {
+    case "FunctionDeclaration":
+    case "FunctionExpression":
+    case "ArrowFunctionExpression":
+    case "BlockStatement":
+    case "CatchClause":
+    case "ForStatement":
+    case "ForInStatement":
+    case "ForOfStatement":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function collectLocalFontPathLiterals(options: AstRange): Array<{ node: AstRange; path: string }> {
   const paths: Array<{ node: AstRange; path: string }> = [];
 
@@ -576,17 +595,9 @@ function collectLocalFontCalls(
   const calls: LocalFontCallInfo[] = [];
 
   function visit(node: AstRecord, shadowed: Set<string>): void {
-    const isScope =
-      node.type === "FunctionDeclaration" ||
-      node.type === "FunctionExpression" ||
-      node.type === "ArrowFunctionExpression" ||
-      node.type === "BlockStatement" ||
-      node.type === "CatchClause" ||
-      node.type === "ForStatement" ||
-      node.type === "ForInStatement" ||
-      node.type === "ForOfStatement";
-
-    const nextShadowed = isScope ? new Set([...shadowed, ...getBindingsInScope(node)]) : shadowed;
+    const nextShadowed = isScopeNode(node)
+      ? new Set([...shadowed, ...getBindingsInScope(node)])
+      : shadowed;
 
     if (node.type === "VariableDeclarator") {
       if (!nextShadowed.has(localFontIdentifier)) {
@@ -618,12 +629,7 @@ function collectLocalFontCalls(
     forEachAstChild(node, (child) => visit(child, nextShadowed));
   }
 
-  const initialShadowed = new Set<string>();
-  const programBindings = getBindingsInScope(ast as unknown as AstRecord);
-  for (const name of programBindings) {
-    initialShadowed.add(name);
-  }
-
+  const initialShadowed = getBindingsInScope(ast as unknown as AstRecord);
   for (const item of ast.body) {
     visit(item as AstRecord, initialShadowed);
   }
@@ -639,17 +645,9 @@ function collectGoogleFontCalls(
     [];
 
   function visit(node: AstRecord, shadowed: Set<string>): void {
-    const isScope =
-      node.type === "FunctionDeclaration" ||
-      node.type === "FunctionExpression" ||
-      node.type === "ArrowFunctionExpression" ||
-      node.type === "BlockStatement" ||
-      node.type === "CatchClause" ||
-      node.type === "ForStatement" ||
-      node.type === "ForInStatement" ||
-      node.type === "ForOfStatement";
-
-    const nextShadowed = isScope ? new Set([...shadowed, ...getBindingsInScope(node)]) : shadowed;
+    const nextShadowed = isScopeNode(node)
+      ? new Set([...shadowed, ...getBindingsInScope(node)])
+      : shadowed;
 
     if (node.type === "CallExpression" && hasRange(node)) {
       const options = firstObjectArgument(node);
@@ -691,12 +689,7 @@ function collectGoogleFontCalls(
     forEachAstChild(node, (child) => visit(child, nextShadowed));
   }
 
-  const initialShadowed = new Set<string>();
-  const programBindings = getBindingsInScope(ast as unknown as AstRecord);
-  for (const name of programBindings) {
-    initialShadowed.add(name);
-  }
-
+  const initialShadowed = getBindingsInScope(ast as unknown as AstRecord);
   for (const item of ast.body) {
     visit(item as AstRecord, initialShadowed);
   }
