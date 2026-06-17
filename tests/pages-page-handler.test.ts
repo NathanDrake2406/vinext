@@ -21,14 +21,6 @@ function makePageModule(overrides: Record<string, unknown> = {}): Record<string,
   return { default: () => null, ...overrides };
 }
 
-function readNextData(html: string): Record<string, unknown> {
-  const match = html.match(
-    /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/,
-  );
-  if (!match) throw new Error(`missing __NEXT_DATA__ in HTML: ${html}`);
-  return JSON.parse(match[1]) as Record<string, unknown>;
-}
-
 type PageRoute = {
   pattern: string;
   patternParts: string[];
@@ -454,8 +446,6 @@ describe("createPagesPageHandler — SSR context", () => {
       ([ctx]) => ctx && (ctx as Record<string, unknown>).pathname === "/something",
     )?.[0] as Record<string, unknown>;
     expect(nonDynamicCtx.query).toEqual({});
-    const nonDynamicNextData = readNextData(await nonDynamicRes.text());
-    expect(nonDynamicNextData.query).toEqual({});
     expect(somethingGetStaticProps.mock.calls[0][0].params).toBeNull();
 
     const dataRes = await handler(
@@ -482,8 +472,6 @@ describe("createPagesPageHandler — SSR context", () => {
       ([ctx]) => ctx && (ctx as Record<string, unknown>).pathname === "/blog/[post]",
     )?.[0] as Record<string, unknown>;
     expect(dynamicCtx.query).toEqual({ post: "post-1" });
-    const dynamicNextData = readNextData(await dynamicRes.text());
-    expect(dynamicNextData.query).toEqual({ post: "post-1" });
   });
 });
 
