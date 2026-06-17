@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  acknowledgeServerEntryMetadataRewrite,
   importServerEntryModule,
   resolveServerEntryImportUrl,
 } from "../packages/vinext/src/server/prod-server.js";
@@ -109,6 +110,26 @@ describe("server entry import URL resolution", () => {
     // replaced by the original bare-URL cache entry.
     const thirdImportUrl = resolveServerEntryImportUrl(entryPath);
     expect(thirdImportUrl).toBe(secondBuildUrl);
+  });
+
+  it("keeps the bare URL after an acknowledged metadata-only rewrite", () => {
+    const dir = makeTmpDir();
+    const entryPath = path.join(dir, "entry.mjs");
+
+    fs.writeFileSync(entryPath, `export const state = { marker: "build-1" };\n`);
+    const firstBuildUrl = resolveServerEntryImportUrl(entryPath);
+    expect(firstBuildUrl).not.toContain("?");
+
+    fs.writeFileSync(
+      entryPath,
+      `globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [];\nexport const state = { marker: "build-1" };\n`,
+    );
+    const bumped = new Date(Date.now() + 10_000);
+    fs.utimesSync(entryPath, bumped, bumped);
+
+    acknowledgeServerEntryMetadataRewrite(entryPath);
+
+    expect(resolveServerEntryImportUrl(entryPath)).toBe(firstBuildUrl);
   });
 
   it("shares the module instance with chunks that import the entry by bare specifier", async () => {

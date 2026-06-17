@@ -3320,6 +3320,32 @@ describe("injectPregeneratedConcretePaths", () => {
     expect(after).toContain('import { handler } from "vinext/server/app-router-entry"');
   });
 
+  it("does not rewrite the server bundle when there is no injection to add or strip", () => {
+    const sourceCode = 'export default { fetch(request) { return new Response("ok"); } };\n';
+    const manifest = {
+      buildId: "test",
+      routes: [
+        {
+          route: "/about",
+          status: "skipped",
+          router: "app",
+          reason: "dynamic",
+        },
+      ],
+    };
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", sourceCode);
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifest));
+
+    const entryPath = path.join(tmpDir, "dist/server/index.js");
+    const beforeMtime = fs.statSync(entryPath).mtimeMs;
+    injectPregeneratedConcretePaths(tmpDir);
+
+    expect(fs.readFileSync(entryPath, "utf-8")).toBe(sourceCode);
+    expect(fs.statSync(entryPath).mtimeMs).toBe(beforeMtime);
+  });
+
   it("excludes fallback-shell placeholder paths from injection", () => {
     const sourceCode = 'export default { fetch(request) { return new Response("ok"); } };\n';
     const manifest = {

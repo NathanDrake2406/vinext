@@ -143,6 +143,31 @@ export function resolveServerEntryImportUrl(entryPath: string): string {
   return `${href}?t=${mtime}`;
 }
 
+/**
+ * Acknowledge a server-entry rewrite that does not require evaluating a new
+ * module instance in this process.
+ *
+ * `runPrerender()` imports the built App Router entry to produce artifacts and
+ * then may rewrite that same file to inject Worker-only prerender metadata.
+ * In Node production startup, `seedMemoryCacheFromPrerender()` reads the same
+ * manifest and populates the runtime registry directly, so reusing the already
+ * imported module avoids a second RSC renderer without losing Node semantics.
+ *
+ * Real rebuilds still cache-bust because only the injection helper calls this
+ * after its narrow marker-block rewrite.
+ */
+export function acknowledgeServerEntryMetadataRewrite(entryPath: string): void {
+  let canonicalEntryPath: string;
+  try {
+    canonicalEntryPath = fs.realpathSync.native(entryPath);
+  } catch {
+    canonicalEntryPath = entryPath;
+  }
+  const href = pathToFileURL(canonicalEntryPath).href;
+  if (!bareServerEntryMtimes.has(href)) return;
+  bareServerEntryMtimes.set(href, fs.statSync(canonicalEntryPath).mtimeMs);
+}
+
 // oxlint-disable-next-line typescript/no-explicit-any -- built entry modules are untyped, matching the previous inline `await import(...)`
 export async function importServerEntryModule(entryPath: string): Promise<any> {
   return import(resolveServerEntryImportUrl(entryPath));
