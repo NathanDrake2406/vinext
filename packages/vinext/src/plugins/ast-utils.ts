@@ -95,8 +95,42 @@ export function collectBindingNames(pattern: unknown, target: Set<string>): void
   }
 }
 
+// `var` is function-scoped: a `var` declared inside nested blocks/loops/switch/
+// catch belongs to the nearest enclosing function (or the module/program), not
+// the block. Collect those hoisted `var` names without crossing into nested
+// function scopes (whose own `var`s belong to them) or claiming block-scoped
+// `let`/`const`/`class`.
+function collectHoistedVars(node: AstRecord, target: Set<string>): void {
+  if (
+    node.type === "FunctionDeclaration" ||
+    node.type === "FunctionExpression" ||
+    node.type === "ArrowFunctionExpression" ||
+    node.type === "ClassDeclaration" ||
+    node.type === "ClassExpression"
+  ) {
+    return;
+  }
+  if (node.type === "VariableDeclaration") {
+    if (node.kind === "var") {
+      for (const decl of nodeArray(node.declarations)) {
+        if (isAstRecord(decl)) collectBindingNames(decl.id, target);
+      }
+    }
+    return;
+  }
+  forEachAstChild(node, (child) => collectHoistedVars(child, target));
+}
+
 export function getBindingsInScope(scopeNode: AstRecord): Set<string> {
   const bindings = new Set<string>();
+
+  // Only function/program scopes own hoisted `var`s. A block scope leaves its
+  // nested `var`s to the enclosing function.
+  const isFunctionScope =
+    scopeNode.type === "FunctionDeclaration" ||
+    scopeNode.type === "FunctionExpression" ||
+    scopeNode.type === "ArrowFunctionExpression" ||
+    scopeNode.type === "Program";
 
   // 1. Collect parameters if scopeNode is a function
   if (
@@ -159,7 +193,10 @@ export function getBindingsInScope(scopeNode: AstRecord): Set<string> {
       return; // Expression bindings do not declare anything in the outer scope.
     }
 
-    // ponytail: nested block scopes, catch, switch, loops are separate lexical scopes, so block-scoped variables (const/let) inside them do not belong to the outer scope
+    // Nested block scopes, catch, switch, and loops are separate lexical scopes:
+    // their `let`/`const`/`class`/function declarations do not belong to the
+    // outer scope. But `var` is function-scoped, so a function/program scope
+    // must still descend to collect hoisted `var`s from them.
     if (
       node.type === "BlockStatement" ||
       node.type === "CatchClause" ||
@@ -168,6 +205,7 @@ export function getBindingsInScope(scopeNode: AstRecord): Set<string> {
       node.type === "ForOfStatement" ||
       node.type === "SwitchStatement"
     ) {
+      if (isFunctionScope) collectHoistedVars(node, bindings);
       return;
     }
 

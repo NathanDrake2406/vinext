@@ -223,6 +223,31 @@ describe("vinext:local-fonts plugin", () => {
     expectImported(result.code, "./real.woff2");
   });
 
+  it("does not rewrite localFont calls shadowed by a var hoisted from a nested block", () => {
+    // `var localFont` is function-scoped, so it shadows the import for the whole
+    // function body, including the call that is a sibling of the if-block.
+    const plugin = getLocalFontsPlugin();
+    const transform = unwrapHook(plugin.transform);
+    const code = [
+      `import localFont from 'next/font/local';`,
+      `function render(condition: boolean) {`,
+      `  if (condition) {`,
+      `    var localFont = () => null;`,
+      `  }`,
+      `  return localFont({ src: "./not-a-next-font.woff2" });`,
+      `}`,
+      `const realFont = localFont({ src: "./real.woff2" });`,
+    ].join("\n");
+
+    const result = transform.call(plugin, code, "/app/layout.tsx");
+
+    expect(result).not.toBeNull();
+    expectImported(result.code, "./real.woff2");
+    // Shadowed by the hoisted var → must not be promoted to an import.
+    expect(result.code).not.toContain(`from "./not-a-next-font.woff2"`);
+    expect(result.code).toContain(`return localFont({ src: "./not-a-next-font.woff2" });`);
+  });
+
   // ── Helper: assert a font file string was promoted to an ESM import ──
   // The transform's contract is that font path strings get rewritten to ESM
   // imports so Vite can fingerprint and serve them. We don't care about the

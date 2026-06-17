@@ -1445,6 +1445,42 @@ describe("vinext:google-fonts plugin", () => {
     }
   });
 
+  it("does not rewrite calls shadowed by a var hoisted from a nested block", async () => {
+    // `var` is function-scoped, so a `var Inter` inside an if-block shadows the
+    // imported Google font loader for the whole function body, including calls
+    // that are siblings of the block.
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-shadow-var-hoist");
+    initPlugin(plugin, { command: "build", root });
+
+    mockGoogleFontsCSS("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }");
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Inter } from 'next/font/google';`,
+        `function render(condition: boolean) {`,
+        `  if (condition) {`,
+        `    var Inter = () => null;`,
+        `  }`,
+        `  return Inter({ weight: '400', subsets: ['latin'] });`,
+        `}`,
+        `const realInter = Inter({ weight: '400', subsets: ['latin'] });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      // The top-level call is the real import and must be self-hosted.
+      expect(result.code).toContain(
+        "const realInter = Inter({ weight: '400', subsets: ['latin'] , _vinext: {",
+      );
+      // The call inside render is shadowed by the hoisted var and must NOT be rewritten.
+      expect(result.code).toContain("return Inter({ weight: '400', subsets: ['latin'] });");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("handles comments inside import statement containing 'from'", async () => {
     const plugin = getGoogleFontsPlugin();
     const root = path.join(import.meta.dirname, ".test-font-root-import-comment");
