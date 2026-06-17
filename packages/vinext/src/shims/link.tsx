@@ -993,7 +993,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     // Resolve relative hrefs (#hash, ?query) for onNavigate and the hard-navigation fallback.
     // Pages query-only links must use the rewrite-aware target resolved above,
     // so callbacks and router-error fallback agree with the actual navigation.
-    const absoluteFullHref = toBrowserNavigationHref(
+    const browserNavigationHref = toBrowserNavigationHref(
       hasAppNavigationRuntime ? navigateHref : pagesNavigateHref,
       window.location.href,
       __basePath,
@@ -1002,7 +1002,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     // Call onNavigate callback if provided (Next.js 16 View Transitions support)
     if (onNavigate) {
       try {
-        const navUrl = new URL(absoluteFullHref, window.location.origin);
+        const navUrl = new URL(browserNavigationHref, window.location.origin);
         let prevented = false;
         const navEvent: NavigateEvent = {
           url: navUrl,
@@ -1042,11 +1042,11 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     ) {
       const externalNavigate = getNavigationRuntime()?.functions.navigateExternal;
       if (externalNavigate) {
-        void externalNavigate(absoluteFullHref, replace ? "replace" : "push");
+        void externalNavigate(browserNavigationHref, replace ? "replace" : "push");
       } else if (replace) {
-        window.location.replace(absoluteFullHref);
+        window.location.replace(browserNavigationHref);
       } else {
-        window.location.assign(absoluteFullHref);
+        window.location.assign(browserNavigationHref);
       }
       return;
     }
@@ -1089,9 +1089,9 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
         },
         fallback: () => {
           if (replace) {
-            window.history.replaceState({}, "", absoluteFullHref);
+            window.history.replaceState({}, "", browserNavigationHref);
           } else {
-            window.history.pushState({}, "", absoluteFullHref);
+            window.history.pushState({}, "", browserNavigationHref);
           }
           window.dispatchEvent(new PopStateEvent("popstate"));
         },
