@@ -1200,6 +1200,10 @@ describe("Pages Router entry template", () => {
         path.join(pagesDir, "local-alias.tsx"),
         "const getStaticProps = () => ({ props: {} }); export { getStaticProps as loader }; export default function Page() { return null; }",
       );
+      fs.writeFileSync(
+        path.join(pagesDir, "type-only.tsx"),
+        "export type { getStaticProps } from './types';\nexport default function Page() { return null; }",
+      );
 
       const code = await generateClientEntry(
         pagesDir,

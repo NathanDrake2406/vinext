@@ -92,6 +92,15 @@ describe("hasNamedExport", () => {
     );
   });
 
+  it("ignores type-only export specifiers", () => {
+    expect(
+      hasNamedExport(
+        "export type { getStaticProps } from './types';\nexport default function Page() { return null; }",
+        "getStaticProps",
+      ),
+    ).toBe(false);
+  });
+
   it("detects export on a line following other code", () => {
     const code = `const x = 1;\nexport async function getStaticProps() {}`;
     expect(hasNamedExport(code, "getStaticProps")).toBe(true);
@@ -141,6 +150,15 @@ describe("hasPublicExportedName", () => {
     expect(hasPublicExportedName("export { getStaticProps as gsp };", "getStaticProps")).toBe(
       false,
     );
+  });
+
+  it("ignores type-only export specifiers", () => {
+    expect(
+      hasPublicExportedName(
+        "export type { getStaticProps } from './types';\nexport default function Page() { return null; }",
+        "getStaticProps",
+      ),
+    ).toBe(false);
   });
 
   it("returns false when export is absent", () => {

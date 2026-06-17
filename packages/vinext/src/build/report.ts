@@ -164,10 +164,13 @@ export function hasExportedName(code: string, name: string): boolean {
 function hasNamedExportInProgram(program: Program, name: string): boolean {
   for (const node of program.body) {
     if (node.type !== "ExportNamedDeclaration") continue;
+    if (node.exportKind === "type") continue;
 
     if (declarationHasBindingName(node.declaration, name)) return true;
 
     for (const specifier of node.specifiers) {
+      if (specifier.exportKind === "type") continue;
+
       if (moduleExportNameValue(specifier.local) === name) {
         return true;
       }
