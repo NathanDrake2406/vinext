@@ -933,6 +933,62 @@ describe("vinext:google-fonts plugin", () => {
     }
   });
 
+  it("does not inject self-host metadata into commented-out font calls", async () => {
+    // Next.js discovers next/font calls by walking the SWC AST:
+    // crates/next-custom-transforms/src/transforms/fonts/font_imports_generator.rs
+    // https://github.com/vercel/next.js/blob/canary/crates/next-custom-transforms/src/transforms/fonts/font_imports_generator.rs
+    // Text in comments is therefore not a font call and must not trigger the
+    // self-hosting rewrite.
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-commented-call");
+    initPlugin(plugin, { command: "build", root });
+
+    mockGoogleFontsCSS("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }");
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Inter } from 'next/font/google';`,
+        `// const inter = Inter({ weight: '400', subsets: ['latin'] });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain("virtual:vinext-google-fonts?");
+      expect(result.code).not.toContain("selfHostedCSS");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("injects self-host metadata when an options comment contains a brace", async () => {
+    // The AST owns the object range, so braces inside comments cannot make the
+    // font call look prematurely closed.
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-comment-brace");
+    initPlugin(plugin, { command: "build", root });
+
+    mockGoogleFontsCSS("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }");
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      const code = [
+        `import { Inter } from 'next/font/google';`,
+        `const inter = Inter({`,
+        `  weight: '400',`,
+        `  subsets: ['latin'], /* } */`,
+        `});`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain("selfHostedCSS");
+      expect(result.code).toContain("virtual:vinext-google-fonts?");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not produce double-comma when font options have a trailing comma", async () => {
     // Regression test: Inter({ subsets: ["latin"], }) already has a trailing comma.
     // injectSelfHostedCss must not prepend another ", " making the object literal
