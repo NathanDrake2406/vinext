@@ -34,6 +34,7 @@ import { appRouter } from "../routing/app-router.js";
 import { scanMetadataFiles } from "../server/metadata-routes.js";
 import { findDir } from "./report.js";
 import { startProdServer } from "../server/prod-server.js";
+import { injectPregeneratedConcretePaths } from "./pregenerated-concrete-paths-injection.js";
 
 // ─── Progress UI ──────────────────────────────────────────────────────────────
 
@@ -353,6 +354,7 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
       buildId: config.buildId,
       trailingSlash: config.trailingSlash,
     });
+    injectPregeneratedConcretePaths(root);
   } finally {
     progress.finish(rendered, skipped, errors);
   }
