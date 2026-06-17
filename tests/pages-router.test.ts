@@ -2061,10 +2061,11 @@ describe("Pages Router integration", () => {
       expect(res.headers.get("x-nextjs-redirect")).toBeNull();
     });
 
-    it("adds x-nextjs-rewrite for a real data URL rewritten by middleware", async () => {
+    it("adds data routing headers for a real data URL rewritten by middleware", async () => {
       const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/rewritten.json`);
       expect(res.status).toBe(200);
       expect(res.headers.get("x-nextjs-rewrite")).toBe("/ssr");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/ssr");
       expect(res.headers.get("x-middleware-rewrite")).toBeNull();
     });
 
@@ -5379,10 +5380,11 @@ describe("Production server middleware (Pages Router)", () => {
       expect(res.headers.get("x-nextjs-redirect")).toBeNull();
     });
 
-    it("adds x-nextjs-rewrite for a real data URL rewritten by middleware", async () => {
+    it("adds data routing headers for a real data URL rewritten by middleware", async () => {
       const res = await fetch(`${prodUrl}/_next/data/${BUILD_ID}/rewritten.json`);
       expect(res.status).toBe(200);
       expect(res.headers.get("x-nextjs-rewrite")).toBe("/ssr");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/ssr");
       expect(res.headers.get("x-middleware-rewrite")).toBeNull();
     });
 

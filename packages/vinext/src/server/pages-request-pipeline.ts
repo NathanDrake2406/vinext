@@ -411,6 +411,10 @@ export async function runPagesRequest(
 
   const matchResolvedPathname = (p: string): string =>
     i18nConfig ? normalizeDefaultLocalePathname(p, i18nConfig, { hostname: requestHostname }) : p;
+  const matchedPathnameForDataResponse = (): string => {
+    const matchedPathname = pathnameForResolvedUrl(resolvedUrl);
+    return matchResolvedPathname(matchedPathname);
+  };
 
   // Step 7: Config headers staging
   if (configHeaders.length) {
@@ -557,18 +561,28 @@ export async function runPagesRequest(
     }
   }
 
-  const refreshDataRewriteHeader = () => {
-    if (
-      (isDataReq || isDataRequest) &&
-      resolvedUrl !== originalResolvedUrl &&
-      !isExternalUrl(resolvedUrl)
-    ) {
+  const refreshDataRoutingHeaders = () => {
+    const isPagesDataRequest = isDataReq || isDataRequest;
+    if (!isPagesDataRequest || isExternalUrl(resolvedUrl)) {
+      delete middlewareHeaders["x-nextjs-rewrite"];
+      delete middlewareHeaders["x-nextjs-matched-path"];
+      return;
+    }
+
+    // Next.js sets both data-response routing hints on different layers:
+    // - web/adapter.ts sets x-nextjs-rewrite when middleware rewrites a data request.
+    // - base-server.ts sets x-nextjs-matched-path to the rendered route pathname.
+    //
+    // Keep both in the shared pipeline so prod, dev, and Worker adapters agree.
+    middlewareHeaders["x-nextjs-matched-path"] = matchedPathnameForDataResponse();
+
+    if (resolvedUrl !== originalResolvedUrl) {
       middlewareHeaders["x-nextjs-rewrite"] = resolvedUrl;
     } else {
       delete middlewareHeaders["x-nextjs-rewrite"];
     }
   };
-  refreshDataRewriteHeader();
+  refreshDataRoutingHeaders();
 
   // Step 13: Render + fallback rewrites
   if (typeof deps.renderPage === "function") {
@@ -598,7 +612,7 @@ export async function runPagesRequest(
         renderPageMatch = deps.matchPageRoute
           ? deps.matchPageRoute(resolvedPathname, request)
           : null;
-        refreshDataRewriteHeader();
+        refreshDataRoutingHeaders();
         if (renderPageMatch) break;
       }
     }
@@ -705,7 +719,7 @@ export async function runPagesRequest(
       if (deps.matchPageRoute?.(resolvedPathname, request)) break;
     }
   }
-  refreshDataRewriteHeader();
+  refreshDataRoutingHeaders();
 
   return {
     type: "render",

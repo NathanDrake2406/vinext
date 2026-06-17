@@ -189,15 +189,27 @@ describe("middleware", () => {
   });
 
   it.each([
-    { i18nConfig: null, requestPath: "/ssr-page", rewritePath: "/ssr-page-2" },
+    {
+      i18nConfig: null,
+      requestPath: "/ssr-page",
+      rewritePath: "/ssr-page-2",
+      expectedMatchedPath: "/ssr-page-2",
+    },
     {
       i18nConfig: { locales: ["en", "fr"], defaultLocale: "en" },
       requestPath: "/en/ssr-page",
       rewritePath: "/en/ssr-page-2",
+      expectedMatchedPath: "/en/ssr-page-2",
+    },
+    {
+      i18nConfig: { locales: ["en", "fr"], defaultLocale: "en" },
+      requestPath: "/en/ssr-page",
+      rewritePath: "/ssr-page-2",
+      expectedMatchedPath: "/en/ssr-page-2",
     },
   ])(
     "exposes the middleware rewrite target on real Pages data responses ($requestPath)",
-    async ({ i18nConfig, requestPath, rewritePath }) => {
+    async ({ i18nConfig, requestPath, rewritePath, expectedMatchedPath }) => {
       const result = await runPagesRequest(
         makeRequest(requestPath),
         baseDeps({
@@ -215,6 +227,7 @@ describe("middleware", () => {
       expect(result.type).toBe("response");
       if (result.type !== "response") return;
       expect(result.response.headers.get("x-nextjs-rewrite")).toBe(rewritePath);
+      expect(result.response.headers.get("x-nextjs-matched-path")).toBe(expectedMatchedPath);
       expect(result.response.headers.get("x-middleware-rewrite")).toBeNull();
     },
   );
@@ -234,6 +247,7 @@ describe("middleware", () => {
     expect(result.type).toBe("response");
     if (result.type !== "response") return;
     expect(result.response.headers.get("x-nextjs-rewrite")).toBeNull();
+    expect(result.response.headers.get("x-nextjs-matched-path")).toBeNull();
   });
 
   it("exposes the final config rewrite URL with appended source params", async () => {
