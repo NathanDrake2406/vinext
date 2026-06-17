@@ -8,6 +8,8 @@
 #
 # Environment variables:
 #   VINEXT_BUILD=0     Skip building vinext (if already built)
+#   VINEXT_DEPLOY_SUITE_QUIET=0  Disable local output filtering
+#   VINEXT_DEPLOY_SUITE_RAW_LOG=/path/to/log  Override local unfiltered log path
 #   NEXTJS_PREPARE=1   Install + build Next.js and Playwright
 #   NEXTJS_PREPARE_ONLY=1  Prepare Next.js and exit (don't run tests)
 #   NEXT_TEST_GROUP    Shard group (e.g. "1/16")
@@ -107,7 +109,30 @@ if [ "$#" -gt 0 ]; then
   RUN_ARGS+=("$@")
 fi
 
-(
-  cd "${NEXTJS_DIR}"
-  node run-tests.js "${RUN_ARGS[@]}"
-)
+run_nextjs_tests() {
+  (
+    cd "${NEXTJS_DIR}"
+    node run-tests.js "${RUN_ARGS[@]}"
+  )
+}
+
+should_filter_output() {
+  if [ -n "${VINEXT_DEPLOY_SUITE_QUIET:-}" ]; then
+    [ "${VINEXT_DEPLOY_SUITE_QUIET}" != "0" ]
+    return
+  fi
+
+  [ -z "${CI:-}" ]
+}
+
+if should_filter_output; then
+  RAW_LOG="${VINEXT_DEPLOY_SUITE_RAW_LOG:-${TMPDIR:-/tmp}/vinext-nextjs-deploy-suite.$$.log}"
+  echo ">>> writing unfiltered deploy-suite output to ${RAW_LOG}" >&2
+
+  run_nextjs_tests 2>&1 | tee "${RAW_LOG}" | perl -ne '
+    next if /^\[\d{2}:\d{2}:\d{2}\.\d{3}Z\] Browser Log: Failed to load resource:/;
+    print;
+  '
+else
+  run_nextjs_tests
+fi
