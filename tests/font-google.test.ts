@@ -1481,6 +1481,43 @@ describe("vinext:google-fonts plugin", () => {
     }
   });
 
+  it("does not rewrite calls shadowed by a const inside a switch case", async () => {
+    // The switch block is a single lexical scope, so a `const Inter` in any
+    // case shadows the imported loader for the whole switch.
+    const plugin = getGoogleFontsPlugin();
+    const root = path.join(import.meta.dirname, ".test-font-root-shadow-switch");
+    initPlugin(plugin, { command: "build", root });
+
+    mockGoogleFontsCSS("@font-face { font-family: 'Inter'; src: url(/inter.woff2); }");
+
+    try {
+      const transform = unwrapHook(plugin.transform);
+      // No braces around the case body: the SwitchStatement itself is the only
+      // lexical scope boundary, so this only passes if `switch` is a scope node.
+      const code = [
+        `import { Inter } from 'next/font/google';`,
+        `function render(kind: string) {`,
+        `  switch (kind) {`,
+        `    case "custom":`,
+        `      const Inter = (options: unknown) => options;`,
+        `      return Inter({ weight: '400', subsets: ['latin'] });`,
+        `  }`,
+        `}`,
+        `const realInter = Inter({ weight: '400', subsets: ['latin'] });`,
+      ].join("\n");
+
+      const result = await transform.call(plugin, code, "/app/layout.tsx");
+      expect(result).not.toBeNull();
+      expect(result.code).toContain(
+        "const realInter = Inter({ weight: '400', subsets: ['latin'] , _vinext: {",
+      );
+      // The call inside the switch case is shadowed and must NOT be rewritten.
+      expect(result.code).toContain("return Inter({ weight: '400', subsets: ['latin'] });");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("handles comments inside import statement containing 'from'", async () => {
     const plugin = getGoogleFontsPlugin();
     const root = path.join(import.meta.dirname, ".test-font-root-import-comment");

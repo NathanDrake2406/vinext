@@ -496,6 +496,7 @@ function isScopeNode(node: AstRecord): boolean {
     case "ForStatement":
     case "ForInStatement":
     case "ForOfStatement":
+    case "SwitchStatement":
       return true;
     default:
       return false;
