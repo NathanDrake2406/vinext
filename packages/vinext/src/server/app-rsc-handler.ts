@@ -880,13 +880,19 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       return new Response("", { status: 404 });
     }
 
-    const renderedNotFoundResponse = await options.renderNotFound({
-      isRscRequest,
-      middlewareContext,
-      request,
-      route: null,
-      scriptNonce,
-    });
+    // The not-found page is a filesystem route. An out-of-basePath request that
+    // no rewrite opted back in must not render it: doing so loads the app's
+    // client references and (under startProdServer's process-wide RSC globals)
+    // corrupts the active manifest. Fall through to a plain 404 instead.
+    const renderedNotFoundResponse = canUseFilesystemRoutes()
+      ? await options.renderNotFound({
+          isRscRequest,
+          middlewareContext,
+          request,
+          route: null,
+          scriptNonce,
+        })
+      : null;
     if (renderedNotFoundResponse) return renderedNotFoundResponse;
 
     options.clearRequestContext();
