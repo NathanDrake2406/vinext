@@ -1031,6 +1031,66 @@ describe("createAppRscHandler", () => {
     expect(loadSlotPage).not.toHaveBeenCalled();
   });
 
+  // Regression for the server-action preflight path in the generated RSC entry.
+  // handleServerActionRequest is invoked for every App Router request, not only
+  // real server actions. The generated wrapper must skip hydration when there is
+  // no action id and must entry-load the matched route (page + route handler,
+  // but not parallel slot pages) when there is one. Without this guard a plain
+  // GET to a route handler with inherited parallel slots would evaluate the slot
+  // page modules before the handler dispatch branch runs.
+  it("does not let the server-action preflight load parallel slot pages for route handlers", async () => {
+    const routeHandlerModule = { GET: () => new Response("route") };
+    const slotPageModule = { default: () => null };
+    const loadRouteHandler = vi.fn(async () => routeHandlerModule);
+    const loadSlotPage = vi.fn(async () => slotPageModule);
+    const route = createPageRoute({
+      page: null,
+      pattern: "/dashboard",
+      routeHandler: null,
+      routeSegments: ["dashboard"],
+      __loadRouteHandler: loadRouteHandler,
+      slots: {
+        "panel:/dashboard/@panel": {
+          page: null,
+          __loadPage: loadSlotPage,
+        },
+      },
+    });
+    const dispatchMatchedRouteHandler = vi.fn<DispatchMatchedRouteHandler>(
+      async () => new Response("route", { status: 200 }),
+    );
+    const matchRoute = (pathname: string) =>
+      pathname === "/dashboard" ? { params: {}, route } : null;
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedRouteHandler,
+      ensureRouteLoaded: ensureAppRouteModulesLoaded,
+      handleServerActionRequest: async ({ actionId, cleanPathname }) => {
+        // Models the generated RSC entry wrapper: non-action requests bail out,
+        // and action requests only load the route entry (page/route handler),
+        // leaving parallel slot page hydration for the page render path.
+        if (!actionId) return null;
+        const match = matchRoute(cleanPathname);
+        if (match) {
+          await ensureAppRouteModulesLoaded(match.route, {
+            includeParallelSlotPages: false,
+          });
+        }
+        return null;
+      },
+      matchRoute,
+    });
+
+    const response = await handler(new Request("https://example.test/docs/dashboard"), null);
+
+    expect(response.status).toBe(200);
+    expect(dispatchMatchedRouteHandler).toHaveBeenCalledTimes(1);
+    expect(route.routeHandler).toBe(routeHandlerModule);
+    expect(route.slots?.["panel:/dashboard/@panel"]?.page).toBeNull();
+    expect(loadRouteHandler).toHaveBeenCalledTimes(1);
+    expect(loadSlotPage).not.toHaveBeenCalled();
+  });
+
   it("preserves non-RSC route handler request URLs while hiding internal parsed params", async () => {
     const route = createPageRoute({
       page: null,
