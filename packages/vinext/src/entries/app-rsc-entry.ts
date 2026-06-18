@@ -195,6 +195,7 @@ export function generateRscEntry(
   trailingSlash?: boolean,
   config?: AppRouterConfig,
   instrumentationPath?: string | null,
+  clientReferenceImportCandidatesByRoute?: readonly (readonly string[] | null)[],
 ): string {
   const bp = basePath ?? "";
   const ts = trailingSlash ?? false;
@@ -220,6 +221,7 @@ export function generateRscEntry(
     routes,
     metadataRoutes,
     globalErrorPath,
+    clientReferenceImportCandidatesByRoute,
     globalNotFoundPath: config?.globalNotFoundPath ?? null,
   });
   const {
@@ -672,6 +674,7 @@ export default createAppRscHandler({
     return __dispatchAppPage({
       basePath: __basePath,
       ensureRouteLoaded: __ensureRouteLoaded,
+      clientReferenceImportCandidates: route.clientReferenceImportCandidates ?? null,
       clientTraceMetadata: __clientTraceMetadata,
       reactMaxHeadersLength: __reactMaxHeadersLength,
       buildPageElement(targetRoute, targetParams, targetOpts, targetSearchParams, layoutParamAccess) {

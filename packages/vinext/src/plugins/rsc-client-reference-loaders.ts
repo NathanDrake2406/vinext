@@ -1,8 +1,13 @@
 import type { Plugin } from "vite";
 import type { PluginApi } from "@vitejs/plugin-rsc";
+import { resolveEntryPath } from "../entries/runtime-entry-module.js";
 
 const CLIENT_REFERENCES_ID = "\0virtual:vite-rsc/client-references";
 const RESOLVED_ID_PROXY_PREFIX = "virtual:vite-rsc/resolved-id/";
+const clientReferenceImportMapStatePath = resolveEntryPath(
+  "../server/client-reference-import-map-state.js",
+  import.meta.url,
+);
 
 type RscClientReferenceMeta = PluginApi["manager"]["clientReferenceMetaMap"][string];
 
@@ -43,7 +48,19 @@ function generateDirectClientReferenceLoaders(metas: RscClientReferenceMeta[]): 
     })
     .join("\n");
 
-  return `export default {\n${entries}\n};\n`;
+  const importMapEntries = metas
+    .slice()
+    .sort((a, b) => a.referenceKey.localeCompare(b.referenceKey))
+    .map((meta) => `  ${JSON.stringify(meta.referenceKey)}: ${JSON.stringify(meta.importId)},`)
+    .join("\n");
+
+  return `import { setClientReferenceImportMap as __vinextSetClientReferenceImportMap } from ${JSON.stringify(clientReferenceImportMapStatePath)};
+__vinextSetClientReferenceImportMap({
+${importMapEntries}
+});
+export default {
+${entries}
+};\n`;
 }
 
 export function createRscClientReferenceLoadersPlugin(): Plugin {

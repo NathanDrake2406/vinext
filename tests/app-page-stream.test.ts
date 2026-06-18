@@ -167,6 +167,31 @@ describe("app page stream helpers", () => {
     );
   });
 
+  it("forwards route-scoped client-reference import candidates to the SSR handler", async () => {
+    const clientReferenceImportCandidates = ["/tmp/test/app/page.tsx", "client-lib"];
+    const ssrHandler = vi.fn(async () => createStream(["<html>client-refs</html>"]));
+
+    const { htmlStream } = await renderAppPageHtmlStream({
+      clientReferenceImportCandidates,
+      fontData: createAppPageFontData({
+        getLinks: () => [],
+        getPreloads: () => [],
+        getStyles: () => [],
+      }),
+      navigationContext: null,
+      rscStream: createStream(["flight"]),
+      ssrHandler: { handleSsr: ssrHandler },
+    });
+
+    await expect(new Response(htmlStream).text()).resolves.toBe("<html>client-refs</html>");
+    expect(ssrHandler).toHaveBeenCalledWith(
+      expect.anything(),
+      null,
+      expect.anything(),
+      expect.objectContaining({ clientReferenceImportCandidates }),
+    );
+  });
+
   it("defers clearRequestContext until the HTML stream body is fully consumed", async () => {
     // Regression test for issue #660: clearRequestContext() must not race the
     // lazy RSC/SSR stream pipeline. It should be called only after the HTTP

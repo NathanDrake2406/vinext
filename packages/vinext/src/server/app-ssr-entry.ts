@@ -51,6 +51,11 @@ import {
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
 import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
+import {
+  getClientReferenceImportMap,
+  isClientReferenceImportMapAvailable,
+} from "./client-reference-import-map-state.js";
+import { resolveClientReferenceIdsForImportCandidates } from "./client-reference-imports.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 import { isPprFallbackShellAbortError } from "vinext/shims/ppr-fallback-shell";
 import DefaultGlobalError from "vinext/shims/default-global-error";
@@ -210,6 +215,26 @@ const clientReferencePreloader = createClientReferencePreloader({
 });
 const BfcacheIdMapContext = getBfcacheIdMapContext();
 
+async function preloadClientReferences(
+  importCandidates: readonly string[] | null | undefined,
+): Promise<void> {
+  if (!isClientReferenceImportMapAvailable()) {
+    await clientReferencePreloader.preload();
+    return;
+  }
+
+  const referenceIds = resolveClientReferenceIdsForImportCandidates(
+    importCandidates,
+    getClientReferenceImportMap(),
+  );
+  if (referenceIds === null) {
+    await clientReferencePreloader.preload();
+    return;
+  }
+
+  await clientReferencePreloader.preload(referenceIds);
+}
+
 function ssrErrorDigest(input: string): string {
   let hash = 5381;
   for (let i = input.length - 1; i >= 0; i--) {
@@ -365,6 +390,11 @@ export async function handleSsr(
      */
     clientTraceMetadata?: readonly string[];
     /**
+     * Route-scoped import candidates for client references. `null`/`undefined`
+     * preserves the legacy global preload path.
+     */
+    clientReferenceImportCandidates?: readonly string[] | null;
+    /**
      * Maximum total length (in characters) of the preload `Link` header React
      * emits during SSR. `0` disables emission. From `reactMaxHeadersLength` in
      * `next.config`. Undefined falls back to React's own default.
@@ -383,7 +413,7 @@ export async function handleSsr(
   return runWithNavigationContext(async () => {
     const ssrNavigationContext = requireNavigationContext(navContext);
 
-    await clientReferencePreloader.preload();
+    await preloadClientReferences(options?.clientReferenceImportCandidates);
 
     setNavigationContext(ssrNavigationContext);
 

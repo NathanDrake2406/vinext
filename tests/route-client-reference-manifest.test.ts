@@ -1,0 +1,236 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import type { AppRoute } from "../packages/vinext/src/routing/app-router.js";
+import {
+  collectAppRouteClientReferenceSeedFiles,
+  collectAppRouteModuleFiles,
+} from "../packages/vinext/src/server/app-route-module-files.js";
+import {
+  buildRouteClientReferenceCandidateManifest,
+  getRouteClientReferenceImportCandidatesInRouteOrder,
+  normalizeClientReferenceImportId,
+  resolveClientReferenceIdsForImportCandidates,
+} from "../packages/vinext/src/server/route-client-reference-manifest.js";
+
+function createRoute(overrides: Partial<AppRoute> = {}): AppRoute {
+  return {
+    pattern: "/dashboard",
+    patternParts: ["dashboard"],
+    pagePath: "/app/dashboard/page.tsx",
+    routePath: "/app/dashboard/route.ts",
+    layouts: ["/app/layout.tsx", "/app/dashboard/layout.tsx"],
+    templates: ["/app/dashboard/template.tsx"],
+    parallelSlots: [
+      {
+        key: "modal:/app/dashboard/@modal",
+        name: "modal",
+        ownerDir: "/app/dashboard",
+        ownerTreePath: "/dashboard",
+        hasPage: false,
+        pagePath: "/app/dashboard/@modal/page.tsx",
+        defaultPath: "/app/dashboard/@modal/default.tsx",
+        layoutPath: "/app/dashboard/@modal/layout.tsx",
+        loadingPath: "/app/dashboard/@modal/loading.tsx",
+        errorPath: "/app/dashboard/@modal/error.tsx",
+        interceptingRoutes: [
+          {
+            convention: ".",
+            targetPattern: "/photos/:id",
+            sourceMatchPattern: "/dashboard",
+            pagePath: "/app/dashboard/@modal/(.)photos/[id]/page.tsx",
+            layoutPaths: ["/app/dashboard/@modal/(.)photos/layout.tsx"],
+            params: ["id"],
+          },
+        ],
+        layoutIndex: 1,
+        routeSegments: ["@modal"],
+      },
+    ],
+    siblingIntercepts: [
+      {
+        convention: ".",
+        targetPattern: "/settings",
+        sourceMatchPattern: "/dashboard",
+        pagePath: "/app/dashboard/(.)settings/page.tsx",
+        layoutPaths: ["/app/dashboard/(.)settings/layout.tsx"],
+        params: [],
+      },
+    ],
+    loadingPath: "/app/dashboard/loading.tsx",
+    errorPath: "/app/dashboard/error.tsx",
+    layoutErrorPaths: [null, "/app/dashboard/error.tsx"],
+    errorPaths: ["/app/dashboard/leaf-error.tsx"],
+    notFoundPath: "/app/dashboard/not-found.tsx",
+    notFoundPaths: ["/app/not-found.tsx", "/app/dashboard/not-found.tsx"],
+    forbiddenPath: "/app/dashboard/forbidden.tsx",
+    forbiddenPaths: ["/app/forbidden.tsx", "/app/dashboard/forbidden.tsx"],
+    unauthorizedPath: "/app/dashboard/unauthorized.tsx",
+    unauthorizedPaths: ["/app/unauthorized.tsx", "/app/dashboard/unauthorized.tsx"],
+    routeSegments: ["dashboard"],
+    templateTreePositions: [1],
+    layoutTreePositions: [0, 1],
+    isDynamic: false,
+    params: [],
+    ...overrides,
+  };
+}
+
+describe("app route module files", () => {
+  it("collects all route modules and includes route handlers only when requested", () => {
+    const route = createRoute();
+
+    expect(collectAppRouteModuleFiles(route)).not.toContain("/app/dashboard/route.ts");
+    expect(collectAppRouteModuleFiles(route, { includeRouteHandler: true })).toContain(
+      "/app/dashboard/route.ts",
+    );
+  });
+
+  it("collects client reference seeds in layout-before-page order", () => {
+    const route = createRoute();
+
+    expect(collectAppRouteClientReferenceSeedFiles(route).slice(0, 4)).toEqual([
+      "/app/layout.tsx",
+      "/app/dashboard/layout.tsx",
+      "/app/dashboard/template.tsx",
+      "/app/dashboard/loading.tsx",
+    ]);
+    expect(collectAppRouteClientReferenceSeedFiles(route)).toContain("/app/dashboard/page.tsx");
+    expect(collectAppRouteClientReferenceSeedFiles(route)).not.toContain("/app/dashboard/route.ts");
+  });
+});
+
+describe("route client reference manifest", () => {
+  it("normalizes Vite query suffixes and virtual prefixes", () => {
+    expect(normalizeClientReferenceImportId("\0/tmp/app/client.tsx?v=1#hash")).toBe(
+      "/tmp/app/client.tsx",
+    );
+  });
+
+  it("maps route import candidates to client reference IDs", () => {
+    const referenceIds = resolveClientReferenceIdsForImportCandidates(
+      ["/tmp/app/client-a.tsx", "package-client"],
+      {
+        "a#default": "/tmp/app/client-a.tsx?used",
+        "b#default": "/tmp/app/client-b.tsx",
+        "pkg#default": "package-client",
+      },
+    );
+
+    expect(referenceIds).toEqual(["a#default", "pkg#default"]);
+  });
+
+  it("walks transitive project-local imports and keeps scoped route order", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const appDir = path.join(root, "app");
+      await fs.mkdir(path.join(appDir, "dashboard"), { recursive: true });
+      await fs.writeFile(
+        path.join(appDir, "layout.tsx"),
+        `import "./shell";\nexport default function Layout({ children }) { return children; }`,
+      );
+      await fs.writeFile(
+        path.join(appDir, "shell.tsx"),
+        `import Search from "./search";\nexport default function Shell() { return <Search />; }`,
+      );
+      await fs.writeFile(
+        path.join(appDir, "search.tsx"),
+        `"use client";\nexport default function Search() { return null; }`,
+      );
+      await fs.writeFile(
+        path.join(appDir, "dashboard", "page.tsx"),
+        `import Counter from "../counter";\nexport default function Page() { return <Counter />; }`,
+      );
+      await fs.writeFile(
+        path.join(appDir, "counter.tsx"),
+        `"use client";\nexport default function Counter() { return null; }`,
+      );
+
+      const routes = [
+        createRoute({
+          pattern: "/",
+          ids: {
+            route: "route:/",
+            page: "page:/",
+            routeHandler: null,
+            rootBoundary: null,
+            layouts: [],
+            templates: [],
+            slots: {},
+          },
+          pagePath: path.join(appDir, "dashboard", "page.tsx"),
+          routePath: null,
+          layouts: [path.join(appDir, "layout.tsx")],
+          templates: [],
+          parallelSlots: [],
+          siblingIntercepts: [],
+          loadingPath: null,
+          errorPath: null,
+          layoutErrorPaths: [null],
+          errorPaths: [],
+          notFoundPath: null,
+          notFoundPaths: [null],
+          forbiddenPath: null,
+          forbiddenPaths: [null],
+          unauthorizedPath: null,
+          unauthorizedPaths: [null],
+        }),
+      ];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+      });
+      const [candidates] = getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes);
+
+      expect(candidates).toContain(
+        normalizeClientReferenceImportId(path.join(appDir, "search.tsx")),
+      );
+      expect(candidates).toContain(
+        normalizeClientReferenceImportId(path.join(appDir, "counter.tsx")),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks routes with dynamic imports incomplete so callers can keep global preload", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const pagePath = path.join(root, "app", "page.tsx");
+      await fs.mkdir(path.dirname(pagePath), { recursive: true });
+      await fs.writeFile(
+        pagePath,
+        `export default async function Page() { const mod = await import ("./client"); return null; }`,
+      );
+
+      const routes = [
+        createRoute({
+          pattern: "/",
+          pagePath,
+          routePath: null,
+          layouts: [],
+          templates: [],
+          parallelSlots: [],
+          siblingIntercepts: [],
+          loadingPath: null,
+          errorPath: null,
+          layoutErrorPaths: [],
+          errorPaths: [],
+          notFoundPath: null,
+          notFoundPaths: [],
+          forbiddenPath: null,
+          forbiddenPaths: [],
+          unauthorizedPath: null,
+          unauthorizedPaths: [],
+        }),
+      ];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+      });
+
+      expect(getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes)).toEqual([null]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

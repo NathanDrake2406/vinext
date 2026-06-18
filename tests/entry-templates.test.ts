@@ -233,6 +233,23 @@ describe("App Router generated manifest construction", () => {
     );
   });
 
+  it("emits route-scoped client-reference import candidates for complete route graphs", () => {
+    const manifest = buildAppRscManifestCode({
+      routes: minimalAppRoutes,
+      clientReferenceImportCandidatesByRoute: [
+        ["/tmp/test/app/layout.tsx", "client-lib"],
+        null,
+        [],
+      ],
+    });
+
+    expect(manifest.routeEntries[0]).toContain(
+      'clientReferenceImportCandidates: ["/tmp/test/app/layout.tsx","client-lib"]',
+    );
+    expect(manifest.routeEntries[1]).not.toContain("clientReferenceImportCandidates");
+    expect(manifest.routeEntries[2]).toContain("clientReferenceImportCandidates: []");
+  });
+
   it("embeds the RouteManifest read model in the browser entry", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-browser-route-manifest-"));
     const appDir = path.join(tmpDir, "app");
@@ -711,6 +728,25 @@ describe("App Router entry templates", () => {
     expect(globalsImportIndex).toBeGreaterThanOrEqual(0);
     expect(firstUserImportIndex).toBeGreaterThanOrEqual(0);
     expect(globalsImportIndex).toBeLessThan(firstUserImportIndex);
+  });
+
+  it("passes route-scoped client-reference import candidates to app page dispatch", () => {
+    const code = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+      undefined,
+      null,
+      [["/tmp/test/app/page.tsx"], null, null, null],
+    );
+
+    expect(code).toContain(
+      "clientReferenceImportCandidates: route.clientReferenceImportCandidates ?? null",
+    );
   });
 
   it("generateRscEntry fails with a path-specific error when a static metadata file cannot be read", () => {
