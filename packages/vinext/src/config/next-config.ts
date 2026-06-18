@@ -218,6 +218,8 @@ export type NextConfig = {
   };
   /** Build output mode: 'export' for full static export, 'standalone' for single server */
   output?: "export" | "standalone";
+  /** Adds a CORS mode to generated script and preload tags. */
+  crossOrigin?: "anonymous" | "use-credentials";
   /** File extensions treated as routable pages/routes (Next.js pageExtensions) */
   pageExtensions?: string[];
   /** Turbopack-compatible module resolution options. */
@@ -346,6 +348,8 @@ export type ResolvedNextConfig = {
    * @see https://nextjs.org/docs/app/api-reference/config/next-config-js/assetPrefix
    */
   assetPrefix: string;
+  /** Resolved `crossOrigin` from next.config.js for generated script/preload tags. */
+  crossOrigin: "anonymous" | "use-credentials" | undefined;
   trailingSlash: boolean;
   output: "" | "export" | "standalone";
   pageExtensions: string[];
@@ -1116,6 +1120,17 @@ export function normalizeAssetPrefix(value: unknown): string {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
+function normalizeCrossOrigin(
+  value: NextConfig["crossOrigin"],
+): "anonymous" | "use-credentials" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "anonymous" || value === "use-credentials") return value;
+
+  throw new Error(
+    'Invalid `crossOrigin` configuration: expected "anonymous" or "use-credentials".',
+  );
+}
+
 function resolveDeploymentId(configDeploymentId: unknown): string | undefined {
   const deploymentId =
     configDeploymentId !== undefined ? configDeploymentId : process.env.NEXT_DEPLOYMENT_ID;
@@ -1332,6 +1347,7 @@ export async function resolveNextConfig(
       env: {},
       basePath: "",
       assetPrefix: "",
+      crossOrigin: undefined,
       trailingSlash: false,
       output: "",
       pageExtensions: normalizePageExtensions(),
@@ -1670,6 +1686,7 @@ export async function resolveNextConfig(
     env: config.env ?? {},
     basePath: config.basePath ?? "",
     assetPrefix: normalizeAssetPrefix(config.assetPrefix),
+    crossOrigin: normalizeCrossOrigin(config.crossOrigin),
     trailingSlash: config.trailingSlash ?? false,
     output: output === "export" || output === "standalone" ? output : "",
     pageExtensions,

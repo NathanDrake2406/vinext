@@ -1999,6 +1999,7 @@ describe("detectNextIntlConfig", () => {
       env: {},
       assetPrefix: "",
       basePath: "",
+      crossOrigin: undefined,
       trailingSlash: false,
       output: "",
       pageExtensions: ["tsx", "ts", "jsx", "js"],

@@ -5028,8 +5028,12 @@ describe("Production server middleware (Pages Router)", () => {
     expect(html).toContain(
       '<script id="__NEXT_DATA__" type="application/json" nonce="pages-prod">',
     );
-    expect(html).toMatch(/<script type="module" defer nonce="pages-prod" src="\/[^"]+"/);
-    expect(html).toMatch(/<link rel="modulepreload" nonce="pages-prod" href="\/[^"]+"/);
+    expect(html).toMatch(
+      /<script\b(?=[^>]*type="module")(?=[^>]*defer)(?=[^>]*nonce="pages-prod")(?=[^>]*src="\/[^"]+")[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<link\b(?=[^>]*rel="modulepreload")(?=[^>]*nonce="pages-prod")(?=[^>]*href="\/[^"]+")[^>]*>/,
+    );
   });
 
   // Ported from Next.js: test/e2e/optimized-loading/test/index.test.ts
@@ -5698,6 +5702,11 @@ describe("Pages _document renderPage enhancers", () => {
       JSON.stringify({ private: true, dependencies: { next: "*", react: "*", "react-dom": "*" } }),
     );
     await fsp.writeFile(
+      path.join(fixtureRoot, "next.config.js"),
+      `module.exports = { crossOrigin: "anonymous" };
+`,
+    );
+    await fsp.writeFile(
       path.join(fixtureRoot, "pages", "_app.tsx"),
       `export default function App({ Component, pageProps }: any) {
   return <main id="app-shell"><Component {...pageProps} /></main>;
@@ -5854,7 +5863,7 @@ export default class CustomDocument extends Document {
   }
   render() {
     return (
-      <Html><Head /><body><p id="document-prop">{(this.props as any).documentProp}</p><p id="document-request-context">{(this.props as any).documentRequestContext}</p><p id="document-error-context">{(this.props as any).documentErrorContext}</p><Main /><NextScript /></body></Html>
+      <Html><Head nonce="test-nonce"><style>{\`body { margin: 0 } /* custom! */\`}</style></Head><body><p id="document-prop">{(this.props as any).documentProp}</p><p id="document-request-context">{(this.props as any).documentRequestContext}</p><p id="document-error-context">{(this.props as any).documentErrorContext}</p><Main /><NextScript nonce="test-nonce" /></body></Html>
     );
   }
 }
@@ -5883,6 +5892,40 @@ export default class CustomDocument extends Document {
 
   // Ported from Next.js: test/e2e/app-document/rendering.test.ts
   // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-document/rendering.test.ts
+  it.each(["dev", "prod"] as const)(
+    "preserves custom Document Head children in %s",
+    async (mode) => {
+      const url = mode === "dev" ? devUrl : prodUrl;
+      const response = await fetch(`${url}/`);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain("body { margin: 0 }");
+    },
+  );
+
+  it.each(["dev", "prod"] as const)(
+    "adds nonces and crossOrigin to all scripts and preload links in %s",
+    async (mode) => {
+      const url = mode === "dev" ? devUrl : prodUrl;
+      const response = await fetch(`${url}/`);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      // Next.js emits JavaScript preloads as `link[rel=preload]`; vinext's Vite
+      // ESM build emits the equivalent entries as `link[rel=modulepreload]`.
+      const targetTags = Array.from(html.matchAll(/<(script|link)\b[^>]*>/g))
+        .map((match) => match[0])
+        .filter(
+          (tag) => tag.startsWith("<script") || /\srel=["'](?:preload|modulepreload)["']/.test(tag),
+        );
+
+      expect(targetTags.length).toBeGreaterThan(0);
+      for (const tag of targetTags) {
+        expect(tag).toContain('nonce="test-nonce"');
+        expect(tag).toContain('crossorigin="anonymous"');
+      }
+    },
+  );
+
   it.each(["dev", "prod"] as const)("applies all renderPage enhancer forms in %s", async (mode) => {
     const url = mode === "dev" ? devUrl : prodUrl;
     for (const [query, expectedIds] of enhancerCases) {

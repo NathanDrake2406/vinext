@@ -11,7 +11,7 @@ import {
 } from "./isr-decision.js";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
-import { createNonceAttribute, escapeHtmlAttr } from "./html.js";
+import { createCrossOriginAttribute, createNonceAttribute, escapeHtmlAttr } from "./html.js";
 import { getClientTraceMetadataHTML } from "./client-trace-metadata.js";
 import { reportRequestError } from "./instrumentation.js";
 import {
@@ -23,6 +23,12 @@ import { fnv1a52 } from "../utils/hash.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { appendAssetDeploymentIdQuery } from "../utils/deployment-id.js";
+import {
+  applyPagesDocumentAssetAttributes,
+  extractPagesDocumentAssetAttributes,
+  mergePagesDocumentAssetAttributes,
+  type PagesDocumentAssetAttributes,
+} from "./pages-document-asset-attributes.js";
 
 // ---------------------------------------------------------------------------
 // Bot / crawler detection for Pages Router edge-runtime SSR
@@ -202,6 +208,7 @@ type RenderPagesPageResponseOptions = {
   routeUrl: string;
   safeJsonStringify: (value: unknown) => string;
   scriptNonce?: string;
+  crossOrigin?: "anonymous" | "use-credentials";
   statusCode?: number;
   vinext?: VinextNextData["__vinext"];
   nextData?: PagesNextDataExtras;
@@ -265,6 +272,7 @@ export function buildPagesNextDataScript(
     | "routePattern"
     | "safeJsonStringify"
     | "scriptNonce"
+    | "crossOrigin"
     | "nextData"
   > & {
     vinext?: VinextNextData["__vinext"];
@@ -300,7 +308,7 @@ export function buildPagesNextDataScript(
     };
   }
 
-  return `<script id="__NEXT_DATA__" type="application/json"${createNonceAttribute(options.scriptNonce)}>${options.safeJsonStringify(nextDataPayload)}</script>`;
+  return `<script id="__NEXT_DATA__" type="application/json"${createNonceAttribute(options.scriptNonce)}${createCrossOriginAttribute(options.crossOrigin)}>${options.safeJsonStringify(nextDataPayload)}</script>`;
 }
 
 async function buildPagesShellHtml(
@@ -312,6 +320,8 @@ async function buildPagesShellHtml(
     "assetTags" | "DocumentComponent" | "renderDocumentToString"
   > & {
     ssrHeadHTML: string;
+    scriptNonce?: string | undefined;
+    crossOrigin?: "anonymous" | "use-credentials" | undefined;
     /**
      * Document props already resolved by `runDocumentRenderPage`. When set,
      * `getInitialProps` was consumed by the renderPage path and must not be
@@ -328,30 +338,55 @@ async function buildPagesShellHtml(
       ? React.createElement(options.DocumentComponent, docProps)
       : React.createElement(options.DocumentComponent);
     let html = await options.renderDocumentToString(docElement);
+    const extracted = extractPagesDocumentAssetAttributes(html);
+    html = extracted.html;
+    const fallbackAttrs: PagesDocumentAssetAttributes = {
+      nonce: options.scriptNonce,
+      crossOrigin: options.crossOrigin,
+    };
+    const headAttrs = mergePagesDocumentAssetAttributes(extracted.head, fallbackAttrs);
+    const nextScriptAttrs = mergePagesDocumentAssetAttributes(extracted.nextScript, fallbackAttrs);
+    const fontHeadWithAttrs = applyPagesDocumentAssetAttributes(fontHeadHTML, headAttrs);
+    const ssrHeadWithAttrs = applyPagesDocumentAssetAttributes(options.ssrHeadHTML, headAttrs);
+    const assetTagsWithAttrs = applyPagesDocumentAssetAttributes(options.assetTags, headAttrs);
+    const nextDataScriptWithAttrs = applyPagesDocumentAssetAttributes(
+      nextDataScript,
+      nextScriptAttrs,
+    );
+
     html = html.replace("__NEXT_MAIN__", bodyMarker);
-    if (options.ssrHeadHTML || options.assetTags || fontHeadHTML) {
+    if (ssrHeadWithAttrs || assetTagsWithAttrs || fontHeadWithAttrs) {
       html = html.replace(
         "</head>",
-        `  ${fontHeadHTML}${options.ssrHeadHTML}\n  ${options.assetTags}\n</head>`,
+        `  ${fontHeadWithAttrs}${ssrHeadWithAttrs}\n  ${assetTagsWithAttrs}\n</head>`,
       );
     }
-    html = html.replace("<!-- __NEXT_SCRIPTS__ -->", nextDataScript);
+    html = html.replace("<!-- __NEXT_SCRIPTS__ -->", nextDataScriptWithAttrs);
     if (!html.includes("__NEXT_DATA__")) {
-      html = html.replace("</body>", `  ${nextDataScript}\n</body>`);
+      html = html.replace("</body>", `  ${nextDataScriptWithAttrs}\n</body>`);
     }
     return html;
   }
+
+  const fallbackAttrs: PagesDocumentAssetAttributes = {
+    nonce: options.scriptNonce,
+    crossOrigin: options.crossOrigin,
+  };
+  const fontHeadWithAttrs = applyPagesDocumentAssetAttributes(fontHeadHTML, fallbackAttrs);
+  const ssrHeadWithAttrs = applyPagesDocumentAssetAttributes(options.ssrHeadHTML, fallbackAttrs);
+  const assetTagsWithAttrs = applyPagesDocumentAssetAttributes(options.assetTags, fallbackAttrs);
+  const nextDataScriptWithAttrs = applyPagesDocumentAssetAttributes(nextDataScript, fallbackAttrs);
 
   // charset + viewport are emitted via getSSRHeadHTML() (next/head's
   // defaultHead seeds them with data-next-head=""), matching Next.js's
   // canonical ordering. Don't duplicate them here.
   return (
     "<!DOCTYPE html>\n<html>\n<head>\n" +
-    `  ${fontHeadHTML}${options.ssrHeadHTML}\n` +
-    `  ${options.assetTags}\n` +
+    `  ${fontHeadWithAttrs}${ssrHeadWithAttrs}\n` +
+    `  ${assetTagsWithAttrs}\n` +
     "</head>\n<body>\n" +
     `  <div id="__next">${bodyMarker}</div>\n` +
-    `  ${nextDataScript}\n` +
+    `  ${nextDataScriptWithAttrs}\n` +
     "</body>\n</html>"
   );
 }
@@ -494,6 +529,7 @@ export async function renderPagesPageResponse(
     routePattern: options.routePattern,
     safeJsonStringify: options.safeJsonStringify,
     scriptNonce: options.scriptNonce,
+    crossOrigin: options.crossOrigin,
     nextData: options.nextData,
     vinext: options.vinext,
   });
@@ -589,6 +625,8 @@ export async function renderPagesPageResponse(
     DocumentComponent: options.DocumentComponent,
     renderDocumentToString: options.renderDocumentToString,
     ssrHeadHTML,
+    scriptNonce: options.scriptNonce,
+    crossOrigin: options.crossOrigin,
     // When the renderPage path already invoked getInitialProps, reuse its
     // resolved props instead of calling it a second time.
     // `skipped` means it was never invoked → fall through to the fast path.

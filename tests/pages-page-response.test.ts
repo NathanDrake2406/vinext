@@ -321,13 +321,69 @@ describe("pages page response", () => {
     expect(html).toContain(
       '<script id="__NEXT_DATA__" type="application/json" nonce="pages-test-nonce">',
     );
-    expect(html).toContain('<link rel="stylesheet" nonce="pages-test-nonce" href="/font.css" />');
-    expect(html).toContain(
-      '<link rel="preload" nonce="pages-test-nonce" href="/font.woff2" as="font" type="font/woff2" crossorigin />',
+    expect(html).toMatch(
+      /<link\b(?=[^>]*rel="stylesheet")(?=[^>]*href="\/font\.css")(?=[^>]*nonce="pages-test-nonce")[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<link\b(?=[^>]*rel="preload")(?=[^>]*href="\/font\.woff2")(?=[^>]*as="font")(?=[^>]*type="font\/woff2")(?=[^>]*crossorigin)(?=[^>]*nonce="pages-test-nonce")[^>]*>/,
     );
     expect(html).toContain('<style data-vinext-fonts nonce="pages-test-nonce">');
-    expect(html).toContain(
-      '<script type="module" nonce="pages-test-nonce" src="/entry.js" crossorigin></script>',
+    expect(html).toMatch(
+      /<script\b(?=[^>]*type="module")(?=[^>]*src="\/entry\.js")(?=[^>]*crossorigin)(?=[^>]*nonce="pages-test-nonce")[^>]*>/,
+    );
+  });
+
+  it("applies custom Document Head and NextScript attributes to generated assets", async () => {
+    const common = createCommonOptions();
+    const renderDocumentToString = vi.fn(
+      async () =>
+        '<!DOCTYPE html><html><head data-vinext-document-head="" data-vinext-document-head-nonce="head-nonce" data-vinext-document-head-crossorigin="anonymous"><style>body { margin: 0 }</style></head><body><div id="__next">__NEXT_MAIN__</div><span data-vinext-next-script="" data-vinext-next-script-nonce="script-nonce" data-vinext-next-script-crossorigin="use-credentials"><!-- __NEXT_SCRIPTS__ --></span></body></html>',
+    );
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      assetTags:
+        '<link rel="modulepreload" href="/entry.js" />\n' +
+        '<script type="module" src="/entry.js"></script>',
+      renderDocumentToString,
+    });
+
+    const html = await response.text();
+    expect(html).not.toContain("data-vinext-document-head");
+    expect(html).not.toContain("data-vinext-next-script");
+    expect(html).not.toContain("<head-nonce");
+    expect(html).toContain("<head><style>body { margin: 0 }</style>");
+    expect(html).toMatch(
+      /<link\b(?=[^>]*rel="modulepreload")(?=[^>]*href="\/entry\.js")(?=[^>]*nonce="head-nonce")(?=[^>]*crossorigin="anonymous")[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<script\b(?=[^>]*type="module")(?=[^>]*src="\/entry\.js")(?=[^>]*nonce="head-nonce")(?=[^>]*crossorigin="anonymous")[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<script\b(?=[^>]*id="__NEXT_DATA__")(?=[^>]*nonce="script-nonce")(?=[^>]*crossorigin="use-credentials")[^>]*>/,
+    );
+  });
+
+  it("falls back to configured crossOrigin when Document passes an empty value", async () => {
+    const common = createCommonOptions();
+    const renderDocumentToString = vi.fn(
+      async () =>
+        '<!DOCTYPE html><html><head data-vinext-document-head="" data-vinext-document-head-crossorigin=""></head><body><div id="__next">__NEXT_MAIN__</div><span data-vinext-next-script="" data-vinext-next-script-crossorigin=""><!-- __NEXT_SCRIPTS__ --></span></body></html>',
+    );
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      assetTags: '<script type="module" src="/entry.js"></script>',
+      crossOrigin: "anonymous",
+      renderDocumentToString,
+    });
+
+    const html = await response.text();
+    expect(html).toMatch(
+      /<script\b(?=[^>]*type="module")(?=[^>]*src="\/entry\.js")(?=[^>]*crossorigin="anonymous")[^>]*>/,
+    );
+    expect(html).toMatch(
+      /<script\b(?=[^>]*id="__NEXT_DATA__")(?=[^>]*crossorigin="anonymous")[^>]*>/,
     );
   });
 

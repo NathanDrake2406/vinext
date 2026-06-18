@@ -69,6 +69,12 @@ import {
   type RenderPageEnhancers,
   runDocumentRenderPage,
 } from "./pages-document-initial-props.js";
+import {
+  applyPagesDocumentAssetAttributes,
+  extractPagesDocumentAssetAttributes,
+  mergePagesDocumentAssetAttributes,
+  type PagesDocumentAssetAttributes,
+} from "./pages-document-asset-attributes.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import {
   hasPagesGetInitialProps,
@@ -202,6 +208,8 @@ async function streamPageToResponse(
     enhancePageElement?: ((opts: RenderPageEnhancers) => React.ReactElement) | undefined;
     /** Per-request CSP nonce forwarded to the shared renderPage helper. */
     scriptNonce?: string | undefined;
+    /** Configured Next.js crossOrigin mode for generated scripts/preloads. */
+    crossOrigin?: "anonymous" | "use-credentials" | undefined;
     /**
      * Minimal `DocumentContext` fields (`pathname`/`query`/`asPath`) forwarded
      * to `getInitialProps`. Mirrors the prod pipeline for parity.
@@ -228,6 +236,7 @@ async function streamPageToResponse(
     getHeadHTML,
     enhancePageElement,
     scriptNonce,
+    crossOrigin,
     documentContext,
     setDocumentInitialHead,
     bufferBodyBeforeHeaders = false,
@@ -291,6 +300,8 @@ async function streamPageToResponse(
 
   // Build the document shell with a placeholder for the body
   let shellTemplate: string;
+  let shellHeadAttrs: PagesDocumentAssetAttributes;
+  let shellNextScriptAttrs: PagesDocumentAssetAttributes;
 
   if (DocumentComponent) {
     // When the renderPage path already invoked getInitialProps, reuse its
@@ -304,30 +315,46 @@ async function streamPageToResponse(
       ? React.createElement(DocumentComponent, docProps)
       : React.createElement(DocumentComponent);
     let docHtml = await renderToStringAsync(docElement);
+    const extracted = extractPagesDocumentAssetAttributes(docHtml);
+    docHtml = extracted.html;
+    const fallbackAttrs: PagesDocumentAssetAttributes = { nonce: scriptNonce, crossOrigin };
+    const headAttrs = mergePagesDocumentAssetAttributes(extracted.head, fallbackAttrs);
+    const nextScriptAttrs = mergePagesDocumentAssetAttributes(extracted.nextScript, fallbackAttrs);
+    shellHeadAttrs = headAttrs;
+    shellNextScriptAttrs = nextScriptAttrs;
+    const fontHeadWithAttrs = applyPagesDocumentAssetAttributes(fontHeadHTML, headAttrs);
+    const headWithAttrs = applyPagesDocumentAssetAttributes(headHTML, headAttrs);
+    const scriptsWithAttrs = applyPagesDocumentAssetAttributes(scripts, nextScriptAttrs);
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
     // Inject head tags
-    if (headHTML || fontHeadHTML) {
-      docHtml = docHtml.replace("</head>", `  ${fontHeadHTML}${headHTML}\n</head>`);
+    if (headWithAttrs || fontHeadWithAttrs) {
+      docHtml = docHtml.replace("</head>", `  ${fontHeadWithAttrs}${headWithAttrs}\n</head>`);
     }
     // Inject scripts: replace placeholder or append before </body>
-    docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", scripts);
+    docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", scriptsWithAttrs);
     if (!docHtml.includes("__NEXT_DATA__")) {
-      docHtml = docHtml.replace("</body>", `  ${scripts}\n</body>`);
+      docHtml = docHtml.replace("</body>", `  ${scriptsWithAttrs}\n</body>`);
     }
     shellTemplate = docHtml;
   } else {
+    const fallbackAttrs: PagesDocumentAssetAttributes = { nonce: scriptNonce, crossOrigin };
+    shellHeadAttrs = fallbackAttrs;
+    shellNextScriptAttrs = fallbackAttrs;
+    const fontHeadWithAttrs = applyPagesDocumentAssetAttributes(fontHeadHTML, fallbackAttrs);
+    const headWithAttrs = applyPagesDocumentAssetAttributes(headHTML, fallbackAttrs);
+    const scriptsWithAttrs = applyPagesDocumentAssetAttributes(scripts, fallbackAttrs);
     // charset + viewport are emitted via getSSRHeadHTML() (next/head's
     // defaultHead seeds them with data-next-head=""), matching Next.js's
     // canonical ordering. Don't duplicate them here.
     shellTemplate = `<!DOCTYPE html>
 <html>
 <head>
-  ${fontHeadHTML}${headHTML}
+  ${fontHeadWithAttrs}${headWithAttrs}
 </head>
 <body>
   <div id="__next">${STREAM_BODY_MARKER}</div>
-  ${scripts}
+  ${scriptsWithAttrs}
 </body>
 </html>`;
   }
@@ -336,8 +363,14 @@ async function streamPageToResponse(
   // shell template, then split at the body marker.
   const transformedShell = await server.transformIndexHtml(url, shellTemplate);
   const markerIdx = transformedShell.indexOf(STREAM_BODY_MARKER);
-  const prefix = transformedShell.slice(0, markerIdx);
-  const suffix = transformedShell.slice(markerIdx + STREAM_BODY_MARKER.length);
+  const prefix = applyPagesDocumentAssetAttributes(
+    transformedShell.slice(0, markerIdx),
+    shellHeadAttrs,
+  );
+  const suffix = applyPagesDocumentAssetAttributes(
+    transformedShell.slice(markerIdx + STREAM_BODY_MARKER.length),
+    shellNextScriptAttrs,
+  );
   const bufferedBody = bufferBodyBeforeHeaders ? await new Response(bodyStream).text() : null;
 
   // Send headers and start streaming.
@@ -442,6 +475,7 @@ export function createSSRHandler(
    */
   clientTraceMetadata?: readonly string[],
   htmlLimitedBots?: string,
+  crossOrigin?: "anonymous" | "use-credentials",
 ) {
   const matcher = fileMatcher ?? createValidFileMatcher();
 
@@ -1727,6 +1761,7 @@ hydrate();
           // Forward the per-request nonce so the shared renderPage helper can
           // apply `withScriptNonce` once (it owns that responsibility).
           scriptNonce,
+          crossOrigin,
           // DocumentContext for `getInitialProps`, matching prod parity.
           documentContext: {
             pathname: patternToNextFormat(route.pattern),
