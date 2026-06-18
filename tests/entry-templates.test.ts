@@ -8,6 +8,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import vm from "node:vm";
+import ts from "typescript";
 import { describe, it, expect } from "vite-plus/test";
 import { generateBrowserEntry } from "../packages/vinext/src/entries/app-browser-entry.js";
 import { buildAppRscManifestCode } from "../packages/vinext/src/entries/app-rsc-manifest.js";
@@ -120,6 +121,78 @@ const minimalAppRoutes: AppRoute[] = [
     siblingIntercepts: [],
   },
 ];
+
+const routeHandlerOnlyAppRoutes: AppRoute[] = [
+  {
+    pattern: "/api/hello",
+    patternParts: ["api", "hello"],
+    pagePath: null,
+    routePath: "/tmp/test/app/api/hello/route.ts",
+    layouts: [],
+    templates: [],
+    parallelSlots: [],
+    loadingPath: null,
+    errorPath: null,
+    layoutErrorPaths: [],
+    notFoundPath: null,
+    notFoundPaths: [],
+    forbiddenPaths: [],
+    forbiddenPath: null,
+    unauthorizedPaths: [],
+    unauthorizedPath: null,
+    routeSegments: ["api", "hello"],
+    templateTreePositions: [],
+    layoutTreePositions: [],
+    isDynamic: false,
+    params: [],
+    siblingIntercepts: [],
+  },
+];
+
+function collectGeneratedModuleFacts(code: string): {
+  identifiers: Set<string>;
+  importSpecifiers: Set<string>;
+} {
+  type ParsedSourceFile = ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] };
+  const sourceFile = ts.createSourceFile(
+    "app-rsc-entry.generated.js",
+    code,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const parseDiagnostics = (sourceFile as ParsedSourceFile).parseDiagnostics ?? [];
+  if (parseDiagnostics.length > 0) {
+    const message = parseDiagnostics
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"))
+      .join("\n");
+    throw new Error(`Generated module failed to parse:\n${message}`);
+  }
+  const identifiers = new Set<string>();
+  const importSpecifiers = new Set<string>();
+
+  function addModuleSpecifier(expression: ts.Expression): void {
+    if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+      importSpecifiers.add(expression.text);
+    }
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node)) identifiers.add(node.text);
+    if (ts.isImportDeclaration(node)) {
+      addModuleSpecifier(node.moduleSpecifier);
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[0]
+    ) {
+      addModuleSpecifier(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return { identifiers, importSpecifiers };
+}
 
 // ── App Router manifest construction ─────────────────────────────────
 
@@ -814,6 +887,44 @@ describe("App Router entry templates", () => {
     expect(code).not.toMatch(
       /import \{\s*handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,/,
     );
+  });
+
+  it("generateRscEntry omits page runtime imports for route-handler-only apps", () => {
+    const code = generateRscEntry(
+      "/tmp/test/app",
+      routeHandlerOnlyAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+    );
+    const { identifiers, importSpecifiers } = collectGeneratedModuleFacts(code);
+    const imports = [...importSpecifiers];
+
+    expect(importSpecifiers).toContain("vinext/server/app-rsc-handler");
+    expect(
+      imports.some((specifier) => specifier.endsWith("/server/app-route-handler-dispatch.js")),
+    ).toBe(true);
+    expect(imports).not.toContain("@vitejs/plugin-rsc/rsc");
+    expect(imports).not.toContain("@vitejs/plugin-rsc/core/rsc");
+    expect(imports).not.toContain("@vitejs/plugin-rsc/vendor/react-server-dom/static.edge");
+    expect(imports).not.toContain("next/font/google");
+    expect(imports).not.toContain("next/font/local");
+    expect(imports).not.toContain("vinext/metadata");
+    expect(imports.some((specifier) => specifier.endsWith("/server/app-page-dispatch.js"))).toBe(
+      false,
+    );
+    expect(
+      imports.some((specifier) => specifier.endsWith("/server/app-fallback-renderer.js")),
+    ).toBe(false);
+    expect(
+      imports.some((specifier) => specifier.endsWith("/server/app-server-action-execution.js")),
+    ).toBe(false);
+    expect(identifiers).toContain("__loadAppRouteHandlerDispatch");
+    expect(identifiers).not.toContain("__dispatchAppPage");
+    expect(identifiers).not.toContain("__loadAppServerActionExecution");
+    expect(identifiers).not.toContain("__fallbackRenderer");
   });
 
   it("generateRscEntry passes page-slot dynamic stale time config into App page dispatch", () => {
