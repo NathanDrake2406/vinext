@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { escapeRegExp } from "../packages/vinext/src/utils/regex.js";
+import ts from "typescript";
 import { describe, expect, it } from "vite-plus/test";
 
 const OPTIONAL_BRANCH_MODULES = [
@@ -10,10 +10,45 @@ const OPTIONAL_BRANCH_MODULES = [
   "./pages-data-route.js",
 ] as const;
 
-function hasStaticValueImport(source: string, specifier: string): boolean {
-  const quotedSpecifier = `["']${escapeRegExp(specifier)}["']`;
-  const pattern = new RegExp(`^import\\s+(?!type\\b)[^;]+\\sfrom\\s+${quotedSpecifier};`, "m");
-  return pattern.test(source);
+type ImportGraph = {
+  dynamicImports: Set<string>;
+  staticValueImports: Set<string>;
+};
+
+function stringLiteralText(node: ts.Node | undefined): string | null {
+  if (!node) return null;
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+  return null;
+}
+
+function collectImportGraph(source: string): ImportGraph {
+  const sourceFile = ts.createSourceFile(
+    "app-rsc-handler.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+
+  const staticValueImports = new Set<string>();
+  const dynamicImports = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) continue;
+    const specifier = stringLiteralText(statement.moduleSpecifier);
+    if (specifier) staticValueImports.add(specifier);
+  }
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const specifier = stringLiteralText(node.arguments[0]);
+      if (specifier) dynamicImports.add(specifier);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+
+  return { dynamicImports, staticValueImports };
 }
 
 describe("App RSC handler import graph", () => {
@@ -22,10 +57,11 @@ describe("App RSC handler import graph", () => {
       new URL("../packages/vinext/src/server/app-rsc-handler.ts", import.meta.url),
       "utf8",
     );
+    const imports = collectImportGraph(source);
 
     for (const specifier of OPTIONAL_BRANCH_MODULES) {
-      expect(hasStaticValueImport(source, specifier), specifier).toBe(false);
-      expect(source).toContain(`import("${specifier}")`);
+      expect(imports.staticValueImports.has(specifier), specifier).toBe(false);
+      expect(imports.dynamicImports.has(specifier), specifier).toBe(true);
     }
   });
 });
