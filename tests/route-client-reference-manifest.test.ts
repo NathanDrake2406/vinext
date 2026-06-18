@@ -324,6 +324,62 @@ describe("route client reference manifest", () => {
     }
   });
 
+  it("follows Vite resolution when it disagrees with local extension order", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const appDir = path.join(root, "app");
+      const pagePath = path.join(appDir, "page.tsx");
+      const heuristicPath = path.join(appDir, "island.tsx");
+      const viteResolvedPath = path.join(appDir, "island.jsx");
+      const heuristicClientPath = path.join(appDir, "heuristic-client.tsx");
+      const viteClientPath = path.join(appDir, "vite-client.jsx");
+      await fs.mkdir(appDir, { recursive: true });
+      await fs.writeFile(
+        pagePath,
+        `import Island from "./island";\nexport default function Page() { return <Island />; }`,
+      );
+      await fs.writeFile(
+        heuristicPath,
+        `import HeuristicClient from "./heuristic-client";\nexport default function Island() { return <HeuristicClient />; }`,
+      );
+      await fs.writeFile(
+        viteResolvedPath,
+        `import ViteClient from "./vite-client";\nexport default function Island() { return <ViteClient />; }`,
+      );
+      await fs.writeFile(
+        heuristicClientPath,
+        `"use client";\nexport default function HeuristicClient() { return null; }`,
+      );
+      await fs.writeFile(
+        viteClientPath,
+        `"use client";\nexport default function ViteClient() { return null; }`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+        resolve: async (specifier, importerPath) => {
+          if (specifier === "./island" && importerPath === pagePath) return viteResolvedPath;
+          if (specifier === "./vite-client" && importerPath === viteResolvedPath) {
+            return viteClientPath;
+          }
+          if (specifier === "./heuristic-client" && importerPath === heuristicPath) {
+            return heuristicClientPath;
+          }
+          return null;
+        },
+      });
+      const [candidates] = getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes);
+
+      expect(candidates).toContain(normalizeClientReferenceImportId(viteResolvedPath));
+      expect(candidates).toContain(normalizeClientReferenceImportId(viteClientPath));
+      expect(candidates).not.toContain(normalizeClientReferenceImportId(heuristicPath));
+      expect(candidates).not.toContain(normalizeClientReferenceImportId(heuristicClientPath));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("marks unsupported route source files incomplete so custom pageExtensions fall back", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
     try {

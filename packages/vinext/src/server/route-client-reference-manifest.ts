@@ -208,18 +208,16 @@ async function resolveImportSpecifier(
 
   let resolvedPath: string | null = null;
   const requiresProjectResolution = pathname.startsWith(".") || pathname.startsWith("/");
-  if (pathname.startsWith(".")) {
-    resolvedPath = await resolveSourceCandidate(path.resolve(path.dirname(importerPath), pathname));
-  } else if (pathname.startsWith("/")) {
-    resolvedPath = await resolveSourceCandidate(pathname);
-  }
-
-  if (!resolvedPath && context.resolve) {
+  if (context.resolve) {
     const resolved = await context.resolve(pathname, importerPath);
     if (resolved) {
       resolvedPath = await resolveSourceCandidate(resolved);
       candidates.add(resolved);
     }
+  } else if (pathname.startsWith(".")) {
+    resolvedPath = await resolveSourceCandidate(path.resolve(path.dirname(importerPath), pathname));
+  } else if (pathname.startsWith("/")) {
+    resolvedPath = await resolveSourceCandidate(pathname);
   }
 
   if (requiresProjectResolution && !resolvedPath) {
