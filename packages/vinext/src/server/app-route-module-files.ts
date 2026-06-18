@@ -44,36 +44,3 @@ export function collectAppRouteModuleFiles(
     ]),
   ]);
 }
-
-export function collectAppRouteClientReferenceSeedFiles(route: AppRoute): string[] {
-  return compactFilePaths([
-    ...route.layouts,
-    ...route.templates,
-    route.loadingPath,
-    route.errorPath,
-    ...route.layoutErrorPaths,
-    ...(route.errorPaths ?? []),
-    route.notFoundPath,
-    ...route.notFoundPaths,
-    route.forbiddenPath,
-    ...route.forbiddenPaths,
-    route.unauthorizedPath,
-    ...route.unauthorizedPaths,
-    route.pagePath,
-    ...route.parallelSlots.flatMap((slot) => [
-      slot.layoutPath,
-      slot.loadingPath,
-      slot.errorPath,
-      slot.defaultPath,
-      slot.pagePath,
-      ...slot.interceptingRoutes.flatMap((intercept) => [
-        ...intercept.layoutPaths,
-        intercept.pagePath,
-      ]),
-    ]),
-    ...(route.siblingIntercepts ?? []).flatMap((intercept) => [
-      ...intercept.layoutPaths,
-      intercept.pagePath,
-    ]),
-  ]);
-}

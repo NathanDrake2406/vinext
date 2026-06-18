@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AppRoute } from "../packages/vinext/src/routing/app-router.js";
-import {
-  collectAppRouteClientReferenceSeedFiles,
-  collectAppRouteModuleFiles,
-} from "../packages/vinext/src/server/app-route-module-files.js";
+import { collectAppRouteModuleFiles } from "../packages/vinext/src/server/app-route-module-files.js";
 import {
   buildRouteClientReferenceCandidateManifest,
   getRouteClientReferenceImportCandidatesInRouteOrder,
@@ -107,19 +104,6 @@ describe("app route module files", () => {
     expect(collectAppRouteModuleFiles(route, { includeRouteHandler: true })).toContain(
       "/app/dashboard/route.ts",
     );
-  });
-
-  it("collects client reference seeds in layout-before-page order", () => {
-    const route = createRoute();
-
-    expect(collectAppRouteClientReferenceSeedFiles(route).slice(0, 4)).toEqual([
-      "/app/layout.tsx",
-      "/app/dashboard/layout.tsx",
-      "/app/dashboard/template.tsx",
-      "/app/dashboard/loading.tsx",
-    ]);
-    expect(collectAppRouteClientReferenceSeedFiles(route)).toContain("/app/dashboard/page.tsx");
-    expect(collectAppRouteClientReferenceSeedFiles(route)).not.toContain("/app/dashboard/route.ts");
   });
 });
 

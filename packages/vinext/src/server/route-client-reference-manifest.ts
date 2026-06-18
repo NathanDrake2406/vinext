@@ -4,7 +4,7 @@ import { parseAst, transformWithOxc } from "vite";
 import { forEachAstChild, isAstRecord } from "../plugins/ast-utils.js";
 import type { AppRoute } from "../routing/app-router.js";
 import { stripViteModuleQuery } from "../utils/path.js";
-import { collectAppRouteClientReferenceSeedFiles } from "./app-route-module-files.js";
+import { collectAppRouteModuleFiles } from "./app-route-module-files.js";
 import { normalizeClientReferenceImportId } from "./client-reference-imports.js";
 
 export {
@@ -299,7 +299,7 @@ async function collectCandidatesForRoute(
 ): Promise<readonly string[] | null> {
   const pendingFiles = [
     ...(context.globalSeedFiles ?? []),
-    ...collectAppRouteClientReferenceSeedFiles(route),
+    ...collectAppRouteModuleFiles(route, { includeRouteHandler: false }),
   ];
   const seenFiles = new Set<string>();
   const candidates = new Set<string>();
