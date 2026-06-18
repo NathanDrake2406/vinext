@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseAst, transformWithOxc } from "vite";
 import type { AppRoute } from "../routing/app-router.js";
+import { stripViteModuleQuery } from "../utils/path.js";
 import { collectAppRouteClientReferenceSeedFiles } from "./app-route-module-files.js";
 import { normalizeClientReferenceImportId } from "./client-reference-imports.js";
 
@@ -70,17 +71,12 @@ function routeClientReferenceId(route: AppRoute): string {
   return route.ids?.route ?? route.pattern;
 }
 
-function stripViteSuffix(value: string): string {
-  const end = value.search(/[?#]/);
-  return end === -1 ? value : value.slice(0, end);
-}
-
 function isSourceFilePath(filePath: string): boolean {
-  return SOURCE_EXTENSIONS.includes(path.extname(stripViteSuffix(filePath)));
+  return SOURCE_EXTENSIONS.includes(path.extname(stripViteModuleQuery(filePath)));
 }
 
 function isStaticAssetPath(value: string): boolean {
-  return STATIC_ASSET_EXTENSIONS.has(path.extname(stripViteSuffix(value)));
+  return STATIC_ASSET_EXTENSIONS.has(path.extname(stripViteModuleQuery(value)));
 }
 
 function isSyntheticReactRuntimeSpecifier(specifier: string): boolean {
@@ -115,7 +111,7 @@ async function existingFilePath(filePath: string): Promise<string | null> {
 
 async function resolveSourceCandidate(candidatePath: string): Promise<string | null> {
   if (path.extname(candidatePath)) {
-    return existingFilePath(stripViteSuffix(candidatePath));
+    return existingFilePath(stripViteModuleQuery(candidatePath));
   }
 
   for (const extension of SOURCE_EXTENSIONS) {
@@ -209,7 +205,7 @@ async function resolveImportSpecifier(
   const candidates = new Set<string>();
   let complete = true;
   let sourceImport: string | null = null;
-  const pathname = stripViteSuffix(specifier);
+  const pathname = stripViteModuleQuery(specifier);
 
   if (!pathname || isStaticAssetPath(pathname) || isSyntheticReactRuntimeSpecifier(pathname)) {
     return { complete, candidates: [], sourceImport };

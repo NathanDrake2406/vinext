@@ -1,15 +1,10 @@
-import { normalizePathSeparators } from "../utils/path.js";
+import { normalizePathSeparators, stripViteModuleQuery } from "../utils/path.js";
 
 export type ClientReferenceImportMap = Readonly<Record<string, string>>;
 
-function stripViteSuffix(value: string): string {
-  const end = value.search(/[?#]/);
-  return end === -1 ? value : value.slice(0, end);
-}
-
 export function normalizeClientReferenceImportId(value: string): string {
   const withoutVirtualPrefix = value.startsWith("\0") ? value.slice(1) : value;
-  return normalizePathSeparators(stripViteSuffix(withoutVirtualPrefix));
+  return normalizePathSeparators(stripViteModuleQuery(withoutVirtualPrefix));
 }
 
 export function resolveClientReferenceIdsForImportCandidates(
