@@ -77,9 +77,12 @@ function isSourceFilePath(filePath: string): boolean {
   return SOURCE_EXTENSIONS.includes(path.extname(stripViteSuffix(filePath)));
 }
 
-function isStaticAssetSpecifier(specifier: string): boolean {
-  const pathname = stripViteSuffix(specifier);
-  return STATIC_ASSET_EXTENSIONS.has(path.extname(pathname));
+function isStaticAssetPath(value: string): boolean {
+  return STATIC_ASSET_EXTENSIONS.has(path.extname(stripViteSuffix(value)));
+}
+
+function isSyntheticReactRuntimeSpecifier(specifier: string): boolean {
+  return specifier === "react/jsx-runtime" || specifier === "react/jsx-dev-runtime";
 }
 
 function isNodeModulesPath(filePath: string): boolean {
@@ -206,7 +209,7 @@ async function resolveImportSpecifier(
   let sourceImport: string | null = null;
   const pathname = stripViteSuffix(specifier);
 
-  if (!pathname || isStaticAssetSpecifier(pathname)) {
+  if (!pathname || isStaticAssetPath(pathname) || isSyntheticReactRuntimeSpecifier(pathname)) {
     return { complete, candidates: [], sourceImport };
   }
 
@@ -238,7 +241,11 @@ async function resolveImportSpecifier(
     candidates.add(resolvedPath);
     if (isScannableProjectSource(resolvedPath, context.projectRoot)) {
       sourceImport = resolvedPath;
+    } else if (!isStaticAssetPath(resolvedPath)) {
+      complete = false;
     }
+  } else if (!requiresProjectResolution) {
+    complete = false;
   }
 
   return { complete, candidates: [...candidates], sourceImport };
@@ -252,7 +259,7 @@ async function scanSourceFile(
   const sourceImports: string[] = [];
 
   if (!isSourceFilePath(filePath)) {
-    return { candidates: [...candidates], complete: true, sourceImports };
+    return { candidates: [...candidates], complete: false, sourceImports };
   }
 
   let source: string;
@@ -301,7 +308,6 @@ async function collectCandidatesForRoute(
   const pendingFiles = [...collectAppRouteClientReferenceSeedFiles(route)];
   const seenFiles = new Set<string>();
   const candidates = new Set<string>();
-  let complete = true;
 
   while (pendingFiles.length > 0) {
     const filePath = pendingFiles.shift();
@@ -312,7 +318,7 @@ async function collectCandidatesForRoute(
     seenFiles.add(normalizedPath);
 
     const scan = await getCachedSourceScan(filePath, context, cache);
-    complete &&= scan.complete;
+    if (!scan.complete) return null;
     for (const candidate of scan.candidates) {
       candidates.add(candidate);
     }
@@ -321,7 +327,7 @@ async function collectCandidatesForRoute(
     }
   }
 
-  return complete ? [...candidates].sort() : null;
+  return [...candidates].sort();
 }
 
 export async function buildRouteClientReferenceCandidateManifest(

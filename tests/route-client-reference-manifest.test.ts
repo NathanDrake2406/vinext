@@ -77,6 +77,28 @@ function createRoute(overrides: Partial<AppRoute> = {}): AppRoute {
   };
 }
 
+function createSinglePageRoute(pagePath: string): AppRoute {
+  return createRoute({
+    pattern: "/",
+    pagePath,
+    routePath: null,
+    layouts: [],
+    templates: [],
+    parallelSlots: [],
+    siblingIntercepts: [],
+    loadingPath: null,
+    errorPath: null,
+    layoutErrorPaths: [],
+    errorPaths: [],
+    notFoundPath: null,
+    notFoundPaths: [],
+    forbiddenPath: null,
+    forbiddenPaths: [],
+    unauthorizedPath: null,
+    unauthorizedPaths: [],
+  });
+}
+
 describe("app route module files", () => {
   it("collects all route modules and includes route handlers only when requested", () => {
     const route = createRoute();
@@ -203,27 +225,7 @@ describe("route client reference manifest", () => {
         `export default async function Page() { const mod = await import ("./client"); return null; }`,
       );
 
-      const routes = [
-        createRoute({
-          pattern: "/",
-          pagePath,
-          routePath: null,
-          layouts: [],
-          templates: [],
-          parallelSlots: [],
-          siblingIntercepts: [],
-          loadingPath: null,
-          errorPath: null,
-          layoutErrorPaths: [],
-          errorPaths: [],
-          notFoundPath: null,
-          notFoundPaths: [],
-          forbiddenPath: null,
-          forbiddenPaths: [],
-          unauthorizedPath: null,
-          unauthorizedPaths: [],
-        }),
-      ];
+      const routes = [createSinglePageRoute(pagePath)];
       const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
         projectRoot: root,
       });
@@ -231,6 +233,87 @@ describe("route client reference manifest", () => {
       expect(getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes)).toEqual([null]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks unsupported route source files incomplete so custom pageExtensions fall back", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const pagePath = path.join(root, "app", "page.mdx");
+      await fs.mkdir(path.dirname(pagePath), { recursive: true });
+      await fs.writeFile(
+        pagePath,
+        `import ClientIsland from "./ClientIsland";\n\nexport default function Page() { return <ClientIsland />; }`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+      });
+
+      expect(getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes)).toEqual([null]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks package import graphs incomplete when package source is not scanned", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const pagePath = path.join(root, "app", "page.tsx");
+      const packageEntryPath = path.join(root, "node_modules", "@acme", "ui", "index.js");
+      const packageButtonPath = path.join(root, "node_modules", "@acme", "ui", "button.js");
+      await fs.mkdir(path.dirname(pagePath), { recursive: true });
+      await fs.mkdir(path.dirname(packageEntryPath), { recursive: true });
+      await fs.writeFile(
+        pagePath,
+        `import { Button } from "@acme/ui";\nexport default function Page() { return <Button />; }`,
+      );
+      await fs.writeFile(packageEntryPath, `export { Button } from "./button.js";`);
+      await fs.writeFile(
+        packageButtonPath,
+        `"use client";\nexport function Button() { return null; }`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+        resolve: async (specifier) => (specifier === "@acme/ui" ? packageEntryPath : null),
+      });
+
+      expect(getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes)).toEqual([null]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks aliases resolving outside projectRoot incomplete", async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-workspace-ui-"));
+    try {
+      const pagePath = path.join(projectRoot, "app", "page.tsx");
+      const aliasedClientPath = path.join(workspaceRoot, "Button.tsx");
+      await fs.mkdir(path.dirname(pagePath), { recursive: true });
+      await fs.writeFile(
+        pagePath,
+        `import { Button } from "@workspace/ui/Button";\nexport default function Page() { return <Button />; }`,
+      );
+      await fs.writeFile(
+        aliasedClientPath,
+        `"use client";\nexport function Button() { return null; }`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot,
+        resolve: async (specifier) =>
+          specifier === "@workspace/ui/Button" ? aliasedClientPath : null,
+      });
+
+      expect(getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes)).toEqual([null]);
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true });
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
   });
 });
