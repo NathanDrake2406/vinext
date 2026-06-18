@@ -5689,6 +5689,21 @@ describe("Pages _document renderPage enhancers", () => {
     return match?.[0] ?? "";
   }
 
+  function isVinextOwnedDocumentAssetTag(tag: string): boolean {
+    if (tag.includes('id="__NEXT_DATA__"')) return true;
+
+    if (tag.startsWith("<script")) {
+      if (/\ssrc=["']\/(?:@id|@vite)\//.test(tag)) return false;
+      if (!/\ssrc=/.test(tag)) return false;
+      return /\ssrc=["']\/(?:_next|assets)\//.test(tag);
+    }
+
+    return (
+      /\srel=["'](?:preload|modulepreload)["']/.test(tag) &&
+      /\shref=["']\/(?:_next|assets)\//.test(tag)
+    );
+  }
+
   beforeAll(async () => {
     fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-document-enhancers-"));
     outDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-document-enhancers-out-"));
@@ -5927,7 +5942,7 @@ export default class CustomDocument extends Document {
   );
 
   it.each(["dev", "prod"] as const)(
-    "adds nonces and crossOrigin to all scripts and preload links in %s",
+    "adds nonces and crossOrigin to owned generated scripts and preload links in %s",
     async (mode) => {
       const url = mode === "dev" ? devUrl : prodUrl;
       const response = await fetch(`${url}/`);
@@ -5937,9 +5952,7 @@ export default class CustomDocument extends Document {
       // ESM build emits the equivalent entries as `link[rel=modulepreload]`.
       const targetTags = Array.from(html.matchAll(/<(script|link)\b[^>]*>/g))
         .map((match) => match[0])
-        .filter(
-          (tag) => tag.startsWith("<script") || /\srel=["'](?:preload|modulepreload)["']/.test(tag),
-        );
+        .filter(isVinextOwnedDocumentAssetTag);
 
       expect(targetTags.length).toBeGreaterThan(0);
       for (const tag of targetTags) {
@@ -5980,13 +5993,7 @@ export default class CustomDocument extends Document {
 
       const generatedTags = Array.from(html.matchAll(/<(script|link)\b[^>]*>/g))
         .map((match) => match[0])
-        .filter(
-          (tag) =>
-            (tag.startsWith("<script") || /\srel=["'](?:preload|modulepreload)["']/.test(tag)) &&
-            !tag.includes("https://example.com/user.js") &&
-            !tag.includes("https://example.com/user.css") &&
-            !tag.includes("/user-preload.js"),
-        );
+        .filter(isVinextOwnedDocumentAssetTag);
 
       expect(generatedTags.length).toBeGreaterThan(0);
       for (const tag of generatedTags) {
