@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseAst, transformWithOxc } from "vite";
 import type { AppRoute } from "../routing/app-router.js";
+import { forEachAstChild, isAstRecord } from "../utils/ast.js";
 import { stripViteModuleQuery } from "../utils/path.js";
 import { collectAppRouteClientReferenceSeedFiles } from "./app-route-module-files.js";
 import { normalizeClientReferenceImportId } from "./client-reference-imports.js";
@@ -22,11 +23,6 @@ type SourceScan = {
   candidates: readonly string[];
   complete: boolean;
   sourceImports: readonly string[];
-};
-
-type AstRecord = Record<string, unknown> & {
-  callee?: unknown;
-  type?: unknown;
 };
 
 type RouteClientReferenceCandidateEntry = {
@@ -128,18 +124,12 @@ async function resolveSourceCandidate(candidatePath: string): Promise<string | n
 }
 
 function isImportCallee(value: unknown): boolean {
-  return typeof value === "object" && value !== null && (value as AstRecord).type === "Import";
+  return isAstRecord(value) && value.type === "Import";
 }
 
 function hasDynamicImportExpression(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((child) => hasDynamicImportExpression(child));
-  }
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const node = value as AstRecord;
+  if (!isAstRecord(value)) return false;
+  const node = value;
   if (node.type === "ImportExpression") {
     return true;
   }
@@ -147,12 +137,13 @@ function hasDynamicImportExpression(value: unknown): boolean {
     return true;
   }
 
-  for (const [key, child] of Object.entries(node)) {
-    if (key === "parent") continue;
-    if (hasDynamicImportExpression(child)) return true;
-  }
+  let found = false;
+  forEachAstChild(node, (child) => {
+    if (found) return;
+    found = hasDynamicImportExpression(child);
+  });
 
-  return false;
+  return found;
 }
 
 async function collectStaticImportSpecifiers(
