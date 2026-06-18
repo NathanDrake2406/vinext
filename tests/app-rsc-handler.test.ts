@@ -319,6 +319,34 @@ describe("createAppRscHandler", () => {
     expect(response.headers.has("x-action-revalidated")).toBe(false);
   });
 
+  it("serves App prerender static params through the handler boundary", async () => {
+    const previousPrerender = process.env.VINEXT_PRERENDER;
+    process.env.VINEXT_PRERENDER = "1";
+    const handler = createHandler({
+      configHeaders: [],
+      staticParamsMap: {
+        "/blog/:slug": () => [{ slug: "hello" }],
+      },
+    });
+
+    try {
+      const response = await handler(
+        new Request("https://example.test/__vinext/prerender/static-params?pattern=/blog/:slug"),
+        null,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("application/json");
+      await expect(response.json()).resolves.toEqual([{ slug: "hello" }]);
+    } finally {
+      if (previousPrerender === undefined) {
+        delete process.env.VINEXT_PRERENDER;
+      } else {
+        process.env.VINEXT_PRERENDER = previousPrerender;
+      }
+    }
+  });
+
   it("uses encoded prerender route params for rendering while retaining decoded params for static validation", async () => {
     const previousPrerender = process.env.VINEXT_PRERENDER;
     process.env.VINEXT_PRERENDER = "1";

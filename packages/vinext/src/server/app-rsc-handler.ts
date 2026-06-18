@@ -36,7 +36,6 @@ import { addBasePathToPathname, hasBasePath, stripBasePath } from "../utils/base
 import { mergeRewriteQuery } from "../utils/query.js";
 import type { AppMiddlewareContext } from "./app-middleware.js";
 import { mergeMiddlewareResponseHeaders } from "./app-page-response.js";
-import { handleAppPrerenderEndpoint } from "./app-prerender-endpoints.js";
 import {
   createRscRedirectLocation,
   hasRscCacheBustingSearchParam,
@@ -47,20 +46,12 @@ import {
 } from "./app-rsc-cache-busting.js";
 import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
-import { buildNextDataNotFoundResponse, normalizePagesDataRequest } from "./pages-data-route.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import { getRenderedConcreteUrlPathsForRoute } from "./pregenerated-concrete-paths.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
-import { buildPageCacheTags } from "./implicit-tags.js";
-import {
-  DEFAULT_DEVICE_SIZES,
-  DEFAULT_IMAGE_SIZES,
-  isImageOptimizationPath,
-  resolveDevImageRedirect,
-  type ImageConfig,
-} from "./image-optimization.js";
-import { handleMetadataRouteRequest } from "./metadata-route-response.js";
+import type { ImageConfig } from "./image-optimization.js";
+import type { MetadataFileRoute } from "./metadata-routes.js";
 import type { MiddlewareModule } from "./middleware-runtime.js";
 import { runWithPrerenderWorkUnit } from "./prerender-work-unit-setup.js";
 import { buildPostMwRequestContext } from "./app-post-middleware-context.js";
@@ -83,13 +74,35 @@ import {
 
 type AppPageParams = Record<string, string | string[]>;
 type RequestContext = ReturnType<typeof requestContextFromRequest>;
-type MetadataRoutes = Parameters<typeof handleMetadataRouteRequest>[0]["metadataRoutes"];
+type MetadataRoutes = readonly (MetadataFileRoute & { fileDataBase64?: string })[];
 const STATIC_METADATA_CONFIG_HEADER_OVERRIDES = new Set(["cache-control"]);
-type MakeThenableParams = Parameters<typeof handleMetadataRouteRequest>[0]["makeThenableParams"];
-type StaticParamsMap = Parameters<typeof handleAppPrerenderEndpoint>[1]["staticParamsMap"];
-type RootParamNamesMap = Parameters<
-  typeof handleAppPrerenderEndpoint
->[1]["rootParamNamesByPattern"];
+type MakeThenableParams = (params: AppPageParams) => unknown;
+type GenerateStaticParams = (args: { params: RootParams }) => unknown;
+type StaticParamsMap = Record<string, GenerateStaticParams | null | undefined>;
+type RootParamNamesMap = Record<string, readonly string[] | undefined>;
+
+type PagesDataNormalizationResult =
+  | {
+      isDataReq: false;
+      request: Request;
+      normalizedPathname: null;
+      search: "";
+      notFoundResponse: Response | null;
+    }
+  | {
+      isDataReq: true;
+      request: Request;
+      normalizedPathname: string;
+      search: string;
+      notFoundResponse: null;
+    };
+
+const APP_PRERENDER_STATIC_PARAMS_ENDPOINT = "/__vinext/prerender/static-params";
+const APP_PRERENDER_PAGES_STATIC_PATHS_ENDPOINT = "/__vinext/prerender/pages-static-paths";
+const NEXT_DATA_PREFIX = "/_next/data/";
+const NEXT_DATA_SUFFIX = ".json";
+const NEXT_IMAGE_OPTIMIZATION_PATH = "/_next/image";
+const VINEXT_IMAGE_OPTIMIZATION_PATH = "/_vinext/image";
 
 type AppRscMiddlewareContext = AppMiddlewareContext;
 
@@ -323,6 +336,21 @@ function isExecutionContextLike(value: unknown): value is ExecutionContextLike {
   return hasProperty(value, "waitUntil") && typeof value.waitUntil === "function";
 }
 
+function isAppPrerenderEndpoint(pathname: string): boolean {
+  return (
+    pathname === APP_PRERENDER_STATIC_PARAMS_ENDPOINT ||
+    pathname === APP_PRERENDER_PAGES_STATIC_PATHS_ENDPOINT
+  );
+}
+
+function isNextDataRequestPathname(pathname: string): boolean {
+  return pathname.startsWith(NEXT_DATA_PREFIX) && pathname.endsWith(NEXT_DATA_SUFFIX);
+}
+
+function isImageOptimizationPathname(pathname: string): boolean {
+  return pathname === NEXT_IMAGE_OPTIMIZATION_PATH || pathname === VINEXT_IMAGE_OPTIMIZATION_PATH;
+}
+
 // TODO(#1333): once App Router supports `basePath: false` rules (see
 // `normalizeRscRequest` — it 404s out-of-basePath requests before they
 // reach this code), pass `hadBasePath` here and skip the prefix when
@@ -489,16 +517,19 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // issue #1333.
   const basePathState = { basePath: options.basePath, hadBasePath: true };
 
-  const prerenderEndpointResponse = await handleAppPrerenderEndpoint(request, {
-    isPrerenderEnabled() {
-      return process.env.VINEXT_PRERENDER === "1";
-    },
-    loadPagesRoutes: options.loadPrerenderPagesRoutes,
-    pathname,
-    rootParamNamesByPattern: options.rootParamNamesByPattern,
-    staticParamsMap: options.staticParamsMap,
-  });
-  if (prerenderEndpointResponse) return prerenderEndpointResponse;
+  if (isAppPrerenderEndpoint(pathname)) {
+    const { handleAppPrerenderEndpoint } = await import("./app-prerender-endpoints.js");
+    const prerenderEndpointResponse = await handleAppPrerenderEndpoint(request, {
+      isPrerenderEnabled() {
+        return process.env.VINEXT_PRERENDER === "1";
+      },
+      loadPagesRoutes: options.loadPrerenderPagesRoutes,
+      pathname,
+      rootParamNamesByPattern: options.rootParamNamesByPattern,
+      staticParamsMap: options.staticParamsMap,
+    });
+    if (prerenderEndpointResponse) return prerenderEndpointResponse;
+  }
 
   const trailingSlashRedirect = normalizeTrailingSlash(
     pathname,
@@ -631,7 +662,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
   }
 
-  if (isImageOptimizationPath(cleanPathname)) {
+  if (isImageOptimizationPathname(cleanPathname)) {
+    const { DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES, resolveDevImageRedirect } =
+      await import("./image-optimization.js");
     const imageRedirect = resolveDevImageRedirect(
       url,
       [
@@ -646,20 +679,23 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     return Response.redirect(new URL(imageRedirect, url.origin).href, 302);
   }
 
-  const metadataRouteResponse = await handleMetadataRouteRequest({
-    metadataRoutes: options.metadataRoutes,
-    cleanPathname,
-    makeThenableParams: options.makeThenableParams,
-  });
-  if (metadataRouteResponse) {
-    applyConfigHeadersToResponse(metadataRouteResponse.headers, {
-      basePathState,
-      configHeaders: options.configHeaders,
-      overwriteExisting: STATIC_METADATA_CONFIG_HEADER_OVERRIDES,
-      pathname: matchPathname(cleanPathname),
-      requestContext: preMiddlewareRequestContext,
+  if (options.metadataRoutes.length > 0) {
+    const { handleMetadataRouteRequest } = await import("./metadata-route-response.js");
+    const metadataRouteResponse = await handleMetadataRouteRequest({
+      metadataRoutes: options.metadataRoutes,
+      cleanPathname,
+      makeThenableParams: options.makeThenableParams,
     });
-    return applyMiddlewareContextToResponse(metadataRouteResponse, middlewareContext);
+    if (metadataRouteResponse) {
+      applyConfigHeadersToResponse(metadataRouteResponse.headers, {
+        basePathState,
+        configHeaders: options.configHeaders,
+        overwriteExisting: STATIC_METADATA_CONFIG_HEADER_OVERRIDES,
+        pathname: matchPathname(cleanPathname),
+        requestContext: preMiddlewareRequestContext,
+      });
+      return applyMiddlewareContextToResponse(metadataRouteResponse, middlewareContext);
+    }
   }
 
   const publicFileResponse = resolvePublicFileRoute({
@@ -861,6 +897,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
 
   if (pagesDataRequest) {
     options.clearRequestContext();
+    const { buildNextDataNotFoundResponse } = await import("./pages-data-route.js");
     return buildNextDataNotFoundResponse();
   }
 
@@ -933,6 +970,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   setRootParams(rootParams);
 
   if (route.routeHandler) {
+    const { buildPageCacheTags } = await import("./implicit-tags.js");
     setCurrentFetchSoftTags(
       buildPageCacheTags(cleanPathname, [], [...route.routeSegments], "route"),
     );
@@ -1093,12 +1131,19 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
     if (pagesDataInScope) {
       pagesDataUrl.pathname = stripBasePath(pagesDataUrl.pathname, options.basePath);
     }
+    const shouldNormalizePagesData =
+      options.renderPagesFallback !== undefined &&
+      pagesDataInScope &&
+      isNextDataRequestPathname(pagesDataUrl.pathname);
     const pagesDataCandidate = pagesDataInScope
       ? cloneRequestWithUrl(rawRequest, pagesDataUrl.toString())
       : null;
-    const pagesDataNormalization =
-      options.renderPagesFallback && pagesDataCandidate
-        ? normalizePagesDataRequest(pagesDataCandidate, options.buildId)
+    const pagesDataNormalization: PagesDataNormalizationResult | null =
+      shouldNormalizePagesData && pagesDataCandidate
+        ? (await import("./pages-data-route.js")).normalizePagesDataRequest(
+            pagesDataCandidate,
+            options.buildId,
+          )
         : null;
     if (pagesDataNormalization?.notFoundResponse) {
       return pagesDataNormalization.notFoundResponse;
