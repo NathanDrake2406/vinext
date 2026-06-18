@@ -45,6 +45,12 @@ async function settleMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+function expectHtmlTag(html: string, pattern: RegExp): string {
+  const match = html.match(pattern);
+  expect(match).not.toBeNull();
+  return match?.[0] ?? "";
+}
+
 function createCommonOptions() {
   const clearSsrContext = vi.fn();
   const createPageElement = vi.fn((pageProps: Record<string, unknown>) =>
@@ -339,12 +345,19 @@ describe("pages page response", () => {
       async () =>
         '<!DOCTYPE html><html><head data-vinext-document-head="" data-vinext-document-head-nonce="head-nonce" data-vinext-document-head-crossorigin="anonymous"><style>body { margin: 0 }</style></head><body><div id="__next">__NEXT_MAIN__</div><span data-vinext-next-script="" data-vinext-next-script-nonce="script-nonce" data-vinext-next-script-crossorigin="use-credentials"><!-- __NEXT_SCRIPTS__ --></span></body></html>',
     );
+    const getSSRHeadHTML = vi.fn(
+      () =>
+        '<script src="https://example.com/user.js"></script>\n' +
+        '<link rel="stylesheet" href="https://example.com/user.css" />\n' +
+        '<link rel="preload" href="/user-preload.js" as="script" />',
+    );
 
     const response = await renderPagesPageResponse({
       ...common.options,
       assetTags:
         '<link rel="modulepreload" href="/entry.js" />\n' +
         '<script type="module" src="/entry.js"></script>',
+      getSSRHeadHTML,
       renderDocumentToString,
     });
 
@@ -362,6 +375,25 @@ describe("pages page response", () => {
     expect(html).toMatch(
       /<script\b(?=[^>]*id="__NEXT_DATA__")(?=[^>]*nonce="script-nonce")(?=[^>]*crossorigin="use-credentials")[^>]*>/,
     );
+
+    const userScript = expectHtmlTag(
+      html,
+      /<script\b(?=[^>]*src="https:\/\/example\.com\/user\.js")[^>]*>/,
+    );
+    expect(userScript).not.toContain("nonce=");
+    expect(userScript).not.toContain("crossorigin");
+    const userStylesheet = expectHtmlTag(
+      html,
+      /<link\b(?=[^>]*rel="stylesheet")(?=[^>]*href="https:\/\/example\.com\/user\.css")[^>]*>/,
+    );
+    expect(userStylesheet).not.toContain("nonce=");
+    expect(userStylesheet).not.toContain("crossorigin");
+    const userPreload = expectHtmlTag(
+      html,
+      /<link\b(?=[^>]*rel="preload")(?=[^>]*href="\/user-preload\.js")[^>]*>/,
+    );
+    expect(userPreload).not.toContain("nonce=");
+    expect(userPreload).not.toContain("crossorigin");
   });
 
   it("falls back to configured crossOrigin when Document passes an empty value", async () => {
@@ -385,6 +417,33 @@ describe("pages page response", () => {
     expect(html).toMatch(
       /<script\b(?=[^>]*id="__NEXT_DATA__")(?=[^>]*crossorigin="anonymous")[^>]*>/,
     );
+  });
+
+  it("does not apply Document or config crossOrigin to font preloads", async () => {
+    const common = createCommonOptions();
+    const renderDocumentToString = vi.fn(
+      async () =>
+        '<!DOCTYPE html><html><head data-vinext-document-head="" data-vinext-document-head-nonce="head-nonce" data-vinext-document-head-crossorigin="use-credentials"></head><body><div id="__next">__NEXT_MAIN__</div><!-- __NEXT_SCRIPTS__ --></body></html>',
+    );
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      assetTags: '<link rel="modulepreload" href="/entry.js" />',
+      crossOrigin: "use-credentials",
+      renderDocumentToString,
+    });
+
+    const html = await response.text();
+    expect(html).toMatch(
+      /<link\b(?=[^>]*rel="modulepreload")(?=[^>]*href="\/entry\.js")(?=[^>]*nonce="head-nonce")(?=[^>]*crossorigin="use-credentials")[^>]*>/,
+    );
+    const fontPreload = expectHtmlTag(
+      html,
+      /<link\b(?=[^>]*rel="preload")(?=[^>]*href="\/font\.woff2")[^>]*>/,
+    );
+    expect(fontPreload).toContain("crossorigin");
+    expect(fontPreload).not.toContain('crossorigin="use-credentials"');
+    expect(fontPreload).not.toContain('nonce="head-nonce"');
   });
 
   it("renders page before collecting SSR head HTML to prevent style race conditions", async () => {

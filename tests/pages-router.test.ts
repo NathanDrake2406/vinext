@@ -5683,6 +5683,12 @@ describe("Pages _document renderPage enhancers", () => {
     expect(html).not.toContain('id="page-content"');
   }
 
+  function expectHtmlTag(html: string, pattern: RegExp): string {
+    const match = html.match(pattern);
+    expect(match).not.toBeNull();
+    return match?.[0] ?? "";
+  }
+
   beforeAll(async () => {
     fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-document-enhancers-"));
     outDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-document-enhancers-out-"));
@@ -5750,6 +5756,23 @@ export default function Page({ throwPage }: { throwPage: boolean }) {
 }
 export default function StaticGspPage() {
   return <p id="static-gsp-page-content">STATIC GSP</p>;
+}
+`,
+    );
+    await fsp.writeFile(
+      path.join(fixtureRoot, "pages", "head-assets.tsx"),
+      `import Head from "next/head";
+export default function HeadAssetsPage() {
+  return (
+    <>
+      <Head>
+        <script src="https://example.com/user.js" />
+        <link rel="stylesheet" href="https://example.com/user.css" />
+        <link rel="preload" href="/user-preload.js" as="script" />
+      </Head>
+      <p id="head-assets-page">HEAD ASSETS</p>
+    </>
+  );
 }
 `,
     );
@@ -5920,6 +5943,53 @@ export default class CustomDocument extends Document {
 
       expect(targetTags.length).toBeGreaterThan(0);
       for (const tag of targetTags) {
+        expect(tag).toContain('nonce="test-nonce"');
+        expect(tag).toContain('crossorigin="anonymous"');
+      }
+    },
+  );
+
+  it.each(["dev", "prod"] as const)(
+    "does not apply Document asset attributes to user-authored next/head tags in %s",
+    async (mode) => {
+      const url = mode === "dev" ? devUrl : prodUrl;
+      const response = await fetch(`${url}/head-assets`);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+
+      const userScript = expectHtmlTag(
+        html,
+        /<script\b(?=[^>]*src="https:\/\/example\.com\/user\.js")[^>]*>/,
+      );
+      expect(userScript).not.toContain("nonce=");
+      expect(userScript).not.toContain("crossorigin");
+
+      const userStylesheet = expectHtmlTag(
+        html,
+        /<link\b(?=[^>]*rel="stylesheet")(?=[^>]*href="https:\/\/example\.com\/user\.css")[^>]*>/,
+      );
+      expect(userStylesheet).not.toContain("nonce=");
+      expect(userStylesheet).not.toContain("crossorigin");
+
+      const userPreload = expectHtmlTag(
+        html,
+        /<link\b(?=[^>]*rel="preload")(?=[^>]*href="\/user-preload\.js")[^>]*>/,
+      );
+      expect(userPreload).not.toContain("nonce=");
+      expect(userPreload).not.toContain("crossorigin");
+
+      const generatedTags = Array.from(html.matchAll(/<(script|link)\b[^>]*>/g))
+        .map((match) => match[0])
+        .filter(
+          (tag) =>
+            (tag.startsWith("<script") || /\srel=["'](?:preload|modulepreload)["']/.test(tag)) &&
+            !tag.includes("https://example.com/user.js") &&
+            !tag.includes("https://example.com/user.css") &&
+            !tag.includes("/user-preload.js"),
+        );
+
+      expect(generatedTags.length).toBeGreaterThan(0);
+      for (const tag of generatedTags) {
         expect(tag).toContain('nonce="test-nonce"');
         expect(tag).toContain('crossorigin="anonymous"');
       }

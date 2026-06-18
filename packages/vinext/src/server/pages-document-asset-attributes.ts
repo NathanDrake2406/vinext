@@ -12,7 +12,13 @@ const HEAD_CROSS_ORIGIN_ATTR = "data-vinext-document-head-crossorigin";
 const NEXT_SCRIPT_MARKER_ATTR = "data-vinext-next-script";
 const NEXT_SCRIPT_NONCE_ATTR = "data-vinext-next-script-nonce";
 const NEXT_SCRIPT_CROSS_ORIGIN_ATTR = "data-vinext-next-script-crossorigin";
+const NEXT_MAIN_PLACEHOLDER = "__NEXT_MAIN__";
 const NEXT_SCRIPT_PLACEHOLDER = "<!-- __NEXT_SCRIPTS__ -->";
+const PROTECTED_ASSET_ATTRS_START = "<!--VINEXT_DOCUMENT_ASSET_ATTRS_PROTECTED_START-->";
+const PROTECTED_ASSET_ATTRS_END = "<!--VINEXT_DOCUMENT_ASSET_ATTRS_PROTECTED_END-->";
+const BODY_PLACEHOLDER_PATTERN = new RegExp(
+  `(${escapeRegExp(NEXT_MAIN_PLACEHOLDER)}|${escapeRegExp(NEXT_SCRIPT_PLACEHOLDER)})`,
+);
 const NEXT_SCRIPT_MARKER_PATTERN = new RegExp(
   `<span\\b(?=[^>]*\\b${escapeRegExp(NEXT_SCRIPT_MARKER_ATTR)}(?:\\s|=|>|\\/))[^>]*>\\s*${escapeRegExp(NEXT_SCRIPT_PLACEHOLDER)}\\s*<\\/span>`,
   "i",
@@ -89,6 +95,46 @@ function cleanMarkerAttributes(tag: string, names: string[]): string {
   return names.reduce((current, name) => removeHtmlAttribute(current, name), tag);
 }
 
+export function protectPagesDocumentAssetAttributes(html: string): string {
+  if (!html) return html;
+  return `${PROTECTED_ASSET_ATTRS_START}${html}${PROTECTED_ASSET_ATTRS_END}`;
+}
+
+function protectPagesDocumentHeadContent(html: string): string {
+  return html.replace(
+    /(<head\b[^>]*>)([\s\S]*?)(<\/head>)/i,
+    (_match: string, open: string, content: string, close: string) => {
+      if (!content) return `${open}${close}`;
+      return `${open}${protectPagesDocumentAssetAttributes(content)}${close}`;
+    },
+  );
+}
+
+function protectPagesDocumentBodyContent(html: string): string {
+  return html.replace(
+    /(<body\b[^>]*>)([\s\S]*?)(<\/body>)/i,
+    (_match: string, open: string, content: string, close: string) => {
+      const parts = content.split(BODY_PLACEHOLDER_PATTERN);
+      const protectedContent = parts
+        .map((part) =>
+          part === NEXT_MAIN_PLACEHOLDER || part === NEXT_SCRIPT_PLACEHOLDER
+            ? part
+            : protectPagesDocumentAssetAttributes(part),
+        )
+        .join("");
+      return `${open}${protectedContent}${close}`;
+    },
+  );
+}
+
+export function protectPagesDocumentUserContent(html: string): string {
+  return protectPagesDocumentBodyContent(protectPagesDocumentHeadContent(html));
+}
+
+function stripPagesDocumentAssetAttributeProtection(html: string): string {
+  return html.replaceAll(PROTECTED_ASSET_ATTRS_START, "").replaceAll(PROTECTED_ASSET_ATTRS_END, "");
+}
+
 export function extractPagesDocumentAssetAttributes(html: string): {
   html: string;
   head: PagesDocumentAssetAttributes;
@@ -126,23 +172,49 @@ export function applyPagesDocumentAssetAttributes(
   html: string,
   attrs: PagesDocumentAssetAttributes,
 ): string {
-  if (!attrs.nonce && attrs.crossOrigin === undefined) return html;
+  if (!attrs.nonce && attrs.crossOrigin === undefined) {
+    return stripPagesDocumentAssetAttributeProtection(html);
+  }
 
-  return html.replace(/<(script|link)\b[^>]*>/gi, (tag, tagName: string) => {
-    if (tagName.toLowerCase() === "link") {
-      const rel = getHtmlAttribute(tag, "rel")?.toLowerCase();
-      if (rel !== "preload" && rel !== "modulepreload" && rel !== "stylesheet") {
-        return tag;
+  const applyToSegment = (segment: string) =>
+    segment.replace(/<(script|link)\b[^>]*>/gi, (tag, tagName: string) => {
+      if (tagName.toLowerCase() === "link") {
+        const rel = getHtmlAttribute(tag, "rel")?.toLowerCase();
+        if (rel !== "preload" && rel !== "modulepreload" && rel !== "stylesheet") {
+          return tag;
+        }
       }
+
+      let next = tag;
+      if (attrs.nonce) {
+        next = setHtmlAttribute(next, "nonce", attrs.nonce);
+      }
+      if (attrs.crossOrigin !== undefined) {
+        next = setHtmlAttribute(next, "crossorigin", attrs.crossOrigin);
+      }
+      return next;
+    });
+
+  let output = "";
+  let index = 0;
+  for (;;) {
+    const start = html.indexOf(PROTECTED_ASSET_ATTRS_START, index);
+    if (start === -1) {
+      output += applyToSegment(html.slice(index));
+      break;
     }
 
-    let next = tag;
-    if (attrs.nonce) {
-      next = setHtmlAttribute(next, "nonce", attrs.nonce);
+    output += applyToSegment(html.slice(index, start));
+    const protectedStart = start + PROTECTED_ASSET_ATTRS_START.length;
+    const end = html.indexOf(PROTECTED_ASSET_ATTRS_END, protectedStart);
+    if (end === -1) {
+      output += stripPagesDocumentAssetAttributeProtection(html.slice(start));
+      break;
     }
-    if (attrs.crossOrigin !== undefined) {
-      next = setHtmlAttribute(next, "crossorigin", attrs.crossOrigin);
-    }
-    return next;
-  });
+
+    output += html.slice(protectedStart, end);
+    index = end + PROTECTED_ASSET_ATTRS_END.length;
+  }
+
+  return output;
 }

@@ -346,8 +346,6 @@ async function buildPagesShellHtml(
     };
     const headAttrs = mergePagesDocumentAssetAttributes(extracted.head, fallbackAttrs);
     const nextScriptAttrs = mergePagesDocumentAssetAttributes(extracted.nextScript, fallbackAttrs);
-    const fontHeadWithAttrs = applyPagesDocumentAssetAttributes(fontHeadHTML, headAttrs);
-    const ssrHeadWithAttrs = applyPagesDocumentAssetAttributes(options.ssrHeadHTML, headAttrs);
     const assetTagsWithAttrs = applyPagesDocumentAssetAttributes(options.assetTags, headAttrs);
     const nextDataScriptWithAttrs = applyPagesDocumentAssetAttributes(
       nextDataScript,
@@ -355,10 +353,10 @@ async function buildPagesShellHtml(
     );
 
     html = html.replace("__NEXT_MAIN__", bodyMarker);
-    if (ssrHeadWithAttrs || assetTagsWithAttrs || fontHeadWithAttrs) {
+    if (options.ssrHeadHTML || assetTagsWithAttrs || fontHeadHTML) {
       html = html.replace(
         "</head>",
-        `  ${fontHeadWithAttrs}${ssrHeadWithAttrs}\n  ${assetTagsWithAttrs}\n</head>`,
+        `  ${fontHeadHTML}${options.ssrHeadHTML}\n  ${assetTagsWithAttrs}\n</head>`,
       );
     }
     html = html.replace("<!-- __NEXT_SCRIPTS__ -->", nextDataScriptWithAttrs);
@@ -372,8 +370,6 @@ async function buildPagesShellHtml(
     nonce: options.scriptNonce,
     crossOrigin: options.crossOrigin,
   };
-  const fontHeadWithAttrs = applyPagesDocumentAssetAttributes(fontHeadHTML, fallbackAttrs);
-  const ssrHeadWithAttrs = applyPagesDocumentAssetAttributes(options.ssrHeadHTML, fallbackAttrs);
   const assetTagsWithAttrs = applyPagesDocumentAssetAttributes(options.assetTags, fallbackAttrs);
   const nextDataScriptWithAttrs = applyPagesDocumentAssetAttributes(nextDataScript, fallbackAttrs);
 
@@ -382,7 +378,7 @@ async function buildPagesShellHtml(
   // canonical ordering. Don't duplicate them here.
   return (
     "<!DOCTYPE html>\n<html>\n<head>\n" +
-    `  ${fontHeadWithAttrs}${ssrHeadWithAttrs}\n` +
+    `  ${fontHeadHTML}${options.ssrHeadHTML}\n` +
     `  ${assetTagsWithAttrs}\n` +
     "</head>\n<body>\n" +
     `  <div id="__next">${bodyMarker}</div>\n` +

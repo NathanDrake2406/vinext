@@ -73,6 +73,8 @@ import {
   applyPagesDocumentAssetAttributes,
   extractPagesDocumentAssetAttributes,
   mergePagesDocumentAssetAttributes,
+  protectPagesDocumentAssetAttributes,
+  protectPagesDocumentUserContent,
   type PagesDocumentAssetAttributes,
 } from "./pages-document-asset-attributes.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
@@ -316,20 +318,20 @@ async function streamPageToResponse(
       : React.createElement(DocumentComponent);
     let docHtml = await renderToStringAsync(docElement);
     const extracted = extractPagesDocumentAssetAttributes(docHtml);
-    docHtml = extracted.html;
+    docHtml = protectPagesDocumentUserContent(extracted.html);
     const fallbackAttrs: PagesDocumentAssetAttributes = { nonce: scriptNonce, crossOrigin };
     const headAttrs = mergePagesDocumentAssetAttributes(extracted.head, fallbackAttrs);
     const nextScriptAttrs = mergePagesDocumentAssetAttributes(extracted.nextScript, fallbackAttrs);
     shellHeadAttrs = headAttrs;
     shellNextScriptAttrs = nextScriptAttrs;
-    const fontHeadWithAttrs = applyPagesDocumentAssetAttributes(fontHeadHTML, headAttrs);
-    const headWithAttrs = applyPagesDocumentAssetAttributes(headHTML, headAttrs);
+    const protectedFontHead = protectPagesDocumentAssetAttributes(fontHeadHTML);
+    const protectedHead = protectPagesDocumentAssetAttributes(headHTML);
     const scriptsWithAttrs = applyPagesDocumentAssetAttributes(scripts, nextScriptAttrs);
     // Replace __NEXT_MAIN__ with our stream marker
     docHtml = docHtml.replace("__NEXT_MAIN__", STREAM_BODY_MARKER);
     // Inject head tags
-    if (headWithAttrs || fontHeadWithAttrs) {
-      docHtml = docHtml.replace("</head>", `  ${fontHeadWithAttrs}${headWithAttrs}\n</head>`);
+    if (protectedHead || protectedFontHead) {
+      docHtml = docHtml.replace("</head>", `  ${protectedFontHead}${protectedHead}\n</head>`);
     }
     // Inject scripts: replace placeholder or append before </body>
     docHtml = docHtml.replace("<!-- __NEXT_SCRIPTS__ -->", scriptsWithAttrs);
@@ -341,8 +343,8 @@ async function streamPageToResponse(
     const fallbackAttrs: PagesDocumentAssetAttributes = { nonce: scriptNonce, crossOrigin };
     shellHeadAttrs = fallbackAttrs;
     shellNextScriptAttrs = fallbackAttrs;
-    const fontHeadWithAttrs = applyPagesDocumentAssetAttributes(fontHeadHTML, fallbackAttrs);
-    const headWithAttrs = applyPagesDocumentAssetAttributes(headHTML, fallbackAttrs);
+    const protectedFontHead = protectPagesDocumentAssetAttributes(fontHeadHTML);
+    const protectedHead = protectPagesDocumentAssetAttributes(headHTML);
     const scriptsWithAttrs = applyPagesDocumentAssetAttributes(scripts, fallbackAttrs);
     // charset + viewport are emitted via getSSRHeadHTML() (next/head's
     // defaultHead seeds them with data-next-head=""), matching Next.js's
@@ -350,7 +352,7 @@ async function streamPageToResponse(
     shellTemplate = `<!DOCTYPE html>
 <html>
 <head>
-  ${fontHeadWithAttrs}${headWithAttrs}
+  ${protectedFontHead}${protectedHead}
 </head>
 <body>
   <div id="__next">${STREAM_BODY_MARKER}</div>
