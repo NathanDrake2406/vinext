@@ -3,6 +3,7 @@ import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
 import { getAppPageSegmentParamName } from "./app-page-params.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
+import { loadAppInterceptLayouts } from "./app-route-module-loader.js";
 
 type AppPageParams = Record<string, string | string[]>;
 type GenerateStaticParams = (args: { params: AppPageParams }) => unknown;
@@ -50,6 +51,8 @@ type BuildAppPageElementResult<TElement> = {
 };
 
 type AppPageInterceptMatch<TPage = unknown> = {
+  interceptLayouts?: readonly unknown[] | null;
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   matchedParams: AppPageParams;
   page: TPage;
   __pageLoader?: (() => Promise<TPage>) | null;
@@ -342,6 +345,9 @@ async function resolveAppPageInterceptState<TRoute, TPage, TInterceptOpts>(
 
   if (intercept.__pageLoader && intercept.page == null) {
     intercept.page = await intercept.__pageLoader();
+  }
+  if (intercept.__loadInterceptLayouts) {
+    await loadAppInterceptLayouts(intercept);
   }
 
   const sourceRoute = await options.getSourceRoute(intercept.sourceRouteIndex);

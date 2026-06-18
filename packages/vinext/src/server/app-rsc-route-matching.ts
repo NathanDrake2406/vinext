@@ -38,6 +38,7 @@ type AppRscInterceptForMatching = {
   sourceMatchPattern?: string;
   sourcePageSegments?: readonly string[];
   interceptLayouts: readonly unknown[];
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   __pageLoader?: (() => Promise<unknown>) | null;
   params: readonly string[];
@@ -54,6 +55,7 @@ type AppRscSiblingInterceptForMatching = {
   sourcePageSegments?: readonly string[];
   slotId: string | null;
   interceptLayouts: readonly unknown[];
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   // Sibling intercept pages are lazy-loaded (manifest emits `page: null` plus a
   // `__pageLoader`) so the intercepting page's CSS chunk stays isolated in
@@ -83,6 +85,7 @@ type AppRscInterceptLookupEntry = {
   sourceMatchPatternParts: string[] | null;
   sourcePageSegments: readonly string[] | null;
   interceptLayouts: readonly unknown[];
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   __pageLoader?: (() => Promise<unknown>) | null;
   params: readonly string[];
@@ -231,6 +234,7 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
             sourceMatchPatternParts,
             sourcePageSegments: intercept.sourcePageSegments ?? null,
             interceptLayouts: intercept.interceptLayouts,
+            __loadInterceptLayouts: intercept.__loadInterceptLayouts,
             page: intercept.page,
             __pageLoader: intercept.__pageLoader,
             params: intercept.params,
@@ -254,6 +258,7 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
           sourceMatchPatternParts,
           sourcePageSegments: intercept.sourcePageSegments ?? null,
           interceptLayouts: intercept.interceptLayouts,
+          __loadInterceptLayouts: intercept.__loadInterceptLayouts,
           page: intercept.page,
           __pageLoader: intercept.__pageLoader,
           params: intercept.params,
