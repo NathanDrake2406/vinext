@@ -41,7 +41,7 @@ type ExportsValue = string | { [condition: string]: ExportsValue };
 /** Minimal package.json shape for entry point resolution. */
 type PackageJson = {
   name?: string;
-  exports?: Record<string, ExportsValue>;
+  exports?: ExportsValue | Record<string, ExportsValue>;
   module?: string;
   main?: string;
 };
@@ -229,6 +229,82 @@ function resolveExportsValue(value: ExportsValue, preferReactServer: boolean): s
   return null;
 }
 
+type ParsedPackageSpecifier = {
+  packageName: string;
+  exportKey: string;
+};
+
+function parsePackageSpecifier(specifier: string): ParsedPackageSpecifier {
+  const parts = specifier.split("/");
+  const packageName = specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
+  const subpathParts = specifier.startsWith("@") ? parts.slice(2) : parts.slice(1);
+  return {
+    packageName,
+    exportKey: subpathParts.length === 0 ? "." : `./${subpathParts.join("/")}`,
+  };
+}
+
+function isPackageExportsMap(
+  exportsField: ExportsValue | Record<string, ExportsValue>,
+): exportsField is Record<string, ExportsValue> {
+  return (
+    typeof exportsField === "object" &&
+    exportsField !== null &&
+    Object.keys(exportsField).some((key) => key === "." || key.startsWith("./"))
+  );
+}
+
+function resolvePackageExport(
+  exportsField: ExportsValue | Record<string, ExportsValue>,
+  exportKey: string,
+  preferReactServer: boolean,
+): string | null {
+  if (!isPackageExportsMap(exportsField)) {
+    return exportKey === "." ? resolveExportsValue(exportsField, preferReactServer) : null;
+  }
+
+  const exact = exportsField[exportKey];
+  if (exact !== undefined) {
+    return resolveExportsValue(exact, preferReactServer);
+  }
+
+  let bestPattern:
+    | {
+        matched: string;
+        prefixLength: number;
+        suffixLength: number;
+        value: ExportsValue;
+      }
+    | undefined;
+  for (const [pattern, value] of Object.entries(exportsField)) {
+    const starIndex = pattern.indexOf("*");
+    if (starIndex === -1) continue;
+    const prefix = pattern.slice(0, starIndex);
+    const suffix = pattern.slice(starIndex + 1);
+    if (!exportKey.startsWith(prefix) || !exportKey.endsWith(suffix)) continue;
+    const matched = exportKey.slice(prefix.length, exportKey.length - suffix.length);
+    if (
+      !bestPattern ||
+      prefix.length > bestPattern.prefixLength ||
+      (prefix.length === bestPattern.prefixLength && suffix.length > bestPattern.suffixLength)
+    ) {
+      bestPattern = {
+        matched,
+        prefixLength: prefix.length,
+        suffixLength: suffix.length,
+        value,
+      };
+    }
+  }
+
+  if (bestPattern) {
+    const target = resolveExportsValue(bestPattern.value, preferReactServer);
+    if (target) return target.replaceAll("*", bestPattern.matched);
+  }
+
+  return null;
+}
+
 /**
  * Result of resolving a package, including the directory and parsed package.json.
  * Used internally by resolvePackageInfo.
@@ -246,6 +322,7 @@ type PackageInfo = {
 async function resolvePackageInfo(
   packageName: string,
   projectRoot: string,
+  fallbackSpecifier = packageName,
 ): Promise<PackageInfo | null> {
   try {
     const req = createRequire(path.join(projectRoot, "package.json"));
@@ -259,7 +336,7 @@ async function resolvePackageInfo(
     } catch {
       // Package has strict exports — resolve main entry and walk up to find package.json
       try {
-        const mainEntry = req.resolve(packageName);
+        const mainEntry = req.resolve(fallbackSpecifier);
         let dir = path.dirname(mainEntry);
         // Walk up until we find package.json with matching name
         for (let i = 0; i < 10; i++) {
@@ -288,41 +365,38 @@ async function resolvePackageInfo(
 }
 
 /**
- * Resolve a package name to its ESM entry file path.
+ * Resolve a package specifier to its ESM entry file path.
  * Checks `exports["."]` → `module` → `main`, then falls back to require.resolve.
  * Pass `preferReactServer: true` in the RSC environment to prefer the "react-server"
  * export condition over "node"/"import" when resolving the barrel entry.
  */
 async function resolvePackageEntry(
-  packageName: string,
+  packageSpecifier: string,
   projectRoot: string,
   preferReactServer: boolean,
 ): Promise<string | null> {
   try {
-    const info = await resolvePackageInfo(packageName, projectRoot);
+    const { packageName, exportKey } = parsePackageSpecifier(packageSpecifier);
+    const info = await resolvePackageInfo(packageName, projectRoot, packageSpecifier);
     if (!info) return null;
     const { pkgDir, pkgJson } = info;
 
     if (pkgJson.exports) {
-      // NOTE: Only the root export (".") is checked here. Subpath exports like
-      // "./Button" or "./*" are intentionally ignored — this function resolves
-      // the barrel entry point, not individual sub-module paths.
-      const dotExport = pkgJson.exports["."];
-      if (dotExport) {
-        const entryPath = resolveExportsValue(dotExport, preferReactServer);
-        if (entryPath) {
-          return normalizePathSeparators(path.resolve(pkgDir, entryPath));
-        }
+      const entryPath = resolvePackageExport(pkgJson.exports, exportKey, preferReactServer);
+      if (entryPath) {
+        return normalizePathSeparators(path.resolve(pkgDir, entryPath));
       }
     }
 
-    const entryField = pkgJson.module ?? pkgJson.main;
-    if (typeof entryField === "string") {
-      return normalizePathSeparators(path.resolve(pkgDir, entryField));
+    if (exportKey === ".") {
+      const entryField = pkgJson.module ?? pkgJson.main;
+      if (typeof entryField === "string") {
+        return normalizePathSeparators(path.resolve(pkgDir, entryField));
+      }
     }
 
     const req = createRequire(path.join(projectRoot, "package.json"));
-    return normalizePathSeparators(req.resolve(packageName));
+    return normalizePathSeparators(req.resolve(packageSpecifier));
   } catch {
     return null;
   }

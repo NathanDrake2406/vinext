@@ -633,6 +633,78 @@ describe("vinext:optimize-imports transform", () => {
     expect(result!.code).not.toContain(`from "./input"`);
   });
 
+  it("rewrites strict export-map subpath barrels through their ESM import entry", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "@heroicons", "react");
+    const esmDir = path.posix.join(pkgDir, "24", "solid", "esm");
+    const cjsDir = path.posix.join(pkgDir, "24", "solid");
+    fs.mkdirSync(esmDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@heroicons/react",
+        type: "module",
+        exports: {
+          "./24/solid": {
+            types: "./24/solid/index.d.ts",
+            import: "./24/solid/esm/index.js",
+            require: "./24/solid/index.js",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.posix.join(esmDir, "index.js"),
+      [
+        `export { default as Bars3Icon } from "./Bars3Icon.js";`,
+        `export { default as XMarkIcon } from "./XMarkIcon.js";`,
+        `export { default as ChevronLeftIcon } from "./ChevronLeftIcon.js";`,
+      ].join("\n"),
+    );
+    fs.writeFileSync(
+      path.posix.join(cjsDir, "index.js"),
+      `module.exports.Bars3Icon = require("./Bars3Icon.js");`,
+    );
+    for (const icon of ["Bars3Icon", "XMarkIcon", "ChevronLeftIcon"]) {
+      fs.writeFileSync(
+        path.posix.join(esmDir, `${icon}.js`),
+        `export default function ${icon}() { return null; }`,
+      );
+    }
+
+    const plugin = createOptimizeImportsPlugin(
+      () => undefined,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { Bars3Icon, XMarkIcon } from "@heroicons/react/24/solid";`,
+      "/app/global-nav.tsx",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.code).toContain(
+      `import Bars3Icon from ${JSON.stringify(path.posix.join(esmDir, "Bars3Icon.js"))}`,
+    );
+    expect(result!.code).toContain(
+      `import XMarkIcon from ${JSON.stringify(path.posix.join(esmDir, "XMarkIcon.js"))}`,
+    );
+    expect(result!.code).not.toContain(`from "@heroicons/react/24/solid"`);
+    expect(result!.code).not.toContain("ChevronLeftIcon");
+    expect(result!.code).not.toContain(path.posix.join(cjsDir, "index.js"));
+  });
+
   it("appends trailing semicolons to all replacement statements", async () => {
     // lodash-es is in DEFAULT_OPTIMIZE_PACKAGES
     const call = await setupTransform(
