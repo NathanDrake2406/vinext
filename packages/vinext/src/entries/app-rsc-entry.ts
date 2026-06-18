@@ -178,6 +178,30 @@ type AppRouterConfig = {
   draftModeSecret?: string;
 };
 
+function hasAnyPath(paths: readonly (string | null)[] | undefined): boolean {
+  return paths?.some((path) => path !== null) ?? false;
+}
+
+function needsAppPageRuntime(route: AppRoute): boolean {
+  return (
+    route.pagePath !== null ||
+    route.layouts.length > 0 ||
+    route.templates.length > 0 ||
+    route.parallelSlots.length > 0 ||
+    (route.siblingIntercepts?.length ?? 0) > 0 ||
+    route.loadingPath !== null ||
+    route.errorPath !== null ||
+    route.notFoundPath !== null ||
+    route.forbiddenPath !== null ||
+    route.unauthorizedPath !== null ||
+    hasAnyPath(route.layoutErrorPaths) ||
+    hasAnyPath(route.errorPaths) ||
+    hasAnyPath(route.notFoundPaths) ||
+    hasAnyPath(route.forbiddenPaths) ||
+    hasAnyPath(route.unauthorizedPaths)
+  );
+}
+
 /**
  * Generate the virtual RSC entry module.
  *
@@ -243,9 +267,18 @@ async function __loadPrerenderPagesRoutes() {
 }
 `
     : "";
+  const needsPageRuntime =
+    routes.some(needsAppPageRuntime) ||
+    Boolean(globalErrorPath) ||
+    Boolean(config?.globalNotFoundPath);
+  const isRouteHandlerOnlyRuntime = !needsPageRuntime && !hasPagesDir;
 
   return `
 import ${JSON.stringify(serverGlobalsPath)};
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 import {
   renderToReadableStream as _renderToReadableStream,
   decodeAction,
@@ -264,9 +297,11 @@ const prerenderToReadableStream = createRscPrerenderer(async (model, options) =>
 );
 import { createElement } from "react";
 import { getNavigationContext as _getNavigationContext } from "next/navigation";
+`
+}
 import { configureMemoryCacheHandler as __configureMemoryCacheHandler } from "vinext/shims/cache-handler";
-import { headersContextFromRequest, getDraftModeCookieHeader, getAndClearPendingCookies, consumeDynamicUsage, consumeInvalidDynamicUsageError, setHeadersAccessPhase } from "next/headers";
-import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";
+${isRouteHandlerOnlyRuntime ? "" : `import { getDraftModeCookieHeader, getAndClearPendingCookies, setHeadersAccessPhase } from "next/headers";`}
+${isRouteHandlerOnlyRuntime ? "" : `import { mergeMetadata, resolveModuleMetadata, mergeViewport, resolveModuleViewport } from "vinext/metadata";`}
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(normalizePathSeparators(middlewarePath))};` : ""}
 ${
   instrumentationPath
@@ -276,16 +311,20 @@ import { ensureInstrumentationRegistered as __ensureInstrumentationRegistered } 
 }
 import { createAppRscHandler } from "vinext/server/app-rsc-handler";
 import { registerConfiguredCacheAdapters as __registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
-import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
-import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
 ${
   hasPagesDir
-    ? `import {
+    ? `import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
+import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
+import {
   applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext,
 } from ${JSON.stringify(appRouteHandlerResponsePath)};`
     : ""
 }
 const __loadAppRouteHandlerDispatch = () => import(${JSON.stringify(appRouteHandlerDispatchPath)});
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 const __loadAppServerActionExecution = () => import(${JSON.stringify(appServerActionExecutionPath)});
 import {
   sanitizeErrorForClient as __sanitizeErrorForClient,
@@ -318,27 +357,39 @@ import {
   resolveAppPageFetchCacheMode as __resolveAppPageFetchCacheMode,
   resolveAppPageSegmentConfig as __resolveAppPageSegmentConfig,
 } from ${JSON.stringify(appSegmentConfigPath)};
+`
+}
 import { makeThenableParams } from ${JSON.stringify(thenableParamsShimPath)};
 import {
   createAppRscRouteMatcher as __createAppRscRouteMatcher,
-  SIBLING_PAGE_INTERCEPT_SLOT_KEY as __SIBLING_PAGE_INTERCEPT_SLOT_KEY,
+${isRouteHandlerOnlyRuntime ? "" : `  SIBLING_PAGE_INTERCEPT_SLOT_KEY as __SIBLING_PAGE_INTERCEPT_SLOT_KEY,`}
 } from ${JSON.stringify(appRscRouteMatchingPath)};
 import {
-  appIsrHtmlKey as __isrHtmlKey,
-  appIsrRscKey as __isrRscKey,
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `  appIsrHtmlKey as __isrHtmlKey,
+  appIsrRscKey as __isrRscKey,`
+}
   appIsrRouteKey as __isrRouteKey,
   isrGet as __isrGet,
   isrSet as __isrSet,
-  isrSetPrerenderedAppPage as __isrSetPrerenderedAppPage,
+${isRouteHandlerOnlyRuntime ? "" : `  isrSetPrerenderedAppPage as __isrSetPrerenderedAppPage,`}
   triggerBackgroundRegeneration as __triggerBackgroundRegeneration,
 } from ${JSON.stringify(isrCachePath)};
 // Import server-only state module to register ALS-backed accessors.
 import "vinext/navigation-state";
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { getSSRFontLinks as _getSSRFontLinks, getSSRFontStyles as _getSSRFontStylesGoogle, getSSRFontPreloads as _getSSRFontPreloadsGoogle } from "next/font/google";
 import { getSSRFontStyles as _getSSRFontStylesLocal, getSSRFontPreloads as _getSSRFontPreloadsLocal } from "next/font/local";
 function _getSSRFontStyles() { return [..._getSSRFontStylesGoogle(), ..._getSSRFontStylesLocal()]; }
 function _getSSRFontPreloads() { return [..._getSSRFontPreloadsGoogle(), ..._getSSRFontPreloadsLocal()]; }
+`
+}
 ${
   hasPagesDir
     ? `// Pages Router routes are loaded lazily from the SSR environment for internal prerender requests.
@@ -346,24 +397,42 @@ import { renderPagesFallback as __renderPagesFallback } from ${JSON.stringify(ap
     : ""
 }
 
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 // Suppress expected "Invalid hook call" dev warning when layout/page
 // components are probed outside React's render cycle. The import patches
 // console.error once at module load (side-effect) and exposes the ALS
 // so per-route dispatch can opt into suppression via .run(true, ...).
 import { suppressHookWarningAls } from ${JSON.stringify(appHookWarningSuppressionPath)};
+`
+}
 import { clearAppRequestContext as __clearRequestContext, setAppNavigationContext as setNavigationContext } from ${JSON.stringify(appRequestContextPath)};
 
 __configureMemoryCacheHandler({ cacheMaxMemorySize: ${JSON.stringify(cacheMaxMemorySize)} });
 import { createAppPrerenderStaticParamsResolver as __createAppPrerenderStaticParamsResolver } from ${JSON.stringify(appPrerenderStaticParamsPath)};
 import { ensureAppRouteModulesLoaded as __ensureRouteLoaded } from ${JSON.stringify(appRouteModuleLoaderPath)};
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 import {
   getRenderedConcreteUrlPathsForRoute as __getRenderedConcreteUrlPathsForRoute,
   initPregeneratedPathsFromGlobals as __initPregeneratedPathsFromGlobals,
 } from ${JSON.stringify(pregeneratedConcretePathsPath)};
+`
+}
 
 const __draftModeSecret = ${JSON.stringify(draftModeSecret)};
 
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 __initPregeneratedPathsFromGlobals();
+`
+}
 
 // Note: cache entries are written with \`headers: undefined\`. Next.js stores
 // response headers (e.g. set-cookie from cookies().set() during render) in the
@@ -392,6 +461,10 @@ const __classDebug = process.env.VINEXT_DEBUG_CLASSIFICATION
     }
   : undefined;
 
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 function __resolveRouteFetchCacheMode(route) {
   return __resolveAppPageFetchCacheMode({
     layouts: route.layouts,
@@ -411,6 +484,8 @@ function __resolveRouteRuntime(route) {
     layouts: route.layouts,
     page: route.page,
   }).runtime ?? null;
+}
+`
 }
 
 ${imports.join("\n")}
@@ -461,6 +536,10 @@ export const __basePath = ${JSON.stringify(bp)};
 // thread the configured trailingSlash flag through canonical URL rendering.
 const __trailingSlash = ${JSON.stringify(ts)};
 
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 const rootNotFoundModule = ${rootNotFoundVar ? rootNotFoundVar : "null"};
 const rootForbiddenModule = ${rootForbiddenVar ? rootForbiddenVar : "null"};
 const rootUnauthorizedModule = ${rootUnauthorizedVar ? rootUnauthorizedVar : "null"};
@@ -478,8 +557,8 @@ const rootLayouts = [${rootLayoutVars.join(", ")}];
 // See https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/app-render.tsx#L495-L520
 // See Next.js test: test/e2e/app-dir/initial-css-order/initial-css-order.test.ts
 const __loadGlobalNotFoundModule = ${
-    globalNotFoundImportSpecifier ? `() => import(${globalNotFoundImportSpecifier})` : "null"
-  };
+        globalNotFoundImportSpecifier ? `() => import(${globalNotFoundImportSpecifier})` : "null"
+      };
 
 const createRscOnErrorHandler = (request, pathname, routePath) =>
   createAppRscOnErrorHandler(_reportRequestError, request, pathname, routePath);
@@ -517,11 +596,17 @@ const __fallbackRenderer = __createAppFallbackRenderer({
     return createRscOnErrorHandler(request, pathname, routePath);
   },
 });
+`
+}
 
 function matchRoute(url) {
   return __routeMatcher.matchRoute(url);
 }
 
+${
+  isRouteHandlerOnlyRuntime
+    ? ""
+    : `
 /**
  * Check if a pathname matches any intercepting route.
  * Returns the match info or null.
@@ -550,6 +635,8 @@ async function buildPageElements(route, params, routePath, pageRequest, layoutPa
     htmlLimitedBots: __htmlLimitedBots,
   });
 }
+`
+}
 
 const __i18nConfig = ${JSON.stringify(i18nConfig)};
 const __configRedirects = ${JSON.stringify(redirects)};
@@ -568,9 +655,15 @@ const __reactMaxHeadersLength = ${JSON.stringify(reactMaxHeadersLength)};
 export const __assetPrefix = ${JSON.stringify(assetPrefix)};
 export const __inlineCss = ${JSON.stringify(inlineCss)};
 export const __hasPagesDir = ${JSON.stringify(hasPagesDir)};
-export const getRenderedConcreteUrlPathsForRoute = __getRenderedConcreteUrlPathsForRoute;
+export const getRenderedConcreteUrlPathsForRoute = ${
+    isRouteHandlerOnlyRuntime ? "() => undefined" : "__getRenderedConcreteUrlPathsForRoute"
+  };
 const __cacheComponents = ${JSON.stringify(cacheComponents)};
 
+${
+  isRouteHandlerOnlyRuntime
+    ? `export async function seedMemoryCacheFromPrerender() {}`
+    : `
 export async function seedMemoryCacheFromPrerender(serverDir) {
   const { seedMemoryCacheFromPrerender: __seedMemoryCacheFromPrerender } =
     await import(${JSON.stringify(seedCachePath)});
@@ -585,6 +678,8 @@ export async function seedMemoryCacheFromPrerender(serverDir) {
       return __isrSetPrerenderedAppPage(key, data, metadata);
     },
   });
+}
+`
 }
 
 ${generateDevOriginCheckCode(config?.allowedDevOrigins)}
@@ -630,7 +725,13 @@ export default createAppRscHandler({
   imageConfig: __imageConfig,
   isDev: process.env.NODE_ENV !== "production",
   draftModeSecret: __draftModeSecret,
-  dispatchMatchedPage({
+  ${
+    isRouteHandlerOnlyRuntime
+      ? `async dispatchMatchedPage() {
+    __clearRequestContext();
+    return new Response(null, { status: 404 });
+  },`
+      : `dispatchMatchedPage({
     clientReuseManifest,
     cleanPathname,
     displayPathname,
@@ -817,6 +918,8 @@ export default createAppRscHandler({
       renderMode,
     });
   },
+  `
+  }
   async dispatchMatchedRouteHandler({
     cleanPathname,
     middlewareContext,
@@ -860,7 +963,15 @@ export default createAppRscHandler({
   },`
       : ""
   }
-  async handleProgressiveActionRequest({
+  ${
+    isRouteHandlerOnlyRuntime
+      ? `async handleProgressiveActionRequest() {
+    return null;
+  },
+  async handleServerActionRequest() {
+    return null;
+  },`
+      : `async handleProgressiveActionRequest({
     actionId,
     cleanPathname,
     contentType,
@@ -1037,6 +1148,8 @@ export default createAppRscHandler({
       },
     });
   },
+  `
+  }
   i18nConfig: __i18nConfig,
   isMiddlewareProxy: ${JSON.stringify(middlewarePath ? isProxyFile(middlewarePath) : false)},
   ${hasPagesDir ? `loadPrerenderPagesRoutes: __loadPrerenderPagesRoutes,` : ""}
@@ -1045,10 +1158,17 @@ export default createAppRscHandler({
   metadataRoutes,
   middlewareModule: ${middlewarePath ? "middlewareModule" : "null"},
   publicFiles: __publicFiles,
-  renderNotFound({ isRscRequest, matchedParams, middlewareContext, request, route, scriptNonce }) {
+  ${
+    isRouteHandlerOnlyRuntime
+      ? `async renderNotFound() {
+    return null;
+  },`
+      : `renderNotFound({ isRscRequest, matchedParams, middlewareContext, request, route, scriptNonce }) {
     const __isEdge = route ? __isEdgeRuntime(__resolveAppPageSegmentConfig({ layouts: route.layouts, page: route.page }).runtime) : false;
     return __fallbackRenderer.renderNotFound(route, isRscRequest, request, matchedParams, scriptNonce, middlewareContext, { isEdgeRuntime: __isEdge });
   },
+  `
+  }
   ${
     hasPagesDir
       ? `async renderPagesFallback({ allowRscDocumentFallback, appRouteMatch, isDataRequest, isRscRequest, matchKind, middlewareContext, pathname, pagesDataRequest, request, url }) {
