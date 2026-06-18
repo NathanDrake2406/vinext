@@ -12,6 +12,7 @@ export {
 
 export type RouteClientReferenceResolutionContext = {
   projectRoot: string;
+  globalSeedFiles?: readonly string[];
   onParseError?: (filePath: string, error: unknown) => void;
   resolve?: (specifier: string, importerPath: string) => Promise<string | null | undefined>;
 };
@@ -33,6 +34,7 @@ type RouteClientReferenceCandidateEntry = {
 };
 
 export type RouteClientReferenceCandidateManifest = {
+  dependencies: readonly string[];
   routes: Readonly<Record<string, RouteClientReferenceCandidateEntry>>;
 };
 
@@ -290,8 +292,10 @@ function getCachedSourceScan(
   filePath: string,
   context: RouteClientReferenceResolutionContext,
   cache: RouteClientReferenceScanCache,
+  dependencies: Set<string>,
 ): Promise<SourceScan> {
   const normalizedPath = normalizeClientReferenceImportId(filePath);
+  dependencies.add(normalizedPath);
   const existing = cache.get(normalizedPath);
   if (existing) return existing;
 
@@ -304,8 +308,12 @@ async function collectCandidatesForRoute(
   route: AppRoute,
   context: RouteClientReferenceResolutionContext,
   cache: RouteClientReferenceScanCache,
+  dependencies: Set<string>,
 ): Promise<readonly string[] | null> {
-  const pendingFiles = [...collectAppRouteClientReferenceSeedFiles(route)];
+  const pendingFiles = [
+    ...(context.globalSeedFiles ?? []),
+    ...collectAppRouteClientReferenceSeedFiles(route),
+  ];
   const seenFiles = new Set<string>();
   const candidates = new Set<string>();
 
@@ -317,7 +325,7 @@ async function collectCandidatesForRoute(
     if (seenFiles.has(normalizedPath)) continue;
     seenFiles.add(normalizedPath);
 
-    const scan = await getCachedSourceScan(filePath, context, cache);
+    const scan = await getCachedSourceScan(filePath, context, cache, dependencies);
     if (!scan.complete) return null;
     for (const candidate of scan.candidates) {
       candidates.add(candidate);
@@ -335,15 +343,16 @@ export async function buildRouteClientReferenceCandidateManifest(
   context: RouteClientReferenceResolutionContext,
   cache: RouteClientReferenceScanCache = new Map(),
 ): Promise<RouteClientReferenceCandidateManifest> {
+  const dependencies = new Set<string>();
   const entries = await Promise.all(
     routes.map(async (route) => {
       const routeId = routeClientReferenceId(route);
-      const importCandidates = await collectCandidatesForRoute(route, context, cache);
+      const importCandidates = await collectCandidatesForRoute(route, context, cache, dependencies);
       return [routeId, { routeId, importCandidates }] as const;
     }),
   );
 
-  return { routes: Object.fromEntries(entries) };
+  return { dependencies: [...dependencies].sort(), routes: Object.fromEntries(entries) };
 }
 
 export function getRouteClientReferenceImportCandidatesInRouteOrder(

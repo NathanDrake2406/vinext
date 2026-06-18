@@ -210,6 +210,110 @@ describe("route client reference manifest", () => {
       expect(candidates).toContain(
         normalizeClientReferenceImportId(path.join(appDir, "counter.tsx")),
       );
+      expect(manifest.dependencies).toEqual([
+        normalizeClientReferenceImportId(path.join(appDir, "counter.tsx")),
+        normalizeClientReferenceImportId(path.join(appDir, "dashboard", "page.tsx")),
+        normalizeClientReferenceImportId(path.join(appDir, "layout.tsx")),
+        normalizeClientReferenceImportId(path.join(appDir, "search.tsx")),
+        normalizeClientReferenceImportId(path.join(appDir, "shell.tsx")),
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes global seed files in every route's scoped candidates", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const appDir = path.join(root, "app");
+      const pagePath = path.join(appDir, "page.tsx");
+      const globalErrorPath = path.join(appDir, "global-error.tsx");
+      const globalErrorClientPath = path.join(appDir, "global-error-client.tsx");
+      await fs.mkdir(appDir, { recursive: true });
+      await fs.writeFile(pagePath, `export default function Page() { return null; }`);
+      await fs.writeFile(
+        globalErrorPath,
+        `import GlobalErrorClient from "./global-error-client";\nexport default function GlobalError() { return <GlobalErrorClient />; }`,
+      );
+      await fs.writeFile(
+        globalErrorClientPath,
+        `"use client";\nexport default function GlobalErrorClient() { return null; }`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        globalSeedFiles: [globalErrorPath],
+        projectRoot: root,
+      });
+      const [candidates] = getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes);
+
+      expect(candidates).toContain(normalizeClientReferenceImportId(globalErrorPath));
+      expect(candidates).toContain(normalizeClientReferenceImportId(globalErrorClientPath));
+      expect(manifest.dependencies).toContain(normalizeClientReferenceImportId(globalErrorPath));
+      expect(manifest.dependencies).toContain(normalizeClientReferenceImportId(pagePath));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks routes incomplete when a global seed file cannot be scanned", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const appDir = path.join(root, "app");
+      const pagePath = path.join(appDir, "page.tsx");
+      const globalErrorPath = path.join(appDir, "global-error.mdx");
+      await fs.mkdir(appDir, { recursive: true });
+      await fs.writeFile(pagePath, `export default function Page() { return null; }`);
+      await fs.writeFile(
+        globalErrorPath,
+        `import GlobalErrorClient from "./global-error-client";\n\nexport default function GlobalError() { return <GlobalErrorClient />; }`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        globalSeedFiles: [globalErrorPath],
+        projectRoot: root,
+      });
+
+      expect(getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes)).toEqual([null]);
+      expect(manifest.dependencies).toContain(normalizeClientReferenceImportId(globalErrorPath));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tracks route files as dependencies so dev edits can regenerate scoped candidates", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const appDir = path.join(root, "app");
+      const pagePath = path.join(appDir, "page.tsx");
+      const clientPath = path.join(appDir, "Island.tsx");
+      await fs.mkdir(appDir, { recursive: true });
+      await fs.writeFile(pagePath, `export default function Page() { return null; }`);
+      await fs.writeFile(
+        clientPath,
+        `"use client";\nexport default function Island() { return null; }`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const firstManifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+      });
+      expect(firstManifest.dependencies).toContain(normalizeClientReferenceImportId(pagePath));
+
+      await fs.writeFile(
+        pagePath,
+        `import Island from "./Island";\nexport default function Page() { return <Island />; }`,
+      );
+      const changedManifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+      });
+      const [changedCandidates] = getRouteClientReferenceImportCandidatesInRouteOrder(
+        changedManifest,
+        routes,
+      );
+
+      expect(changedCandidates).toContain(normalizeClientReferenceImportId(clientPath));
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

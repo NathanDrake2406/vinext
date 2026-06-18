@@ -2800,6 +2800,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           const clientReferenceCandidateManifest = await buildRouteClientReferenceCandidateManifest(
             routes,
             {
+              globalSeedFiles: globalErrorPath ? [globalErrorPath] : [],
               projectRoot: root,
               resolve: async (specifier, importerPath) => {
                 const resolved = await this.resolve(specifier, importerPath, { skipSelf: true });
@@ -2807,6 +2808,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               },
             },
           );
+          for (const dependency of clientReferenceCandidateManifest.dependencies) {
+            this.addWatchFile(dependency);
+          }
           const clientReferenceImportCandidatesByRoute =
             getRouteClientReferenceImportCandidatesInRouteOrder(
               clientReferenceCandidateManifest,
