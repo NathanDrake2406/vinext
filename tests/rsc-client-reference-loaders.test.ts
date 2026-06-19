@@ -21,12 +21,21 @@ async function runConfigResolved(plugin: Plugin, config: unknown): Promise<void>
   await (hook as ConfigResolvedHook).call(undefined, config);
 }
 
-async function runTransform(plugin: Plugin, code: string, id: string): Promise<TransformResult> {
+async function runTransform(
+  plugin: Plugin,
+  code: string,
+  id: string,
+  environmentName?: string,
+): Promise<TransformResult> {
   const hook = plugin.transform;
   if (typeof hook !== "function") {
     throw new Error("expected function transform hook");
   }
-  return await (hook as TransformHook).call({}, code, id);
+  return await (hook as TransformHook).call(
+    environmentName ? { environment: { name: environmentName } } : {},
+    code,
+    id,
+  );
 }
 
 function requireTransformCode(result: TransformResult): { code: string; map: unknown } {
@@ -37,7 +46,7 @@ function requireTransformCode(result: TransformResult): { code: string; map: unk
 }
 
 describe("RSC client reference loaders plugin", () => {
-  it("registers client-reference import ids from the transformed client-reference module", async () => {
+  function createPluginWithClientReferenceMeta() {
     const meta = {
       importId: "/tmp/app/client.tsx",
       referenceKey: "/tmp/app/client.tsx#default",
@@ -46,23 +55,35 @@ describe("RSC client reference loaders plugin", () => {
     } as unknown as PluginApi["manager"]["clientReferenceMetaMap"][string];
     const plugin = createRscClientReferenceLoadersPlugin();
 
-    await runConfigResolved(plugin, {
-      plugins: [
-        {
-          name: "rsc:minimal",
-          api: {
-            manager: {
-              isScanBuild: false,
-              clientReferenceMetaMap: {
-                "/tmp/app/client.tsx": meta,
+    return {
+      config: {
+        plugins: [
+          {
+            name: "rsc:minimal",
+            api: {
+              manager: {
+                isScanBuild: false,
+                clientReferenceMetaMap: {
+                  "/tmp/app/client.tsx": meta,
+                },
               },
             },
           },
-        },
-      ],
-    });
+        ],
+      },
+      meta,
+      plugin,
+    };
+  }
 
-    const result = requireTransformCode(await runTransform(plugin, "", CLIENT_REFERENCES_ID));
+  it("registers client-reference import ids from the SSR transformed client-reference module", async () => {
+    const { config, meta, plugin } = createPluginWithClientReferenceMeta();
+
+    await runConfigResolved(plugin, config);
+
+    const result = requireTransformCode(
+      await runTransform(plugin, "", CLIENT_REFERENCES_ID, "ssr"),
+    );
 
     expect(result).toEqual(
       expect.objectContaining({
@@ -73,5 +94,24 @@ describe("RSC client reference loaders plugin", () => {
     expect(result.code).toContain('"/tmp/app/client.tsx#default": "/tmp/app/client.tsx"');
     expect(result.code).toContain('"/tmp/app/client.tsx#default": async () => {');
     expect(meta.groupChunkId).toBe("/tmp/app/client.tsx");
+  });
+
+  it("does not import server-only import map state in the client transformed module", async () => {
+    const { config, plugin } = createPluginWithClientReferenceMeta();
+
+    await runConfigResolved(plugin, config);
+
+    const result = requireTransformCode(
+      await runTransform(plugin, "", CLIENT_REFERENCES_ID, "client"),
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        code: expect.not.stringContaining("setClientReferenceImportMap"),
+        map: null,
+      }),
+    );
+    expect(result.code).not.toContain("client-reference-import-map-state");
+    expect(result.code).toContain('"/tmp/app/client.tsx#default": async () => {');
   });
 });

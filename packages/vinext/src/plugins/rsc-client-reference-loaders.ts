@@ -15,6 +15,12 @@ type RscPluginWithApi = Plugin & {
   api?: PluginApi;
 };
 
+type PluginContextWithEnvironment = {
+  environment?: {
+    name?: string;
+  };
+};
+
 function withResolvedIdProxy(resolvedId: string): string {
   return resolvedId.startsWith("\0")
     ? RESOLVED_ID_PROXY_PREFIX + encodeURIComponent(resolvedId)
@@ -33,7 +39,10 @@ function generateClientReferenceObject(meta: RscClientReferenceMeta): string {
   return exports ? `{\n${exports}\n    }` : "{}";
 }
 
-function generateDirectClientReferenceLoaders(metas: RscClientReferenceMeta[]): string {
+function generateDirectClientReferenceLoaders(
+  metas: RscClientReferenceMeta[],
+  options: { registerImportMap: boolean },
+): string {
   const entries = metas
     .slice()
     .sort((a, b) => a.referenceKey.localeCompare(b.referenceKey))
@@ -54,11 +63,15 @@ function generateDirectClientReferenceLoaders(metas: RscClientReferenceMeta[]): 
     .map((meta) => `  ${JSON.stringify(meta.referenceKey)}: ${JSON.stringify(meta.importId)},`)
     .join("\n");
 
-  return `import { setClientReferenceImportMap as __vinextSetClientReferenceImportMap } from ${JSON.stringify(clientReferenceImportMapStatePath)};
+  const importMapRegistration = options.registerImportMap
+    ? `import { setClientReferenceImportMap as __vinextSetClientReferenceImportMap } from ${JSON.stringify(clientReferenceImportMapStatePath)};
 __vinextSetClientReferenceImportMap({
 ${importMapEntries}
 });
-export default {
+`
+    : "";
+
+  return `${importMapRegistration}export default {
 ${entries}
 };\n`;
 }
@@ -100,8 +113,11 @@ export function createRscClientReferenceLoadersPlugin(): Plugin {
         meta.groupChunkId = id;
       }
 
+      const envName = (this as PluginContextWithEnvironment).environment?.name;
       return {
-        code: generateDirectClientReferenceLoaders(metas),
+        code: generateDirectClientReferenceLoaders(metas, {
+          registerImportMap: envName !== "client",
+        }),
         map: null,
       };
     },
