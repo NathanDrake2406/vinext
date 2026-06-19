@@ -253,9 +253,8 @@ describe("Pages Router popstate stale-state filter (non-i18n parity)", () => {
 // stopped writing `url` distinct from `as`, or the popstate handler stopped
 // keying the fetch off `state.url`, this fails where the isolated tests would
 // not. It also reproduces the PR's bug through the real write path: after a
-// push the router tracker (`lastPathnameAndSearch`) equals the visible URL, so
-// the masked entry hits the identical-URL case that the `isMaskedRoute` guard
-// must exclude from the hash-only fast path.
+// push the visible browser URL is unchanged and has no hash delta, so the
+// masked entry must not be swallowed by the hash-only fast path.
 describe("Pages Router masked popstate (producer→consumer integration)", () => {
   it("replays a Router.push-produced masked entry and fetches state.url, not state.as", async () => {
     const previousWindow = (globalThis as any).window;
@@ -303,8 +302,8 @@ describe("Pages Router masked popstate (producer→consumer integration)", () =>
       expect(win.location.pathname).toBe("/static");
 
       // Consumer: replay that exact entry. The visible URL is unchanged from
-      // the push (`/static`), so without the masked-route guard this would be
-      // mis-classified as a hash-only no-op. A single popstate suffices because
+      // the push (`/static`) and carries no hash, so hash-only classification
+      // must fall through to a full fetch. A single popstate suffices because
       // the push already set `routerDidNavigate`, disabling the replay filter.
       fetchMock.mockClear();
       win.__NEXT_DATA__ = {
