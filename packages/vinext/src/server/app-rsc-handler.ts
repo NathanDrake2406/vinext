@@ -301,6 +301,7 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   makeThenableParams: MakeThenableParams;
   matchRoute: (pathname: string) => AppRscRouteMatch<TRoute> | null;
   metadataRoutes: MetadataRoutes;
+  middlewareFilePath: string | null;
   middlewareModule: MiddlewareModule | null;
   publicFiles: ReadonlySet<string>;
   renderNotFound: (options: RenderNotFoundOptions<TRoute>) => Promise<Response | null>;
@@ -592,6 +593,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       cleanPathname,
       context: middlewareContext,
       hadBasePath,
+      filePath: options.middlewareFilePath ?? undefined,
       i18nConfig: options.i18nConfig,
       isDataRequest,
       isProxy: options.isMiddlewareProxy,

@@ -40,13 +40,14 @@ jobs:
     env:
       VINEXT_PERF_RUN_KIND: ${{ github.event_name == 'pull_request' && 'pull_request' || inputs.run_kind || 'main' }}
       VINEXT_PERF_COMMIT_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.commit_sha || github.sha }}
+      VINEXT_PERF_TARGET_SHA: ${{ github.event_name == 'pull_request' && github.sha || inputs.commit_sha || github.sha }}
       VINEXT_PERF_PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || inputs.pull_request }}
       VINEXT_PERF_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.base_sha }}
       VINEXT_PERF_EXECUTION_ID: ${{ github.run_id }}:${{ github.run_attempt }}
       CODSPEED_SKIP_UPLOAD: "true"
       CODSPEED_WALLTIME_PROFILER: samply
       VINEXT_PERF_TARGET_ROOT: ${{ github.workspace }}
-      VINEXT_PERF_TRUSTED_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.event.pull_request.base.sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      VINEXT_PERF_TRUSTED_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
     steps:
       - name: Validate run metadata
         run: |
@@ -65,10 +66,10 @@ jobs:
           fi
 
       - name: Checkout code under test
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ env.VINEXT_PERF_COMMIT_SHA }}
+          repository: ${{ github.repository }}
+          ref: ${{ env.VINEXT_PERF_TARGET_SHA }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -82,7 +83,7 @@ jobs:
           fi
 
       - name: Checkout trusted benchmark manifests
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.repository }}
           ref: ${{ env.VINEXT_PERF_TRUSTED_REF }}
@@ -121,7 +122,7 @@ jobs:
           echo "VINEXT_PERF_TARGET_USER=vinext-perf" >> "$GITHUB_ENV"
 
       - name: Checkout trusted performance harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.repository }}
           ref: ${{ env.VINEXT_PERF_TRUSTED_REF }}
