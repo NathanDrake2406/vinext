@@ -10,6 +10,7 @@ import {
   RSC_EMBEDDED_BINARY_CHUNK,
   type RscEmbeddedChunk,
 } from "./app-rsc-embedded-chunks.js";
+import { rewriteReactFlightStylesheetPreloadHints } from "./rsc-stream-hints.js";
 import { NAVIGATION_RUNTIME_SYMBOL_DESCRIPTION } from "../client/navigation-runtime.js";
 
 type RscEmbedTransform = {
@@ -17,6 +18,14 @@ type RscEmbedTransform = {
   finalize(): Promise<string>;
   /** Resolves when all raw bytes from the embed stream have been read. */
   getRawBuffer(): Promise<ArrayBuffer>;
+};
+type RscEmbedTransformOptions = {
+  /**
+   * Keep the exported transform defensive by default for callers that pass raw
+   * Flight streams directly. App SSR disables this because the RSC renderer
+   * already normalized the same stream at the source.
+   */
+  normalizeFlightHints?: boolean;
 };
 
 type HtmlInsertion = string | (() => string);
@@ -63,8 +72,7 @@ function createNavigationRuntimeRscDoneScript(): string {
  * the HTML spec requires as="style" for <link rel="preload">.
  */
 export function fixFlightHints(text: string): string {
-  if (!text.includes('"stylesheet"') || !text.includes(":HL[")) return text;
-  return text.replace(/(\d*:HL\[.*?),"stylesheet"(\]|,)/g, '$1,"style"$2');
+  return rewriteReactFlightStylesheetPreloadHints(text);
 }
 
 /**
@@ -74,11 +82,13 @@ export function fixFlightHints(text: string): string {
 export function createRscEmbedTransform(
   embedStream: ReadableStream<Uint8Array>,
   scriptNonce?: string,
+  options?: RscEmbedTransformOptions,
 ): RscEmbedTransform {
   const reader = embedStream.getReader();
   let pendingChunks: RscEmbeddedChunk[] = [];
   const rawChunks: Uint8Array[] = [];
   let reading = false;
+  const normalizeFlightHints = options?.normalizeFlightHints ?? true;
 
   async function pumpReader(): Promise<void> {
     if (reading) return;
@@ -93,10 +103,7 @@ export function createRscEmbedTransform(
         try {
           const decoder = new TextDecoder("utf-8", { fatal: true });
           const text = decoder.decode(result.value);
-          // The RSC entry already fixes HL hints at the source. Keep this second
-          // pass as defense in depth for any embed stream that bypasses that
-          // wrapper; the rewrite is idempotent, so double-application is safe.
-          pendingChunks.push(fixFlightHints(text));
+          pendingChunks.push(normalizeFlightHints ? fixFlightHints(text) : text);
         } catch {
           pendingChunks.push([RSC_EMBEDDED_BINARY_CHUNK, bytesToBase64(result.value)]);
         }
@@ -156,9 +163,48 @@ export function fixPreloadAs(html: string): string {
   ) {
     return html;
   }
-  return html.replace(/<link(?=[^>]*\srel="preload")[^>]*>/g, (tag) =>
-    tag.replace(' as="stylesheet"', ' as="style"'),
-  );
+  let rewritten = "";
+  let cursor = 0;
+  let searchFrom = 0;
+
+  for (;;) {
+    const linkStart = html.indexOf("<link", searchFrom);
+    if (linkStart === -1) break;
+
+    const linkEnd = html.indexOf(">", linkStart);
+    if (linkEnd === -1) break;
+
+    const tag = html.slice(linkStart, linkEnd + 1);
+    const asStart = tag.indexOf(' as="stylesheet"');
+    if (asStart === -1 || !hasPreloadRelAttribute(tag)) {
+      searchFrom = linkEnd + 1;
+      continue;
+    }
+
+    rewritten +=
+      html.slice(cursor, linkStart) +
+      tag.slice(0, asStart) +
+      ' as="style"' +
+      tag.slice(asStart + ' as="stylesheet"'.length);
+    cursor = linkEnd + 1;
+    searchFrom = linkEnd + 1;
+  }
+
+  return cursor === 0 ? html : rewritten + html.slice(cursor);
+}
+
+function isHtmlSpaceCode(code: number): boolean {
+  return code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d || code === 0x20;
+}
+
+function hasPreloadRelAttribute(tag: string): boolean {
+  let searchFrom = 0;
+  for (;;) {
+    const relStart = tag.indexOf('rel="preload"', searchFrom);
+    if (relStart === -1) return false;
+    if (relStart > 0 && isHtmlSpaceCode(tag.charCodeAt(relStart - 1))) return true;
+    searchFrom = relStart + 1;
+  }
 }
 
 // These `g`-flag regexes carry mutable `lastIndex` state. Every consumer below

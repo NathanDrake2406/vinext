@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeReactFlightPreloadHints } from "../packages/vinext/src/server/rsc-stream-hints.js";
+import {
+  normalizeReactFlightPreloadHints,
+  rewriteReactFlightStylesheetPreloadHints,
+} from "../packages/vinext/src/server/rsc-stream-hints.js";
 
 function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -29,6 +32,20 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 }
 
 describe("RSC stream hint helpers", () => {
+  it("rewrites stylesheet hints without touching non-HL stylesheet payloads", () => {
+    expect(rewriteReactFlightStylesheetPreloadHints(':HL["/a.css","stylesheet"]')).toBe(
+      ':HL["/a.css","style"]',
+    );
+    expect(
+      rewriteReactFlightStylesheetPreloadHints(
+        '0:D{"name":"page"}\n1:["$","link",null,{"rel":"stylesheet"}]\n',
+      ),
+    ).toBe('0:D{"name":"page"}\n1:["$","link",null,{"rel":"stylesheet"}]\n');
+    expect(
+      rewriteReactFlightStylesheetPreloadHints(':HL["/a.css","font"]\n0:D"stylesheet"\n'),
+    ).toBe(':HL["/a.css","font"]\n0:D"stylesheet"\n');
+  });
+
   it("rewrites React Flight stylesheet preload hints", async () => {
     const stream = normalizeReactFlightPreloadHints(
       streamFromChunks([
@@ -81,5 +98,37 @@ describe("RSC stream hint helpers", () => {
     );
 
     await expect(readStream(stream)).resolves.toBe(':HL["/assets/app.css","style"]');
+  });
+
+  it("passes through complete unchanged chunks without re-encoding", async () => {
+    const chunk = new TextEncoder().encode('0:D{"name":"page"}\n3:HL["/font.woff2","font"]\n');
+    const stream = normalizeReactFlightPreloadHints(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(chunk);
+          controller.close();
+        },
+      }),
+    );
+
+    const reader = stream.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(first.value).toBe(chunk);
+    await expect(reader.read()).resolves.toMatchObject({ done: true });
+  });
+
+  it("does not duplicate split UTF-8 bytes when an unchanged chunk is incomplete", async () => {
+    const stream = normalizeReactFlightPreloadHints(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0x30, 0x3a, 0x44, 0x22, 0xc3]));
+          controller.enqueue(new Uint8Array([0xa9, 0x22]));
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(readStream(stream)).resolves.toBe('0:D"é"');
   });
 });

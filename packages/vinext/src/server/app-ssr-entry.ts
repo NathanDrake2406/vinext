@@ -405,14 +405,18 @@ export async function handleSsr(
 
         if (options?.sideStream) {
           ssrStream = rscStream;
-          rscEmbed = createRscEmbedTransform(options.sideStream, options?.scriptNonce);
+          rscEmbed = createRscEmbedTransform(options.sideStream, options?.scriptNonce, {
+            normalizeFlightHints: false,
+          });
           if (options.capturedRscDataRef) {
             options.capturedRscDataRef.value = rscEmbed.getRawBuffer();
           }
         } else {
           const [s1, s2] = rscStream.tee();
           ssrStream = s1;
-          rscEmbed = createRscEmbedTransform(s2, options?.scriptNonce);
+          rscEmbed = createRscEmbedTransform(s2, options?.scriptNonce, {
+            normalizeFlightHints: false,
+          });
         }
 
         let flightRoot: PromiseLike<AppWireElements> | null = null;
