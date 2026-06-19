@@ -6,6 +6,7 @@ const REACT_FLIGHT_STYLESHEET_PRELOAD_HINT = /(\d*:HL\[.*?),"stylesheet"(\]|,)/g
  * Flight line so SSR embeds, navigation, and server actions see valid hints.
  */
 function normalizeReactFlightHintLine(line: string): string {
+  if (!line.includes('"stylesheet"') || !line.includes(":HL[")) return line;
   return line.replace(REACT_FLIGHT_STYLESHEET_PRELOAD_HINT, '$1,"style"$2');
 }
 

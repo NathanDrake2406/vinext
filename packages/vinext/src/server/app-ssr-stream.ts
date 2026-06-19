@@ -63,6 +63,7 @@ function createNavigationRuntimeRscDoneScript(): string {
  * the HTML spec requires as="style" for <link rel="preload">.
  */
 export function fixFlightHints(text: string): string {
+  if (!text.includes('"stylesheet"') || !text.includes(":HL[")) return text;
   return text.replace(/(\d*:HL\[.*?),"stylesheet"(\]|,)/g, '$1,"style"$2');
 }
 
@@ -148,6 +149,13 @@ export function createRscEmbedTransform(
  * HTML spec requires as="style" for <link rel="preload">.
  */
 export function fixPreloadAs(html: string): string {
+  if (
+    !html.includes("<link") ||
+    !html.includes('rel="preload"') ||
+    !html.includes(' as="stylesheet"')
+  ) {
+    return html;
+  }
   return html.replace(/<link(?=[^>]*\srel="preload")[^>]*>/g, (tag) =>
     tag.replace(' as="stylesheet"', ' as="style"'),
   );
