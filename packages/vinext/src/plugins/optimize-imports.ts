@@ -293,7 +293,7 @@ function resolvePackageExport(
 
   if (bestPattern) {
     const target = resolveExportsValue(bestPattern.value, preferReactServer);
-    if (target) return target.replaceAll("*", bestPattern.matched);
+    if (target) return target.replace("*", bestPattern.matched);
   }
 
   return null;
@@ -399,9 +399,9 @@ async function resolvePackageInfo(
 
 /**
  * Resolve a package specifier to its ESM entry file path.
- * Checks `exports["."]` → `module` → `main`, then falls back to require.resolve.
- * Pass `preferReactServer: true` in the RSC environment to prefer the "react-server"
- * export condition over "node"/"import" when resolving the barrel entry.
+ * Resolves its exact or most-specific pattern export, then checks `module` and `main`
+ * for root package imports before falling back to `require.resolve`.
+ * Pass `preferReactServer: true` to activate the "react-server" export condition.
  */
 async function resolvePackageEntry(
   packageSpecifier: string,

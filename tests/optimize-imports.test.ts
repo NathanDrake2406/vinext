@@ -763,6 +763,51 @@ describe("vinext:optimize-imports transform", () => {
     expect(result!.code).not.toContain(`from "@pattern/icons/icons/solid/X"`);
   });
 
+  it("replaces only the first star in a pattern export target", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "single-star-target");
+    const targetDir = path.posix.join(pkgDir, "dist", "Home");
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "single-star-target",
+        type: "module",
+        exports: {
+          "./icons/*": "./dist/*/barrel-*.js",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.posix.join(targetDir, "barrel-*.js"),
+      `export { Icon } from "./Icon.js";`,
+    );
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["single-star-target/icons/Home"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { Icon } from "single-star-target/icons/Home";`,
+      "/app/page.tsx",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.code).toContain(path.posix.join(targetDir, "Icon.js"));
+  });
+
   it("skips optimization when a pattern export is explicitly excluded with null", async () => {
     tmpDir = normalizePathSeparators(
       fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
