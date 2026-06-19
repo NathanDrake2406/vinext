@@ -288,6 +288,8 @@ function resolvePackageExport(
     const prefix = pattern.slice(0, starIndex);
     const suffix = pattern.slice(starIndex + 1);
     if (!exportKey.startsWith(prefix) || !exportKey.endsWith(suffix)) continue;
+    // Reject overlapping prefix/suffix segments, matching Node's export-map behavior.
+    if (prefix.length + suffix.length > exportKey.length) continue;
     const matched = exportKey.slice(prefix.length, exportKey.length - suffix.length);
     if (
       !bestPattern ||
@@ -353,26 +355,10 @@ async function resolvePackageInfo(
         try {
           mainEntry = req.resolve(packageName);
         } catch {
-          // Last resort: some strict ESM-only packages are unresolvable via CJS
-          // require conditions. Try a direct node_modules lookup relative to the
-          // project root. This covers standard npm/pnpm/yarn layouts where the
-          // package directory is symlinked into node_modules.
-          const manualPkgJson = path.join(
-            projectRoot,
-            "node_modules",
-            ...packageName.split("/"),
-            "package.json",
-          );
-          try {
-            const pkgJson = JSON.parse(await fs.readFile(manualPkgJson, "utf-8")) as PackageJson;
-            if (pkgJson.name === packageName) {
-              return { pkgDir: path.dirname(manualPkgJson), pkgJson };
-            }
-          } catch {
-            return null;
-          }
+          // Both resolves failed — fall through to the manual node_modules lookup below.
         }
       }
+
       if (mainEntry) {
         let dir = path.dirname(mainEntry);
         // Walk up until we find package.json with matching name
@@ -390,6 +376,27 @@ async function resolvePackageInfo(
           if (parent === dir) break;
           dir = parent;
         }
+      }
+
+      // Last resort: some strict ESM-only packages are unresolvable via CJS
+      // require conditions. Try a direct node_modules lookup relative to the
+      // project root. This covers standard npm/pnpm/yarn layouts where the
+      // package directory is symlinked into node_modules. It also acts as a
+      // fallback when a resolved main entry's walk-up failed to find a matching
+      // package.json (e.g. nested distribution layouts).
+      const manualPkgJson = path.join(
+        projectRoot,
+        "node_modules",
+        ...packageName.split("/"),
+        "package.json",
+      );
+      try {
+        const pkgJson = JSON.parse(await fs.readFile(manualPkgJson, "utf-8")) as PackageJson;
+        if (pkgJson.name === packageName) {
+          return { pkgDir: path.dirname(manualPkgJson), pkgJson };
+        }
+      } catch {
+        return null;
       }
     }
 

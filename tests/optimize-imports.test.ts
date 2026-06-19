@@ -864,6 +864,101 @@ describe("vinext:optimize-imports transform", () => {
     expect(result!.code).not.toContain(`from "@import-only/icons/icons"`);
   });
 
+  it("falls back to a direct node_modules lookup when no entry is resolvable via require", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "@manual-fallback", "icons");
+    const esmDir = path.posix.join(pkgDir, "esm");
+    fs.mkdirSync(esmDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@manual-fallback/icons",
+        type: "module",
+        exports: {
+          "./icons": {
+            import: "./esm/icons.js",
+          },
+        },
+        // Intentionally no main/default: the only way to discover this package is
+        // the direct node_modules lookup fallback.
+      }),
+    );
+    fs.writeFileSync(path.posix.join(esmDir, "icons.js"), `export { IconB } from "./IconB.js";`);
+    fs.writeFileSync(
+      path.posix.join(esmDir, "IconB.js"),
+      `export function IconB() { return null; }`,
+    );
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["@manual-fallback/icons/icons"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { IconB } from "@manual-fallback/icons/icons";`,
+      "/app/page.tsx",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.code).toContain(
+      `import { IconB } from ${JSON.stringify(path.posix.join(esmDir, "IconB.js"))}`,
+    );
+    expect(result!.code).not.toContain(`from "@manual-fallback/icons/icons"`);
+  });
+
+  it("rejects pattern exports where prefix and suffix overlap in the export key", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "@overlap", "pkg");
+    const distDir = path.posix.join(pkgDir, "dist");
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@overlap/pkg",
+        type: "module",
+        exports: {
+          "./a*a": "./dist/*.js",
+        },
+      }),
+    );
+    fs.writeFileSync(path.posix.join(distDir, "a.js"), `export { A } from "./A.js";`);
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["@overlap/pkg/a"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { A } from "@overlap/pkg/a";`,
+      "/app/page.tsx",
+    );
+
+    // Overlapping prefix/suffix segments should be rejected, leaving the import unchanged.
+    expect(result).toBeNull();
+  });
+
   it("intentionally prefers node over import in SSR condition resolution", async () => {
     tmpDir = normalizePathSeparators(
       fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
