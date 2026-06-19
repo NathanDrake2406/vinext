@@ -243,11 +243,38 @@ describe("App Router generated manifest construction", () => {
       ],
     });
 
+    expect(manifest.clientReferenceCandidateSetEntries).toEqual([
+      '["/tmp/test/app/layout.tsx","client-lib"]',
+      "[]",
+    ]);
     expect(manifest.routeEntries[0]).toContain(
-      'clientReferenceImportCandidates: ["/tmp/test/app/layout.tsx","client-lib"]',
+      "clientReferenceImportCandidates: __clientReferenceCandidateSets[0]",
     );
     expect(manifest.routeEntries[1]).not.toContain("clientReferenceImportCandidates");
-    expect(manifest.routeEntries[2]).toContain("clientReferenceImportCandidates: []");
+    expect(manifest.routeEntries[2]).toContain(
+      "clientReferenceImportCandidates: __clientReferenceCandidateSets[1]",
+    );
+  });
+
+  it("interns repeated route-scoped client-reference import candidate sets", () => {
+    const manifest = buildAppRscManifestCode({
+      routes: minimalAppRoutes,
+      clientReferenceImportCandidatesByRoute: [
+        ["/tmp/test/app/layout.tsx", "client-lib"],
+        null,
+        ["/tmp/test/app/layout.tsx", "client-lib"],
+      ],
+    });
+
+    expect(manifest.clientReferenceCandidateSetEntries).toEqual([
+      '["/tmp/test/app/layout.tsx","client-lib"]',
+    ]);
+    expect(manifest.routeEntries[0]).toContain(
+      "clientReferenceImportCandidates: __clientReferenceCandidateSets[0]",
+    );
+    expect(manifest.routeEntries[2]).toContain(
+      "clientReferenceImportCandidates: __clientReferenceCandidateSets[0]",
+    );
   });
 
   it("embeds the RouteManifest read model in the browser entry", async () => {

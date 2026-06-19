@@ -226,6 +226,7 @@ export function generateRscEntry(
   });
   const {
     imports,
+    clientReferenceCandidateSetEntries,
     routeEntries,
     metaRouteEntries,
     generateStaticParamsEntries,
@@ -443,6 +444,10 @@ function __VINEXT_CLASS(routeIdx) {
 function __VINEXT_CLASS_REASONS(routeIdx) {
   return null;
 }
+
+const __clientReferenceCandidateSets = [
+${clientReferenceCandidateSetEntries.map((entry) => `  ${entry}`).join(",\n")}
+];
 
 const routes = [
 ${routeEntries.join(",\n")}

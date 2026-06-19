@@ -55,7 +55,7 @@ import {
   preloadClientReferencesForImportCandidates,
 } from "./app-client-reference-preloader.js";
 import {
-  getClientReferenceImportMap,
+  getClientReferenceImportIndex,
   isClientReferenceImportMapAvailable,
 } from "./client-reference-import-map-state.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
@@ -221,7 +221,7 @@ async function preloadClientReferences(
   importCandidates: readonly string[] | null | undefined,
 ): Promise<void> {
   await preloadClientReferencesForImportCandidates(clientReferencePreloader, importCandidates, {
-    getImportMap: getClientReferenceImportMap,
+    getImportIndex: getClientReferenceImportIndex,
     isAvailable: isClientReferenceImportMapAvailable,
   });
 }

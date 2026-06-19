@@ -9,6 +9,7 @@ import { normalizePathSeparators } from "../utils/path.js";
 
 type AppRscManifestCode = {
   imports: string[];
+  clientReferenceCandidateSetEntries: string[];
   routeEntries: string[];
   metaRouteEntries: string[];
   generateStaticParamsEntries: string[];
@@ -215,8 +216,21 @@ function buildRouteEntries(
   routes: AppRoute[],
   imports: ImportAllocator,
   clientReferenceImportCandidatesByRoute: readonly (readonly string[] | null)[] = [],
-): string[] {
-  return routes.map((route, routeIdx) => {
+): { routeEntries: string[]; clientReferenceCandidateSetEntries: string[] } {
+  const clientReferenceCandidateSetEntries: string[] = [];
+  const clientReferenceCandidateSetIndexes = new Map<string, number>();
+  function getClientReferenceCandidateSetVar(candidates: readonly string[]): string {
+    const key = JSON.stringify(candidates);
+    let index = clientReferenceCandidateSetIndexes.get(key);
+    if (index === undefined) {
+      index = clientReferenceCandidateSetEntries.length;
+      clientReferenceCandidateSetIndexes.set(key, index);
+      clientReferenceCandidateSetEntries.push(key);
+    }
+    return `__clientReferenceCandidateSets[${index}]`;
+  }
+
+  const routeEntries = routes.map((route, routeIdx) => {
     // Pre-compute static-sibling segment names for the matched route's
     // dynamic URL levels. The client router uses this to decide if a cached
     // dynamic-route prefetch can be reused when navigating to a static
@@ -291,7 +305,7 @@ ${interceptEntries.join(",\n")}
     const clientReferenceImportCandidatesField =
       clientReferenceImportCandidates === undefined || clientReferenceImportCandidates === null
         ? ""
-        : `    clientReferenceImportCandidates: ${JSON.stringify(clientReferenceImportCandidates)},\n`;
+        : `    clientReferenceImportCandidates: ${getClientReferenceCandidateSetVar(clientReferenceImportCandidates)},\n`;
     return `  {
     __buildTimeClassifications: __VINEXT_CLASS(${routeIdx}), // evaluated once at module load
     __buildTimeReasons: __classDebug ? __VINEXT_CLASS_REASONS(${routeIdx}) : null,
@@ -330,6 +344,8 @@ ${siblingInterceptEntries.join(",\n")}
     unauthorizeds: [${unauthorizedVars.join(", ")}],
   }`;
   });
+
+  return { routeEntries, clientReferenceCandidateSetEntries };
 }
 
 type RoutePatternPrefix = {
@@ -449,7 +465,7 @@ export function buildAppRscManifestCode(
   const metadataRoutes = options.metadataRoutes ?? [];
 
   registerRouteModules(options.routes, imports);
-  const routeEntries = buildRouteEntries(
+  const { routeEntries, clientReferenceCandidateSetEntries } = buildRouteEntries(
     options.routes,
     imports,
     options.clientReferenceImportCandidatesByRoute,
@@ -498,6 +514,7 @@ export function buildAppRscManifestCode(
 
   return {
     imports: imports.imports,
+    clientReferenceCandidateSetEntries,
     routeEntries,
     metaRouteEntries: createMetadataRouteEntriesSource(metadataRoutes, imports.importMap),
     generateStaticParamsEntries: buildGenerateStaticParamsEntries(

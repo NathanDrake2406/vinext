@@ -3,7 +3,10 @@ import {
   createClientReferencePreloader,
   preloadClientReferencesForImportCandidates,
 } from "../packages/vinext/src/server/app-client-reference-preloader.js";
-import type { ClientReferenceImportMap } from "../packages/vinext/src/server/client-reference-imports.js";
+import {
+  createClientReferenceImportIndex,
+  type ClientReferenceImportMap,
+} from "../packages/vinext/src/server/client-reference-imports.js";
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolveDeferred: () => void = () => {
@@ -29,7 +32,7 @@ describe("app client reference preloader", () => {
     });
 
     await preloadClientReferencesForImportCandidates(preloader, options.importCandidates, {
-      getImportMap: () => options.importMap ?? {},
+      getImportIndex: () => createClientReferenceImportIndex(options.importMap ?? {}),
       isAvailable: () => options.importMap !== undefined,
     });
 

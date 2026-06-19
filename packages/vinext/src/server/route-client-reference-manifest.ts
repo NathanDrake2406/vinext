@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseAst, transformWithOxc } from "vite";
-import { forEachAstChild, isAstRecord } from "../plugins/ast-utils.js";
+import { forEachAstChild, isAstRecord, isIdentifierNamed } from "../plugins/ast-utils.js";
 import type { AppRoute } from "../routing/app-router.js";
 import { normalizePathSeparators, stripViteModuleQuery } from "../utils/path.js";
 import { collectAppRouteModuleFiles } from "./app-route-module-files.js";
 import { normalizeClientReferenceImportId } from "./client-reference-imports.js";
 
 export {
+  createClientReferenceImportIndex,
   normalizeClientReferenceImportId,
   resolveClientReferenceIdsForImportCandidates,
 } from "./client-reference-imports.js";
@@ -127,7 +128,22 @@ function isImportCallee(value: unknown): boolean {
   return isAstRecord(value) && value.type === "Import";
 }
 
-function hasDynamicImportExpression(value: unknown): boolean {
+function isCommonJsModuleLoadCallee(value: unknown): boolean {
+  if (isIdentifierNamed(value, "require") || isIdentifierNamed(value, "createRequire")) {
+    return true;
+  }
+  if (!isAstRecord(value) || value.type !== "MemberExpression") {
+    return false;
+  }
+  const object = value.object;
+  const property = value.property;
+  return (
+    isIdentifierNamed(object, "require") ||
+    (isIdentifierNamed(object, "module") && isIdentifierNamed(property, "require"))
+  );
+}
+
+function hasUnsupportedModuleLoadingExpression(value: unknown): boolean {
   if (!isAstRecord(value)) return false;
   const node = value;
   if (node.type === "ImportExpression") {
@@ -136,11 +152,14 @@ function hasDynamicImportExpression(value: unknown): boolean {
   if (node.type === "CallExpression" && isImportCallee(node.callee)) {
     return true;
   }
+  if (node.type === "CallExpression" && isCommonJsModuleLoadCallee(node.callee)) {
+    return true;
+  }
 
   let found = false;
   forEachAstChild(node, (child) => {
     if (found) return;
-    found = hasDynamicImportExpression(child);
+    found = hasUnsupportedModuleLoadingExpression(child);
   });
 
   return found;
@@ -180,7 +199,7 @@ async function collectStaticImportSpecifiers(
       continue;
     }
 
-    if (hasDynamicImportExpression(node)) {
+    if (hasUnsupportedModuleLoadingExpression(node)) {
       complete = false;
     }
   }

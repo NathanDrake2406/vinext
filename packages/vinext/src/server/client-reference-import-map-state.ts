@@ -1,10 +1,14 @@
-import type { ClientReferenceImportMap } from "./client-reference-imports.js";
+import {
+  createClientReferenceImportIndex,
+  type ClientReferenceImportIndex,
+  type ClientReferenceImportMap,
+} from "./client-reference-imports.js";
 
 let clientReferenceImportMapAvailable = false;
-let clientReferenceImportIds: ClientReferenceImportMap = {};
+let clientReferenceImportIndex: ClientReferenceImportIndex = new Map();
 
 export function setClientReferenceImportMap(importIds: ClientReferenceImportMap): void {
-  clientReferenceImportIds = importIds;
+  clientReferenceImportIndex = createClientReferenceImportIndex(importIds);
   clientReferenceImportMapAvailable = true;
 }
 
@@ -12,6 +16,6 @@ export function isClientReferenceImportMapAvailable(): boolean {
   return clientReferenceImportMapAvailable;
 }
 
-export function getClientReferenceImportMap(): ClientReferenceImportMap {
-  return clientReferenceImportIds;
+export function getClientReferenceImportIndex(): ClientReferenceImportIndex {
+  return clientReferenceImportIndex;
 }

@@ -6,6 +6,7 @@ import type { AppRoute } from "../packages/vinext/src/routing/app-router.js";
 import { collectAppRouteModuleFiles } from "../packages/vinext/src/server/app-route-module-files.js";
 import {
   buildRouteClientReferenceCandidateManifest,
+  createClientReferenceImportIndex,
   getRouteClientReferenceImportCandidatesInRouteOrder,
   normalizeClientReferenceImportId,
   resolveClientReferenceIdsForImportCandidates,
@@ -117,11 +118,11 @@ describe("route client reference manifest", () => {
   it("maps route import candidates to client reference IDs", () => {
     const referenceIds = resolveClientReferenceIdsForImportCandidates(
       ["/tmp/app/client-a.tsx", "package-client"],
-      {
+      createClientReferenceImportIndex({
         "a#default": "/tmp/app/client-a.tsx?used",
         "b#default": "/tmp/app/client-b.tsx",
         "pkg#default": "package-client",
-      },
+      }),
     );
 
     expect(referenceIds).toEqual(["a#default", "pkg#default"]);
@@ -311,6 +312,58 @@ describe("route client reference manifest", () => {
       await fs.writeFile(
         pagePath,
         `export default async function Page() { const mod = await import ("./client"); return null; }`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+      });
+
+      expect(getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes)).toEqual([null]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks CommonJS module loading incomplete so callers can keep global preload", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const appDir = path.join(root, "app");
+      const pagePath = path.join(appDir, "page.js");
+      await fs.mkdir(appDir, { recursive: true });
+      await fs.writeFile(
+        pagePath,
+        `const Client = require("./client");\nmodule.exports = function Page() { return Client; };`,
+      );
+      await fs.writeFile(
+        path.join(appDir, "client.js"),
+        `"use client";\nmodule.exports = function Client() { return null; };`,
+      );
+
+      const routes = [createSinglePageRoute(pagePath)];
+      const manifest = await buildRouteClientReferenceCandidateManifest(routes, {
+        projectRoot: root,
+      });
+
+      expect(getRouteClientReferenceImportCandidatesInRouteOrder(manifest, routes)).toEqual([null]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks createRequire usage incomplete so callers can keep global preload", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-client-refs-"));
+    try {
+      const appDir = path.join(root, "app");
+      const pagePath = path.join(appDir, "page.mjs");
+      await fs.mkdir(appDir, { recursive: true });
+      await fs.writeFile(
+        pagePath,
+        `const require = createRequire(import.meta.url);\nconst Client = require("./client.cjs");\nexport default function Page() { return Client; }`,
+      );
+      await fs.writeFile(
+        path.join(appDir, "client.cjs"),
+        `"use client";\nmodule.exports = function Client() { return null; };`,
       );
 
       const routes = [createSinglePageRoute(pagePath)];
