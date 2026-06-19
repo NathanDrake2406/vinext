@@ -75,16 +75,20 @@ test.describe("app dir - basepath", () => {
     await page.goto(`${BASE}${initialPagePath}`);
     await waitForAppRouterHydration(page);
 
-    page.on("request", (req) => {
-      if (!req.url().includes("_next")) {
+    const onRequest = (req: Request) => {
+      const url = req.url();
+      if (url.includes(initialPagePath) || url.includes(destinationPagePath)) {
         requests.push(req);
       }
-    });
-    page.on("response", (res) => {
-      if (!res.url().includes("_next")) {
+    };
+    const onResponse = (res: Response) => {
+      const url = res.url();
+      if (url.includes(initialPagePath) || url.includes(destinationPagePath)) {
         responses.push(res);
       }
-    });
+    };
+    page.on("request", onRequest);
+    page.on("response", onResponse);
 
     await page.locator("#redirect-absolute-external").click();
     await expect(page).toHaveURL(new RegExp(`${BASE}${destinationPagePath}$`));
