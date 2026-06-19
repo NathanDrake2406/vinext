@@ -207,7 +207,11 @@ describe("Pages Router popstate stale-state filter (non-i18n parity)", () => {
         __N: true,
         key: "",
       },
-      expectedFetchUrl: "/[dynamic]",
+      // Next stores the route href verbatim (`/[dynamic]?` with a bare empty
+      // query); the handler threads `state.url` through unchanged, so the HTML
+      // fetch keeps the trailing `?`. It is harmless (empty search) and matches
+      // the value Next writes into history state.
+      expectedFetchUrl: "/[dynamic]?",
     });
   });
 
@@ -466,6 +470,94 @@ describe("Pages Router popstate stale-state filter (i18n parity)", () => {
     }
   });
 
+  it("processes the second masked popstate under a sticky locale and fetches state.url", async () => {
+    // With-i18n companion to the non-i18n parity block above. Mirrors
+    // test/e2e/ignore-invalid-popstateevent/with-i18n.test.ts: a stale masked
+    // entry (`url` = route, `as` = address bar) carrying `options.locale`. The
+    // locale-aware stale filter must drop only the first replay; the second
+    // event must navigate and fetch the route (`state.url`), not the masked
+    // address bar (`state.as`). Guards the locale + masked-route interaction
+    // that the non-i18n test does not exercise (issue #1336 listed both).
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const originalCustomEvent = globalThis.CustomEvent;
+    const { win } = createNavWindow();
+    win.location.pathname = "/static";
+    win.location.href = "http://localhost/static";
+    win.__NEXT_DATA__ = {
+      ...win.__NEXT_DATA__,
+      page: "/static",
+      __vinext: { pageModuleUrl: "/@fs/pages/static.js" },
+    };
+    Object.assign(win, {
+      __VINEXT_LOCALE__: "sv",
+      __VINEXT_LOCALES__: ["en", "sv"],
+      __VINEXT_DEFAULT_LOCALE__: "en",
+    });
+
+    let routeChangeStartCount = 0;
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          buildNavHtml(
+            "/[dynamic]",
+            PAGE_MODULE_URL,
+            {},
+            { locale: "sv", locales: ["en", "sv"], defaultLocale: "en" },
+          ),
+          { status: 200 },
+        ),
+    );
+    globalThis.fetch = fetchMock;
+    (globalThis as any).CustomEvent = class CustomEventMock {
+      constructor(public type: string) {}
+    } as any;
+
+    const state = {
+      url: "/[dynamic]?",
+      as: "/static",
+      options: { locale: "sv" },
+      __N: true as const,
+      key: "",
+    };
+
+    try {
+      const listeners = await installRuntime(win);
+      const popstateHandler = listeners.get("popstate");
+      expect(popstateHandler).toBeDefined();
+
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      routerModule.default.events.on("routeChangeStart", () => {
+        routeChangeStartCount += 1;
+      });
+
+      // 1st event: matching locale + as → Safari-replay, ignored.
+      popstateHandler!({ state });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(routeChangeStartCount).toBe(0);
+      expect(win.__NEXT_DATA__.page).toBe("/static");
+
+      // 2nd event: not ignored; masked → fetch the route, keeping the locale.
+      // `sv` is non-default, so the fetch URL is the route as-is (no `/sv`
+      // root rewrite, which only applies to default-locale root navigations).
+      popstateHandler!({ state });
+      await vi.waitFor(() => expect(win.__NEXT_DATA__.page).toBe("/[dynamic]"));
+      expect(routeChangeStartCount).toBe(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]![0]).toBe("/[dynamic]?");
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+      (globalThis as any).CustomEvent = originalCustomEvent;
+    }
+  });
+
   it("does not ignore a first popstate when the locale differs from the current locale", async () => {
     // Parity with Next.js test/e2e/ignore-invalid-popstateevent/with-i18n.test.ts
     // "Don't ignore event with different locale".
@@ -573,6 +665,93 @@ describe("Pages Router popstate stale-state filter (i18n parity)", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+      (globalThis as any).CustomEvent = originalCustomEvent;
+    }
+  });
+});
+
+// Ported from Next.js test/e2e/ignore-invalid-popstateevent — basePath variant.
+// A masked popstate under a configured basePath must fetch the route URL with
+// basePath applied exactly once. vinext stores app-relative history state
+// (no basePath), so the handler composes basePath back on via `withBasePath`;
+// this guards against a double-prefix regression on the masked path.
+describe("Pages Router popstate masked route under basePath", () => {
+  it("fetches the basePath-prefixed route URL for the second masked popstate", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const originalCustomEvent = globalThis.CustomEvent;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    // `__basePath` is read from this env var at module load, so set it before
+    // the reset-and-import below.
+    process.env.__NEXT_ROUTER_BASEPATH = "/base";
+
+    const { win } = createNavWindow();
+    // The browser shows the basePath-prefixed address bar; history state stays
+    // app-relative (`as: "/static"`, `url: "/[dynamic]?"`).
+    win.location.pathname = "/base/static";
+    win.location.href = "http://localhost/base/static";
+    win.__NEXT_DATA__ = {
+      ...win.__NEXT_DATA__,
+      page: "/static",
+      __vinext: { pageModuleUrl: "/@fs/pages/static.js" },
+    };
+
+    const fetchMock = vi.fn(
+      async () => new Response(buildNavHtml("/[dynamic]", PAGE_MODULE_URL), { status: 200 }),
+    );
+    globalThis.fetch = fetchMock;
+    (globalThis as any).CustomEvent = class CustomEventMock {
+      constructor(public type: string) {}
+    } as any;
+
+    const listeners = new Map<string, (event: any) => void>();
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    }) as any;
+    (globalThis as any).window = win;
+
+    const state = {
+      url: "/[dynamic]?",
+      as: "/static",
+      options: {},
+      __N: true as const,
+      key: "",
+    };
+
+    try {
+      vi.resetModules();
+      await import("../packages/vinext/src/shims/router.js");
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+
+      const popstateHandler = listeners.get("popstate");
+      expect(popstateHandler).toBeDefined();
+
+      // 1st event: `withBasePath(state.as)` === tracker ("/base/static") → ignored.
+      popstateHandler!({ state });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(win.__NEXT_DATA__.page).toBe("/static");
+
+      // 2nd event: masked → fetch the route with basePath applied once.
+      popstateHandler!({ state });
+      await vi.waitFor(() => expect(win.__NEXT_DATA__.page).toBe("/[dynamic]"));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]![0]).toBe("/base/[dynamic]?");
+    } finally {
+      vi.resetModules();
+      if (previousBasePath === undefined) {
+        delete process.env.__NEXT_ROUTER_BASEPATH;
+      } else {
+        process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      }
       if (previousWindow === undefined) {
         delete (globalThis as any).window;
       } else {
