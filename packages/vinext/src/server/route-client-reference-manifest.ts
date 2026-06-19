@@ -2,9 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseAst, transformWithOxc } from "vite";
 import { forEachAstChild, isAstRecord, isIdentifierNamed } from "../plugins/ast-utils.js";
-import type { AppRoute } from "../routing/app-router.js";
+import { collectAppRouteModuleFiles, type AppRoute } from "../routing/app-router.js";
 import { normalizePathSeparators, stripViteModuleQuery } from "../utils/path.js";
-import { collectAppRouteModuleFiles } from "./app-route-module-files.js";
 import { normalizeClientReferenceImportId } from "./client-reference-imports.js";
 
 export {

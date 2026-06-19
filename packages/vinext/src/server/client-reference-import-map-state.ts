@@ -19,3 +19,8 @@ export function isClientReferenceImportMapAvailable(): boolean {
 export function getClientReferenceImportIndex(): ClientReferenceImportIndex {
   return clientReferenceImportIndex;
 }
+
+export function resetClientReferenceImportMapForTesting(): void {
+  clientReferenceImportIndex = new Map();
+  clientReferenceImportMapAvailable = false;
+}

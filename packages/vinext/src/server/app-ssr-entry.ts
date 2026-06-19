@@ -50,14 +50,7 @@ import {
 } from "./app-bfcache-identity.js";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
-import {
-  createClientReferencePreloader,
-  preloadClientReferencesForImportCandidates,
-} from "./app-client-reference-preloader.js";
-import {
-  getClientReferenceImportIndex,
-  isClientReferenceImportMapAvailable,
-} from "./client-reference-import-map-state.js";
+import { createAppSsrClientReferencePreloadForRuntime } from "./app-ssr-client-reference-preload.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 import { isPprFallbackShellAbortError } from "vinext/shims/ppr-fallback-shell";
 import DefaultGlobalError from "vinext/shims/default-global-error";
@@ -202,28 +195,14 @@ function renderSsrErrorDocumentShell(
   );
 }
 
-const clientReferencePreloader = createClientReferencePreloader({
-  getReferences() {
-    return clientReferences;
-  },
-  getClientRequire() {
-    return globalThis.__vite_rsc_client_require__;
-  },
-  onPreloadError(id, error) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("[vinext] failed to preload client ref:", id, error);
-    }
-  },
-});
+const preloadClientReferencesForSsr =
+  createAppSsrClientReferencePreloadForRuntime(clientReferences);
 const BfcacheIdMapContext = getBfcacheIdMapContext();
 
 async function preloadClientReferences(
   importCandidates: readonly string[] | null | undefined,
 ): Promise<void> {
-  await preloadClientReferencesForImportCandidates(clientReferencePreloader, importCandidates, {
-    getImportIndex: getClientReferenceImportIndex,
-    isAvailable: isClientReferenceImportMapAvailable,
-  });
+  await preloadClientReferencesForSsr(importCandidates);
 }
 
 function ssrErrorDigest(input: string): string {

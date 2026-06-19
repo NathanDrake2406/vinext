@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AppRoute } from "../packages/vinext/src/routing/app-router.js";
-import { collectAppRouteModuleFiles } from "../packages/vinext/src/server/app-route-module-files.js";
+import {
+  collectAppRouteModuleFiles,
+  iterateAppRouteRenderableModules,
+} from "../packages/vinext/src/routing/app-router.js";
 import {
   buildRouteClientReferenceCandidateManifest,
   createClientReferenceImportIndex,
@@ -100,10 +103,18 @@ function createSinglePageRoute(pagePath: string): AppRoute {
 describe("app route module files", () => {
   it("collects all route modules and includes route handlers only when requested", () => {
     const route = createRoute();
+    const modules = [...iterateAppRouteRenderableModules(route)];
 
     expect(collectAppRouteModuleFiles(route)).not.toContain("/app/dashboard/route.ts");
     expect(collectAppRouteModuleFiles(route, { includeRouteHandler: true })).toContain(
       "/app/dashboard/route.ts",
+    );
+    expect(modules).toEqual(
+      expect.arrayContaining([
+        { filePath: "/app/dashboard/page.tsx", kind: "page" },
+        { filePath: "/app/dashboard/@modal/default.tsx", kind: "slot-default" },
+        { filePath: "/app/dashboard/@modal/(.)photos/[id]/page.tsx", kind: "intercept-page" },
+      ]),
     );
   });
 });

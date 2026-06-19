@@ -185,6 +185,102 @@ export type AppRoute = {
   patternParts: string[];
 };
 
+export type AppRouteRenderableModule = {
+  filePath: string;
+  kind:
+    | "page"
+    | "route-handler"
+    | "layout"
+    | "template"
+    | "loading"
+    | "error"
+    | "not-found"
+    | "forbidden"
+    | "unauthorized"
+    | "slot-page"
+    | "slot-default"
+    | "slot-layout"
+    | "slot-loading"
+    | "slot-error"
+    | "intercept-page"
+    | "intercept-layout";
+};
+
+type AppRouteRenderableModuleOptions = {
+  includeRouteHandler?: boolean;
+};
+
+function* maybeRenderableModule(
+  filePath: string | null | undefined,
+  kind: AppRouteRenderableModule["kind"],
+): Generator<AppRouteRenderableModule> {
+  if (typeof filePath === "string") {
+    yield { filePath, kind };
+  }
+}
+
+function* renderableModulesFromIntercept(
+  intercept: InterceptingRoute,
+): Generator<AppRouteRenderableModule> {
+  yield { filePath: intercept.pagePath, kind: "intercept-page" };
+  for (const layoutPath of intercept.layoutPaths) {
+    yield { filePath: layoutPath, kind: "intercept-layout" };
+  }
+}
+
+/**
+ * Iterate every App Router module that can participate in rendering a route.
+ * Keep this next to the AppRoute model so consumers do not mirror the route
+ * graph shape independently.
+ */
+export function* iterateAppRouteRenderableModules(
+  route: AppRoute,
+  options: AppRouteRenderableModuleOptions = {},
+): Generator<AppRouteRenderableModule> {
+  yield* maybeRenderableModule(route.pagePath, "page");
+  if (options.includeRouteHandler) {
+    yield* maybeRenderableModule(route.routePath, "route-handler");
+  }
+  for (const layout of route.layouts) yield { filePath: layout, kind: "layout" };
+  for (const template of route.templates) yield { filePath: template, kind: "template" };
+  yield* maybeRenderableModule(route.loadingPath, "loading");
+  yield* maybeRenderableModule(route.errorPath, "error");
+  for (const errorPath of route.layoutErrorPaths) yield* maybeRenderableModule(errorPath, "error");
+  for (const errorPath of route.errorPaths ?? []) yield { filePath: errorPath, kind: "error" };
+  yield* maybeRenderableModule(route.notFoundPath, "not-found");
+  for (const notFoundPath of route.notFoundPaths) {
+    yield* maybeRenderableModule(notFoundPath, "not-found");
+  }
+  yield* maybeRenderableModule(route.forbiddenPath, "forbidden");
+  for (const forbiddenPath of route.forbiddenPaths) {
+    yield* maybeRenderableModule(forbiddenPath, "forbidden");
+  }
+  yield* maybeRenderableModule(route.unauthorizedPath, "unauthorized");
+  for (const unauthorizedPath of route.unauthorizedPaths) {
+    yield* maybeRenderableModule(unauthorizedPath, "unauthorized");
+  }
+  for (const slot of route.parallelSlots) {
+    yield* maybeRenderableModule(slot.pagePath, "slot-page");
+    yield* maybeRenderableModule(slot.defaultPath, "slot-default");
+    yield* maybeRenderableModule(slot.layoutPath, "slot-layout");
+    yield* maybeRenderableModule(slot.loadingPath, "slot-loading");
+    yield* maybeRenderableModule(slot.errorPath, "slot-error");
+    for (const intercept of slot.interceptingRoutes) {
+      yield* renderableModulesFromIntercept(intercept);
+    }
+  }
+  for (const intercept of route.siblingIntercepts) {
+    yield* renderableModulesFromIntercept(intercept);
+  }
+}
+
+export function collectAppRouteModuleFiles(
+  route: AppRoute,
+  options: AppRouteRenderableModuleOptions = {},
+): string[] {
+  return [...iterateAppRouteRenderableModules(route, options)].map((module) => module.filePath);
+}
+
 export type AppRouteSemanticIds = {
   route: string;
   page: string | null;

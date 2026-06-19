@@ -26,6 +26,8 @@ export {
   computeAppRouteStaticSiblings,
   computeRootParamNames,
   convertSegmentsToRouteParts,
+  collectAppRouteModuleFiles,
+  iterateAppRouteRenderableModules,
 } from "./app-route-graph.js";
 
 type AppRouteGraph = {
