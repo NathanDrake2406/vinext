@@ -10,6 +10,7 @@ import {
   finalizeAppPageHtmlCacheResponse,
   finalizeAppPageRscCacheResponse,
 } from "./app-page-cache-finalizer.js";
+import { shouldTrackRenderObservation } from "./app-page-cache-proof-gating.js";
 import {
   buildAppPageFontLinkHeader,
   readAppPageBinaryStream,
@@ -686,6 +687,16 @@ export async function renderAppPageLifecycle(
 
   let revalidateSeconds = options.revalidateSeconds;
   let expireSeconds = options.expireSeconds;
+  const trackRenderObservation = shouldTrackRenderObservation({
+    clientReuseManifest: options.clientReuseManifest,
+    isDraftMode: options.isDraftMode,
+    isForceDynamic: options.isForceDynamic,
+    isProduction: options.isProduction,
+    isProgressiveActionRender: options.isProgressiveActionRender,
+    isPrerender: options.isPrerender,
+    isRscRequest: options.isRscRequest,
+    revalidateSeconds,
+  });
   const shouldCaptureRscForCacheMetadata =
     options.isProgressiveActionRender !== true &&
     (options.isProduction || options.isPrerender === true) &&
@@ -800,19 +811,23 @@ export async function renderAppPageLifecycle(
         options.isProduction && shouldCaptureRscForCacheMetadata ? capturedRscDataRef.value : null,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
-      consumeRenderObservationState: options.consumeRenderObservationState,
-      createRscRenderObservation(input) {
-        return createAppPageRenderObservation({
-          boundaryOutcome: { kind: "success" },
-          cacheability: "public",
-          cacheTags: input.cacheTags,
-          cleanPathname: options.cleanPathname,
-          completeness: "complete",
-          output: rscOutputScope,
-          params: options.navigationParams,
-          state: input.state,
-        });
-      },
+      ...(trackRenderObservation
+        ? {
+            consumeRenderObservationState: options.consumeRenderObservationState,
+            createRscRenderObservation(input) {
+              return createAppPageRenderObservation({
+                boundaryOutcome: { kind: "success" },
+                cacheability: "public",
+                cacheTags: input.cacheTags,
+                cleanPathname: options.cleanPathname,
+                completeness: "complete",
+                output: rscOutputScope,
+                params: options.navigationParams,
+                state: input.state,
+              });
+            },
+          }
+        : {}),
       dynamicUsedDuringBuild,
       getPageTags() {
         return options.getPageTags();
@@ -1012,31 +1027,35 @@ export async function renderAppPageLifecycle(
       capturedRscDataPromise: capturedRscDataRef.value,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
-      consumeRenderObservationState: options.consumeRenderObservationState,
-      createHtmlRenderObservation(input) {
-        return createAppPageRenderObservation({
-          boundaryOutcome: { kind: "success" },
-          cacheability: "public",
-          cacheTags: input.cacheTags,
-          cleanPathname: options.cleanPathname,
-          completeness: "complete",
-          output: htmlOutputScope,
-          params: options.navigationParams,
-          state: input.state,
-        });
-      },
-      createRscRenderObservation(input) {
-        return createAppPageRenderObservation({
-          boundaryOutcome: { kind: "success" },
-          cacheability: "public",
-          cacheTags: input.cacheTags,
-          cleanPathname: options.cleanPathname,
-          completeness: "complete",
-          output: rscOutputScope,
-          params: options.navigationParams,
-          state: input.state,
-        });
-      },
+      ...(trackRenderObservation
+        ? {
+            consumeRenderObservationState: options.consumeRenderObservationState,
+            createHtmlRenderObservation(input) {
+              return createAppPageRenderObservation({
+                boundaryOutcome: { kind: "success" },
+                cacheability: "public",
+                cacheTags: input.cacheTags,
+                cleanPathname: options.cleanPathname,
+                completeness: "complete",
+                output: htmlOutputScope,
+                params: options.navigationParams,
+                state: input.state,
+              });
+            },
+            createRscRenderObservation(input) {
+              return createAppPageRenderObservation({
+                boundaryOutcome: { kind: "success" },
+                cacheability: "public",
+                cacheTags: input.cacheTags,
+                cleanPathname: options.cleanPathname,
+                completeness: "complete",
+                output: rscOutputScope,
+                params: options.navigationParams,
+                state: input.state,
+              });
+            },
+          }
+        : {}),
       getPageTags() {
         return options.getPageTags();
       },

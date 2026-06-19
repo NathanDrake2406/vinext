@@ -1,6 +1,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  APP_LAYOUT_FLAGS_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
   AppElementsWire,
@@ -1059,6 +1060,120 @@ describe("app page dispatch", () => {
         process.env.__VINEXT_BUILD_ID = originalBuildId;
       }
     }
+  });
+
+  it.each([
+    {
+      name: "draft mode",
+      overrides: {
+        request: new Request("https://example.test/posts/hello", {
+          headers: { Cookie: "__prerender_bypass=draft-secret" },
+        }),
+        revalidateSeconds: 60,
+      },
+    },
+    {
+      name: "force-dynamic",
+      overrides: {
+        dynamicConfig: "force-dynamic" as const,
+        revalidateSeconds: 60,
+      },
+    },
+    {
+      name: "revalidate=0 no-store",
+      overrides: {
+        revalidateSeconds: 0,
+      },
+    },
+  ])("skips cache-proof layout observation collection for $name renders", async ({ overrides }) => {
+    const seenTrackers: unknown[] = [];
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const layoutId = AppElementsWire.encodeLayoutId("/");
+    const route = createRoute({
+      layoutTreePositions: [0],
+      layouts: [{ default() {} }],
+      pattern: "/posts/[slug]",
+      routeSegments: ["posts", "[slug]"],
+    });
+    const { options } = createDispatchOptions({
+      buildPageElement: async () => ({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/posts/[slug]",
+        [layoutId]: "root-layout",
+        [AppElementsWire.encodePageId("/posts/[slug]", null)]: "post-page",
+      }),
+      isProduction: true,
+      isRscRequest: true,
+      route,
+      ...overrides,
+      probeLayoutAt(_layoutIndex, layoutParamAccess) {
+        seenTrackers.push(layoutParamAccess);
+        return null;
+      },
+      renderToReadableStream(payload) {
+        capturedPayloads.push(captureRecord(payload));
+        return createStream(["flight"]);
+      },
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("flight");
+    expect(seenTrackers).toEqual([undefined]);
+    expect(capturedPayloads).toHaveLength(1);
+    expect(Object.hasOwn(capturedPayloads[0], APP_LAYOUT_FLAGS_KEY)).toBe(false);
+  });
+
+  it("keeps cache-proof layout observation collection for cacheable static-layout reuse renders", async () => {
+    const seenTrackers: unknown[] = [];
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const layoutId = AppElementsWire.encodeLayoutId("/");
+    const route = createRoute({
+      __buildTimeClassifications: new Map([[0, "static"]]),
+      layoutTreePositions: [0],
+      layouts: [{ default() {} }],
+      params: [],
+      pattern: "/",
+      routeSegments: [],
+    });
+    const probeLayout = createLayoutParamProbe(route, {}, []);
+    const { options } = createDispatchOptions({
+      buildPageElement: async () => ({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/",
+        [layoutId]: "root-layout",
+        [AppElementsWire.encodePageId("/", null)]: "home-page",
+      }),
+      cleanPathname: "/",
+      isProduction: true,
+      isRscRequest: true,
+      params: {},
+      revalidateSeconds: 60,
+      route,
+      probeLayoutAt(_layoutIndex, layoutParamAccess) {
+        seenTrackers.push(layoutParamAccess);
+        return probeLayout(_layoutIndex, layoutParamAccess);
+      },
+      renderToReadableStream(payload) {
+        capturedPayloads.push(captureRecord(payload));
+        return createStream(["flight"]);
+      },
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("flight");
+    expect(seenTrackers).toHaveLength(1);
+    expect(seenTrackers[0]).toEqual(
+      expect.objectContaining({
+        getLayoutObservation: expect.any(Function),
+        runLayoutProbe: expect.any(Function),
+      }),
+    );
+    expect(capturedPayloads).toHaveLength(1);
+    expect(capturedPayloads[0][APP_LAYOUT_FLAGS_KEY]).toEqual({ [layoutId]: "s" });
   });
 
   it("returns not found for dynamicParams=false paths outside generated params", async () => {

@@ -87,6 +87,7 @@ import {
   isAppLayoutObservationUnsafeForStaticReuse,
   type AppLayoutParamAccessTracker,
 } from "./app-layout-param-observation.js";
+import { shouldCollectCacheProof } from "./app-page-cache-proof-gating.js";
 
 type AppPageParams = Record<string, string | string[]>;
 type AppPageElement = ReactNode | Readonly<Record<string, ReactNode>>;
@@ -649,7 +650,18 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   const isDynamicError = dynamicConfig === "error";
   const isForceDynamic = dynamicConfig === "force-dynamic";
   const isDraftMode = isDraftModeRequest(options.request, options.draftModeSecret);
-  const layoutParamAccess = createAppLayoutParamAccessTracker();
+  const collectCacheProof = shouldCollectCacheProof({
+    clientReuseManifest: options.clientReuseManifest,
+    debugClassification: options.debugClassification !== undefined,
+    isDraftMode,
+    isForceDynamic,
+    isProduction: options.isProduction,
+    isProgressiveActionRender: options.isProgressiveActionRender,
+    isPrerender: process.env.VINEXT_PRERENDER === "1",
+    isRscRequest: options.isRscRequest,
+    revalidateSeconds: currentRevalidateSeconds,
+  });
+  const layoutParamAccess = collectCacheProof ? createAppLayoutParamAccessTracker() : undefined;
 
   setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], route.routeSegments));
   setCurrentFetchCacheMode(options.fetchCache ?? null);
@@ -1089,33 +1101,36 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     probePage() {
       return options.probePage();
     },
-    classification: {
-      getLayoutId(index) {
-        const treePosition = route.layoutTreePositions?.[index] ?? 0;
-        return AppElementsWire.encodeLayoutId(
-          createAppPageTreePath([...route.routeSegments], treePosition),
-        );
-      },
-      buildTimeClassifications: layoutClassifications.buildTimeClassifications,
-      buildTimeReasons: layoutClassifications.buildTimeReasons,
-      debugClassification: options.debugClassification,
-      isLayoutObservationDynamic(layoutId) {
-        return isAppLayoutObservationUnsafeForStaticReuse(
-          layoutParamAccess.getLayoutObservation(layoutId),
-        );
-      },
-      async runWithIsolatedDynamicScope(fn) {
-        const priorDynamic = consumeDynamicUsage();
-        try {
-          const result = await fn();
-          const dynamicDetected = consumeDynamicUsage();
-          return { result, dynamicDetected };
-        } finally {
-          consumeDynamicUsage();
-          if (priorDynamic) markDynamicUsage();
+    classification: collectCacheProof
+      ? {
+          getLayoutId(index) {
+            const treePosition = route.layoutTreePositions?.[index] ?? 0;
+            return AppElementsWire.encodeLayoutId(
+              createAppPageTreePath([...route.routeSegments], treePosition),
+            );
+          },
+          buildTimeClassifications: layoutClassifications.buildTimeClassifications,
+          buildTimeReasons: layoutClassifications.buildTimeReasons,
+          debugClassification: options.debugClassification,
+          isLayoutObservationDynamic(layoutId) {
+            if (!layoutParamAccess) return false;
+            return isAppLayoutObservationUnsafeForStaticReuse(
+              layoutParamAccess.getLayoutObservation(layoutId),
+            );
+          },
+          async runWithIsolatedDynamicScope(fn) {
+            const priorDynamic = consumeDynamicUsage();
+            try {
+              const result = await fn();
+              const dynamicDetected = consumeDynamicUsage();
+              return { result, dynamicDetected };
+            } finally {
+              consumeDynamicUsage();
+              if (priorDynamic) markDynamicUsage();
+            }
+          },
         }
-      },
-    },
+      : null,
     dynamicStaleTimeSeconds: options.dynamicStaleTimeSeconds,
     revalidateSeconds: currentRevalidateSeconds,
     mountedSlotsHeader: options.mountedSlotsHeader,

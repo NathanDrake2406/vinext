@@ -476,6 +476,40 @@ describe("app page render lifecycle", () => {
     expect(consumeDynamicUsage).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    {
+      name: "draft mode",
+      overrides: { isDraftMode: true, revalidateSeconds: 60 },
+    },
+    {
+      name: "force-dynamic",
+      overrides: { isForceDynamic: true, revalidateSeconds: 60 },
+    },
+    {
+      name: "revalidate=0 no-store",
+      overrides: { revalidateSeconds: 0 },
+    },
+  ])("skips render observation collection for $name RSC renders", async ({ overrides }) => {
+    const common = createCommonOptions();
+    const consumeRenderObservationState = vi.fn(() => {
+      throw new Error("render observation state should not be consumed");
+    });
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      ...overrides,
+      consumeRenderObservationState,
+      isProduction: true,
+      isRscRequest: true,
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("flight-data");
+    expect(common.waitUntilPromises).toHaveLength(0);
+    expect(common.isrSet).not.toHaveBeenCalled();
+    expect(consumeRenderObservationState).not.toHaveBeenCalled();
+  });
+
   it("does not cache RSC responses when skip transport omits layout records", async () => {
     const common = createCommonOptions();
     const isrDebug = vi.fn();
