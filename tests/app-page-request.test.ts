@@ -466,19 +466,25 @@ describe("resolveAppPageInterceptMatch", () => {
     const interceptLayout = { default: "modal-layout" };
     const __pageLoader = vi.fn(async () => interceptPage);
     const __loadInterceptLayout = vi.fn(async () => interceptLayout);
+    const sharedLoadState = {
+      page: null as unknown,
+      pageLoading: null as Promise<unknown> | null,
+      interceptLayoutsLoading: null as Promise<readonly unknown[]> | null,
+    };
     const intercept = {
       interceptLayouts: [null],
       __loadInterceptLayouts: [__loadInterceptLayout],
       matchedParams: { id: "123" },
       page: null,
       __pageLoader,
+      __loadState: sharedLoadState,
       slotKey: "modal@app/feed/@modal",
       sourceRouteIndex: 0,
     };
     const options = {
       cleanPathname: "/photos/123",
       currentRoute,
-      findIntercept: () => intercept,
+      findIntercept: () => ({ ...intercept, page: sharedLoadState.page }),
       getRouteParamNames: (route: { params: string[] }) => route.params,
       getSourceRoute: () => sourceRoute,
       isRscRequest: true,
@@ -492,7 +498,7 @@ describe("resolveAppPageInterceptMatch", () => {
 
     expect(__pageLoader).toHaveBeenCalledTimes(1);
     expect(__loadInterceptLayout).toHaveBeenCalledTimes(1);
-    expect(intercept.page).toBe(interceptPage);
+    expect(sharedLoadState.page).toBe(interceptPage);
     expect(intercept.interceptLayouts).toEqual([interceptLayout]);
   });
 

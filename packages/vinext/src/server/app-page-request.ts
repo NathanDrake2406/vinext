@@ -56,7 +56,11 @@ type AppPageInterceptMatch<TPage = unknown> = {
   matchedParams: AppPageParams;
   page: TPage;
   __pageLoader?: (() => Promise<TPage>) | null;
-  __pageLoading?: Promise<TPage> | null;
+  __loadState?: {
+    page: TPage;
+    pageLoading: Promise<TPage> | null;
+    interceptLayoutsLoading: Promise<readonly unknown[]> | null;
+  };
   slotId?: string | null;
   slotKey: string;
   sourceRouteIndex: number;
@@ -344,21 +348,26 @@ async function resolveAppPageInterceptState<TRoute, TPage, TInterceptOpts>(
     return { kind: "none" };
   }
 
+  const loadState = intercept.__loadState;
+  if (loadState?.page != null) intercept.page = loadState.page;
   if (intercept.__pageLoader && intercept.page == null) {
     const loading =
-      intercept.__pageLoading ??
+      loadState?.pageLoading ??
       intercept
         .__pageLoader()
         .then((page) => {
           intercept.page = page;
-          intercept.__pageLoading = null;
+          if (loadState) {
+            loadState.page = page;
+            loadState.pageLoading = null;
+          }
           return page;
         })
         .catch((error: unknown) => {
-          intercept.__pageLoading = null;
+          if (loadState) loadState.pageLoading = null;
           throw error;
         });
-    intercept.__pageLoading = loading;
+    if (loadState) loadState.pageLoading = loading;
     await loading;
   }
   if (intercept.__loadInterceptLayouts) {

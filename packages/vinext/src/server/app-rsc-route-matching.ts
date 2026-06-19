@@ -76,6 +76,12 @@ type AppRscInterceptMatch = AppRscInterceptLookupEntry & {
   matchedParams: AppRscRouteParams;
 };
 
+type AppRscInterceptLoadState = {
+  page: unknown;
+  pageLoading: Promise<unknown> | null;
+  interceptLayoutsLoading: Promise<readonly unknown[]> | null;
+};
+
 type AppRscInterceptLookupEntry = {
   sourceRouteIndex: number;
   slotKey: string;
@@ -88,6 +94,7 @@ type AppRscInterceptLookupEntry = {
   __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   __pageLoader?: (() => Promise<unknown>) | null;
+  __loadState: AppRscInterceptLoadState;
   params: readonly string[];
   slotId: string | null;
 };
@@ -166,6 +173,7 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
         const sourceParams = matchedSourceParams ?? createRouteParams();
         return {
           ...entry,
+          page: entry.__loadState.page,
           sourceRouteIndex: concreteSourceRouteIndex,
           matchedParams: mergeMatchedParams(sourceParams, params),
         };
@@ -237,6 +245,11 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
             __loadInterceptLayouts: intercept.__loadInterceptLayouts,
             page: intercept.page,
             __pageLoader: intercept.__pageLoader,
+            __loadState: {
+              page: intercept.page,
+              pageLoading: null,
+              interceptLayoutsLoading: null,
+            },
             params: intercept.params,
           });
         }
@@ -261,6 +274,11 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
           __loadInterceptLayouts: intercept.__loadInterceptLayouts,
           page: intercept.page,
           __pageLoader: intercept.__pageLoader,
+          __loadState: {
+            page: intercept.page,
+            pageLoading: null,
+            interceptLayoutsLoading: null,
+          },
           params: intercept.params,
         });
       }

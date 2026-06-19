@@ -29,7 +29,9 @@ type LazyModuleLoaderArray = readonly (LazyModuleThunk | null | undefined)[];
 type LazyLoadableIntercept = {
   interceptLayouts?: readonly unknown[] | null;
   __loadInterceptLayouts?: LazyModuleLoaderArray | null;
-  __loadingInterceptLayouts?: Promise<readonly unknown[]> | null;
+  __loadState?: {
+    interceptLayoutsLoading: Promise<readonly unknown[]> | null;
+  };
 };
 
 type LazyLoadableSlot = {
@@ -126,7 +128,8 @@ function pushArrayLoads(
 export function loadAppInterceptLayouts(
   intercept: LazyLoadableIntercept,
 ): Promise<readonly unknown[]> {
-  if (intercept.__loadingInterceptLayouts) return intercept.__loadingInterceptLayouts;
+  const loadState = intercept.__loadState;
+  if (loadState?.interceptLayoutsLoading) return loadState.interceptLayoutsLoading;
 
   const loads: Promise<unknown>[] = [];
   pushArrayLoads(loads, intercept.interceptLayouts, intercept.__loadInterceptLayouts);
@@ -134,14 +137,14 @@ export function loadAppInterceptLayouts(
 
   const loading = Promise.all(loads)
     .then(() => {
-      intercept.__loadingInterceptLayouts = null;
+      if (loadState) loadState.interceptLayoutsLoading = null;
       return intercept.interceptLayouts ?? [];
     })
     .catch((error: unknown) => {
-      intercept.__loadingInterceptLayouts = null;
+      if (loadState) loadState.interceptLayoutsLoading = null;
       throw error;
     });
-  intercept.__loadingInterceptLayouts = loading;
+  if (loadState) loadState.interceptLayoutsLoading = loading;
   return loading;
 }
 
