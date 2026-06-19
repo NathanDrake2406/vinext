@@ -810,6 +810,46 @@ describe("vinext:optimize-imports transform", () => {
     expect(result).toBeNull();
   });
 
+  it("does not match export patterns whose prefix and suffix overlap", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "overlap-pattern");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "overlap-pattern",
+        type: "module",
+        exports: {
+          "./a*a": "./barrel.js",
+        },
+      }),
+    );
+    fs.writeFileSync(path.posix.join(pkgDir, "barrel.js"), `export { Icon } from "./Icon.js";`);
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["overlap-pattern/a"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { Icon } from "overlap-pattern/a";`,
+      "/app/page.tsx",
+    );
+
+    expect(result).toBeNull();
+  });
+
   it("optimizes strict ESM-only subpath barrels with only an import condition", async () => {
     tmpDir = normalizePathSeparators(
       fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
@@ -864,7 +904,7 @@ describe("vinext:optimize-imports transform", () => {
     expect(result!.code).not.toContain(`from "@import-only/icons/icons"`);
   });
 
-  it("falls back to a direct node_modules lookup when no entry is resolvable via require", async () => {
+  it("discovers strict ESM-only packages through the manual node_modules fallback", async () => {
     tmpDir = normalizePathSeparators(
       fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
     );
@@ -873,31 +913,26 @@ describe("vinext:optimize-imports transform", () => {
       JSON.stringify({ name: "test-app", type: "module" }),
     );
 
-    const pkgDir = path.posix.join(tmpDir, "node_modules", "@manual-fallback", "icons");
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "manual-fallback");
     const esmDir = path.posix.join(pkgDir, "esm");
     fs.mkdirSync(esmDir, { recursive: true });
     fs.writeFileSync(
       path.posix.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@manual-fallback/icons",
+        name: "manual-fallback",
         type: "module",
         exports: {
           "./icons": {
             import: "./esm/icons.js",
           },
         },
-        // Intentionally no main/default: the only way to discover this package is
-        // the direct node_modules lookup fallback.
       }),
     );
-    fs.writeFileSync(path.posix.join(esmDir, "icons.js"), `export { IconB } from "./IconB.js";`);
-    fs.writeFileSync(
-      path.posix.join(esmDir, "IconB.js"),
-      `export function IconB() { return null; }`,
-    );
+    fs.writeFileSync(path.posix.join(esmDir, "icons.js"), `export { Icon } from "./Icon.js";`);
+    fs.writeFileSync(path.posix.join(esmDir, "Icon.js"), `export function Icon() {}`);
 
     const plugin = createOptimizeImportsPlugin(
-      () => ({ optimizePackageImports: ["@manual-fallback/icons/icons"] }) as any,
+      () => ({ optimizePackageImports: ["manual-fallback/icons"] }) as any,
       () => tmpDir,
     ) as Plugin;
     const buildStartHook = unwrapHook((plugin as any).buildStart);
@@ -906,18 +941,15 @@ describe("vinext:optimize-imports transform", () => {
 
     const result = await (transform as any).call(
       { ...plugin, environment: { name: "ssr" } },
-      `import { IconB } from "@manual-fallback/icons/icons";`,
+      `import { Icon } from "manual-fallback/icons";`,
       "/app/page.tsx",
     );
 
     expect(result).not.toBeNull();
-    expect(result!.code).toContain(
-      `import { IconB } from ${JSON.stringify(path.posix.join(esmDir, "IconB.js"))}`,
-    );
-    expect(result!.code).not.toContain(`from "@manual-fallback/icons/icons"`);
+    expect(result!.code).toContain(path.posix.join(esmDir, "Icon.js"));
   });
 
-  it("rejects pattern exports where prefix and suffix overlap in the export key", async () => {
+  it("falls back to node_modules when resolved-entry package discovery is exhausted", async () => {
     tmpDir = normalizePathSeparators(
       fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
     );
@@ -926,23 +958,35 @@ describe("vinext:optimize-imports transform", () => {
       JSON.stringify({ name: "test-app", type: "module" }),
     );
 
-    const pkgDir = path.posix.join(tmpDir, "node_modules", "@overlap", "pkg");
-    const distDir = path.posix.join(pkgDir, "dist");
-    fs.mkdirSync(distDir, { recursive: true });
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "deep-entry");
+    const deepDir = path.posix.join(
+      pkgDir,
+      ...Array.from({ length: 11 }, (_, index) => `d${index}`),
+    );
+    const esmDir = path.posix.join(pkgDir, "esm");
+    fs.mkdirSync(deepDir, { recursive: true });
+    fs.mkdirSync(esmDir, { recursive: true });
     fs.writeFileSync(
       path.posix.join(pkgDir, "package.json"),
       JSON.stringify({
-        name: "@overlap/pkg",
+        name: "deep-entry",
         type: "module",
         exports: {
-          "./a*a": "./dist/*.js",
+          ".": {
+            require: `./${path.posix.relative(pkgDir, deepDir)}/index.cjs`,
+          },
+          "./icons": {
+            import: "./esm/icons.js",
+          },
         },
       }),
     );
-    fs.writeFileSync(path.posix.join(distDir, "a.js"), `export { A } from "./A.js";`);
+    fs.writeFileSync(path.posix.join(deepDir, "index.cjs"), `module.exports = {};`);
+    fs.writeFileSync(path.posix.join(esmDir, "icons.js"), `export { Icon } from "./Icon.js";`);
+    fs.writeFileSync(path.posix.join(esmDir, "Icon.js"), `export function Icon() {}`);
 
     const plugin = createOptimizeImportsPlugin(
-      () => ({ optimizePackageImports: ["@overlap/pkg/a"] }) as any,
+      () => ({ optimizePackageImports: ["deep-entry/icons"] }) as any,
       () => tmpDir,
     ) as Plugin;
     const buildStartHook = unwrapHook((plugin as any).buildStart);
@@ -951,15 +995,62 @@ describe("vinext:optimize-imports transform", () => {
 
     const result = await (transform as any).call(
       { ...plugin, environment: { name: "ssr" } },
-      `import { A } from "@overlap/pkg/a";`,
+      `import { Icon } from "deep-entry/icons";`,
       "/app/page.tsx",
     );
 
-    // Overlapping prefix/suffix segments should be rejected, leaving the import unchanged.
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.code).toContain(path.posix.join(esmDir, "Icon.js"));
   });
 
-  it("intentionally prefers node over import in SSR condition resolution", async () => {
+  it("discovers strict ESM-only packages hoisted above the project root", async () => {
+    const workspaceDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-workspace-"))),
+    );
+    tmpDir = path.posix.join(workspaceDir, "apps", "web");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(workspaceDir, "node_modules", "hoisted-icons");
+    const esmDir = path.posix.join(pkgDir, "esm");
+    fs.mkdirSync(esmDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "hoisted-icons",
+        type: "module",
+        exports: {
+          "./icons": {
+            import: "./esm/icons.js",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(path.posix.join(esmDir, "icons.js"), `export { Icon } from "./Icon.js";`);
+    fs.writeFileSync(path.posix.join(esmDir, "Icon.js"), `export function Icon() {}`);
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["hoisted-icons/icons"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { Icon } from "hoisted-icons/icons";`,
+      "/app/page.tsx",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.code).toContain(path.posix.join(esmDir, "Icon.js"));
+  });
+
+  it("matches conditional exports in package declaration order", async () => {
     tmpDir = normalizePathSeparators(
       fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
     );
@@ -988,14 +1079,8 @@ describe("vinext:optimize-imports transform", () => {
         main: "./default/index.js",
       }),
     );
-    fs.writeFileSync(
-      path.posix.join(esmDir, "index.js"),
-      `export { EsmIcon } from "./EsmIcon.js";`,
-    );
-    fs.writeFileSync(
-      path.posix.join(nodeDir, "index.js"),
-      `export { NodeIcon } from "./NodeIcon.js";`,
-    );
+    fs.writeFileSync(path.posix.join(esmDir, "index.js"), `export { Icon } from "./Icon.js";`);
+    fs.writeFileSync(path.posix.join(nodeDir, "index.js"), `export { Icon } from "./Icon.js";`);
 
     const plugin = createOptimizeImportsPlugin(
       () => ({ optimizePackageImports: ["@condition-order/pkg"] }) as any,
@@ -1007,15 +1092,13 @@ describe("vinext:optimize-imports transform", () => {
 
     const result = await (transform as any).call(
       { ...plugin, environment: { name: "ssr" } },
-      `import { NodeIcon } from "@condition-order/pkg";`,
+      `import { Icon } from "@condition-order/pkg";`,
       "/app/page.tsx",
     );
 
-    // NodeIcon only exists in the node entry. If the resolver picked import first,
-    // the transform would return null. Resolving non-null proves node won.
     expect(result).not.toBeNull();
-    expect(result!.code).toContain(path.posix.join(nodeDir, "NodeIcon.js"));
-    expect(result!.code).not.toContain(path.posix.join(esmDir, "EsmIcon.js"));
+    expect(result!.code).toContain(path.posix.join(esmDir, "Icon.js"));
+    expect(result!.code).not.toContain(path.posix.join(nodeDir, "Icon.js"));
     expect(result!.code).not.toContain(`from "@condition-order/pkg"`);
   });
 

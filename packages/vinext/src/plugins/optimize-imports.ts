@@ -204,32 +204,19 @@ export function createOptimizedImportSourceMatcher(
 
 /**
  * Resolve a package.json exports value to a string entry path.
- * Prefers node → import → module → default conditions, recursing into nested objects.
- * When `preferReactServer` is true (RSC environment), "react-server" is checked first
- * so that packages like `react` and `react-dom` resolve their RSC-compatible entry points.
- *
- * Note: this is an intentional approximation of Node's conditional exports. The real
- * resolver matches conditions in the order they appear in the export object and supports
- * arbitrarily nested condition objects. vinext hardcodes a small priority list because
- * the plugin only needs to find the ESM barrel entry used at runtime. The approximation
- * is documented and tested so future changes don't accidentally assume full Node semantics.
+ * Matches active conditions in package declaration order, recursing into nested objects.
+ * RSC additionally activates the "react-server" condition so packages like `react` and
+ * `react-dom` resolve their server-component-compatible entry points.
  */
 function resolveExportsValue(value: ExportsValue, preferReactServer: boolean): string | null {
   if (typeof value === "string") return value;
   if (typeof value === "object" && value !== null) {
-    // In the RSC environment prefer "react-server" before standard conditions so that
-    // packages exposing RSC-only entry points (e.g. react, react-dom) are resolved
-    // to their server-compatible barrel. In the SSR environment the "react-server"
-    // condition must NOT be preferred — SSR renders with the full React runtime.
-    const conditions = preferReactServer
-      ? ["react-server", "node", "import", "module", "default"]
-      : ["node", "import", "module", "default"];
-    for (const key of conditions) {
-      const nested = value[key];
-      if (nested !== undefined) {
-        const resolved = resolveExportsValue(nested, preferReactServer);
-        if (resolved) return resolved;
-      }
+    const activeConditions = new Set(["node", "import", "module"]);
+    if (preferReactServer) activeConditions.add("react-server");
+    for (const [condition, nested] of Object.entries(value)) {
+      if (condition !== "default" && !activeConditions.has(condition)) continue;
+      const resolved = resolveExportsValue(nested, preferReactServer);
+      if (resolved) return resolved;
     }
   }
   return null;
@@ -288,7 +275,6 @@ function resolvePackageExport(
     const prefix = pattern.slice(0, starIndex);
     const suffix = pattern.slice(starIndex + 1);
     if (!exportKey.startsWith(prefix) || !exportKey.endsWith(suffix)) continue;
-    // Reject overlapping prefix/suffix segments, matching Node's export-map behavior.
     if (prefix.length + suffix.length > exportKey.length) continue;
     const matched = exportKey.slice(prefix.length, exportKey.length - suffix.length);
     if (
@@ -322,6 +308,33 @@ type PackageInfo = {
   pkgJson: PackageJson;
 };
 
+async function readMatchingPackageJson(
+  pkgJsonPath: string,
+  packageName: string,
+): Promise<PackageInfo | null> {
+  try {
+    const pkgJson = JSON.parse(await fs.readFile(pkgJsonPath, "utf-8")) as PackageJson;
+    return pkgJson.name === packageName ? { pkgDir: path.dirname(pkgJsonPath), pkgJson } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function findPackageInAncestorNodeModules(
+  packageName: string,
+  projectRoot: string,
+): Promise<PackageInfo | null> {
+  let dir = path.resolve(projectRoot);
+  while (true) {
+    const pkgJsonPath = path.join(dir, "node_modules", ...packageName.split("/"), "package.json");
+    const info = await readMatchingPackageJson(pkgJsonPath, packageName);
+    if (info) return info;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 /**
  * Resolve a package name to its directory and parsed package.json.
  * Handles packages with strict `exports` fields that don't expose `./package.json`
@@ -354,11 +367,8 @@ async function resolvePackageInfo(
       } catch {
         try {
           mainEntry = req.resolve(packageName);
-        } catch {
-          // Both resolves failed — fall through to the manual node_modules lookup below.
-        }
+        } catch {}
       }
-
       if (mainEntry) {
         let dir = path.dirname(mainEntry);
         // Walk up until we find package.json with matching name
@@ -377,30 +387,11 @@ async function resolvePackageInfo(
           dir = parent;
         }
       }
-
       // Last resort: some strict ESM-only packages are unresolvable via CJS
-      // require conditions. Try a direct node_modules lookup relative to the
-      // project root. This covers standard npm/pnpm/yarn layouts where the
-      // package directory is symlinked into node_modules. It also acts as a
-      // fallback when a resolved main entry's walk-up failed to find a matching
-      // package.json (e.g. nested distribution layouts).
-      const manualPkgJson = path.join(
-        projectRoot,
-        "node_modules",
-        ...packageName.split("/"),
-        "package.json",
-      );
-      try {
-        const pkgJson = JSON.parse(await fs.readFile(manualPkgJson, "utf-8")) as PackageJson;
-        if (pkgJson.name === packageName) {
-          return { pkgDir: path.dirname(manualPkgJson), pkgJson };
-        }
-      } catch {
-        return null;
-      }
+      // conditions, and a resolved legacy main can point outside the package.
+      // Search node_modules from the project root through workspace ancestors.
+      return await findPackageInAncestorNodeModules(packageName, projectRoot);
     }
-
-    return null;
   } catch {
     return null;
   }
