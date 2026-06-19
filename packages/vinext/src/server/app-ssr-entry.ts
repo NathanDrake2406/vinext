@@ -50,12 +50,14 @@ import {
 } from "./app-bfcache-identity.js";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
-import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
+import {
+  createClientReferencePreloader,
+  preloadClientReferencesForImportCandidates,
+} from "./app-client-reference-preloader.js";
 import {
   getClientReferenceImportMap,
   isClientReferenceImportMapAvailable,
 } from "./client-reference-import-map-state.js";
-import { resolveClientReferenceIdsForImportCandidates } from "./client-reference-imports.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 import { isPprFallbackShellAbortError } from "vinext/shims/ppr-fallback-shell";
 import DefaultGlobalError from "vinext/shims/default-global-error";
@@ -218,21 +220,10 @@ const BfcacheIdMapContext = getBfcacheIdMapContext();
 async function preloadClientReferences(
   importCandidates: readonly string[] | null | undefined,
 ): Promise<void> {
-  if (!isClientReferenceImportMapAvailable()) {
-    await clientReferencePreloader.preload();
-    return;
-  }
-
-  const referenceIds = resolveClientReferenceIdsForImportCandidates(
-    importCandidates,
-    getClientReferenceImportMap(),
-  );
-  if (referenceIds === null) {
-    await clientReferencePreloader.preload();
-    return;
-  }
-
-  await clientReferencePreloader.preload(referenceIds);
+  await preloadClientReferencesForImportCandidates(clientReferencePreloader, importCandidates, {
+    getImportMap: getClientReferenceImportMap,
+    isAvailable: isClientReferenceImportMapAvailable,
+  });
 }
 
 function ssrErrorDigest(input: string): string {

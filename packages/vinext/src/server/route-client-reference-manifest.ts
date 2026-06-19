@@ -3,7 +3,7 @@ import path from "node:path";
 import { parseAst, transformWithOxc } from "vite";
 import { forEachAstChild, isAstRecord } from "../plugins/ast-utils.js";
 import type { AppRoute } from "../routing/app-router.js";
-import { stripViteModuleQuery } from "../utils/path.js";
+import { normalizePathSeparators, stripViteModuleQuery } from "../utils/path.js";
 import { collectAppRouteModuleFiles } from "./app-route-module-files.js";
 import { normalizeClientReferenceImportId } from "./client-reference-imports.js";
 
@@ -80,7 +80,7 @@ function isSyntheticReactRuntimeSpecifier(specifier: string): boolean {
 }
 
 function isNodeModulesPath(filePath: string): boolean {
-  return filePath.split(path.sep).includes("node_modules");
+  return normalizePathSeparators(filePath).split("/").includes("node_modules");
 }
 
 function isInProjectRoot(filePath: string, projectRoot: string): boolean {
