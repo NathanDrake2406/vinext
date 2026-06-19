@@ -1,5 +1,6 @@
 import { isValidElement, type ReactNode } from "react";
 import {
+  ARTIFACT_COMPATIBILITY_PROOF_FIELDS,
   createArtifactCompatibilityEnvelope,
   parseArtifactCompatibilityEnvelope,
   type ArtifactCompatibilityEnvelope,
@@ -9,7 +10,6 @@ import type {
   CacheProofBreakerFallbackMode,
   CacheProofFallbackScope,
   CacheProofRejectionCode,
-  RenderObservation,
 } from "./cache-proof.js";
 import type { ClientReuseManifestSkipDisposition } from "./client-reuse-manifest.js";
 import { isInterceptionMatchedUrlPath } from "./normalize-path.js";
@@ -244,7 +244,6 @@ export type AppOutgoingElements = Readonly<
     | ArtifactCompatibilityEnvelope
     | CacheEntryReuseProof
     | AppElementsInterception
-    | RenderObservation
     | readonly string[]
     | readonly AppElementsSlotBinding[]
   >
@@ -277,7 +276,6 @@ type AppElementsWireCodec = {
     artifactCompatibility?: ArtifactCompatibilityEnvelope;
     cacheEntryReuseProof?: CacheEntryReuseProof;
     layoutFlags: LayoutFlags;
-    renderObservation?: RenderObservation;
     skipDisposition?: ClientReuseManifestSkipDisposition;
   }): ReactNode | AppOutgoingElements;
   encodePageId(routePath: string, interceptionContext: string | null): string;
@@ -636,12 +634,21 @@ export function withLayoutFlags<T extends Record<string, unknown>>(
   return { ...elements, [APP_LAYOUT_FLAGS_KEY]: layoutFlags };
 }
 
+const DEFAULT_ARTIFACT_COMPATIBILITY_ENVELOPE = createArtifactCompatibilityEnvelope();
+
+function isDefaultArtifactCompatibilityEnvelope(
+  artifactCompatibility: ArtifactCompatibilityEnvelope,
+): boolean {
+  return ARTIFACT_COMPATIBILITY_PROOF_FIELDS.every(
+    (field) => artifactCompatibility[field] === DEFAULT_ARTIFACT_COMPATIBILITY_ENVELOPE[field],
+  );
+}
+
 export function buildOutgoingAppPayload(input: {
   element: ReactNode | AppElements;
   artifactCompatibility?: ArtifactCompatibilityEnvelope;
   cacheEntryReuseProof?: CacheEntryReuseProof;
   layoutFlags: LayoutFlags;
-  renderObservation?: RenderObservation;
   skipDisposition?: ClientReuseManifestSkipDisposition;
 }): ReactNode | AppOutgoingElements {
   if (!isAppElementsRecord(input.element)) {
@@ -655,7 +662,6 @@ export function buildOutgoingAppPayload(input: {
     | ArtifactCompatibilityEnvelope
     | CacheEntryReuseProof
     | AppElementsInterception
-    | RenderObservation
     | readonly string[]
     | readonly AppElementsSlotBinding[]
   > = {};
@@ -666,17 +672,19 @@ export function buildOutgoingAppPayload(input: {
     }
     payload[key] = value === UNMATCHED_SLOT ? APP_UNMATCHED_SLOT_WIRE_VALUE : value;
   }
-  payload[APP_LAYOUT_FLAGS_KEY] = input.layoutFlags;
+  if (Object.keys(input.layoutFlags).length > 0) {
+    payload[APP_LAYOUT_FLAGS_KEY] = input.layoutFlags;
+  }
   if (skippedLayoutIds.size > 0) {
     payload[APP_SKIPPED_LAYOUT_IDS_KEY] = [...skippedLayoutIds];
   }
-  payload[APP_ARTIFACT_COMPATIBILITY_KEY] =
-    input.artifactCompatibility ?? createArtifactCompatibilityEnvelope();
+  const artifactCompatibility =
+    input.artifactCompatibility ?? DEFAULT_ARTIFACT_COMPATIBILITY_ENVELOPE;
+  if (!isDefaultArtifactCompatibilityEnvelope(artifactCompatibility)) {
+    payload[APP_ARTIFACT_COMPATIBILITY_KEY] = artifactCompatibility;
+  }
   if (input.cacheEntryReuseProof) {
     payload[APP_CACHE_ENTRY_REUSE_PROOF_KEY] = input.cacheEntryReuseProof;
-  }
-  if (input.renderObservation) {
-    payload[APP_RENDER_OBSERVATION_KEY] = input.renderObservation;
   }
   return payload;
 }

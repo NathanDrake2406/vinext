@@ -1279,7 +1279,7 @@ describe("layoutFlags injection into RSC payload", () => {
     expect(getCapturedElement()[APP_LAYOUT_FLAGS_KEY]).toEqual({ "layout:/": "d" });
   });
 
-  it("injects empty __layoutFlags when classification is not provided (backward compat)", async () => {
+  it("omits empty __layoutFlags when classification is not provided", async () => {
     const { options, getCapturedElement } = createRscOptions({
       element: { "layout:/": "root-layout", "page:/test": "test-page" },
       layoutCount: 1,
@@ -1287,7 +1287,7 @@ describe("layoutFlags injection into RSC payload", () => {
     });
 
     await renderAppPageLifecycle(options);
-    expect(getCapturedElement()[APP_LAYOUT_FLAGS_KEY]).toEqual({});
+    expect(APP_LAYOUT_FLAGS_KEY in getCapturedElement()).toBe(false);
   });
 
   it("injects concrete artifact compatibility metadata from the render boundary", async () => {
@@ -1325,7 +1325,7 @@ describe("layoutFlags injection into RSC payload", () => {
     });
   });
 
-  it("injects partial render observation metadata into outgoing AppElements payloads", async () => {
+  it("omits partial render observation metadata from outgoing AppElements payloads", async () => {
     const { options, getCapturedElement } = createRscOptions({
       element: {
         [APP_ROOT_LAYOUT_KEY]: "/",
@@ -1333,38 +1333,13 @@ describe("layoutFlags injection into RSC payload", () => {
         "page:/test": "test-page",
       },
     });
-
     await renderAppPageLifecycle({
       ...options,
       navigationParams: { id: "123" },
       params: { id: "123" },
-      peekRenderObservationState() {
-        return {
-          dynamicFetches: ["https://api.example.test/posts?token=secret"],
-          requestApis: ["headers"],
-        };
-      },
     });
 
-    const renderObservation = getCapturedElement()[APP_RENDER_OBSERVATION_KEY];
-
-    expect(renderObservation).toMatchObject({
-      boundaryOutcome: { kind: "unknown" },
-      cacheability: "unknown",
-      completeness: "partial",
-      output: {
-        kind: "app-rsc",
-        mountedSlotsFingerprint: null,
-        renderEpoch: null,
-        rootBoundaryId: "/",
-        routeId: "route:/test",
-      },
-      requestApis: expect.arrayContaining([
-        { kind: "headers", status: "observed" },
-        { kind: "params", status: "observed" },
-      ]),
-    });
-    expect(JSON.stringify(renderObservation)).not.toContain("secret");
+    expect(APP_RENDER_OBSERVATION_KEY in getCapturedElement()).toBe(false);
   });
 
   it("injects __layoutFlags for multiple independently classified layouts", async () => {
