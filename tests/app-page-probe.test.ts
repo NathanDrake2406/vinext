@@ -107,6 +107,40 @@ describe("app page probe helpers", () => {
     expect(calls).toEqual(["layout", "lazy"]);
   });
 
+  it("continues probing siblings after an async server component resolves", async () => {
+    const calls: string[] = [];
+
+    function Grandchild() {
+      calls.push("grandchild");
+      return null;
+    }
+
+    async function AsyncChild() {
+      calls.push("async-start");
+      await Promise.resolve();
+      calls.push("async-end");
+      return React.createElement(Grandchild);
+    }
+
+    function Sibling() {
+      calls.push("sibling");
+      return null;
+    }
+
+    function Layout() {
+      return React.createElement(
+        "section",
+        null,
+        React.createElement(AsyncChild),
+        React.createElement(Sibling),
+      );
+    }
+
+    await probeReactServerSubtree(React.createElement(Layout));
+
+    expect(calls).toEqual(["async-start", "async-end", "grandchild", "sibling"]);
+  });
+
   it("enforces subtree depth limits for nested arrays", async () => {
     await expect(
       probeReactServerSubtree([[[React.createElement("span")]]], { maxDepth: 1 }),

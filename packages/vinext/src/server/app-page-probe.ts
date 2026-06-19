@@ -1,4 +1,4 @@
-import { Fragment, isValidElement, type ReactElement, type ReactNode } from "react";
+import { Fragment, type ReactElement, type ReactNode } from "react";
 import { markAppPagePropsForUseCache } from "vinext/shims/internal/app-page-props-cache-key";
 import { isNextRouterError } from "vinext/shims/navigation-server";
 import { collectAppPageSearchParams } from "./app-page-head.js";
@@ -14,6 +14,7 @@ import { isPromiseLike } from "../utils/promise.js";
 
 const DEFAULT_SUBTREE_PROBE_MAX_DEPTH = 32;
 const DEFAULT_SUBTREE_PROBE_MAX_NODES = 1000;
+const REACT_ELEMENT_TYPE = Symbol.for("react.transitional.element");
 const REACT_FORWARD_REF_TYPE = Symbol.for("react.forward_ref");
 const REACT_LAZY_TYPE = Symbol.for("react.lazy");
 const REACT_MEMO_TYPE = Symbol.for("react.memo");
@@ -28,6 +29,8 @@ type ProbeReactElementProps = Readonly<{
 }>;
 
 type UnknownFunction = (...args: unknown[]) => unknown;
+type ProbeVisitResult = void | PromiseLike<void>;
+type ProbeRenderResult = boolean | PromiseLike<boolean>;
 
 type ReactMemoType = Readonly<{
   innerType: unknown;
@@ -63,7 +66,11 @@ function isIterable(value: unknown): value is Iterable<unknown> {
 }
 
 function isProbeReactElement(value: unknown): value is ReactElement<ProbeReactElementProps> {
-  return isValidElement<ProbeReactElementProps>(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { $$typeof?: unknown }).$$typeof === REACT_ELEMENT_TYPE
+  );
 }
 
 function isObjectLike(value: unknown): value is object {
@@ -136,18 +143,36 @@ export async function probeReactServerSubtree(
     }
   };
 
-  const renderElementType = async (
+  const continueArrayProbe = (
+    values: readonly unknown[],
+    startIndex: number,
+    depth: number,
+  ): ProbeVisitResult => {
+    for (let index = startIndex; index < values.length; index += 1) {
+      const childResult = visit(values[index], depth + 1);
+      if (isPromiseLike(childResult)) {
+        return Promise.resolve(childResult).then(() =>
+          continueArrayProbe(values, index + 1, depth),
+        );
+      }
+    }
+  };
+
+  const renderElementType = (
     type: unknown,
     props: ProbeReactElementProps,
     depth: number,
     wrapperDepth = 0,
-  ): Promise<boolean> => {
+  ): ProbeRenderResult => {
     if (wrapperDepth > maxDepth) {
       throw new AppPageSubtreeProbeLimitError("App page layout subtree probe exceeded max depth");
     }
 
     if (isUnknownFunction(type)) {
-      await visit(type(props), depth + 1);
+      const result = visit(type(props), depth + 1);
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).then(() => true);
+      }
       return true;
     }
 
@@ -158,52 +183,55 @@ export async function probeReactServerSubtree(
 
     const lazyType = readReactLazyType(type);
     if (lazyType) {
-      return renderElementType(
-        await resolveReactLazyType(lazyType),
-        props,
-        depth,
-        wrapperDepth + 1,
+      return resolveReactLazyType(lazyType).then((resolvedType) =>
+        renderElementType(resolvedType, props, depth, wrapperDepth + 1),
       );
     }
 
     const forwardRefRender = readReactForwardRefRender(type);
     if (forwardRefRender) {
-      await visit(forwardRefRender(props, null), depth + 1);
+      const result = visit(forwardRefRender(props, null), depth + 1);
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).then(() => true);
+      }
       return true;
     }
 
     return false;
   };
 
-  const visit = async (value: unknown, depth: number): Promise<void> => {
+  const visit = (value: unknown, depth: number): ProbeVisitResult => {
     enterProbeNode(depth);
     if (value == null || typeof value === "boolean" || typeof value === "number") return;
     if (typeof value === "string" || typeof value === "bigint") return;
     if (isPromiseLike(value)) {
-      await visit(await value, depth);
-      return;
+      return Promise.resolve(value).then((resolved) => visit(resolved, depth));
     }
     if (Array.isArray(value)) {
-      for (const child of value) {
-        await visit(child, depth + 1);
-      }
-      return;
+      return continueArrayProbe(value, 0, depth);
     }
     if (isIterable(value) && !isProbeReactElement(value)) {
       throw new AppPageSubtreeProbeUnsupportedIterableError();
     }
     if (!isProbeReactElement(value)) return;
 
-    if (value.type === Fragment || typeof value.type === "string") {
-      await visit(value.props.children, depth + 1);
+    const { type, props } = value;
+    if (type === Fragment || typeof type === "string") {
+      return visit(props.children, depth + 1);
+    }
+
+    const renderResult = renderElementType(type, props, depth);
+    if (isPromiseLike(renderResult)) {
+      return Promise.resolve(renderResult).then((didRender) => {
+        if (didRender) return;
+        return visit(props.children, depth + 1);
+      });
+    }
+    if (renderResult) {
       return;
     }
 
-    if (await renderElementType(value.type, value.props, depth)) {
-      return;
-    }
-
-    await visit(value.props.children, depth + 1);
+    return visit(props.children, depth + 1);
   };
 
   await visit(node, 0);
@@ -261,7 +289,7 @@ export function probeAppPage(options: {
       return resolved;
     });
   }
-  if (isValidElement(result) || Array.isArray(result)) {
+  if (isProbeReactElement(result) || Array.isArray(result)) {
     return probeReactServerSubtreeForDynamicUsage(result).then(() => result);
   }
   return result;
