@@ -35,8 +35,8 @@ async function readFileSafe(filepath: string): Promise<string | null> {
   }
 }
 
-/** Nested conditional exports value (string path or nested conditions). */
-type ExportsValue = string | { [condition: string]: ExportsValue };
+/** Nested conditional exports value (string path, null exclusion target, or nested conditions). */
+type ExportsValue = string | null | { [condition: string]: ExportsValue };
 
 /** Minimal package.json shape for entry point resolution. */
 type PackageJson = {
@@ -207,6 +207,12 @@ export function createOptimizedImportSourceMatcher(
  * Prefers node → import → module → default conditions, recursing into nested objects.
  * When `preferReactServer` is true (RSC environment), "react-server" is checked first
  * so that packages like `react` and `react-dom` resolve their RSC-compatible entry points.
+ *
+ * Note: this is an intentional approximation of Node's conditional exports. The real
+ * resolver matches conditions in the order they appear in the export object and supports
+ * arbitrarily nested condition objects. vinext hardcodes a small priority list because
+ * the plugin only needs to find the ESM barrel entry used at runtime. The approximation
+ * is documented and tested so future changes don't accidentally assume full Node semantics.
  */
 function resolveExportsValue(value: ExportsValue, preferReactServer: boolean): string | null {
   if (typeof value === "string") return value;
@@ -334,9 +340,40 @@ async function resolvePackageInfo(
       const pkgJson = JSON.parse(await fs.readFile(pkgJsonPath, "utf-8")) as PackageJson;
       return { pkgDir, pkgJson };
     } catch {
-      // Package has strict exports — resolve main entry and walk up to find package.json
+      // Package has strict exports — resolve main entry and walk up to find package.json.
+      // First try the full subpath specifier (e.g. @heroicons/react/24/solid). If that
+      // fails, fall back to resolving the package root itself. The root fallback handles
+      // strict ESM-only subpaths that expose only an "import" condition: CJS require
+      // cannot resolve them, but the package root usually has a default/main entry that
+      // lets us discover the package directory and then read the export map directly.
+      let mainEntry: string | null = null;
       try {
-        const mainEntry = req.resolve(fallbackSpecifier);
+        mainEntry = req.resolve(fallbackSpecifier);
+      } catch {
+        try {
+          mainEntry = req.resolve(packageName);
+        } catch {
+          // Last resort: some strict ESM-only packages are unresolvable via CJS
+          // require conditions. Try a direct node_modules lookup relative to the
+          // project root. This covers standard npm/pnpm/yarn layouts where the
+          // package directory is symlinked into node_modules.
+          const manualPkgJson = path.join(
+            projectRoot,
+            "node_modules",
+            ...packageName.split("/"),
+            "package.json",
+          );
+          try {
+            const pkgJson = JSON.parse(await fs.readFile(manualPkgJson, "utf-8")) as PackageJson;
+            if (pkgJson.name === packageName) {
+              return { pkgDir: path.dirname(manualPkgJson), pkgJson };
+            }
+          } catch {
+            return null;
+          }
+        }
+      }
+      if (mainEntry) {
         let dir = path.dirname(mainEntry);
         // Walk up until we find package.json with matching name
         for (let i = 0; i < 10; i++) {
@@ -353,8 +390,6 @@ async function resolvePackageInfo(
           if (parent === dir) break;
           dir = parent;
         }
-      } catch {
-        return null;
       }
     }
 

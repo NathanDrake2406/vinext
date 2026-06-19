@@ -705,6 +705,225 @@ describe("vinext:optimize-imports transform", () => {
     expect(result!.code).not.toContain(path.posix.join(cjsDir, "index.js"));
   });
 
+  it("resolves the most specific matching pattern export", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "@pattern", "icons");
+    const genericDir = path.posix.join(pkgDir, "dist", "generic");
+    const solidDir = path.posix.join(pkgDir, "dist", "solid");
+    fs.mkdirSync(genericDir, { recursive: true });
+    fs.mkdirSync(solidDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@pattern/icons",
+        type: "module",
+        exports: {
+          "./icons/*": "./dist/generic/*.js",
+          "./icons/solid/*": "./dist/solid/*.js",
+        },
+      }),
+    );
+    fs.writeFileSync(path.posix.join(genericDir, "X.js"), `export { XIcon } from "./XImpl.js";`);
+    fs.writeFileSync(
+      path.posix.join(solidDir, "X.js"),
+      `export { default as XIcon } from "./XImpl.js";`,
+    );
+    fs.writeFileSync(
+      path.posix.join(solidDir, "XImpl.js"),
+      `export default function XIcon() { return null; }`,
+    );
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["@pattern/icons/icons/solid/X"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { XIcon } from "@pattern/icons/icons/solid/X";`,
+      "/app/page.tsx",
+    );
+
+    expect(result).not.toBeNull();
+    // Most specific pattern wins: ./icons/solid/*, not ./icons/*
+    expect(result!.code).toContain(
+      `import XIcon from ${JSON.stringify(path.posix.join(solidDir, "XImpl.js"))}`,
+    );
+    expect(result!.code).not.toContain(path.posix.join(genericDir, "XImpl.js"));
+    expect(result!.code).not.toContain(`from "@pattern/icons/icons/solid/X"`);
+  });
+
+  it("skips optimization when a pattern export is explicitly excluded with null", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "@null-exclude", "pkg");
+    const genericDir = path.posix.join(pkgDir, "dist", "generic");
+    fs.mkdirSync(genericDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@null-exclude/pkg",
+        type: "module",
+        exports: {
+          "./icons/*": "./dist/generic/*.js",
+          "./icons/private/*": null,
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.posix.join(genericDir, "Secret.js"),
+      `export { Secret } from "./SecretImpl.js";`,
+    );
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["@null-exclude/pkg/icons/private/Secret"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { Secret } from "@null-exclude/pkg/icons/private/Secret";`,
+      "/app/page.tsx",
+    );
+
+    // null target means the subpath is explicitly excluded from the export map,
+    // so the optimizer safely leaves the original import unchanged.
+    expect(result).toBeNull();
+  });
+
+  it("optimizes strict ESM-only subpath barrels with only an import condition", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "@import-only", "icons");
+    const esmDir = path.posix.join(pkgDir, "esm");
+    fs.mkdirSync(esmDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@import-only/icons",
+        type: "module",
+        exports: {
+          "./icons": {
+            import: "./esm/icons.js",
+          },
+        },
+        // Root main gives require.resolve a fallback path to discover the package directory
+        main: "./index.js",
+      }),
+    );
+    fs.writeFileSync(path.posix.join(pkgDir, "index.js"), `export {};`);
+    fs.writeFileSync(path.posix.join(esmDir, "icons.js"), `export { IconA } from "./IconA.js";`);
+    fs.writeFileSync(
+      path.posix.join(esmDir, "IconA.js"),
+      `export function IconA() { return null; }`,
+    );
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["@import-only/icons/icons"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { IconA } from "@import-only/icons/icons";`,
+      "/app/page.tsx",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.code).toContain(
+      `import { IconA } from ${JSON.stringify(path.posix.join(esmDir, "IconA.js"))}`,
+    );
+    expect(result!.code).not.toContain(`from "@import-only/icons/icons"`);
+  });
+
+  it("intentionally prefers node over import in SSR condition resolution", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "@condition-order", "pkg");
+    const esmDir = path.posix.join(pkgDir, "esm");
+    const nodeDir = path.posix.join(pkgDir, "node");
+    fs.mkdirSync(esmDir, { recursive: true });
+    fs.mkdirSync(nodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@condition-order/pkg",
+        type: "module",
+        exports: {
+          ".": {
+            import: "./esm/index.js",
+            node: "./node/index.js",
+            default: "./default/index.js",
+          },
+        },
+        main: "./default/index.js",
+      }),
+    );
+    fs.writeFileSync(
+      path.posix.join(esmDir, "index.js"),
+      `export { EsmIcon } from "./EsmIcon.js";`,
+    );
+    fs.writeFileSync(
+      path.posix.join(nodeDir, "index.js"),
+      `export { NodeIcon } from "./NodeIcon.js";`,
+    );
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["@condition-order/pkg"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { NodeIcon } from "@condition-order/pkg";`,
+      "/app/page.tsx",
+    );
+
+    // NodeIcon only exists in the node entry. If the resolver picked import first,
+    // the transform would return null. Resolving non-null proves node won.
+    expect(result).not.toBeNull();
+    expect(result!.code).toContain(path.posix.join(nodeDir, "NodeIcon.js"));
+    expect(result!.code).not.toContain(path.posix.join(esmDir, "EsmIcon.js"));
+    expect(result!.code).not.toContain(`from "@condition-order/pkg"`);
+  });
+
   it("appends trailing semicolons to all replacement statements", async () => {
     // lodash-es is in DEFAULT_OPTIMIZE_PACKAGES
     const call = await setupTransform(
