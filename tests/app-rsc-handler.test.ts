@@ -941,6 +941,65 @@ describe("createAppRscHandler", () => {
     }
   });
 
+  // Ported from Next.js: test/e2e/app-dir/app-basepath/index.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app-basepath/index.test.ts
+  //
+  // Next.js generates its trailing-slash redirect as a basePath-scoped rule
+  // (`/:path+/` with no `basePath: false`, so it compiles to `/docs/:path+/`).
+  // It therefore never matches an out-of-basePath request, and such requests
+  // are not pushed back under basePath before `basePath: false` rewrites run.
+  // See packages/next/src/lib/load-custom-routes.ts trailing-slash redirects.
+  //
+  // Each trailingSlash setting triggers the redirect from the opposite request
+  // shape: `false` strips a trailing slash, `true` adds one. Both previously
+  // emitted a bogus `308 Location: /docs/outsideBasePath[/]`.
+  for (const { trailingSlash, requestPath } of [
+    { trailingSlash: false, requestPath: "/outsideBasePath/" },
+    { trailingSlash: true, requestPath: "/outsideBasePath" },
+  ]) {
+    it(`does not prepend basePath to out-of-basePath trailing-slash requests before basePath:false rewrites match (trailingSlash:${trailingSlash})`, async () => {
+      const receivedUrls: string[] = [];
+      const server = createServer((req, res) => {
+        receivedUrls.push(req.url ?? "");
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("outside basePath");
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address() as AddressInfo;
+      const upstreamBase = `http://127.0.0.1:${address.port}`;
+
+      try {
+        const handler = createHandler({
+          configHeaders: [],
+          configRewrites: {
+            beforeFiles: [],
+            afterFiles: [
+              {
+                source: "/outsideBasePath",
+                destination: `${upstreamBase}/`,
+                basePath: false,
+              },
+            ],
+            fallback: [],
+          },
+          matchRoute: () => null,
+          trailingSlash,
+        });
+
+        const response = await handler(new Request(`https://example.test${requestPath}`), null);
+
+        // Must not 308 to `/docs/outsideBasePath[/]`; the basePath:false rewrite
+        // owns this path and proxies it instead.
+        expect(response.status).toBe(200);
+        expect(response.headers.get("location")).toBeNull();
+        expect(await response.text()).toBe("outside basePath");
+        expect(receivedUrls).toEqual(["/"]);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+  }
+
   it("preserves Node route handler RSC URLs while hiding internal parsed params", async () => {
     // Ported from Next.js:
     // test/e2e/app-dir/front-redirect-issue/front-redirect-issue.test.ts

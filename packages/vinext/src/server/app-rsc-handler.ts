@@ -519,12 +519,19 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (prerenderEndpointResponse) return prerenderEndpointResponse;
   }
 
-  const trailingSlashRedirect = normalizeTrailingSlash(
-    pathname,
-    options.basePath,
-    options.trailingSlash,
-    url.search,
-  );
+  // Trailing-slash normalisation is a basePath-scoped internal redirect in
+  // Next.js: the auto-generated `/:path+/` → `/:path+` rule carries the
+  // basePath (no `basePath: false`), so it compiles to `/base/:path+/` and
+  // never matches out-of-basePath requests. `normalizeTrailingSlash` instead
+  // unconditionally rebuilds the Location as `basePath + pathname`, which for a
+  // delayed-rejection out-of-basePath request (`hadBasePath === false`,
+  // `pathname` still un-stripped) would emit a bogus `/base/...` redirect and
+  // push the request back under basePath before its `basePath: false` rewrite
+  // can match. Gate on `hadBasePath` (true whenever basePath is empty or the
+  // request was in-basePath) to mirror Next.js load-custom-routes.ts.
+  const trailingSlashRedirect = hadBasePath
+    ? normalizeTrailingSlash(pathname, options.basePath, options.trailingSlash, url.search)
+    : null;
   if (trailingSlashRedirect) return trailingSlashRedirect;
 
   // Default-locale path normalisation (issue #1336, item 4). Next.js
