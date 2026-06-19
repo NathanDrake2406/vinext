@@ -136,6 +136,20 @@ describe("ensureAppRouteModulesLoaded", () => {
     expect(__loadLayouts[2]).not.toHaveBeenCalled();
   });
 
+  it("ignores array loaders beyond the manifest placeholder length", async () => {
+    const layout = { default: () => null };
+    const outOfRangeLoader = vi.fn(async () => layout);
+    const route: LazyLoadableRoute = {
+      layouts: [null],
+      __loadLayouts: [null, outOfRangeLoader],
+    };
+
+    await ensureAppRouteModulesLoaded(route);
+
+    expect(route.layouts).toEqual([null]);
+    expect(outOfRangeLoader).not.toHaveBeenCalled();
+  });
+
   it("hydrates parallel-slot modules onto each slot", async () => {
     const slotPage = { default: () => null };
     const slotLayout = { default: () => null };

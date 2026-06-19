@@ -29,6 +29,7 @@ type LazyModuleLoaderArray = readonly (LazyModuleThunk | null | undefined)[];
 type LazyLoadableIntercept = {
   interceptLayouts?: readonly unknown[] | null;
   __loadInterceptLayouts?: LazyModuleLoaderArray | null;
+  __loadingInterceptLayouts?: Promise<readonly unknown[]> | null;
 };
 
 type LazyLoadableSlot = {
@@ -42,6 +43,7 @@ type LazyLoadableSlot = {
   __loadLayout?: LazyModuleThunk | null;
   __loadLoading?: LazyModuleThunk | null;
   __loadError?: LazyModuleThunk | null;
+  /** Hydrated only after an intercept matches, not with the slot's base modules. */
   intercepts?: LazyLoadableIntercept[];
 };
 
@@ -112,7 +114,7 @@ function pushArrayLoads(
   // boundary-local cast here rather than a widening of the shared contract.
   const slots = target as unknown[];
   for (const [index, loader] of loaders.entries()) {
-    if (!loader || slots[index] != null) continue;
+    if (index >= slots.length || !loader || slots[index] != null) continue;
     loads.push(
       loader().then((module) => {
         slots[index] = module;
@@ -124,10 +126,23 @@ function pushArrayLoads(
 export function loadAppInterceptLayouts(
   intercept: LazyLoadableIntercept,
 ): Promise<readonly unknown[]> {
+  if (intercept.__loadingInterceptLayouts) return intercept.__loadingInterceptLayouts;
+
   const loads: Promise<unknown>[] = [];
   pushArrayLoads(loads, intercept.interceptLayouts, intercept.__loadInterceptLayouts);
   if (loads.length === 0) return Promise.resolve(intercept.interceptLayouts ?? []);
-  return Promise.all(loads).then(() => intercept.interceptLayouts ?? []);
+
+  const loading = Promise.all(loads)
+    .then(() => {
+      intercept.__loadingInterceptLayouts = null;
+      return intercept.interceptLayouts ?? [];
+    })
+    .catch((error: unknown) => {
+      intercept.__loadingInterceptLayouts = null;
+      throw error;
+    });
+  intercept.__loadingInterceptLayouts = loading;
+  return loading;
 }
 
 /**
