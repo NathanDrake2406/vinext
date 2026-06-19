@@ -73,7 +73,6 @@ import {
   createAppPageHtmlOutputScope,
   createAppPageRenderObservation,
   createAppPageRscOutputScope,
-  createEmptyAppPageRenderObservationState,
   type AppPageRenderObservationState,
 } from "./app-page-render-observation.js";
 import type {
@@ -162,7 +161,6 @@ type RenderAppPageLifecycleOptions = {
   pprFallbackShellReactSignal?: AbortSignal;
   abortPprFallbackShell?: () => void;
   rootParams?: RootParams;
-  peekRenderObservationState?: () => AppPageRenderObservationState;
   probeLayoutAt: (layoutIndex: number) => unknown;
   probePage: () => unknown;
   expireSeconds?: number;
@@ -633,19 +631,6 @@ export async function renderAppPageLifecycle(
     rootBoundaryId,
     routePattern: options.routePattern,
   });
-  // Partial payload metadata is a pre-stream snapshot. Fetch tags may still
-  // accumulate while the RSC/HTML streams are consumed; complete cache artifact
-  // observations below rebuild this field after the stream drains.
-  const payloadRenderObservation = createAppPageRenderObservation({
-    boundaryOutcome: { kind: "unknown" },
-    cacheability: "unknown",
-    cacheTags: options.getPageTags(),
-    cleanPathname: options.cleanPathname,
-    completeness: "partial",
-    output: rscOutputScope,
-    params: options.navigationParams,
-    state: options.peekRenderObservationState?.() ?? createEmptyAppPageRenderObservationState(),
-  });
   const skipDisposition =
     options.skipDisposition ??
     createRenderLifecycleSkipDisposition({
@@ -663,7 +648,6 @@ export async function renderAppPageLifecycle(
     element: options.element,
     layoutFlags,
     ...(artifactCompatibility ? { artifactCompatibility } : {}),
-    renderObservation: payloadRenderObservation,
     skipDisposition: options.isRscRequest ? skipDisposition : undefined,
   });
 
