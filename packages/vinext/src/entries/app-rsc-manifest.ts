@@ -225,6 +225,10 @@ function buildRouteEntries(routes: AppRoute[], imports: ImportAllocator): string
     // sibling URL (issue cloudflare/vinext#1525). Emitted only when there are
     // siblings so static routes get an empty literal and stay lean.
     const staticSiblings = route.isDynamic ? computeAppRouteStaticSiblings(routes, route) : [];
+    // Root layouts also have eager namespace imports for route-miss boundary
+    // rendering. Keep them in this positional loader array too so matched-route
+    // hydration has one uniform path; their dynamic import resolves from the
+    // module cache after the eager import rather than evaluating them twice.
     const layoutLoaders = lazyLoaderArray(route.layouts, imports);
     const templateLoaders = lazyLoaderArray(route.templates, imports);
     const notFoundPaths = route.notFoundPaths ?? [];
