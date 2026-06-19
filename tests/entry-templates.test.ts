@@ -356,27 +356,31 @@ describe("App Router generated manifest construction", () => {
     });
 
     const imports = manifest.imports.join("\n");
-    expect(imports.match(/\/tmp\/test\/app\/layout\.tsx/g)).toHaveLength(1);
-    // All page modules are lazy loaders (including the dynamic "/dashboard/:id"
-    // page and intercepting pages); only shared modules
-    // (layouts/templates/boundaries) and global-error stay eager `import * as`.
+    // The root layout stays eager (`import * as`, always needed for every
+    // render) and is additionally referenced by a lazy loader for the route's
+    // `layouts` array, so its path appears in both an eager and a lazy import.
+    expect(imports.match(/\/tmp\/test\/app\/layout\.tsx/g)).toHaveLength(2);
+    // Every per-route module — pages, route handlers, layouts, templates,
+    // boundaries and intercepting pages/layouts — is emitted as a lazy `() =>
+    // import()` loader. Only the always-needed root boundaries (root layout,
+    // not-found/forbidden/unauthorized) and global-error stay eager `import * as`.
     expect(imports).toContain('const load_0 = () => import("/tmp/test/app/page.tsx");');
     expect(imports).toContain(
-      'const load_1 = () => import("/tmp/test/app/dashboard/[id]/page.tsx");',
+      'const load_5 = () => import("/tmp/test/app/dashboard/[id]/page.tsx");',
     );
     expect(imports).toContain(
-      'const load_2 = () => import("/tmp/test/app/dashboard/[id]/route.ts");',
+      'const load_6 = () => import("/tmp/test/app/dashboard/[id]/route.ts");',
     );
     expect(imports).toContain(
-      'const load_3 = () => import("/tmp/test/app/dashboard/@modal/(.)photos/[photoId]/page.tsx");',
+      'const load_17 = () => import("/tmp/test/app/dashboard/@modal/(.)photos/[photoId]/page.tsx");',
     );
-    expect(imports).toContain('import * as mod_15 from "/tmp/test/app/global-error.tsx";');
+    expect(imports).toContain('import * as mod_4 from "/tmp/test/app/global-error.tsx";');
 
-    expect(manifest.rootNotFoundVar).toBe("mod_1");
-    expect(manifest.rootForbiddenVar).toBe("mod_2");
-    expect(manifest.rootUnauthorizedVar).toBe("mod_3");
-    expect(manifest.rootLayoutVars).toEqual(["mod_0"]);
-    expect(manifest.globalErrorVar).toBe("mod_15");
+    expect(manifest.rootNotFoundVar).toBe("mod_0");
+    expect(manifest.rootForbiddenVar).toBe("mod_1");
+    expect(manifest.rootUnauthorizedVar).toBe("mod_2");
+    expect(manifest.rootLayoutVars).toEqual(["mod_3"]);
+    expect(manifest.globalErrorVar).toBe("mod_4");
 
     const dynamicRouteEntry = manifest.routeEntries[1];
     expect(dynamicRouteEntry).toContain('"route":"route:/dashboard/:id"');
@@ -386,17 +390,20 @@ describe("App Router generated manifest construction", () => {
     expect(dynamicRouteEntry).toContain('id: "slot:modal:/dashboard"');
     expect(dynamicRouteEntry).toContain('pattern: "/dashboard/:id"');
     expect(dynamicRouteEntry).toContain("page: null");
-    expect(dynamicRouteEntry).toContain("__loadPage: load_1");
+    expect(dynamicRouteEntry).toContain("__loadPage: load_5");
     expect(dynamicRouteEntry).toContain("routeHandler: null");
-    expect(dynamicRouteEntry).toContain("__loadRouteHandler: load_2");
-    expect(dynamicRouteEntry).toContain("layouts: [mod_0, mod_4]");
+    expect(dynamicRouteEntry).toContain("__loadRouteHandler: load_6");
+    // Layouts are `null` placeholders hydrated on demand from `__loadLayouts`.
+    expect(dynamicRouteEntry).toContain("layouts: [null, null]");
+    expect(dynamicRouteEntry).toContain("__loadLayouts: [load_1, load_7]");
     expect(dynamicRouteEntry).toContain('"modal:/tmp/test/app/dashboard/@modal": {');
-    expect(dynamicRouteEntry).toContain("interceptLayouts: [mod_14]");
+    expect(dynamicRouteEntry).toContain("interceptLayouts: [null]");
+    expect(dynamicRouteEntry).toContain("__loadInterceptLayouts: [load_18]");
     expect(dynamicRouteEntry).toContain("page: null");
-    expect(dynamicRouteEntry).toContain("__pageLoader: load_3");
+    expect(dynamicRouteEntry).toContain("__pageLoader: load_17");
     expect(dynamicRouteEntry).toContain('params: ["photoId"]');
     expect(manifest.generateStaticParamsEntries).toEqual([
-      '  "/dashboard/:id": __createAppPrerenderStaticParamsResolver([{ load: load_1 }], ["id"]),',
+      '  "/dashboard/:id": __createAppPrerenderStaticParamsResolver([{ load: load_5 }], ["id"]),',
     ]);
   });
 
@@ -434,12 +441,13 @@ describe("App Router generated manifest construction", () => {
       globalErrorPath: null,
     });
 
-    // The "/server" page is a static route, so it is lazy-loaded (load_0) and
-    // the eager `import * as mod_N` numbering starts at the root layout.
-    expect(manifest.rootLayoutVars).toEqual(["mod_0"]);
-    expect(manifest.rootNotFoundVar).toBe("mod_1");
-    expect(manifest.rootForbiddenVar).toBe("mod_2");
-    expect(manifest.rootUnauthorizedVar).toBe("mod_3");
+    // Every per-route module is lazy-loaded, so the eager `import * as mod_N`
+    // numbering starts at the always-eager root boundaries: not-found,
+    // forbidden, unauthorized, then the root layout.
+    expect(manifest.rootNotFoundVar).toBe("mod_0");
+    expect(manifest.rootForbiddenVar).toBe("mod_1");
+    expect(manifest.rootUnauthorizedVar).toBe("mod_2");
+    expect(manifest.rootLayoutVars).toEqual(["mod_3"]);
   });
 
   it("exposes layout-level generateStaticParams to App Router prerender", () => {
@@ -480,7 +488,7 @@ describe("App Router generated manifest construction", () => {
     });
 
     expect(manifest.generateStaticParamsEntries).toEqual([
-      '  "/:lang/:locale": __createAppPrerenderStaticParamsResolver([mod_0?.generateStaticParams], ["lang","locale"]),',
+      '  "/:lang/:locale": __createAppPrerenderStaticParamsResolver([{ load: load_1 }], ["lang","locale"]),',
       '  "/:lang/:locale/other/:slug": __createAppPrerenderStaticParamsResolver([{ load: load_0 }], ["lang","locale"]),',
     ]);
     expect(manifest.rootParamNameEntries).toEqual([
@@ -525,7 +533,7 @@ describe("App Router generated manifest construction", () => {
     });
 
     expect(manifest.generateStaticParamsEntries).toEqual([
-      '  "/:lang/docs v2/:section": __createAppPrerenderStaticParamsResolver([mod_0?.generateStaticParams], ["lang","section"]),',
+      '  "/:lang/docs v2/:section": __createAppPrerenderStaticParamsResolver([{ load: load_1 }], ["lang","section"]),',
       '  "/:lang/docs v2/:section/:slug": __createAppPrerenderStaticParamsResolver([{ load: load_0 }], ["lang","section"]),',
     ]);
     expect(manifest.rootParamNameEntries).toEqual([

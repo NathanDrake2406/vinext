@@ -123,6 +123,31 @@ describe("App RSC route matching", () => {
     });
   });
 
+  it("shares lazy intercept load state across fresh match objects", () => {
+    const matcher = createAppRscRouteMatcher([
+      route("/feed", ["feed"], {
+        modal: {
+          intercepts: [
+            {
+              targetPattern: "/photos/:id",
+              interceptLayouts: [null],
+              __loadInterceptLayouts: [async () => "modal-layout"],
+              page: null,
+              __pageLoader: async () => "photo-page",
+              params: ["id"],
+            },
+          ],
+        },
+      }),
+    ]);
+
+    const first = matcher.findIntercept("/photos/42", "/feed");
+    const second = matcher.findIntercept("/photos/42", "/feed");
+
+    expect(first).not.toBe(second);
+    expect(first?.__loadState).toBe(second?.__loadState);
+  });
+
   it("does not treat a target match as an intercept without a matching source route", () => {
     const matcher = createAppRscRouteMatcher([
       route("/feed", ["feed"], {
@@ -473,6 +498,8 @@ type TestIntercept = {
    */
   sourceMatchPattern?: string;
   interceptLayouts: readonly unknown[];
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[];
   page: unknown;
+  __pageLoader?: () => Promise<unknown>;
   params: string[];
 };

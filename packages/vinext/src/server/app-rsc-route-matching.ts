@@ -38,6 +38,7 @@ type AppRscInterceptForMatching = {
   sourceMatchPattern?: string;
   sourcePageSegments?: readonly string[];
   interceptLayouts: readonly unknown[];
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   __pageLoader?: (() => Promise<unknown>) | null;
   params: readonly string[];
@@ -54,6 +55,7 @@ type AppRscSiblingInterceptForMatching = {
   sourcePageSegments?: readonly string[];
   slotId: string | null;
   interceptLayouts: readonly unknown[];
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   // Sibling intercept pages are lazy-loaded (manifest emits `page: null` plus a
   // `__pageLoader`) so the intercepting page's CSS chunk stays isolated in
@@ -74,6 +76,12 @@ type AppRscInterceptMatch = AppRscInterceptLookupEntry & {
   matchedParams: AppRscRouteParams;
 };
 
+type AppRscInterceptLoadState = {
+  page: unknown;
+  pageLoading: Promise<unknown> | null;
+  interceptLayoutsLoading: Promise<readonly unknown[]> | null;
+};
+
 type AppRscInterceptLookupEntry = {
   sourceRouteIndex: number;
   slotKey: string;
@@ -83,8 +91,10 @@ type AppRscInterceptLookupEntry = {
   sourceMatchPatternParts: string[] | null;
   sourcePageSegments: readonly string[] | null;
   interceptLayouts: readonly unknown[];
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   __pageLoader?: (() => Promise<unknown>) | null;
+  __loadState: AppRscInterceptLoadState;
   params: readonly string[];
   slotId: string | null;
 };
@@ -163,6 +173,7 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
         const sourceParams = matchedSourceParams ?? createRouteParams();
         return {
           ...entry,
+          page: entry.__loadState.page,
           sourceRouteIndex: concreteSourceRouteIndex,
           matchedParams: mergeMatchedParams(sourceParams, params),
         };
@@ -231,8 +242,14 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
             sourceMatchPatternParts,
             sourcePageSegments: intercept.sourcePageSegments ?? null,
             interceptLayouts: intercept.interceptLayouts,
+            __loadInterceptLayouts: intercept.__loadInterceptLayouts,
             page: intercept.page,
             __pageLoader: intercept.__pageLoader,
+            __loadState: {
+              page: intercept.page,
+              pageLoading: null,
+              interceptLayoutsLoading: null,
+            },
             params: intercept.params,
           });
         }
@@ -254,8 +271,14 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
           sourceMatchPatternParts,
           sourcePageSegments: intercept.sourcePageSegments ?? null,
           interceptLayouts: intercept.interceptLayouts,
+          __loadInterceptLayouts: intercept.__loadInterceptLayouts,
           page: intercept.page,
           __pageLoader: intercept.__pageLoader,
+          __loadState: {
+            page: intercept.page,
+            pageLoading: null,
+            interceptLayoutsLoading: null,
+          },
           params: intercept.params,
         });
       }
