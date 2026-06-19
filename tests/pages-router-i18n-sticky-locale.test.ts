@@ -245,6 +245,91 @@ describe("Pages Router popstate stale-state filter (non-i18n parity)", () => {
   });
 });
 
+// End-to-end producer→consumer regression. The hand-built-state tests above
+// isolate the popstate consumer; this one closes the loop through the real
+// state *writer*: a masked `Router.push(href, as)` produces history state via
+// `updateHistory`, and that exact captured object is replayed through popstate.
+// It guards against drift between the two sides — if `updateHistory` ever
+// stopped writing `url` distinct from `as`, or the popstate handler stopped
+// keying the fetch off `state.url`, this fails where the isolated tests would
+// not. It also reproduces the PR's bug through the real write path: after a
+// push the router tracker (`lastPathnameAndSearch`) equals the visible URL, so
+// the masked entry hits the identical-URL case that the `isMaskedRoute` guard
+// must exclude from the hash-only fast path.
+describe("Pages Router masked popstate (producer→consumer integration)", () => {
+  it("replays a Router.push-produced masked entry and fetches state.url, not state.as", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const originalCustomEvent = globalThis.CustomEvent;
+    const { win } = createNavWindow();
+    win.location.pathname = "/";
+    win.location.href = "http://localhost/";
+
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(buildNavHtml("/dynamic-route", PAGE_MODULE_URL), { status: 200 }),
+    );
+    globalThis.fetch = fetchMock;
+    (globalThis as any).CustomEvent = class CustomEventMock {
+      constructor(public type: string) {}
+    } as any;
+
+    const listeners = new Map<string, PopStateListener>();
+    win.addEventListener = vi.fn((type: string, handler: PopStateListener) => {
+      listeners.set(type, handler);
+    }) as any;
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+
+      const popstateHandler = listeners.get("popstate");
+      expect(popstateHandler).toBeDefined();
+
+      // Producer: masked navigation. `href` is the route, `as` the address bar.
+      // `updateHistory` writes `{ url: "/dynamic-route", as: "/static", … }`.
+      await Router.push("/dynamic-route", "/static");
+      await vi.waitFor(() => expect(win.__NEXT_DATA__.page).toBe("/dynamic-route"));
+
+      // Capture the state the producer actually wrote — no hand-built shape.
+      const produced = win.history.state as MaskedHistoryState;
+      expect(produced.__N).toBe(true);
+      expect(produced.url).toBe("/dynamic-route");
+      expect(produced.as).toBe("/static");
+      expect(win.location.pathname).toBe("/static");
+
+      // Consumer: replay that exact entry. The visible URL is unchanged from
+      // the push (`/static`), so without the masked-route guard this would be
+      // mis-classified as a hash-only no-op. A single popstate suffices because
+      // the push already set `routerDidNavigate`, disabling the replay filter.
+      fetchMock.mockClear();
+      win.__NEXT_DATA__ = {
+        ...win.__NEXT_DATA__,
+        page: "/static",
+      };
+
+      popstateHandler!({ state: produced });
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      // The fetch targets the route behind the mask, not the address bar.
+      expect(fetchMock.mock.calls[0]![0]).toBe("/dynamic-route");
+      await vi.waitFor(() => expect(win.__NEXT_DATA__.page).toBe("/dynamic-route"));
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
+      (globalThis as any).CustomEvent = originalCustomEvent;
+    }
+  });
+});
+
 // Ported from Next.js test/e2e/ignore-invalid-popstateevent — Next.js writes
 // `{ url, as, options, __N: true, key }` on every pushState/replaceState so
 // the popstate handler can detect stale or non-Next events.
