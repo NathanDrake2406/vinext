@@ -44,6 +44,13 @@ export type ApplyAppMiddlewareResult =
       kind: "continue";
       cleanPathname: string;
       search: string | null;
+      /**
+       * True only when middleware (or a forwarded dev-mode middleware context)
+       * explicitly rewrote the request to a new pathname. Callers use this to
+       * decide whether out-of-basePath requests become eligible for filesystem
+       * route matching.
+       */
+      didRewrite: boolean;
     }
   | {
       kind: "response";
@@ -212,6 +219,7 @@ export async function applyAppMiddleware(
   const middlewareRequest = requestWithoutFlightHeaders(options.request);
   let cleanPathname = options.cleanPathname;
   let search: string | null = null;
+  let didRewrite = false;
 
   if (forwarded.rewriteUrl) {
     try {
@@ -228,6 +236,7 @@ export async function applyAppMiddleware(
       const rewriteParsed = new URL(forwarded.rewriteUrl, middlewareRequest.url);
       cleanPathname = rewriteParsed.pathname;
       search = rewriteParsed.search;
+      didRewrite = true;
     } catch (e) {
       console.error("[vinext] Failed to apply forwarded middleware rewrite:", e);
       forwarded.applied = false;
@@ -285,6 +294,7 @@ export async function applyAppMiddleware(
       const rewriteParsed = new URL(result.rewriteUrl, middlewareRequest.url);
       cleanPathname = rewriteParsed.pathname;
       search = rewriteParsed.search;
+      didRewrite = true;
     }
   }
 
@@ -294,5 +304,5 @@ export async function applyAppMiddleware(
     processMiddlewareHeaders(options.context.headers);
   }
 
-  return { kind: "continue", cleanPathname, search };
+  return { kind: "continue", cleanPathname, search, didRewrite };
 }

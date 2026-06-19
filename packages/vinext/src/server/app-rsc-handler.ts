@@ -597,7 +597,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
 
     cleanPathname = middlewareResult.cleanPathname;
-    didMiddlewareRewrite = cleanPathname !== normalized.cleanPathname;
+    didMiddlewareRewrite = middlewareResult.didRewrite;
     if (middlewareResult.search !== null) {
       url.search = middlewareResult.search;
     }
@@ -719,8 +719,19 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const contentType = request.headers.get("content-type") || "";
 
   const isPostRequest = request.method.toUpperCase() === "POST";
+  // Server actions mutate state and load route modules internally via
+  // matchRoute(cleanPathname), so they must share the same filesystem
+  // eligibility gate as visible page matching. Without this, an out-of-basePath
+  // POST with an action id could execute app code that canUseFilesystemRoutes()
+  // was designed to block.
+  const canDispatchAppRoute = canUseFilesystemRoutes();
   let progressiveActionResult: Response | ProgressiveActionFormStateResult | null = null;
-  if (isPostRequest && contentType.startsWith("multipart/form-data") && !actionId) {
+  if (
+    canDispatchAppRoute &&
+    isPostRequest &&
+    contentType.startsWith("multipart/form-data") &&
+    !actionId
+  ) {
     progressiveActionResult = await options.handleProgressiveActionRequest({
       actionId,
       cleanPathname,
@@ -742,7 +753,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const actionError = failedProgressiveActionResult?.actionError;
 
   const serverActionResponse =
-    isPostRequest && actionId
+    canDispatchAppRoute && isPostRequest && actionId
       ? await options.handleServerActionRequest({
           actionId,
           cleanPathname,

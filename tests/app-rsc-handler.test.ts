@@ -1886,6 +1886,76 @@ describe("createAppRscHandler", () => {
     expect(metadataResponse.status).toBe(404);
   });
 
+  it("does not dispatch server actions for out-of-basePath POST requests", async () => {
+    // Server actions mutate state and load route modules internally via
+    // matchRoute(cleanPathname). They must share the same filesystem
+    // eligibility gate as visible page matching — an out-of-basePath POST
+    // with an action id must not execute app code.
+    const handleServerActionRequest = vi.fn(async () => null);
+    const handler = createHandler({
+      configHeaders: [],
+      handleServerActionRequest,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/about", {
+        method: "POST",
+        headers: { "next-action": "action_123" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(404);
+    expect(handleServerActionRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch progressive form actions for out-of-basePath POST requests", async () => {
+    const handleProgressiveActionRequest = vi.fn(async () => null);
+    const handler = createHandler({
+      configHeaders: [],
+      handleProgressiveActionRequest,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/about", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=vinext" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(404);
+    expect(handleProgressiveActionRequest).not.toHaveBeenCalled();
+  });
+
+  it("allows server actions after a middleware rewrite opts into basePath scope", async () => {
+    // A middleware rewrite that changes the pathname must make the request
+    // eligible for action dispatch again — the gate should open, not stay
+    // closed forever for requests that started out-of-basePath.
+    const handleServerActionRequest = vi.fn(async () => new Response(null, { status: 200 }));
+    const handler = createHandler({
+      configHeaders: [],
+      handleServerActionRequest,
+      middlewareModule: {
+        default: () =>
+          new Response(null, {
+            headers: { "x-middleware-rewrite": "https://example.test/docs/about" },
+          }),
+      },
+    });
+
+    const response = await handler(
+      new Request("https://example.test/about", {
+        method: "POST",
+        headers: { "next-action": "action_123" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    expect(handleServerActionRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("lets middleware Cache-Control override static metadata route defaults", async () => {
     // Ported from Next.js: test/e2e/app-dir/no-duplicate-headers-middleware/no-duplicate-headers-middleware.test.ts
     // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/no-duplicate-headers-middleware/no-duplicate-headers-middleware.test.ts
