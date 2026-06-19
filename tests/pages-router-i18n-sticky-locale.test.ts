@@ -114,13 +114,28 @@ function buildNavHtml(
 
 const PAGE_MODULE_URL = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
 
+// Router-shaped history state as Next.js writes it on push/replace
+// (`{ url, as, options, __N, key }`). `url` is the route, `as` the address bar;
+// a masked entry has `url !== as`.
+type MaskedHistoryState = {
+  url: string;
+  as: string;
+  options: { locale?: string; shallow?: boolean };
+  __N: true;
+  key: string;
+};
+
+// The popstate handler the runtime registers via `addEventListener`. The tests
+// only ever drive it with a `{ state }` payload, so this is the honest surface.
+type PopStateListener = (event: { state: unknown }) => void;
+
 // Ported from Next.js:
 // test/e2e/ignore-invalid-popstateevent/without-i18n.test.ts
 // https://github.com/vercel/next.js/blob/canary/test/e2e/ignore-invalid-popstateevent/without-i18n.test.ts
 describe("Pages Router popstate stale-state filter (non-i18n parity)", () => {
   async function installRuntime(win: ReturnType<typeof createNavWindow>["win"]) {
-    const listeners = new Map<string, (event: any) => void>();
-    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+    const listeners = new Map<string, PopStateListener>();
+    win.addEventListener = vi.fn((type: string, handler: PopStateListener) => {
       listeners.set(type, handler);
     }) as any;
     (globalThis as any).window = win;
@@ -138,7 +153,7 @@ describe("Pages Router popstate stale-state filter (non-i18n parity)", () => {
     expectedFetchUrl,
   }: {
     initialPath: string;
-    state: { url: string; as: string; options: {}; __N: true; key: string };
+    state: MaskedHistoryState;
     expectedFetchUrl: string;
   }) {
     const previousWindow = (globalThis as any).window;
@@ -388,8 +403,8 @@ describe("Pages Router history state shape", () => {
 // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/router.ts (around L935-942)
 describe("Pages Router popstate stale-state filter (i18n parity)", () => {
   async function installRuntime(win: ReturnType<typeof createNavWindow>["win"]) {
-    const listeners = new Map<string, (event: any) => void>();
-    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+    const listeners = new Map<string, PopStateListener>();
+    win.addEventListener = vi.fn((type: string, handler: PopStateListener) => {
       listeners.set(type, handler);
     }) as any;
     (globalThis as any).window = win;
@@ -496,7 +511,7 @@ describe("Pages Router popstate stale-state filter (i18n parity)", () => {
     });
 
     let routeChangeStartCount = 0;
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async () =>
         new Response(
           buildNavHtml(
@@ -513,11 +528,11 @@ describe("Pages Router popstate stale-state filter (i18n parity)", () => {
       constructor(public type: string) {}
     } as any;
 
-    const state = {
+    const state: MaskedHistoryState = {
       url: "/[dynamic]?",
       as: "/static",
       options: { locale: "sv" },
-      __N: true as const,
+      __N: true,
       key: "",
     };
 
@@ -702,7 +717,7 @@ describe("Pages Router popstate masked route under basePath", () => {
       __vinext: { pageModuleUrl: "/@fs/pages/static.js" },
     };
 
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async () => new Response(buildNavHtml("/[dynamic]", PAGE_MODULE_URL), { status: 200 }),
     );
     globalThis.fetch = fetchMock;
@@ -710,17 +725,17 @@ describe("Pages Router popstate masked route under basePath", () => {
       constructor(public type: string) {}
     } as any;
 
-    const listeners = new Map<string, (event: any) => void>();
-    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+    const listeners = new Map<string, PopStateListener>();
+    win.addEventListener = vi.fn((type: string, handler: PopStateListener) => {
       listeners.set(type, handler);
     }) as any;
     (globalThis as any).window = win;
 
-    const state = {
+    const state: MaskedHistoryState = {
       url: "/[dynamic]?",
       as: "/static",
       options: {},
-      __N: true as const,
+      __N: true,
       key: "",
     };
 
@@ -823,8 +838,8 @@ describe("Pages Router locale stickiness on programmatic navigation", () => {
 // to close that gap.
 describe("Pages Router initial-entry history state", () => {
   async function installRuntime(win: ReturnType<typeof createNavWindow>["win"]) {
-    const listeners = new Map<string, (event: any) => void>();
-    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+    const listeners = new Map<string, PopStateListener>();
+    win.addEventListener = vi.fn((type: string, handler: PopStateListener) => {
       listeners.set(type, handler);
     }) as any;
     (globalThis as any).window = win;
