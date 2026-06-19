@@ -461,6 +461,47 @@ describe("resolveAppPageInterceptMatch", () => {
     expect(result?.interceptOpts).toEqual(toInterceptOpts(intercept));
   });
 
+  it("deduplicates concurrent intercept page and layout loads", async () => {
+    const interceptPage = { default: "modal-page" };
+    const interceptLayout = { default: "modal-layout" };
+    const __pageLoader = vi.fn(async () => interceptPage);
+    const __loadInterceptLayout = vi.fn(async () => interceptLayout);
+    const sharedLoadState = {
+      page: null as unknown,
+      pageLoading: null as Promise<unknown> | null,
+      interceptLayoutsLoading: null as Promise<readonly unknown[]> | null,
+    };
+    const intercept = {
+      interceptLayouts: [null],
+      __loadInterceptLayouts: [__loadInterceptLayout],
+      matchedParams: { id: "123" },
+      page: null,
+      __pageLoader,
+      __loadState: sharedLoadState,
+      slotKey: "modal@app/feed/@modal",
+      sourceRouteIndex: 0,
+    };
+    const options = {
+      cleanPathname: "/photos/123",
+      currentRoute,
+      findIntercept: () => ({ ...intercept, page: sharedLoadState.page }),
+      getRouteParamNames: (route: { params: string[] }) => route.params,
+      getSourceRoute: () => sourceRoute,
+      isRscRequest: true,
+      toInterceptOpts,
+    };
+
+    await Promise.all([
+      resolveAppPageInterceptMatch(options),
+      resolveAppPageInterceptMatch(options),
+    ]);
+
+    expect(__pageLoader).toHaveBeenCalledTimes(1);
+    expect(__loadInterceptLayout).toHaveBeenCalledTimes(1);
+    expect(sharedLoadState.page).toBe(interceptPage);
+    expect(intercept.interceptLayouts).toEqual([interceptLayout]);
+  });
+
   it("slices source params down to the source route's declared params", async () => {
     const categorySourceRoute = { params: ["category"], pattern: "/feed/[category]" };
     const matchedParams = { category: "nature", id: "123" };

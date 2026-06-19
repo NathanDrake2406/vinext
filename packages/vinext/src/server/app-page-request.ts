@@ -3,6 +3,7 @@ import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
 import { getAppPageSegmentParamName } from "./app-page-params.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
+import { loadAppInterceptLayouts } from "./app-route-module-loader.js";
 
 type AppPageParams = Record<string, string | string[]>;
 type GenerateStaticParams = (args: { params: AppPageParams }) => unknown;
@@ -50,9 +51,16 @@ type BuildAppPageElementResult<TElement> = {
 };
 
 type AppPageInterceptMatch<TPage = unknown> = {
+  interceptLayouts?: readonly unknown[] | null;
+  __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
   matchedParams: AppPageParams;
   page: TPage;
   __pageLoader?: (() => Promise<TPage>) | null;
+  __loadState?: {
+    page: TPage;
+    pageLoading: Promise<TPage> | null;
+    interceptLayoutsLoading: Promise<readonly unknown[]> | null;
+  };
   slotId?: string | null;
   slotKey: string;
   sourceRouteIndex: number;
@@ -340,8 +348,30 @@ async function resolveAppPageInterceptState<TRoute, TPage, TInterceptOpts>(
     return { kind: "none" };
   }
 
+  const loadState = intercept.__loadState;
+  if (loadState?.page != null) intercept.page = loadState.page;
   if (intercept.__pageLoader && intercept.page == null) {
-    intercept.page = await intercept.__pageLoader();
+    const loading =
+      loadState?.pageLoading ??
+      intercept
+        .__pageLoader()
+        .then((page) => {
+          intercept.page = page;
+          if (loadState) {
+            loadState.page = page;
+            loadState.pageLoading = null;
+          }
+          return page;
+        })
+        .catch((error: unknown) => {
+          if (loadState) loadState.pageLoading = null;
+          throw error;
+        });
+    if (loadState) loadState.pageLoading = loading;
+    await loading;
+  }
+  if (intercept.__loadInterceptLayouts) {
+    await loadAppInterceptLayouts(intercept);
   }
 
   const sourceRoute = await options.getSourceRoute(intercept.sourceRouteIndex);
