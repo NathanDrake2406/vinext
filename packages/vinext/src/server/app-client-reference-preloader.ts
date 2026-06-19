@@ -1,6 +1,14 @@
+import type { ClientReferenceImportMap } from "./client-reference-imports.js";
+import { resolveClientReferenceIdsForImportCandidates } from "./client-reference-imports.js";
+
 type ClientReferenceRequire = (id: string) => Promise<unknown>;
 
 type ClientReferenceMap = Readonly<Record<string, unknown>>;
+
+type ClientReferenceImportMapAccess = {
+  getImportMap: () => ClientReferenceImportMap;
+  isAvailable: () => boolean;
+};
 
 export type ClientReferencePreloaderOptions = {
   getReferences: () => ClientReferenceMap | undefined;
@@ -97,4 +105,26 @@ export function createClientReferencePreloader(
       return allReferencesPreloadPromise;
     },
   };
+}
+
+export async function preloadClientReferencesForImportCandidates(
+  preloader: ClientReferencePreloader,
+  importCandidates: readonly string[] | null | undefined,
+  importMap: ClientReferenceImportMapAccess,
+): Promise<void> {
+  if (!importMap.isAvailable()) {
+    await preloader.preload();
+    return;
+  }
+
+  const referenceIds = resolveClientReferenceIdsForImportCandidates(
+    importCandidates,
+    importMap.getImportMap(),
+  );
+  if (referenceIds === null) {
+    await preloader.preload();
+    return;
+  }
+
+  await preloader.preload(referenceIds);
 }

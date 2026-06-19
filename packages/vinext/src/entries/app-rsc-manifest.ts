@@ -46,6 +46,12 @@ type BuildAppRscManifestCodeOptions = {
   metadataRoutes?: MetadataFileRoute[];
   globalErrorPath?: string | null;
   /**
+   * Per-route import candidates that can reach client references. `null` means
+   * the route graph was incomplete and runtime should preserve global preload.
+   * `undefined` means the caller did not compute this manifest.
+   */
+  clientReferenceImportCandidatesByRoute?: readonly (readonly string[] | null)[];
+  /**
    * Optional `app/global-not-found.tsx` path. When present, route-miss 404s
    * render this module standalone (it provides its own <html>/<body>) instead
    * of wrapping the regular not-found boundary inside the root layout.
@@ -205,7 +211,11 @@ function registerRouteModules(routes: AppRoute[], imports: ImportAllocator): voi
   }
 }
 
-function buildRouteEntries(routes: AppRoute[], imports: ImportAllocator): string[] {
+function buildRouteEntries(
+  routes: AppRoute[],
+  imports: ImportAllocator,
+  clientReferenceImportCandidatesByRoute: readonly (readonly string[] | null)[] = [],
+): string[] {
   return routes.map((route, routeIdx) => {
     // Pre-compute static-sibling segment names for the matched route's
     // dynamic URL levels. The client router uses this to decide if a cached
@@ -277,6 +287,11 @@ ${interceptEntries.join(",\n")}
     const loadRouteHandlerField = route.routePath
       ? imports.getLazyLoaderVar(route.routePath)
       : "null";
+    const clientReferenceImportCandidates = clientReferenceImportCandidatesByRoute[routeIdx];
+    const clientReferenceImportCandidatesField =
+      clientReferenceImportCandidates === undefined || clientReferenceImportCandidates === null
+        ? ""
+        : `    clientReferenceImportCandidates: ${JSON.stringify(clientReferenceImportCandidates)},\n`;
     return `  {
     __buildTimeClassifications: __VINEXT_CLASS(${routeIdx}), // evaluated once at module load
     __buildTimeReasons: __classDebug ? __VINEXT_CLASS_REASONS(${routeIdx}) : null,
@@ -287,7 +302,7 @@ ${interceptEntries.join(",\n")}
     params: ${JSON.stringify(route.params)},
     staticSiblings: ${JSON.stringify(staticSiblings)},
     rootParamNames: ${JSON.stringify(route.rootParamNames ?? [])},
-    page: null,
+${clientReferenceImportCandidatesField}    page: null,
     __loadPage: ${loadPageField},
     routeHandler: null,
     __loadRouteHandler: ${loadRouteHandlerField},
@@ -434,7 +449,11 @@ export function buildAppRscManifestCode(
   const metadataRoutes = options.metadataRoutes ?? [];
 
   registerRouteModules(options.routes, imports);
-  const routeEntries = buildRouteEntries(options.routes, imports);
+  const routeEntries = buildRouteEntries(
+    options.routes,
+    imports,
+    options.clientReferenceImportCandidatesByRoute,
+  );
 
   const rootRoute = findRootBoundaryRoute(options.routes);
   const rootNotFoundPath = rootRouteBoundaryPath(
