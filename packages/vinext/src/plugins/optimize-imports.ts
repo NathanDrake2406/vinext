@@ -35,8 +35,8 @@ async function readFileSafe(filepath: string): Promise<string | null> {
   }
 }
 
-/** Nested conditional exports value (string path, null exclusion target, or nested conditions). */
-type ExportsValue = string | null | { [condition: string]: ExportsValue };
+/** Package exports target with nested conditions and ordered fallbacks. */
+type ExportsValue = string | null | ExportsValue[] | { [condition: string]: ExportsValue };
 
 /** Minimal package.json shape for entry point resolution. */
 type PackageJson = {
@@ -210,6 +210,13 @@ export function createOptimizedImportSourceMatcher(
  */
 function resolveExportsValue(value: ExportsValue, preferReactServer: boolean): string | null {
   if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    for (const candidate of value) {
+      const resolved = resolveExportsValue(candidate, preferReactServer);
+      if (resolved) return resolved;
+    }
+    return null;
+  }
   if (typeof value === "object" && value !== null) {
     const activeConditions = new Set(["node", "import", "module"]);
     if (preferReactServer) activeConditions.add("react-server");

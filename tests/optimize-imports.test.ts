@@ -1147,6 +1147,49 @@ describe("vinext:optimize-imports transform", () => {
     expect(result!.code).not.toContain(`from "@condition-order/pkg"`);
   });
 
+  it("resolves the first usable array-form export target", async () => {
+    tmpDir = normalizePathSeparators(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vinext-optimize-test-"))),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test-app", type: "module" }),
+    );
+
+    const pkgDir = path.posix.join(tmpDir, "node_modules", "array-target");
+    const esmDir = path.posix.join(pkgDir, "esm");
+    fs.mkdirSync(esmDir, { recursive: true });
+    fs.writeFileSync(
+      path.posix.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "array-target",
+        type: "module",
+        exports: {
+          "./icons": [null, { import: "./esm/icons.js" }, "./fallback.js"],
+        },
+      }),
+    );
+    fs.writeFileSync(path.posix.join(esmDir, "icons.js"), `export { Icon } from "./Icon.js";`);
+    fs.writeFileSync(path.posix.join(esmDir, "Icon.js"), `export function Icon() {}`);
+
+    const plugin = createOptimizeImportsPlugin(
+      () => ({ optimizePackageImports: ["array-target/icons"] }) as any,
+      () => tmpDir,
+    ) as Plugin;
+    const buildStartHook = unwrapHook((plugin as any).buildStart);
+    if (buildStartHook) await buildStartHook.call(plugin);
+    const transform = unwrapHook(plugin.transform)!;
+
+    const result = await (transform as any).call(
+      { ...plugin, environment: { name: "ssr" } },
+      `import { Icon } from "array-target/icons";`,
+      "/app/page.tsx",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.code).toContain(path.posix.join(esmDir, "Icon.js"));
+  });
+
   it("appends trailing semicolons to all replacement statements", async () => {
     // lodash-es is in DEFAULT_OPTIMIZE_PACKAGES
     const call = await setupTransform(
