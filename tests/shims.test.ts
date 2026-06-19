@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { PAGES_FIXTURE_DIR } from "./helpers.js";
 import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/router.js";
+import { isHashOnlyBrowserUrlChange } from "../packages/vinext/src/shims/url-utils.js";
 import { extractVinextNextDataJson } from "../packages/vinext/src/client/vinext-next-data.js";
 import { isValidModulePath } from "../packages/vinext/src/client/validate-module-path.js";
 import vinext from "../packages/vinext/src/index.js";
@@ -14234,6 +14235,32 @@ describe("Pages Router router helpers", () => {
 
     it("returns false for full URLs without window context", () => {
       expect(isHashOnlyChange("https://example.com#foo")).toBe(false);
+    });
+  });
+
+  describe("isHashOnlyBrowserUrlChange", () => {
+    it("returns false for identical no-hash URLs", () => {
+      expect(isHashOnlyBrowserUrlChange("http://localhost/about", "http://localhost/about")).toBe(
+        false,
+      );
+    });
+
+    it("returns true when browser back removes a hash on the same path and search", () => {
+      expect(
+        isHashOnlyBrowserUrlChange(
+          "http://localhost/about?tab=1",
+          "http://localhost/about?tab=1#section",
+        ),
+      ).toBe(true);
+    });
+
+    it("returns true for same-hash anchor scrolling", () => {
+      expect(
+        isHashOnlyBrowserUrlChange(
+          "http://localhost/about#section",
+          "http://localhost/about#section",
+        ),
+      ).toBe(true);
     });
   });
 

@@ -474,6 +474,12 @@ function getPagesRouterRuntimeState(): PagesRouterRuntimeState {
 const routerRuntimeState = getPagesRouterRuntimeState();
 const routerEvents = routerRuntimeState.events;
 
+function updateBrowserUrlTrackers(pathnameAndSearch?: string): void {
+  routerRuntimeState.lastPathnameAndSearch =
+    pathnameAndSearch ?? window.location.pathname + window.location.search;
+  routerRuntimeState.lastBrowserUrl = window.location.href;
+}
+
 function getPagesRouterRuntimeComponents(): PagesRouterRuntimeComponents {
   const existing = routerRuntimeState.components;
   if (existing) return existing;
@@ -1274,7 +1280,7 @@ function getPathnameAndQuery(): {
 
 function getCurrentHistoryAsPath(): string | null {
   const state = window.history?.state;
-  if (!isNextRouterState(state) || typeof state.as !== "string") return null;
+  if (!isNextRouterState(state)) return null;
 
   try {
     const browserUrl = new URL(window.location.href);
@@ -1698,8 +1704,7 @@ async function navigateClientData(
     }
 
     window.history.replaceState(window.history.state ?? {}, "", redirectedUrl);
-    routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
-    routerRuntimeState.lastBrowserUrl = window.location.href;
+    updateBrowserUrlTrackers();
     await navigateClientHtml(redirectedUrl, redirectedUrl, controller, navId, assertStillCurrent);
     return;
   }
@@ -2021,8 +2026,7 @@ async function navigateClientHtml(
   // Next.js's client Root callback without remounting the page tree.
   if (pendingRedirectHistoryUrl) {
     window.history.replaceState(window.history.state ?? {}, "", pendingRedirectHistoryUrl);
-    routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
-    routerRuntimeState.lastBrowserUrl = window.location.href;
+    updateBrowserUrlTrackers();
   }
   window.__NEXT_DATA__ = nextData;
   applyVinextLocaleGlobals(window, nextData);
@@ -2115,9 +2119,7 @@ async function navigateClient(
             scheduleHardNavigationAndThrow(redirectLocation, "Navigation redirected externally");
           }
           window.history.replaceState(window.history.state ?? {}, "", redirectedUrl);
-          routerRuntimeState.lastPathnameAndSearch =
-            window.location.pathname + window.location.search;
-          routerRuntimeState.lastBrowserUrl = window.location.href;
+          updateBrowserUrlTrackers();
           browserUrl = redirectedUrl;
           htmlFetchUrl = redirectedUrl;
         } else if (middlewareEffect?.rewriteTarget) {
@@ -2306,8 +2308,7 @@ function updateHistory(
   if (mode === "push") window.history.pushState(state, "", fullUrl);
   else window.history.replaceState(state, "", fullUrl);
   routerRuntimeState.currentHistoryKey = key;
-  routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
-  routerRuntimeState.lastBrowserUrl = window.location.href;
+  updateBrowserUrlTrackers();
   routerRuntimeState.routerDidNavigate = true;
 }
 
@@ -2912,7 +2913,6 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     const currentLocale = window.__VINEXT_LOCALE__;
     if (
       state.options?.locale === currentLocale &&
-      typeof state.as === "string" &&
       withBasePath(state.as, __basePath) === routerRuntimeState.lastPathnameAndSearch
     ) {
       return;
@@ -2929,18 +2929,16 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   // URL. Defaults to `browserUrl` for non-masked entries, making the rest of
   // the handler a no-op for ordinary back/forward navigation.
   const stateRouteUrl =
-    isNextRouterState(state) &&
-    typeof state.url === "string" &&
-    typeof state.as === "string" &&
-    state.url !== state.as
+    isNextRouterState(state) && state.url !== state.as
       ? normalizePathTrailingSlash(withBasePath(state.url, __basePath), __trailingSlash)
       : browserUrl;
 
   // Detect hash-only back/forward against the previous full browser URL. The
   // pathname+search tracker is hash-stripped for other router comparisons, so
   // using it here would misclassify identical no-hash URLs as hash-only. This
-  // mirrors Next.js's `onlyAHashChange`, which requires a real hash-bearing
-  // destination and therefore lets masked same-URL popstates fetch `state.url`.
+  // mirrors Next.js's `onlyAHashChange`, which requires a real hash delta (or
+  // a hash-bearing destination for same-hash scrolling) and therefore lets
+  // masked same-URL popstates fetch `state.url`.
   const isHashOnly = isHashOnlyBrowserUrlChange(
     window.location.href,
     routerRuntimeState.lastBrowserUrl,
@@ -2996,8 +2994,7 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   if (targetKey !== undefined) {
     routerRuntimeState.currentHistoryKey = targetKey;
   }
-  routerRuntimeState.lastPathnameAndSearch = browserUrl;
-  routerRuntimeState.lastBrowserUrl = window.location.href;
+  updateBrowserUrlTrackers(browserUrl);
 
   if (isHashOnly) {
     // Hash-only back/forward — no page fetch needed.
