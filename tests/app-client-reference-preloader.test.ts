@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createClientReferencePreloader,
-  preloadClientReferencesForImportCandidates,
-} from "../packages/vinext/src/server/app-client-reference-preloader.js";
-import type { ClientReferenceImportMap } from "../packages/vinext/src/server/client-reference-imports.js";
+import { createClientReferencePreloader } from "../packages/vinext/src/server/app-client-reference-preloader.js";
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolveDeferred: () => void = () => {
@@ -16,47 +12,6 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("app client reference preloader", () => {
-  async function preloadImportCandidates(options: {
-    importCandidates?: readonly string[] | null;
-    importMap?: ClientReferenceImportMap;
-  }): Promise<string[]> {
-    const calls: string[] = [];
-    const preloader = createClientReferencePreloader({
-      getReferences: () => ({ "comp-a": true, "comp-b": true, "comp-c": true }),
-      getClientRequire: () => async (id) => {
-        calls.push(id);
-      },
-    });
-
-    await preloadClientReferencesForImportCandidates(preloader, options.importCandidates, {
-      getImportMap: () => options.importMap ?? {},
-      isAvailable: () => options.importMap !== undefined,
-    });
-
-    return calls;
-  }
-
-  it("maps route import candidates to client reference ids before preloading", async () => {
-    const importMap = {
-      "comp-a": "/app/alpha.tsx",
-      "comp-b": "/app/beta.tsx",
-      "comp-c": "package-client",
-    };
-
-    await expect(
-      preloadImportCandidates({ importCandidates: ["/app/alpha.tsx"] }),
-    ).resolves.toEqual(["comp-a", "comp-b", "comp-c"]);
-    await expect(preloadImportCandidates({ importCandidates: null, importMap })).resolves.toEqual([
-      "comp-a",
-      "comp-b",
-      "comp-c",
-    ]);
-    await expect(preloadImportCandidates({ importCandidates: [], importMap })).resolves.toEqual([]);
-    await expect(
-      preloadImportCandidates({ importCandidates: ["/app/beta.tsx"], importMap }),
-    ).resolves.toEqual(["comp-b"]);
-  });
-
   it("shares one in-flight preload across concurrent cold SSR calls", async () => {
     const refs = { "comp-a": true, "comp-b": true, "comp-c": true };
     const calls: string[] = [];

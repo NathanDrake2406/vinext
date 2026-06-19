@@ -125,11 +125,6 @@ export type AppPageSsrHandler = {
        */
       clientTraceMetadata?: readonly string[];
       /**
-       * Route-scoped import candidates for client references. `null`/`undefined`
-       * preserves the legacy global preload path.
-       */
-      clientReferenceImportCandidates?: readonly string[] | null;
-      /**
        * Maximum total length (in characters) of the preload `Link` header
        * emitted during SSR. `0` disables emission. From `reactMaxHeadersLength`
        * in `next.config`.
@@ -165,11 +160,6 @@ type RenderAppPageHtmlStreamOptions = {
    * the SSR head. Undefined or empty disables emission.
    */
   clientTraceMetadata?: readonly string[];
-  /**
-   * Route-scoped import candidates for client references. `null`/`undefined`
-   * preserves the legacy global preload path.
-   */
-  clientReferenceImportCandidates?: readonly string[] | null;
   /**
    * Maximum total length (in characters) of the preload `Link` header emitted
    * during SSR. `0` disables emission. From `reactMaxHeadersLength` in
@@ -249,7 +239,6 @@ export async function renderAppPageHtmlStream(
     scriptNonce: options.scriptNonce,
     basePath: options.basePath,
     clientTraceMetadata: options.clientTraceMetadata,
-    clientReferenceImportCandidates: options.clientReferenceImportCandidates ?? null,
     reactMaxHeadersLength: options.reactMaxHeadersLength,
     rootParams: options.rootParams,
     sideStream: options.sideStream,

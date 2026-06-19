@@ -57,10 +57,6 @@ import {
   collectRouteClassificationManifest,
   type RouteClassificationManifest,
 } from "./build/route-classification-manifest.js";
-import {
-  buildRouteClientReferenceCandidateManifest,
-  getRouteClientReferenceImportCandidatesInRouteOrder,
-} from "./server/route-client-reference-manifest.js";
 import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import {
@@ -2809,25 +2805,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // indices in the manifest correspond 1:1 to the route.layouts arrays
           // used during codegen. renderChunk clears this after patching.
           rscClassificationManifest = collectRouteClassificationManifest(routes);
-          const clientReferenceCandidateManifest = await buildRouteClientReferenceCandidateManifest(
-            routes,
-            {
-              globalSeedFiles: globalErrorPath ? [globalErrorPath] : [],
-              projectRoot: root,
-              resolve: async (specifier, importerPath) => {
-                const resolved = await this.resolve(specifier, importerPath, { skipSelf: true });
-                return resolved?.id ?? null;
-              },
-            },
-          );
-          for (const dependency of clientReferenceCandidateManifest.dependencies) {
-            this.addWatchFile(dependency);
-          }
-          const clientReferenceImportCandidatesByRoute =
-            getRouteClientReferenceImportCandidatesInRouteOrder(
-              clientReferenceCandidateManifest,
-              routes,
-            );
           return generateRscEntry(
             appDir,
             routes,
@@ -2864,7 +2841,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               draftModeSecret,
             },
             instrumentationPath,
-            clientReferenceImportCandidatesByRoute,
           );
         }
         if (id === RESOLVED_ROOT_PARAMS) {

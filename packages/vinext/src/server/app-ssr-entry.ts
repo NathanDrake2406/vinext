@@ -50,14 +50,7 @@ import {
 } from "./app-bfcache-identity.js";
 import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
-import {
-  createClientReferencePreloader,
-  preloadClientReferencesForImportCandidates,
-} from "./app-client-reference-preloader.js";
-import {
-  getClientReferenceImportMap,
-  isClientReferenceImportMapAvailable,
-} from "./client-reference-import-map-state.js";
+import { createClientReferencePreloader } from "./app-client-reference-preloader.js";
 import { RSC_FORM_STATE_GLOBAL } from "./app-browser-hydration.js";
 import { isPprFallbackShellAbortError } from "vinext/shims/ppr-fallback-shell";
 import DefaultGlobalError from "vinext/shims/default-global-error";
@@ -217,13 +210,8 @@ const clientReferencePreloader = createClientReferencePreloader({
 });
 const BfcacheIdMapContext = getBfcacheIdMapContext();
 
-async function preloadClientReferences(
-  importCandidates: readonly string[] | null | undefined,
-): Promise<void> {
-  await preloadClientReferencesForImportCandidates(clientReferencePreloader, importCandidates, {
-    getImportMap: getClientReferenceImportMap,
-    isAvailable: isClientReferenceImportMapAvailable,
-  });
+async function preloadClientReferences(): Promise<void> {
+  await clientReferencePreloader.preload();
 }
 
 function ssrErrorDigest(input: string): string {
@@ -381,11 +369,6 @@ export async function handleSsr(
      */
     clientTraceMetadata?: readonly string[];
     /**
-     * Route-scoped import candidates for client references. `null`/`undefined`
-     * preserves the legacy global preload path.
-     */
-    clientReferenceImportCandidates?: readonly string[] | null;
-    /**
      * Maximum total length (in characters) of the preload `Link` header React
      * emits during SSR. `0` disables emission. From `reactMaxHeadersLength` in
      * `next.config`. Undefined falls back to React's own default.
@@ -404,7 +387,7 @@ export async function handleSsr(
   return runWithNavigationContext(async () => {
     const ssrNavigationContext = requireNavigationContext(navContext);
 
-    await preloadClientReferences(options?.clientReferenceImportCandidates);
+    await preloadClientReferences();
 
     setNavigationContext(ssrNavigationContext);
 

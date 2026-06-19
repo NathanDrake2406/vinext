@@ -42,7 +42,6 @@ export default {
         // Runtime helpers imported by generated virtual entries. The imports
         // are emitted as strings, so knip cannot trace them statically.
         "src/server/app-middleware.ts",
-        "src/server/client-reference-import-map-state.ts",
         "src/server/app-page-dispatch.ts",
         "src/server/app-page-head.ts",
         "src/server/app-prerender-static-params.ts",
