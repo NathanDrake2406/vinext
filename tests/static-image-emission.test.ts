@@ -263,14 +263,32 @@ function waitForWatchBuild(
   });
 }
 
-async function readBuiltJavaScript(outDir: string): Promise<string> {
+async function readBuiltJavaScript(outDir: string, allowMissing = false): Promise<string> {
   const chunks: string[] = [];
-  for (const entry of await readdir(outDir, { withFileTypes: true })) {
+  let entries: fs.Dirent[];
+  try {
+    entries = await readdir(outDir, { withFileTypes: true });
+  } catch (error) {
+    if (allowMissing && isEnoent(error)) return "";
+    throw error;
+  }
+  for (const entry of entries) {
     const entryPath = path.join(outDir, entry.name);
-    if (entry.isDirectory()) chunks.push(await readBuiltJavaScript(entryPath));
-    else if (entry.name.endsWith(".js")) chunks.push(await readFile(entryPath, "utf8"));
+    if (entry.isDirectory()) {
+      chunks.push(await readBuiltJavaScript(entryPath, true));
+    } else if (entry.name.endsWith(".js")) {
+      try {
+        chunks.push(await readFile(entryPath, "utf8"));
+      } catch (error) {
+        if (!isEnoent(error)) throw error;
+      }
+    }
   }
   return chunks.join("\n");
+}
+
+function isEnoent(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 function getAttribute(html: string, id: string, attribute: string): string {
