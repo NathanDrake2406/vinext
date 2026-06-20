@@ -811,6 +811,77 @@ describe("App Router entry templates", () => {
     expect(code).not.toContain("computeRscCacheBustingSearchParam(");
   });
 
+  it("generateRscEntry only includes the App middleware runtime when middleware exists", () => {
+    const withoutMiddleware = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      null,
+      [],
+      null,
+      "",
+      false,
+    );
+    const withMiddleware = generateRscEntry(
+      "/tmp/test/app",
+      minimalAppRoutes,
+      "/tmp/test/middleware.ts",
+      [],
+      null,
+      "",
+      false,
+    );
+
+    expect(withoutMiddleware).not.toContain("app-middleware.js");
+    expect(withoutMiddleware).not.toContain("runMiddleware(");
+    expect(withMiddleware).toContain("app-middleware.js");
+    expect(withMiddleware).toContain("runMiddleware({ cleanPathname");
+    expect(withMiddleware).toContain("return __applyAppMiddleware({");
+  });
+
+  it("generateRscEntry only includes metadata route response handling when routes exist", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-entry-metadata-runtime-"));
+    const filePath = path.join(tmpDir, "sitemap.ts");
+    fs.writeFileSync(filePath, "export default function sitemap() { return []; }");
+
+    try {
+      const withoutMetadataRoutes = generateRscEntry(
+        "/tmp/test/app",
+        minimalAppRoutes,
+        null,
+        [],
+        null,
+        "",
+        false,
+      );
+      const withMetadataRoutes = generateRscEntry(
+        "/tmp/test/app",
+        minimalAppRoutes,
+        null,
+        [
+          {
+            type: "sitemap",
+            isDynamic: true,
+            filePath,
+            routePrefix: "",
+            servedUrl: "/sitemap.xml",
+            contentType: "application/xml",
+          },
+        ],
+        null,
+        "",
+        false,
+      );
+
+      expect(withoutMetadataRoutes).not.toContain("metadata-route-response.js");
+      expect(withoutMetadataRoutes).not.toContain("handleMetadataRouteRequest(cleanPathname)");
+      expect(withMetadataRoutes).toContain("metadata-route-response.js");
+      expect(withMetadataRoutes).toContain("handleMetadataRouteRequest(cleanPathname)");
+      expect(withMetadataRoutes).toContain("await __loadMetadataRouteResponse()");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("generateRscEntry defers route-handler and server-action runtimes", () => {
     const code = generateRscEntry("/tmp/test/app", minimalAppRoutes, null, [], null, "", false);
 
