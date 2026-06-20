@@ -258,14 +258,11 @@ __configureMemoryCacheHandler({ cacheMaxMemorySize: vinextConfig.cacheMaxMemoryS
 const _appAssetPath = ${appAssetPathJson};
 
 let _reactDomServerEdgePromise = null;
-function _getLoadedReactNodeEnv() {
-  return __getReactNodeEnv(React.createElement);
-}
-
 async function _loadReactDomServerEdge() {
   if (_reactDomServerEdgePromise) return _reactDomServerEdgePromise;
-  _reactDomServerEdgePromise = __importWithReactNodeEnv(_getLoadedReactNodeEnv(), () =>
-    import("react-dom/server.edge"),
+  _reactDomServerEdgePromise = __importWithReactNodeEnv(
+    __getReactNodeEnv(React.createElement),
+    () => import("react-dom/server.edge"),
   );
   return _reactDomServerEdgePromise;
 }

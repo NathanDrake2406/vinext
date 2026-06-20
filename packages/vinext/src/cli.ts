@@ -457,7 +457,7 @@ async function buildApp() {
   const dotenvModulePromise = import("./config/dotenv.js");
   const nextConfigModulePromise = import("./config/next-config.js");
   const cleanOutputModulePromise = import("./build/clean-output.js");
-  const vinextModulePromise = hasUserViteConfig ? null : loadVinext();
+  if (!hasUserViteConfig) void loadVinext();
 
   const { loadDotenv } = await dotenvModulePromise;
   loadDotenv({
@@ -632,7 +632,7 @@ async function buildApp() {
           );
         }
       }
-      const vinext = await (vinextModulePromise ?? loadVinext());
+      const vinext = await loadVinext();
       await vite.build({
         root,
         configFile: false,

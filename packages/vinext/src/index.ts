@@ -237,24 +237,10 @@ function loadMetadataRoutesModule(): Promise<typeof import("./server/metadata-ro
 }
 
 let devServerModulePromise: Promise<typeof import("./server/dev-server.js")> | null = null;
-function loadDevServerModule(): Promise<typeof import("./server/dev-server.js")> {
-  devServerModulePromise ??= import("./server/dev-server.js");
-  return devServerModulePromise;
-}
-
 let apiHandlerModulePromise: Promise<typeof import("./server/api-handler.js")> | null = null;
-function loadApiHandlerModule(): Promise<typeof import("./server/api-handler.js")> {
-  apiHandlerModulePromise ??= import("./server/api-handler.js");
-  return apiHandlerModulePromise;
-}
-
 let imageOptimizationModulePromise: Promise<
   typeof import("./server/image-optimization.js")
 > | null = null;
-function loadImageOptimizationModule(): Promise<typeof import("./server/image-optimization.js")> {
-  imageOptimizationModulePromise ??= import("./server/image-optimization.js");
-  return imageOptimizationModulePromise;
-}
 
 function getCacheDirPrefix(cacheDir: string): string {
   const normalizedCacheDir = normalizePathSeparators(cacheDir);
@@ -4045,7 +4031,8 @@ export const loadServerActionClient = ${
               // its import for non-image dev requests.
               if (requestPathname === "/_next/image" || requestPathname === "/_vinext/image") {
                 const { DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES, resolveDevImageRedirect } =
-                  await loadImageOptimizationModule();
+                  await (imageOptimizationModulePromise ??=
+                    import("./server/image-optimization.js"));
                 const imageRequestUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
                 const allowedWidths = [
                   ...(nextConfig.images?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
@@ -4488,7 +4475,8 @@ export const loadServerActionClient = ${
                 if (pipelineResult.middlewareStatus !== undefined) {
                   req.__vinextMiddlewareStatus = pipelineResult.middlewareStatus;
                 }
-                const { handleApiRoute } = await loadApiHandlerModule();
+                const { handleApiRoute } = await (apiHandlerModulePromise ??=
+                  import("./server/api-handler.js"));
                 const handled = await handleApiRoute(
                   getPagesRunner(),
                   req,
@@ -4540,7 +4528,8 @@ export const loadServerActionClient = ${
                   }
                 }
                 if (!cachedSSRHandler || cachedSSRHandler.routes !== routes) {
-                  const { createSSRHandler } = await loadDevServerModule();
+                  const { createSSRHandler } = await (devServerModulePromise ??=
+                    import("./server/dev-server.js"));
                   cachedSSRHandler = {
                     routes,
                     handler: createSSRHandler(
