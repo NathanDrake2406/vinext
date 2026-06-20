@@ -269,9 +269,17 @@ export function decodeMatchedParams(params: Record<string, string | string[]>): 
  */
 export function isInvisibleSegment(segment: string): boolean {
   if (segment === ".") return true;
-  if (segment.startsWith("(") && segment.endsWith(")")) return true;
+  if (isRouteGroupSegment(segment)) return true;
   if (segment.startsWith("@")) return true;
   return false;
+}
+
+export function isRouteGroupSegment(segment: string): boolean {
+  return segment.startsWith("(") && segment.endsWith(")");
+}
+
+export function isParallelRouteSegment(segment: string): boolean {
+  return segment.startsWith("@") && segment !== "@children";
 }
 
 /** Split a pathname into its non-empty segments without decoding. */
