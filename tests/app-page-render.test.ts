@@ -4,7 +4,6 @@ import React from "react";
 import {
   APP_ARTIFACT_COMPATIBILITY_KEY,
   APP_LAYOUT_FLAGS_KEY,
-  APP_RENDER_OBSERVATION_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_SKIPPED_LAYOUT_IDS_KEY,
   AppElementsWire,
@@ -1323,23 +1322,6 @@ describe("layoutFlags injection into RSC payload", () => {
       rootBoundaryId: "/(shop)",
       renderEpoch: null,
     });
-  });
-
-  it("omits partial render observation metadata from outgoing AppElements payloads", async () => {
-    const { options, getCapturedElement } = createRscOptions({
-      element: {
-        [APP_ROOT_LAYOUT_KEY]: "/",
-        "layout:/": "root-layout",
-        "page:/test": "test-page",
-      },
-    });
-    await renderAppPageLifecycle({
-      ...options,
-      navigationParams: { id: "123" },
-      params: { id: "123" },
-    });
-
-    expect(APP_RENDER_OBSERVATION_KEY in getCapturedElement()).toBe(false);
   });
 
   it("injects __layoutFlags for multiple independently classified layouts", async () => {

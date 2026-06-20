@@ -25,7 +25,6 @@ export const APP_INTERCEPTION_KEY = "__interception";
 export const APP_INTERCEPTION_CONTEXT_KEY = "__interceptionContext";
 export const APP_LAYOUT_IDS_KEY = "__layoutIds";
 export const APP_LAYOUT_FLAGS_KEY = "__layoutFlags";
-export const APP_RENDER_OBSERVATION_KEY = "__renderObservation";
 export const APP_ROUTE_KEY = "__route";
 export const APP_ROOT_LAYOUT_KEY = "__rootLayout";
 export const APP_SKIPPED_LAYOUT_IDS_KEY = "__skippedLayoutIds";
@@ -256,7 +255,6 @@ type AppElementsWireKeys = {
   readonly interceptionContext: typeof APP_INTERCEPTION_CONTEXT_KEY;
   readonly layoutIds: typeof APP_LAYOUT_IDS_KEY;
   readonly layoutFlags: typeof APP_LAYOUT_FLAGS_KEY;
-  readonly renderObservation: typeof APP_RENDER_OBSERVATION_KEY;
   readonly rootLayout: typeof APP_ROOT_LAYOUT_KEY;
   readonly route: typeof APP_ROUTE_KEY;
   readonly skippedLayoutIds: typeof APP_SKIPPED_LAYOUT_IDS_KEY;
@@ -859,7 +857,6 @@ export const AppElementsWire: AppElementsWireCodec = {
     interceptionContext: APP_INTERCEPTION_CONTEXT_KEY,
     layoutIds: APP_LAYOUT_IDS_KEY,
     layoutFlags: APP_LAYOUT_FLAGS_KEY,
-    renderObservation: APP_RENDER_OBSERVATION_KEY,
     rootLayout: APP_ROOT_LAYOUT_KEY,
     route: APP_ROUTE_KEY,
     skippedLayoutIds: APP_SKIPPED_LAYOUT_IDS_KEY,
