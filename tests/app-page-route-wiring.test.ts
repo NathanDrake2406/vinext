@@ -1606,6 +1606,77 @@ describe("app page route wiring helpers", () => {
     expect(body).not.toContain("page:en");
   });
 
+  it("waits for the owning layout before serializing parallel slot entries", async () => {
+    let activeLocale = "en";
+
+    async function LocaleLayout(props: Record<string, unknown>) {
+      await Promise.resolve();
+      activeLocale = "de";
+      return createElement(
+        "div",
+        { "data-layout": "locale" },
+        readChildren(props.sidebar),
+        readChildren(props.children),
+      );
+    }
+
+    function LocaleSlotPage() {
+      return createElement("aside", null, `slot:${activeLocale}`);
+    }
+
+    function LocalePage() {
+      return createElement("main", null, "page");
+    }
+
+    const elements = buildAppPageElements({
+      element: createElement(LocalePage),
+      makeThenableParams(params) {
+        return Promise.resolve(params);
+      },
+      matchedParams: {},
+      resolvedMetadata: null,
+      resolvedViewport: {},
+      route: {
+        error: null,
+        errors: [null],
+        layoutTreePositions: [0],
+        layouts: [{ default: LocaleLayout }],
+        loading: null,
+        notFound: null,
+        notFounds: [null],
+        routeSegments: ["locale"],
+        slots: {
+          sidebar: {
+            default: null,
+            error: null,
+            layout: null,
+            layoutIndex: 0,
+            loading: null,
+            name: "sidebar",
+            page: { default: LocaleSlotPage },
+            routeSegments: [],
+          },
+        },
+        templateTreePositions: [],
+        templates: [],
+      },
+      routePath: "/locale",
+      rootNotFoundModule: null,
+    });
+
+    const body = await renderHtml(
+      createElement(
+        Fragment,
+        null,
+        readChildren(elements["layout:/"]),
+        readChildren(elements["slot:sidebar:/"]),
+      ),
+    );
+
+    expect(body).toContain("slot:de");
+    expect(body).not.toContain("slot:en");
+  });
+
   it("releases skipped layout dependencies before serializing retained child entries", async () => {
     let activeLocale = "en";
 

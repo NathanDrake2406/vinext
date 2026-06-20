@@ -81,6 +81,12 @@ function resolveSlotLayoutParams(
   return resolveAppPageBranchParams(routeSegments, treePosition, params);
 }
 
+function snapshotAppRenderDependencies(
+  dependencies: readonly AppRenderDependency[],
+): readonly AppRenderDependency[] {
+  return dependencies.length === 0 ? EMPTY_APP_RENDER_DEPENDENCIES : [...dependencies];
+}
+
 export type AppPageModule = Record<string, unknown> & {
   default?: AppPageComponent | null | undefined;
 };
@@ -779,9 +785,7 @@ export function buildAppPageElements<
     const layoutIndex = layoutIndicesByTreePosition[treePosition];
     if (layoutIndex !== undefined) {
       const layoutEntry = layoutEntries[layoutIndex];
-      const deps =
-        pageDependencies.length === 0 ? EMPTY_APP_RENDER_DEPENDENCIES : [...pageDependencies];
-      layoutDependenciesBefore[layoutIndex] = deps;
+      layoutDependenciesBefore[layoutIndex] = snapshotAppRenderDependencies(pageDependencies);
       if (getDefaultExport(layoutEntry.layoutModule)) {
         const layoutDependency = createAppRenderDependency();
         layoutDependenciesByIndex[layoutIndex] = layoutDependency;
@@ -789,7 +793,8 @@ export function buildAppPageElements<
         pageDependencies.push(layoutDependency);
       }
       if (hasSlots) {
-        slotDependenciesByLayoutIndex[layoutIndex] = deps;
+        slotDependenciesByLayoutIndex[layoutIndex] =
+          snapshotAppRenderDependencies(pageDependencies);
       }
     }
 
@@ -799,7 +804,7 @@ export function buildAppPageElements<
       templateDependenciesById.set(templateEntry.id, templateDependency);
       templateDependenciesBeforeById.set(
         templateEntry.id,
-        pageDependencies.length === 0 ? EMPTY_APP_RENDER_DEPENDENCIES : [...pageDependencies],
+        snapshotAppRenderDependencies(pageDependencies),
       );
       pageDependencies.push(templateDependency);
     }
