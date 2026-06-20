@@ -3232,6 +3232,16 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // fully registered before we inspect them. We prefer "ssr", then any
         // non-"rsc" environment, then whatever is available.
         let pagesRunner: import("vite/module-runner").ModuleRunner | null = null;
+        // Reuse the Pages SSR handler across requests. Every createSSRHandler
+        // input is stable for the dev session (server, runner, config,
+        // middlewarePath) except `routes`, which is the cached pagesRouter array
+        // — a new reference only when the route set changes (invalidateRouteCache
+        // -> re-scan). Keying on `routes` rebuilds exactly then and reuses the
+        // handler otherwise, instead of re-running it for every request.
+        let cachedSSRHandler: {
+          routes: Awaited<ReturnType<typeof pagesRouter>>;
+          handler: ReturnType<typeof createSSRHandler>;
+        } | null = null;
         function getPagesRunner() {
           if (!pagesRunner) {
             const env =
@@ -4203,22 +4213,27 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     return next();
                   }
                 }
-                const handler = createSSRHandler(
-                  server,
-                  getPagesRunner(),
-                  routes,
-                  pagesDir,
-                  nextConfig?.i18n,
-                  fileMatcher,
-                  nextConfig?.basePath ?? "",
-                  nextConfig?.trailingSlash ?? false,
-                  middlewarePath !== null,
-                  (nextConfig?.rewrites.beforeFiles.length ?? 0) > 0 ||
-                    (nextConfig?.rewrites.afterFiles.length ?? 0) > 0 ||
-                    (nextConfig?.rewrites.fallback.length ?? 0) > 0,
-                  nextConfig?.clientTraceMetadata,
-                  nextConfig?.htmlLimitedBots,
-                );
+                if (!cachedSSRHandler || cachedSSRHandler.routes !== routes) {
+                  cachedSSRHandler = {
+                    routes,
+                    handler: createSSRHandler(
+                      server,
+                      getPagesRunner(),
+                      routes,
+                      pagesDir,
+                      nextConfig?.i18n,
+                      fileMatcher,
+                      nextConfig?.basePath ?? "",
+                      nextConfig?.trailingSlash ?? false,
+                      middlewarePath !== null,
+                      (nextConfig?.rewrites.beforeFiles.length ?? 0) > 0 ||
+                        (nextConfig?.rewrites.afterFiles.length ?? 0) > 0 ||
+                        (nextConfig?.rewrites.fallback.length ?? 0) > 0,
+                      nextConfig?.clientTraceMetadata,
+                      nextConfig?.htmlLimitedBots,
+                    ),
+                  };
+                }
                 flushStagedHeaders();
                 flushRequestHeaders();
                 if (pipelineResult.middlewareStatus !== undefined) {
@@ -4226,7 +4241,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 }
                 // Update req.url to the resolved URL so SSR sees the post-mw path
                 req.url = pipelineResult.resolvedUrl;
-                await handler(
+                await cachedSSRHandler.handler(
                   req,
                   res,
                   pipelineResult.resolvedUrl,
