@@ -41,19 +41,13 @@ export function normalizeReactFlightPreloadHints(
 
         carry = text.slice(lastNewline + 1);
         controller.enqueue(
-          encoder.encode(
-            text
-              .slice(0, lastNewline + 1)
-              .replace(REACT_FLIGHT_STYLESHEET_PRELOAD_HINT, '$1,"style"$2'),
-          ),
+          encoder.encode(rewriteReactFlightStylesheetPreloadHints(text.slice(0, lastNewline + 1))),
         );
       },
       flush(controller) {
         const text = carry + decoder.decode();
         if (text) {
-          controller.enqueue(
-            encoder.encode(text.replace(REACT_FLIGHT_STYLESHEET_PRELOAD_HINT, '$1,"style"$2')),
-          );
+          controller.enqueue(encoder.encode(rewriteReactFlightStylesheetPreloadHints(text)));
         }
       },
     }),
