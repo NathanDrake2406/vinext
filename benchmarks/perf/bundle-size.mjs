@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
-import { parseAst } from "vite";
 import { reportPerformanceSample } from "./report-sample.mjs";
 
 const repositoryRoot = process.env.VINEXT_PERF_TARGET_ROOT ?? process.cwd();
 const benchmarkDir = join(repositoryRoot, "benchmarks");
+const requireFromRepositoryRoot = createRequire(join(repositoryRoot, "package.json"));
 const framework = process.argv[2];
 const target = process.argv[3] ?? "client";
+let parseAstPromise;
 
 if (framework !== "vinext" && framework !== "nextjs") {
   console.error(
@@ -23,6 +25,12 @@ if (!["client", "client-entry", "rsc-entry", "server"].includes(target)) {
 }
 if (framework === "nextjs" && target !== "client") {
   throw new Error(`Bundle target ${target} is only defined for vinext`);
+}
+
+async function parseJavaScriptAst(source) {
+  parseAstPromise ??= import(requireFromRepositoryRoot.resolve("vite")).then((mod) => mod.parseAst);
+  const parseAst = await parseAstPromise;
+  return parseAst(source);
 }
 
 const outputPath =
@@ -131,7 +139,7 @@ async function gzipStaticEntryClosure(entryPath) {
 
     const source = await readFile(resolvedFilePath, "utf8");
     gzipBytes += gzipSync(source).length;
-    const ast = parseAst(source);
+    const ast = await parseJavaScriptAst(source);
     for (const statement of ast.body) {
       if (
         statement.type !== "ImportDeclaration" &&
