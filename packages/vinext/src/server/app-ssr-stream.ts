@@ -163,48 +163,9 @@ export function fixPreloadAs(html: string): string {
   ) {
     return html;
   }
-  let rewritten = "";
-  let cursor = 0;
-  let searchFrom = 0;
-
-  for (;;) {
-    const linkStart = html.indexOf("<link", searchFrom);
-    if (linkStart === -1) break;
-
-    const linkEnd = html.indexOf(">", linkStart);
-    if (linkEnd === -1) break;
-
-    const tag = html.slice(linkStart, linkEnd + 1);
-    const asStart = tag.indexOf(' as="stylesheet"');
-    if (asStart === -1 || !hasPreloadRelAttribute(tag)) {
-      searchFrom = linkEnd + 1;
-      continue;
-    }
-
-    rewritten +=
-      html.slice(cursor, linkStart) +
-      tag.slice(0, asStart) +
-      ' as="style"' +
-      tag.slice(asStart + ' as="stylesheet"'.length);
-    cursor = linkEnd + 1;
-    searchFrom = linkEnd + 1;
-  }
-
-  return cursor === 0 ? html : rewritten + html.slice(cursor);
-}
-
-function isHtmlSpaceCode(code: number): boolean {
-  return code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d || code === 0x20;
-}
-
-function hasPreloadRelAttribute(tag: string): boolean {
-  let searchFrom = 0;
-  for (;;) {
-    const relStart = tag.indexOf('rel="preload"', searchFrom);
-    if (relStart === -1) return false;
-    if (relStart > 0 && isHtmlSpaceCode(tag.charCodeAt(relStart - 1))) return true;
-    searchFrom = relStart + 1;
-  }
+  return html.replace(/<link(?=[^>]*\srel="preload")[^>]*>/g, (tag) =>
+    tag.replace(' as="stylesheet"', ' as="style"'),
+  );
 }
 
 // These `g`-flag regexes carry mutable `lastIndex` state. Every consumer below

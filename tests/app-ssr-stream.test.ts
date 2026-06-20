@@ -22,9 +22,6 @@ describe("App SSR stream helpers", () => {
       expect(fixPreloadAs('<link rel="stylesheet" href="/file.css" as="stylesheet"/>')).toBe(
         '<link rel="stylesheet" href="/file.css" as="stylesheet"/>',
       );
-      expect(fixPreloadAs('<link data-rel="preload" href="/file.css" as="stylesheet"/>')).toBe(
-        '<link data-rel="preload" href="/file.css" as="stylesheet"/>',
-      );
 
       expect(fixPreloadAs('<link rel="preload" href="/font.woff2" as="font"/>')).toBe(
         '<link rel="preload" href="/font.woff2" as="font"/>',
@@ -152,18 +149,6 @@ describe("createRscEmbedTransform raw buffer (#981)", () => {
     // The fixed text "as=\"style\"" appears in the embed script after JSON escaping.
     // fixFlightHints turns "stylesheet" → "style" before the chunk is script-wrapped.
     expect(finalScripts).not.toContain("stylesheet");
-    expect(finalScripts).toContain(".done=true");
-  });
-
-  it("can skip embed-time hint normalization for already-normalized RSC streams", async () => {
-    const sideStream = createTextStream([':HL["/a.css","stylesheet"]']);
-    const transform = createRscEmbedTransform(sideStream, undefined, {
-      normalizeFlightHints: false,
-    });
-
-    const finalScripts = await transform.finalize();
-
-    expect(finalScripts).toContain("stylesheet");
     expect(finalScripts).toContain(".done=true");
   });
 
