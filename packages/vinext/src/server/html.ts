@@ -18,13 +18,18 @@
  * The result is valid JSON that is also safe to embed in any HTML context
  * without additional escaping.
  */
+const ESCAPE_LOOKUP: Record<string, string> = {
+  "&": "\\u0026",
+  ">": "\\u003e",
+  "<": "\\u003c",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
+const ESCAPE_REGEX = /[&><\u2028\u2029]/g;
+
 export function safeJsonStringify(data: unknown): string {
-  return JSON.stringify(data)
-    .replace(/</g, "\\u003c")
-    .replace(/>/g, "\\u003e")
-    .replace(/&/g, "\\u0026")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
+  return JSON.stringify(data).replace(ESCAPE_REGEX, (match) => ESCAPE_LOOKUP[match]!);
 }
 
 export function escapeHtmlAttr(value: string): string {

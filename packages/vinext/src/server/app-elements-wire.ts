@@ -678,10 +678,11 @@ export function buildOutgoingAppPayload(input: {
   if (skippedLayoutIds.size > 0) {
     payload[APP_SKIPPED_LAYOUT_IDS_KEY] = [...skippedLayoutIds];
   }
-  const artifactCompatibility =
-    input.artifactCompatibility ?? DEFAULT_ARTIFACT_COMPATIBILITY_ENVELOPE;
-  if (!isDefaultArtifactCompatibilityEnvelope(artifactCompatibility)) {
-    payload[APP_ARTIFACT_COMPATIBILITY_KEY] = artifactCompatibility;
+  if (
+    input.artifactCompatibility &&
+    !isDefaultArtifactCompatibilityEnvelope(input.artifactCompatibility)
+  ) {
+    payload[APP_ARTIFACT_COMPATIBILITY_KEY] = input.artifactCompatibility;
   }
   if (input.cacheEntryReuseProof) {
     payload[APP_CACHE_ENTRY_REUSE_PROOF_KEY] = input.cacheEntryReuseProof;
