@@ -31,15 +31,8 @@ import fs from "node:fs";
 import { escapeRegExp } from "../utils/regex.js";
 import { lastSignificantChar } from "../utils/has-trailing-comma.js";
 import MagicString from "magic-string";
-import {
-  buildFallbackFontFace,
-  getFallbackFontOverrideMetrics,
-} from "../build/google-fonts/fallback-metrics.js";
-import { validateGoogleFontOptions } from "../build/google-fonts/validate.js";
-import { getFontAxes } from "../build/google-fonts/get-axes.js";
 import { buildGoogleFontsUrl } from "../build/google-fonts/build-url.js";
 import { findFontFilesInCss } from "../build/google-fonts/find-font-files-in-css.js";
-import { CONTENT_TYPES } from "../server/static-file-cache.js";
 import { ASSET_PREFIX_URL_DIR } from "../utils/asset-prefix.js";
 
 /**
@@ -95,6 +88,11 @@ const GOOGLE_FONT_UTILITY_EXPORTS = new Set([
  */
 const VINEXT_FONT_URL_NAMESPACE = "_vinext_fonts";
 const MAX_GOOGLE_FONTS_ERROR_BODY_LENGTH = 500;
+const FONT_CONTENT_TYPES: Record<string, string> = {
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".ttf": "font/ttf",
+};
 
 function formatGoogleFontsErrorBody(body: string): string {
   const trimmed = body.trim();
@@ -698,10 +696,10 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
         fs.stat(filePath, (err, stat) => {
           if (err || !stat.isFile()) return next();
           const ext = path.extname(filePath).toLowerCase();
-          // CONTENT_TYPES is the same map prod-server uses, so fonts get
-          // identical MIME types in dev and prod. fetchAndCacheFont only
-          // ever writes .woff2/.woff/.ttf, all of which are covered.
-          res.setHeader("Content-Type", CONTENT_TYPES[ext] ?? "application/octet-stream");
+          // Keep this local to avoid importing the production static-file server
+          // on every vinext() plugin load. fetchAndCacheFont only writes these
+          // font extensions, matching prod-server's MIME table for the same files.
+          res.setHeader("Content-Type", FONT_CONTENT_TYPES[ext] ?? "application/octet-stream");
           res.setHeader("Cache-Control", "no-cache");
           res.setHeader("Access-Control-Allow-Origin", "*");
           fs.createReadStream(filePath).pipe(res);
@@ -859,6 +857,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
           // See issue #885.
           let validated;
           try {
+            const { validateGoogleFontOptions } = await import("../build/google-fonts/validate.js");
             validated = validateGoogleFontOptions(family, options);
           } catch (err) {
             // Validation errors are programmer errors (unknown family,
@@ -868,6 +867,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
             const message = err instanceof Error ? err.message : String(err);
             throw new Error(`[vinext:google-fonts] ${id}: ${message}`);
           }
+          const { getFontAxes } = await import("../build/google-fonts/get-axes.js");
           const axes = getFontAxes(
             family,
             validated.weights,
@@ -926,13 +926,15 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
           )
             .filter((file) => file.preloadFontFile)
             .map((file) => file.googleFontFileUrl);
-          const fallbackMetrics =
-            validated.adjustFontFallback === false
-              ? undefined
-              : getFallbackFontOverrideMetrics(family);
-          const adjustedFallbackCSS = fallbackMetrics
-            ? buildFallbackFontFace(family, fallbackMetrics)
-            : undefined;
+          let adjustedFallbackCSS: string | undefined;
+          if (validated.adjustFontFallback !== false) {
+            const { buildFallbackFontFace, getFallbackFontOverrideMetrics } =
+              await import("../build/google-fonts/fallback-metrics.js");
+            const fallbackMetrics = getFallbackFontOverrideMetrics(family);
+            adjustedFallbackCSS = fallbackMetrics
+              ? buildFallbackFontFace(family, fallbackMetrics)
+              : undefined;
+          }
           const validatedFontWeight =
             validated.weights.length === 1 && validated.weights[0] !== "variable"
               ? Number(validated.weights[0])
