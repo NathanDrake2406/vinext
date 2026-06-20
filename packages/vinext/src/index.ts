@@ -172,10 +172,6 @@ import {
   withBuildBundlerOptions,
 } from "./build/client-build-config.js";
 import {
-  markCssUrlAssetReferences,
-  restoreDedupedCssAssetReferences,
-} from "./build/css-url-assets.js";
-import {
   augmentSsrManifestFromBundle,
   tryRealpathSync,
   relativeWithinRoot,
@@ -241,6 +237,12 @@ let apiHandlerModulePromise: Promise<typeof import("./server/api-handler.js")> |
 let imageOptimizationModulePromise: Promise<
   typeof import("./server/image-optimization.js")
 > | null = null;
+let cssUrlAssetsModulePromise: Promise<typeof import("./build/css-url-assets.js")> | null = null;
+
+function loadCssUrlAssetsModule(): Promise<typeof import("./build/css-url-assets.js")> {
+  cssUrlAssetsModulePromise ??= import("./build/css-url-assets.js");
+  return cssUrlAssetsModulePromise;
+}
 
 function getCacheDirPrefix(cacheDir: string): string {
   const normalizedCacheDir = normalizePathSeparators(cacheDir);
@@ -3262,7 +3264,8 @@ export const loadServerActionClient = ${
           id: /\.(?:css|scss|sass|less|styl|stylus)(?:\?|$)/i,
           code: "url(",
         },
-        handler(code, id) {
+        async handler(code, id) {
+          const { markCssUrlAssetReferences } = await loadCssUrlAssetsModule();
           const marked = markCssUrlAssetReferences(code, id);
           if (marked === null) return null;
           // No source map: the marker is transient — it's stripped before final
@@ -3336,7 +3339,8 @@ export const loadServerActionClient = ${
       enforce: "post",
       apply: "build",
 
-      generateBundle(_options, bundle) {
+      async generateBundle(_options, bundle) {
+        const { restoreDedupedCssAssetReferences } = await loadCssUrlAssetsModule();
         restoreDedupedCssAssetReferences(bundle, (asset) => {
           this.emitFile({ type: "asset", fileName: asset.fileName, source: asset.source });
         });
