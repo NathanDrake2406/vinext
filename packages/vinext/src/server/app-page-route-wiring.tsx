@@ -72,6 +72,7 @@ type AppPageErrorComponent = ComponentType<{ error: unknown; reset: () => void }
 const APP_PAGE_LAYOUT_PROBE_CHILD = <Fragment />;
 const DEFAULT_GLOBAL_ERROR_COMPONENT = DefaultGlobalError as AppPageErrorComponent;
 const EMPTY_APP_RENDER_DEPENDENCIES: readonly AppRenderDependency[] = [];
+const EMPTY_APP_PAGE_SLOT_ENTRIES: readonly AppPageSlotEntry[] = [];
 
 function resolveSlotLayoutParams(
   routeSegments: readonly string[],
@@ -272,6 +273,10 @@ type AppPageRouteWiringPlan<
   rootLayoutTreePath: string | null;
   routeSegments: readonly string[];
   slotEntries: readonly AppPageSlotEntry<TModule, TErrorModule>[];
+  slotEntriesByLayoutIndex: readonly (
+    | readonly AppPageSlotEntry<TModule, TErrorModule>[]
+    | undefined
+  )[];
   slotNameCounts: ReadonlyMap<string, number> | null;
   templateEntries: readonly AppPageTemplateEntry<TModule>[];
   templateEntriesByTreePosition: readonly (AppPageTemplateEntry<TModule> | undefined)[];
@@ -485,11 +490,17 @@ function createAppPageRouteWiringPlan<
   const slotEntries: AppPageSlotEntry<TModule, TErrorModule>[] = route.slots
     ? Object.entries(route.slots)
     : [];
+  const slotEntriesByLayoutIndex: AppPageSlotEntry<TModule, TErrorModule>[][] = [];
   let slotNameCounts: Map<string, number> | null = null;
   if (slotEntries.length > 0) {
     slotNameCounts = new Map();
-    for (const [, slot] of slotEntries) {
+    for (const slotEntry of slotEntries) {
+      const [, slot] = slotEntry;
       slotNameCounts.set(slot.name, (slotNameCounts.get(slot.name) ?? 0) + 1);
+      const targetIndex = slot.layoutIndex >= 0 ? slot.layoutIndex : layoutEntries.length - 1;
+      if (targetIndex >= 0) {
+        (slotEntriesByLayoutIndex[targetIndex] ??= []).push(slotEntry);
+      }
     }
   }
 
@@ -511,6 +522,7 @@ function createAppPageRouteWiringPlan<
     rootLayoutTreePath: layoutEntries[0]?.treePath ?? null,
     routeSegments,
     slotEntries,
+    slotEntriesByLayoutIndex,
     slotNameCounts,
     templateEntries,
     templateEntriesByTreePosition,
@@ -540,8 +552,7 @@ function createAppPageParallelSlotEntries<
   TModule extends AppPageModule,
   TErrorModule extends AppPageErrorModule,
 >(
-  layoutIndex: number,
-  layoutEntries: readonly AppPageLayoutEntry<TModule, TErrorModule>[],
+  layoutTreePath: string,
   slotEntries: readonly AppPageSlotEntry<TModule, TErrorModule>[],
   getEffectiveSlotParams: (slotKey: string, slotName: string) => AppPageParams,
   resolveSlotOverride: (
@@ -549,18 +560,15 @@ function createAppPageParallelSlotEntries<
     slotName: string,
   ) => AppPageSlotOverride<TModule> | undefined,
 ): Readonly<Record<string, ReactNode>> | undefined {
+  if (slotEntries.length === 0) {
+    return undefined;
+  }
+
   const parallelSlots: Record<string, ReactNode> = {};
 
   for (const [slotKey, slot] of slotEntries) {
     const slotName = slot.name;
-    const targetIndex = slot.layoutIndex >= 0 ? slot.layoutIndex : layoutEntries.length - 1;
-    if (targetIndex !== layoutIndex) {
-      continue;
-    }
-
-    const layoutEntry = layoutEntries[targetIndex];
-    const treePath = layoutEntry?.treePath ?? "/";
-    const slotId = resolveAppPageSlotId(slot, treePath);
+    const slotId = resolveAppPageSlotId(slot, layoutTreePath);
     const slotParams = getEffectiveSlotParams(slotKey, slotName);
     const routeSegments =
       resolveSlotOverride(slotKey, slotName)?.routeSegments ?? slot.routeSegments;
@@ -574,7 +582,7 @@ function createAppPageParallelSlotEntries<
     );
   }
 
-  return Object.keys(parallelSlots).length > 0 ? parallelSlots : undefined;
+  return parallelSlots;
 }
 
 function resolveAppPageSlotId(slot: AppPageRouteWiringSlot, treePath: string): string {
@@ -711,6 +719,7 @@ export function buildAppPageElements<
   const errorEntriesByTreePosition = routePlan.errorEntriesByTreePosition;
   const layoutIndicesByTreePosition = routePlan.layoutIndicesByTreePosition;
   const slotEntries = routePlan.slotEntries;
+  const slotEntriesByLayoutIndex = routePlan.slotEntriesByLayoutIndex;
   const hasSlots = slotEntries.length > 0;
   const layoutDependenciesByIndex: AppRenderDependency[] = [];
   const renderDependenciesByElementId = new Map<string, AppRenderDependency>();
@@ -761,11 +770,17 @@ export function buildAppPageElements<
         : routePlan.defaultSourcePage,
       slotBindings:
         hasSlots || options.route.childrenSlot
-          ? createAppPageSlotBindings(options.route, slotEntries, layoutEntries, resolveSlotOverride, {
-            interception: renderIdentity?.interception ?? options.interception ?? null,
-            interceptionContext,
-            routePath: options.routePath,
-            })
+          ? createAppPageSlotBindings(
+              options.route,
+              slotEntries,
+              layoutEntries,
+              resolveSlotOverride,
+              {
+                interception: renderIdentity?.interception ?? options.interception ?? null,
+                interceptionContext,
+                routePath: options.routePath,
+              },
+            )
           : undefined,
     }),
   };
@@ -779,7 +794,7 @@ export function buildAppPageElements<
     elements[APP_STATIC_SIBLINGS_KEY] = options.route.staticSiblings;
   }
   const getEffectiveSlotParams = (slotKey: string, slotName: string): AppPageParams =>
-    resolveSlotOverride?.(slotKey, slotName)?.params ?? options.matchedParams;
+    resolveSlotOverride(slotKey, slotName)?.params ?? options.matchedParams;
 
   for (const treePosition of orderedTreePositions) {
     const layoutIndex = layoutIndicesByTreePosition[treePosition];
@@ -877,12 +892,8 @@ export function buildAppPageElements<
     };
 
     if (hasSlots) {
-      for (const [, slot] of slotEntries) {
+      for (const [, slot] of slotEntriesByLayoutIndex[index] ?? []) {
         const slotName = slot.name;
-        const targetIndex = slot.layoutIndex >= 0 ? slot.layoutIndex : layoutEntries.length - 1;
-        if (targetIndex !== index) {
-          continue;
-        }
         layoutProps[slotName] = <ParallelSlot name={slotName} />;
       }
     }
@@ -1230,6 +1241,10 @@ export function buildAppPageElements<
     }
     const layoutHasElement = getDefaultExport(layoutEntry.layoutModule) !== null;
     const layoutIndex = layoutIndicesByTreePosition[treePosition] ?? -1;
+    const layoutSlotEntries =
+      layoutIndex >= 0
+        ? (slotEntriesByLayoutIndex[layoutIndex] ?? EMPTY_APP_PAGE_SLOT_ENTRIES)
+        : EMPTY_APP_PAGE_SLOT_ENTRIES;
     const segmentMap: { children: string[] } & Record<string, string[]> = {
       children: resolveAppPageLayoutSegmentProviderSegments(
         options.route.childrenRouteSegments ?? routeSegments,
@@ -1237,12 +1252,8 @@ export function buildAppPageElements<
         options.matchedParams,
       ),
     };
-    for (const [slotKey, slot] of slotEntries) {
+    for (const [slotKey, slot] of layoutSlotEntries) {
       const slotName = slot.name;
-      const targetIndex = slot.layoutIndex >= 0 ? slot.layoutIndex : layoutEntries.length - 1;
-      if (targetIndex !== layoutIndex) {
-        continue;
-      }
       const slotParams = getEffectiveSlotParams(slotKey, slotName);
       const slotOverride = resolveSlotOverride(slotKey, slotName);
       const hasActiveSlotPage =
@@ -1266,11 +1277,10 @@ export function buildAppPageElements<
           <Slot
             id={layoutEntry.id}
             parallelSlots={
-              hasSlots
+              layoutSlotEntries.length > 0
                 ? createAppPageParallelSlotEntries(
-                    layoutIndex,
-                    layoutEntries,
-                    slotEntries,
+                    layoutEntry.treePath,
+                    layoutSlotEntries,
                     getEffectiveSlotParams,
                     resolveSlotOverride,
                   )
