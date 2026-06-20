@@ -19,6 +19,7 @@ async function writeStartupOptimizeFixture(fixtureRoot: string): Promise<void> {
 
   await fsp.mkdir(path.join(appDir, "(startup)"), { recursive: true });
   await fsp.mkdir(path.join(appDir, "@modal"), { recursive: true });
+  await fsp.mkdir(path.join(appDir, "@drawer", "(startup-slot)"), { recursive: true });
   await fsp.mkdir(path.join(appDir, "about"), { recursive: true });
   await fsp.mkdir(packageDir, { recursive: true });
   await symlinkWorkspacePackage(fixtureRoot, "@vitejs");
@@ -86,6 +87,54 @@ export default function RootSlotDefault() {
 `,
   );
   await fsp.writeFile(
+    path.join(appDir, "@drawer", "(startup-slot)", "page.tsx"),
+    `import { startupMarker } from "@vinext-test/startup-dep";
+
+export default function RouteGroupSlotPage() {
+  return <aside>route group slot page {startupMarker}</aside>;
+}
+`,
+  );
+  await fsp.writeFile(
+    path.join(appDir, "@drawer", "(startup-slot)", "default.tsx"),
+    `import { startupMarker } from "@vinext-test/startup-dep";
+
+export default function RouteGroupSlotDefault() {
+  return <aside>route group slot default {startupMarker}</aside>;
+}
+`,
+  );
+  await fsp.writeFile(
+    path.join(appDir, "@drawer", "(startup-slot)", "layout.tsx"),
+    `import type { ReactNode } from "react";
+import { startupMarker } from "@vinext-test/startup-dep";
+
+export default function RouteGroupSlotLayout({ children }: { children: ReactNode }) {
+  return <section data-startup-marker={startupMarker}>{children}</section>;
+}
+`,
+  );
+  await fsp.writeFile(
+    path.join(appDir, "@drawer", "(startup-slot)", "loading.tsx"),
+    `import { startupMarker } from "@vinext-test/startup-dep";
+
+export default function RouteGroupSlotLoading() {
+  return <span>route group slot loading {startupMarker}</span>;
+}
+`,
+  );
+  await fsp.writeFile(
+    path.join(appDir, "@drawer", "(startup-slot)", "error.tsx"),
+    `"use client";
+
+import { startupMarker } from "@vinext-test/startup-dep";
+
+export default function RouteGroupSlotError() {
+  return <span>route group slot error {startupMarker}</span>;
+}
+`,
+  );
+  await fsp.writeFile(
     path.join(appDir, "about", "page.tsx"),
     `export default function AboutPage() {
   return <main>About should not be an optimizer startup entry</main>;
@@ -109,15 +158,23 @@ it("includes URL-invisible root files in focused App Router optimizeDeps.entries
     const ssrEntries = fixtureServer.config.environments.ssr?.optimizeDeps?.entries;
     const clientEntries = fixtureServer.config.environments.client?.optimizeDeps?.entries;
 
-    const joinedEntries = [
-      ...(Array.isArray(rscEntries) ? rscEntries : []),
-      ...(Array.isArray(ssrEntries) ? ssrEntries : []),
-      ...(Array.isArray(clientEntries) ? clientEntries : []),
-    ].join(",");
+    const environmentEntries = {
+      rsc: rscEntries,
+      ssr: ssrEntries,
+      client: clientEntries,
+    };
 
-    expect(joinedEntries).toContain("app/(startup)/page.tsx");
-    expect(joinedEntries).toContain("app/@modal/default.tsx");
-    expect(joinedEntries).not.toContain("app/about/page.tsx");
+    for (const [name, entries] of Object.entries(environmentEntries)) {
+      expect(Array.isArray(entries), name).toBe(true);
+      expect(entries, name).toContain("app/(startup)/page.tsx");
+      expect(entries, name).toContain("app/@modal/default.tsx");
+      expect(entries, name).toContain("app/@drawer/(startup-slot)/page.tsx");
+      expect(entries, name).not.toContain("app/@drawer/(startup-slot)/default.tsx");
+      expect(entries, name).not.toContain("app/@drawer/(startup-slot)/layout.tsx");
+      expect(entries, name).not.toContain("app/@drawer/(startup-slot)/loading.tsx");
+      expect(entries, name).not.toContain("app/@drawer/(startup-slot)/error.tsx");
+      expect(entries, name).not.toContain("app/about/page.tsx");
+    }
 
     const rootResponse = await fetch(`${fixtureBaseUrl}/`);
     const html = await rootResponse.text();

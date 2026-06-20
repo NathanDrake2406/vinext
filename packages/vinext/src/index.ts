@@ -28,8 +28,8 @@ import {
   normalizeViteResolveExtensions,
   createValidFileMatcher,
   findFileWithExts,
-  type ValidFileMatcher,
 } from "./routing/file-matcher.js";
+import { collectAppRouterStartupOptimizeEntries } from "./routing/app-startup-optimize-entries.js";
 import { createSSRHandler } from "./server/dev-server.js";
 import { handleApiRoute } from "./server/api-handler.js";
 import {
@@ -65,11 +65,7 @@ import {
   type RouteClassificationManifest,
 } from "./build/route-classification-manifest.js";
 import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
-import {
-  isParallelRouteSegment,
-  isRouteGroupSegment,
-  normalizePathnameForRouteMatchStrict,
-} from "./routing/utils.js";
+import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import {
   createRscCompatibilityId,
   findNextConfigPath,
@@ -364,87 +360,6 @@ function isVinextOgShimImporter(importer: string | undefined): boolean {
 
 function toRelativeFileEntry(root: string, absPath: string): string {
   return path.relative(root, absPath).split(path.sep).join("/");
-}
-
-const APP_ROUTER_STARTUP_OPTIMIZE_CONVENTIONS = Object.freeze([
-  "layout",
-  "page",
-  "route",
-  "template",
-  "loading",
-  "error",
-  "not-found",
-  "forbidden",
-  "unauthorized",
-  "global-error",
-  "global-not-found",
-]);
-
-function collectAppStartupOptimizeEntries(
-  root: string,
-  appDir: string,
-  matcher: ValidFileMatcher,
-): string[] {
-  const entries = new Set<string>();
-
-  function addConvention(dir: string, convention: string): void {
-    const filePath = findFileWithExts(dir, convention, matcher);
-    if (filePath) entries.add(toRelativeFileEntry(root, filePath));
-  }
-
-  function addAppConventions(dir: string): void {
-    for (const convention of APP_ROUTER_STARTUP_OPTIMIZE_CONVENTIONS) {
-      addConvention(dir, convention);
-    }
-  }
-
-  function addSlotConventions(slotDir: string): void {
-    // These are the slot fields discoverParallelSlots() can attach to the
-    // active root render without walking visible URL segments.
-    for (const convention of ["layout", "page", "default", "loading", "error"]) {
-      addConvention(slotDir, convention);
-    }
-
-    for (const entry of readStartupDirectoryEntries(slotDir)) {
-      if (!isRouteGroupSegment(entry.name)) continue;
-      // Slot root pages can live under transparent route groups:
-      // app/@modal/(group)/page.tsx is still the root slot page.
-      addSlotRouteGroupPage(path.posix.join(slotDir, entry.name));
-    }
-  }
-
-  function addSlotRouteGroupPage(dir: string): void {
-    addConvention(dir, "page");
-
-    for (const entry of readStartupDirectoryEntries(dir)) {
-      if (isRouteGroupSegment(entry.name)) {
-        addSlotRouteGroupPage(path.posix.join(dir, entry.name));
-      }
-    }
-  }
-
-  function walkInvisibleRootTree(dir: string): void {
-    addAppConventions(dir);
-
-    for (const entry of readStartupDirectoryEntries(dir)) {
-      if (isRouteGroupSegment(entry.name)) {
-        walkInvisibleRootTree(path.posix.join(dir, entry.name));
-      } else if (isParallelRouteSegment(entry.name)) {
-        addSlotConventions(path.posix.join(dir, entry.name));
-      }
-    }
-  }
-
-  walkInvisibleRootTree(appDir);
-  return [...entries];
-}
-
-function readStartupDirectoryEntries(dir: string): fs.Dirent[] {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-  } catch {
-    return [];
-  }
 }
 
 const TSCONFIG_FILES = ["tsconfig.json", "jsconfig.json"];
@@ -2434,7 +2349,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // stable across environments are handled by explicit include/exclude
           // rules below instead of relying on incidental whole-app discovery.
           // The entries must be relative to the project root.
-          const appEntries = collectAppStartupOptimizeEntries(root, appDir, fileMatcher);
+          const appEntries = collectAppRouterStartupOptimizeEntries({
+            root,
+            appDir,
+            matcher: fileMatcher,
+          });
           const explicitInstrumentationEntries = [
             instrumentationPath,
             instrumentationClientPath,
