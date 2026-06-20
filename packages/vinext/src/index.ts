@@ -361,6 +361,31 @@ function toRelativeFileEntry(root: string, absPath: string): string {
   return path.relative(root, absPath).split(path.sep).join("/");
 }
 
+const APP_ROUTER_STARTUP_OPTIMIZE_CONVENTIONS = Object.freeze([
+  "layout",
+  "page",
+  "route",
+  "template",
+  "loading",
+  "error",
+  "not-found",
+  "forbidden",
+  "unauthorized",
+  "global-error",
+  "global-not-found",
+]);
+
+function collectAppStartupOptimizeEntries(
+  root: string,
+  appDir: string,
+  matcher: ReturnType<typeof createValidFileMatcher>,
+): string[] {
+  return APP_ROUTER_STARTUP_OPTIMIZE_CONVENTIONS.flatMap((convention) => {
+    const filePath = findFileWithExts(appDir, convention, matcher);
+    return filePath ? [toRelativeFileEntry(root, filePath)] : [];
+  });
+}
+
 const TSCONFIG_FILES = ["tsconfig.json", "jsconfig.json"];
 
 function resolveTsconfigPathCandidate(candidate: string): string | null {
@@ -2340,14 +2365,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
         // If app/ directory exists, configure RSC environments
         if (hasAppDir) {
-          // Compute optimizeDeps.entries so Vite discovers server-side
-          // dependencies at startup instead of on first request. Without
-          // this, deps imported in rsc/ssr environments are found lazily,
-          // causing re-optimisation cascades and runtime errors (e.g.
-          // "Invalid hook call" from duplicate React instances).
+          // Seed only app-level startup conventions instead of the entire app/
+          // tree. Route modules are already represented in the generated RSC
+          // manifest as lazy import() thunks, so crawling every page/route file
+          // makes the first dev response scale with total route count even when
+          // the requested route is "/". Framework deps that must stay identity-
+          // stable across environments are handled by explicit include/exclude
+          // rules below instead of relying on incidental whole-app discovery.
           // The entries must be relative to the project root.
-          const relAppDir = path.relative(root, appDir);
-          const appEntries = [`${relAppDir}/**/*.{tsx,ts,jsx,js}`];
+          const appEntries = collectAppStartupOptimizeEntries(root, appDir, fileMatcher);
           const explicitInstrumentationEntries = [
             instrumentationPath,
             instrumentationClientPath,
@@ -2501,9 +2527,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   VINEXT_OPTIMIZE_DEPS_EXCLUDE,
                   nextServerExternal,
                 ),
-                // Crawl app/ source files up front so client-only deps imported
-                // by user components are discovered during startup instead of
-                // triggering a late re-optimisation + full page reload.
+                // Crawl app startup conventions up front. Route-specific client
+                // deps are discovered when their route is requested, while
+                // framework hydration deps below are always pre-included to
+                // avoid duplicate React/runtime instances.
                 entries: optimizeEntries,
                 // React packages aren't crawled from app/ source files,
                 // so must be pre-included to avoid late discovery (#25).
