@@ -257,18 +257,18 @@ type AppPageRouteWiringPlan<
 > = {
   defaultSourcePage: string;
   errorEntries: readonly AppPageErrorEntry<TErrorModule>[];
-  errorEntriesByTreePosition: ReadonlyMap<number, AppPageErrorEntry<TErrorModule>>;
+  errorEntriesByTreePosition: readonly (AppPageErrorEntry<TErrorModule> | undefined)[];
   layoutEntries: readonly AppPageLayoutEntry<TModule, TErrorModule>[];
-  layoutEntriesByTreePosition: ReadonlyMap<number, AppPageLayoutEntry<TModule, TErrorModule>>;
+  layoutEntriesByTreePosition: readonly (AppPageLayoutEntry<TModule, TErrorModule> | undefined)[];
   layoutIds: readonly string[];
-  layoutIndicesByTreePosition: ReadonlyMap<number, number>;
+  layoutIndicesByTreePosition: readonly (number | undefined)[];
   orderedTreePositions: readonly number[];
   rootLayoutTreePath: string | null;
   routeSegments: readonly string[];
   slotEntries: readonly AppPageSlotEntry<TModule, TErrorModule>[];
   slotNameCounts: ReadonlyMap<string, number> | null;
   templateEntries: readonly AppPageTemplateEntry<TModule>[];
-  templateEntriesByTreePosition: ReadonlyMap<number, AppPageTemplateEntry<TModule>>;
+  templateEntriesByTreePosition: readonly (AppPageTemplateEntry<TModule> | undefined)[];
 };
 
 const appPageRouteWiringPlanCache = new WeakMap<
@@ -459,21 +459,21 @@ function createAppPageRouteWiringPlan<
   const layoutEntries = createAppPageLayoutEntries(route);
   const templateEntries = createAppPageTemplateEntries(route);
   const errorEntries = createAppPageErrorEntries(route);
-  const layoutEntriesByTreePosition = new Map<number, AppPageLayoutEntry<TModule, TErrorModule>>();
-  const templateEntriesByTreePosition = new Map<number, AppPageTemplateEntry<TModule>>();
-  const errorEntriesByTreePosition = new Map<number, AppPageErrorEntry<TErrorModule>>();
-  const layoutIndicesByTreePosition = new Map<number, number>();
+  const layoutEntriesByTreePosition: (AppPageLayoutEntry<TModule, TErrorModule> | undefined)[] = [];
+  const templateEntriesByTreePosition: (AppPageTemplateEntry<TModule> | undefined)[] = [];
+  const errorEntriesByTreePosition: (AppPageErrorEntry<TErrorModule> | undefined)[] = [];
+  const layoutIndicesByTreePosition: (number | undefined)[] = [];
 
   for (let index = 0; index < layoutEntries.length; index++) {
     const layoutEntry = layoutEntries[index];
-    layoutEntriesByTreePosition.set(layoutEntry.treePosition, layoutEntry);
-    layoutIndicesByTreePosition.set(layoutEntry.treePosition, index);
+    layoutEntriesByTreePosition[layoutEntry.treePosition] = layoutEntry;
+    layoutIndicesByTreePosition[layoutEntry.treePosition] = index;
   }
   for (const templateEntry of templateEntries) {
-    templateEntriesByTreePosition.set(templateEntry.treePosition, templateEntry);
+    templateEntriesByTreePosition[templateEntry.treePosition] = templateEntry;
   }
   for (const errorEntry of errorEntries) {
-    errorEntriesByTreePosition.set(errorEntry.treePosition, errorEntry);
+    errorEntriesByTreePosition[errorEntry.treePosition] = errorEntry;
   }
 
   const slotEntries: AppPageSlotEntry<TModule, TErrorModule>[] = route.slots
@@ -591,12 +591,6 @@ function resolveAppPageSlotBindingState(
   return "unmatched";
 }
 
-function resolveEmptyAppPageSlotOverride<TModule extends AppPageModule>():
-  | AppPageSlotOverride<TModule>
-  | undefined {
-  return undefined;
-}
-
 function createAppPageSlotBindings<
   TModule extends AppPageModule,
   TErrorModule extends AppPageErrorModule,
@@ -712,15 +706,12 @@ export function buildAppPageElements<
   const layoutIndicesByTreePosition = routePlan.layoutIndicesByTreePosition;
   const slotEntries = routePlan.slotEntries;
   const hasSlots = slotEntries.length > 0;
-  const hasTemplates = templateEntries.length > 0;
   const layoutDependenciesByIndex: AppRenderDependency[] = [];
   const renderDependenciesByElementId = new Map<string, AppRenderDependency>();
   const layoutDependenciesBefore: Array<readonly AppRenderDependency[]> = [];
   const slotDependenciesByLayoutIndex: Array<readonly AppRenderDependency[]> = [];
-  const templateDependenciesById = hasTemplates ? new Map<string, AppRenderDependency>() : null;
-  const templateDependenciesBeforeById = hasTemplates
-    ? new Map<string, readonly AppRenderDependency[]>()
-    : null;
+  const templateDependenciesById = new Map<string, AppRenderDependency>();
+  const templateDependenciesBeforeById = new Map<string, readonly AppRenderDependency[]>();
   const pageDependencies: AppRenderDependency[] = [];
   const rootLayoutTreePath = routePlan.rootLayoutTreePath;
   const slotNameCounts = routePlan.slotNameCounts;
@@ -743,7 +734,7 @@ export function buildAppPageElements<
 
         return undefined;
       }
-    : resolveEmptyAppPageSlotOverride;
+    : () => undefined;
   const elements: Record<
     string,
     | ReactNode
@@ -785,11 +776,12 @@ export function buildAppPageElements<
     resolveSlotOverride?.(slotKey, slotName)?.params ?? options.matchedParams;
 
   for (const treePosition of orderedTreePositions) {
-    const layoutIndex = layoutIndicesByTreePosition.get(treePosition);
+    const layoutIndex = layoutIndicesByTreePosition[treePosition];
     if (layoutIndex !== undefined) {
       const layoutEntry = layoutEntries[layoutIndex];
-      layoutDependenciesBefore[layoutIndex] =
+      const deps =
         pageDependencies.length === 0 ? EMPTY_APP_RENDER_DEPENDENCIES : [...pageDependencies];
+      layoutDependenciesBefore[layoutIndex] = deps;
       if (getDefaultExport(layoutEntry.layoutModule)) {
         const layoutDependency = createAppRenderDependency();
         layoutDependenciesByIndex[layoutIndex] = layoutDependency;
@@ -797,17 +789,12 @@ export function buildAppPageElements<
         pageDependencies.push(layoutDependency);
       }
       if (hasSlots) {
-        slotDependenciesByLayoutIndex[layoutIndex] =
-          pageDependencies.length === 0 ? EMPTY_APP_RENDER_DEPENDENCIES : [...pageDependencies];
+        slotDependenciesByLayoutIndex[layoutIndex] = deps;
       }
     }
 
-    if (hasTemplates && templateDependenciesById && templateDependenciesBeforeById) {
-      const templateEntry = templateEntriesByTreePosition.get(treePosition);
-      if (!templateEntry || !getDefaultExport(templateEntry.templateModule)) {
-        continue;
-      }
-
+    const templateEntry = templateEntriesByTreePosition[treePosition];
+    if (templateEntry && getDefaultExport(templateEntry.templateModule)) {
       const templateDependency = createAppRenderDependency();
       templateDependenciesById.set(templateEntry.id, templateDependency);
       templateDependenciesBeforeById.set(
@@ -839,7 +826,7 @@ export function buildAppPageElements<
       continue;
     }
     const TemplateComponent = templateComponent;
-    const templateDependency = templateDependenciesById?.get(templateEntry.id);
+    const templateDependency = templateDependenciesById.get(templateEntry.id);
     const templateElement = templateDependency ? (
       renderWithAppDependencyBarrier(
         <TemplateComponent>
@@ -854,7 +841,7 @@ export function buildAppPageElements<
     );
     elements[templateEntry.id] = renderAfterAppDependencies(
       templateElement,
-      templateDependenciesBeforeById?.get(templateEntry.id) ?? EMPTY_APP_RENDER_DEPENDENCIES,
+      templateDependenciesBeforeById.get(templateEntry.id) ?? EMPTY_APP_RENDER_DEPENDENCIES,
     );
   }
 
@@ -1171,9 +1158,9 @@ export function buildAppPageElements<
       options.matchedParams,
     );
     let segmentChildren: ReactNode = routeChildren;
-    const layoutEntry = layoutEntriesByTreePosition.get(treePosition);
-    const templateEntry = templateEntriesByTreePosition.get(treePosition);
-    const errorEntry = errorEntriesByTreePosition.get(treePosition);
+    const layoutEntry = layoutEntriesByTreePosition[treePosition];
+    const templateEntry = templateEntriesByTreePosition[treePosition];
+    const errorEntry = errorEntriesByTreePosition[treePosition];
 
     // Next.js nesting per segment (outer to inner): Layout > Template > Error > Unauthorized > Forbidden > NotFound > children.
     // Building bottom-up means NotFoundBoundary must wrap the leaf subtree first,
@@ -1237,7 +1224,7 @@ export function buildAppPageElements<
       continue;
     }
     const layoutHasElement = getDefaultExport(layoutEntry.layoutModule) !== null;
-    const layoutIndex = layoutIndicesByTreePosition.get(treePosition) ?? -1;
+    const layoutIndex = layoutIndicesByTreePosition[treePosition] ?? -1;
     const segmentMap: { children: string[] } & Record<string, string[]> = {
       children: resolveAppPageLayoutSegmentProviderSegments(
         options.route.childrenRouteSegments ?? routeSegments,
