@@ -48,6 +48,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import MagicString from "magic-string";
+import { OgAssetOwnership } from "./og-asset-ownership.js";
 
 // ── Plugin factories ──────────────────────────────────────────────────────────
 
@@ -66,6 +67,7 @@ export function createOgInlineFetchAssetsPlugin(): Plugin {
   // build. Dev mode skips the cache so asset edits are picked up without
   // restarting the Vite server.
   const cache = new Map<string, string>(); // absPath -> base64
+  const ownership = new OgAssetOwnership();
   let isBuild = false;
 
   return {
@@ -74,32 +76,48 @@ export function createOgInlineFetchAssetsPlugin(): Plugin {
 
     configResolved(config) {
       isBuild = config.command === "build";
+      ownership.configure(config.root, config.resolve.alias);
     },
 
     buildStart() {
       if (isBuild) {
         cache.clear();
       }
+      ownership.reset();
+    },
+
+    async resolveId(source, importer, options) {
+      if (!ownership.shouldTrackImport(source)) return null;
+
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      if (resolved === null || resolved.external) return null;
+      await ownership.recordResolvedImport(source, resolved.id);
+      return null;
     },
 
     transform: {
       filter: { code: "import.meta.url" },
       async handler(code, id) {
         const useCache = isBuild;
-        const moduleDir = path.dirname(id);
-        let newCode = code;
+        const boundary = await ownership.resolveModuleBoundary(id);
+        if (boundary === null) return null;
+        const { assetRoot, moduleDir } = boundary;
+        const s = new MagicString(code);
         let didReplace = false;
 
         // Read a file from disk and return its base64 encoding, using the build
         // cache when enabled. Returns null on any read error so callers can skip
         // the match (e.g. file not present on disk for the active environment).
         const readAsBase64 = async (absPath: string): Promise<string | null> => {
-          const cached = useCache ? cache.get(absPath) : undefined;
+          const realPath = await ownership.resolveContainedAsset(assetRoot, absPath);
+          if (realPath === null) return null;
+
+          const cached = useCache ? cache.get(realPath) : undefined;
           if (cached !== undefined) return cached;
           try {
-            const buf = await fs.promises.readFile(absPath);
+            const buf = await fs.promises.readFile(realPath);
             const b64 = buf.toString("base64");
-            if (useCache) cache.set(absPath, b64);
+            if (useCache) cache.set(realPath, b64);
             return b64;
           } catch {
             return null;
@@ -145,7 +163,7 @@ export function createOgInlineFetchAssetsPlugin(): Plugin {
               `})()`,
             ].join("");
 
-            newCode = newCode.replaceAll(fullMatch, inlined);
+            s.overwrite(match.index, match.index + fullMatch.length, inlined);
             didReplace = true;
           }
         }
@@ -158,7 +176,7 @@ export function createOgInlineFetchAssetsPlugin(): Plugin {
           const readFilePattern =
             /[a-zA-Z_$][a-zA-Z0-9_$]*\.readFileSync\(\s*(?:[a-zA-Z_$][a-zA-Z0-9_$]*\.)?fileURLToPath\(\s*new URL\(\s*(["'])(\.[^"']+)\1\s*,\s*import\.meta\.url\s*\)\s*\)\s*\)/g;
 
-          for (const match of newCode.matchAll(readFilePattern)) {
+          for (const match of code.matchAll(readFilePattern)) {
             const fullMatch = match[0];
             const relPath = match[2]; // e.g. "./noto-sans-v27-latin-regular.ttf"
             const absPath = path.resolve(moduleDir, relPath);
@@ -170,13 +188,13 @@ export function createOgInlineFetchAssetsPlugin(): Plugin {
             // Buffer is always available in Node.js and in the vinext SSR/RSC environments.
             const inlined = `Buffer.from(${JSON.stringify(fileBase64)},"base64")`;
 
-            newCode = newCode.replaceAll(fullMatch, inlined);
+            s.overwrite(match.index, match.index + fullMatch.length, inlined);
             didReplace = true;
           }
         }
 
         if (!didReplace) return null;
-        return { code: newCode, map: null };
+        return { code: s.toString(), map: s.generateMap({ hires: "boundary" }) };
       },
     },
   } satisfies Plugin;

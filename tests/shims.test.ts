@@ -16,7 +16,7 @@ import type {
   CacheHandlerValue,
   IncrementalCacheValue,
 } from "../packages/vinext/src/shims/cache.js";
-import { normalizePathSeparators } from "../packages/vinext/src/utils/path.ts";
+import { isWindows, normalizePathSeparators } from "../packages/vinext/src/utils/path.ts";
 
 const FIXTURE_DIR = PAGES_FIXTURE_DIR;
 
@@ -3371,6 +3371,34 @@ describe("next/headers shim", () => {
     setHeadersContext(null);
   });
 
+  it("headers() strips internal flight and dev request-id headers from userland reads", async () => {
+    // Ported from Next.js:
+    // packages/next/src/server/async-storage/request-store.ts
+    // https://github.com/vercel/next.js/blob/bba8fe18eb21d49dac68cdddef64e8906dc9f804/packages/next/src/server/async-storage/request-store.ts
+    const { setHeadersContext, headers } = await import("../packages/vinext/src/shims/headers.js");
+    const reqHeaders = new Headers({
+      rsc: "1",
+      "Next-Router-State-Tree": "tree",
+      "x-nextjs-request-id": "dev-request",
+      "x-nextjs-html-request-id": "dev-html-request",
+      "x-custom": "test-value",
+    });
+    setHeadersContext({
+      headers: reqHeaders,
+      cookies: new Map(),
+    });
+
+    const h = await headers();
+    expect(h.get("x-custom")).toBe("test-value");
+    expect(h.get("rsc")).toBeNull();
+    expect(h.get("Next-Router-State-Tree")).toBeNull();
+    expect(h.get("x-nextjs-request-id")).toBeNull();
+    expect(h.get("x-nextjs-html-request-id")).toBeNull();
+    expect(reqHeaders.get("x-nextjs-request-id")).toBe("dev-request");
+    expect(reqHeaders.get("x-nextjs-html-request-id")).toBe("dev-html-request");
+    setHeadersContext(null);
+  });
+
   it("headers() supports the legacy sync access pattern", async () => {
     // Next.js docs: headers() temporarily supports sync property access in v15.
     const { setHeadersContext, headers } = await import("../packages/vinext/src/shims/headers.js");
@@ -4054,7 +4082,7 @@ describe("next/headers shim", () => {
     expect(getDraftModeCookieHeader()).toBeNull();
   });
 
-  it('draftMode() throws the dynamic = "error" access error before exposing draft controls', async () => {
+  it('draftMode() stays readable with dynamic = "error" but mutations throw', async () => {
     const { setHeadersContext, draftMode, getDraftModeCookieHeader, consumeDynamicUsage } =
       await import("../packages/vinext/src/shims/headers.js");
     const accessError = new Error(
@@ -4067,7 +4095,10 @@ describe("next/headers shim", () => {
       accessError,
     });
 
-    await expect(draftMode()).rejects.toThrow(accessError);
+    const dm = await draftMode();
+    expect(dm.isEnabled).toBe(false);
+    expect(() => dm.enable()).toThrow(accessError);
+    expect(() => dm.disable()).toThrow(accessError);
     expect(consumeDynamicUsage()).toBe(false);
     expect(getDraftModeCookieHeader()).toBeNull();
 
@@ -12612,7 +12643,7 @@ describe("next/dynamic shim", () => {
     expect(result).toEqual([]);
   });
 
-  it("loading component receives Next.js noSSR loading props", async () => {
+  it("loading component receives App Router loading props (pastDelay:true)", async () => {
     const { default: dynamic } = await import("../packages/vinext/src/shims/dynamic.js");
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
@@ -12632,7 +12663,9 @@ describe("next/dynamic shim", () => {
     renderToStaticMarkup(React.createElement(DynComp));
     expect(receivedProps).not.toBeNull();
     expect(receivedProps.isLoading).toBe(true);
-    expect(receivedProps.pastDelay).toBe(false);
+    // pastDelay is true on the server to match the client first render and the
+    // Next.js App Router contract (issue 1967).
+    expect(receivedProps.pastDelay).toBe(true);
     expect(receivedProps.error).toBeNull();
   });
 
@@ -14484,6 +14517,18 @@ describe("Pages Router concurrent navigation", () => {
     return `<html><head></head><body>${nextDataScript}</body></html>`;
   }
 
+  // Resolve an absolute fixture path the router can dynamically import. POSIX
+  // absolute paths begin with `/` and pass the router's `isValidModulePath`
+  // guard unchanged, so they are returned as-is. On Windows the path is
+  // drive-qualified (`E:\...`) with no leading `/`, which the guard rejects and
+  // blocks before the import; wrap it as the Vite `/@fs/` URL Vite serves for
+  // on-disk files, which is importable and starts with `/`.
+  function fixtureModuleUrl(relativePath: string): string {
+    const absolutePath = path.resolve(import.meta.dirname, relativePath);
+    if (!isWindows) return absolutePath;
+    return "/@fs/" + normalizePathSeparators(absolutePath);
+  }
+
   function buildNavHtmlWithVinext(
     page: string,
     vinext: { pageModuleUrl?: string; appModuleUrl?: string; hasMiddleware?: boolean },
@@ -14815,7 +14860,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/slug-1";
     win.location.href = "http://localhost/docs/slug-1";
     (globalThis as any).window = win;
@@ -14866,7 +14911,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/slug-1";
     win.location.href = "http://localhost/docs/slug-1";
     (globalThis as any).window = win;
@@ -14917,7 +14962,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/fr/slug-1";
     win.location.href = "http://localhost/docs/fr/slug-1";
     win.__VINEXT_LOCALE__ = "fr";
@@ -14981,7 +15026,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/en/hello";
     win.location.href = "http://localhost/docs/en/hello";
     win.__VINEXT_LOCALE__ = "en";
@@ -15044,7 +15089,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/fr/slug-1";
     win.location.href = "http://localhost/docs/fr/slug-1";
     win.__VINEXT_LOCALE__ = "fr";
@@ -15405,7 +15450,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/new";
     win.location.href = "http://localhost/new";
     Object.assign(win, {
@@ -15472,7 +15517,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/new";
     win.location.href = "http://localhost/new";
     Object.assign(win, {
@@ -15534,7 +15579,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/id/new";
     win.location.href = "http://localhost/id/new";
     Object.assign(win, {
@@ -15595,7 +15640,7 @@ describe("Pages Router concurrent navigation", () => {
     const originalCustomEvent = globalThis.CustomEvent;
     const listeners = new Map<string, (event: any) => void>();
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
 
     win.location.pathname = "/about";
     win.location.href = "http://localhost/about";
@@ -15672,7 +15717,7 @@ describe("Pages Router concurrent navigation", () => {
     const originalCustomEvent = globalThis.CustomEvent;
     const listeners = new Map<string, (event: any) => void>();
     const { win, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.scrollTo.mockImplementation((x: number, y: number) => {
       win.scrollX = x;
       win.scrollY = y;
@@ -16163,7 +16208,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win, {
       __VINEXT_LOCALE__: "id",
       __VINEXT_LOCALES__: ["en", "id", "fr"],
@@ -16221,7 +16266,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win, replaceState, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, { origin: "http://localhost" });
     Object.assign(win, {
       __VINEXT_LOCALE__: "en",
@@ -16288,7 +16333,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, { origin: "http://localhost" });
     Object.assign(win.__NEXT_DATA__, {
       buildId: "build-1",
@@ -16418,7 +16463,7 @@ describe("Pages Router concurrent navigation", () => {
     const originalFetch = globalThis.fetch;
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const { win, replaceState, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, {
       origin: "http://localhost",
       pathname: "/docs",
@@ -16491,7 +16536,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, { origin: "http://localhost" });
     Object.assign(win.__NEXT_DATA__, {
       buildId: "build-1",
@@ -21616,10 +21661,12 @@ describe("shim alias map .js variants", () => {
     const hook = configPlugin.resolveId as {
       handler: (this: { environment?: { name?: string } }, id: string) => string | undefined;
     };
-    const clientShim = path.resolve(import.meta.dirname, "../packages/vinext/src/shims/error.tsx");
-    const reactServerShim = path.resolve(
-      import.meta.dirname,
-      "../packages/vinext/src/shims/error.react-server.ts",
+    // resolveId returns Vite-style ids: forward slashes on every platform.
+    const clientShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/error.tsx"),
+    );
+    const reactServerShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/error.react-server.ts"),
     );
 
     expect(hook.handler.call({ environment: { name: "rsc" } }, "next/error")).toBe(reactServerShim);
@@ -21738,15 +21785,16 @@ describe("vinext shim package-subpath resolution", () => {
 
   it("strips JavaScript extensions and Vite queries from package subpaths", () => {
     const hook = getResolveIdHook();
-    const expectedShim = path.resolve(
-      import.meta.dirname,
-      "../packages/vinext/src/shims/navigation.ts",
+    // resolveId returns Vite-style ids: forward slashes on every platform.
+    const expectedShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/navigation.ts"),
     );
-    const expectedReactServerShim = path.resolve(
-      import.meta.dirname,
-      "../packages/vinext/src/shims/navigation.react-server.ts",
+    const expectedReactServerShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/navigation.react-server.ts"),
     );
-    const expectedOgShim = path.resolve(import.meta.dirname, "../packages/vinext/src/shims/og.tsx");
+    const expectedOgShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/og.tsx"),
+    );
 
     expect(hook.filter.id.test("vinext/shims/navigation.js?v=123")).toBe(true);
     expect(hook.filter.id.test("\0vinext/shims/navigation.js?v=123")).toBe(true);

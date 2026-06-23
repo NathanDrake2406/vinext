@@ -415,6 +415,7 @@ type PagesRouterRuntimeState = {
   beforePopStateCb?: BeforePopStateCallback;
   lastPathnameAndSearch: string;
   lastBrowserUrl: string;
+  lastHash: string;
   isFirstPopStateEvent: boolean;
   routerDidNavigate: boolean;
   deprecatedEventBridgeInstalled: boolean;
@@ -443,6 +444,7 @@ function createPagesRouterRuntimeState(): PagesRouterRuntimeState {
     lastPathnameAndSearch:
       typeof window !== "undefined" ? window.location.pathname + window.location.search : "",
     lastBrowserUrl: typeof window !== "undefined" ? window.location.href : "",
+    lastHash: typeof window !== "undefined" ? window.location.hash : "",
     isFirstPopStateEvent: true,
     routerDidNavigate: false,
     deprecatedEventBridgeInstalled: false,
@@ -478,6 +480,7 @@ function updateBrowserUrlTrackers(pathnameAndSearch?: string): void {
   routerRuntimeState.lastPathnameAndSearch =
     pathnameAndSearch ?? window.location.pathname + window.location.search;
   routerRuntimeState.lastBrowserUrl = window.location.href;
+  routerRuntimeState.lastHash = window.location.hash;
 }
 
 function getPagesRouterRuntimeComponents(): PagesRouterRuntimeComponents {
@@ -2865,6 +2868,12 @@ function getRouterStateKey(state: unknown): string | undefined {
   return typeof state.key === "string" ? state.key : undefined;
 }
 
+function getTrackedPagesRouterAsPath(): string {
+  const trackedUrl = new URL(routerRuntimeState.lastPathnameAndSearch, window.location.href);
+  const appPath = stripBasePath(trackedUrl.pathname, __basePath) + trackedUrl.search;
+  return removeNavigationLocalePrefix(appPath);
+}
+
 function handlePagesRouterPopState(e: PopStateEvent): void {
   const browserUrl = window.location.pathname + window.location.search;
   const appUrl = stripBasePath(window.location.pathname, __basePath) + window.location.search;
@@ -2897,8 +2906,9 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
   // still points at the entry we were on, so a genuine navigation is *not*
   // misidentified as a replay.
   //
-  // `state.as` is the canonical app-relative path (no basePath); compose the
-  // basePath back on for the comparison.
+  // `state.as` and Next.js's `router.asPath` are app-relative: neither carries
+  // basePath or the active locale prefix. Normalize the tracked browser URL to
+  // the same shape before comparing.
   //
   // Mirrors Next.js's:
   //   if (isFirstPopStateEvent && this.locale === state.options.locale
@@ -2913,7 +2923,8 @@ function handlePagesRouterPopState(e: PopStateEvent): void {
     const currentLocale = window.__VINEXT_LOCALE__;
     if (
       state.options?.locale === currentLocale &&
-      withBasePath(state.as, __basePath) === routerRuntimeState.lastPathnameAndSearch
+      typeof state.as === "string" &&
+      state.as === getTrackedPagesRouterAsPath()
     ) {
       return;
     }
