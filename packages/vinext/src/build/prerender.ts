@@ -31,12 +31,8 @@ import {
   RSC_EMBEDDED_BINARY_CHUNK,
   type RscEmbeddedChunk,
 } from "../server/app-rsc-embedded-chunks.js";
-import {
-  NoOpCacheHandler,
-  setCacheHandler,
-  getCacheHandler,
-  _consumeRequestScopedCacheLife,
-} from "vinext/shims/cache";
+import { NoOpCacheHandler, setCacheHandler, getCacheHandler } from "vinext/shims/cache-handler";
+import { _consumeRequestScopedCacheLife } from "vinext/shims/cache-request-state";
 import { runWithHeadersContext, headersContextFromRequest } from "vinext/shims/headers";
 import { createValidFileMatcher, findFileWithExtensions } from "../routing/file-matcher.js";
 import { normalizeStaticPathsEntry, type StaticPathsEntry } from "../routing/route-pattern.js";
@@ -714,12 +710,6 @@ export async function prerenderPages({
       // that non-2xx response as a prerender failure.
       if (route.pattern === "/404") continue;
 
-      // Cross-reference with file-system route scan.
-      const fsRoute = routes.find(
-        (r) => r.filePath === route.filePath || r.pattern === route.pattern,
-      );
-      if (!fsRoute) continue;
-
       const { type, revalidate: classifiedRevalidate } = classifyPagesRoute(route.filePath);
 
       // Route type detection uses static file analysis (classifyPagesRoute).
@@ -1231,7 +1221,7 @@ export async function prerenderApp({
             continue;
           }
 
-          if (!Array.isArray(paramSets) || paramSets.length === 0) {
+          if (paramSets.length === 0) {
             // Empty params — skip with warning
             results.push({ route: route.pattern, status: "skipped", reason: "no-static-params" });
             continue;
