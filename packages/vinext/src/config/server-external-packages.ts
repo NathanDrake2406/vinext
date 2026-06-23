@@ -1,5 +1,5 @@
-// Mirrors Next.js v16.2.6's default server-external package list.
-// Source: packages/next/src/lib/server-external-packages.jsonc
+// Keep in sync with Next.js 16.2.6:
+// packages/next/src/lib/server-external-packages.jsonc
 export const NEXT_SERVER_EXTERNAL_PACKAGES = [
   "@alinea/generated",
   "@appsignal/nodejs",
@@ -81,3 +81,18 @@ export const NEXT_SERVER_EXTERNAL_PACKAGES = [
   "websocket",
   "zeromq",
 ] as const;
+
+export function mergeServerExternalPackages(
+  userPackages: readonly string[] = [],
+  transpilePackages: readonly string[] = [],
+): string[] {
+  const transpiled = new Set(transpilePackages);
+  const conflicts = userPackages.filter((name) => transpiled.has(name));
+  if (conflicts.length > 0) {
+    throw new Error(
+      `The packages specified in the 'transpilePackages' conflict with the 'serverExternalPackages': ${conflicts.join(", ")}`,
+    );
+  }
+  const defaults = NEXT_SERVER_EXTERNAL_PACKAGES.filter((name) => !transpiled.has(name));
+  return [...new Set([...defaults, ...userPackages])];
+}
