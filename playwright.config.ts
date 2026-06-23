@@ -202,9 +202,11 @@ const projectServers = {
     use: { baseURL: "http://localhost:4182" },
     server: {
       // Build vinext CLI, then build the fixture, then start the standalone
-      // server. The standalone server.js reads PORT from the environment.
+      // server from an isolated temp directory. Moving it outside the repo
+      // prevents Node from resolving missing externals from workspace
+      // node_modules and verifies the standalone package is self-contained.
       command:
-        "npx vp run vinext#build && node ../../../packages/vinext/dist/cli.js build && PORT=4182 node dist/standalone/server.js",
+        'npx vp run vinext#build && node ../../../packages/vinext/dist/cli.js build && standalone_dir="$(mktemp -d)" && cp -R dist/standalone/. "$standalone_dir" && PORT=4182 node "$standalone_dir/server.js"',
       cwd: "./tests/fixtures/standalone-output",
       port: 4182,
       reuseExistingServer: !process.env.CI,
@@ -273,6 +275,24 @@ const projectServers = {
       port: 4189,
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,
+    },
+  },
+  "pages-router-basepath": {
+    // basePath + trailingSlash. Runs in PROD mode (build + start) because
+    // vinext's dev server has a Vite html-proxy / basePath incompatibility
+    // in inline hydration imports — unrelated to the navigation pipeline
+    // under test. Prod skips html-proxy entirely (it uses pre-built
+    // `__VINEXT_PAGE_LOADERS__`), so we exercise the same Pages Router
+    // navigation code paths users hit in production.
+    testDir: "./tests/e2e/pages-router-basepath",
+    use: { baseURL: "http://localhost:4190" },
+    server: {
+      command:
+        "(test -e node_modules || test -L node_modules || ln -s ../pages-basic/node_modules node_modules) && npx vp run vinext#build && node ../../../packages/vinext/dist/cli.js build && node ../../../packages/vinext/dist/cli.js start --port 4190",
+      cwd: "./tests/fixtures/pages-basepath-trailing-slash",
+      port: 4190,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
     },
   },
 };

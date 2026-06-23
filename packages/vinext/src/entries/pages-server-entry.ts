@@ -174,6 +174,7 @@ export async function runMiddleware(request, ctx, options) {
   return __runGeneratedMiddleware({
     basePath: vinextConfig.basePath,
     ctx,
+    filePath: ${JSON.stringify(normalizePathSeparators(middlewarePath))},
     i18nConfig,
     isDataRequest: options?.isDataRequest === true,
     isProxy: ${JSON.stringify(isProxyFile(middlewarePath))},
@@ -198,7 +199,8 @@ import { renderToReadableStream } from "react-dom/server.edge";
 import { resetSSRHead, getSSRHeadHTML, setDocumentInitialHead } from "next/head";
 import { flushPreloads } from "next/dynamic";
 import Router, { setSSRContext, wrapWithRouterContext, getPagesNavigationIsReadyFromSerializedState } from "next/router";
-import { _runWithCacheState, configureMemoryCacheHandler as __configureMemoryCacheHandler } from "next/cache";
+import { _runWithCacheState } from "vinext/shims/cache-request-state";
+import { configureMemoryCacheHandler as __configureMemoryCacheHandler } from "vinext/shims/cache-handler";
 import { registerConfiguredCacheAdapters as __registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
 import { runWithPrivateCache } from "vinext/cache-runtime";
 import { ensureFetchPatch, runWithFetchCache } from "vinext/fetch-cache";
