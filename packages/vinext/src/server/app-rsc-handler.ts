@@ -36,7 +36,7 @@ import { createRequestContext, runWithRequestContext } from "vinext/shims/unifie
 import { flattenErrorCauses } from "../utils/error-cause.js";
 import { addBasePathToPathname, hasBasePath, stripBasePath } from "../utils/base-path.js";
 import { mergeRewriteQuery } from "../utils/query.js";
-import type { AppMiddlewareContext } from "./app-middleware.js";
+import type { AppMiddlewareContext, ApplyAppMiddlewareResult } from "./app-middleware.js";
 import { mergeMiddlewareResponseHeaders } from "./app-page-response.js";
 import type {
   AppPrerenderRootParamNamesMap,
@@ -65,11 +65,6 @@ import {
   resolveDevImageRedirect,
   type ImageConfig,
 } from "./image-optimization.js";
-import type {
-  MetadataRouteMakeThenableParams,
-  MetadataRuntimeRoute,
-} from "./metadata-route-response.js";
-import type { MiddlewareModule } from "./middleware-runtime.js";
 import { runWithPrerenderWorkUnit } from "./prerender-work-unit-setup.js";
 import { buildPostMwRequestContext } from "./app-post-middleware-context.js";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
@@ -88,18 +83,29 @@ import {
   readTrustedPrerenderRouteParams,
   serializePrerenderRouteParamsHeader,
 } from "./prerender-route-params.js";
+import {
+  createServerActionNotFoundResponse,
+  getServerActionNotFoundMessage,
+} from "./server-action-not-found.js";
 
 type AppPageParams = Record<string, string | string[]>;
 type RequestContext = ReturnType<typeof requestContextFromRequest>;
-type MetadataRoutes = readonly MetadataRuntimeRoute[];
 const STATIC_METADATA_CONFIG_HEADER_OVERRIDES = new Set(["cache-control"]);
-type MakeThenableParams = MetadataRouteMakeThenableParams;
 type StaticParamsMap = AppPrerenderStaticParamsMap;
 type RootParamNamesMap = AppPrerenderRootParamNamesMap;
 
 type AppRscMiddlewareContext = AppMiddlewareContext;
 
+type RunAppMiddlewareOptions = {
+  cleanPathname: string;
+  context: AppRscMiddlewareContext;
+  isDataRequest: boolean;
+  request: Request;
+};
+
 type AppRscHandlerRoute = {
+  __loadPage?: unknown;
+  __loadRouteHandler?: unknown;
   isDynamic: boolean;
   params?: readonly string[];
   page?: unknown;
@@ -259,7 +265,6 @@ type NavigationContextValue = {
 type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   basePath: string;
   buildId: string | null;
-  cacheComponents?: boolean;
   clearRequestContext: () => void;
   configHeaders: NextHeader[];
   configRedirects: NextRedirect[];
@@ -287,22 +292,23 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
    * Node server and dev included, not just the Cloudflare worker entry.
    */
   registerCacheAdapters: (env?: Record<string, unknown>) => void;
-  handleProgressiveActionRequest: (
+  handleProgressiveActionRequest?: (
     options: HandleProgressiveActionRequestOptions,
   ) => Promise<Response | ProgressiveActionFormStateResult | null>;
-  handleServerActionRequest: (
+  handleMetadataRouteRequest?: (cleanPathname: string) => Promise<Response | null>;
+  createPprFallbackShells?: (
+    route: Pick<AppRscHandlerRoute, "params" | "pattern" | "rootParamNames">,
+    params: AppPageParams,
+  ) => AppPagePprFallbackCacheShell[];
+  handleServerActionRequest?: (
     options: HandleServerActionRequestOptions,
   ) => Promise<Response | null>;
   i18nConfig: NextI18nConfig | null;
   imageConfig?: ImageConfig;
   isDev: boolean;
-  isMiddlewareProxy: boolean;
   loadPrerenderPagesRoutes?: () => Promise<unknown>;
-  makeThenableParams: MakeThenableParams;
   matchRoute: (pathname: string) => AppRscRouteMatch<TRoute> | null;
-  metadataRoutes: MetadataRoutes;
-  middlewareFilePath: string | null;
-  middlewareModule: MiddlewareModule | null;
+  runMiddleware?: (options: RunAppMiddlewareOptions) => Promise<ApplyAppMiddlewareResult>;
   publicFiles: ReadonlySet<string>;
   renderNotFound: (options: RenderNotFoundOptions<TRoute>) => Promise<Response | null>;
   renderPagesFallback?: (options: RenderPagesFallbackOptions) => Promise<Response | null>;
@@ -328,6 +334,15 @@ function isEdgeRouteHandler(handler: unknown): boolean {
 function isExecutionContextLike(value: unknown): value is ExecutionContextLike {
   if (!value || typeof value !== "object") return false;
   return hasProperty(value, "waitUntil") && typeof value.waitUntil === "function";
+}
+
+function createMissingServerActionResponse(
+  options: Pick<CreateAppRscHandlerOptions<AppRscHandlerRoute>, "clearRequestContext">,
+  actionId: string | null,
+): Response {
+  console.warn(getServerActionNotFoundMessage(actionId));
+  options.clearRequestContext();
+  return createServerActionNotFoundResponse();
 }
 
 function redirectDestinationWithBasePath(
@@ -519,16 +534,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     if (prerenderEndpointResponse) return prerenderEndpointResponse;
   }
 
-  // Trailing-slash normalisation is a basePath-scoped internal redirect in
-  // Next.js: the auto-generated `/:path+/` → `/:path+` rule carries the
-  // basePath (no `basePath: false`), so it compiles to `/base/:path+/` and
-  // never matches out-of-basePath requests. `normalizeTrailingSlash` instead
-  // unconditionally rebuilds the Location as `basePath + pathname`, which for a
-  // delayed-rejection out-of-basePath request (`hadBasePath === false`,
-  // `pathname` still un-stripped) would emit a bogus `/base/...` redirect and
-  // push the request back under basePath before its `basePath: false` rewrite
-  // can match. Gate on `hadBasePath` (true whenever basePath is empty or the
-  // request was in-basePath) to mirror Next.js load-custom-routes.ts.
+  // Trailing-slash normalisation is scoped to requests that already matched
+  // basePath. Out-of-basePath requests may still be handled by `basePath: false`
+  // rewrites and should not be redirected back under basePath first.
   const trailingSlashRedirect = hadBasePath
     ? normalizeTrailingSlash(pathname, options.basePath, options.trailingSlash, url.search)
     : null;
@@ -593,20 +601,12 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     requestHeaders: null,
     status: null,
   };
-  if (options.middlewareModule) {
-    const { applyAppMiddleware } = await import("./app-middleware.js");
-    const middlewareResult = await applyAppMiddleware({
-      basePath: options.basePath,
+  if (options.runMiddleware) {
+    const middlewareResult = await options.runMiddleware({
       cleanPathname,
       context: middlewareContext,
-      hadBasePath,
-      filePath: options.middlewareFilePath ?? undefined,
-      i18nConfig: options.i18nConfig,
       isDataRequest,
-      isProxy: options.isMiddlewareProxy,
-      module: options.middlewareModule,
       request: userlandRequest,
-      trailingSlash: options.trailingSlash,
     });
     if (middlewareResult.kind === "response") {
       return applyConfigHeadersToMiddlewareRedirect(middlewareResult.response, {
@@ -673,13 +673,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     return Response.redirect(new URL(imageRedirect, url.origin).href, 302);
   }
 
-  if (canUseFilesystemRoutes() && options.metadataRoutes.length > 0) {
-    const { handleMetadataRouteRequest } = await import("./metadata-route-response.js");
-    const metadataRouteResponse = await handleMetadataRouteRequest({
-      metadataRoutes: options.metadataRoutes,
-      cleanPathname,
-      makeThenableParams: options.makeThenableParams,
-    });
+  if (canUseFilesystemRoutes() && options.handleMetadataRouteRequest) {
+    const metadataRouteResponse = await options.handleMetadataRouteRequest(cleanPathname);
     if (metadataRouteResponse) {
       applyConfigHeadersToResponse(metadataRouteResponse.headers, {
         basePathState,
@@ -743,9 +738,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const isPostRequest = request.method.toUpperCase() === "POST";
   // Server actions mutate state and load route modules internally via
   // matchRoute(cleanPathname), so they must share the same filesystem
-  // eligibility gate as visible page matching. Without this, an out-of-basePath
-  // POST with an action id could execute app code that canUseFilesystemRoutes()
-  // was designed to block.
+  // eligibility gate as visible page matching.
   const canDispatchAppRoute = canUseFilesystemRoutes();
   let progressiveActionResult: Response | ProgressiveActionFormStateResult | null = null;
   if (
@@ -754,13 +747,17 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     contentType.startsWith("multipart/form-data") &&
     !actionId
   ) {
-    progressiveActionResult = await options.handleProgressiveActionRequest({
-      actionId,
-      cleanPathname,
-      contentType,
-      middlewareContext,
-      request,
-    });
+    if (options.handleProgressiveActionRequest) {
+      progressiveActionResult = await options.handleProgressiveActionRequest({
+        actionId,
+        cleanPathname,
+        contentType,
+        middlewareContext,
+        request,
+      });
+    } else if (preActionMatch?.route.__loadPage && !preActionMatch.route.__loadRouteHandler) {
+      return createMissingServerActionResponse(options, null);
+    }
   }
   if (progressiveActionResult instanceof Response) return progressiveActionResult;
   const progressiveActionFormState =
@@ -775,7 +772,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const actionError = failedProgressiveActionResult?.actionError;
 
   const serverActionResponse =
-    canDispatchAppRoute && isPostRequest && actionId
+    canDispatchAppRoute && isPostRequest && actionId && options.handleServerActionRequest
       ? await options.handleServerActionRequest({
           actionId,
           cleanPathname,
@@ -789,6 +786,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         })
       : null;
   if (serverActionResponse) return serverActionResponse;
+  if (canDispatchAppRoute && isPostRequest && actionId && !options.handleServerActionRequest) {
+    return createMissingServerActionResponse(options, actionId);
+  }
 
   let match = preActionMatch;
   const renderPagesForMatchKind = async (
@@ -923,10 +923,6 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       return new Response("", { status: 404 });
     }
 
-    // The not-found page is a filesystem route. An out-of-basePath request that
-    // no rewrite opted back in must not render it: doing so loads the app's
-    // client references and (under startProdServer's process-wide RSC globals)
-    // corrupts the active manifest. Fall through to a plain 404 instead.
     const renderedNotFoundResponse = canUseFilesystemRoutes()
       ? await options.renderNotFound({
           isRscRequest,
@@ -960,14 +956,13 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const resolvedSearchParams = getResolvedSearchParams();
   let runtimeFallbackShells: AppPagePprFallbackCacheShell[] = [];
   if (
-    options.cacheComponents === true &&
+    options.createPprFallbackShells &&
     request.method === "GET" &&
     !isRscRequest &&
     !isPrerenderFallbackShell &&
     route.params
   ) {
-    const { createAppPprFallbackShells } = await import("./app-ppr-fallback-shell.js");
-    runtimeFallbackShells = createAppPprFallbackShells(
+    runtimeFallbackShells = options.createPprFallbackShells(
       {
         params: route.params,
         pattern: route.pattern,

@@ -146,11 +146,15 @@ describe("generateRscEntry ISR code generation", () => {
 
     const code = generateRscEntry("/tmp/test/app", [routeWithInterceptLayouts]);
 
-    // Intercept-layout modules must be wired into the route's intercept entry
-    // (mod_N is the generator's import alias scheme — `interceptLayouts: [mod_`
-    // confirms a module reference, not the original layout path string).
-    expect(code).toContain("interceptLayouts: [mod_");
+    // Intercept-layout modules are wired into the route's intercept entry as
+    // lazy loaders: `interceptLayouts` holds `null` placeholders and the
+    // `__loadInterceptLayouts` array carries the `load_N` import thunks
+    // (load_N/mod_N are the generator's alias schemes — a module reference, not
+    // the original layout path string).
+    expect(code).toContain("interceptLayouts: [null]");
+    expect(code).toMatch(/__loadInterceptLayouts:\s*\[load_\d+\]/);
     expect(code).not.toMatch(/interceptLayouts:\s*\[\s*"\/tmp\/test\/app/);
+    expect(code).not.toMatch(/__loadInterceptLayouts:\s*\[\s*"\/tmp\/test\/app/);
   });
 
   it("generated code seeds root params around prerender generateStaticParams", () => {
