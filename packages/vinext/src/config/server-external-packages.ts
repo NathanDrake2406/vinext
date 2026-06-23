@@ -1,12 +1,5 @@
-/**
- * Packages Next.js opts out of server bundling by default.
- *
- * Keep this in sync with:
- * https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/server-external-packages.jsonc
- *
- * Documented at:
- * https://nextjs.org/docs/pages/api-reference/config/next-config-js/serverExternalPackages
- */
+// Keep in sync with Next.js 16.2.6:
+// packages/next/src/lib/server-external-packages.jsonc
 const DEFAULT_SERVER_EXTERNAL_PACKAGES = [
   "@alinea/generated",
   "@appsignal/nodejs",
@@ -89,6 +82,17 @@ const DEFAULT_SERVER_EXTERNAL_PACKAGES = [
   "zeromq",
 ] as const;
 
-export function mergeServerExternalPackages(userPackages: readonly string[] = []): string[] {
-  return [...new Set([...DEFAULT_SERVER_EXTERNAL_PACKAGES, ...userPackages])];
+export function mergeServerExternalPackages(
+  userPackages: readonly string[] = [],
+  transpilePackages: readonly string[] = [],
+): string[] {
+  const transpiled = new Set(transpilePackages);
+  const conflicts = userPackages.filter((name) => transpiled.has(name));
+  if (conflicts.length > 0) {
+    throw new Error(
+      `The packages specified in the 'transpilePackages' conflict with the 'serverExternalPackages': ${conflicts.join(", ")}`,
+    );
+  }
+  const defaults = DEFAULT_SERVER_EXTERNAL_PACKAGES.filter((name) => !transpiled.has(name));
+  return [...new Set([...defaults, ...userPackages])];
 }

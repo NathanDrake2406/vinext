@@ -34,6 +34,12 @@ export const VINEXT_PRERENDER_SECRET_HEADER = "x-vinext-prerender-secret";
 /** URL-encoded JSON route params for build-time prerender renders. */
 export const VINEXT_PRERENDER_ROUTE_PARAMS_HEADER = "x-vinext-prerender-route-params";
 
+/** Internal endpoint used to evaluate App Router generateStaticParams exports. */
+export const VINEXT_PRERENDER_STATIC_PARAMS_PATH = "/__vinext/prerender/static-params";
+
+/** Internal endpoint used to evaluate Pages Router getStaticPaths exports. */
+export const VINEXT_PRERENDER_PAGES_STATIC_PATHS_PATH = "/__vinext/prerender/pages-static-paths";
+
 /** TPR (Tailored Per-Request) revalidation interval in seconds. */
 export const VINEXT_REVALIDATE_HEADER = "x-vinext-revalidate";
 
@@ -155,6 +161,8 @@ export const NEXT_ROUTER_STATE_TREE_HEADER = "Next-Router-State-Tree";
 export const NEXT_ROUTER_PREFETCH_HEADER = "Next-Router-Prefetch";
 export const NEXT_ROUTER_SEGMENT_PREFETCH_HEADER = "Next-Router-Segment-Prefetch";
 export const NEXT_URL_HEADER = "Next-Url";
+export const NEXT_REQUEST_ID_HEADER = "x-nextjs-request-id";
+export const NEXT_HTML_REQUEST_ID_HEADER = "x-nextjs-html-request-id";
 
 /** Lowercase flight header variants used in middleware forwarding. */
 export const FLIGHT_HEADERS: readonly string[] = [
