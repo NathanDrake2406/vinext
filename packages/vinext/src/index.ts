@@ -2396,10 +2396,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             ssr: {
               ...(hasCloudflarePlugin || hasNitroPlugin
                 ? {}
-                  : {
-                      resolve: {
-                        external: appSsrServerExternal,
-                        // Force all node_modules through Vite's transform pipeline
+                : {
+                    resolve: {
+                      external: appSsrServerExternal,
+                      // Force all node_modules through Vite's transform pipeline
                       // so non-JS imports (CSS, images) don't hit Node's native
                       // ESM loader. Matches Next.js behavior of bundling everything.
                       // When user sets `ssr.external: true`, skip noExternal since
