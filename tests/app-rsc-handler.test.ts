@@ -9,7 +9,10 @@ import {
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { createAppRscHandler } from "../packages/vinext/src/server/app-rsc-handler.js";
-import { ensureAppRouteModulesLoaded } from "../packages/vinext/src/server/app-route-module-loader.js";
+import {
+  ensureAppRouteModulesLoaded,
+  type LazyLoadableRoute,
+} from "../packages/vinext/src/server/app-route-module-loader.js";
 import { createArtifactCompatibilityEnvelope } from "../packages/vinext/src/server/artifact-compatibility.js";
 import {
   createClientReuseManifest,
@@ -24,16 +27,14 @@ import {
 import type { MiddlewareModule } from "../packages/vinext/src/server/middleware-runtime.js";
 import { makeThenableParams } from "../packages/vinext/src/shims/thenable-params.js";
 
-type TestRoute = {
-  __loadPage?: (() => Promise<unknown>) | null;
-  __loadRouteHandler?: (() => Promise<unknown>) | null;
+type TestRoute = LazyLoadableRoute & {
   isDynamic: boolean;
   page?: { default?: unknown } | null;
   pattern: string;
   rootParamNames?: readonly string[];
   routeHandler?: { GET?: () => Response; runtime?: string } | null;
   routeSegments: readonly string[];
-  slots?: Record<string, { page?: unknown; __loadPage?: (() => Promise<unknown>) | null }> | null;
+  slots?: Record<string, { page?: unknown; __loadPage?: (() => Promise<unknown>) | null }>;
 };
 
 type HandlerOptions = Parameters<typeof createAppRscHandler<TestRoute>>[0];
@@ -47,7 +48,6 @@ type DispatchMatchedRouteHandler = HandlerOptions["dispatchMatchedRouteHandler"]
 
 function createPageRoute(overrides: Partial<TestRoute> = {}): TestRoute {
   return {
-    __loadPage() {},
     isDynamic: false,
     page: { default() {} },
     pattern: "/about",
