@@ -398,8 +398,6 @@ export type ResolvedNextConfig = {
   reactMaxHeadersLength: number;
   /** Serialized htmlLimitedBots regexp source from next.config. */
   htmlLimitedBots: string | undefined;
-  /** Packages that should stay bundled/transpiled instead of being loaded natively. */
-  transpilePackages: string[];
   /**
    * Packages that should be treated as server-external (not bundled by Vite).
    * Sourced from `serverExternalPackages` or the legacy
@@ -1305,7 +1303,6 @@ export async function resolveNextConfig(
       expireTime: DEFAULT_EXPIRE_TIME,
       reactMaxHeadersLength: DEFAULT_REACT_MAX_HEADERS_LENGTH,
       htmlLimitedBots: undefined,
-      transpilePackages: [],
       serverExternalPackages: [],
       cacheHandler: undefined,
       cacheMaxMemorySize: undefined,
@@ -1639,7 +1636,6 @@ export async function resolveNextConfig(
         ? config.reactMaxHeadersLength
         : DEFAULT_REACT_MAX_HEADERS_LENGTH,
     htmlLimitedBots,
-    transpilePackages,
     serverExternalPackages,
     cacheHandler,
     cacheMaxMemorySize,

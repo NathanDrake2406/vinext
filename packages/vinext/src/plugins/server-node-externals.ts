@@ -43,6 +43,8 @@ const BUNDLED_SERVER_PACKAGE_NAMES = new Set([
 const MODULE_SPECIFIER_RE =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s*)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)/g;
 
+const VINEXT_PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
+
 const realpathCache = new Map<string, string>();
 
 function realpathIfExists(filePath: string): string {
@@ -94,6 +96,12 @@ function isInsideDirectory(dir: string, filePath: string): boolean {
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
+function isVinextInternalFile(filePath: string): boolean {
+  const realFilePath = realpathIfExists(filePath);
+  const realVinextRoot = realpathIfExists(VINEXT_PACKAGE_ROOT);
+  return realFilePath === realVinextRoot || isInsideDirectory(realVinextRoot, realFilePath);
+}
+
 function moduleOwnershipKey(environmentName: string, filePath: string): string {
   return `${environmentName}\0${filePath}`;
 }
@@ -123,6 +131,9 @@ function mergeOwnership(
   ownership: ModuleOwnership | null,
 ): void {
   if (!ownership) return;
+  // Route ownership should not leak onto vinext shims; their package imports
+  // are framework runtime dependencies and must stay bundled by default.
+  if (isVinextInternalFile(filePath)) return;
 
   const key = moduleOwnershipKey(environmentName, realpathIfExists(filePath));
   const current = ownershipByModule.get(key);

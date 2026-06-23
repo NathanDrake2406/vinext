@@ -1882,7 +1882,6 @@ describe("detectNextIntlConfig", () => {
       serverActionsBodySizeLimit: 1 * 1024 * 1024,
       serverActionsBodySizeLimitLabel: "1 MB",
       htmlLimitedBots: undefined,
-      transpilePackages: [],
       serverExternalPackages: [],
       cacheHandler: undefined,
       cacheMaxMemorySize: undefined,
