@@ -48,6 +48,7 @@ import {
   tryAcquireLockfile,
 } from "./server/dev-lockfile.js";
 import { generateRouteTypes } from "./typegen.js";
+import { normalizePathSeparators } from "./utils/path.js";
 
 // ─── Resolve Vite from the project root ────────────────────────────────────────
 //
@@ -445,7 +446,7 @@ async function buildApp() {
   console.log(`\n  vinext build  (Vite ${getViteVersion()})\n`);
 
   const root = process.cwd();
-  const isApp = hasAppDir(process.cwd());
+  const isApp = hasAppDir(normalizePathSeparators(root));
   const resolvedNextConfig = await resolveNextConfig(
     await loadNextConfig(root, PHASE_PRODUCTION_BUILD),
     root,
@@ -770,11 +771,10 @@ async function check() {
   const parsed = parseArgs(rawArgs);
   if (parsed.help) return printHelp("check");
 
-  const root = process.cwd();
   console.log(`\n  vinext check\n`);
   console.log("  Scanning project...\n");
 
-  const result = runCheck(root);
+  const result = runCheck(normalizePathSeparators(process.cwd()));
   console.log(formatReport(result));
 }
 
