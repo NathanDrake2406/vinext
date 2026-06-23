@@ -25,6 +25,8 @@ import {
   renameCJSConfigs as _renameCJSConfigs,
   detectPackageManager as _detectPackageManager,
   findInNodeModules as _findInNodeModules,
+  findDir,
+  hasAppDir,
 } from "./utils/project.js";
 import { getReactUpgradeDeps } from "./init.js";
 import { runTPR } from "./cloudflare/tpr.js";
@@ -35,6 +37,12 @@ import { loadNextConfig, resolveNextConfig } from "./config/next-config.js";
 import { parsePositiveIntegerArg } from "./cli-args.js";
 
 export { injectPregeneratedConcretePaths } from "./build/pregenerated-concrete-paths-injection.js";
+import {
+  readPrerenderManifest,
+  buildPregeneratedConcretePathTable,
+} from "./server/prerender-manifest.js";
+import { escapeRegExp } from "./utils/regex.js";
+import { normalizePathSeparators } from "./utils/path.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -179,26 +187,31 @@ export function formatMissingCloudflarePluginError(options: {
   );
 }
 
+/**
+ * Detect the project structure (router, config, worker entry, package name).
+ *
+ * `root` must be forward-slash — it is joined with `path.posix.*`, passed to
+ * `findDir` / `hasAppDir`, and used as the base of `path.posix.basename`.
+ * Callers normalize it at the deploy entry.
+ */
 export function detectProject(root: string): ProjectInfo {
-  const hasApp =
-    fs.existsSync(path.join(root, "app")) || fs.existsSync(path.join(root, "src", "app"));
-  const hasPages =
-    fs.existsSync(path.join(root, "pages")) || fs.existsSync(path.join(root, "src", "pages"));
+  const hasApp = hasAppDir(root);
+  const hasPages = findDir(root, "pages", "src/pages") !== null;
 
   // Prefer App Router if both exist
   const isAppRouter = hasApp;
   const isPagesRouter = !hasApp && hasPages;
 
   const hasViteConfig =
-    fs.existsSync(path.join(root, "vite.config.ts")) ||
-    fs.existsSync(path.join(root, "vite.config.js")) ||
-    fs.existsSync(path.join(root, "vite.config.mjs"));
+    fs.existsSync(path.posix.join(root, "vite.config.ts")) ||
+    fs.existsSync(path.posix.join(root, "vite.config.js")) ||
+    fs.existsSync(path.posix.join(root, "vite.config.mjs"));
 
   const wranglerConfigExists = hasWranglerConfig(root);
 
   const hasWorkerEntry =
-    fs.existsSync(path.join(root, "worker", "index.ts")) ||
-    fs.existsSync(path.join(root, "worker", "index.js"));
+    fs.existsSync(path.posix.join(root, "worker", "index.ts")) ||
+    fs.existsSync(path.posix.join(root, "worker", "index.js"));
 
   // Check node_modules for installed packages.
   // Walk up ancestor directories so that monorepo-hoisted packages are found
@@ -208,7 +221,7 @@ export function detectProject(root: string): ProjectInfo {
   const hasWrangler = _findInNodeModules(root, ".bin/wrangler") !== null;
 
   // Parse package.json once for all fields that need it
-  const pkgPath = path.join(root, "package.json");
+  const pkgPath = path.posix.join(root, "package.json");
   let pkg: Record<string, unknown> | null = null;
   if (fs.existsSync(pkgPath)) {
     try {
@@ -219,7 +232,7 @@ export function detectProject(root: string): ProjectInfo {
   }
 
   // Derive project name from package.json or directory name
-  let projectName = path.basename(root);
+  let projectName = path.posix.basename(root);
   if (pkg?.name && typeof pkg.name === "string") {
     // Sanitize: Workers names must be lowercase alphanumeric + hyphens
     projectName = pkg.name
@@ -556,6 +569,7 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES, isI
 import type { ImageConfig } from "vinext/server/image-optimization";
 import { cloneRequestWithHeaders, cloneRequestWithUrl, filterInternalHeaders, isOpenRedirectShaped } from "vinext/server/request-pipeline";
 import { notFoundStaticAssetResponse } from "vinext/server/http-error-responses";
+import { finalizeMissingStaticAssetResponse } from "vinext/server/worker-utils";
 import { assetPrefixPathname, isNextStaticPath } from "vinext/utils/asset-prefix";
 import { hasBasePath, stripBasePath } from "vinext/utils/base-path";
 
@@ -614,15 +628,11 @@ export default {
         return new Response("This page could not be found", { status: 404 });
       }
 
-      // Invalid \`_next/static/*\` paths short-circuit with a plain-text 404
-      // instead of falling through to renderPage (which would render the full
-      // HTML 404 page with bootstrap scripts + CSS). Valid assets are served
-      // by Cloudflare's ASSETS binding BEFORE the worker runs; only misses
-      // reach this code. Matches Next.js (#1337):
-      //   packages/next/src/server/lib/router-server.ts
-      if (isNextStaticPath(pathname, basePath, assetPathPrefix)) {
-        return notFoundStaticAssetResponse();
-      }
+      // Valid assets are served by Cloudflare's ASSETS binding before the
+      // worker runs. Missing asset-shaped requests still need to reach
+      // middleware so it can rewrite or respond; a final 404 is converted
+      // back to Next.js's canonical plain-text static-file response below.
+      const missingBuildAsset = isNextStaticPath(pathname, basePath, assetPathPrefix);
 
       // Strip internal headers from inbound requests so they cannot be
       // forged to influence routing or impersonate internal state.
@@ -714,10 +724,12 @@ export default {
 
       const result = await runPagesRequest(request, deps);
       if (result.type === "response") {
-        return result.response;
+        return finalizeMissingStaticAssetResponse(result.response, missingBuildAsset);
       }
       // Should not reach here for prod/worker (all callbacks supplied).
-      return new Response("This page could not be found", { status: 404 });
+      return missingBuildAsset
+        ? notFoundStaticAssetResponse()
+        : new Response("This page could not be found", { status: 404 });
 
     } catch (error) {
       console.error("[vinext] Worker error:", error);
@@ -756,7 +768,7 @@ export function generateAppRouterViteConfig(info?: ProjectInfo): string {
     }),`);
 
   // Build resolve.alias for native module stubs (tsconfig paths are handled
-  // automatically by vite-tsconfig-paths inside the vinext plugin)
+  // by the vinext plugin's Vite 8 native support / Vite 7 fallback).
   let resolveBlock = "";
   const aliases: string[] = [];
 
@@ -793,7 +805,7 @@ export function generatePagesRouterViteConfig(info?: ProjectInfo): string {
   }
 
   // Build resolve.alias for native module stubs (tsconfig paths are handled
-  // automatically by vite-tsconfig-paths inside the vinext plugin)
+  // by the vinext plugin's Vite 8 native support / Vite 7 fallback).
   let resolveBlock = "";
   const aliases: string[] = [];
 
@@ -1286,7 +1298,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
   console.log("\n  vinext deploy\n");
 
   // Step 1: Detect project structure
-  const info = detectProject(root);
+  const info = detectProject(normalizePathSeparators(root));
 
   if (!info.isAppRouter && !info.isPagesRouter) {
     console.error("  Error: No app/ or pages/ directory found.");
@@ -1327,7 +1339,7 @@ export async function deploy(options: DeployOptions): Promise<void> {
     // Re-detect so all fields reflect the freshly installed packages.
     // Preserve any CLI name override applied above.
     const nameOverride = options.name ? info.projectName : undefined;
-    Object.assign(info, detectProject(root));
+    Object.assign(info, detectProject(normalizePathSeparators(root)));
     if (nameOverride) info.projectName = nameOverride;
   }
 
