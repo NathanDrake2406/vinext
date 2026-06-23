@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vite-plus/test";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import {
   detectProject,
@@ -30,6 +31,7 @@ import {
   hasWranglerConfig,
   formatMissingCloudflarePluginError,
   formatMissingCacheAdapterError,
+  injectPregeneratedConcretePaths,
 } from "../packages/vinext/src/deploy.js";
 import {
   detectPackageManager,
@@ -44,11 +46,14 @@ import {
   computeClientRuntimeMetadata,
   buildRuntimeGlobalsScript,
 } from "../packages/vinext/src/utils/client-runtime-metadata.js";
+import { fetchWorkerFilesystemRoute } from "../packages/vinext/src/server/pages-request-pipeline.js";
 import {
+  finalizeMissingStaticAssetResponse,
   mergeHeaders,
   resolveStaticAssetSignal,
 } from "../packages/vinext/src/server/worker-utils.js";
 import { domainCandidates, parseWranglerConfig } from "../packages/vinext/src/cloudflare/tpr.js";
+import { clearPregeneratedConcretePaths } from "../packages/vinext/src/server/pregenerated-concrete-paths.js";
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -294,7 +299,7 @@ describe("resolveWranglerBin", () => {
   });
 
   it("returns a clear fallback path when Wrangler is missing", () => {
-    expect(resolveWranglerBin(tmpDir)).toBe(
+    expect(resolveWranglerBin(tmpDir, () => null)).toBe(
       path.join(tmpDir, "node_modules", "wrangler", "bin", "wrangler.js"),
     );
   });
@@ -850,6 +855,21 @@ describe("scanPublicFileRoutes", () => {
 });
 
 describe("generatePagesRouterWorkerEntry", () => {
+  it("keeps Cloudflare dev _next/data URLs intact for Worker normalization", () => {
+    const indexSource = fs.readFileSync(
+      path.join(import.meta.dirname, "../packages/vinext/src/index.ts"),
+      "utf8",
+    );
+    const delegation = indexSource.indexOf("if (hasCloudflarePlugin) return next();");
+    const dataNormalization = indexSource.indexOf(
+      "// ── `_next/data` normalization (Pages Router) ──────────────",
+    );
+
+    expect(delegation).toBeGreaterThanOrEqual(0);
+    expect(dataNormalization).toBeGreaterThanOrEqual(0);
+    expect(delegation).toBeLessThan(dataNormalization);
+  });
+
   it("generates valid TypeScript", () => {
     const content = generatePagesRouterWorkerEntry();
     expect(content).toContain("export default");
@@ -866,6 +886,8 @@ describe("generatePagesRouterWorkerEntry", () => {
     // runPagesRequest.
     expect(content).toContain('typeof runMiddleware === "function"');
     expect(content).toContain("wrapMiddlewareWithBasePath(runMiddleware, basePath, hadBasePath)");
+    expect(content).toContain("const dataNorm = normalizeDataRequest(request)");
+    expect(content).toContain("isDataRequest: isDataReq");
     expect(content).toContain("runPagesRequest(request, deps)");
   });
 
@@ -947,17 +969,17 @@ describe("generatePagesRouterWorkerEntry", () => {
     expect(content).toContain("runPagesRequest(request, deps)");
   });
 
-  it("handles basePath stripping and creates a new request with stripped URL for middleware", () => {
+  it("handles basePath stripping and clones the request with the stripped URL", () => {
     const content = generatePagesRouterWorkerEntry();
     expect(content).toContain("basePath");
     expect(content).toContain(
       'import { hasBasePath, stripBasePath } from "vinext/utils/base-path"',
     );
     expect(content).toContain("const stripped = stripBasePath(pathname, basePath);");
-    // After stripping, a new request with the stripped URL must be created
-    // in the adapter so runPagesRequest receives a clean basePath-free request.
+    // After stripping, clone with the stripped URL so runPagesRequest receives
+    // a clean basePath-free request without dropping Worker metadata.
     expect(content).toContain("strippedUrl.pathname = stripped");
-    expect(content).toContain("new Request(strippedUrl, request)");
+    expect(content).toContain("cloneRequestWithUrl(request, strippedUrl.toString())");
   });
 
   it("handles trailing slash normalization", () => {
@@ -976,6 +998,11 @@ describe("generatePagesRouterWorkerEntry", () => {
     expect(content).toContain('handleApi: typeof handleApiRoute === "function"');
     expect(content).toContain("handleApiRoute(req, apiUrl, ctx)");
     expect(content).toContain("runPagesRequest(request, deps)");
+  });
+
+  it("preserves request metadata when stripping Pages Router basePath", () => {
+    const content = generatePagesRouterWorkerEntry();
+    expect(content).toContain("cloneRequestWithUrl(request, strippedUrl.toString())");
   });
 
   it("includes error handling", () => {
@@ -1010,6 +1037,13 @@ describe("generatePagesRouterWorkerEntry", () => {
     expect(content).toContain("transformImage:");
     expect(content).toContain("env.ASSETS.fetch");
     expect(content).toContain("env.IMAGES");
+  });
+
+  it("re-enters the ASSETS binding after beforeFiles rewrites", () => {
+    const content = generatePagesRouterWorkerEntry();
+    expect(content).toContain("serveFilesystemRoute: async");
+    expect(content).toContain("fetchWorkerFilesystemRoute(");
+    expect(content).toContain("env.ASSETS.fetch(assetRequest)");
   });
 
   it("exports every vinext subpath imported by generated worker entries", () => {
@@ -1184,7 +1218,36 @@ describe("generatePagesRouterWorkerEntry", () => {
     // now called inside runPagesRequest. The worker delegates to the pipeline.
     expect(content).toContain("runPagesRequest(request, deps)");
     expect(content).toContain('result.type === "response"');
-    expect(content).toContain("return result.response");
+    expect(content).toContain(
+      "return finalizeMissingStaticAssetResponse(result.response, missingBuildAsset)",
+    );
+  });
+
+  it("finalizes only missing build-asset 404 responses", async () => {
+    let canceled = false;
+    const routed404 = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("rendered 404"));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 404, headers: { "content-type": "text/html" } },
+    );
+
+    const finalized = finalizeMissingStaticAssetResponse(routed404, true);
+    expect(finalized.status).toBe(404);
+    expect(finalized.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(await finalized.text()).toBe("Not Found");
+    await vi.waitFor(() => expect(canceled).toBe(true));
+
+    const middlewareResponse = new Response("rewritten missing asset", { status: 200 });
+    expect(finalizeMissingStaticAssetResponse(middlewareResponse, true)).toBe(middlewareResponse);
+
+    const regular404 = new Response("rendered 404", { status: 404 });
+    expect(finalizeMissingStaticAssetResponse(regular404, false)).toBe(regular404);
   });
 
   it("resolveStaticAssetSignal fetches and merges static asset responses with middleware status", async () => {
@@ -1242,9 +1305,10 @@ describe("generatePagesRouterWorkerEntry", () => {
   it("does not defer error page rendering for data requests", () => {
     const content = generatePagesRouterWorkerEntry();
     // shouldDeferErrorPageOnMiss logic is now inside runPagesRequest.
-    // The worker passes isDataReq: false (no buildId normalization) and
-    // matchPageRoute dep so the pipeline computes the right behavior.
-    expect(content).toContain("isDataReq: false,");
+    // The worker normalizes the build-ID-aware URL before the pipeline and
+    // passes the trusted classification alongside matchPageRoute.
+    expect(content).toContain("isDataReq,");
+    expect(content).toContain("isDataRequest: isDataReq");
     expect(content).toContain(
       'matchPageRoute: typeof matchPageRoute === "function" ? matchPageRoute : null',
     );
@@ -1287,11 +1351,9 @@ describe("generatePagesRouterWorkerEntry", () => {
     expect(content).toContain("runPagesRequest(request, deps)");
   });
 
-  // Regression for #1337: invalid `_next/static/*` paths must short-circuit
-  // with a plain-text 404 instead of falling through to renderPage (which
-  // would render the full HTML 404 page with bootstrap scripts + CSS).
-  // Matches Next.js: packages/next/src/server/lib/router-server.ts.
-  it("short-circuits invalid `_next/static/*` paths with plain-text 404", () => {
+  // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-general/test/index.test.ts
+  it("runs middleware before finalizing missing `_next/static/*` responses", () => {
     const content = generatePagesRouterWorkerEntry();
     expect(content).toContain(
       'import { notFoundStaticAssetResponse } from "vinext/server/http-error-responses"',
@@ -1300,15 +1362,87 @@ describe("generatePagesRouterWorkerEntry", () => {
       'import { assetPrefixPathname, isNextStaticPath } from "vinext/utils/asset-prefix"',
     );
     expect(content).toContain("assetPrefixPathname(vinextConfig?.assetPrefix");
-    expect(content).toContain("isNextStaticPath(pathname, basePath, assetPathPrefix)");
-    expect(content).toContain("return notFoundStaticAssetResponse();");
+    expect(content).toContain(
+      "const missingBuildAsset = isNextStaticPath(pathname, basePath, assetPathPrefix)",
+    );
+    expect(content).toContain(
+      "finalizeMissingStaticAssetResponse(result.response, missingBuildAsset)",
+    );
 
-    // The short-circuit must fire BEFORE runPagesRequest (which invokes renderPage)
-    // so the rich HTML 404 is never rendered for asset misses.
+    // Detection happens before routing, but the response is finalized only
+    // after runPagesRequest has given middleware a chance to handle the miss.
     const staticPos = content.indexOf("isNextStaticPath(pathname, basePath, assetPathPrefix)");
     const pipelinePos = content.indexOf("runPagesRequest(request, deps)");
+    const finalizePos = content.indexOf(
+      "finalizeMissingStaticAssetResponse(result.response, missingBuildAsset)",
+    );
     expect(staticPos).toBeGreaterThan(-1);
     expect(pipelinePos).toBeGreaterThan(staticPos);
+    expect(finalizePos).toBeGreaterThan(pipelinePos);
+  });
+});
+
+describe("fetchWorkerFilesystemRoute", () => {
+  it.each(["beforeFiles", "afterFiles", "fallback"] as const)(
+    "fetches rewritten assets during %s",
+    async (phase) => {
+      const fetchAsset = vi.fn(
+        async (request: Request) =>
+          new Response(`asset:${new URL(request.url).pathname}`, {
+            headers: { "content-type": "text/plain" },
+          }),
+      );
+      const result = await fetchWorkerFilesystemRoute(
+        new Request("https://example.com/sv/source?ignored=1"),
+        "/file.txt",
+        phase,
+        fetchAsset,
+      );
+
+      expect(result).toBeInstanceOf(Response);
+      if (!(result instanceof Response)) return;
+      await expect(result.text()).resolves.toBe("asset:/file.txt");
+      expect(fetchAsset).toHaveBeenCalledOnce();
+      expect(new URL(fetchAsset.mock.calls[0][0].url).search).toBe("");
+    },
+  );
+
+  it("falls through on asset misses and preserves HEAD", async () => {
+    const fetchAsset = vi.fn(async (request: Request) => {
+      expect(request.method).toBe("HEAD");
+      return new Response(null, { status: 404 });
+    });
+    const result = await fetchWorkerFilesystemRoute(
+      new Request("https://example.com/source", { method: "HEAD" }),
+      "/missing.txt",
+      "afterFiles",
+      fetchAsset,
+    );
+
+    expect(result).toBe(false);
+    expect(fetchAsset).toHaveBeenCalledOnce();
+  });
+
+  it("skips direct and API filesystem probes", async () => {
+    const fetchAsset = vi.fn(async () => new Response("unexpected"));
+
+    expect(
+      await fetchWorkerFilesystemRoute(
+        new Request("https://example.com/file.txt"),
+        "/file.txt",
+        "direct",
+        fetchAsset,
+      ),
+    ).toBe(false);
+    expect(
+      await fetchWorkerFilesystemRoute(
+        new Request("https://example.com/source"),
+        "/api/hello",
+        "fallback",
+        fetchAsset,
+      ),
+    ).toBe(false);
+    expect(fetchAsset).not.toHaveBeenCalled();
   });
 });
 
@@ -3153,5 +3287,171 @@ describe("parseWranglerConfig — custom domain extraction", () => {
     );
     const config = parseWranglerConfig(tmpDir);
     expect(config?.kvNamespaceId).toBe("abc123");
+  });
+});
+
+describe("injectPregeneratedConcretePaths", () => {
+  it("second call replaces first injection", () => {
+    const sourceCode = `import { handler } from "vinext/server/app-router-entry";\n`;
+    const manifestA = {
+      buildId: "build-a",
+      routes: [
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-a",
+          revalidate: 60,
+        },
+      ],
+    };
+    const manifestB = {
+      buildId: "build-b",
+      routes: [
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-b",
+          revalidate: 60,
+        },
+      ],
+    };
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", sourceCode);
+
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifestA));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const afterA = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    expect(afterA).toContain("post-a");
+    expect(afterA).not.toContain("post-b");
+
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifestB));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const afterB = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    expect(afterB).toContain("post-b");
+    expect(afterB).not.toContain("post-a");
+    expect(afterB).toContain('import { handler } from "vinext/server/app-router-entry"');
+  });
+
+  it("missing manifest strips prior injection", () => {
+    const priorInjection = [
+      "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */",
+      'globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/blog/:slug",["/blog/post-a"]]];',
+      "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */",
+      'import { handler } from "vinext/server/app-router-entry";',
+      "",
+    ].join("\n");
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", priorInjection);
+
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const after = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    expect(after).not.toContain("__VINEXT_PREGENERATED_CONCRETE_PATHS");
+    expect(after).toContain('import { handler } from "vinext/server/app-router-entry"');
+  });
+
+  it("excludes fallback-shell placeholder paths from injection", () => {
+    const sourceCode = 'export default { fetch(request) { return new Response("ok"); } };\n';
+    const manifest = {
+      buildId: "test",
+      routes: [
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-a",
+          revalidate: 60,
+        },
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/[slug]",
+          revalidate: 60,
+          fallback: true,
+        },
+      ],
+    };
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", sourceCode);
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifest));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const code = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    const match = code.match(/globalThis\.__VINEXT_PREGENERATED_CONCRETE_PATHS = (\[.*?\]);/);
+    expect(match).not.toBeNull();
+    const table: unknown = JSON.parse(match![1]);
+    expect(table).toEqual([["/blog/:slug", ["/blog/post-a"]]]);
+  });
+
+  it("hydrates the concrete-path registry when the generated Worker entry is imported", async () => {
+    const registryModuleUrl = pathToFileURL(
+      path.resolve("packages/vinext/src/server/pregenerated-concrete-paths.ts"),
+    ).href;
+    const sourceCode = [
+      `import { getRenderedConcreteUrlPathsForRoute, initPregeneratedPathsFromGlobals } from ${JSON.stringify(registryModuleUrl)};`,
+      "initPregeneratedPathsFromGlobals();",
+      'export const renderedPaths = [...(getRenderedConcreteUrlPathsForRoute("/blog/:slug") ?? [])];',
+      'export default { fetch(request) { return new Response("ok"); } };',
+      "",
+    ].join("\n");
+    const manifest = {
+      buildId: "test",
+      routes: [
+        {
+          route: "/blog/:slug",
+          status: "rendered",
+          router: "app",
+          path: "/blog/post-a",
+          revalidate: 60,
+        },
+      ],
+    };
+
+    clearPregeneratedConcretePaths();
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", sourceCode);
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", JSON.stringify(manifest));
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const entryUrl = pathToFileURL(path.join(tmpDir, "dist/server/index.js")).href;
+    const workerEntry: unknown = await import(`${entryUrl}?t=${Date.now()}`);
+
+    expect(workerEntry).toMatchObject({
+      renderedPaths: ["/blog/post-a"],
+    });
+  });
+
+  it("corrupt manifest strips prior injection", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const priorInjection = [
+      "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_START__ */",
+      'globalThis.__VINEXT_PREGENERATED_CONCRETE_PATHS = [["/",["/"]]];',
+      "/* __VINEXT_PREGENERATED_CONCRETE_PATHS_END__ */",
+      'export default { fetch(request) { return new Response("ok"); } };',
+      "",
+    ].join("\n");
+
+    mkdir(tmpDir, "dist/server");
+    writeFile(tmpDir, "dist/server/index.js", priorInjection);
+    writeFile(tmpDir, "dist/server/vinext-prerender.json", "{invalid json}");
+
+    injectPregeneratedConcretePaths(tmpDir);
+
+    const after = fs.readFileSync(path.join(tmpDir, "dist/server/index.js"), "utf-8");
+    expect(after).not.toContain("__VINEXT_PREGENERATED_CONCRETE_PATHS");
+    expect(after).toContain('export default { fetch(request) { return new Response("ok"); } }');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[vinext] Failed to read prerender manifest"),
+      expect.any(SyntaxError),
+    );
+    warnSpy.mockRestore();
   });
 });

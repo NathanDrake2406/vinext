@@ -5,7 +5,7 @@
  * Resolves metadata from layouts and pages (pages override layouts).
  */
 import React from "react";
-import { makeThenableParams } from "./thenable-params.js";
+import { makeThenableParams, type ThenableParamsObserver } from "./thenable-params.js";
 import { isAbsoluteOrProtocolRelativeUrl } from "./url-utils.js";
 
 // ---------------------------------------------------------------------------
@@ -38,10 +38,19 @@ export type Viewport = {
 export async function resolveModuleViewport(
   mod: Record<string, unknown>,
   params: Record<string, string | string[]>,
+  searchParams?: Record<string, string | string[]>,
+  searchParamsObserver?: ThenableParamsObserver,
 ): Promise<Viewport | null> {
   if (typeof mod.generateViewport === "function") {
     const asyncParams = makeThenableParams(params);
-    return await mod.generateViewport({ params: asyncParams });
+    const props =
+      searchParams === undefined
+        ? { params: asyncParams }
+        : {
+            params: asyncParams,
+            searchParams: makeThenableParams(searchParams, searchParamsObserver),
+          };
+    return await mod.generateViewport(props);
   }
   if (mod.viewport && typeof mod.viewport === "object") {
     return mod.viewport as Viewport;
@@ -536,6 +545,7 @@ export async function resolveModuleMetadata(
   params: Record<string, string | string[]> = {},
   searchParams?: Record<string, string | string[]>,
   parent: Promise<Metadata> = Promise.resolve({}),
+  searchParamsObserver?: ThenableParamsObserver,
 ): Promise<Metadata | null> {
   if (typeof mod.generateMetadata === "function") {
     // Next.js 16 passes params/searchParams as Promises (async pattern).
@@ -544,7 +554,10 @@ export async function resolveModuleMetadata(
     const props =
       searchParams === undefined
         ? { params: asyncParams }
-        : { params: asyncParams, searchParams: makeThenableParams(searchParams) };
+        : {
+            params: asyncParams,
+            searchParams: makeThenableParams(searchParams, searchParamsObserver),
+          };
     // Only pass the `parent` metadata when `generateMetadata` actually declares
     // it (arity >= 2). Next.js omits the parent argument for `generateMetadata`
     // functions that don't use it, which matters for `'use cache'` functions:
@@ -1103,7 +1116,7 @@ export function MetadataHead({ metadata, pathname = "/", trailingSlash }: Metada
       }
     }
     // Twitter player cards
-    if (tw.players) {
+    if (tw.card === "player" && tw.players) {
       const players = Array.isArray(tw.players) ? tw.players : [tw.players];
       for (const player of players) {
         const playerUrl = player.playerUrl.toString();
@@ -1121,7 +1134,7 @@ export function MetadataHead({ metadata, pathname = "/", trailingSlash }: Metada
       }
     }
     // Twitter app cards
-    if (tw.app) {
+    if (tw.card === "app" && tw.app) {
       const { app } = tw;
       for (const platform of ["iphone", "ipad", "googleplay"] as const) {
         if (app.name) {
@@ -1129,7 +1142,7 @@ export function MetadataHead({ metadata, pathname = "/", trailingSlash }: Metada
             <meta key={key++} name={`twitter:app:name:${platform}`} content={app.name} />,
           );
         }
-        if (app.id[platform] !== undefined) {
+        if (app.id[platform]) {
           elements.push(
             <meta
               key={key++}
@@ -1138,7 +1151,7 @@ export function MetadataHead({ metadata, pathname = "/", trailingSlash }: Metada
             />,
           );
         }
-        if (app.url?.[platform] !== undefined) {
+        if (app.url?.[platform]) {
           const appUrl = app.url[platform]!.toString();
           elements.push(
             <meta key={key++} name={`twitter:app:url:${platform}`} content={resolveUrl(appUrl)} />,

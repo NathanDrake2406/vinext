@@ -789,6 +789,14 @@ describe("App Router Production server (startProdServer)", () => {
     expect(json).toHaveProperty("message");
   });
 
+  it("runs an exact API middleware matcher for a trailing-slash route handler request", async () => {
+    const res = await fetch(`${baseUrl}/api/header-override-delete/`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-mw-ran")).toBe("true");
+    expect(res.headers.get("x-mw-pathname")).toBe("/api/header-override-delete/");
+  });
+
   it("returns 404 for nonexistent routes", async () => {
     const res = await fetch(`${baseUrl}/no-such-page`);
     expect(res.status).toBe(404);
@@ -1511,6 +1519,43 @@ describe("App Router Production server (startProdServer)", () => {
     expect(res.headers.get("x-nextjs-action-not-found")).toBeNull();
     expect(text).not.toContain("Server action not found");
     expect(text).toContain("echo:world");
+  });
+
+  // Ported from Next.js:
+  // test/e2e/app-dir/actions/app-action-size-limit-invalid.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/actions/app-action-size-limit-invalid.test.ts
+  it("returns a Flight error for a streamed server action body overflow", async () => {
+    const html = await (await fetch(`${baseUrl}/nextjs-compat/action-node-mw`)).text();
+    const refValue = html.match(/name="\$ACTION_[^"]*:0"\s+value="([^"]+)"/)?.[1];
+    expect(refValue).toBeDefined();
+    const decoded = refValue!.replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+    const actionId = JSON.parse(decoded).id as string;
+
+    const oversizedPayload = JSON.stringify(["x".repeat(2 * 1024 * 1024)]);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoded = new TextEncoder().encode(oversizedPayload);
+        for (let offset = 0; offset < encoded.byteLength; offset += 64 * 1024) {
+          controller.enqueue(encoded.subarray(offset, offset + 64 * 1024));
+        }
+        controller.close();
+      },
+    });
+
+    const res = await fetch(`${baseUrl}/nextjs-compat/action-node-mw.rsc`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain",
+        "x-rsc-action": actionId,
+      },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const text = await res.text();
+
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("text/x-component");
+    expect(text).not.toContain("echo:");
   });
 });
 

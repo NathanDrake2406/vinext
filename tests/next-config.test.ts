@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi, beforeEach } from "vite-plus/test"
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   detectNextIntlConfig,
   lightningCssFeatureNamesToMask,
@@ -1380,6 +1381,14 @@ describe("resolveNextConfig serverExternalPackages", () => {
       "The packages specified in the 'transpilePackages' conflict with the 'serverExternalPackages': payload",
     );
   });
+
+  it("preserves transpilePackages for default external precedence", async () => {
+    const resolved = await resolveNextConfig({
+      transpilePackages: ["typescript", "shiki"],
+    });
+
+    expect(resolved.transpilePackages).toEqual(["typescript", "shiki"]);
+  });
 });
 
 describe("resolveNextConfig serverActionsBodySizeLimit", () => {
@@ -1493,6 +1502,20 @@ describe("resolveNextConfig gestureTransition", () => {
       experimental: { gestureTransition: true },
     });
     expect(resolved.gestureTransition).toBe(true);
+  });
+});
+
+describe("resolveNextConfig appNavFailHandling", () => {
+  it("defaults experimental.appNavFailHandling to false", async () => {
+    const resolved = await resolveNextConfig({});
+    expect(resolved.appNavFailHandling).toBe(false);
+  });
+
+  it("reads experimental.appNavFailHandling from next.config", async () => {
+    const resolved = await resolveNextConfig({
+      experimental: { appNavFailHandling: true },
+    });
+    expect(resolved.appNavFailHandling).toBe(true);
   });
 });
 
@@ -1841,6 +1864,7 @@ describe("detectNextIntlConfig", () => {
       resolveExtensions: null,
       serverResolveExtensions: null,
       cacheComponents: false,
+      appNavFailHandling: false,
       gestureTransition: false,
       prefetchInlining: false,
       redirects: [],
@@ -1853,6 +1877,7 @@ describe("detectNextIntlConfig", () => {
       allowedDevOrigins: [],
       serverActionsAllowedOrigins: [],
       optimizePackageImports: [],
+      transpilePackages: [],
       inlineCss: false,
       serverActionsBodySizeLimit: 1 * 1024 * 1024,
       serverActionsBodySizeLimitLabel: "1 MB",
@@ -2420,10 +2445,15 @@ describe("resolveNextConfig rootParams deprecation warning", () => {
 
 describe("resolveNextConfig cacheHandler", () => {
   it("resolves file:// URLs to filesystem paths", async () => {
+    // Build the URL with pathToFileURL so it is valid on Windows too, where a
+    // file:// URL must carry a drive letter (a drive-less file:///… throws in
+    // fileURLToPath). In production the URL comes from import.meta.resolve, so
+    // it is always platform-valid.
+    const handlerPath = path.resolve("/absolute/path/to/handler.js");
     const resolved = await resolveNextConfig({
-      cacheHandler: "file:///absolute/path/to/handler.js",
+      cacheHandler: pathToFileURL(handlerPath).href,
     });
-    expect(resolved.cacheHandler).toBe("/absolute/path/to/handler.js");
+    expect(resolved.cacheHandler).toBe(handlerPath);
   });
 
   it("passes through absolute paths unchanged", async () => {

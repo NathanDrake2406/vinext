@@ -1,6 +1,11 @@
 import "./server-globals.js";
 import type { Route } from "../routing/pages-router.js";
-import { mergeRouteParamsIntoQuery, parseQueryString } from "../utils/query.js";
+import type { NextI18nConfig } from "../config/next-config.js";
+import {
+  mergeRouteParamsIntoQuery,
+  parseQueryString,
+  urlQueryToSearchParams,
+} from "../utils/query.js";
 import {
   createPagesReqRes,
   parsePagesApiBody,
@@ -11,6 +16,7 @@ import {
 } from "./pages-node-compat.js";
 import { resolveBodyParserConfig } from "./pages-body-parser-config.js";
 import { internalServerErrorResponse } from "./http-error-responses.js";
+import { cloneRequestWithUrl } from "./request-pipeline.js";
 import { isEdgeApiRuntime } from "./edge-api-runtime.js";
 import { runWithExecutionContext, type ExecutionContextLike } from "vinext/shims/request-context";
 import { NextRequest } from "vinext/shims/server";
@@ -90,10 +96,24 @@ type HandlePagesApiRouteOptions = {
   reportRequestError?: (error: Error, routePattern: string) => void | Promise<void>;
   request: Request;
   url: string;
+  nextConfig?: {
+    basePath?: string;
+    i18n?: NextI18nConfig | null;
+    trailingSlash?: boolean;
+  };
 };
 
 function buildPagesApiQuery(url: string, params: PagesRequestQuery): PagesRequestQuery {
   return mergeRouteParamsIntoQuery(parseQueryString(url), params);
+}
+
+function createEdgeApiRequest(request: Request, url: string, params: PagesRequestQuery): Request {
+  const resolvedUrl = new URL(request.url);
+  resolvedUrl.search = urlQueryToSearchParams(buildPagesApiQuery(url, params)).toString();
+  const resolvedUrlString = resolvedUrl.toString();
+  return resolvedUrlString === request.url
+    ? request
+    : cloneRequestWithUrl(request, resolvedUrlString);
 }
 
 function isEdgeApiRouteModule(
@@ -127,7 +147,18 @@ async function _handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promis
       // Next.js wraps the incoming Request in a NextRequest before invoking
       // edge API handlers, so handlers can use `req.nextUrl.searchParams`,
       // `req.cookies`, etc. (Cf. NextRequestHint in next/src/server/web/adapter.ts.)
-      const nextRequest = new NextRequest(options.request);
+      const nextRequest = new NextRequest(
+        createEdgeApiRequest(options.request, options.url, params),
+        options.nextConfig
+          ? {
+              nextConfig: {
+                basePath: options.nextConfig.basePath,
+                i18n: options.nextConfig.i18n ?? undefined,
+                trailingSlash: options.nextConfig.trailingSlash,
+              },
+            }
+          : undefined,
+      );
       const response = await route.module.default(nextRequest);
       if (response instanceof Response) {
         return response;

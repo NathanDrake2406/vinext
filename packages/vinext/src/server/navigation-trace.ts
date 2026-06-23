@@ -4,8 +4,10 @@ type NavigationTraceSchemaVersion = 0;
 
 export const NavigationTraceReasonCodes = {
   cacheProofRejected: "NC_CACHE_REJECT",
+  cacheReuseTokenRejected: "NC_CACHE_TOKEN_REJECT",
   commitCurrent: "NC_COMMIT",
   crossDocumentFlight: "NC_CROSS_DOC_FLIGHT",
+  fetchFresh: "NC_FETCH_FRESH",
   invalidRscPayload: "NC_RSC_INVALID",
   interceptedCommitCurrent: "NC_INTERCEPT_COMMIT",
   interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT",
@@ -14,7 +16,9 @@ export const NavigationTraceReasonCodes = {
   interceptedRejectedTargetMismatch: "NC_INTERCEPT_REJECT_TARGET",
   interceptedRejectedUndeclaredTopology: "NC_INTERCEPT_REJECT_GRAPH",
   interceptedRejectedUnknownSource: "NC_INTERCEPT_REJECT_SOURCE",
+  optimisticRouteShell: "NC_OPTIMISTIC_SHELL",
   prefetchOnly: "NC_PREFETCH_ONLY",
+  prefetchResponseReuse: "NC_PREFETCH_REUSE",
   proceedToCommit: "NC_RSC_PROCEED",
   redirectFollow: "NC_RSC_REDIRECT_FOLLOW",
   redirectTerminalDepth: "NC_RSC_REDIRECT_DEPTH",
@@ -30,10 +34,13 @@ export const NavigationTraceReasonCodes = {
   serverActionRscCompatibilityMismatch: "NC_SA_RSC_COMPAT",
   staleOperation: "NC_STALE",
   streamedRedirectLoop: "NC_RSC_STREAMED_REDIRECT_LOOP",
+  visitedResponseReuse: "NC_VISITED_REUSE",
 } satisfies Readonly<{
   cacheProofRejected: "NC_CACHE_REJECT";
+  cacheReuseTokenRejected: "NC_CACHE_TOKEN_REJECT";
   commitCurrent: "NC_COMMIT";
   crossDocumentFlight: "NC_CROSS_DOC_FLIGHT";
+  fetchFresh: "NC_FETCH_FRESH";
   invalidRscPayload: "NC_RSC_INVALID";
   interceptedCommitCurrent: "NC_INTERCEPT_COMMIT";
   interceptedRejectedIncompatibleRoot: "NC_INTERCEPT_REJECT_ROOT";
@@ -42,7 +49,9 @@ export const NavigationTraceReasonCodes = {
   interceptedRejectedTargetMismatch: "NC_INTERCEPT_REJECT_TARGET";
   interceptedRejectedUndeclaredTopology: "NC_INTERCEPT_REJECT_GRAPH";
   interceptedRejectedUnknownSource: "NC_INTERCEPT_REJECT_SOURCE";
+  optimisticRouteShell: "NC_OPTIMISTIC_SHELL";
   prefetchOnly: "NC_PREFETCH_ONLY";
+  prefetchResponseReuse: "NC_PREFETCH_REUSE";
   proceedToCommit: "NC_RSC_PROCEED";
   redirectFollow: "NC_RSC_REDIRECT_FOLLOW";
   redirectTerminalDepth: "NC_RSC_REDIRECT_DEPTH";
@@ -58,6 +67,7 @@ export const NavigationTraceReasonCodes = {
   serverActionRscCompatibilityMismatch: "NC_SA_RSC_COMPAT";
   staleOperation: "NC_STALE";
   streamedRedirectLoop: "NC_RSC_STREAMED_REDIRECT_LOOP";
+  visitedResponseReuse: "NC_VISITED_REUSE";
 }>;
 
 export const NavigationTraceTransactionCodes = {
@@ -84,11 +94,13 @@ type NavigationTraceFieldName =
   | "cacheProofMode"
   | "cacheProofReuseClass"
   | "cacheProofScope"
+  | "cacheReuseTokenReason"
   | "currentRootLayoutTreePath"
   | "currentVisibleCommitVersion"
   | "nextRootLayoutTreePath"
   | "eventKind"
   | "fetchResultSource"
+  | "freshFetchReason"
   | "operationLane"
   | "pendingOperationId"
   | "redirectDepth"

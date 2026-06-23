@@ -13,6 +13,7 @@ import type { AppPageMiddlewareContext } from "./app-page-response.js";
 import type { AppPageSsrHandler } from "./app-page-stream.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
 import type { AppElements } from "./app-elements.js";
+import type { ApplyAppPageFileBasedMetadata } from "./app-page-head.js";
 
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type AppPageComponent = import("react").ComponentType<any>;
@@ -40,6 +41,7 @@ type AppFallbackRendererFontProviders = {
 };
 
 type AppFallbackRendererOptions<TModule extends AppPageModule = AppPageModule> = {
+  applyFileBasedMetadata?: ApplyAppPageFileBasedMetadata;
   clearRequestContext: () => void;
   createRscOnErrorHandler: (
     request: Request,
@@ -95,6 +97,7 @@ type AppFallbackRendererCallContext = {
    * render path. Defaults to `false` when no route is matched.
    */
   isEdgeRuntime?: boolean;
+  sourcePageSegments?: readonly string[] | null;
 };
 
 type AppFallbackRenderer<TModule extends AppPageModule = AppPageModule> = {
@@ -107,6 +110,7 @@ type AppFallbackRenderer<TModule extends AppPageModule = AppPageModule> = {
     scriptNonce: string | undefined,
     middlewareContext: AppPageMiddlewareContext,
     callContext?: AppFallbackRendererCallContext,
+    errorOrigin?: "rsc" | "ssr",
   ) => Promise<Response | null>;
   renderHttpAccessFallback: (
     route: AppPageBoundaryRoute<TModule> | null,
@@ -140,6 +144,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
   options: AppFallbackRendererOptions<TModule>,
 ): AppFallbackRenderer<TModule> {
   const {
+    applyFileBasedMetadata,
     basePath = "",
     clearRequestContext,
     createRscOnErrorHandler: buildRscOnErrorHandler,
@@ -219,6 +224,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         const globalNotFoundComponent = globalNotFoundModule?.default ?? null;
         if (globalNotFoundComponent) {
           return renderAppPageHttpAccessFallback({
+            applyFileBasedMetadata,
             boundaryComponent: globalNotFoundComponent,
             boundaryModule: globalNotFoundModule ?? null,
             buildFontLinkHeader: fontProviders.buildFontLinkHeader,
@@ -255,6 +261,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
       }
 
       return renderAppPageHttpAccessFallback({
+        applyFileBasedMetadata,
         basePath,
         trailingSlash,
         boundaryComponent: opts?.boundaryComponent ?? null,
@@ -286,6 +293,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         route,
         renderToReadableStream: rscRenderer,
         scriptNonce,
+        sourcePageSegments: callContext?.sourcePageSegments,
         statusCode,
       });
     },
@@ -320,8 +328,10 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
       scriptNonce,
       middlewareContext,
       callContext,
+      errorOrigin = "rsc",
     ) {
       return renderAppPageErrorBoundary({
+        applyFileBasedMetadata,
         basePath,
         trailingSlash,
         buildFontLinkHeader: fontProviders.buildFontLinkHeader,
@@ -330,6 +340,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
           return buildRscOnErrorHandler(request, pathname, routePath);
         },
         error,
+        errorOrigin,
         getFontLinks: fontProviders.getFontLinks,
         getFontPreloads: fontProviders.getFontPreloads,
         getFontStyles: fontProviders.getFontStyles,
@@ -349,6 +360,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         renderToReadableStream: rscRenderer,
         sanitizeErrorForClient: sanitizer,
         scriptNonce,
+        sourcePageSegments: callContext?.sourcePageSegments,
       });
     },
   };

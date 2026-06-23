@@ -1,9 +1,14 @@
 import { createElement } from "react";
 import { makeThenableParams } from "vinext/shims/thenable-params";
-import { resolveActiveParallelRouteHeadInputs, resolveAppPageHead } from "./app-page-head.js";
+import {
+  resolveActiveParallelRouteHeadInputs,
+  resolveAppPageHead,
+  type ApplyAppPageFileBasedMetadata,
+} from "./app-page-head.js";
 import { SIBLING_PAGE_INTERCEPT_SLOT_KEY } from "./app-rsc-route-matching.js";
 import {
   buildAppPageElements,
+  createAppPageSourcePage,
   createAppPageTreePath,
   type AppPageErrorModule,
   type AppPageModule,
@@ -15,17 +20,41 @@ import type { AppPageParams } from "./app-page-boundary.js";
 import { DEFAULT_GLOBAL_ERROR_MODULE } from "./default-global-error-module.js";
 import { matchRoutePattern } from "../routing/route-pattern.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
-import {
-  APP_RSC_RENDER_MODE_NAVIGATION,
-  shouldSuppressLoadingBoundaries,
-  type AppRscRenderMode,
-} from "./app-rsc-render-mode.js";
+import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import { createAppPageRenderIdentity } from "./app-page-render-identity.js";
-import { makeObservedAppPageSearchParamsThenable } from "./app-page-search-params-observation.js";
+import {
+  createAppPageSearchParamsObserver,
+  makeObservedAppPageSearchParamsThenable,
+} from "./app-page-search-params-observation.js";
 import { shouldServeStreamingMetadata } from "./streaming-metadata.js";
+import { resolveAppPageBranchParams } from "./app-page-params.js";
+
+function resolveInterceptLayoutParams(
+  branchSegments: readonly string[],
+  layoutSegments: readonly string[],
+  params: AppPageParams,
+): AppPageParams {
+  return resolveAppPageBranchParams(branchSegments, layoutSegments.length, params, layoutSegments);
+}
 
 export type { AppPageErrorModule, AppPageRouteWiringRoute } from "./app-page-route-wiring.js";
+
+type AppPageComponent = NonNullable<AppPageModule["default"]>;
+const REACT_CLIENT_REFERENCE = Symbol.for("react.client.reference");
+
+function isReactOwnedPageComponent(component: AppPageComponent): boolean {
+  if (typeof component !== "function") {
+    return true;
+  }
+  const candidate = component as AppPageComponent & {
+    $$typeof?: symbol;
+    prototype?: { isReactComponent?: unknown };
+  };
+  return (
+    candidate.$$typeof === REACT_CLIENT_REFERENCE || candidate.prototype?.isReactComponent != null
+  );
+}
 
 /**
  * Route shape passed from the generated entry. Extends the wiring route with
@@ -45,11 +74,14 @@ export type AppPageBuildRoute<
 export type AppPageInterceptOptions<TModule extends AppPageModule = AppPageModule> = {
   interceptionContext?: string | null;
   interceptLayouts?: readonly (TModule | null | undefined)[] | null;
+  interceptLayoutSegments?: readonly (readonly string[])[] | null;
+  interceptBranchSegments?: readonly string[] | null;
   interceptPage?: TModule | null;
   interceptParams?: AppPageParams | null;
   interceptSlotId?: string | null;
   interceptSlotKey?: string | null;
   interceptSourceMatchedUrl?: string | null;
+  interceptSourcePageSegments?: readonly string[] | null;
 };
 
 export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = {
@@ -65,12 +97,17 @@ export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = 
   mountedSlotsHeader: string | null;
   /** Semantic RSC payload mode for this page render. */
   renderMode?: AppRscRenderMode;
+  /** Observe page `searchParams` access for cache-safety classification. */
+  observePageSearchParamsAccess?: boolean;
+  /** Observe page metadata `searchParams` access for cache-safety classification. */
+  observeMetadataSearchParamsAccess?: boolean;
 };
 
 export type BuildPageElementsOptions<
   TModule extends AppPageModule = AppPageModule,
   TErrorModule extends AppPageErrorModule = AppPageErrorModule,
 > = {
+  applyFileBasedMetadata?: ApplyAppPageFileBasedMetadata;
   route: AppPageBuildRoute<TModule, TErrorModule>;
   params: AppPageParams;
   routePath: string;
@@ -152,12 +189,15 @@ export async function buildPageElements<
     rootUnauthorizedModule,
     metadataRoutes,
   } = options;
+  const slotParamOverrides = resolveSlotParamOverrides(route, routePath);
   const {
     opts,
     searchParams,
     isRscRequest,
     mountedSlotsHeader,
     renderMode = APP_RSC_RENDER_MODE_NAVIGATION,
+    observeMetadataSearchParamsAccess = false,
+    observePageSearchParamsAccess = false,
   } = pageRequest;
 
   const pageModule: AppPageModule | null | undefined = route.page;
@@ -179,6 +219,9 @@ export async function buildPageElements<
   // to `pageModule?.default` since `effectivePageModule === pageModule`.
   const EffectivePageComponent = effectivePageModule?.default;
   const effectiveParams = isSiblingIntercept ? (opts!.interceptParams ?? params) : params;
+  const sourcePageSegments = isSiblingIntercept
+    ? opts?.interceptSourcePageSegments
+    : route.routeSegments;
 
   const hasPageModule = !!pageModule;
   const renderIdentity = createAppPageRenderIdentity({
@@ -217,6 +260,7 @@ export async function buildPageElements<
         layoutIds: noExportLayoutIds,
         rootLayoutTreePath: noExportRootLayout,
         routeId: renderIdentity.routeId,
+        sourcePage: createAppPageSourcePage(sourcePageSegments),
       }),
       [renderIdentity.routeId]: createElement("div", null, "Page has no default export"),
     };
@@ -228,36 +272,86 @@ export async function buildPageElements<
     pageSearchParams,
     viewport: resolvedViewport,
   } = await resolveAppPageHead({
+    applyFileBasedMetadata: options.applyFileBasedMetadata,
     basePath: options.basePath ?? "",
     layoutModules: route.layouts,
     layoutTreePositions: route.layoutTreePositions,
     metadataRoutes,
-    pageModule: effectivePageModule ?? null,
-    parallelRoutes: resolveActiveParallelRouteHeadInputs({
-      interceptLayouts: opts?.interceptLayouts ?? null,
-      interceptPage: opts?.interceptPage ?? null,
-      interceptParams: opts?.interceptParams ?? null,
-      interceptSlotKey: opts?.interceptSlotKey ?? null,
-      params,
-      routeSegments: route.routeSegments ?? [],
-      slots: route.slots ?? null,
-    }),
+    pageModule: isSiblingIntercept ? null : (effectivePageModule ?? null),
+    parallelRoutes: [
+      ...resolveActiveParallelRouteHeadInputs({
+        interceptBranchSegments: opts?.interceptBranchSegments ?? null,
+        interceptLayouts: opts?.interceptLayouts ?? null,
+        interceptLayoutSegments: opts?.interceptLayoutSegments ?? null,
+        interceptPage: opts?.interceptPage ?? null,
+        interceptParams: opts?.interceptParams ?? null,
+        interceptSlotKey: opts?.interceptSlotKey ?? null,
+        layoutTreePositions: route.layoutTreePositions,
+        params,
+        routeSegments: route.routeSegments ?? [],
+        slotParams: slotParamOverrides,
+        slots: route.slots ?? null,
+      }),
+      ...(isSiblingIntercept
+        ? [
+            {
+              layoutModules: opts?.interceptLayouts ?? [],
+              layoutParams: (opts?.interceptLayoutSegments ?? []).map((segments) =>
+                resolveInterceptLayoutParams(
+                  opts?.interceptBranchSegments ?? segments,
+                  segments,
+                  effectiveParams,
+                ),
+              ),
+              pageModule: effectivePageModule ?? null,
+              params: effectiveParams,
+              routeSegments: opts?.interceptSourcePageSegments ?? route.routeSegments ?? [],
+            },
+          ]
+        : []),
+    ],
     params: effectiveParams,
     routePath: route.pattern,
     routeSegments: route.routeSegments ?? null,
     searchParams,
+    searchParamsObserver: observeMetadataSearchParamsAccess
+      ? createAppPageSearchParamsObserver()
+      : undefined,
   });
 
   const pageProps: Record<string, unknown> = { params: makeThenableParams(effectiveParams) };
-  let pageSearchParamsThenable: unknown;
-  if (searchParams) {
-    const shouldObservePageSearchParamsAccess =
-      !shouldSuppressLoadingBoundaries(renderMode) && Boolean(route.loading?.default);
-    pageSearchParamsThenable = shouldObservePageSearchParamsAccess
-      ? makeObservedAppPageSearchParamsThenable(pageSearchParams)
-      : makeThenableParams(pageSearchParams);
-    pageProps.searchParams = pageSearchParamsThenable;
-  }
+  const hasRequestSearchParams = Object.keys(pageSearchParams).length > 0;
+  const createPageElement = (
+    PageComponent: AppPageComponent,
+    props: Readonly<Record<string, unknown>>,
+  ) => {
+    if (isReactOwnedPageComponent(PageComponent)) {
+      const invocationProps = { ...props };
+      if (searchParams) {
+        invocationProps.searchParams = observePageSearchParamsAccess
+          ? makeObservedAppPageSearchParamsThenable(pageSearchParams, {
+              markDynamic: hasRequestSearchParams,
+            })
+          : makeThenableParams(pageSearchParams);
+      }
+      return createElement(PageComponent, invocationProps);
+    }
+
+    const ServerPageComponent = PageComponent as unknown as (
+      props: Readonly<Record<string, unknown>>,
+    ) => ReturnType<typeof createElement> | Promise<unknown> | string | number | null;
+    const PageInvoker = () => {
+      const invocationProps = { ...props };
+      if (searchParams) {
+        invocationProps.searchParams = observePageSearchParamsAccess
+          ? makeObservedAppPageSearchParamsThenable(pageSearchParams)
+          : makeThenableParams(pageSearchParams);
+      }
+      return ServerPageComponent(invocationProps);
+    };
+    return createElement(PageInvoker as unknown as AppPageComponent);
+  };
+  const pageSearchParamsThenable = searchParams ? makeThenableParams(pageSearchParams) : undefined;
 
   const mountedSlotIds = mountedSlotsHeader ? new Set(mountedSlotsHeader.split(" ")) : null;
 
@@ -279,21 +373,26 @@ export async function buildPageElements<
   // so a layout.tsx adjacent to the (.) / (..) / (...) marker dir is respected.
   let siblingInterceptElement: ReturnType<typeof createElement> | null =
     isSiblingIntercept && EffectivePageComponent
-      ? createElement(EffectivePageComponent, pageProps)
+      ? createPageElement(EffectivePageComponent, pageProps)
       : null;
   if (isSiblingIntercept && siblingInterceptElement !== null && opts?.interceptLayouts?.length) {
-    const siblingThenableParams = makeThenableParams(effectiveParams);
     for (let i = opts.interceptLayouts.length - 1; i >= 0; i--) {
       const layoutMod = opts.interceptLayouts[i] as AppPageModule | null | undefined;
       const LayoutComponent = layoutMod?.default;
       if (LayoutComponent) {
+        const interceptLayoutSegments = opts.interceptLayoutSegments?.[i] ?? [];
+        const interceptLayoutParams = resolveInterceptLayoutParams(
+          opts.interceptBranchSegments ?? interceptLayoutSegments,
+          interceptLayoutSegments,
+          effectiveParams,
+        );
         // Layout component types vary; cast to any to avoid overload-resolution
         // issues in createElement while preserving runtime safety.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const LC = LayoutComponent as (props: any) => any;
         siblingInterceptElement = createElement(
           LC,
-          { params: siblingThenableParams },
+          { params: makeThenableParams(interceptLayoutParams) },
           siblingInterceptElement,
         );
       }
@@ -304,8 +403,9 @@ export async function buildPageElements<
     element: isSiblingIntercept
       ? siblingInterceptElement
       : EffectivePageComponent
-        ? createElement(EffectivePageComponent, pageProps)
+        ? createPageElement(EffectivePageComponent, pageProps)
         : null,
+    createPageElement,
     // Fall back to vinext's built-in default global error module so that
     // uncaught client render errors are caught by the route-level
     // <ErrorBoundary> wrapper in app-page-route-wiring.tsx, mirroring
@@ -323,6 +423,7 @@ export async function buildPageElements<
     resolvedViewport,
     renderIdentity,
     routePath,
+    sourcePageSegments,
     rootNotFoundModule: rootNotFoundModule ?? null,
     rootForbiddenModule: rootForbiddenModule ?? null,
     rootUnauthorizedModule: rootUnauthorizedModule ?? null,
@@ -363,7 +464,9 @@ function buildSlotOverrides<TModule extends AppPageModule, TErrorModule extends 
     opts.interceptSlotKey !== SIBLING_PAGE_INTERCEPT_SLOT_KEY
   ) {
     overrides[opts.interceptSlotKey] = {
+      branchSegments: opts.interceptBranchSegments ?? null,
       layoutModules: opts.interceptLayouts || null,
+      layoutSegments: opts.interceptLayoutSegments ?? null,
       pageModule: opts.interceptPage,
       params: opts.interceptParams || routeParams,
     };

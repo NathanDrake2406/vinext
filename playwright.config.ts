@@ -202,9 +202,11 @@ const projectServers = {
     use: { baseURL: "http://localhost:4182" },
     server: {
       // Build vinext CLI, then build the fixture, then start the standalone
-      // server. The standalone server.js reads PORT from the environment.
+      // server from an isolated temp directory. Moving it outside the repo
+      // prevents Node from resolving missing externals from workspace
+      // node_modules and verifies the standalone package is self-contained.
       command:
-        "npx vp run vinext#build && node ../../../packages/vinext/dist/cli.js build && PORT=4182 node dist/standalone/server.js",
+        'npx vp run vinext#build && node ../../../packages/vinext/dist/cli.js build && standalone_dir="$(mktemp -d)" && cp -R dist/standalone/. "$standalone_dir" && PORT=4182 node "$standalone_dir/server.js"',
       cwd: "./tests/fixtures/standalone-output",
       port: 4182,
       reuseExistingServer: !process.env.CI,
@@ -225,6 +227,72 @@ const projectServers = {
       port: 4184,
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
+    },
+  },
+  "use-params-app-pages": {
+    testDir: "./tests/e2e/use-params-app-pages",
+    use: { baseURL: "http://localhost:4186" },
+    server: {
+      command:
+        "cd ../../.. && npx vp run vinext#build && cd tests/fixtures/use-params-app-pages && node ../../../packages/vinext/dist/cli.js build && node ../../../packages/vinext/dist/cli.js start --port 4186",
+      cwd: "./tests/fixtures/use-params-app-pages",
+      port: 4186,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+  },
+  "ppr-impact-demo": {
+    testDir: "./tests/e2e/ppr-impact-demo",
+    use: { baseURL: "http://localhost:4187" },
+    server: {
+      command:
+        "npx vp run vinext#build && node ../../../packages/vinext/dist/cli.js build --prerender-all && node ../../../packages/vinext/dist/cli.js start --port 4187",
+      cwd: "./tests/fixtures/ppr-impact-demo",
+      port: 4187,
+      reuseExistingServer: !process.env.CI,
+      timeout: 90_000,
+    },
+  },
+  "app-front-redirect-issue": {
+    testDir: "./tests/e2e/app-front-redirect-issue",
+    use: { baseURL: "http://localhost:4188" },
+    server: {
+      command:
+        "(test -e node_modules || test -L node_modules || ln -s ../../../fixtures/app-basic/node_modules node_modules) && npx vp run vinext#build && NEXT_DEPLOYMENT_ID=vinext-front-redirect-e2e node ../../../../packages/vinext/dist/cli.js build && NEXT_DEPLOYMENT_ID=vinext-front-redirect-e2e node ../../../../packages/vinext/dist/cli.js start --port 4188",
+      cwd: "./tests/e2e/app-front-redirect-issue/fixture",
+      port: 4188,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+  },
+  "pages-router-basepath-dev": {
+    testDir: "./tests/e2e/pages-router-basepath-dev",
+    use: { baseURL: "http://localhost:4189" },
+    server: {
+      command:
+        "(test -e node_modules || test -L node_modules || ln -s ../pages-basic/node_modules node_modules) && npx vp dev --port 4189",
+      cwd: "./tests/fixtures/pages-basepath-dev",
+      port: 4189,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+  },
+  "pages-router-basepath": {
+    // basePath + trailingSlash. Runs in PROD mode (build + start) because
+    // vinext's dev server has a Vite html-proxy / basePath incompatibility
+    // in inline hydration imports — unrelated to the navigation pipeline
+    // under test. Prod skips html-proxy entirely (it uses pre-built
+    // `__VINEXT_PAGE_LOADERS__`), so we exercise the same Pages Router
+    // navigation code paths users hit in production.
+    testDir: "./tests/e2e/pages-router-basepath",
+    use: { baseURL: "http://localhost:4190" },
+    server: {
+      command:
+        "(test -e node_modules || test -L node_modules || ln -s ../pages-basic/node_modules node_modules) && npx vp run vinext#build && node ../../../packages/vinext/dist/cli.js build && node ../../../packages/vinext/dist/cli.js start --port 4190",
+      cwd: "./tests/fixtures/pages-basepath-trailing-slash",
+      port: 4190,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
     },
   },
 };

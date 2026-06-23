@@ -1,6 +1,6 @@
 import { ACTION_REVALIDATED_HEADER } from "./headers.js";
 import { VINEXT_RSC_CONTENT_TYPE } from "./app-rsc-cache-busting.js";
-import { ServerActionResultFactsV0 } from "./navigation-planner.js";
+import { ServerActionResultFacts } from "./navigation-planner.js";
 
 export type AppBrowserServerActionResult<TRoot> = {
   root?: TRoot;
@@ -73,7 +73,7 @@ export function parseServerActionRevalidationHeader(
 }
 
 function createServerActionHttpFallbackError(status: number): (Error & { digest: string }) | null {
-  if (status < 400 || status > 599) return null;
+  if (status !== 401 && status !== 403 && status !== 404) return null;
 
   const digest =
     status === 404 ? "NEXT_HTTP_ERROR_FALLBACK;404" : `NEXT_HTTP_ERROR_FALLBACK;${status}`;
@@ -124,7 +124,7 @@ export type ServerActionResultResponseFactsInput = {
  */
 export function createServerActionResultFacts(
   input: ServerActionResultResponseFactsInput,
-): ServerActionResultFactsV0 {
+): ServerActionResultFacts {
   return {
     actionRedirectHref: input.actionRedirectHref,
     actionRedirectType: input.actionRedirectType === "push" ? "push" : "replace",

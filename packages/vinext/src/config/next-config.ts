@@ -202,7 +202,7 @@ export type NextConfig = {
     deviceSizes?: number[];
     /** Allowed image sizes for fixed-width images. Defaults to Next.js defaults: [16, 32, 48, 64, 96, 128, 256, 384] */
     imageSizes?: number[];
-    /** Allowed image qualities. Defaults to Next.js 16's `[75]`. */
+    /** Allowed image qualities. When unset, any quality from 1-100 is permitted (matches Next.js). */
     qualities?: number[];
     /** Allow SVG images through the image optimization endpoint. SVG can contain scripts, so only enable if you trust all image sources. */
     dangerouslyAllowSVG?: boolean;
@@ -284,6 +284,8 @@ export type NextConfig = {
     defineServer?: Record<string, string | number | boolean>;
   };
   experimental?: {
+    /** Enables hard-navigation recovery when App Router navigation rendering fails. */
+    appNavFailHandling?: boolean;
     /**
      * Enables the experimental App Router gesture transition API:
      * `useRouter().experimental_gesturePush()`.
@@ -348,6 +350,7 @@ export type ResolvedNextConfig = {
   serverResolveExtensions: string[] | null;
   instrumentationClientInject: string[];
   cacheComponents: boolean;
+  appNavFailHandling: boolean;
   /**
    * Enables the experimental App Router gesture transition API:
    * `useRouter().experimental_gesturePush()`.
@@ -378,6 +381,8 @@ export type ResolvedNextConfig = {
   serverActionsAllowedOrigins: string[];
   /** Packages whose barrel imports should be optimized (from experimental.optimizePackageImports). */
   optimizePackageImports: string[];
+  /** Packages explicitly requested for server/client transpilation. */
+  transpilePackages: string[];
   /** Inline app CSS into production HTML (from experimental.inlineCss). */
   inlineCss: boolean;
   /** Parsed body size limit for server actions in bytes (from experimental.serverActions.bodySizeLimit). Defaults to 1MB. */
@@ -1280,6 +1285,7 @@ export async function resolveNextConfig(
       resolveExtensions: null,
       serverResolveExtensions: null,
       cacheComponents: false,
+      appNavFailHandling: false,
       gestureTransition: false,
       prefetchInlining: false,
       redirects: [],
@@ -1292,6 +1298,7 @@ export async function resolveNextConfig(
       allowedDevOrigins: [],
       serverActionsAllowedOrigins: [],
       optimizePackageImports: [],
+      transpilePackages: [],
       inlineCss: false,
       serverActionsBodySizeLimit: 1 * 1024 * 1024,
       serverActionsBodySizeLimitLabel: "1 MB",
@@ -1466,9 +1473,7 @@ export async function resolveNextConfig(
     experimental?.serverComponentsExternalPackages,
   );
   const serverExternalPackages = topLevelServerExternalPackages ?? legacyServerComponentsExternal;
-  const transpilePackages = Array.isArray(config.transpilePackages)
-    ? readStringArray(config.transpilePackages)
-    : [];
+  const transpilePackages = readStringArray(config.transpilePackages);
   const externalPackageConflicts = transpilePackages.filter((pkg) =>
     serverExternalPackages.includes(pkg),
   );
@@ -1611,6 +1616,7 @@ export async function resolveNextConfig(
         )
       : [],
     cacheComponents: config.cacheComponents ?? false,
+    appNavFailHandling: experimental?.appNavFailHandling === true,
     gestureTransition: experimental?.gestureTransition === true,
     prefetchInlining,
     redirects,
@@ -1623,6 +1629,7 @@ export async function resolveNextConfig(
     allowedDevOrigins,
     serverActionsAllowedOrigins,
     optimizePackageImports,
+    transpilePackages,
     inlineCss,
     serverActionsBodySizeLimit,
     serverActionsBodySizeLimitLabel,
