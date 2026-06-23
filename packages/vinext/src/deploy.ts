@@ -35,14 +35,9 @@ import { injectPregeneratedConcretePaths } from "./build/pregenerated-concrete-p
 import { loadDotenv } from "./config/dotenv.js";
 import { loadNextConfig, resolveNextConfig } from "./config/next-config.js";
 import { parsePositiveIntegerArg } from "./cli-args.js";
+import { normalizePathSeparators } from "./utils/path.js";
 
 export { injectPregeneratedConcretePaths } from "./build/pregenerated-concrete-paths-injection.js";
-import {
-  readPrerenderManifest,
-  buildPregeneratedConcretePathTable,
-} from "./server/prerender-manifest.js";
-import { escapeRegExp } from "./utils/regex.js";
-import { normalizePathSeparators } from "./utils/path.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
