@@ -21,6 +21,7 @@ import {
   parseServerActionRevalidationHeader,
   readInvalidServerActionResponseError,
   shouldClearClientNavigationCachesForServerActionResult,
+  shouldSyncServerActionHttpFallbackHead,
   shouldScheduleRefreshForDiscardedServerAction,
 } from "../packages/vinext/src/server/app-browser-action-result.js";
 import {
@@ -100,11 +101,13 @@ import {
   type AppRouterState,
   type OperationLane,
 } from "../packages/vinext/src/server/app-browser-state.js";
+import { createInitialBfcacheMaps } from "../packages/vinext/src/server/app-bfcache-identity.js";
 import {
   HistoryStateSnapshotCache,
   RestorableClientStateController,
 } from "../packages/vinext/src/server/app-history-state.js";
 import {
+  blockDangerousStreamedRscRedirect,
   resolveRscRedirectLifecycleHop,
   resolveStreamedRscRedirectLifecycleHop,
 } from "../packages/vinext/src/server/app-browser-rsc-redirect.js";
@@ -898,6 +901,23 @@ describe("app browser entry navigation scheduling", () => {
     } else {
       throw new Error("Expected fallback to have a digest property");
     }
+  });
+
+  it("lets thrown action HTTP fallbacks own their boundary robots metadata", () => {
+    expect(
+      shouldSyncServerActionHttpFallbackHead({
+        returnValue: { ok: false, data: new Error("sanitized") },
+      }),
+    ).toBe(false);
+    expect(shouldSyncServerActionHttpFallbackHead({ returnValue: { ok: true, data: null } })).toBe(
+      true,
+    );
+    expect(
+      shouldSyncServerActionHttpFallbackHead({
+        root: { __route: "/current" },
+        returnValue: { ok: false, data: new Error("sanitized") },
+      }),
+    ).toBe(false);
   });
 
   it("preserves ordinary server action errors for 500 responses", () => {
@@ -5079,6 +5099,50 @@ describe("app browser entry bfcacheId helpers", () => {
     });
   });
 
+  it("builds initial bfcache maps from shared App Elements metadata", () => {
+    const elements = createBfcacheElements(pageX1Id);
+    const metadata = AppElementsWire.readMetadata(elements);
+    const maps = createInitialBfcacheMaps({
+      elements,
+      metadata,
+      pathname: "/x/1",
+    });
+
+    expect(maps.bfcacheIds).toEqual(createInitialBfcacheIdMap(elements));
+    expect(maps.stateKeys).toEqual(
+      createBfcacheSegmentStateKeyMap({
+        elements,
+        pathname: "/x/1",
+      }),
+    );
+  });
+
+  it("writes only history-readable bfcache segment ids", () => {
+    const routeId = AppElementsWire.encodeRouteId("/x/1", null);
+    const elements = createResolvedElements(routeId, "/", null, {
+      [routeId]: React.createElement("main", null),
+      [rootLayoutId]: React.createElement("div", null),
+      [pageX1Id]: React.createElement("main", null),
+    });
+    const metadata = AppElementsWire.readMetadata(elements);
+    const maps = createInitialBfcacheMaps({
+      elements,
+      metadata,
+      pathname: "/x/1",
+    });
+    const state = createHistoryStateWithNavigationMetadata(null, {
+      bfcacheIds: maps.bfcacheIds,
+      bfcacheVersion: 1,
+      previousNextUrl: null,
+    });
+
+    expect(maps.bfcacheIds).toEqual({
+      [rootLayoutId]: "0",
+      [pageX1Id]: "0",
+    });
+    expect(readHistoryStateBfcacheIds(state)).toEqual(maps.bfcacheIds);
+  });
+
   it("derives page segment state keys from pathname, not history bfcache ids", () => {
     const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
     const pageOneKeys = createBfcacheSegmentStateKeyMap({
@@ -5984,6 +6048,30 @@ describe("createPopstateRestoreHandler", () => {
 });
 
 describe("app browser RSC redirect lifecycle", () => {
+  it("blocks dangerous streamed redirects before browser navigation", async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ cancel }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(
+      blockDangerousStreamedRscRedirect(
+        response,
+        "javascript:window.location.assign('/nextjs-compat/javascript-urls/boom')",
+      ),
+    ).toBe(true);
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(consoleError).toHaveBeenCalledWith(
+      "Next.js has blocked a javascript: URL as a security precaution.",
+    );
+  });
+
+  it("allows safe streamed redirects to reach the navigation planner", () => {
+    const response = new Response("rsc payload");
+
+    expect(blockDangerousStreamedRscRedirect(response, "/dashboard")).toBe(false);
+    expect(response.bodyUsed).toBe(false);
+  });
+
   it("keeps RSC redirect hops in the initiating lifecycle and preserves push history intent", () => {
     const decision = resolveRscRedirectLifecycleHop({
       currentHref: "https://example.com/start",

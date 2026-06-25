@@ -123,10 +123,11 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
         qualities: [60, 75],
       },
     });
-    expect(code).toContain("const __imageConfig");
+    expect(code).toContain("const __runtimeImageConfig");
+    expect(code).toContain("export const __imageConfig");
     expect(code).toContain('"deviceSizes":[320,640]');
     expect(code).toContain('"qualities":[60,75]');
-    expect(code).toContain("imageConfig: __imageConfig");
+    expect(code).toContain("imageConfig: __runtimeImageConfig");
     expect(code).toContain('isDev: process.env.NODE_ENV !== "production"');
   });
 
@@ -197,7 +198,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
       redirects: [{ source: "/old", destination: "/new", permanent: true }],
     });
-    expect(code).toContain("export default __createAppRscHandler({");
+    expect(code).toContain("export default createAppRscHandler({");
     expect(code).toContain("configRedirects: __configRedirects");
     expect(code).toContain("dispatchMatchedPage({");
     expect(code).toContain("    clientReuseManifest,");

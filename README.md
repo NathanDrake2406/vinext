@@ -208,7 +208,7 @@ Find your account ID in the Cloudflare dashboard URL (`dash.cloudflare.com/<acco
 
 Alternatively, set the `CLOUDFLARE_ACCOUNT_ID` environment variable instead of hardcoding it in the config file.
 
-`vinext deploy` auto-generates the necessary configuration files (`vite.config.ts`, `wrangler.jsonc`, `worker/index.ts`) if they don't exist, builds the application, and deploys to Workers.
+`vinext deploy` auto-generates the necessary configuration files (`vite.config.ts`, `wrangler.jsonc`, and — for the Pages Router — `worker/index.ts`) if they don't exist, builds the application, and deploys to Workers. App Router needs no custom worker: `main` points at the built-in `vinext/server/app-router-entry`, which handles routing and image optimization.
 
 ```bash
 vinext deploy
@@ -404,7 +404,7 @@ These are deployed to Cloudflare Workers and updated on every push to `main`:
 | App Router (minimal)   | Minimal App Router on Workers                                                                                    | [app-router-cloudflare.vinext.workers.dev](https://app-router-cloudflare.vinext.workers.dev)     |
 | Pages Router (minimal) | Minimal Pages Router on Workers                                                                                  | [pages-router-cloudflare.vinext.workers.dev](https://pages-router-cloudflare.vinext.workers.dev) |
 | RealWorld API          | REST API routes example                                                                                          | [realworld-api-rest.vinext.workers.dev](https://realworld-api-rest.vinext.workers.dev)           |
-| Benchmarks Dashboard   | Build performance tracking over time (D1-backed)                                                                 | [benchmarks.vinext.workers.dev](https://benchmarks.vinext.workers.dev)                           |
+| Benchmarks Dashboard   | Build performance tracking over time (D1-backed)                                                                 | [vinext-web.vinext.workers.dev/benchmarks](https://vinext-web.vinext.workers.dev/benchmarks)     |
 | App Router + Nitro     | App Router deployed via Nitro (multi-platform)                                                                   | [examples/app-router-nitro](examples/app-router-nitro)                                           |
 
 ## API coverage
@@ -593,7 +593,7 @@ These are intentional exclusions. For things that are missing today but on the r
 
 These are gaps we'd like to close — distinct from the [intentional exclusions](#whats-not-supported-and-wont-be) above.
 
-- **Image optimization doesn't happen at build time.** Remote images work via `@unpic/react` (auto-detects 28 CDN providers). Local images are routed through a `/_next/image` endpoint that can resize and transcode on Cloudflare Workers (via the Images binding) in production, but no build-time optimization or static resizing occurs.
+- **Image optimization doesn't happen at build time.** Remote images work via `@unpic/react` (auto-detects 28 CDN providers). Local images are routed through a `/_next/image` endpoint. On Cloudflare Workers, enable on-the-fly resize/transcode (via the Images binding) by configuring the optimizer in your Vite config — `vinext({ images: { optimizer: imageAdapter() } })` from `@vinext/cloudflare/images/images-optimizer` — which works across all targets (gracefully serving images unoptimized where the binding isn't available). `next.config.js` `images` (`remotePatterns`, `deviceSizes`, `dangerouslyAllowSVG`, etc.) is honored. No build-time/static resizing occurs.
 - **Google Fonts are loaded from the CDN, not self-hosted.** No `size-adjust` fallback font metrics. Local fonts work but `@font-face` CSS is injected at runtime, not extracted at build time.
 - **Route segment config** — `runtime` and `preferredRegion` are ignored (everything runs in the same environment).
 - **Node.js production server (`vinext start`)** works for testing but is less complete than Workers deployment. Cloudflare Workers is the primary target.
@@ -614,7 +614,7 @@ We measure three things:
 - **Client bundle size** — gzipped output of each build.
 - **Dev server cold start** — 10 runs, randomized execution order. Vite's dependency optimizer cache is cleared before each run.
 
-Benchmarks run on GitHub CI runners (2-core Ubuntu) on every merge to `main`. See the launch numbers in the [announcement blog post](https://blog.cloudflare.com/vinext/) and the latest results at **[benchmarks.vinext.workers.dev](https://benchmarks.vinext.workers.dev)**.
+Benchmarks run on GitHub CI runners (2-core Ubuntu) on every merge to `main`. See the launch numbers in the [announcement blog post](https://blog.cloudflare.com/vinext/) and the latest results at **[vinext-web.vinext.workers.dev/benchmarks](https://vinext-web.vinext.workers.dev/benchmarks)**.
 
 <details>
 <summary>Why the bundle size difference?</summary>

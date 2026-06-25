@@ -15,7 +15,7 @@ import type {
   CacheHandlerValue,
   IncrementalCacheValue,
 } from "../packages/vinext/src/shims/cache.js";
-import { normalizePathSeparators } from "../packages/vinext/src/utils/path.ts";
+import { isWindows, normalizePathSeparators } from "../packages/vinext/src/utils/path.ts";
 
 const FIXTURE_DIR = PAGES_FIXTURE_DIR;
 
@@ -45,6 +45,50 @@ describe("vinext next data client helpers", () => {
     expect(extractVinextNextDataJson(`<script>window.__NEXT_DATA__ = \r\n\t${json}</script>`)).toBe(
       json,
     );
+  });
+});
+
+describe("dynamic route href interpolation", () => {
+  it("preserves query and hash suffixes while interpolating", async () => {
+    const { interpolateDynamicRouteHref } =
+      await import("../packages/vinext/src/shims/internal/interpolate-as.js");
+
+    expect(interpolateDynamicRouteHref("/blog/[slug]?preview=1#section", "/blog/post")).toEqual({
+      href: "/blog/post?preview=1#section",
+      params: ["slug"],
+      query: { preview: "1" },
+      routePathname: "/blog/[slug]",
+    });
+  });
+
+  it("treats a query marker after the hash as fragment text", async () => {
+    const { interpolateDynamicRouteHref } =
+      await import("../packages/vinext/src/shims/internal/interpolate-as.js");
+
+    expect(interpolateDynamicRouteHref("/blog/[slug]#a?b=1", "/blog/post")).toEqual({
+      href: "/blog/post#a?b=1",
+      params: ["slug"],
+      query: {},
+      routePathname: "/blog/[slug]",
+    });
+  });
+
+  it("normalizes object-form query values for interpolation", async () => {
+    const { interpolateDynamicRouteHref } =
+      await import("../packages/vinext/src/shims/internal/interpolate-as.js");
+
+    expect(
+      interpolateDynamicRouteHref("/blog/[slug]?draft=true", "/blog/[slug]", {
+        slug: 42,
+        tag: ["one", 2],
+        missing: undefined,
+      }),
+    ).toEqual({
+      href: "/blog/42?draft=true",
+      params: ["slug"],
+      query: { slug: "42", tag: ["one", "2"] },
+      routePathname: "/blog/[slug]",
+    });
   });
 });
 
@@ -2918,6 +2962,69 @@ describe("window.next debug global", () => {
     }
   });
 
+  it("masked same-path pushes with a hash replace the current history entry", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousDocument = (globalThis as any).document;
+    const originalFetch = globalThis.fetch;
+    const pushState = vi.fn();
+    const replaceState = vi.fn();
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("shallow Router.push must not fetch the page HTML");
+    });
+    const win: any = {
+      location: {
+        pathname: "/hello",
+        search: "",
+        hash: "",
+        href: "http://localhost/hello",
+        origin: "http://localhost",
+        hostname: "localhost",
+        assign: vi.fn(),
+        replace: vi.fn(),
+        reload: vi.fn(),
+      },
+      history: { state: null, pushState, replaceState },
+      addEventListener() {},
+      dispatchEvent() {},
+      scrollTo() {},
+      __NEXT_DATA__: { page: "/hello", query: {}, isFallback: false },
+    };
+    (globalThis as any).window = win;
+    (globalThis as any).document = {
+      getElementById: vi.fn(() => null),
+      getElementsByName: vi.fn(() => []),
+    };
+    globalThis.fetch = fetchSpy as any;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+
+      const result = await routerModule.default.push("/something-else", "/hello#section", {
+        shallow: true,
+      });
+
+      expect(result).toBe(true);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(pushState).not.toHaveBeenCalled();
+      expect(replaceState).toHaveBeenCalledWith(
+        expect.objectContaining({
+          __N: true,
+          url: "/something-else",
+          as: "/hello",
+        }),
+        "",
+        "/hello#section",
+      );
+    } finally {
+      (globalThis as any).window = previousWindow;
+      if (previousDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = previousDocument;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
   it("appRouterInstance exported from the navigation shim has the public router surface", async () => {
     vi.resetModules();
     const { appRouterInstance } = await import("../packages/vinext/src/shims/navigation.js");
@@ -3260,6 +3367,34 @@ describe("next/headers shim", () => {
 
     const h = await headers();
     expect(h.get("x-custom")).toBe("test-value");
+    setHeadersContext(null);
+  });
+
+  it("headers() strips internal flight and dev request-id headers from userland reads", async () => {
+    // Ported from Next.js:
+    // packages/next/src/server/async-storage/request-store.ts
+    // https://github.com/vercel/next.js/blob/bba8fe18eb21d49dac68cdddef64e8906dc9f804/packages/next/src/server/async-storage/request-store.ts
+    const { setHeadersContext, headers } = await import("../packages/vinext/src/shims/headers.js");
+    const reqHeaders = new Headers({
+      rsc: "1",
+      "Next-Router-State-Tree": "tree",
+      "x-nextjs-request-id": "dev-request",
+      "x-nextjs-html-request-id": "dev-html-request",
+      "x-custom": "test-value",
+    });
+    setHeadersContext({
+      headers: reqHeaders,
+      cookies: new Map(),
+    });
+
+    const h = await headers();
+    expect(h.get("x-custom")).toBe("test-value");
+    expect(h.get("rsc")).toBeNull();
+    expect(h.get("Next-Router-State-Tree")).toBeNull();
+    expect(h.get("x-nextjs-request-id")).toBeNull();
+    expect(h.get("x-nextjs-html-request-id")).toBeNull();
+    expect(reqHeaders.get("x-nextjs-request-id")).toBe("dev-request");
+    expect(reqHeaders.get("x-nextjs-html-request-id")).toBe("dev-html-request");
     setHeadersContext(null);
   });
 
@@ -3946,7 +4081,7 @@ describe("next/headers shim", () => {
     expect(getDraftModeCookieHeader()).toBeNull();
   });
 
-  it('draftMode() throws the dynamic = "error" access error before exposing draft controls', async () => {
+  it('draftMode() stays readable with dynamic = "error" but mutations throw', async () => {
     const { setHeadersContext, draftMode, getDraftModeCookieHeader, consumeDynamicUsage } =
       await import("../packages/vinext/src/shims/headers.js");
     const accessError = new Error(
@@ -3959,7 +4094,10 @@ describe("next/headers shim", () => {
       accessError,
     });
 
-    await expect(draftMode()).rejects.toThrow(accessError);
+    const dm = await draftMode();
+    expect(dm.isEnabled).toBe(false);
+    expect(() => dm.enable()).toThrow(accessError);
+    expect(() => dm.disable()).toThrow(accessError);
     expect(consumeDynamicUsage()).toBe(false);
     expect(getDraftModeCookieHeader()).toBeNull();
 
@@ -6659,7 +6797,7 @@ describe("middleware runner", () => {
     expect(await result.response?.text()).toBe("Forbidden");
   });
 
-  it("findMiddlewareFile prefers proxy.ts over middleware.ts (Next.js 16)", async () => {
+  it("findMiddlewareFile rejects projects with both proxy.ts and middleware.ts", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const os = await import("node:os");
@@ -6672,9 +6810,9 @@ describe("middleware runner", () => {
     try {
       fs.writeFileSync(path.join(tmpDir, "proxy.ts"), "export default function proxy() {}");
       fs.writeFileSync(path.join(tmpDir, "middleware.ts"), "export function middleware() {}");
-      const result = findMiddlewareFile(tmpDir, createValidFileMatcher());
-      expect(result).not.toBeNull();
-      expect(result).toContain("proxy.ts");
+      expect(() => findMiddlewareFile(tmpDir, createValidFileMatcher())).toThrow(
+        'Both middleware file "./middleware.ts" and proxy file "./proxy.ts" are detected. Please use "./proxy.ts" only.',
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -6839,6 +6977,7 @@ describe("middleware/proxy export validation", () => {
     expect(isProxyFile("/app/proxy.ts")).toBe(true);
     expect(isProxyFile("/app/proxy.js")).toBe(true);
     expect(isProxyFile("/app/proxy.mjs")).toBe(true);
+    expect(isProxyFile("/app/proxy.platform.tsx")).toBe(true);
     expect(isProxyFile("/app/src/proxy.ts")).toBe(true);
   });
 
@@ -6890,7 +7029,7 @@ describe("middleware/proxy export validation", () => {
     const { resolveMiddlewareHandler } =
       await import("../packages/vinext/src/server/middleware.js");
     expect(() => resolveMiddlewareHandler({ middleware: () => {} }, "/app/proxy.ts")).toThrow(
-      "must export a function named `proxy` or a `default` function",
+      'The file "./proxy.ts" must export a function, either as a default export or as a named "proxy" export.',
     );
   });
 
@@ -6898,7 +7037,7 @@ describe("middleware/proxy export validation", () => {
     const { resolveMiddlewareHandler } =
       await import("../packages/vinext/src/server/middleware.js");
     expect(() => resolveMiddlewareHandler({ handler: () => {} }, "/app/proxy.ts")).toThrow(
-      "must export a function named `proxy` or a `default` function",
+      'The file "./proxy.ts" must export a function, either as a default export or as a named "proxy" export.',
     );
   });
 
@@ -6906,7 +7045,7 @@ describe("middleware/proxy export validation", () => {
     const { resolveMiddlewareHandler } =
       await import("../packages/vinext/src/server/middleware.js");
     expect(() => resolveMiddlewareHandler({}, "/app/proxy.ts")).toThrow(
-      "must export a function named `proxy` or a `default` function",
+      'The file "./proxy.ts" must export a function, either as a default export or as a named "proxy" export.',
     );
   });
 
@@ -6914,7 +7053,15 @@ describe("middleware/proxy export validation", () => {
     const { resolveMiddlewareHandler } =
       await import("../packages/vinext/src/server/middleware.js");
     expect(() => resolveMiddlewareHandler({ proxy: "not a function" }, "/app/proxy.ts")).toThrow(
-      "must export a function named `proxy` or a `default` function",
+      'The file "./proxy.ts" must export a function, either as a default export or as a named "proxy" export.',
+    );
+  });
+
+  it("resolveMiddlewareHandler: proxy.ts throws when default export is not a function", async () => {
+    const { resolveMiddlewareHandler } =
+      await import("../packages/vinext/src/server/middleware.js");
+    expect(() => resolveMiddlewareHandler({ default: {} }, "/app/proxy.ts")).toThrow(
+      'The file "./proxy.ts" must export a function, either as a default export or as a named "proxy" export.',
     );
   });
 
@@ -6938,7 +7085,7 @@ describe("middleware/proxy export validation", () => {
     const { resolveMiddlewareHandler } =
       await import("../packages/vinext/src/server/middleware.js");
     expect(() => resolveMiddlewareHandler({ proxy: () => {} }, "/app/middleware.ts")).toThrow(
-      "must export a function named `middleware` or a `default` function",
+      'The file "./middleware.ts" must export a function, either as a default export or as a named "middleware" export.',
     );
   });
 
@@ -6946,7 +7093,7 @@ describe("middleware/proxy export validation", () => {
     const { resolveMiddlewareHandler } =
       await import("../packages/vinext/src/server/middleware.js");
     expect(() => resolveMiddlewareHandler({}, "/app/middleware.ts")).toThrow(
-      "must export a function named `middleware` or a `default` function",
+      'The file "./middleware.ts" must export a function, either as a default export or as a named "middleware" export.',
     );
   });
 });
@@ -7130,6 +7277,34 @@ describe("middleware matcher patterns", () => {
     expect(matchesMiddleware("/dashboard", matcher)).toBe(true);
     expect(matchesMiddleware("/dashboard/settings", matcher)).toBe(true);
     expect(matchesMiddleware("/other", matcher)).toBe(false);
+  });
+
+  it("matchesMiddleware: trailing slashes in matcher sources are optional", async () => {
+    const { matchPattern, matchesMiddleware } =
+      await import("../packages/vinext/src/server/middleware.js");
+
+    // Next.js compiles middleware sources with an optional terminal delimiter.
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/build/analysis/get-page-static-info.ts
+    expect(matchPattern("/api/admin/", "/api/admin/")).toBe(true);
+    expect(matchPattern("/api/admin/", "/api/admin\\/")).toBe(true);
+    expect(matchPattern("/api/admin", "/api/admin\\/")).toBe(false);
+    expect(matchPattern("/blog/post/", "/(.*)/")).toBe(true);
+    expect(matchPattern("/blog/post", "/(.*)/")).toBe(false);
+    expect(matchPattern("/api/123/", "/api/:id")).toBe(true);
+    expect(matchPattern("/api/123/", "/api/:id/")).toBe(true);
+    expect(matchPattern("/api/123", "/api/:id/")).toBe(false);
+    expect(matchPattern("/foo/", "/:path(.*\\/)")).toBe(true);
+    expect(matchPattern("/foo", "/:path(.*\\/)")).toBe(false);
+    expect(matchesMiddleware("/api/admin", "/api/admin/")).toBe(true);
+    expect(matchesMiddleware("/api/admin", ["/api/admin/"])).toBe(true);
+    expect(matchesMiddleware("/api/admin", [{ source: "/api/admin/" }])).toBe(true);
+    expect(
+      matchesMiddleware("/fr/api/admin/", "/api/admin\\/", undefined, {
+        locales: ["en", "fr"],
+        defaultLocale: "en",
+      }),
+    ).toBe(true);
+    expect(matchesMiddleware("/", "/")).toBe(true);
   });
 
   it("matchesMiddleware: array of object matchers with source", async () => {
@@ -12467,7 +12642,7 @@ describe("next/dynamic shim", () => {
     expect(result).toEqual([]);
   });
 
-  it("loading component receives Next.js noSSR loading props", async () => {
+  it("loading component receives App Router loading props (pastDelay:true)", async () => {
     const { default: dynamic } = await import("../packages/vinext/src/shims/dynamic.js");
     const React = await import("react");
     const { renderToStaticMarkup } = await import("react-dom/server");
@@ -12487,7 +12662,9 @@ describe("next/dynamic shim", () => {
     renderToStaticMarkup(React.createElement(DynComp));
     expect(receivedProps).not.toBeNull();
     expect(receivedProps.isLoading).toBe(true);
-    expect(receivedProps.pastDelay).toBe(false);
+    // pastDelay is true on the server to match the client first render and the
+    // Next.js App Router contract (issue 1967).
+    expect(receivedProps.pastDelay).toBe(true);
     expect(receivedProps.error).toBeNull();
   });
 
@@ -14313,6 +14490,18 @@ describe("Pages Router concurrent navigation", () => {
     return `<html><head></head><body>${nextDataScript}</body></html>`;
   }
 
+  // Resolve an absolute fixture path the router can dynamically import. POSIX
+  // absolute paths begin with `/` and pass the router's `isValidModulePath`
+  // guard unchanged, so they are returned as-is. On Windows the path is
+  // drive-qualified (`E:\...`) with no leading `/`, which the guard rejects and
+  // blocks before the import; wrap it as the Vite `/@fs/` URL Vite serves for
+  // on-disk files, which is importable and starts with `/`.
+  function fixtureModuleUrl(relativePath: string): string {
+    const absolutePath = path.resolve(import.meta.dirname, relativePath);
+    if (!isWindows) return absolutePath;
+    return "/@fs/" + normalizePathSeparators(absolutePath);
+  }
+
   function buildNavHtmlWithVinext(
     page: string,
     vinext: { pageModuleUrl?: string; appModuleUrl?: string; hasMiddleware?: boolean },
@@ -14644,7 +14833,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/slug-1";
     win.location.href = "http://localhost/docs/slug-1";
     (globalThis as any).window = win;
@@ -14695,7 +14884,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/slug-1";
     win.location.href = "http://localhost/docs/slug-1";
     (globalThis as any).window = win;
@@ -14746,7 +14935,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/fr/slug-1";
     win.location.href = "http://localhost/docs/fr/slug-1";
     win.__VINEXT_LOCALE__ = "fr";
@@ -14805,12 +14994,75 @@ describe("Pages Router concurrent navigation", () => {
     }
   });
 
+  it("Pages Router localizes masked route and display URLs to a non-default locale", async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    const originalFetch = globalThis.fetch;
+    const { win } = createNavWindow();
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
+    win.location.pathname = "/docs/en/hello";
+    win.location.href = "http://localhost/docs/en/hello";
+    win.__VINEXT_LOCALE__ = "en";
+    win.__VINEXT_LOCALES__ = ["en", "fr"];
+    win.__VINEXT_DEFAULT_LOCALE__ = "en";
+    (globalThis as any).window = win;
+    process.env.__NEXT_ROUTER_BASEPATH = "/docs";
+
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          buildNavHtml(
+            "/something-else",
+            pageModuleUrl,
+            {},
+            {
+              locale: "fr",
+              locales: ["en", "fr"],
+              defaultLocale: "en",
+            },
+          ),
+        ),
+    );
+    globalThis.fetch = fetch;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+
+      const result = await routerModule.default.push("/something-else", "/hello", {
+        locale: "fr",
+      });
+
+      expect(result).toBe(true);
+      expect(fetch).toHaveBeenCalledWith("/docs/fr/something-else", expect.any(Object));
+      expect(win.history.pushState).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "/fr/something-else",
+          as: "/fr/hello",
+          options: expect.objectContaining({ locale: "fr" }),
+        }),
+        "",
+        "/docs/fr/hello",
+      );
+      expect(win.location.pathname).toBe("/docs/fr/hello");
+      expect(win.__NEXT_DATA__.page).toBe("/something-else");
+      expect(win.__VINEXT_LOCALE__).toBe("fr");
+    } finally {
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      vi.resetModules();
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("Pages Router maps /_error through a non-default locale while preserving the masked URL", async () => {
     const previousWindow = (globalThis as any).window;
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/docs/fr/slug-1";
     win.location.href = "http://localhost/docs/fr/slug-1";
     win.__VINEXT_LOCALE__ = "fr";
@@ -15171,7 +15423,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/new";
     win.location.href = "http://localhost/new";
     Object.assign(win, {
@@ -15238,7 +15490,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/new";
     win.location.href = "http://localhost/new";
     Object.assign(win, {
@@ -15300,7 +15552,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.location.pathname = "/id/new";
     win.location.href = "http://localhost/id/new";
     Object.assign(win, {
@@ -15361,7 +15613,7 @@ describe("Pages Router concurrent navigation", () => {
     const originalCustomEvent = globalThis.CustomEvent;
     const listeners = new Map<string, (event: any) => void>();
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
 
     win.location.pathname = "/about";
     win.location.href = "http://localhost/about";
@@ -15438,7 +15690,7 @@ describe("Pages Router concurrent navigation", () => {
     const originalCustomEvent = globalThis.CustomEvent;
     const listeners = new Map<string, (event: any) => void>();
     const { win, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     win.scrollTo.mockImplementation((x: number, y: number) => {
       win.scrollX = x;
       win.scrollY = y;
@@ -15606,6 +15858,60 @@ describe("Pages Router concurrent navigation", () => {
       } else {
         process.env.__NEXT_SCROLL_RESTORATION = originalScrollRestorationEnv;
       }
+    }
+  });
+
+  it("beforePopState receives the stored href and as values for masked history entries", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+    const listeners = new Map<string, (event: any) => void>();
+    const { win } = createNavWindow();
+
+    win.addEventListener = vi.fn((type: string, handler: (event: any) => void) => {
+      listeners.set(type, handler);
+    });
+    (globalThis as any).window = win;
+    globalThis.fetch = vi.fn();
+
+    try {
+      vi.resetModules();
+      await import("../packages/vinext/src/shims/router.js");
+      const { installPagesRouterRuntime } =
+        await import("../packages/vinext/src/shims/pages-router-runtime.js");
+      installPagesRouterRuntime();
+
+      const popstateHandler = listeners.get("popstate");
+      expect(popstateHandler).toBeDefined();
+
+      const beforePopState = vi.fn(() => false);
+      (win as any).next.router.beforePopState(beforePopState);
+
+      win.location.pathname = "/hello";
+      win.location.href = "http://localhost/hello";
+      popstateHandler!({
+        state: {
+          __N: true,
+          url: "/something-else",
+          as: "/hello",
+          options: { shallow: true, locale: "en" },
+          key: "key-masked",
+        },
+      });
+
+      expect(beforePopState).toHaveBeenCalledWith({
+        url: "/something-else",
+        as: "/hello",
+        options: { shallow: true, locale: "en" },
+      });
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -15858,7 +16164,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win, {
       __VINEXT_LOCALE__: "id",
       __VINEXT_LOCALES__: ["en", "id", "fr"],
@@ -15916,7 +16222,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win, replaceState, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, { origin: "http://localhost" });
     Object.assign(win, {
       __VINEXT_LOCALE__: "en",
@@ -15983,7 +16289,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, { origin: "http://localhost" });
     Object.assign(win.__NEXT_DATA__, {
       buildId: "build-1",
@@ -16113,7 +16419,7 @@ describe("Pages Router concurrent navigation", () => {
     const originalFetch = globalThis.fetch;
     const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
     const { win, replaceState, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, {
       origin: "http://localhost",
       pathname: "/docs",
@@ -16186,7 +16492,7 @@ describe("Pages Router concurrent navigation", () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
     const { win, render } = createNavWindow();
-    const pageModuleUrl = path.resolve(import.meta.dirname, "fixtures/client-navigation-page.tsx");
+    const pageModuleUrl = fixtureModuleUrl("fixtures/client-navigation-page.tsx");
     Object.assign(win.location, { origin: "http://localhost" });
     Object.assign(win.__NEXT_DATA__, {
       buildId: "build-1",
@@ -21311,10 +21617,12 @@ describe("shim alias map .js variants", () => {
     const hook = configPlugin.resolveId as {
       handler: (this: { environment?: { name?: string } }, id: string) => string | undefined;
     };
-    const clientShim = path.resolve(import.meta.dirname, "../packages/vinext/src/shims/error.tsx");
-    const reactServerShim = path.resolve(
-      import.meta.dirname,
-      "../packages/vinext/src/shims/error.react-server.ts",
+    // resolveId returns Vite-style ids: forward slashes on every platform.
+    const clientShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/error.tsx"),
+    );
+    const reactServerShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/error.react-server.ts"),
     );
 
     expect(hook.handler.call({ environment: { name: "rsc" } }, "next/error")).toBe(reactServerShim);
@@ -21322,6 +21630,45 @@ describe("shim alias map .js variants", () => {
     expect(hook.handler.call({ environment: { name: "rsc" } }, "next/error.js")).toBe(
       reactServerShim,
     );
+  });
+
+  it("keeps the App Router request handler source-resolved in source checkouts", () => {
+    const plugins = vinext() as Plugin[];
+    const configPlugin = plugins.find((plugin) => plugin.name === "vinext:config");
+    if (!configPlugin?.resolveId || typeof configPlugin.resolveId === "function") {
+      throw new Error("vinext:config resolveId hook not found");
+    }
+
+    const hook = configPlugin.resolveId as {
+      filter: { id: RegExp };
+      handler: (
+        this: {
+          environment?: {
+            name?: string;
+            config: {
+              command: "serve" | "build";
+            };
+          };
+        },
+        id: string,
+      ) => string | { id: string; external: true } | undefined;
+    };
+    const id = "vinext/server/app-rsc-handler";
+    // resolveId returns a forward-slash id (Vite-canonical) on every platform.
+    const expected = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/server/app-rsc-handler.ts"),
+    );
+
+    expect(hook.filter.id.test(id)).toBe(true);
+    expect(
+      hook.handler.call({ environment: { name: "rsc", config: { command: "serve" } } }, id),
+    ).toBe(expected);
+    expect(
+      hook.handler.call({ environment: { name: "rsc", config: { command: "build" } } }, id),
+    ).toBe(expected);
+    expect(
+      hook.handler.call({ environment: { name: "ssr", config: { command: "serve" } } }, id),
+    ).toBe(expected);
   });
 });
 
@@ -21394,15 +21741,16 @@ describe("vinext shim package-subpath resolution", () => {
 
   it("strips JavaScript extensions and Vite queries from package subpaths", () => {
     const hook = getResolveIdHook();
-    const expectedShim = path.resolve(
-      import.meta.dirname,
-      "../packages/vinext/src/shims/navigation.ts",
+    // resolveId returns Vite-style ids: forward slashes on every platform.
+    const expectedShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/navigation.ts"),
     );
-    const expectedReactServerShim = path.resolve(
-      import.meta.dirname,
-      "../packages/vinext/src/shims/navigation.react-server.ts",
+    const expectedReactServerShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/navigation.react-server.ts"),
     );
-    const expectedOgShim = path.resolve(import.meta.dirname, "../packages/vinext/src/shims/og.tsx");
+    const expectedOgShim = normalizePathSeparators(
+      path.resolve(import.meta.dirname, "../packages/vinext/src/shims/og.tsx"),
+    );
 
     expect(hook.filter.id.test("vinext/shims/navigation.js?v=123")).toBe(true);
     expect(hook.filter.id.test("\0vinext/shims/navigation.js?v=123")).toBe(true);

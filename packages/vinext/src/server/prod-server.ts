@@ -78,6 +78,11 @@ import {
   resolveRequestProtocol,
   resolveRequestHost as resolveHost,
 } from "./proxy-trust.js";
+import {
+  negotiateEncoding,
+  parseAcceptedEncodings,
+  selectContentEncoding,
+} from "./accept-encoding.js";
 
 /**
  * mtime of the build each bare (query-less) server-entry URL was first
@@ -230,27 +235,6 @@ const COMPRESSIBLE_TYPES = new Set([
 const COMPRESS_THRESHOLD = 1024;
 
 /**
- * Parse the Accept-Encoding header and return the best supported encoding.
- * Preference order: zstd > br > gzip > deflate > identity.
- *
- * zstd decompresses ~3-5x faster than brotli at similar compression ratios.
- * Supported in Chrome 123+, Firefox 126+. Safari can decompress but doesn't
- * send zstd in Accept-Encoding, so it transparently falls back to br/gzip.
- */
-const HAS_ZSTD = typeof zlib.createZstdCompress === "function";
-
-function negotiateEncoding(req: IncomingMessage): "zstd" | "br" | "gzip" | "deflate" | null {
-  const accept = req.headers["accept-encoding"];
-  if (!accept || typeof accept !== "string") return null;
-  const lower = accept.toLowerCase();
-  if (HAS_ZSTD && lower.includes("zstd")) return "zstd";
-  if (lower.includes("br")) return "br";
-  if (lower.includes("gzip")) return "gzip";
-  if (lower.includes("deflate")) return "deflate";
-  return null;
-}
-
-/**
  * Create a compression stream for the given encoding.
  */
 function createCompressor(
@@ -375,6 +359,30 @@ function omitHeadersCaseInsensitive(
   return filtered;
 }
 
+function mergeVaryHeader(
+  headers: Record<string, string | string[]>,
+  value: string,
+): Record<string, string | string[]> {
+  const merged = { ...headers };
+  const existingKey = Object.keys(merged).find((key) => key.toLowerCase() === "vary");
+  if (!existingKey) {
+    merged.Vary = value;
+    return merged;
+  }
+
+  const rawVary = merged[existingKey];
+  const existingVary = Array.isArray(rawVary) ? rawVary.join(", ") : rawVary;
+  if (existingVary.trim().length === 0) {
+    merged[existingKey] = value;
+    return merged;
+  }
+  const values = existingVary.split(",").map((entry) => entry.trim().toLowerCase());
+  if (!values.includes("*") && !values.includes(value.toLowerCase())) {
+    merged[existingKey] = `${existingVary}, ${value}`;
+  }
+  return merged;
+}
+
 function matchesIfNoneMatchHeader(ifNoneMatch: string | undefined, etag: string): boolean {
   if (!ifNoneMatch) return false;
   if (ifNoneMatch === "*") return true;
@@ -457,49 +465,59 @@ function sendCompressed(
 ): void {
   const buf = typeof body === "string" ? Buffer.from(body) : body;
   const baseType = contentType.split(";")[0].trim();
-  const encoding = compress ? negotiateEncoding(req) : null;
+  const varyByEncoding = compress && COMPRESSIBLE_TYPES.has(baseType);
+  const encoding = compress ? negotiateEncoding(req) : "identity";
   const headersWithoutBodyHeaders = omitHeadersCaseInsensitive(extraHeaders, OMIT_BODY_HEADERS);
 
-  const writeHead = (headers: Record<string, string | string[]>) => {
-    if (statusText) {
-      res.writeHead(statusCode, statusText, headers);
+  const writeHead = (
+    headers: Record<string, string | string[]>,
+    responseStatus = statusCode,
+    responseStatusText = statusText,
+  ) => {
+    if (responseStatusText) {
+      res.writeHead(responseStatus, responseStatusText, headers);
     } else {
-      res.writeHead(statusCode, headers);
+      res.writeHead(responseStatus, headers);
     }
   };
 
-  if (encoding && COMPRESSIBLE_TYPES.has(baseType) && buf.length >= COMPRESS_THRESHOLD) {
-    const compressor = createCompressor(encoding);
-    // Merge Accept-Encoding into existing Vary header from extraHeaders instead
-    // of overwriting. Preserves Vary values set by the App Router for content
-    // negotiation (e.g. "RSC, Accept").
-    const rawVary = extraHeaders["Vary"] ?? extraHeaders["vary"];
-    const existingVary = Array.isArray(rawVary) ? rawVary.join(", ") : rawVary;
-    let varyValue: string;
-    if (existingVary) {
-      const existing = existingVary.toLowerCase();
-      varyValue = existing.includes("accept-encoding")
-        ? existingVary
-        : existingVary + ", Accept-Encoding";
-    } else {
-      varyValue = "Accept-Encoding";
+  if (encoding !== "identity" && varyByEncoding && buf.length >= COMPRESS_THRESHOLD) {
+    writeHead(
+      mergeVaryHeader(
+        {
+          ...headersWithoutBodyHeaders,
+          "Content-Type": contentType,
+          "Content-Encoding": encoding,
+        },
+        "Accept-Encoding",
+      ),
+    );
+    // HEAD (RFC 9110): emit headers only, no body. Mirrors sendWebResponse.
+    // Returning here also avoids spinning up a compressor for a payload Node
+    // would discard anyway (HEAD bodies are dropped at the socket level).
+    if (req.method === "HEAD") {
+      res.end();
+      return;
     }
-    writeHead({
-      ...headersWithoutBodyHeaders,
-      "Content-Type": contentType,
-      "Content-Encoding": encoding,
-      Vary: varyValue,
-    });
+    const compressor = createCompressor(encoding);
     compressor.end(buf);
     pipeline(compressor, res, () => {
       /* ignore pipeline errors on closed connections */
     });
   } else {
-    writeHead({
+    const identityHeaders = {
       ...headersWithoutBodyHeaders,
       "Content-Type": contentType,
       "Content-Length": String(buf.length),
-    });
+    };
+    writeHead(
+      varyByEncoding ? mergeVaryHeader(identityHeaders, "Accept-Encoding") : identityHeaders,
+    );
+    // HEAD (RFC 9110): emit headers only, no body. Mirrors sendWebResponse.
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
     res.end(buf);
   }
 }
@@ -552,25 +570,10 @@ async function tryServeStatic(
     const entry = cache.lookup(lookupPath);
     if (!entry) return false;
 
-    // 304 Not Modified: string compare against pre-computed ETag
-    const ifNoneMatch = req.headers["if-none-match"];
-    if (
-      responseStatus === 200 &&
-      typeof ifNoneMatch === "string" &&
-      matchesIfNoneMatchHeader(ifNoneMatch, entry.etag)
-    ) {
-      if (extraHeaders) {
-        res.writeHead(304, { ...entry.notModifiedHeaders, ...extraHeaders });
-      } else {
-        res.writeHead(304, entry.notModifiedHeaders);
-      }
-      res.end();
-      return true;
-    }
-
     // Pick the best precompressed variant: zstd → br → gzip → original.
     // Each variant has pre-computed headers — zero string building.
-    // Encoding tokens are case-insensitive per RFC 9110; lowercase once.
+    // Encoding tokens are case-insensitive per RFC 9110, and we honor q=0
+    // refusals via parseAcceptedEncodings (e.g. `gzip, br;q=0` won't pick br).
     // NOTE: compress=false skips precompressed variants too, not just on-the-fly
     // compression. This is correct for current callers (image optimization passes
     // compress=false, and images are never precompressed). If a future caller
@@ -579,19 +582,43 @@ async function tryServeStatic(
     // pre-existing .zst file from disk, not calling zstdCompress() at runtime.
     // The HAS_ZSTD guard only matters for the slow-path's on-the-fly compression.
     const rawAe = compress ? req.headers["accept-encoding"] : undefined;
-    const ae = typeof rawAe === "string" ? rawAe.toLowerCase() : undefined;
-    const variant = ae
-      ? (ae.includes("zstd") && entry.zst) ||
-        (ae.includes("br") && entry.br) ||
-        (ae.includes("gzip") && entry.gz) ||
-        entry.original
-      : entry.original;
+    const parsed = typeof rawAe === "string" ? parseAcceptedEncodings(rawAe) : undefined;
+    const availableVariants: Array<"zstd" | "br" | "gzip"> = [
+      ...(entry.zst ? (["zstd"] as const) : []),
+      ...(entry.br ? (["br"] as const) : []),
+      ...(entry.gz ? (["gzip"] as const) : []),
+    ];
+    const variesByEncoding = compress && availableVariants.length > 0;
+    const selected = parsed ? selectContentEncoding(parsed, availableVariants) : "identity";
+    const variant =
+      selected === "zstd"
+        ? entry.zst!
+        : selected === "br"
+          ? entry.br!
+          : selected === "gzip"
+            ? entry.gz!
+            : entry.original;
 
-    if (extraHeaders) {
-      res.writeHead(responseStatus, { ...variant.headers, ...extraHeaders });
-    } else {
-      res.writeHead(responseStatus, variant.headers);
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (
+      responseStatus === 200 &&
+      typeof ifNoneMatch === "string" &&
+      matchesIfNoneMatchHeader(ifNoneMatch, entry.etag)
+    ) {
+      const notModifiedHeaders = variesByEncoding
+        ? mergeVaryHeader({ ...entry.notModifiedHeaders, ...extraHeaders }, "Accept-Encoding")
+        : { ...entry.notModifiedHeaders, ...extraHeaders };
+      if (selected !== "identity") notModifiedHeaders["Content-Encoding"] = selected;
+      res.writeHead(304, notModifiedHeaders);
+      res.end();
+      return true;
     }
+
+    const responseHeaders = { ...variant.headers, ...extraHeaders };
+    res.writeHead(
+      responseStatus,
+      variesByEncoding ? mergeVaryHeader(responseHeaders, "Accept-Encoding") : responseHeaders,
+    );
 
     if (omitBody || req.method === "HEAD") {
       res.end();
@@ -651,29 +678,6 @@ async function tryServeStatic(
   const baseType = ct.split(";")[0].trim();
   const isCompressible = compress && COMPRESSIBLE_TYPES.has(baseType);
 
-  // 304 Not Modified — parity with the fast (cache) path.
-  // Include Vary: Accept-Encoding only when compress=true AND the content type
-  // is compressible. When compress=false (e.g. image optimization caller),
-  // Vary is intentionally omitted — matching the fast-path behaviour where
-  // compress=false also skips all compressed variants.
-  // Spreading undefined is a no-op in object literals (ES2018+).
-  const ifNoneMatch = req.headers["if-none-match"];
-  if (
-    responseStatus === 200 &&
-    typeof ifNoneMatch === "string" &&
-    matchesIfNoneMatchHeader(ifNoneMatch, etag)
-  ) {
-    const notModifiedHeaders: Record<string, string | string[]> = {
-      ETag: etag,
-      "Cache-Control": cacheControl,
-      ...(isCompressible ? { Vary: "Accept-Encoding" } : undefined),
-      ...extraHeaders,
-    };
-    res.writeHead(304, notModifiedHeaders);
-    res.end();
-    return true;
-  }
-
   const baseHeaders: Record<string, string | string[]> = {
     "Content-Type": ct,
     "Cache-Control": cacheControl,
@@ -683,14 +687,25 @@ async function tryServeStatic(
 
   if (isCompressible) {
     const encoding = negotiateEncoding(req);
-    if (encoding) {
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (
+      responseStatus === 200 &&
+      typeof ifNoneMatch === "string" &&
+      matchesIfNoneMatchHeader(ifNoneMatch, etag)
+    ) {
+      const notModifiedHeaders = mergeVaryHeader(baseHeaders, "Accept-Encoding");
+      if (encoding !== "identity") notModifiedHeaders["Content-Encoding"] = encoding;
+      res.writeHead(304, notModifiedHeaders);
+      res.end();
+      return true;
+    }
+    if (encoding !== "identity") {
       // Content-Length omitted intentionally: compressed size isn't known
       // ahead of time, so Node.js uses chunked transfer encoding.
-      res.writeHead(responseStatus, {
-        ...baseHeaders,
-        "Content-Encoding": encoding,
-        Vary: "Accept-Encoding",
-      });
+      res.writeHead(
+        responseStatus,
+        mergeVaryHeader({ ...baseHeaders, "Content-Encoding": encoding }, "Accept-Encoding"),
+      );
       if (omitBody || req.method === "HEAD") {
         res.end();
         return true;
@@ -708,10 +723,28 @@ async function tryServeStatic(
     }
   }
 
-  res.writeHead(responseStatus, {
+  const ifNoneMatch = req.headers["if-none-match"];
+  if (
+    responseStatus === 200 &&
+    typeof ifNoneMatch === "string" &&
+    matchesIfNoneMatchHeader(ifNoneMatch, etag)
+  ) {
+    res.writeHead(
+      304,
+      isCompressible ? mergeVaryHeader(baseHeaders, "Accept-Encoding") : baseHeaders,
+    );
+    res.end();
+    return true;
+  }
+
+  const identityHeaders = {
     ...baseHeaders,
     "Content-Length": String(resolved.size),
-  });
+  };
+  res.writeHead(
+    responseStatus,
+    isCompressible ? mergeVaryHeader(identityHeaders, "Accept-Encoding") : identityHeaders,
+  );
   if (omitBody || req.method === "HEAD") {
     res.end();
     return true;
@@ -847,39 +880,29 @@ async function sendWebResponse(
     }
   });
 
+  // Check if we should compress the response.
+  // Skip if the upstream already compressed (avoid double-compression).
+  const contentEncoding = webResponse.headers.get("content-encoding");
+  const alreadyEncoded = contentEncoding !== null;
   if (!webResponse.body) {
     writeHead(nodeHeaders);
     res.end();
     return;
   }
 
-  // Check if we should compress the response.
-  // Skip if the upstream already compressed (avoid double-compression).
-  const alreadyEncoded = webResponse.headers.has("content-encoding");
   const contentType = webResponse.headers.get("content-type") ?? "";
   const baseType = contentType.split(";")[0].trim();
-  const encoding = compress && !alreadyEncoded ? negotiateEncoding(req) : null;
-  const shouldCompress = !!(encoding && COMPRESSIBLE_TYPES.has(baseType));
+  const varyByEncoding = compress && !alreadyEncoded && COMPRESSIBLE_TYPES.has(baseType);
+  const encoding = compress && !alreadyEncoded ? negotiateEncoding(req) : "identity";
+  const shouldCompress = encoding !== "identity" && COMPRESSIBLE_TYPES.has(baseType);
 
   if (shouldCompress) {
     delete nodeHeaders["content-length"];
     delete nodeHeaders["Content-Length"];
     nodeHeaders["Content-Encoding"] = encoding!;
-    // Merge Accept-Encoding into existing Vary header (e.g. "RSC, Accept") instead
-    // of overwriting. This prevents stripping the Vary values that the App Router
-    // sets for content negotiation (RSC stream vs HTML).
-    const existingVary = nodeHeaders["Vary"] ?? nodeHeaders["vary"];
-    if (existingVary) {
-      const existing = String(existingVary).toLowerCase();
-      if (!existing.includes("accept-encoding")) {
-        nodeHeaders["Vary"] = existingVary + ", Accept-Encoding";
-      }
-    } else {
-      nodeHeaders["Vary"] = "Accept-Encoding";
-    }
   }
 
-  writeHead(nodeHeaders);
+  writeHead(varyByEncoding ? mergeVaryHeader(nodeHeaders, "Accept-Encoding") : nodeHeaders);
 
   // HEAD requests: send headers only, skip the body
   if (req.method === "HEAD") {
@@ -1166,18 +1189,6 @@ function installPagesClientAssetGlobals(options: {
 async function startAppRouterServer(options: AppRouterServerOptions) {
   const { port, host, clientDir, rscEntryPath, compress, purpose } = options;
 
-  // Load image config written at build time by vinext:image-config plugin.
-  // This provides SVG/security header settings for the image optimization endpoint.
-  let imageConfig: ImageConfig | undefined;
-  const imageConfigPath = path.join(path.dirname(rscEntryPath), "image-config.json");
-  if (fs.existsSync(imageConfigPath)) {
-    try {
-      imageConfig = JSON.parse(fs.readFileSync(imageConfigPath, "utf-8"));
-    } catch {
-      /* ignore parse errors */
-    }
-  }
-
   // Load prerender secret written at build time by vinext:server-manifest plugin.
   // Used to authenticate internal /__vinext/prerender/* HTTP endpoints.
   const prerenderSecret = readPrerenderSecret(path.dirname(rscEntryPath));
@@ -1201,6 +1212,23 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     typeof rscModule.__basePath === "string" ? rscModule.__basePath : "";
   const appRouterInlineCss = rscModule.__inlineCss === true;
   const appRouterHasPagesDir = rscModule.__hasPagesDir === true;
+  const appImageAllowedWidths: number[] = Array.isArray(rscModule.__imageAllowedWidths)
+    ? rscModule.__imageAllowedWidths
+    : [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
+  let imageConfig: ImageConfig | undefined =
+    typeof rscModule.__imageConfig === "object" && rscModule.__imageConfig !== null
+      ? (rscModule.__imageConfig as ImageConfig)
+      : undefined;
+  if (imageConfig === undefined) {
+    const imageConfigPath = path.join(path.dirname(rscEntryPath), "image-config.json");
+    if (fs.existsSync(imageConfigPath)) {
+      try {
+        imageConfig = JSON.parse(fs.readFileSync(imageConfigPath, "utf-8"));
+      } catch {
+        /* Older or malformed build sidecar: fall back to defaults. */
+      }
+    }
+  }
   globalThis.__VINEXT_INLINE_CSS__ = appRouterInlineCss
     ? collectInlineCssManifest(clientDir, appRouterAssetPrefix)
     : undefined;
@@ -1295,10 +1323,11 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     // Cloudflare's ASSETS binding serves these directly in Workers; this
     // branch is the Node fallback.
     //
-    // Asset-shaped requests that don't find a file return a plain-text 404
-    // instead of falling through to the RSC handler (which would render
-    // the full HTML 404 page). Matches Next.js's behaviour in
-    // packages/next/src/server/lib/router-server.ts.
+    // Existing build assets bypass middleware. Missing asset-shaped requests
+    // must still reach middleware so it can rewrite or respond; if routing
+    // ultimately returns 404, convert it back to the canonical plain-text
+    // static-file response below.
+    let missingBuildAsset = false;
     {
       const assetLookupPath = resolveAppRouterAssetPath(
         pathname,
@@ -1309,9 +1338,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
         if (await tryServeStatic(req, res, clientDir, assetLookupPath, compress, staticCache)) {
           return;
         }
-        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end("Not Found");
-        return;
+        missingBuildAsset = true;
       }
     }
 
@@ -1319,11 +1346,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     // serves the original file with cache headers and security headers)
     if (isImageOptimizationPath(pathname)) {
       const parsedUrl = new URL(rawUrl, "http://localhost");
-      const allowedWidths = [
-        ...(imageConfig?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
-        ...(imageConfig?.imageSizes ?? DEFAULT_IMAGE_SIZES),
-      ];
-      const params = parseImageParams(parsedUrl, allowedWidths, imageConfig?.qualities);
+      const params = parseImageParams(parsedUrl, appImageAllowedWidths, imageConfig?.qualities);
       if (!params) {
         res.writeHead(400);
         res.end("Bad Request");
@@ -1409,6 +1432,13 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
           res,
           compress,
         );
+        return;
+      }
+
+      if (missingBuildAsset && response.status === 404) {
+        cancelResponseBody(response);
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Not Found");
         return;
       }
 
@@ -1500,6 +1530,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   } = serverEntry;
   const matchPageRoute =
     typeof serverEntry.matchPageRoute === "function" ? serverEntry.matchPageRoute : undefined;
+  const hasMiddleware = serverEntry.hasMiddleware === true;
   const pageRoutes = readPagesServerEntryPageRoutes(serverEntry.pageRoutes);
 
   // Load prerender secret written at build time by vinext:server-manifest plugin.
@@ -1636,19 +1667,17 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     // `staticLookupPath` is still computed because non-asset paths below
     // (image-optimization, SSR routing) match against the basePath-stripped form.
     //
-    // Asset-shaped requests that don't find a file return a plain-text 404
-    // instead of falling through to the SSR/render handler (which would
-    // render the full HTML 404 page). Matches Next.js's behaviour in
-    // packages/next/src/server/lib/router-server.ts.
+    // Existing build assets bypass middleware. Missing asset-shaped requests
+    // must still reach middleware so it can rewrite or respond; if routing
+    // ultimately returns 404, convert it back to the canonical plain-text
+    // static-file response below.
     const staticLookupPath = stripBasePath(pathname, basePath);
     const pagesAssetLookup = resolveAppRouterAssetPath(pathname, pagesAssetPathPrefix, assetPrefix);
+    const missingBuildAsset = pagesAssetLookup !== null;
     if (pagesAssetLookup) {
       if (await tryServeStatic(req, res, clientDir, pagesAssetLookup, compress, staticCache)) {
         return;
       }
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("Not Found");
-      return;
     }
 
     // ── Image optimization passthrough ──────────────────────────────
@@ -1766,6 +1795,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         hadBasePath,
         isDataReq,
         isDataRequest,
+        hasMiddleware,
         ctx: undefined, // Node has no ExecutionContext
         // Raw query from req.url so redirect Locations aren't re-encoded by URL parsing.
         rawSearch: rawQs,
@@ -1833,6 +1863,12 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       if (result.type === "response") {
         const { response } = result;
+        if (missingBuildAsset && response.status === 404) {
+          cancelResponseBody(response);
+          res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Not Found");
+          return;
+        }
         const shouldStream = isVinextStreamedHtmlResponse(response);
         // Passthrough responses (middleware short-circuits, external proxies, redirects)
         // carry no defaultContentType — send them verbatim without injecting a

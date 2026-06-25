@@ -18,7 +18,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -43,7 +43,7 @@ jobs:
         shardIndex: [1, 2, 3]
         shardTotal: [3]
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -70,7 +70,7 @@ jobs:
         shardIndex: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         shardTotal: [10]
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -124,7 +124,7 @@ jobs:
     needs: [test-integration]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -157,7 +157,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -274,6 +274,10 @@ jobs:
             label: pages-router-basepath-dev
             shardIndex: 1
             shardTotal: 1
+          - project: pages-router-basepath
+            label: pages-router-basepath
+            shardIndex: 1
+            shardTotal: 1
           - project: app-router
             label: app-router 1/3
             shardIndex: 1
@@ -347,7 +351,7 @@ jobs:
             shardIndex: 1
             shardTotal: 1
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -371,7 +375,7 @@ jobs:
       # the package archives cached we skip the (slow) download step on hits.
       - name: Cache apt archives (WebKit deps)
         if: ${{ matrix.project == 'app-router-webkit-browser-specific' }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: |
             ~/.cache/apt-archives
