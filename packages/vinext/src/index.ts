@@ -69,6 +69,12 @@ import { mergeServerExternalPackages } from "./config/server-external-packages.j
 
 import { findMiddlewareFile, isProxyFile, runMiddleware } from "./server/middleware.js";
 import { isNextDataPathname, parseNextDataPathname } from "./server/pages-data-route.js";
+import { isImageOptimizationPath } from "./server/image-optimization-paths.js";
+import type {
+  StaticExportOptions,
+  AppStaticExportOptions,
+  StaticExportResult,
+} from "./build/static-export.js";
 import { resolvePagesI18nRequest } from "./server/pages-i18n.js";
 import {
   MIDDLEWARE_NEXT_HEADER,
@@ -222,8 +228,6 @@ installSocketErrorBackstop();
 
 type ASTNode = ReturnType<typeof parseAst>["body"][number]["parent"];
 type CreateSSRHandler = typeof import("./server/dev-server.js").createSSRHandler;
-type StaticExportPages = typeof import("./build/static-export.js").staticExportPages;
-type StaticExportApp = typeof import("./build/static-export.js").staticExportApp;
 
 let metadataRoutesModulePromise: Promise<typeof import("./server/metadata-routes.js")> | null =
   null;
@@ -4031,9 +4035,9 @@ export const loadServerActionClient = ${
               // ── Image optimization passthrough (dev mode) ─────────────
               // In dev, redirect to the original asset URL so Vite serves it.
               const requestPathname = url.split("?")[0]!;
-              // Keep these literals in sync with image-optimization.ts while avoiding
-              // its import for non-image dev requests.
-              if (requestPathname === "/_next/image" || requestPathname === "/_vinext/image") {
+              // Cheap path predicate — gating here avoids importing the full
+              // image-optimization handler for non-image dev requests.
+              if (isImageOptimizationPath(requestPathname)) {
                 const { DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES, resolveDevImageRedirect } =
                   await (imageOptimizationModulePromise ??=
                     import("./server/image-optimization.js"));
@@ -6004,19 +6008,19 @@ async function writeWebResponseToNodeRes(
   }
 }
 
-// Public exports for static export
-export async function staticExportPages(
-  ...args: Parameters<StaticExportPages>
-): ReturnType<StaticExportPages> {
+// Public exports for static export. Thin async wrappers that defer the heavy
+// build/static-export module until a caller actually runs an export, while
+// keeping the underlying single-options signatures intact.
+export async function staticExportPages(options: StaticExportOptions): Promise<StaticExportResult> {
   const { staticExportPages } = await import("./build/static-export.js");
-  return staticExportPages(...args);
+  return staticExportPages(options);
 }
 
 export async function staticExportApp(
-  ...args: Parameters<StaticExportApp>
-): ReturnType<StaticExportApp> {
+  options: AppStaticExportOptions,
+): Promise<StaticExportResult> {
   const { staticExportApp } = await import("./build/static-export.js");
-  return staticExportApp(...args);
+  return staticExportApp(options);
 }
 
 export type {

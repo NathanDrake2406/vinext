@@ -57,7 +57,7 @@ import { ssrAppRouterInstance } from "./app-ssr-router-instance.js";
 // @ts-expect-error — resolved by the vinext build plugin in SSR environments.
 import pagesClientAssets from "virtual:vinext-pages-client-assets";
 import { setPagesClientAssets, type PagesClientAssets } from "./pages-client-assets.js";
-import { getReactNodeEnv, importWithReactNodeEnv } from "./react-renderer-env.js";
+import { getReactNodeEnv, importReactDomServerEdge } from "./react-renderer-env.js";
 
 setPagesClientAssets(pagesClientAssets as PagesClientAssets);
 
@@ -105,10 +105,7 @@ let reactDomServerEdgePromise: Promise<ReactDomServerEdge> | null = null;
 async function loadReactDomServerEdge(): Promise<ReactDomServerEdge> {
   if (reactDomServerEdgePromise) return reactDomServerEdgePromise;
 
-  reactDomServerEdgePromise = importWithReactNodeEnv(
-    getLoadedReactNodeEnv(),
-    () => import("react-dom/server.edge"),
-  );
+  reactDomServerEdgePromise = importReactDomServerEdge(getLoadedReactNodeEnv());
   return reactDomServerEdgePromise;
 }
 

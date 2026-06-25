@@ -225,7 +225,7 @@ import { handlePagesApiRoute as __handlePagesApiRoute } from ${JSON.stringify(_p
 import { normalizePagesDataRequest as __normalizePagesDataRequest, buildNextDataNotFoundResponse as __buildNextDataNotFoundResponse } from ${JSON.stringify(_pagesDataRoutePath)};
 import { buildDefaultPagesNotFoundResponse as __buildDefaultPagesNotFoundResponse } from ${JSON.stringify(_pagesDefault404Path)};
 import { createPagesPageHandler as __createPagesPageHandler } from ${JSON.stringify(_pagesPageHandlerPath)};
-import { getReactNodeEnv as __getReactNodeEnv, importWithReactNodeEnv as __importWithReactNodeEnv } from ${JSON.stringify(_reactRendererEnvPath)};
+import { getReactNodeEnv as __getReactNodeEnv, importReactDomServerEdge as __importReactDomServerEdge } from ${JSON.stringify(_reactRendererEnvPath)};
 ${instrumentationImportCode}
 ${middlewareImportCode}
 
@@ -260,10 +260,7 @@ const _appAssetPath = ${appAssetPathJson};
 let _reactDomServerEdgePromise = null;
 async function _loadReactDomServerEdge() {
   if (_reactDomServerEdgePromise) return _reactDomServerEdgePromise;
-  _reactDomServerEdgePromise = __importWithReactNodeEnv(
-    __getReactNodeEnv(React.createElement),
-    () => import("react-dom/server.edge"),
-  );
+  _reactDomServerEdgePromise = __importReactDomServerEdge(__getReactNodeEnv(React.createElement));
   return _reactDomServerEdgePromise;
 }
 

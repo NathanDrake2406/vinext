@@ -34,6 +34,7 @@ import MagicString from "magic-string";
 import { buildGoogleFontsUrl } from "../build/google-fonts/build-url.js";
 import { findFontFilesInCss } from "../build/google-fonts/find-font-files-in-css.js";
 import { ASSET_PREFIX_URL_DIR } from "../utils/asset-prefix.js";
+import { CONTENT_TYPES } from "../server/content-types.js";
 
 /**
  * Thrown when Google Fonts returns a non-2xx response. Distinct from a raw
@@ -88,11 +89,6 @@ const GOOGLE_FONT_UTILITY_EXPORTS = new Set([
  */
 const VINEXT_FONT_URL_NAMESPACE = "_vinext_fonts";
 const MAX_GOOGLE_FONTS_ERROR_BODY_LENGTH = 500;
-const FONT_CONTENT_TYPES: Record<string, string> = {
-  ".woff2": "font/woff2",
-  ".woff": "font/woff",
-  ".ttf": "font/ttf",
-};
 
 function formatGoogleFontsErrorBody(body: string): string {
   const trimmed = body.trim();
@@ -696,10 +692,7 @@ export function createGoogleFontsPlugin(fontGoogleShimPath: string, shimsDir: st
         fs.stat(filePath, (err, stat) => {
           if (err || !stat.isFile()) return next();
           const ext = path.extname(filePath).toLowerCase();
-          // Keep this local to avoid importing the production static-file server
-          // on every vinext() plugin load. fetchAndCacheFont only writes these
-          // font extensions, matching prod-server's MIME table for the same files.
-          res.setHeader("Content-Type", FONT_CONTENT_TYPES[ext] ?? "application/octet-stream");
+          res.setHeader("Content-Type", CONTENT_TYPES[ext] ?? "application/octet-stream");
           res.setHeader("Cache-Control", "no-cache");
           res.setHeader("Access-Control-Allow-Origin", "*");
           fs.createReadStream(filePath).pipe(res);
