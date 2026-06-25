@@ -639,7 +639,7 @@ async function buildApp() {
     process.stdout.write("\x1b[0m");
     console.log(`  ${label}`);
     prerenderResult = await runPrerender({
-      root: process.cwd(),
+      root: normalizePathSeparators(process.cwd()),
       concurrency: parsed.prerenderConcurrency,
     });
   }
@@ -650,7 +650,7 @@ async function buildApp() {
   process.stdout.write("\x1b[0m");
   const { printBuildReport } = await import("./build/report.js");
   await printBuildReport({
-    root: process.cwd(),
+    root: normalizePathSeparators(process.cwd()),
     pageExtensions: resolvedNextConfig.pageExtensions,
     prerenderResult: prerenderResult ?? undefined,
   });
