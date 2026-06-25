@@ -655,9 +655,8 @@ async function buildApp() {
     }
   } finally {
     if (pagesClientAssetsBuildSession) {
-      const { clearPagesClientAssetsBuildMetadata } = await import(
-        "./build/pages-client-assets-module.js"
-      );
+      const { clearPagesClientAssetsBuildMetadata } =
+        await import("./build/pages-client-assets-module.js");
       clearPagesClientAssetsBuildMetadata(pagesClientAssetsBuildSession);
       if (
         process.env.__VINEXT_PAGES_CLIENT_ASSETS_BUILD_SESSION === pagesClientAssetsBuildSession
@@ -681,9 +680,8 @@ async function buildApp() {
   }
 
   let prerenderResult;
-  const { formatVinextPrerenderLabel, resolveVinextPrerenderDecision } = await import(
-    "./config/prerender.js"
-  );
+  const { formatVinextPrerenderLabel, resolveVinextPrerenderDecision } =
+    await import("./config/prerender.js");
   const prerenderDecision = resolveVinextPrerenderDecision({
     prerenderAllFlag: parsed.prerenderAll,
     vinextPrerenderConfig: buildConfigMetadata.prerenderConfig,
@@ -809,9 +807,7 @@ async function lint() {
 }
 
 async function deployCommand() {
-  const { deploy: runDeploy, parseDeployArgs } = await import(
-    "@vinext/cloudflare/internal/deploy"
-  );
+  const { deploy: runDeploy, parseDeployArgs } = await import("@vinext/cloudflare/internal/deploy");
   const parsed = parseDeployArgs(rawArgs);
   if (parsed.help) {
     printDeployDeprecationWarning();
@@ -892,9 +888,8 @@ async function initCommand() {
   const port = parsed.port ?? 3001;
   const skipCheck = rawArgs.includes("--skip-check");
   const force = rawArgs.includes("--force");
-  const { INIT_PLATFORMS, resolveInitPlatform, resolveInitPrerender } = await import(
-    "./init-platform.js"
-  );
+  const { INIT_PLATFORMS, resolveInitPlatform, resolveInitPrerender } =
+    await import("./init-platform.js");
   const platform = await resolveInitPlatform(rawArgs);
   const platformOptions = await INIT_PLATFORMS[platform].options(rawArgs);
   const prerender = await resolveInitPrerender(rawArgs);
