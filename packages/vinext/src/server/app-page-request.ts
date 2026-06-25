@@ -204,7 +204,7 @@ function pickAppPageRouteParams(
 function remapRouteParams(
   matchedParams: AppPageParams,
   source: Pick<
-    GenerateStaticParamsSource,
+    AppPageGenerateStaticParamsSource,
     "paramAliases" | "paramPatternParts" | "routePatternParts"
   >,
 ): AppPageParams {
