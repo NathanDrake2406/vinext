@@ -1,5 +1,6 @@
 import path from "node:path";
-import { buildAppRouteGraph, type AppRouteGraphRoute } from "./app-route-graph.js";
+import type { AppRouteGraphRoute } from "./app-route-graph.js";
+import { appRouteGraph } from "./app-router.js";
 import { findFileWithExts, type ValidFileMatcher } from "./file-matcher.js";
 import { normalizePathSeparators } from "../utils/path.js";
 
@@ -26,7 +27,7 @@ export type CollectAppRouterStartupOptimizeEntriesOptions = {
  * Why a projection and not a bespoke filesystem walk: App Router startup
  * semantics (transparent `@children`, slot root pages discovered through route
  * groups, which route-group branch actually resolves to "/", which slot layout
- * the renderer wraps with) already live in `buildAppRouteGraph`. Re-deriving a
+ * the renderer wraps with) already live in `appRouteGraph`. Re-deriving a
  * subset by hand drifts from those facts — it both misses real startup modules
  * (an `app/@children/page.tsx` root page) and over-includes non-startup ones (an
  * `app/(admin)/layout.tsx` that only wraps `/dashboard`). Deriving the set from
@@ -52,7 +53,7 @@ export async function collectAppRouterStartupOptimizeEntries({
     add(findFileWithExts(appDir, convention, matcher));
   }
 
-  const { routes } = await buildAppRouteGraph(appDir, matcher);
+  const { routes } = await appRouteGraph(appDir, undefined, matcher);
   for (const route of routes) {
     if (route.pattern !== ROOT_PATTERN) continue;
     addRouteConventionFiles(route, add);
@@ -85,6 +86,7 @@ function addRouteConventionFiles(
   // slot's intercepting routes load on interception navigations, not on "/".
   for (const slot of route.parallelSlots) {
     add(slot.layoutPath);
+    slot.configLayoutPaths?.forEach(add);
     add(slot.pagePath);
     add(slot.defaultPath);
     add(slot.loadingPath);

@@ -207,10 +207,8 @@ describe("collectAppRouterStartupOptimizeEntries (projection of the route graph)
 
   it("includes a slot root page found through a route group, mirroring what the graph loads", async () => {
     // A slot's root page can live under a transparent route group. The renderer
-    // loads that page but not the route-group-nested layout (the graph models a
-    // slot's layout only at the slot root, app/@drawer/layout.tsx). The startup
-    // set tracks the graph exactly: page in, nested layout out — so the two
-    // never disagree, regardless of which file imports which dep.
+    // loads that page and the route-group-nested layout captured in the graph's
+    // configLayoutPaths. The startup set tracks that graph projection exactly.
     await withTempApp(
       {
         "layout.tsx": LAYOUT,
@@ -221,7 +219,7 @@ describe("collectAppRouterStartupOptimizeEntries (projection of the route graph)
       async (collect) => {
         const entries = await collect();
         expect(entries).toContain("app/@drawer/(group)/page.tsx");
-        expect(entries).not.toContain("app/@drawer/(group)/layout.tsx");
+        expect(entries).toContain("app/@drawer/(group)/layout.tsx");
       },
     );
   });
@@ -253,8 +251,8 @@ it("includes URL-invisible root files in focused App Router optimizeDeps.entries
       expect(entries, name).toContain("app/(startup)/page.tsx");
       expect(entries, name).toContain("app/@modal/default.tsx");
       expect(entries, name).toContain("app/@drawer/(startup-slot)/page.tsx");
+      expect(entries, name).toContain("app/@drawer/(startup-slot)/layout.tsx");
       expect(entries, name).not.toContain("app/@drawer/(startup-slot)/default.tsx");
-      expect(entries, name).not.toContain("app/@drawer/(startup-slot)/layout.tsx");
       expect(entries, name).not.toContain("app/@drawer/(startup-slot)/loading.tsx");
       expect(entries, name).not.toContain("app/@drawer/(startup-slot)/error.tsx");
       expect(entries, name).not.toContain("app/about/page.tsx");
