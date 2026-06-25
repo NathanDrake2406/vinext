@@ -21275,6 +21275,48 @@ describe("cache scope guards for dynamic APIs", () => {
     );
   });
 
+  it('connection() throws the "use cache" error before static shell suspension', async () => {
+    const { cacheContextStorage } = await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { connection } = await import("../packages/vinext/src/shims/server.js");
+    const { runWithStaticNavigationShellScope } =
+      await import("../packages/vinext/src/server/app-static-navigation-shell.js");
+    const {
+      createPprFallbackShellState,
+      preparePprFallbackShellFinalRender,
+      runWithPprFallbackShellState,
+    } = await import("../packages/vinext/src/shims/ppr-fallback-shell.js");
+
+    const state = createPprFallbackShellState({
+      fallbackParamNames: [],
+      routePattern: "/test",
+    });
+    preparePprFallbackShellFinalRender(state);
+
+    try {
+      await runWithPprFallbackShellState(state, () =>
+        runWithStaticNavigationShellScope({ includeRuntimeRequestApis: false }, () =>
+          cacheContextStorage.run(
+            {
+              tags: [],
+              lifeConfigs: [],
+              variant: "default",
+              hasExplicitRevalidate: false,
+              hasExplicitExpire: false,
+              dynamicNestedCacheError: undefined,
+            },
+            async () => {
+              const result = connection();
+              state.abortController.abort();
+              await expect(result).rejects.toThrow(/cannot be called inside "use cache"/);
+            },
+          ),
+        ),
+      );
+    } finally {
+      state.abortController.abort();
+    }
+  });
+
   it("headers() throws inside unstable_cache() scope", async () => {
     const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
