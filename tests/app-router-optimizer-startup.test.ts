@@ -2,8 +2,32 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type ViteDevServer } from "vite";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { startFixtureServer } from "./helpers.js";
+import { createValidFileMatcher } from "../packages/vinext/src/routing/file-matcher.js";
+import { collectAppRouterStartupOptimizeEntries } from "../packages/vinext/src/routing/app-startup-optimize-entries.js";
+
+const LAYOUT = `export default function L({ children }: { children: unknown }) { return children; }\n`;
+const PAGE = `export default function P() { return null; }\n`;
+
+async function withTempApp(
+  files: Record<string, string>,
+  run: (collect: () => Promise<string[]>) => Promise<void>,
+): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-startup-collect-"));
+  try {
+    const appDir = path.join(root, "app");
+    for (const [relativePath, contents] of Object.entries(files)) {
+      const filePath = path.join(appDir, relativePath);
+      await fsp.mkdir(path.dirname(filePath), { recursive: true });
+      await fsp.writeFile(filePath, contents);
+    }
+    const matcher = createValidFileMatcher();
+    await run(() => collectAppRouterStartupOptimizeEntries({ root, appDir, matcher }));
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
 
 async function symlinkWorkspacePackage(fixtureRoot: string, packageName: string): Promise<void> {
   await fsp.symlink(
@@ -142,6 +166,66 @@ export default function RouteGroupSlotError() {
 `,
   );
 }
+
+describe("collectAppRouterStartupOptimizeEntries (projection of the route graph)", () => {
+  it("includes a transparent @children root page", async () => {
+    // app/@children/page.tsx is the real "/" page (Next.js treats @children as
+    // transparent), so its module must be a startup entry. A bespoke walk that
+    // only recurses route groups and non-@children slots silently dropped it.
+    await withTempApp(
+      {
+        "layout.tsx": LAYOUT,
+        "@children/page.tsx": PAGE,
+      },
+      async (collect) => {
+        const entries = await collect();
+        expect(entries).toContain("app/@children/page.tsx");
+        expect(entries).toContain("app/layout.tsx");
+      },
+    );
+  });
+
+  it("excludes route-group conventions that do not resolve to the root URL", async () => {
+    // (admin)/layout.tsx only wraps /dashboard, never "/", so it is not a
+    // startup module. Including every invisible route-group shell reintroduced
+    // the whole-app scaling this projection exists to remove.
+    await withTempApp(
+      {
+        "layout.tsx": LAYOUT,
+        "page.tsx": PAGE,
+        "(admin)/layout.tsx": LAYOUT,
+        "(admin)/dashboard/page.tsx": PAGE,
+      },
+      async (collect) => {
+        const entries = await collect();
+        expect(entries).toEqual(expect.arrayContaining(["app/layout.tsx", "app/page.tsx"]));
+        expect(entries).not.toContain("app/(admin)/layout.tsx");
+        expect(entries).not.toContain("app/(admin)/dashboard/page.tsx");
+      },
+    );
+  });
+
+  it("includes a slot root page found through a route group, mirroring what the graph loads", async () => {
+    // A slot's root page can live under a transparent route group. The renderer
+    // loads that page but not the route-group-nested layout (the graph models a
+    // slot's layout only at the slot root, app/@drawer/layout.tsx). The startup
+    // set tracks the graph exactly: page in, nested layout out — so the two
+    // never disagree, regardless of which file imports which dep.
+    await withTempApp(
+      {
+        "layout.tsx": LAYOUT,
+        "page.tsx": PAGE,
+        "@drawer/(group)/page.tsx": PAGE,
+        "@drawer/(group)/layout.tsx": LAYOUT,
+      },
+      async (collect) => {
+        const entries = await collect();
+        expect(entries).toContain("app/@drawer/(group)/page.tsx");
+        expect(entries).not.toContain("app/@drawer/(group)/layout.tsx");
+      },
+    );
+  });
+});
 
 it("includes URL-invisible root files in focused App Router optimizeDeps.entries", async () => {
   const fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-startup-optimize-"));

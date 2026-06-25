@@ -2341,15 +2341,16 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
 
         // If app/ directory exists, configure RSC environments
         if (hasAppDir) {
-          // Seed only app-level startup conventions instead of the entire app/
-          // tree. Route modules are already represented in the generated RSC
-          // manifest as lazy import() thunks, so crawling every page/route file
-          // makes the first dev response scale with total route count even when
-          // the requested route is "/". Framework deps that must stay identity-
-          // stable across environments are handled by explicit include/exclude
-          // rules below instead of relying on incidental whole-app discovery.
-          // The entries must be relative to the project root.
-          const appEntries = collectAppRouterStartupOptimizeEntries({
+          // Seed only the modules that rendering the root URL ("/") loads,
+          // derived from the canonical route graph, instead of crawling the
+          // entire app/ tree. Route modules below "/" are already represented in
+          // the generated RSC manifest as lazy import() thunks, so crawling every
+          // page/route file makes the first dev response scale with total route
+          // count even when the requested route is "/". Framework deps that must
+          // stay identity-stable across environments are handled by explicit
+          // include/exclude rules below instead of relying on incidental
+          // whole-app discovery. The entries must be relative to the project root.
+          const appEntries = await collectAppRouterStartupOptimizeEntries({
             root,
             appDir,
             matcher: fileMatcher,
