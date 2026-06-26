@@ -68,6 +68,7 @@ import {
 } from "../client/pages-router-link-navigation.js";
 import { createRouteTrieCache, matchRouteWithTrie } from "../routing/route-matching.js";
 import { stripBasePath } from "../utils/base-path.js";
+import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import {
   prefetchPagesData,
   resolvePagesDataNavigationTarget,
@@ -434,6 +435,8 @@ function prefetchUrl(href: string, mode: LinkPrefetchMode, priority: "low" | "hi
   schedule(() => {
     void (async () => {
       if (hasAppNavigationRuntime()) {
+        if (isBotUserAgent(window.navigator?.userAgent ?? "")) return;
+
         // Hybrid ownership: skip the App RSC prefetch when Pages owns the
         // URL. The App's `__VINEXT_LINK_PREFETCH_ROUTES__` may include an
         // App catch-all that also matches the same path, so a naive
