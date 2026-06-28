@@ -230,6 +230,7 @@ export async function buildPageElements<
   const hasPageModule = !!pageModule;
   const renderIdentity = createAppPageRenderIdentity({
     displayPathname,
+    targetMatchedPathname: routePath,
     interceptionContext: opts?.interceptionContext ?? null,
     interceptSourceMatchedUrl: opts?.interceptSourceMatchedUrl ?? null,
     // Sibling intercepts are full-page replacements with no slot proof.

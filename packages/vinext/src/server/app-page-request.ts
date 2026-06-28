@@ -1,6 +1,7 @@
 import type { AppPageSpecialError } from "./app-page-execution.js";
 import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
 import { getAppPageSegmentParamName } from "./app-page-params.js";
+import { matchRoutePattern } from "../routing/route-pattern.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import { loadAppInterceptLayouts } from "./app-route-module-loader.js";
@@ -15,7 +16,20 @@ type GenerateStaticParamsModule = {
 
 export type AppPageGenerateStaticParamsSource = {
   generateStaticParams: GenerateStaticParams;
+  paramAliases?: Readonly<Record<string, string>>;
+  paramPatternParts?: readonly string[];
+  routePatternParts?: readonly string[];
   parentParamNames: readonly string[];
+};
+
+type ParallelGenerateStaticParamsBranch = {
+  configLayouts?: readonly (GenerateStaticParamsModule | null | undefined)[] | null;
+  configLayoutTreePositions?: readonly number[] | null;
+  layout?: GenerateStaticParamsModule | null;
+  page?: GenerateStaticParamsModule | null;
+  paramNames?: readonly string[] | null;
+  patternParts?: readonly string[] | null;
+  routeSegments?: readonly string[] | null;
 };
 
 export type ValidateAppPageDynamicParamsOptions = {
@@ -43,6 +57,8 @@ type ResolveAppPageGenerateStaticParamsSourcesOptions = {
   layouts?: readonly (GenerateStaticParamsModule | null | undefined)[];
   layoutTreePositions?: readonly number[];
   page?: GenerateStaticParamsModule | null;
+  parallelBranches?: readonly (ParallelGenerateStaticParamsBranch | null | undefined)[];
+  routePatternParts?: readonly string[];
   routeSegments: readonly string[];
 };
 
@@ -185,6 +201,46 @@ function pickAppPageRouteParams(
   return params;
 }
 
+function remapRouteParams(
+  matchedParams: AppPageParams,
+  source: Pick<
+    AppPageGenerateStaticParamsSource,
+    "paramAliases" | "paramPatternParts" | "routePatternParts"
+  >,
+): AppPageParams {
+  if (source.paramPatternParts && source.routePatternParts) {
+    const urlParts: string[] = [];
+    for (const part of source.routePatternParts) {
+      if (!part.startsWith(":")) {
+        urlParts.push(part);
+        continue;
+      }
+
+      const paramName = part.slice(1).replace(/[+*]$/, "");
+      const value = matchedParams[paramName];
+      if (Array.isArray(value)) {
+        urlParts.push(...value.map(encodeURIComponent));
+      } else if (value !== undefined) {
+        urlParts.push(encodeURIComponent(value));
+      }
+    }
+
+    const slotParams = matchRoutePattern(urlParts, source.paramPatternParts);
+    if (slotParams) return slotParams;
+  }
+
+  if (!source.paramAliases) return matchedParams;
+
+  const params: AppPageParams = { ...matchedParams };
+  for (const [routeParamName, sourceParamName] of Object.entries(source.paramAliases)) {
+    const value = matchedParams[routeParamName];
+    if (value === undefined) continue;
+    delete params[routeParamName];
+    params[sourceParamName] = value;
+  }
+  return params;
+}
+
 function collectParentParamNames(
   routeSegments: readonly string[],
   boundaryPosition: number,
@@ -207,6 +263,23 @@ function getLayoutGenerateStaticParamsBoundary(layoutTreePosition: number | unde
   // generateStaticParams belongs to the [id] segment and receives only parent
   // params from segments before [id].
   return (layoutTreePosition ?? 0) - 1;
+}
+
+function getParallelParentParamNames(
+  routeParamNames: readonly string[],
+  branch: ParallelGenerateStaticParamsBranch,
+  boundaryPosition: number,
+): string[] {
+  const slotParamNames = branch.paramNames ?? routeParamNames;
+  const branchParamNames = collectParentParamNames(branch.routeSegments ?? [], boundaryPosition);
+  const branchParamNameSet = new Set(
+    (branch.routeSegments ?? []).flatMap((segment) => {
+      const name = getAppPageSegmentParamName(segment);
+      return name ? [name] : [];
+    }),
+  );
+  const ownerParamNames = slotParamNames.filter((name) => !branchParamNameSet.has(name));
+  return [...new Set([...ownerParamNames, ...branchParamNames])];
 }
 
 export function resolveAppPageGenerateStaticParamsSources(
@@ -234,6 +307,52 @@ export function resolveAppPageGenerateStaticParamsSources(
         Math.max(0, options.routeSegments.length - 1),
       ),
     });
+  }
+
+  const routeParamNames = options.routeSegments.flatMap((segment) => {
+    const name = getAppPageSegmentParamName(segment);
+    return name ? [name] : [];
+  });
+  for (const parallelBranch of options.parallelBranches ?? []) {
+    if (!parallelBranch) continue;
+    const slotParamNames = parallelBranch.paramNames ?? routeParamNames;
+    const paramAliases = Object.fromEntries(
+      routeParamNames.flatMap((routeParamName, index) => {
+        const slotParamName = slotParamNames[index];
+        return slotParamName && slotParamName !== routeParamName
+          ? [[routeParamName, slotParamName]]
+          : [];
+      }),
+    );
+    const addParallelSource = (
+      module: GenerateStaticParamsModule | null | undefined,
+      boundaryPosition: number,
+    ) => {
+      if (typeof module?.generateStaticParams !== "function") return;
+      sources.push({
+        generateStaticParams: module.generateStaticParams,
+        ...(Object.keys(paramAliases).length > 0 ? { paramAliases } : {}),
+        ...(parallelBranch.patternParts ? { paramPatternParts: parallelBranch.patternParts } : {}),
+        ...(options.routePatternParts ? { routePatternParts: options.routePatternParts } : {}),
+        parentParamNames: getParallelParentParamNames(
+          routeParamNames,
+          parallelBranch,
+          boundaryPosition,
+        ),
+      });
+    };
+
+    addParallelSource(parallelBranch.layout, -1);
+    parallelBranch.configLayouts?.forEach((layout, index) => {
+      addParallelSource(
+        layout,
+        getLayoutGenerateStaticParamsBoundary(parallelBranch.configLayoutTreePositions?.[index]),
+      );
+    });
+    addParallelSource(
+      parallelBranch.page,
+      Math.max(0, (parallelBranch.routeSegments?.length ?? 0) - 1),
+    );
   }
 
   return sources;
@@ -304,13 +423,15 @@ function isAppPageStaticParamCovered(
 function getAppPageStaticParamSourceParamNames(
   staticParams: readonly Record<string, unknown>[],
   routeParamNames: readonly string[],
+  source: Pick<AppPageGenerateStaticParamsSource, "paramAliases">,
 ): string[] {
   const sourceParamNames: string[] = [];
 
   for (const paramName of routeParamNames) {
+    const sourceParamName = source.paramAliases?.[paramName] ?? paramName;
     if (
       staticParams.some((staticParamSet) =>
-        Object.prototype.hasOwnProperty.call(staticParamSet, paramName),
+        Object.prototype.hasOwnProperty.call(staticParamSet, sourceParamName),
       )
     ) {
       sourceParamNames.push(paramName);
@@ -324,11 +445,13 @@ function isAppPageStaticParamTupleCovered(
   staticParamSet: Record<string, unknown>,
   params: AppPageParams,
   paramNames: readonly string[],
+  source: Pick<AppPageGenerateStaticParamsSource, "paramAliases">,
 ): boolean {
   return paramNames.every((paramName) => {
-    const currentValue = params[paramName];
+    const sourceParamName = source.paramAliases?.[paramName] ?? paramName;
+    const currentValue = params[sourceParamName];
     if (currentValue === undefined) return false;
-    return isAppPageStaticParamCovered(staticParamSet, paramName, currentValue);
+    return isAppPageStaticParamCovered(staticParamSet, sourceParamName, currentValue);
   });
 }
 
@@ -377,9 +500,10 @@ export async function resolveAppPageDynamicParams(
   const staticallyCoveredParamNames = new Set<string>();
 
   for (const source of generateStaticParamsSources) {
+    const sourceParams = remapRouteParams(options.params, source);
     const staticParams = await runWithFetchDedupe(() =>
       source.generateStaticParams({
-        params: pickAppPageRouteParams(options.params, source.parentParamNames),
+        params: pickAppPageRouteParams(sourceParams, source.parentParamNames),
       }),
     );
 
@@ -389,7 +513,7 @@ export async function resolveAppPageDynamicParams(
 
     if (
       options.enforceStaticParamsOnly &&
-      !areAppPageStaticParamsAllowed(options.params, staticParams)
+      !areAppPageStaticParamsAllowed(sourceParams, staticParams)
     ) {
       options.clearRequestContext();
       return {
@@ -403,11 +527,12 @@ export async function resolveAppPageDynamicParams(
     const sourceParamNames = getAppPageStaticParamSourceParamNames(
       staticParams,
       options.routeParamNames,
+      source,
     );
     if (sourceParamNames.length === 0) continue;
 
     const matchedTuple = staticParams.some((staticParamSet) =>
-      isAppPageStaticParamTupleCovered(staticParamSet, options.params, sourceParamNames),
+      isAppPageStaticParamTupleCovered(staticParamSet, sourceParams, sourceParamNames, source),
     );
     if (!matchedTuple) continue;
 
