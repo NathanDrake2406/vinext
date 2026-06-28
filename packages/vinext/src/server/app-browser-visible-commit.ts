@@ -154,7 +154,8 @@ function reduceApprovedVisibleCommitState(
   const { action } = commit;
   switch (action.type) {
     case "traverse":
-    case "navigate": {
+    case "navigate":
+    case "replace": {
       const preserveElementIds = action.reuseCurrentBfcacheIds
         ? commit.decision.preserveElementIds
         : [];
@@ -195,27 +196,6 @@ function reduceApprovedVisibleCommitState(
         action.operation,
       );
     }
-    case "replace":
-      return commitVisibleRouterState(
-        state,
-        {
-          // Replace commits install the complete payload directly; if they ever
-          // start preserving previous elements, they must preserve bfcache ids too.
-          bfcacheIds: action.bfcacheIds,
-          elements: action.elements,
-          interception: action.interception,
-          interceptionContext: action.interceptionContext,
-          layoutFlags: action.layoutFlags,
-          layoutIds: action.layoutIds,
-          navigationSnapshot: action.navigationSnapshot,
-          previousNextUrl: action.previousNextUrl,
-          renderId: action.renderId,
-          rootLayoutTreePath: action.rootLayoutTreePath,
-          routeId: action.routeId,
-          slotBindings: action.slotBindings,
-        },
-        action.operation,
-      );
     default: {
       const _exhaustive: never = action.type;
       throw new Error("[vinext] Unknown router action: " + String(_exhaustive));
@@ -352,23 +332,37 @@ function addCommitTransactionTrace(
   }
 }
 
-export function approveHmrVisibleCommit(pending: PendingNavigationCommit): ApprovedVisibleCommit {
+export function approveHmrVisibleCommit(options: {
+  currentState: AppRouterState;
+  pending: PendingNavigationCommit;
+  routeManifest?: RouteManifest | null;
+  targetHref: string;
+}): CommitApproval {
+  const { currentState, pending } = options;
   if (pending.action.operation.lane !== "hmr") {
     throw new Error("[vinext] HMR visible commit approval requires an HMR pending operation");
   }
 
-  const decision = addCommitTransactionTrace(createVisibleCommitDecision(), pending);
-  // This guard is a type narrowing assertion: createVisibleCommitDecision()
-  // structurally produces a commit decision, and addCommitTransactionTrace()
-  // must preserve that disposition while adding operator trace context.
-  if (decision.disposition !== "commit") {
-    throw new Error("[vinext] HMR visible commit approval did not produce a commit decision");
+  const decision = resolvePendingNavigationCommitDecision({
+    activeNavigationId: pending.action.operation.id,
+    currentState,
+    pending,
+    routeManifest: options.routeManifest,
+    startedNavigationId: pending.action.operation.id,
+    targetHref: options.targetHref,
+  });
+  const tracedDecision = addCommitTransactionTrace(decision, pending);
+  if (tracedDecision.disposition === "commit") {
+    return {
+      approvedCommit: createApprovedVisibleCommit({ decision: tracedDecision, pending }),
+      decision: tracedDecision,
+    };
   }
 
-  return createApprovedVisibleCommit({
-    decision,
-    pending,
-  });
+  return {
+    approvedCommit: null,
+    decision: tracedDecision,
+  };
 }
 
 export function approvePendingNavigationCommit(options: {

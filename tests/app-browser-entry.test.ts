@@ -1446,7 +1446,7 @@ describe("app browser entry state helpers", () => {
     });
   });
 
-  it("replaces elements on approved replace commits", async () => {
+  it("merges planner-approved elements on navigation replace commits", async () => {
     const nextElements = createResolvedElements("route:/next", "/", null, {
       "page:/next": React.createElement("main", null, "next"),
     });
@@ -1475,7 +1475,7 @@ describe("app browser entry state helpers", () => {
 
     const nextState = applyApprovedVisibleCommit(state, approval.approvedCommit);
 
-    expect(nextState.elements).toBe(nextElements);
+    expect(nextState.elements).toEqual(nextElements);
     expect(nextState.interceptionContext).toBeNull();
     expect(nextState.previousNextUrl).toBeNull();
     expect(nextState.elements).toMatchObject({
@@ -2387,7 +2387,15 @@ describe("app browser entry state helpers", () => {
       type: "replace",
     });
 
-    const approvedCommit = approveHmrVisibleCommit(pending);
+    const approval = approveHmrVisibleCommit({
+      currentState,
+      pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
+      targetHref: "https://example.com/hmr",
+    });
+    const approvedCommit = approval.approvedCommit;
+    expect(approvedCommit).not.toBeNull();
+    if (!approvedCommit) throw new Error("Expected HMR visible commit approval");
     expect(approvedCommit.decision.trace.entries[0]).toEqual({
       code: NavigationTraceTransactionCodes.visibleCommit,
       fields: {
@@ -2418,12 +2426,306 @@ describe("app browser entry state helpers", () => {
       type: "replace",
     });
 
-    expect(() => approveHmrVisibleCommit(pending)).toThrow(
-      "[vinext] HMR visible commit approval requires an HMR pending operation",
-    );
+    expect(() =>
+      approveHmrVisibleCommit({
+        currentState,
+        pending,
+        routeManifest: createRouteManifestForPendingCommit(currentState, pending),
+        targetHref: "https://example.com/dashboard",
+      }),
+    ).toThrow("[vinext] HMR visible commit approval requires an HMR pending operation");
   });
 
-  it("applies approved replace commits without preserving old elements", async () => {
+  it("preserves planner-approved named slot state across HMR replacement", async () => {
+    const rootLayoutId = AppElementsWire.encodeLayoutId("/");
+    const authSlotId = AppElementsWire.encodeSlotId("auth", "/");
+    const currentSlot = React.createElement("aside", null, "reset");
+    const currentBindings = [
+      {
+        ownerLayoutId: rootLayoutId,
+        slotId: authSlotId,
+        slotName: "auth",
+        state: "active" as const,
+      },
+    ];
+    const targetBindings = [
+      {
+        ownerLayoutId: rootLayoutId,
+        slotId: authSlotId,
+        slotName: "auth",
+        state: "default" as const,
+      },
+    ];
+    const currentState = createState({
+      elements: createResolvedElements(
+        "route:/parallel-selected-segment/foo",
+        "/",
+        null,
+        { [authSlotId]: currentSlot },
+        [rootLayoutId],
+        currentBindings,
+      ),
+      layoutIds: [rootLayoutId],
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/parallel-selected-segment/foo",
+        {},
+      ),
+      routeId: "route:/parallel-selected-segment/foo",
+      slotBindings: currentBindings,
+    });
+    const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements(
+          "route:/parallel-selected-segment/foo",
+          "/",
+          null,
+          { [authSlotId]: React.createElement("aside", null, "default") },
+          [rootLayoutId],
+          targetBindings,
+        ),
+      ),
+      navigationSnapshot: currentState.navigationSnapshot,
+      operationLane: "hmr",
+      renderId: 15,
+      type: "replace",
+    });
+
+    const approval = approveHmrVisibleCommit({
+      currentState,
+      pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
+      targetHref: "https://example.com/parallel-selected-segment/foo",
+    });
+    const approvedCommit = approval.approvedCommit;
+    expect(approvedCommit).not.toBeNull();
+    if (!approvedCommit) throw new Error("Expected HMR visible commit approval");
+    expect(approvedCommit.decision.preservePreviousSlotIds).toEqual([authSlotId]);
+
+    const nextState = applyApprovedVisibleCommit(currentState, approvedCommit);
+    expect(nextState.elements[authSlotId]).toBe(currentSlot);
+    expect(nextState.slotBindings).toEqual(currentBindings);
+  });
+
+  it("does not let a pending HMR replacement overwrite a navigation commit", async () => {
+    const { controller, stateRef, setBrowserRouterState } = createControllerHarness();
+    let resolveHmrPayload!: (elements: AppElements) => void;
+    const hmrPayload = new Promise<AppElements>((resolve) => {
+      resolveHmrPayload = resolve;
+    });
+
+    const hmrPromise = controller.hmrReplaceTree(
+      hmrPayload,
+      createClientNavigationRenderSnapshot("https://example.com/hmr", {}),
+    );
+    const navigationState = await applyApprovedTestCommit(stateRef.current, {
+      activeNavigationId: 17,
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/navigation",
+        {},
+      ),
+      renderId: 17,
+      rootLayoutTreePath: "/",
+      routeId: "route:/navigation",
+      startedNavigationId: 17,
+      targetHref: "https://example.com/navigation",
+    });
+    stateRef.current = navigationState;
+
+    resolveHmrPayload(createResolvedElements("route:/hmr", "/"));
+    await hmrPromise;
+
+    expect(stateRef.current.routeId).toBe("route:/navigation");
+    expect(stateRef.current.visibleCommitVersion).toBe(1);
+    expect(setBrowserRouterState).not.toHaveBeenCalled();
+  });
+
+  it("does not let faster HMR reject a navigation that started while HMR was pending", async () => {
+    const { controller, detach, stateRef } = createControllerHarness();
+    let resolveHmrPayload!: (elements: AppElements) => void;
+    let resolveNavigationPayload!: (elements: AppElements) => void;
+    const hmrPayload = new Promise<AppElements>((resolve) => {
+      resolveHmrPayload = resolve;
+    });
+    const navigationPayload = new Promise<AppElements>((resolve) => {
+      resolveNavigationPayload = resolve;
+    });
+
+    try {
+      const hmrPromise = controller.hmrReplaceTree(
+        hmrPayload,
+        createClientNavigationRenderSnapshot("https://example.com/initial", {}),
+      );
+      const navId = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot(
+          "https://example.com/navigation",
+          {},
+        ),
+        nextElements: navigationPayload,
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/navigation",
+        navId,
+      });
+
+      resolveHmrPayload(createResolvedElements("route:/hmr", "/"));
+      await hmrPromise;
+      expect(stateRef.current.routeId).toBe("route:/initial");
+
+      resolveNavigationPayload(createResolvedElements("route:/navigation", "/"));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(stateRef.current.routeId).toBe("route:/navigation");
+      expect(stateRef.current.activeOperation).toMatchObject({
+        lane: "navigation",
+        state: "committed",
+      });
+    } finally {
+      detach();
+    }
+  });
+
+  it("does not let HMR that starts during a pending navigation supersede it", async () => {
+    const { controller, detach, stateRef, setBrowserRouterState } = createControllerHarness();
+    let resolveNavigationPayload!: (elements: AppElements) => void;
+    const navigationPayload = new Promise<AppElements>((resolve) => {
+      resolveNavigationPayload = resolve;
+    });
+
+    try {
+      const navId = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot(
+          "https://example.com/navigation",
+          {},
+        ),
+        nextElements: navigationPayload,
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/navigation",
+        navId,
+      });
+
+      await controller.hmrReplaceTree(
+        Promise.resolve(createResolvedElements("route:/hmr", "/")),
+        createClientNavigationRenderSnapshot("https://example.com/initial", {}),
+      );
+
+      expect(stateRef.current.routeId).toBe("route:/initial");
+      expect(setBrowserRouterState).not.toHaveBeenCalled();
+
+      resolveNavigationPayload(createResolvedElements("route:/navigation", "/"));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(stateRef.current.routeId).toBe("route:/navigation");
+      expect(stateRef.current.activeOperation).toMatchObject({
+        lane: "navigation",
+        state: "committed",
+      });
+    } finally {
+      detach();
+    }
+  });
+
+  it("hard-navigates when HMR changes the root layout boundary", async () => {
+    const performHardNavigation = vi.fn(() => true);
+    const currentState = createState({
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/marketing", {}),
+      rootLayoutTreePath: "/(marketing)",
+      routeId: "route:/marketing",
+    });
+    const { controller, detach, stateRef, setBrowserRouterState } = createControllerHarness(
+      currentState,
+      {
+        getRouteManifest: () =>
+          createTestRouteManifest([
+            {
+              id: "route:/marketing",
+              layoutIds: [AppElementsWire.encodeLayoutId("/(marketing)")],
+              pattern: "/marketing",
+              rootBoundaryId: "root-boundary:/(marketing)",
+            },
+            {
+              id: "route:/marketing-hmr",
+              layoutIds: [AppElementsWire.encodeLayoutId("/(shop)")],
+              pattern: "/marketing",
+              rootBoundaryId: "root-boundary:/(shop)",
+            },
+          ]),
+        performHardNavigation,
+      },
+    );
+
+    try {
+      await controller.hmrReplaceTree(
+        Promise.resolve(createResolvedElements("route:/marketing-hmr", "/(shop)")),
+        currentState.navigationSnapshot,
+      );
+
+      expect(performHardNavigation).toHaveBeenCalledWith("/marketing");
+      expect(setBrowserRouterState).not.toHaveBeenCalled();
+      expect(stateRef.current).toBe(currentState);
+    } finally {
+      detach();
+    }
+  });
+
+  it("does not commit an older HMR payload after a newer HMR update starts", async () => {
+    const { controller, detach, stateRef, setBrowserRouterState } = createControllerHarness();
+    let resolveFirstHmrPayload!: (elements: AppElements) => void;
+    let resolveSecondHmrPayload!: (elements: AppElements) => void;
+    const firstHmrPayload = new Promise<AppElements>((resolve) => {
+      resolveFirstHmrPayload = resolve;
+    });
+    const secondHmrPayload = new Promise<AppElements>((resolve) => {
+      resolveSecondHmrPayload = resolve;
+    });
+
+    try {
+      const firstHmrPromise = controller.hmrReplaceTree(
+        firstHmrPayload,
+        stateRef.current.navigationSnapshot,
+      );
+      const secondHmrPromise = controller.hmrReplaceTree(
+        secondHmrPayload,
+        stateRef.current.navigationSnapshot,
+      );
+
+      resolveFirstHmrPayload(createResolvedElements("route:/hmr-a", "/"));
+      await firstHmrPromise;
+
+      expect(stateRef.current.routeId).toBe("route:/initial");
+      expect(setBrowserRouterState).not.toHaveBeenCalled();
+
+      resolveSecondHmrPayload(createResolvedElements("route:/hmr-b", "/"));
+      await secondHmrPromise;
+
+      expect(stateRef.current.routeId).toBe("route:/hmr-b");
+      expect(setBrowserRouterState).toHaveBeenCalledTimes(1);
+    } finally {
+      detach();
+    }
+  });
+
+  it("does not preserve unapproved old elements on navigation replace commits", async () => {
     const currentState = createState({
       elements: createResolvedElements("route:/initial", "/", null, {
         "layout:/old": React.createElement("div", null, "old"),
@@ -2456,13 +2758,92 @@ describe("app browser entry state helpers", () => {
     }
 
     const nextState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
-    expect(nextState.elements).toBe(nextElements);
+    expect(nextState.elements).toEqual(nextElements);
     expect(Object.hasOwn(nextState.elements, "layout:/old")).toBe(false);
     expect(nextState.activeOperation).toMatchObject({
       id: 12,
       lane: "navigation",
       state: "committed",
     });
+  });
+
+  it("replace navigation preserves planner-approved default-only slot content", async () => {
+    const rootLayoutId = AppElementsWire.encodeLayoutId("/");
+    const authSlotId = AppElementsWire.encodeSlotId("auth", "/");
+    const currentSlot = React.createElement("aside", null, "reset");
+    const currentBindings = [
+      {
+        ownerLayoutId: rootLayoutId,
+        slotId: authSlotId,
+        slotName: "auth",
+        state: "active" as const,
+      },
+    ];
+    const targetBindings = [
+      {
+        ownerLayoutId: rootLayoutId,
+        slotId: authSlotId,
+        slotName: "auth",
+        state: "default" as const,
+      },
+    ];
+    const currentState = createState({
+      elements: createResolvedElements(
+        "route:/parallel-selected-segment/reset",
+        "/",
+        null,
+        { [authSlotId]: currentSlot },
+        [rootLayoutId],
+        currentBindings,
+      ),
+      layoutIds: [rootLayoutId],
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/parallel-selected-segment/reset",
+        {},
+      ),
+      routeId: "route:/parallel-selected-segment/reset",
+      slotBindings: currentBindings,
+    });
+    const pending = await createPendingNavigationCommit({
+      payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+      currentState,
+      nextElements: Promise.resolve(
+        createResolvedElements(
+          "route:/parallel-selected-segment/foo",
+          "/",
+          null,
+          { "page:/parallel-selected-segment/foo": React.createElement("main", null, "foo") },
+          [rootLayoutId],
+          targetBindings,
+        ),
+      ),
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/parallel-selected-segment/foo",
+        {},
+      ),
+      operationLane: "navigation",
+      renderId: 13,
+      type: "replace",
+    });
+
+    const approval = approvePendingNavigationCommit({
+      activeNavigationId: 5,
+      currentState,
+      pending,
+      routeManifest: createRouteManifestForPendingCommit(currentState, pending),
+      startedNavigationId: 5,
+      targetHref: "https://example.com/parallel-selected-segment/foo",
+    });
+
+    expect(approval.decision.disposition).toBe("commit");
+    if (approval.decision.disposition !== "commit" || approval.approvedCommit === null) {
+      throw new Error("Expected visible commit approval");
+    }
+    expect(approval.decision.preservePreviousSlotIds).toEqual([authSlotId]);
+
+    const nextState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
+    expect(nextState.elements[authSlotId]).toBe(currentSlot);
+    expect(nextState.slotBindings).toEqual(currentBindings);
   });
 
   it("applies approved traverse commits with stale slot cleanup", async () => {

@@ -283,6 +283,9 @@ export function createAppBrowserNavigationController(
   // and causing hooks to prefer stale snapshot values indefinitely.
   let nextNavigationRenderId = 0;
   let activeNavigationId = 0;
+  let pendingUserNavigationId: number | null = null;
+  let pendingUserNavigationLane: OperationLane | null = null;
+  let latestHmrUpdateId = 0;
   const pendingNavigationCommits = new Map<
     number,
     {
@@ -338,7 +341,13 @@ export function createAppBrowserNavigationController(
   }
 
   function beginNavigation(): number {
+    // User navigation owns the next visible result. Revoke any HMR payload
+    // already suspended on RSC resolution so it cannot commit first and make
+    // the still-current navigation look stale by advancing visible state.
+    latestHmrUpdateId += 1;
     activeNavigationId += 1;
+    pendingUserNavigationId = activeNavigationId;
+    pendingUserNavigationLane = null;
     return activeNavigationId;
   }
 
@@ -408,6 +417,8 @@ export function createAppBrowserNavigationController(
     settlePendingBrowserRouterState(pending);
 
     if (isCurrentNavigation(navId)) {
+      pendingUserNavigationId = null;
+      pendingUserNavigationLane = null;
       clearPendingPathname(navId);
     }
   }
@@ -481,6 +492,8 @@ export function createAppBrowserNavigationController(
     nextElements: Promise<AppElements>,
     navigationSnapshot: ClientNavigationRenderSnapshot,
   ): Promise<void> {
+    const hmrUpdateId = ++latestHmrUpdateId;
+    const startedDuringUserNavigation = pendingUserNavigationLane === "navigation";
     if (!hasBrowserRouterState()) return;
 
     const currentState = getBrowserRouterState();
@@ -495,13 +508,25 @@ export function createAppBrowserNavigationController(
       type: "replace",
     });
 
+    if (hmrUpdateId !== latestHmrUpdateId || startedDuringUserNavigation) return;
+
     // createPendingNavigationCommit awaits the new RSC payload. While
     // suspended, the prior broken render can unmount BrowserRoot. Re-check
     // before dispatching so a racing unmount doesn't surface as an
     // initialized-setter error.
     if (!hasBrowserRouterState()) return;
 
-    dispatchSynchronousVisibleCommit(approveHmrVisibleCommit(pending));
+    const approval = approveHmrVisibleCommit({
+      currentState: getBrowserRouterState(),
+      pending,
+      routeManifest: deps.getRouteManifest?.() ?? null,
+      targetHref: createSnapshotPathAndSearch(navigationSnapshot),
+    });
+    if (approval.approvedCommit) {
+      dispatchSynchronousVisibleCommit(approval.approvedCommit);
+    } else if (approval.decision.disposition === "hard-navigate") {
+      performHardNavigation(createSnapshotPathAndSearch(navigationSnapshot));
+    }
   }
 
   function NavigationCommitSignal(
@@ -705,6 +730,10 @@ export function createAppBrowserNavigationController(
     visibleCommitMode?: NavigationRuntimeVisibleCommitMode;
     onCommittedState?: (state: AppRouterState) => void;
   }): Promise<NavigationPayloadOutcome> {
+    if (options.navId === pendingUserNavigationId) {
+      pendingUserNavigationLane = options.operationLane;
+    }
+
     const renderId = allocateRenderId();
     const failureTarget = getAppNavigationFailureTarget(options.targetHref);
     if (failureTarget) {
