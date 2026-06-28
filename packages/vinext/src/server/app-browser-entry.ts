@@ -174,7 +174,7 @@ import {
 import { hasServerActions, loadServerActionClient } from "virtual:vinext-app-capabilities";
 
 type SearchParamInput = ConstructorParameters<typeof URLSearchParams>[0];
-type DevErrorOverlayModule = typeof import("./dev-error-overlay.js");
+type DevErrorOverlayModule = typeof import("../client/dev-error-overlay.js");
 
 type ServerActionResult = AppBrowserServerActionResult<AppWireElements>;
 
@@ -744,6 +744,11 @@ type NavigationRequestState = {
   previousNextUrl: string | null;
 };
 
+function getCurrentMatchedRoutePathname(): string | null {
+  const routeKey = AppElementsWire.parseElementKey(getBrowserRouterState().routeId);
+  return routeKey?.kind === "route" ? routeKey.path : null;
+}
+
 function getRequestState(
   navigationKind: NavigationKind,
   targetPathname: string,
@@ -805,6 +810,7 @@ function getRequestState(
       const middlewareRewriteInterceptionContext =
         resolveMiddlewareRewriteNavigationInterceptionContext({
           basePath: __basePath,
+          currentMatchedPathname: getCurrentMatchedRoutePathname(),
           currentPathname: window.location.pathname,
           routeManifest: getBrowserRouteManifest(),
           targetPathname,
@@ -1394,7 +1400,7 @@ async function main(): Promise<void> {
 
   let devErrorOverlay: DevErrorOverlayModule | null = null;
   if (import.meta.env.DEV) {
-    devErrorOverlay = await import("./dev-error-overlay.js");
+    devErrorOverlay = await import("../client/dev-error-overlay.js");
     devErrorOverlay.installDevErrorOverlay();
     devErrorOverlay.installViteHmrErrorHandler(import.meta.hot);
     devErrorOverlay.reportInitialDevServerErrors();

@@ -33,8 +33,8 @@ import { pagesRouter, apiRouter } from "../routing/pages-router.js";
 import { appRouter } from "../routing/app-router.js";
 import { scanMetadataFiles } from "../server/metadata-routes.js";
 import { findDir } from "../utils/project.js";
+import { injectPregeneratedConcretePaths } from "./inject-pregenerated-paths.js";
 import { startProdServer } from "../server/prod-server.js";
-import { injectPregeneratedConcretePaths } from "./pregenerated-concrete-paths-injection.js";
 
 // ─── Progress UI ──────────────────────────────────────────────────────────────
 
@@ -153,6 +153,13 @@ export function assertNoFatalPrerenderRoutes(routes: readonly PrerenderRouteResu
   );
 }
 
+/**
+ * Statically generate routes and return the prerender result.
+ *
+ * `options.root` must be forward-slash — it is passed to `findDir` and flows
+ * into the route model. The caller (the `vinext build` entry in cli.ts)
+ * normalizes it.
+ */
 export async function runPrerender(options: RunPrerenderOptions): Promise<PrerenderResult | null> {
   const { root } = options;
 
