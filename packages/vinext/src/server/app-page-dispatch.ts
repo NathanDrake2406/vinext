@@ -18,6 +18,7 @@ import {
   isDraftModeRequest,
   markDynamicUsage,
   peekDynamicUsage,
+  peekRenderRequestApiUsage,
   setHeadersContext,
 } from "vinext/shims/headers";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
@@ -26,6 +27,7 @@ import {
   ensureFetchPatch,
   type FetchCacheMode,
   getCollectedFetchTags,
+  peekDynamicFetchObservations,
   runWithFetchDedupe,
   setCurrentFetchCacheMode,
   setCurrentForceDynamicFetchDefault,
@@ -725,6 +727,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
             return {
               html: rendered.html,
               htmlRenderObservation: rendered.htmlRenderObservation,
+              linkHeader: rendered.linkHeader,
               rscData: rendered.rscData!,
               rscRenderObservation: rendered.rscRenderObservation,
               tags: rendered.tags,
@@ -1021,6 +1024,12 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       : undefined,
     layoutParamAccess,
     rootParams: options.rootParams,
+    peekRenderObservationState() {
+      return {
+        dynamicFetches: peekDynamicFetchObservations(),
+        requestApis: peekRenderRequestApiUsage(),
+      };
+    },
     probeLayoutAt(layoutIndex) {
       return options.probeLayoutAt(layoutIndex, layoutParamAccess);
     },

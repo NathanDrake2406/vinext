@@ -277,6 +277,119 @@ describe("createAppRscHandler", () => {
     );
   });
 
+  it("returns HTTP 500 for progressive action execution failures", async () => {
+    const dispatchMatchedPage = vi.fn(async ({ middlewareContext }) =>
+      Promise.resolve(new Response("error page", { status: middlewareContext.status ?? 200 })),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      async handleProgressiveActionRequest() {
+        return {
+          kind: "form-state",
+          formState: null,
+          actionError: new Error("boom"),
+          actionFailed: true,
+          pendingCookies: [],
+          draftCookie: null,
+          revalidationKind: 0,
+        };
+      },
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/about", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=vinext" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(500);
+    expect(dispatchMatchedPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionFailed: true,
+        middlewareContext: expect.objectContaining({ status: 500 }),
+      }),
+    );
+  });
+
+  it("preserves progressive action HTTP fallback status handling", async () => {
+    const dispatchMatchedPage = vi.fn(async ({ middlewareContext }) =>
+      Promise.resolve(new Response("not found", { status: middlewareContext.status ?? 404 })),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      async handleProgressiveActionRequest() {
+        return {
+          kind: "form-state",
+          formState: null,
+          actionError: { digest: "NEXT_NOT_FOUND" },
+          actionFailed: true,
+          pendingCookies: [],
+          draftCookie: null,
+          revalidationKind: 0,
+        };
+      },
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/about", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=vinext" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(404);
+    expect(dispatchMatchedPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        middlewareContext: expect.objectContaining({ status: null }),
+      }),
+    );
+  });
+
+  it("normalizes progressive forbidden fallbacks to Next.js not-found rendering", async () => {
+    const dispatchMatchedPage = vi.fn(async ({ actionError, middlewareContext }) =>
+      Promise.resolve(
+        new Response(JSON.stringify(actionError), { status: middlewareContext.status ?? 404 }),
+      ),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      async handleProgressiveActionRequest() {
+        return {
+          kind: "form-state",
+          formState: null,
+          actionError: { digest: "NEXT_HTTP_ERROR_FALLBACK;403" },
+          actionFailed: true,
+          pendingCookies: [],
+          draftCookie: null,
+          revalidationKind: 0,
+        };
+      },
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/about", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=vinext" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ digest: "NEXT_NOT_FOUND" });
+    expect(dispatchMatchedPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionError: { digest: "NEXT_NOT_FOUND" },
+        middlewareContext: expect.objectContaining({ status: null }),
+      }),
+    );
+  });
+
   // Regression for issue #1483 — `cookies().set(...)` / `cookies().delete(...)`
   // and `draftMode().enable()` invoked inside a no-JS server action must flow
   // through to the page rerender response. Before the fix, those Set-Cookie
@@ -599,7 +712,40 @@ describe("createAppRscHandler", () => {
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
   });
 
-  it("uses the soft redirect protocol for config redirects on Pages data requests", async () => {
+  it("does not prepend basePath to opt-out redirects outside basePath", async () => {
+    const handler = createHandler({
+      configHeaders: [],
+      configRedirects: [
+        { source: "/outside", destination: "/landing", permanent: false, basePath: false },
+      ],
+    });
+
+    const response = await handler(new Request("https://example.test/outside"), null);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("/landing");
+  });
+
+  it("does not prepend basePath when normalizing trailing slashes outside basePath", async () => {
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [{ source: "/outside", destination: "/about", basePath: false }],
+        afterFiles: [],
+        fallback: [],
+      },
+      trailingSlash: true,
+    });
+
+    const response = await handler(new Request("https://example.test/outside"), null);
+
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/outside/");
+  });
+
+  it("keeps the real status for config redirects on Pages data requests", async () => {
+    // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/middleware-general/test/index.test.ts
     const handler = createHandler({
       configRedirects: [{ source: "/old-about", destination: "/about", permanent: true }],
       matchRoute: () => null,
@@ -611,9 +757,26 @@ describe("createAppRscHandler", () => {
       null,
     );
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("location")).toBeNull();
-    expect(response.headers.get("x-nextjs-redirect")).toBe("/docs/about");
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/docs/about");
+    expect(response.headers.get("x-nextjs-redirect")).toBeNull();
+  });
+
+  it("ignores forged data headers for App Router config redirects", async () => {
+    const handler = createHandler({
+      configRedirects: [{ source: "/old-about", destination: "/about", permanent: true }],
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/old-about", {
+        headers: { "x-nextjs-data": "1" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/docs/about");
+    expect(response.headers.get("x-nextjs-redirect")).toBeNull();
   });
 
   it("lets middleware redirect headers override earlier matching config headers", async () => {
@@ -752,6 +915,35 @@ describe("createAppRscHandler", () => {
 
     expect(response.headers.get("content-type")).toBe("text/html");
     expect(await response.text()).toBe("pages");
+  });
+
+  it("does not hand query-only middleware-rewritten RSC requests to Pages HTML", async () => {
+    const headers = createRscRequestHeaders();
+    const rscUrl = await createRscRequestUrl("/docs/source", headers);
+    const renderPagesFallback = vi.fn(async ({ allowRscDocumentFallback }) =>
+      allowRscDocumentFallback
+        ? new Response("pages", { headers: { "content-type": "text/html" } })
+        : null,
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      matchRoute: () => null,
+      middlewareModule: {
+        default: () =>
+          new Response(null, {
+            headers: { "x-middleware-rewrite": "https://example.test/docs/source?query=updated" },
+          }),
+      },
+      renderPagesFallback,
+    });
+
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).not.toBe("text/html");
+    expect(renderPagesFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ allowRscDocumentFallback: false }),
+    );
   });
 
   it("does not duplicate additive config headers on non-redirect middleware responses", async () => {
@@ -939,6 +1131,152 @@ describe("createAppRscHandler", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it("applies basePath false rewrites before rejecting outside-basePath requests", async () => {
+    // Ported from Next.js: test/e2e/app-dir/app-basepath/index.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app-basepath/index.test.ts
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("outside-base-path upstream");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+
+    try {
+      const handler = createHandler({
+        configHeaders: [],
+        configRewrites: {
+          beforeFiles: [
+            {
+              source: "/outsideBasePath",
+              destination: `http://127.0.0.1:${address.port}/`,
+              basePath: false,
+            },
+          ],
+          afterFiles: [],
+          fallback: [],
+        },
+        matchRoute: () => null,
+      });
+
+      const response = await handler(new Request("https://example.test/outsideBasePath"), null);
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("outside-base-path upstream");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("does not expose direct App routes outside basePath when an opt-out rule exists", async () => {
+    const dispatchMatchedPage = vi.fn(async () => new Response("page"));
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [{ source: "/only-this-path", destination: "/about", basePath: false }],
+        afterFiles: [],
+        fallback: [],
+      },
+      dispatchMatchedPage,
+    });
+
+    const response = await handler(new Request("https://example.test/about"), null);
+
+    expect(response.status).toBe(404);
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch server actions outside basePath when an opt-out rule exists", async () => {
+    const handleServerActionRequest = vi.fn(async () => new Response("action"));
+    const handler = createHandler({
+      configHeaders: [{ source: "/outside", headers: [], basePath: false }],
+      handleServerActionRequest,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/about", {
+        method: "POST",
+        headers: { "next-action": "abc123" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(404);
+    expect(handleServerActionRequest).not.toHaveBeenCalled();
+  });
+
+  it("passes outside-basePath state to middleware", async () => {
+    let pathname: string | undefined;
+    let basePath: string | undefined;
+    const handler = createHandler({
+      configHeaders: [{ source: "/outside", headers: [], basePath: false }],
+      middlewareModule: {
+        default: (request: Request & { nextUrl: URL & { basePath: string } }) => {
+          pathname = request.nextUrl.pathname;
+          basePath = request.nextUrl.basePath;
+          return new Response(null, { headers: { "x-middleware-next": "1" } });
+        },
+      },
+    });
+
+    await handler(new Request("https://example.test/outside"), null);
+
+    expect(pathname).toBe("/outside");
+    expect(basePath).toBe("");
+  });
+
+  it("allows middleware-only apps to handle requests outside basePath", async () => {
+    const handler = createHandler({
+      configHeaders: [],
+      middlewareModule: {
+        default: (request: Request) =>
+          Response.redirect(new URL("/docs/about", request.url).toString(), 307),
+      },
+    });
+
+    const response = await handler(new Request("https://example.test/outside"), null);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("/docs/about");
+  });
+
+  it("returns a plain 404 when middleware leaves an outside-basePath request unchanged", async () => {
+    const renderNotFound = vi.fn(async () => new Response("rendered not found", { status: 404 }));
+    const handler = createHandler({
+      configHeaders: [],
+      middlewareModule: {
+        default: () => new Response(null, { headers: { "x-middleware-next": "1" } }),
+      },
+      renderNotFound,
+    });
+
+    const response = await handler(new Request("https://example.test/outside"), null);
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toBe("rendered not found");
+    expect(renderNotFound).not.toHaveBeenCalled();
+  });
+
+  it("allows query-only middleware rewrites to make outside-basePath routes eligible", async () => {
+    const dispatchMatchedPage = vi.fn(async () => new Response("page"));
+    const handler = createHandler({
+      configHeaders: [{ source: "/about", headers: [], basePath: false }],
+      dispatchMatchedPage,
+      middlewareModule: {
+        default: (request: Request) =>
+          new Response(null, {
+            headers: {
+              "x-middleware-rewrite": new URL("/about?from=middleware", request.url).toString(),
+            },
+          }),
+      },
+    });
+
+    const response = await handler(new Request("https://example.test/about"), null);
+
+    expect(response.status).toBe(200);
+    expect(dispatchMatchedPage).toHaveBeenCalled();
   });
 
   it("preserves Node route handler RSC URLs while hiding internal parsed params", async () => {
@@ -1499,6 +1837,7 @@ describe("createAppRscHandler", () => {
 
   it("normalizes hybrid Pages data requests before middleware", async () => {
     let middlewarePathname: string | null = null;
+    let middlewareIsData: boolean | undefined;
     let middlewareCf: unknown;
     let pagesDataCf: unknown;
     let pagesDataUrl: string | null = null;
@@ -1509,6 +1848,7 @@ describe("createAppRscHandler", () => {
       middlewareModule: {
         default: (request: Request) => {
           middlewarePathname = new URL(request.url).pathname;
+          middlewareIsData = (request as Request & { __isData?: boolean }).__isData;
           middlewareCf = (request as Request & { cf?: unknown }).cf;
           return new Response(null, { headers: { "x-middleware-next": "1" } });
         },
@@ -1529,6 +1869,7 @@ describe("createAppRscHandler", () => {
 
     expect(await response.text()).toBe("pages-data");
     expect(middlewarePathname).toBe("/docs/form-search");
+    expect(middlewareIsData).toBe(true);
     expect(middlewareCf).toBe(cf);
     expect(pagesDataCf).toBe(cf);
     expect(pagesDataUrl).toBe(
@@ -1540,6 +1881,28 @@ describe("createAppRscHandler", () => {
         pagesDataRequest: expect.any(Request),
       }),
     );
+  });
+
+  it("does not expose forged data headers to App Router middleware", async () => {
+    let middlewareIsData: boolean | undefined;
+    const handler = createHandler({
+      middlewareModule: {
+        default: (request: Request) => {
+          middlewareIsData = (request as Request & { __isData?: boolean }).__isData;
+          return new Response(null, { headers: { "x-middleware-next": "1" } });
+        },
+      },
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/about", {
+        headers: { "x-nextjs-data": "1" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    expect(middlewareIsData).toBeUndefined();
   });
 
   it("exposes the rewritten route on hybrid Pages data responses", async () => {
@@ -1614,6 +1977,27 @@ describe("createAppRscHandler", () => {
     expect(await response.text()).toBe("{}");
     expect(middleware).not.toHaveBeenCalled();
     expect(renderPagesFallback).not.toHaveBeenCalled();
+  });
+
+  it("returns middleware-enabled Pages data misses with the requested matched path", async () => {
+    const handler = createHandler({
+      configHeaders: [],
+      matchRoute: () => null,
+      middlewareModule: {
+        default: () => new Response(null, { headers: { "x-middleware-next": "1" } }),
+      },
+      renderPagesFallback: async () => null,
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/_next/data/build-id/missing.json"),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(response.headers.get("x-nextjs-matched-path")).toBe("/missing");
+    expect(await response.text()).toBe("{}");
   });
 
   it("does not normalize hybrid Pages data requests outside basePath", async () => {
