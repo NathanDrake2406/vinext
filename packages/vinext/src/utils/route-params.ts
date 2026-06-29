@@ -15,14 +15,3 @@ export function isRouteParams(value: unknown): value is RouteParams {
   }
   return true;
 }
-
-export function parseRouteParamsHeader(value: string | null): RouteParams | null {
-  if (value === null || value === "") return null;
-
-  try {
-    const decoded: unknown = JSON.parse(decodeURIComponent(value));
-    return isRouteParams(decoded) ? decoded : null;
-  } catch {
-    return null;
-  }
-}
