@@ -437,6 +437,10 @@ describe("static navigation shell cache", () => {
 
   it("deduplicates concurrent shell seeds for the same lookup", async () => {
     let releaseResponse!: (response: Response) => void;
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
     const shellResponse = new Promise<Response>((resolve) => {
       releaseResponse = resolve;
     });
@@ -445,6 +449,7 @@ describe("static navigation shell cache", () => {
       awaitSeedCompletion: true,
       fetchShell: async (url, init) => {
         calls.push({ init, url });
+        markFetchStarted();
         return shellResponse;
       },
       maxEntries: 3,
@@ -453,7 +458,7 @@ describe("static navigation shell cache", () => {
 
     const firstSeed = seed(cache, "/target?_rsc=deduped");
     const secondSeed = seed(cache, "/target?_rsc=deduped");
-    await waitOneTask();
+    await fetchStarted;
 
     expect(calls).toHaveLength(1);
 
