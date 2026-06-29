@@ -159,6 +159,8 @@ import {
   createRscRequestHeaders,
   createRscRequestUrl,
   getVinextRscCompatibilityId,
+  stripRscCacheBustingSearchParam,
+  stripRscSuffix,
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_CONTENT_TYPE,
 } from "./app-rsc-cache-busting.js";
@@ -480,6 +482,41 @@ function isSettledPrefetchCacheEntry(
   return (
     entry.outcome === "cache-seeded" && entry.pending === undefined && entry.snapshot !== undefined
   );
+}
+
+function normalizeNavigationPrefetchRscUrl(rawUrl: string, origin: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(rawUrl, origin);
+  } catch {
+    return null;
+  }
+
+  stripRscCacheBustingSearchParam(url);
+  url.pathname = stripRscSuffix(url.pathname);
+  return url.pathname + url.search;
+}
+
+function hasNonNavigationPrefetchEntryForNavigation(options: {
+  interceptionContext: string | null;
+  origin: string;
+  rscUrl: string;
+}): boolean {
+  const normalizedTarget = normalizeNavigationPrefetchRscUrl(options.rscUrl, options.origin);
+  if (normalizedTarget === null) return false;
+
+  for (const [cacheKey, entry] of getPrefetchCache()) {
+    if (entry.cacheForNavigation !== false) continue;
+
+    const source = parsePrefetchCacheKey(cacheKey);
+    if (source.interceptionContext !== options.interceptionContext) continue;
+    if (normalizeNavigationPrefetchRscUrl(source.rscUrl, options.origin) !== normalizedTarget) {
+      continue;
+    }
+    return true;
+  }
+
+  return false;
 }
 
 function parsePrefetchCacheKey(cacheKey: string): {
@@ -1955,7 +1992,15 @@ function bootstrapHydration(
           // render an optimistic shell from cached route templates before the
           // real fetch commits, but that shell is detached and always superseded
           // by the authoritative fetch.
-          if (fallbackReuseDecision.kind === "attemptOptimisticRouteShell") {
+          if (
+            fallbackReuseDecision.kind === "attemptOptimisticRouteShell" &&
+            hasPrefetchCandidate &&
+            !hasNonNavigationPrefetchEntryForNavigation({
+              interceptionContext: requestInterceptionContext,
+              origin: window.location.origin,
+              rscUrl,
+            })
+          ) {
             await learnOptimisticRouteTemplatesFromPrefetchCache({
               interceptionContext: requestInterceptionContext,
               mountedSlotsHeader,
@@ -2347,7 +2392,7 @@ function bootstrapHydration(
           historyUpdateMode: currentHistoryMode,
           params: navParams,
           previousNextUrl: requestPreviousNextUrl,
-          pendingRouterState: detachedNavigationCommits ? null : pendingRouterState,
+          pendingRouterState,
           payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: toActionType(navigationKind),
           operationLane: toOperationLane(navigationKind),
