@@ -1,6 +1,8 @@
 const fs = require("node:fs");
+const path = require("node:path");
 
-const workspace = fs.readFileSync("pnpm-workspace.yaml", "utf8");
+const workspaceRoot = process.env.GITHUB_WORKSPACE || process.cwd();
+const workspace = fs.readFileSync(path.join(workspaceRoot, "pnpm-workspace.yaml"), "utf8");
 let inCatalog = false;
 
 for (const line of workspace.split(/\r?\n/)) {
