@@ -143,8 +143,9 @@ test.describe("Navigation regression tests (#652 Firefox hang fix)", () => {
     await waitForAppRouterHydration(page);
     await expect(page.locator("#list-title")).toHaveText("Nav Flash List");
 
-    // Cross-route: list -> query-sync
-    await page.click("#to-query-sync");
+    // Use the slow fixture entry so the Suspense fallback is still mounted when
+    // the same-route navigation supersedes the cross-route stream.
+    await page.click("#to-query-sync-slow");
     await expect(page.locator("#query-title")).toHaveText("Search", { timeout: 10_000 });
     await expect(page.locator("#query-loading")).toBeVisible();
 
