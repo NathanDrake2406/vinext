@@ -5,7 +5,7 @@ import {
   isRouteGroupSegment,
 } from "../routing/utils.js";
 
-const APP_PAGE_SEGMENT_KEY = "__PAGE__";
+export const APP_PAGE_SEGMENT_KEY = "__PAGE__";
 
 function isDynamicSegment(segment: string): boolean {
   return segment.startsWith("[") && segment.endsWith("]") && !segment.includes(".");
