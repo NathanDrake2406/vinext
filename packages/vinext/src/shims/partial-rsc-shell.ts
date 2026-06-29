@@ -9,7 +9,6 @@ export type PartialRscShellState = {
   // when they settle late.
   cacheEpoch: number;
   cacheReadyResolvers: Array<() => void>;
-  fallbackParamNames: ReadonlySet<string>;
   hasDynamicBoundary: boolean;
   includePrivateCacheTasks: boolean;
   isFinalRenderStarted: boolean;
@@ -23,7 +22,6 @@ export type PartialRscShellState = {
 };
 
 type CreatePartialRscShellStateOptions = {
-  fallbackParamNames: readonly string[];
   includePrivateCacheTasks?: boolean;
   routePattern: string;
 };
@@ -160,7 +158,6 @@ export function createPartialRscShellState(
     reactAbortController: abortController,
     cacheEpoch: 0,
     cacheReadyResolvers: [],
-    fallbackParamNames: new Set(options.fallbackParamNames),
     hasDynamicBoundary: false,
     includePrivateCacheTasks: options.includePrivateCacheTasks === true,
     isFinalRenderStarted: false,
@@ -248,7 +245,7 @@ function markPartialRscShellDynamicBoundaryForState(state: PartialRscShellState)
 
 export function markPartialRscShellDynamicBoundary(): void {
   const state = getPartialRscShellState();
-  if (state === null || state.fallbackParamNames.size === 0) return;
+  if (state === null) return;
   markPartialRscShellDynamicBoundaryForState(state);
 }
 
