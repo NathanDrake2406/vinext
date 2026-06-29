@@ -1350,6 +1350,27 @@ describe("Pages Router integration", () => {
     expect(res.status).toBe(404);
   });
 
+  it("renders an empty optional catch-all path from getStaticPaths in dev", async () => {
+    const res = await fetch(`${baseUrl}/catchall-optional`);
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    expect(html).toMatch(/Catch all: \[(?:<!-- -->)?\]/);
+  });
+
+  it("requires mixed route params while accepting an empty optional catch-all in dev", async () => {
+    const res = await fetch(`${baseUrl}/mixed-catchall/guides`);
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    expect(html).toContain("Category:");
+    expect(html).toContain("guides");
+    expect(html).toMatch(/Slug: \[(?:<!-- -->)?\]/);
+
+    const unlistedRes = await fetch(`${baseUrl}/mixed-catchall/unlisted`);
+    expect(unlistedRes.status).toBe(404);
+  });
+
   it("renders pre-listed paths with getStaticPaths fallback: blocking", async () => {
     const res = await fetch(`${baseUrl}/articles/1`);
     expect(res.status).toBe(200);
@@ -2100,10 +2121,11 @@ describe("Pages Router integration", () => {
       expect(res.headers.get("x-custom-middleware")).toBe("active");
     });
 
-    it("returns 404 JSON for an unknown page", async () => {
+    it("returns the middleware data-miss protocol for an unknown page", async () => {
       const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/totally-missing-page.json`);
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/totally-missing-page");
       // Body must still be valid JSON so naive clients calling `.json()` do
       // not throw before checking the status code.
       expect(await res.json()).toEqual({});
@@ -2168,15 +2190,16 @@ describe("Pages Router integration", () => {
         });
       });
 
-      it("sets the header on the route-miss JSON 404", async () => {
+      it("sets deployment and matched-path headers on the route-miss response", async () => {
         // Exercises createSSRHandler's `!match` data exit (dev-server.ts):
         // the page was removed under a new deployment, so a stale client's
         // data fetch must still see the header to hard-navigate.
         await withDeploymentId(async () => {
           const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/totally-missing-page.json`);
-          expect(res.status).toBe(404);
+          expect(res.status).toBe(200);
           expect(res.headers.get("content-type")).toContain("application/json");
           expect(res.headers.get("x-nextjs-deployment-id")).toBe(DEPLOYMENT_ID);
+          expect(res.headers.get("x-nextjs-matched-path")).toBe("/totally-missing-page");
           expect(await res.json()).toEqual({});
         });
       });
@@ -2213,8 +2236,9 @@ describe("Pages Router integration", () => {
         expect(staleRes.headers.get("x-nextjs-deployment-id")).toBeNull();
 
         const missRes = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/totally-missing-page.json`);
-        expect(missRes.status).toBe(404);
+        expect(missRes.status).toBe(200);
         expect(missRes.headers.get("x-nextjs-deployment-id")).toBeNull();
+        expect(missRes.headers.get("x-nextjs-matched-path")).toBe("/totally-missing-page");
 
         const okRes = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/ssr.json`);
         expect(okRes.status).toBe(200);
@@ -3139,6 +3163,70 @@ describe("Production build", () => {
     // Should contain route patterns from our fixture pages
     expect(entryContent).toContain("/about");
     expect(entryContent).toContain("/ssr");
+  });
+
+  // Ported from Next.js: test/e2e/handle-non-hoisted-swc-helpers/index.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/handle-non-hoisted-swc-helpers/index.test.ts
+  it("resolves framework-owned SWC helpers when they are not hoisted", async () => {
+    const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vinext-pages-swc-helpers-"));
+    const rootNodeModules = path.resolve(import.meta.dirname, "../node_modules");
+    const fixtureNodeModules = path.join(tmpRoot, "node_modules");
+    const fixtureOutDir = path.join(tmpRoot, "dist");
+
+    try {
+      await fsp.mkdir(fixtureNodeModules, { recursive: true });
+      for (const packageName of ["next", "react", "react-dom"]) {
+        await fsp.symlink(
+          path.join(rootNodeModules, packageName),
+          path.join(fixtureNodeModules, packageName),
+          "junction",
+        );
+      }
+      const appRootHelpers = path.join(fixtureNodeModules, "@swc", "helpers");
+      await fsp.mkdir(path.join(appRootHelpers, "_"), { recursive: true });
+      await fsp.writeFile(
+        path.join(appRootHelpers, "package.json"),
+        JSON.stringify({ name: "@swc/helpers", version: "0.0.0-app-root" }),
+      );
+      await fsp.writeFile(path.join(appRootHelpers, "_", "_object_spread.js"), "const = ;\n");
+      await fsp.mkdir(path.join(tmpRoot, "pages"), { recursive: true });
+      await fsp.writeFile(
+        path.join(tmpRoot, "pages", "index.jsx"),
+        `export default function Page() {
+  return <p>hello world</p>;
+}
+
+export function getServerSideProps() {
+  const helper = require("@swc/helpers/_/_object_spread");
+  console.log(helper);
+  return { props: { now: Date.now() } };
+}
+`,
+      );
+
+      await buildPagesFixtureToOutDir(tmpRoot, fixtureOutDir);
+
+      const { startProdServer } = await import("../packages/vinext/src/server/prod-server.js");
+      const prodServer = unwrapStartedProdServer(
+        await startProdServer({
+          port: 0,
+          host: "127.0.0.1",
+          outDir: fixtureOutDir,
+          noCompression: true,
+        }),
+      );
+
+      try {
+        const address = prodServer.address() as { port: number };
+        const response = await fetch(`http://127.0.0.1:${address.port}/`);
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain("hello world");
+      } finally {
+        await new Promise<void>((resolve) => prodServer.close(() => resolve()));
+      }
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it("runMiddleware in generated pages prod entry executes named proxy export", async () => {
@@ -5472,10 +5560,11 @@ describe("Production server middleware (Pages Router)", () => {
       expect(res.headers.get("x-custom-middleware")).toBe("active");
     });
 
-    it("returns JSON 404 for an unknown page", async () => {
+    it("returns the middleware data-miss protocol for an unknown page", async () => {
       const res = await fetch(`${prodUrl}/_next/data/${BUILD_ID}/totally-missing-page.json`);
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("x-nextjs-matched-path")).toBe("/totally-missing-page");
       expect(await res.json()).toEqual({});
     });
 

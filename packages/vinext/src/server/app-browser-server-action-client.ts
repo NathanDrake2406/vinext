@@ -11,6 +11,7 @@ import {
   parseServerActionRevalidationHeader,
   readInvalidServerActionResponseError,
   shouldClearClientNavigationCachesForServerActionResult,
+  shouldSyncServerActionHttpFallbackHead,
   type AppBrowserServerActionResult,
   type ServerActionRevalidationKind,
 } from "./app-browser-action-result.js";
@@ -59,6 +60,7 @@ export type ClientServerActionDeps = {
     elements: AppElements,
     target: ActionRedirectTarget,
     actionInitiation: ClientServerActionInitiation,
+    revalidation: ServerActionRevalidationKind,
   ): void;
   syncCurrentHistoryState(
     previousNextUrl: string | null,
@@ -211,6 +213,7 @@ export async function invokeClientServerAction(
         AppElementsWire.decode(result.root),
         actionRedirectTarget,
         actionInitiation,
+        revalidation,
       );
       throw new ServerActionRedirectError(actionRedirectTarget);
     }
@@ -218,8 +221,9 @@ export async function invokeClientServerAction(
     return undefined;
   }
 
-  const hasSameUrlRerenderPayload = isServerActionResult(result) && result.root !== undefined;
-  deps.syncServerActionHttpFallbackHead(hasSameUrlRerenderPayload ? null : fetchResponse.status);
+  deps.syncServerActionHttpFallbackHead(
+    shouldSyncServerActionHttpFallbackHead(result) ? fetchResponse.status : null,
+  );
 
   if (isServerActionResult(result)) {
     if (result.root !== undefined) {
