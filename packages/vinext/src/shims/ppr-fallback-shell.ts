@@ -14,15 +14,44 @@ import {
   type PartialRscShellState,
 } from "./partial-rsc-shell.js";
 
-export type PprFallbackShellState = PartialRscShellState;
+export type PprFallbackShellState = PartialRscShellState & {
+  fallbackParamNames: ReadonlySet<string>;
+};
 
-export const createPprFallbackShellState = createPartialRscShellState;
+type CreatePprFallbackShellStateOptions = {
+  fallbackParamNames: readonly string[];
+  includePrivateCacheTasks?: boolean;
+  routePattern: string;
+};
+
+export function createPprFallbackShellState(
+  options: CreatePprFallbackShellStateOptions,
+): PprFallbackShellState {
+  return {
+    ...createPartialRscShellState({
+      includePrivateCacheTasks: options.includePrivateCacheTasks,
+      routePattern: options.routePattern,
+    }),
+    fallbackParamNames: new Set(options.fallbackParamNames),
+  };
+}
+
 export const runWithPprFallbackShellState = runWithPartialRscShellState;
-export const getPprFallbackShellState = getPartialRscShellState;
+
+export function getPprFallbackShellState(): PprFallbackShellState | null {
+  return getPartialRscShellState() as PprFallbackShellState | null;
+}
+
 export const trackPprFallbackShellCacheTask = trackPartialRscShellCacheTask;
 export const createPprFallbackShellSuspensePromiseForState =
   createPartialRscShellSuspensePromiseForState;
-export const markPprFallbackShellDynamicBoundary = markPartialRscShellDynamicBoundary;
+
+export function markPprFallbackShellDynamicBoundary(): void {
+  const state = getPprFallbackShellState();
+  if (state === null || state.fallbackParamNames.size === 0) return;
+  markPartialRscShellDynamicBoundary();
+}
+
 export const createPprFallbackShellSuspensePromise = createPartialRscShellSuspensePromise;
 export const waitForPprFallbackShellCacheReady = waitForPartialRscShellCacheReady;
 export const waitForPprFallbackShellSettled = waitForPartialRscShellSettled;
