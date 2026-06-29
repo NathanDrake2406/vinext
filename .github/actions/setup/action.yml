@@ -14,13 +14,59 @@ inputs:
     description: Whether to run `vp install` after setup
     required: false
     default: true
+  version:
+    description: Vite+ version to install. Defaults to the workspace catalog entry.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
+    - name: Resolve Vite+ version
+      id: vite-plus-version
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "$INPUT_VERSION" ]; then
+          version="$INPUT_VERSION"
+        else
+          version="$(node <<'NODE'
+        const fs = require("node:fs");
+
+        const workspace = fs.readFileSync("pnpm-workspace.yaml", "utf8");
+        let inCatalog = false;
+
+        for (const line of workspace.split(/\r?\n/)) {
+          if (/^\S/.test(line)) {
+            inCatalog = line === "catalog:";
+            continue;
+          }
+
+          if (!inCatalog) {
+            continue;
+          }
+
+          const vitePlus = line.match(/^\s{2}vite-plus:\s*["']?([^"'\s#]+)["']?/);
+          if (vitePlus) {
+            process.stdout.write(vitePlus[1]);
+            process.exit(0);
+          }
+        }
+
+        throw new Error("Missing vite-plus catalog entry in pnpm-workspace.yaml");
+        NODE
+          )"
+        fi
+
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
     - name: Setup Vite+
       uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
       with:
         node-version: ${{ inputs.node-version }}
         cache: ${{ inputs.cache }}
         run-install: ${{ inputs.run-install }}
+        version: ${{ steps.vite-plus-version.outputs.version }}
