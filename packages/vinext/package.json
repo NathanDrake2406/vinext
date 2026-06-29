@@ -57,9 +57,17 @@
       "types": "./dist/server/pages-client-assets.d.ts",
       "import": "./dist/server/pages-client-assets.js"
     },
+    "./server/fetch-handler": {
+      "types": "./dist/server/fetch-handler.d.ts",
+      "import": "./dist/server/fetch-handler.js"
+    },
     "./server/app-router-entry": {
       "types": "./dist/server/app-router-entry.d.ts",
       "import": "./dist/server/app-router-entry.js"
+    },
+    "./server/pages-router-entry": {
+      "types": "./dist/server/pages-router-entry.d.ts",
+      "import": "./dist/server/pages-router-entry.js"
     },
     "./internal/server/headers": {
       "types": "./dist/server/headers.d.ts",
