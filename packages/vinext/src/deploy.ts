@@ -31,8 +31,6 @@ import {
   workerEntryHasCacheHandler,
 } from "./cloudflare/deploy-config.js";
 
-export { injectPregeneratedConcretePaths } from "./build/inject-pregenerated-paths.js";
-
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type DeployOptions = {
