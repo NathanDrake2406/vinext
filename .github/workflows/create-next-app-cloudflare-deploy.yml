@@ -13,6 +13,10 @@ concurrency:
 
 jobs:
   deploy:
+    # This workflow deploys a fixed Cloudflare Worker using repository secrets.
+    # Forks still receive pushes to their own main branch, but they do not have
+    # the canonical repo's Cloudflare credentials.
+    if: github.repository_owner == 'cloudflare'
     name: Deploy and smoke test
     runs-on: ubuntu-latest
     env:
