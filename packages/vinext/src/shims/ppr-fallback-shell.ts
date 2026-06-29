@@ -24,6 +24,10 @@ type CreatePprFallbackShellStateOptions = {
   routePattern: string;
 };
 
+function isPprFallbackShellState(state: PartialRscShellState): state is PprFallbackShellState {
+  return "fallbackParamNames" in state;
+}
+
 export function createPprFallbackShellState(
   options: CreatePprFallbackShellStateOptions,
 ): PprFallbackShellState {
@@ -39,7 +43,9 @@ export function createPprFallbackShellState(
 export const runWithPprFallbackShellState = runWithPartialRscShellState;
 
 export function getPprFallbackShellState(): PprFallbackShellState | null {
-  return getPartialRscShellState() as PprFallbackShellState | null;
+  const state = getPartialRscShellState();
+  if (state === null || !isPprFallbackShellState(state)) return null;
+  return state;
 }
 
 export const trackPprFallbackShellCacheTask = trackPartialRscShellCacheTask;
