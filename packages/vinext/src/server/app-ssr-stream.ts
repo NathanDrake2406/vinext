@@ -30,6 +30,10 @@ type RscEmbedTransformOptions = {
 
 type HtmlInsertion = string | (() => string);
 type InlineCssManifest = Record<string, string>;
+export type InitialNavigationCacheMetadata = {
+  kind: "dynamic" | "static";
+  dynamicStaleTimeSeconds?: number;
+};
 type InlineCssRewriteResult = {
   html: string;
   consumedPrependCss: boolean;
@@ -46,6 +50,7 @@ export function navigationRuntimeRscBootstrapExpression(): string {
 export function createNavigationRuntimeRscMetadataScript(
   params: Record<string, string | string[]>,
   nav: { pathname: string; searchParams: [string, string][] },
+  dynamicStaleTimeSeconds?: number,
 ): string {
   return (
     "Object.assign(" +
@@ -54,6 +59,9 @@ export function createNavigationRuntimeRscMetadataScript(
     safeJsonStringify(params) +
     ",nav:" +
     safeJsonStringify(nav) +
+    (dynamicStaleTimeSeconds === undefined
+      ? ""
+      : ",dynamicStaleTimeSeconds:" + safeJsonStringify(dynamicStaleTimeSeconds)) +
     "})"
   );
 }
@@ -62,8 +70,24 @@ function createNavigationRuntimeRscChunkScript(chunk: RscEmbeddedChunk): string 
   return navigationRuntimeRscBootstrapExpression() + ".rsc.push(" + safeJsonStringify(chunk) + ")";
 }
 
-function createNavigationRuntimeRscDoneScript(): string {
-  return navigationRuntimeRscBootstrapExpression() + ".done=true";
+function createNavigationRuntimeRscDoneScript(metadata?: InitialNavigationCacheMetadata): string {
+  const bootstrap = navigationRuntimeRscBootstrapExpression();
+  return (
+    (metadata === undefined
+      ? ""
+      : "Object.assign(" +
+        bootstrap +
+        "," +
+        safeJsonStringify({
+          initialCacheKind: metadata.kind,
+          ...(metadata.dynamicStaleTimeSeconds === undefined
+            ? {}
+            : { dynamicStaleTimeSeconds: metadata.dynamicStaleTimeSeconds }),
+        }) +
+        ");") +
+    bootstrap +
+    ".done=true"
+  );
 }
 
 /**
@@ -82,6 +106,7 @@ export function fixFlightHints(text: string): string {
 export function createRscEmbedTransform(
   embedStream: ReadableStream<Uint8Array>,
   scriptNonce?: string,
+  getInitialNavigationCacheMetadata?: () => InitialNavigationCacheMetadata,
   options?: RscEmbedTransformOptions,
 ): RscEmbedTransform {
   const reader = embedStream.getReader();
@@ -137,7 +162,10 @@ export function createRscEmbedTransform(
     async finalize(): Promise<string> {
       await pumpPromise;
       let scripts = this.flush();
-      scripts += createInlineScriptTag(createNavigationRuntimeRscDoneScript(), scriptNonce);
+      scripts += createInlineScriptTag(
+        createNavigationRuntimeRscDoneScript(getInitialNavigationCacheMetadata?.()),
+        scriptNonce,
+      );
       return scripts;
     },
 
