@@ -4519,7 +4519,7 @@ export const loadServerActionClient = ${
                       middlewarePath !== null,
                       (nextConfig?.rewrites.beforeFiles.length ?? 0) > 0 ||
                         (nextConfig?.rewrites.afterFiles.length ?? 0) > 0 ||
-                      (nextConfig?.rewrites.fallback.length ?? 0) > 0,
+                        (nextConfig?.rewrites.fallback.length ?? 0) > 0,
                       nextConfig?.clientTraceMetadata,
                       nextConfig?.htmlLimitedBots,
                       nextConfig?.crossOrigin,
