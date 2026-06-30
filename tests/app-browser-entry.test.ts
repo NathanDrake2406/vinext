@@ -83,6 +83,7 @@ import {
 import { createClientNavigationRenderSnapshot } from "../packages/vinext/src/shims/navigation.js";
 import * as navigationShim from "../packages/vinext/src/shims/navigation.js";
 import {
+  createBfcacheSegmentStateKeyMap,
   createHistoryStateWithNavigationMetadata,
   createHistoryStateWithPreviousNextUrl,
   createInitialBfcacheIdMap,
@@ -163,6 +164,24 @@ type TestRouteManifestInterception = {
   targetPattern: string;
 };
 
+function createTestSegmentStateKeys(
+  entries: Record<string, unknown>,
+  layoutIds: readonly string[],
+): Record<string, string> {
+  const keys: Record<string, string> = {};
+  for (const id of [...layoutIds, ...Object.keys(entries)]) {
+    const parsed = AppElementsWire.parseElementKey(id);
+    if (parsed?.kind === "layout" || parsed?.kind === "template") {
+      keys[id] = parsed.treePath;
+    } else if (parsed?.kind === "page") {
+      keys[id] = parsed.path;
+    } else if (parsed?.kind === "slot") {
+      keys[id] = `${parsed.treePath}/@${parsed.name}`;
+    }
+  }
+  return keys;
+}
+
 function createResolvedElements(
   routeId: string,
   rootLayoutTreePath: string | null,
@@ -174,6 +193,9 @@ function createResolvedElements(
   slotBindings: readonly AppElementsSlotBinding[] = [],
   interception: AppElementsInterception | null = null,
 ) {
+  const segmentStateKeyEntries = Object.hasOwn(extraEntries, APP_SEGMENT_STATE_KEYS_KEY)
+    ? {}
+    : { [APP_SEGMENT_STATE_KEYS_KEY]: createTestSegmentStateKeys(extraEntries, layoutIds) };
   return normalizeAppElements({
     ...AppElementsWire.createMetadataEntries({
       interception,
@@ -183,6 +205,7 @@ function createResolvedElements(
       routeId,
       slotBindings,
     }),
+    ...segmentStateKeyEntries,
     ...extraEntries,
   });
 }
@@ -5076,6 +5099,10 @@ describe("app browser entry previousNextUrl helpers", () => {
         {
           "layout:/": React.createElement("div", null, "root layout"),
           "layout:/blog/[slug]": previousLayout,
+          [APP_SEGMENT_STATE_KEYS_KEY]: {
+            "layout:/": "/",
+            "layout:/blog/[slug]": "/blog/[slug]?slug=hello-world",
+          },
         },
         ["layout:/", "layout:/blog/[slug]"],
       ),
@@ -5091,6 +5118,11 @@ describe("app browser entry previousNextUrl helpers", () => {
       extraEntries: {
         "layout:/blog/[slug]": nextLayout,
         "page:/blog/[slug]": React.createElement("main", null, "getting-started"),
+        [APP_SEGMENT_STATE_KEYS_KEY]: {
+          "layout:/": "/",
+          "layout:/blog/[slug]": "/blog/[slug]?slug=getting-started",
+          "page:/blog/[slug]": "/blog/[slug]?slug=getting-started",
+        },
       },
       layoutIds: ["layout:/", "layout:/blog/[slug]"],
       navigationSnapshot: createClientNavigationRenderSnapshot(
@@ -5940,6 +5972,8 @@ describe("app browser entry bfcacheId helpers", () => {
     if (options.segmentStateKeys !== null) {
       extraEntries[APP_SEGMENT_STATE_KEYS_KEY] =
         options.segmentStateKeys ?? createDefaultBfcacheSegmentStateKeys(pageId);
+    } else {
+      extraEntries[APP_SEGMENT_STATE_KEYS_KEY] = undefined;
     }
     if (options.graphVersion !== undefined) {
       extraEntries[APP_ARTIFACT_COMPATIBILITY_KEY] = createArtifactCompatibilityEnvelope({
