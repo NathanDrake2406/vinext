@@ -83,6 +83,14 @@ async function blockNextNavigationRscRequest(page: Page, pathname: string) {
   };
 }
 
+async function releaseBlockedNavigation(
+  page: Page,
+  blockedNavigation: Awaited<ReturnType<typeof blockNextNavigationRscRequest>>,
+) {
+  await blockedNavigation.release();
+  await page.clock.fastForward(1_000).catch(() => {});
+}
+
 async function expectNoRscRequests(page: Page, action: () => Promise<void>) {
   const requests: string[] = [];
   const handler = async (route: Route) => {
@@ -158,7 +166,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expectVisibleIdText(page, "headers-boundary", "Loading headers...");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await secondRequest.release();
+      await releaseBlockedNavigation(page, secondRequest);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
@@ -176,7 +184,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await thirdRequest.blocked;
       await expectVisibleMainNotToContain(page, "Cached content");
     } finally {
-      await thirdRequest.release();
+      await releaseBlockedNavigation(page, thirdRequest);
     }
 
     await expect(visibleId(page, "cached-content")).toContainText("Cached content");
@@ -235,7 +243,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expect(visibleId(page, "cached-content")).toContainText("Cached content");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await blocked.release();
+      await releaseBlockedNavigation(page, blocked);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
@@ -263,7 +271,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expect(visibleId(page, "cached-content")).toContainText("Cached content");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await blocked.release();
+      await releaseBlockedNavigation(page, blocked);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
@@ -292,7 +300,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expect(visibleId(page, "params")).toContainText("Param: foo");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await blocked.release();
+      await releaseBlockedNavigation(page, blocked);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
@@ -321,7 +329,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expectVisibleIdText(page, "params-boundary", "Loading params...");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await blocked.release();
+      await releaseBlockedNavigation(page, blocked);
     }
 
     await expect(visibleId(page, "params-boundary")).toContainText("Param: foo");
@@ -353,7 +361,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expectVisibleIdText(page, "params-boundary", "Loading params...");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await blocked.release();
+      await releaseBlockedNavigation(page, blocked);
     }
 
     await expect(visibleId(page, "params-boundary")).toContainText("Locale: en, Param: foo");
@@ -389,7 +397,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expect(visibleId(page, "headers-boundary")).toContainText("Header:");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await secondRequest.release();
+      await releaseBlockedNavigation(page, secondRequest);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
@@ -408,7 +416,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expectVisibleMainNotToContain(page, "Header:");
       await expectVisibleMainNotToContain(page, "Dynamic content");
     } finally {
-      await thirdRequest.release();
+      await releaseBlockedNavigation(page, thirdRequest);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
@@ -431,7 +439,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expect(visibleId(page, "cached-content")).toContainText("Cached content");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await blocked.release();
+      await releaseBlockedNavigation(page, blocked);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
@@ -462,7 +470,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expect(visibleId(page, "headers-boundary")).toContainText("Header:");
       await expectVisibleIdText(page, "connection-boundary", "Loading connection...");
     } finally {
-      await secondRequest.release();
+      await releaseBlockedNavigation(page, secondRequest);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
@@ -481,7 +489,7 @@ test.describe("Next.js compat: cached navigations", () => {
       await expectVisibleMainNotToContain(page, "Header:");
       await expectVisibleMainNotToContain(page, "Dynamic content");
     } finally {
-      await thirdRequest.release();
+      await releaseBlockedNavigation(page, thirdRequest);
     }
 
     await expect(visibleId(page, "connection-boundary")).toContainText("Dynamic content");
