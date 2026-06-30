@@ -6133,7 +6133,7 @@ describe("app browser entry bfcacheId helpers", () => {
     expect(next[dynamicPageId]).not.toBe("_b_5_");
   });
 
-  it("mints a fresh segment id when the artifact-compatibility graphVersion changes", () => {
+  it("preserves segment ids when only the artifact-compatibility graphVersion changes", () => {
     const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
     const segmentStateKeys = {
       [rootLayoutId]: "/",
@@ -6156,8 +6156,9 @@ describe("app browser entry bfcacheId helpers", () => {
       }),
     });
 
-    expect(next[dynamicPageId]).toMatch(/^_b_\d+_$/);
-    expect(next[dynamicPageId]).not.toBe("_b_5_");
+    expect(next[rootLayoutId]).toBe("0");
+    expect(next[groupLayoutId]).toBe("_b_4_");
+    expect(next[dynamicPageId]).toBe("_b_5_");
   });
 
   it("uses carried catch-all and optional catch-all keys as canonical identity", () => {

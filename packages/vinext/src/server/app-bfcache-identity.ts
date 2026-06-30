@@ -61,9 +61,9 @@ function readAppElementsMetadata(elements: AppElements): ParsedAppElementsMetada
 /**
  * Derive a BFCache segment identity from route-graph facts: the segment's
  * semantic wire id, the carried canonical bound-segment key (__segmentStateKeys),
- * the artifact-compatibility graphVersion, and per-kind facts such as slot
- * state. A segment whose key was not carried returns no comparable identity, so
- * it re-mints rather than colliding with a real binding.
+ * and per-kind facts such as slot state. A segment whose key was not carried
+ * returns no comparable identity, so it re-mints rather than colliding with a
+ * real binding.
  */
 function createBfcacheSegmentIdentity(
   id: string,
@@ -73,7 +73,6 @@ function createBfcacheSegmentIdentity(
   if (!parsed || parsed.kind === "route") return null;
 
   const metadata = options.metadata?.metadata;
-  const graphVersion = metadata?.artifactCompatibility.graphVersion ?? null;
   const rootBoundaryId = metadata?.rootLayoutTreePath ?? null;
   const segmentStateKeys = metadata?.segmentStateKeys;
   if (!segmentStateKeys || !Object.hasOwn(segmentStateKeys, id)) {
@@ -84,7 +83,6 @@ function createBfcacheSegmentIdentity(
   if (parsed.kind === "page") {
     return deriveBfcacheSegmentIdentity({
       kind: "page",
-      graphVersion,
       graphId: id,
       rootBoundaryId,
       boundSegmentKey,
@@ -96,7 +94,6 @@ function createBfcacheSegmentIdentity(
     const interception = metadata?.interception ?? null;
     return deriveBfcacheSegmentIdentity({
       kind: "slot",
-      graphVersion,
       graphId: id,
       slotId: id,
       ownerLayoutId: binding?.ownerLayoutId ?? null,
@@ -110,7 +107,6 @@ function createBfcacheSegmentIdentity(
   if (parsed.kind === "layout") {
     return deriveBfcacheSegmentIdentity({
       kind: "layout",
-      graphVersion,
       graphId: id,
       rootBoundaryId,
       boundSegmentKey,
@@ -120,7 +116,6 @@ function createBfcacheSegmentIdentity(
   if (parsed.kind === "template") {
     return deriveBfcacheSegmentIdentity({
       kind: "template",
-      graphVersion,
       graphId: id,
       rootBoundaryId,
       boundSegmentKey,
