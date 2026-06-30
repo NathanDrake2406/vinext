@@ -35,7 +35,9 @@ import { getDeploymentId } from "../../utils/deployment-id.js";
 
 type InflightEntry = {
   controller: AbortController;
+  deleteOnSettle: boolean;
   promise: Promise<BufferedResponse>;
+  settled: boolean;
 };
 
 type BufferedResponse = {
@@ -127,10 +129,17 @@ export function fetchStaticPagesData(dataHref: string, init?: RequestInit): Prom
 }
 
 export function evictPagesDataCache(dataHref: string): void {
-  const key = getStaticDataKey(dataHref);
-  delete staticDataCache[key];
-  staticDataSources.delete(key);
-  inflight.delete(getInflightKey(dataHref));
+  const staticKey = getStaticDataKey(dataHref);
+  delete staticDataCache[staticKey];
+  staticDataSources.delete(staticKey);
+  const inflightKey = getInflightKey(dataHref);
+  const entry = inflight.get(inflightKey);
+  if (!entry) return;
+  if (entry.settled) {
+    inflight.delete(inflightKey);
+  } else {
+    entry.deleteOnSettle = true;
+  }
 }
 
 function getInflightKey(dataHref: string): string {
@@ -205,18 +214,25 @@ export function dedupedPagesDataFetch(
           status: response.status,
           statusText: response.statusText,
         };
-        if ((!persist || !response.ok) && inflight.get(key) === currentEntry) {
+        currentEntry.settled = true;
+        if (
+          (!persist || !response.ok || currentEntry.deleteOnSettle) &&
+          inflight.get(key) === currentEntry
+        ) {
           inflight.delete(key);
         }
         return buffered;
       })
       .catch((error: unknown) => {
+        currentEntry.settled = true;
         if (inflight.get(key) === currentEntry) inflight.delete(key);
         throw error;
       });
     currentEntry = {
       controller,
+      deleteOnSettle: false,
       promise,
+      settled: false,
     };
     inflight.set(key, currentEntry);
     entry = currentEntry;

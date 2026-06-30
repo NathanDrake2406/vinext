@@ -251,4 +251,46 @@ describe("dedupedPagesDataFetch", () => {
     expect(await afterEvict.json()).toEqual({ pageProps: { count: 2 } });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps an evicted in-flight entry joinable until it settles", async () => {
+    let resolveFetch: (response: Response) => void = () => {};
+    let fetchCount = 0;
+    const fetchSpy = vi.fn(() => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        return new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        });
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ pageProps: { attempt: fetchCount } }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    (globalThis as unknown as { fetch: unknown }).fetch = fetchSpy;
+
+    const url = "/_next/data/build-id/slow.json";
+    const first = dedupedPagesDataFetch(url, { persist: true });
+    evictPagesDataCache(url);
+    const second = dedupedPagesDataFetch(url, { persist: true });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    resolveFetch(
+      new Response(JSON.stringify({ pageProps: { attempt: 1 } }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(first.then((response) => response.json())).resolves.toEqual({
+      pageProps: { attempt: 1 },
+    });
+    await expect(second.then((response) => response.json())).resolves.toEqual({
+      pageProps: { attempt: 1 },
+    });
+
+    const afterSettle = await dedupedPagesDataFetch(url, { persist: true });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(await afterSettle.json()).toEqual({ pageProps: { attempt: 2 } });
+  });
 });
