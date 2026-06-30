@@ -6,7 +6,6 @@ import {
 
 const pageDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "page" }> = {
   kind: "page",
-  graphVersion: "g1",
   graphId: "page:/p/[n]",
   rootBoundaryId: "rb1",
   boundSegmentKey: "n|1|d",
@@ -14,7 +13,6 @@ const pageDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "page" }> = {
 
 const layoutDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "layout" }> = {
   kind: "layout",
-  graphVersion: "g1",
   graphId: "layout:/p/[n]",
   rootBoundaryId: "rb1",
   boundSegmentKey: "n|1|d",
@@ -22,7 +20,6 @@ const layoutDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "layout" }> = 
 
 const templateDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "template" }> = {
   kind: "template",
-  graphVersion: "g1",
   graphId: "template:/p/[n]",
   rootBoundaryId: "rb1",
   boundSegmentKey: "n|1|d",
@@ -30,7 +27,6 @@ const templateDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "template" }
 
 const slotDescriptor: Extract<BfcacheSegmentDescriptor, { kind: "slot" }> = {
   kind: "slot",
-  graphVersion: "g1",
   graphId: "slot:modal:/dashboard",
   slotId: "slot:modal:/dashboard",
   ownerLayoutId: "layout:/dashboard",
@@ -47,12 +43,6 @@ describe("deriveBfcacheSegmentIdentity", () => {
     );
     expect(deriveBfcacheSegmentIdentity(pageDescriptor)).not.toBe(
       deriveBfcacheSegmentIdentity({ ...pageDescriptor, boundSegmentKey: "n|2|d" }),
-    );
-  });
-
-  it("folds artifact-compatibility graphVersion into segment equality", () => {
-    expect(deriveBfcacheSegmentIdentity(pageDescriptor)).not.toBe(
-      deriveBfcacheSegmentIdentity({ ...pageDescriptor, graphVersion: "g2" }),
     );
   });
 
@@ -105,10 +95,10 @@ describe("deriveBfcacheSegmentIdentity", () => {
     );
   });
 
-  it("treats null and absent graphVersion as the same low-context identity", () => {
-    const a = deriveBfcacheSegmentIdentity({ ...pageDescriptor, graphVersion: null });
-    const b = deriveBfcacheSegmentIdentity({ ...pageDescriptor, graphVersion: null });
-    expect(a).toBe(b);
-    expect(a).not.toBe(deriveBfcacheSegmentIdentity(pageDescriptor));
+  it("keeps artifact graph compatibility out of segment equality", () => {
+    // graphVersion is route-pattern scoped, so putting it in segment equality
+    // would remint shared layout identities during ordinary soft navigation.
+    const identity = deriveBfcacheSegmentIdentity(pageDescriptor);
+    expect(identity).toBe(deriveBfcacheSegmentIdentity({ ...pageDescriptor }));
   });
 });

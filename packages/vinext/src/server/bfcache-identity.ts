@@ -8,9 +8,6 @@
 // Identity is composed from route-graph semantic facts rather than reverse-
 // engineered from wire-key strings + pathname segment counting:
 //
-//   - graphVersion        — the artifact-compatibility graphVersion
-//                           (routePattern/rootBoundaryId fingerprint today);
-//                           equality-only for this identity, not reject authority
 //   - graphId             — the segment's stable semantic id (page/layout/...)
 //   - boundSegmentKey     — canonical param binding (the resolveAppPageRouteStateKey
 //                           family already used for React reset keys), so /p/1 and
@@ -30,28 +27,24 @@ type ParallelSlotBindingState = "active" | "default" | "unmatched";
 export type BfcacheSegmentDescriptor =
   | {
       kind: "page";
-      graphVersion: string | null;
       graphId: string;
       rootBoundaryId: string | null;
       boundSegmentKey: string;
     }
   | {
       kind: "layout";
-      graphVersion: string | null;
       graphId: string;
       rootBoundaryId: string | null;
       boundSegmentKey: string;
     }
   | {
       kind: "template";
-      graphVersion: string | null;
       graphId: string;
       rootBoundaryId: string | null;
       boundSegmentKey: string;
     }
   | {
       kind: "slot";
-      graphVersion: string | null;
       graphId: string;
       slotId: string;
       ownerLayoutId: string | null;
@@ -70,7 +63,6 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
     case "page":
       return JSON.stringify([
         "page",
-        descriptor.graphVersion,
         descriptor.graphId,
         descriptor.rootBoundaryId,
         descriptor.boundSegmentKey,
@@ -78,7 +70,6 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
     case "layout":
       return JSON.stringify([
         "layout",
-        descriptor.graphVersion,
         descriptor.graphId,
         descriptor.rootBoundaryId,
         descriptor.boundSegmentKey,
@@ -86,7 +77,6 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
     case "template":
       return JSON.stringify([
         "template",
-        descriptor.graphVersion,
         descriptor.graphId,
         descriptor.rootBoundaryId,
         descriptor.boundSegmentKey,
@@ -94,7 +84,6 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
     case "slot":
       return JSON.stringify([
         "slot",
-        descriptor.graphVersion,
         descriptor.graphId,
         descriptor.slotId,
         descriptor.ownerLayoutId,
