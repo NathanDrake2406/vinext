@@ -2407,6 +2407,10 @@ function discoverInterceptingRoutes(
  * Sibling intercepts use the same conventions and target-computation logic as
  * slot intercepts, but their intercepting page replaces the full page response
  * (not a slot) during soft navigation.
+ *
+ * `appDir` and each route's `pagePath` / `routePath` must be forward-slash. The
+ * owner directories are derived from `pagePath` / `routePath` and matched
+ * against `appDir`-relative paths built with `path.posix.*`.
  */
 function discoverSiblingInterceptingRoutes(
   routes: AppRouteGraphRoute[],
@@ -2421,8 +2425,7 @@ function discoverSiblingInterceptingRoutes(
   for (const route of routes) {
     const filePath = route.pagePath ?? route.routePath;
     if (!filePath) continue;
-    // Keys are forward-slash — findOwnerRouteForDir compares in that space.
-    const routeDir = normalizePathSeparators(path.dirname(filePath));
+    const routeDir = path.posix.dirname(filePath);
     if (!routesByDir.has(routeDir)) {
       routesByDir.set(routeDir, route);
     }
@@ -2442,7 +2445,7 @@ function discoverSiblingInterceptingRoutes(
       // Skip @slot subtrees — their markers are handled by the slot path
       if (entry.name.startsWith("@")) continue;
 
-      const childDir = path.join(dir, entry.name);
+      const childDir = path.posix.join(dir, entry.name);
       const marker = matchInterceptConvention(entry.name);
 
       if (marker) {
