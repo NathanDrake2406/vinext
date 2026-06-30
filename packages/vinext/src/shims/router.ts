@@ -148,6 +148,7 @@ function PagesRouterCommitBoundaryHelper({
 function renderPagesRouterElement(
   element: ReactElement,
   scroll?: ScrollPosition | null,
+  onCommit?: () => void,
 ): Promise<void> {
   const root = window.__VINEXT_ROOT__;
   if (!root) {
@@ -189,6 +190,7 @@ function renderPagesRouterElement(
             if (!isCurrent()) return;
 
             try {
+              onCommit?.();
               await scrollHandler();
               if (!isCurrent()) return;
               clearIfCurrent();
@@ -205,9 +207,20 @@ function renderPagesRouterElement(
         },
       ),
     );
-    if (!hasBrowserDocument()) {
+    if (!onCommit && !scroll) {
       clearIfCurrent();
       resolve();
+      return;
+    }
+    if (!hasBrowserDocument()) {
+      try {
+        onCommit?.();
+        clearIfCurrent();
+        resolve();
+      } catch (err) {
+        clearIfCurrent();
+        reject(err);
+      }
     }
   });
 }
@@ -1452,10 +1465,30 @@ function scheduleHardNavigationAndThrow(url: string, message: string): never {
 type NavigateClientOptions = {
   allowNotFoundResponse?: boolean;
   /**
-   * The history mode of the originating navigation. Used when a gSSP/gSP data
-   * response carries a `__N_REDIRECT` marker so the re-entrant navigation to
-   * the redirect destination preserves push-vs-replace semantics, matching
-   * Next.js's `this.change(method, ...)` re-dispatch.
+   * Set by `navigateClientData` after a `__N_REDIRECT` data response has
+   * chained a `performNavigation` to the redirect destination. The outer
+   * `performNavigation` reads this to skip its own `routeChangeComplete`
+   * event — the destination navigation has already produced completion for
+   * the destination URL. Mirrors Next.js's
+   * `return this.change(method, newUrl, newAs, options)` chain in
+   * `pageProps.__N_REDIRECT` handling.
+   */
+  consumedByRedirect?: boolean;
+  /**
+   * The boolean the chained destination `performNavigation` resolved to,
+   * recorded alongside `consumedByRedirect`. The outer `performNavigation`
+   * returns this instead of a hardcoded `true` so a failed destination
+   * navigation (e.g. deploy-skew 404 → hard reload) propagates `false` to
+   * the originating `Router.push()`, matching Next.js's recursive
+   * `return this.change(...)` which yields the destination navigation's
+   * result.
+   */
+  redirectResult?: boolean;
+  dataLocale?: string;
+  /**
+   * The history mode of the originating navigation. Used when a gSSP/gSP
+   * data response carries a `__N_REDIRECT` marker so the re-entrant
+   * navigation preserves push-vs-replace semantics.
    */
   mode?: "push" | "replace";
   scroll?: ScrollPosition | null;
@@ -1795,8 +1828,11 @@ async function resolveClientConfigRewrite(
   return matched ? { href: currentHref, kind: "rewrite" } : null;
 }
 
-function getMiddlewarePagesDataFetchUrl(browserUrl: string): string | null {
-  return getPagesMiddlewareDataHref(browserUrl, __basePath);
+function getMiddlewarePagesDataFetchUrl(
+  browserUrl: string,
+  activeLocaleOverride?: string,
+): string | null {
+  return getPagesMiddlewareDataHref(browserUrl, __basePath, activeLocaleOverride);
 }
 
 function getPagesDataCacheHref(dataHref: string): string {
@@ -1824,8 +1860,9 @@ function shouldEvictMiddlewareDataCache(
 async function resolveMiddlewareDataEffect(
   browserUrl: string,
   signal: AbortSignal,
+  activeLocaleOverride?: string,
 ): Promise<MiddlewareDataEffect | null> {
-  const dataUrl = getMiddlewarePagesDataFetchUrl(browserUrl);
+  const dataUrl = getMiddlewarePagesDataFetchUrl(browserUrl, activeLocaleOverride);
   if (!dataUrl) return null;
 
   // Middleware probes use the Pages data cache so a Link prefetch can be reused
@@ -1860,20 +1897,28 @@ async function resolveMiddlewareDataEffect(
  *
  * Internal destinations (absolute paths, unless the redirect opted out of
  * basePath via `__N_REDIRECT_BASE_PATH === false`) are followed with a fresh
- * client-side navigation that preserves the originating push/replace mode. The
- * fresh navigation increments the navigation id, so the navigation that
+ * client-side navigation that preserves the originating push/replace mode.
+ * The fresh navigation increments the navigation id, so the navigation that
  * produced this redirect is superseded and never commits the intermediate
- * page. External (or non-absolute) destinations fall back to a hard navigation.
+ * page. External (or non-absolute) destinations fall back to a hard
+ * navigation.
+ *
+ * The destination navigation is **awaited** so the userland `router.push()`
+ * promise resolves only after the redirect destination has finished. This
+ * matches Next.js's `return this.change(method, newUrl, newAs, options)`
+ * in `pageProps.__N_REDIRECT` handling (packages/next/src/shared/lib/
+ * router/router.ts:1725), where the recursive `change` chains into the
+ * source navigation's promise.
  *
  * Ported from Next.js: packages/next/src/shared/lib/router/router.ts
  * (`pageProps.__N_REDIRECT` handling — internal `this.change` vs
  * `handleHardNavigation`).
  */
-function handleDataRedirect(
+async function handleDataRedirect(
   destination: string,
   redirectBasePath: unknown,
   mode: "push" | "replace" = "push",
-): void {
+): Promise<boolean> {
   const isInternal = destination.startsWith("/") && redirectBasePath !== false;
   if (!isInternal) {
     // External or basePath-less redirect — hard navigate to the redirect
@@ -1881,9 +1926,9 @@ function handleDataRedirect(
     scheduleHardNavigationAndThrow(destination, "Navigation redirected externally");
   }
 
-  // Re-dispatch as a fresh navigation. `locale: false` matches Next.js, which
-  // does not re-apply the locale prefix to a redirect destination.
-  void performNavigation(destination, undefined, { locale: false }, mode);
+  // Re-dispatch as a chained navigation. `locale: false` matches Next.js,
+  // which does not re-apply the locale prefix to a redirect destination.
+  return performNavigation(destination, undefined, { locale: false }, mode);
 }
 
 async function loadTargetPageModule(
@@ -2123,13 +2168,13 @@ async function navigateClientData(
   }
   let res = prefetchedResponse;
   if (!res) {
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "x-nextjs-data": "1",
+    };
+    const deploymentId = getDeploymentId();
+    if (deploymentId) headers[NEXT_DEPLOYMENT_ID_HEADER] = deploymentId;
     try {
-      const headers: Record<string, string> = {
-        Accept: "application/json",
-        "x-nextjs-data": "1",
-      };
-      const deploymentId = getDeploymentId();
-      if (deploymentId) headers[NEXT_DEPLOYMENT_ID_HEADER] = deploymentId;
       const dataFetch =
         initialTarget.dataKind === "static" ? fetchStaticPagesData : dedupedPagesDataFetch;
       res = await dataFetch(initialTarget.dataHref, {
@@ -2160,10 +2205,14 @@ async function navigateClientData(
       scheduleHardNavigationAndThrow(softRedirect, "Navigation redirected externally");
     }
 
-    window.history.replaceState(window.history.state ?? {}, "", redirectedUrl);
-    routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
-    routerRuntimeState.lastHash = window.location.hash;
-    await navigateClientHtml(redirectedUrl, redirectedUrl, controller, navId, assertStillCurrent);
+    await navigateClientHtml(
+      redirectedUrl,
+      redirectedUrl,
+      controller,
+      navId,
+      assertStillCurrent,
+      options,
+    );
     return;
   }
 
@@ -2177,7 +2226,7 @@ async function navigateClientData(
 
   const rewriteTarget = res.headers.get("x-nextjs-rewrite");
   const target = rewriteTarget
-    ? resolvePagesDataNavigationTarget(rewriteTarget, __basePath)
+    ? resolvePagesDataNavigationTarget(rewriteTarget, __basePath, options.dataLocale)
     : initialTarget;
   if (!target) {
     scheduleHardNavigationAndThrow(
@@ -2201,18 +2250,27 @@ async function navigateClientData(
     evictPagesDataCache(initialTarget.dataHref);
   }
 
-  // gSSP/gSP redirect marker. When getServerSideProps/getStaticProps returns
-  // `{ redirect }`, the data endpoint replies 200 with `__N_REDIRECT` /
-  // `__N_REDIRECT_STATUS` inside pageProps (rather than an HTTP redirect, which
-  // fetch would transparently follow to non-JSON HTML). Re-enter a fresh
-  // navigation to the destination — this increments the navigation id, which
-  // supersedes (cancels) the current navigation so the intermediate page is
-  // never committed. Mirrors Next.js's `pageProps.__N_REDIRECT` handling in
-  // packages/next/src/shared/lib/router/router.ts (`this.change(method, ...)`).
+  // gSSP/gSP redirect marker. When getServerSideProps/getStaticProps
+  // returns `{ redirect }`, the data endpoint replies 200 with
+  // `__N_REDIRECT` / `__N_REDIRECT_STATUS` inside pageProps (rather than
+  // an HTTP redirect, which fetch would transparently follow to non-JSON
+  // HTML). Chain into a fresh navigation to the destination and await it
+  // so the userland `router.push()` promise resolves only after the
+  // redirect has committed. Mirrors Next.js's
+  // `return this.change(method, newUrl, newAs, options)` in
+  // packages/next/src/shared/lib/router/router.ts:1725. The
+  // `consumedByRedirect` flag tells the source `performNavigation` to
+  // skip its own `commitHistory` write and `routeChangeComplete` event
+  // because the destination has already produced both.
   const redirectDestination = pageProps.__N_REDIRECT;
   if (typeof redirectDestination === "string") {
-    handleDataRedirect(redirectDestination, pageProps.__N_REDIRECT_BASE_PATH, options.mode);
-    throw new NavigationCancelledError(url);
+    options.consumedByRedirect = true;
+    options.redirectResult = await handleDataRedirect(
+      redirectDestination,
+      pageProps.__N_REDIRECT_BASE_PATH,
+      options.mode,
+    );
+    return;
   }
 
   await renderPagesNavigationTarget(url, target, props, options, assertStillCurrent);
@@ -2386,11 +2444,6 @@ async function navigateClientHtml(
   // has passed assertStillCurrent(). The post-render await below waits for the
   // stable Pages Router commit boundary before routeChangeComplete, matching
   // Next.js's client Root callback without remounting the page tree.
-  if (pendingRedirectHistoryUrl) {
-    window.history.replaceState(window.history.state ?? {}, "", pendingRedirectHistoryUrl);
-    routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
-    routerRuntimeState.lastHash = window.location.hash;
-  }
   window.__NEXT_DATA__ = nextData;
   applyVinextLocaleGlobals(window, nextData);
   await renderPagesRouterElement(element, options.scroll);
@@ -2495,11 +2548,18 @@ async function navigateClient(
       // `_next/data/<id>/something-else.json` (the page that actually renders)
       // rather than `_next/data/<id>/hello.json` (the masked address). When
       // routeUrl === url (no mask), behaviour is unchanged.
-      let dataTarget = resolvePagesDataNavigationTarget(routeLookupUrl, __basePath);
+      let dataTarget = resolvePagesDataNavigationTarget(
+        routeLookupUrl,
+        __basePath,
+        options.dataLocale,
+      );
       let middlewareDataResponse: Response | undefined;
       let middlewareEffect: MiddlewareDataEffect | null = null;
       let middlewareRewrittenTarget: PagesDataTarget | null | undefined;
-      const middlewareProbeDataHref = getMiddlewarePagesDataFetchUrl(browserUrl);
+      const middlewareProbeDataHref = getMiddlewarePagesDataFetchUrl(
+        browserUrl,
+        options.dataLocale,
+      );
       if (middlewareProbeDataHref !== null) {
         // If this navigation is superseded before middleware responds, we do
         // not yet know whether middleware would redirect/rewrite away from a
@@ -2508,7 +2568,11 @@ async function navigateClient(
         // target is cacheable static data.
         middlewareDataCacheEvictHref = getPagesDataCacheHref(middlewareProbeDataHref);
         try {
-          middlewareEffect = await resolveMiddlewareDataEffect(browserUrl, controller.signal);
+          middlewareEffect = await resolveMiddlewareDataEffect(
+            browserUrl,
+            controller.signal,
+            options.dataLocale,
+          );
         } catch (err: unknown) {
           if (err instanceof DOMException && err.name === "AbortError") {
             throw new NavigationCancelledError(browserUrl);
@@ -2519,6 +2583,7 @@ async function navigateClient(
           middlewareRewrittenTarget = resolvePagesDataNavigationTarget(
             middlewareEffect.rewriteTarget,
             __basePath,
+            options.dataLocale,
           );
         }
         if (middlewareEffect) {
@@ -2544,6 +2609,8 @@ async function navigateClient(
         routerRuntimeState.lastHash = window.location.hash;
         browserUrl = redirectedUrl;
         htmlFetchUrl = redirectedUrl;
+        options.consumedByRedirect = true;
+        options.redirectResult = true;
       } else if (middlewareEffect) {
         // A masked navigation probes middleware using the browser-visible URL but must fetch page
         // data using the route URL. Without a rewrite header those are different requests, so do
@@ -2554,7 +2621,11 @@ async function navigateClient(
         if (middlewareEffect.rewriteTarget) {
           const rewrittenTarget =
             middlewareRewrittenTarget ??
-            resolvePagesDataNavigationTarget(middlewareEffect.rewriteTarget, __basePath);
+            resolvePagesDataNavigationTarget(
+              middlewareEffect.rewriteTarget,
+              __basePath,
+              options.dataLocale,
+            );
           if (!rewrittenTarget) {
             scheduleHardNavigationAndThrow(browserUrl, "Navigation rewritten to a non-Pages route");
           }
@@ -2755,6 +2826,22 @@ function updateHistory(
   routerRuntimeState.lastPathnameAndSearch = window.location.pathname + window.location.search;
   routerRuntimeState.lastHash = window.location.hash;
   routerRuntimeState.routerDidNavigate = true;
+}
+
+function buildNavigationHistoryState(
+  historyUrl: string,
+  options: { locale?: string; shallow: boolean },
+): { url: string; as: string; options: { locale?: string; shallow: boolean } } {
+  try {
+    const parsed = new URL(historyUrl, window.location.href);
+    const hashlessHistoryUrl = stripHash(historyUrl);
+    const search = parsed.search || (hashlessHistoryUrl.endsWith("?") ? "?" : "");
+    const appPath = stripBasePath(parsed.pathname, __basePath) + search;
+    return { url: appPath, as: appPath, options };
+  } catch {
+    const appPath = stripHash(historyUrl);
+    return { url: appPath, as: appPath, options };
+  }
 }
 
 /**
@@ -2972,8 +3059,8 @@ async function performNavigation(
   // scroll after completion.
   const scrollTarget = doScroll ? { x: 0, y: 0 } : null;
   const navigateOptions: NavigateClientOptions = errorRouteHtmlFetchUrl
-    ? { allowNotFoundResponse: true, mode, scroll: scrollTarget }
-    : { mode, scroll: scrollTarget };
+    ? { allowNotFoundResponse: true, dataLocale: navigationLocale, mode, scroll: scrollTarget }
+    : { dataLocale: navigationLocale, mode, scroll: scrollTarget };
 
   // Next.js push→replace coercion (narrowed): when the display URL (asPath)
   // doesn't change AND the route URL DOES change AND the locale doesn't
@@ -3096,11 +3183,20 @@ async function performNavigation(
   routerEvents.emit("beforeHistoryChange", resolved, { shallow });
   updateHistory(mode, full, navState);
   if (!shallow) {
+    // Spread into a new object so navigateClientData can mark recursive
+    // redirects as consumed without mutating the caller's options object.
+    // The reference is retained so the outer `performNavigation` can observe
+    // `consumedByRedirect`, which `navigateClientData` sets when a
+    // `__N_REDIRECT` gSSP/gSP marker chains a destination navigation into
+    // this one's promise.
+    const navigateClientOptions: NavigateClientOptions = {
+      ...navigateOptions,
+    };
     const result = await runNavigateClient(
       full,
       resolved,
       htmlFetchUrl,
-      navigateOptions,
+      navigateClientOptions,
       // When href and as differ, the data fetch must target the route URL
       // (the module that actually renders), not the masked display URL.
       // fullRouteUrl === full when there is no mask, so this is a no-op
@@ -3109,6 +3205,15 @@ async function performNavigation(
     );
     if (result === "cancelled") return true;
     if (result === "failed") return false;
+    if (navigateClientOptions.consumedByRedirect) {
+      // Destination navigation already produced beforeHistoryChange +
+      // routeChangeComplete for the destination URL; suppress the source
+      // URL's completion event so listeners see a single transition. Return
+      // the destination navigation's own boolean so a failed redirect target
+      // reports `false` to `Router.push()`, matching Next.js's recursive
+      // `return this.change(...)`.
+      return navigateClientOptions.redirectResult ?? true;
+    }
   } else {
     // Shallow navigations skip the render-commit path, so apply the scroll
     // reset synchronously here — before routeChangeComplete. This matches the
