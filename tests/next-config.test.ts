@@ -2039,6 +2039,7 @@ describe("detectNextIntlConfig", () => {
       sassOptions: null,
       removeConsole: false,
       disableOptimizedLoading: false,
+      reactStrictMode: null,
       scrollRestoration: false,
       compilerDefine: {},
       compilerDefineServer: {},

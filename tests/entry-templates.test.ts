@@ -187,6 +187,47 @@ describe("App Router generated manifest construction", () => {
         siblingIntercepts: [],
       },
       {
+        pattern: "/teams/:team/dashboard",
+        patternParts: ["teams", ":team", "dashboard"],
+        pagePath: "/tmp/test/app/teams/[team]/dashboard/page.tsx",
+        routePath: null,
+        layouts: ["/tmp/test/app/layout.tsx", "/tmp/test/app/teams/[team]/layout.tsx"],
+        templates: [],
+        parallelSlots: [
+          {
+            id: "slot:analytics:/teams/:team/dashboard",
+            key: "analytics:/tmp/test/app/teams/[team]/dashboard/@analytics",
+            name: "analytics",
+            ownerDir: "/tmp/test/app/teams/[team]/dashboard/@analytics",
+            ownerTreePath: "/teams/:team/dashboard",
+            hasPage: true,
+            pagePath: "/tmp/test/app/teams/[team]/dashboard/@analytics/page.tsx",
+            defaultPath: "/tmp/test/app/teams/[team]/dashboard/@analytics/default.tsx",
+            layoutPath: null,
+            loadingPath: null,
+            errorPath: null,
+            interceptingRoutes: [],
+            layoutIndex: 1,
+            routeSegments: ["teams", ":team", "dashboard", "@analytics"],
+          },
+        ],
+        loadingPath: null,
+        errorPath: null,
+        layoutErrorPaths: [null, null],
+        notFoundPath: null,
+        notFoundPaths: [null, null],
+        forbiddenPaths: [null, null],
+        forbiddenPath: null,
+        unauthorizedPaths: [null, null],
+        unauthorizedPath: null,
+        routeSegments: ["teams", ":team", "dashboard"],
+        templateTreePositions: [],
+        layoutTreePositions: [0, 1],
+        isDynamic: true,
+        params: ["team"],
+        siblingIntercepts: [],
+      },
+      {
         pattern: "/api",
         patternParts: ["api"],
         pagePath: null,
@@ -224,6 +265,9 @@ describe("App Router generated manifest construction", () => {
     );
     expect(code).toContain(
       '{"canPrefetchLoadingShell":true,"patternParts":["docs",":slug"],"isDynamic":true}',
+    );
+    expect(code).toContain(
+      '{"canPrefetchLoadingShell":false,"patternParts":["teams",":team","dashboard"],"isDynamic":true,"requiresDynamicNavigationRequest":true}',
     );
     expect(code).toContain(
       '{"canPrefetchLoadingShell":false,"patternParts":["modal-host"],"isDynamic":false}',
@@ -1381,6 +1425,78 @@ describe("Pages Router entry template", () => {
       expect(code).toContain("onCaughtError: overlay.devOnCaughtError");
       expect(code).toContain("onUncaughtError: overlay.devOnUncaughtError");
       expect(overlayImportIndex).toBeLessThan(pageLoadIndex);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  // Ported from Next.js: `reactStrictMode` wraps the client tree in
+  // <React.StrictMode> via the `process.env.__NEXT_STRICT_MODE` branch in
+  // .nextjs-ref/packages/next/src/client/index.tsx (around line 787). vinext
+  // signals this to its router shim via `window.__VINEXT_REACT_STRICT_MODE__`,
+  // which `wrapWithRouterContext` reads so the wrap is applied on the initial
+  // hydration AND every navigation render (Next.js's `doRender` closure runs
+  // for both). For the Pages Router the default is OFF —
+  // `reactStrictMode === null ? false` in
+  // .nextjs-ref/packages/next/src/build/define-env.ts — so the flag is `true`
+  // only when the option is explicitly `true`.
+  it("publishes the reactStrictMode flag to the client entry when reactStrictMode is true", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-client-entry-strict-"));
+    const pagesDir = path.join(tmpDir, "pages");
+
+    try {
+      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pagesDir, "index.tsx"),
+        "export default function Page() { return null; }",
+      );
+
+      const code = await generateClientEntry(
+        pagesDir,
+        await resolveNextConfig({ reactStrictMode: true }),
+        createValidFileMatcher(),
+      );
+
+      // The flag is set before hydrate() runs so wrapWithRouterContext sees it
+      // on the very first render.
+      const flagIndex = code.indexOf("window.__VINEXT_REACT_STRICT_MODE__ = true;");
+      const hydrateRootIndex = code.indexOf("hydrateRoot(container, element, hydrateRootOptions)");
+
+      expect(flagIndex).toBeGreaterThanOrEqual(0);
+      expect(hydrateRootIndex).toBeGreaterThanOrEqual(0);
+      expect(flagIndex).toBeLessThan(hydrateRootIndex);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes a false reactStrictMode flag for the Pages Router by default or when disabled", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-client-entry-no-strict-"));
+    const pagesDir = path.join(tmpDir, "pages");
+
+    try {
+      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pagesDir, "index.tsx"),
+        "export default function Page() { return null; }",
+      );
+
+      // Unset → Pages Router default is OFF (Next.js: `reactStrictMode === null ? false`).
+      const defaultCode = await generateClientEntry(
+        pagesDir,
+        await resolveNextConfig({}),
+        createValidFileMatcher(),
+      );
+      expect(defaultCode).toContain("window.__VINEXT_REACT_STRICT_MODE__ = false;");
+      expect(defaultCode).not.toContain("window.__VINEXT_REACT_STRICT_MODE__ = true;");
+
+      // Explicit false → also OFF.
+      const disabledCode = await generateClientEntry(
+        pagesDir,
+        await resolveNextConfig({ reactStrictMode: false }),
+        createValidFileMatcher(),
+      );
+      expect(disabledCode).toContain("window.__VINEXT_REACT_STRICT_MODE__ = false;");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
