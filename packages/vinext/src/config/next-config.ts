@@ -189,13 +189,16 @@ export type NextConfig = {
   headers?: () => Promise<NextHeader[]> | NextHeader[];
   /** Image optimization config */
   images?: {
-    remotePatterns?: Array<{
-      protocol?: string;
-      hostname: string;
-      port?: string;
-      pathname?: string;
-      search?: string;
-    }>;
+    remotePatterns?: Array<
+      | URL
+      | {
+          protocol?: string;
+          hostname: string;
+          port?: string;
+          pathname?: string;
+          search?: string;
+        }
+    >;
     domains?: string[];
     unoptimized?: boolean;
     /** Allowed device widths for image optimization. Defaults to Next.js defaults: [640, 750, 828, 1080, 1200, 1920, 2048, 3840] */
@@ -213,6 +216,14 @@ export type NextConfig = {
     /** Content-Security-Policy header for image responses. Defaults to "script-src 'none'; frame-src 'none'; sandbox;" */
     contentSecurityPolicy?: string;
   };
+  /**
+   * Enable React Strict Mode. When `true`, the client root is wrapped in
+   * `<React.StrictMode>` so React runs its dev-only strict checks (double-
+   * invoked effects/render, deprecation warnings). `null`/unset resolves per
+   * router: OFF for the Pages Router, ON for the App Router — matching Next.js.
+   * @see https://nextjs.org/docs/app/api-reference/config/next-config-js/reactStrictMode
+   */
+  reactStrictMode?: boolean | null;
   /** Build output mode: 'export' for full static export, 'standalone' for single server */
   output?: "export" | "standalone";
   /** File extensions treated as routable pages/routes (Next.js pageExtensions) */
@@ -387,6 +398,8 @@ export type ResolvedNextConfig = {
   turbopackTranspilePackages: string[];
   /** Inline app CSS into production HTML (from experimental.inlineCss). */
   inlineCss: boolean;
+  /** Enable standalone route-miss 404 handling (from experimental.globalNotFound). */
+  globalNotFound: boolean;
   /** Parsed body size limit for server actions in bytes (from experimental.serverActions.bodySizeLimit). Defaults to 1MB. */
   serverActionsBodySizeLimit: number;
   /** Verbatim body size limit config value (e.g. "2mb") for the "Body exceeded {limit} limit" error. Defaults to "1 MB". */
@@ -465,6 +478,16 @@ export type ResolvedNextConfig = {
    * `test/e2e/optimized-loading` test fixture.
    */
   disableOptimizedLoading: boolean;
+  /**
+   * Resolved `reactStrictMode` from next.config, preserved as `boolean | null`
+   * so each router can apply its own default (Next.js resolves `null` to OFF
+   * for the Pages Router and ON for the App Router). When the effective value
+   * is `true`, the client root is wrapped in `<React.StrictMode>`.
+   *
+   * See `.nextjs-ref/packages/next/src/build/define-env.ts`
+   * (`__NEXT_STRICT_MODE` / `__NEXT_STRICT_MODE_APP`).
+   */
+  reactStrictMode: boolean | null;
   /**
    * Mirrors Next.js `experimental.scrollRestoration`. When true, the Pages
    * Router client takes ownership of browser history scroll restoration by
@@ -1349,6 +1372,7 @@ export async function resolveNextConfig(
       transpilePackages: [],
       turbopackTranspilePackages: [...DEFAULT_TRANSPILED_PACKAGES],
       inlineCss: false,
+      globalNotFound: false,
       serverActionsBodySizeLimit: 1 * 1024 * 1024,
       serverActionsBodySizeLimitLabel: "1 MB",
       expireTime: DEFAULT_EXPIRE_TIME,
@@ -1365,6 +1389,7 @@ export async function resolveNextConfig(
       sassOptions: null,
       removeConsole: false,
       disableOptimizedLoading: false,
+      reactStrictMode: null,
       scrollRestoration: false,
       compilerDefine: {},
       compilerDefineServer: {},
@@ -1477,6 +1502,7 @@ export async function resolveNextConfig(
     ? rawOptimize.filter((x): x is string => typeof x === "string")
     : [];
   const inlineCss = experimental?.inlineCss === true;
+  const globalNotFound = experimental?.globalNotFound === true;
   const prefetchInlining =
     experimental?.prefetchInlining === true || isUnknownRecord(experimental?.prefetchInlining);
 
@@ -1642,6 +1668,23 @@ export async function resolveNextConfig(
     };
   }
 
+  const images = config.images
+    ? {
+        ...config.images,
+        remotePatterns: config.images.remotePatterns?.map((pattern) =>
+          pattern instanceof URL
+            ? {
+                protocol: pattern.protocol.slice(0, -1),
+                hostname: pattern.hostname,
+                port: pattern.port,
+                pathname: pattern.pathname,
+                search: pattern.search,
+              }
+            : { ...pattern },
+        ),
+      }
+    : undefined;
+
   const resolved: ResolvedNextConfig = {
     env: config.env ?? {},
     basePath: config.basePath ?? "",
@@ -1663,7 +1706,7 @@ export async function resolveNextConfig(
     redirects,
     rewrites,
     headers,
-    images: config.images,
+    images,
     i18n,
     mdx,
     aliases,
@@ -1673,6 +1716,7 @@ export async function resolveNextConfig(
     transpilePackages,
     turbopackTranspilePackages,
     inlineCss,
+    globalNotFound,
     serverActionsBodySizeLimit,
     serverActionsBodySizeLimitLabel,
     expireTime: typeof config.expireTime === "number" ? config.expireTime : DEFAULT_EXPIRE_TIME,
@@ -1699,6 +1743,9 @@ export async function resolveNextConfig(
     // Next.js stores this under `experimental.disableOptimizedLoading`.
     // Default `false` matches Next.js: page scripts get `defer` in <head>.
     disableOptimizedLoading: experimental?.disableOptimizedLoading === true,
+    // Preserve `null` (unset) so each router applies its own default — Next.js
+    // resolves `null` to OFF for Pages Router, ON for App Router.
+    reactStrictMode: typeof config.reactStrictMode === "boolean" ? config.reactStrictMode : null,
     scrollRestoration: experimental?.scrollRestoration === true,
     compilerDefine: serializeCompilerDefine(config.compiler?.define),
     compilerDefineServer: serializeCompilerDefine(config.compiler?.defineServer),
