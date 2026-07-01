@@ -13,6 +13,7 @@ import {
   useLayoutEffect,
   Fragment,
   Component,
+  StrictMode,
   createElement,
   type ReactElement,
   type ReactNode,
@@ -2444,6 +2445,15 @@ async function navigateClientHtml(
   // has passed assertStillCurrent(). The post-render await below waits for the
   // stable Pages Router commit boundary before routeChangeComplete, matching
   // Next.js's client Root callback without remounting the page tree.
+  if (pendingRedirectHistoryUrl) {
+    const historyOptions: { locale?: string; shallow: boolean } = { shallow: false };
+    if (options.dataLocale !== undefined) historyOptions.locale = options.dataLocale;
+    updateHistory(
+      "replace",
+      pendingRedirectHistoryUrl,
+      buildNavigationHistoryState(pendingRedirectHistoryUrl, historyOptions),
+    );
+  }
   window.__NEXT_DATA__ = nextData;
   applyVinextLocaleGlobals(window, nextData);
   await renderPagesRouterElement(element, options.scroll);
@@ -2619,6 +2629,13 @@ async function navigateClient(
           middlewareDataResponse = middlewareEffect.response;
         }
         if (middlewareEffect.rewriteTarget) {
+          const rewrittenOwner = resolveDirectHybridClientRouteOwner(
+            middlewareEffect.rewriteTarget,
+            __basePath,
+          );
+          if (rewrittenOwner === "app" || rewrittenOwner === "document") {
+            scheduleHardNavigationAndThrow(browserUrl, "Navigation rewritten to a non-Pages route");
+          }
           const rewrittenTarget =
             middlewareRewrittenTarget ??
             resolvePagesDataNavigationTarget(
@@ -3666,11 +3683,23 @@ export function wrapWithRouterContext(
   onError: (error: Error) => void = noopCommit,
 ): ReactElement {
   const { CommitBoundary, Provider } = getPagesRouterRuntimeComponents();
-  return createElement(
-    CommitBoundary,
-    { onCommit, onError },
-    createElement(Provider, null, element),
-  );
+  // React Strict Mode (Pages Router). When `reactStrictMode: true`, wrap the
+  // router-context subtree in <React.StrictMode> so React runs its dev-only
+  // strict checks. We read a client-only `window` flag rather than wrapping
+  // unconditionally so the server-rendered tree is never wrapped (matching
+  // Next.js, which only wraps client-side in `client/index.tsx`). Because this
+  // wrap lives in `wrapWithRouterContext` — called by the initial hydration
+  // entry AND every navigation `root.render()` — StrictMode survives soft
+  // navigations, mirroring Next.js's `doRender` closure used for both. The
+  // CommitBoundary stays outside StrictMode so its commit `useLayoutEffect`
+  // is not double-invoked (Next.js keeps `<Root>` outside <StrictMode> too).
+  let inner: ReactElement = createElement(Provider, null, element);
+  // Re-read the static page-load flag on each render so hydration and
+  // navigation share this single wrapping path.
+  if (typeof window !== "undefined" && window.__VINEXT_REACT_STRICT_MODE__ === true) {
+    inner = createElement(StrictMode, null, inner);
+  }
+  return createElement(CommitBoundary, { onCommit, onError }, inner);
 }
 
 /**

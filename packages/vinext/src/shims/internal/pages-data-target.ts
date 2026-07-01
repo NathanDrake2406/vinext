@@ -51,7 +51,7 @@ function prefixPagesDataPathWithLocale(pagePath: string, locale: string): string
   return pagePath === "/" ? `/${locale}` : `/${locale}${pagePath}`;
 }
 
-export function resolvePagesDataLocalePath(
+function resolvePagesDataLocalePath(
   pagePath: string,
   locales: readonly string[] | undefined,
   currentLocale: string | undefined,
