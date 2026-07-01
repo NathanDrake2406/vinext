@@ -1605,18 +1605,22 @@ describe("Link prefetch scheduling", () => {
     try {
       expect(observer.observe).toHaveBeenCalledWith(result.anchor);
       observer.dispatchIntersectingEntry(result.anchor);
-      await flushPrefetchTasks();
+      await waitForFetchCalls(result.fetch, 2);
 
       expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
       expectCanonicalRscFetchCall(
-        result.fetch.mock.calls[0],
+        result.fetch.mock.calls[1],
         "/blog/hello",
         expect.objectContaining({
           credentials: "include",
           priority: "low",
         }),
       );
-      const fetchInit = result.fetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      const shellFetchInit = result.fetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(
+        (shellFetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER),
+      ).toBe(APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL);
+      const fetchInit = result.fetch.mock.calls[1]?.[1] as RequestInit | undefined;
       expect(
         (fetchInit?.headers as Headers | undefined)?.get(VINEXT_RSC_RENDER_MODE_HEADER),
       ).toBeNull();
@@ -1798,8 +1802,7 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
-  it("gates prefetchInlining full payload behind a loading-shell request", async () => {
-    vi.stubEnv("__VINEXT_PREFETCH_INLINING", "true");
+  it("awaits an automatic loading-shell prefetch before upgrading to a full payload", async () => {
     const observer = stubIntersectionObserver();
     let resolveShell: ((response: Response) => void) | undefined;
     let releaseShellBody: (() => void) | undefined;
@@ -1814,9 +1817,11 @@ describe("Link prefetch scheduling", () => {
       },
     });
     const result = await renderIsolatedLink({
-      href: "/intent-prefetch-target",
+      href: "/blog/hello",
       nodeEnv: "production",
+      props: { unstable_dynamicOnHover: true },
     });
+    const { getPrefetchCache } = await import("../packages/vinext/src/shims/navigation.js");
 
     result.fetch
       .mockImplementationOnce(() => shellPromise)
@@ -1835,7 +1840,7 @@ describe("Link prefetch scheduling", () => {
         APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
       );
 
-      pingVisibleLinksFromRuntime();
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
       await flushPrefetchTasks();
       expect(result.fetch).toHaveBeenCalledTimes(1);
 
@@ -1851,6 +1856,7 @@ describe("Link prefetch scheduling", () => {
       }
       releaseShellBody();
       await waitForFetchCalls(result.fetch, 2);
+      await flushPrefetchTasks();
 
       const secondInit = result.fetch.mock.calls[1]?.[1];
       expect(secondInit?.headers).toBeInstanceOf(Headers);
@@ -1858,6 +1864,16 @@ describe("Link prefetch scheduling", () => {
         throw new Error("Expected full prefetch request headers");
       }
       expect(secondInit.headers.get(VINEXT_RSC_RENDER_MODE_HEADER)).toBeNull();
+      expect(
+        [...getPrefetchCache().values()].some(
+          (entry) => entry.cacheForNavigation === false && entry.optimisticRouteShell === true,
+        ),
+      ).toBe(true);
+      await Promise.all(
+        [...getPrefetchCache().values()].flatMap((entry) =>
+          entry.pending === undefined ? [] : [entry.pending.catch(() => {})],
+        ),
+      );
     } finally {
       result.restoreNodeEnv();
     }
@@ -1933,11 +1949,12 @@ describe("Link prefetch scheduling", () => {
       ).toBe(true);
 
       invalidatePrefetchCache();
-      await waitForFetchCalls(result.fetch, 3);
+      await waitForFetchCalls(result.fetch, 4);
+      await flushPrefetchTasks();
 
-      expect(result.fetch).toHaveBeenCalledTimes(3);
+      expect(result.fetch).toHaveBeenCalledTimes(4);
       expectCanonicalRscFetchCall(
-        result.fetch.mock.calls[2],
+        result.fetch.mock.calls[3],
         "/blog/hello",
         expect.objectContaining({
           credentials: "include",

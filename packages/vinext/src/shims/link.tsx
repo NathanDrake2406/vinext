@@ -114,7 +114,7 @@ type LinkProps = {
   children?: React.ReactNode;
 } & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href">;
 
-type LinkPrefetchMode = "disabled" | "auto" | "full";
+type LinkPrefetchMode = "disabled" | "auto" | "full" | "full-after-shell";
 
 declare global {
   // Window is an ambient interface from lib.dom; interface merging is required
@@ -371,6 +371,18 @@ export function resolveAutoAppRoutePrefetch(href: string): {
   return resolveMatchedAutoAppRoutePrefetch(match.route);
 }
 
+function resolveFullAppRoutePrefetch(): {
+  cacheForNavigation: true;
+  prefetchShellFirst: boolean;
+  shouldPrefetch: true;
+} {
+  return {
+    cacheForNavigation: true,
+    prefetchShellFirst: true,
+    shouldPrefetch: true,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Prefetching infrastructure
 // ---------------------------------------------------------------------------
@@ -476,7 +488,9 @@ function prefetchUrl(
         const autoPrefetch =
           mode === "auto"
             ? resolveAutoAppRoutePrefetch(prefetchHref)
-            : { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true };
+            : mode === "full-after-shell"
+              ? { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true }
+              : resolveFullAppRoutePrefetch();
         if (!autoPrefetch.shouldPrefetch) return;
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);
@@ -525,27 +539,50 @@ function prefetchUrl(
         // unified route payload, so gate that payload behind a loading-shell
         // request to preserve the same pending/dedup observable contract.
         const fetchPromise =
-          __prefetchInlining && autoPrefetch.cacheForNavigation && autoPrefetch.prefetchShellFirst
+          (mode === "full" || mode === "full-after-shell" || __prefetchInlining) &&
+          autoPrefetch.cacheForNavigation &&
+          autoPrefetch.prefetchShellFirst &&
+          (mode !== "full" || mountedSlotsHeader === null)
             ? (async () => {
                 const shellHeaders = createRscRequestHeaders({
                   interceptionContext,
                   renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
                 });
+                shellHeaders.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
                 if (mountedSlotsHeader) {
                   shellHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
                 }
                 const shellRscUrl = await createRscRequestUrl(fullHref, shellHeaders);
-                const shellResponse = await fetch(shellRscUrl, {
-                  headers: shellHeaders,
-                  credentials: "include",
-                  priority,
-                  // @ts-expect-error — purpose is a valid fetch option in some browsers
-                  purpose: "prefetch",
-                });
-                if (!shellResponse.ok) {
-                  return shellResponse;
+                const shellCacheKey = AppElementsWire.encodeCacheKey(
+                  shellRscUrl,
+                  interceptionContext,
+                );
+                const shellCache = getPrefetchCache();
+                let shellEntry = shellCache.get(shellCacheKey);
+                if (shellEntry === undefined) {
+                  getPrefetchedUrls().add(shellCacheKey);
+                  prefetchRscResponse(
+                    shellRscUrl,
+                    Promise.resolve().then(() =>
+                      fetch(shellRscUrl, {
+                        headers: shellHeaders,
+                        credentials: "include",
+                        priority,
+                        // @ts-expect-error — purpose is a valid fetch option in some browsers
+                        purpose: "prefetch",
+                      }),
+                    ),
+                    interceptionContext,
+                    mountedSlotsHeader,
+                    undefined,
+                    {
+                      cacheForNavigation: false,
+                      optimisticRouteShell: true,
+                    },
+                  );
+                  shellEntry = shellCache.get(shellCacheKey);
                 }
-                await shellResponse.arrayBuffer().catch(() => {});
+                await shellEntry?.pending?.catch(() => {});
                 return fetch(rscUrl, {
                   headers,
                   credentials: "include",
@@ -1026,11 +1063,11 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     ) {
       return;
     }
-    const intentMode = unstable_dynamicOnHover ? "full" : prefetchMode;
+    const intentMode = unstable_dynamicOnHover ? "full-after-shell" : prefetchMode;
     if (unstable_dynamicOnHover && internalRef.current) {
       const instance = observedLinkPrefetches.get(internalRef.current);
       if (instance) {
-        instance.mode = "full";
+        instance.mode = "full-after-shell";
       }
       void promotePrefetchEntriesForNavigation(normalizedHref);
     }
