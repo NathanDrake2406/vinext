@@ -93,6 +93,22 @@ import {
  */
 const bareServerEntryMtimes = new Map<string, number>();
 
+function resolveCanonicalServerEntry(entryPath: string): { href: string; mtime: number } {
+  // The catch only covers realpathSync.native failing on filesystems that
+  // don't support it; it does not make a missing entry path "work" — that
+  // still throws at the statSync below, same as before this helper existed.
+  let canonicalEntryPath: string;
+  try {
+    canonicalEntryPath = fs.realpathSync.native(entryPath);
+  } catch {
+    canonicalEntryPath = entryPath;
+  }
+  return {
+    href: pathToFileURL(canonicalEntryPath).href,
+    mtime: fs.statSync(canonicalEntryPath).mtimeMs,
+  };
+}
+
 /**
  * Import a built server entry module (App Router RSC entry or Pages Router
  * server entry) by absolute file path.
@@ -130,17 +146,7 @@ const bareServerEntryMtimes = new Map<string, number>();
  * Exported for direct unit testing of the URL choice.
  */
 export function resolveServerEntryImportUrl(entryPath: string): string {
-  // The catch only covers realpathSync.native failing on filesystems that
-  // don't support it; it does not make a missing entry path "work" — that
-  // still throws at the statSync below, same as before this helper existed.
-  let canonicalEntryPath: string;
-  try {
-    canonicalEntryPath = fs.realpathSync.native(entryPath);
-  } catch {
-    canonicalEntryPath = entryPath;
-  }
-  const href = pathToFileURL(canonicalEntryPath).href;
-  const mtime = fs.statSync(canonicalEntryPath).mtimeMs;
+  const { href, mtime } = resolveCanonicalServerEntry(entryPath);
   const bareMtime = bareServerEntryMtimes.get(href);
   if (bareMtime === undefined || bareMtime === mtime) {
     bareServerEntryMtimes.set(href, mtime);
@@ -179,6 +185,11 @@ export function acknowledgeServerEntryMetadataRewrite(
   const href = pathToFileURL(canonicalEntryPath).href;
   if (bareServerEntryMtimes.get(href) !== expectedPreviousMtime) return;
   bareServerEntryMtimes.set(href, fs.statSync(canonicalEntryPath).mtimeMs);
+}
+
+export function rememberCurrentServerEntryImportMtime(entryPath: string): void {
+  const { href, mtime } = resolveCanonicalServerEntry(entryPath);
+  bareServerEntryMtimes.set(href, mtime);
 }
 
 // oxlint-disable-next-line typescript/no-explicit-any -- built entry modules are untyped, matching the previous inline `await import(...)`
@@ -244,6 +255,8 @@ export type ProdServerOptions = {
    * remains stable.
    */
   purpose?: "prerender";
+  /** Suppress the startup log for internal child-process servers. */
+  silent?: boolean;
 };
 
 /** Content types that benefit from compression. */
@@ -987,6 +1000,7 @@ export async function startProdServer(options: ProdServerOptions = {}) {
     outDir = path.resolve("dist"),
     noCompression = false,
     purpose,
+    silent = false,
   } = options;
 
   const compress = !noCompression;
@@ -1006,10 +1020,18 @@ export async function startProdServer(options: ProdServerOptions = {}) {
   }
 
   if (isAppRouter) {
-    return startAppRouterServer({ port, host, clientDir, rscEntryPath, compress, purpose });
+    return startAppRouterServer({ port, host, clientDir, rscEntryPath, compress, purpose, silent });
   }
 
-  return startPagesRouterServer({ port, host, clientDir, serverEntryPath, compress, purpose });
+  return startPagesRouterServer({
+    port,
+    host,
+    clientDir,
+    serverEntryPath,
+    compress,
+    purpose,
+    silent,
+  });
 }
 
 // ─── App Router Production Server ─────────────────────────────────────────────
@@ -1021,6 +1043,7 @@ type AppRouterServerOptions = {
   rscEntryPath: string;
   compress: boolean;
   purpose?: ProdServerOptions["purpose"];
+  silent?: boolean;
 };
 
 type WorkerAppRouterEntry = {
@@ -1224,7 +1247,7 @@ function installPagesClientAssets(options: {
  * 4. Stream the Web Response back (with optional compression)
  */
 async function startAppRouterServer(options: AppRouterServerOptions) {
-  const { port, host, clientDir, rscEntryPath, compress, purpose } = options;
+  const { port, host, clientDir, rscEntryPath, compress, purpose, silent } = options;
 
   // Load prerender secret written at build time by vinext:server-manifest plugin.
   // Used to authenticate internal /__vinext/prerender/* HTTP endpoints.
@@ -1498,7 +1521,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
-      logProdServerStarted(host, actualPort, purpose);
+      if (!silent) logProdServerStarted(host, actualPort, purpose);
       resolve();
     });
   });
@@ -1517,6 +1540,7 @@ type PagesRouterServerOptions = {
   serverEntryPath: string;
   compress: boolean;
   purpose?: ProdServerOptions["purpose"];
+  silent?: boolean;
 };
 
 type PagesServerEntryPageRoute = {
@@ -1551,7 +1575,7 @@ function readPagesServerEntryPageRoutes(value: unknown): PagesServerEntryPageRou
  * - vinextConfig — embedded next.config.js settings
  */
 async function startPagesRouterServer(options: PagesRouterServerOptions) {
-  const { port, host, clientDir, serverEntryPath, compress, purpose } = options;
+  const { port, host, clientDir, serverEntryPath, compress, purpose, silent } = options;
 
   // Import the server entry module. importServerEntryModule uses the bare
   // file:// URL so lazy chunks that import the entry back resolve to the same
@@ -1962,7 +1986,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
-      logProdServerStarted(host, actualPort, purpose);
+      if (!silent) logProdServerStarted(host, actualPort, purpose);
       resolve();
     });
   });

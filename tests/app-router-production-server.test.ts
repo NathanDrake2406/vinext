@@ -805,6 +805,15 @@ describe("App Router Production server (startProdServer)", () => {
     expect(html).toContain("test-post");
   });
 
+  // Ported from Next.js: test/e2e/app-dir/app-prefetch-static/app-prefetch-static.test.ts
+  // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app-prefetch-static/app-prefetch-static.test.ts
+  it("serves lowercase paths generated from uppercase static params", async () => {
+    const res = await fetch(`${baseUrl}/nextjs-compat/case-insensitive-static-params/se`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('id="case-insensitive-static-param"');
+  });
+
   it("serves nested layouts", async () => {
     const res = await fetch(`${baseUrl}/dashboard`);
     expect(res.status).toBe(200);
@@ -818,12 +827,19 @@ describe("App Router Production server (startProdServer)", () => {
     expect(res.headers.get("content-type")).toContain("text/x-component");
   });
 
-  it("returns HTML for header-only RSC requests at canonical page URLs", async () => {
+  it("redirects header-only RSC requests at canonical page URLs to cache-separated Flight URLs", async () => {
     const res = await fetch(`${baseUrl}/about`, {
       headers: { Accept: "text/x-component", RSC: "1" },
+      redirect: "manual",
     });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("/about?_rsc");
+
+    const followedRes = await fetch(`${baseUrl}${res.headers.get("location")}`, {
+      headers: { Accept: "text/x-component", RSC: "1" },
+    });
+    expect(followedRes.status).toBe(200);
+    expect(followedRes.headers.get("content-type")).toContain("text/x-component");
   });
 
   it("serves route handlers (GET /api/hello)", async () => {

@@ -81,6 +81,7 @@ import type {
   StaticLayoutObservationSkipRejection,
 } from "./app-layout-param-observation.js";
 import { getStaticLayoutObservationSkipRejection } from "./app-layout-param-observation.js";
+import { peekDynamicUsage } from "vinext/shims/headers";
 
 type AppPageBoundaryOnError = (
   error: unknown,
@@ -673,6 +674,11 @@ export async function renderAppPageLifecycle(
   const outgoingElement = AppElementsWire.encodeOutgoingPayload({
     element: options.element,
     layoutFlags,
+    ...(options.dynamicStaleTimeSeconds !== undefined &&
+    options.isPrerender !== true &&
+    !options.isForceStatic
+      ? { dynamicStaleTimeSeconds: options.dynamicStaleTimeSeconds }
+      : {}),
     ...(artifactCompatibility ? { artifactCompatibility } : {}),
     renderObservation: payloadRenderObservation,
     skipDisposition: options.isRscRequest ? skipDisposition : undefined,
@@ -750,11 +756,13 @@ export async function renderAppPageLifecycle(
   }
 
   if (options.isRscRequest) {
+    let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
     if (options.isPrerender === true) {
       await settleCapturedRscRenderForCacheMetadata(capturedRscDataRef.value);
+      requestCacheLifeForPrerender = readRequestCacheLifeForPrerender(options);
       ({ expireSeconds, revalidateSeconds } = applyRequestCacheLife({
         expireSeconds,
-        requestCacheLife: readRequestCacheLifeForPrerender(options),
+        requestCacheLife: requestCacheLifeForPrerender,
         revalidateSeconds,
       }));
     }
@@ -797,6 +805,7 @@ export async function renderAppPageLifecycle(
       mountedSlotsHeader: options.mountedSlotsHeader,
       params: options.navigationParams,
       policy: rscResponsePolicy,
+      requestCacheLife: requestCacheLifeForPrerender,
       timing: buildResponseTiming({
         compileEnd,
         handlerStart: options.handlerStart,
@@ -868,6 +877,7 @@ export async function renderAppPageLifecycle(
     getStyles: options.getFontStyles,
   });
   const fontLinkHeader = buildAppPageFontLinkHeader(fontData.preloads);
+  let dynamicUsedDuringHtmlRender = false;
   let renderEnd: number | undefined;
 
   const htmlRender = await renderAppPageHtmlStreamWithRecovery({
@@ -887,6 +897,30 @@ export async function renderAppPageLifecycle(
       const ssrHandler = await options.loadSsrHandler();
       return renderAppPageHtmlStream({
         capturedRscDataRef,
+        getInitialNavigationCacheMetadata: () => {
+          let kind: "dynamic" | "static";
+          if (options.isForceStatic) {
+            kind = "static";
+          } else if (options.isForceDynamic || dynamicUsedDuringHtmlRender || peekDynamicUsage()) {
+            kind = "dynamic";
+          } else {
+            const observation = options.peekRenderObservationState?.();
+            kind =
+              observation &&
+              (observation.dynamicFetches.length > 0 || observation.requestApis.length > 0)
+                ? "dynamic"
+                : "static";
+          }
+          return {
+            kind,
+            ...(kind === "dynamic" &&
+            options.dynamicStaleTimeSeconds !== undefined &&
+            options.isPrerender !== true &&
+            !shouldCaptureRscForCacheMetadata
+              ? { dynamicStaleTimeSeconds: options.dynamicStaleTimeSeconds }
+              : {}),
+          };
+        },
         fontData,
         hasCustomGlobalError: options.hasCustomGlobalError,
         navigationContext: options.getNavigationContext(),
@@ -951,15 +985,18 @@ export async function renderAppPageLifecycle(
   }
 
   // Eagerly read values that must be captured before the stream is consumed.
+  let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
   if (options.isPrerender === true) {
     await settleCapturedRscRenderForCacheMetadata(htmlRender.capturedRscData);
+    requestCacheLifeForPrerender = readRequestCacheLifeForPrerender(options);
     ({ expireSeconds, revalidateSeconds } = applyRequestCacheLife({
       expireSeconds,
-      requestCacheLife: readRequestCacheLifeForPrerender(options),
+      requestCacheLife: requestCacheLifeForPrerender,
       revalidateSeconds,
     }));
   }
   let dynamicUsedDuringRender = options.consumeDynamicUsage();
+  dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
 
   const draftCookie = options.getDraftModeCookieHeader();
   let dynamicUsedBeforeContextCleanup = dynamicUsedDuringRender;
@@ -973,6 +1010,7 @@ export async function renderAppPageLifecycle(
   const safeHtmlStream = deferUntilStreamConsumed(htmlStream, () => {
     dynamicUsedBeforeContextCleanup =
       dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
+    dynamicUsedDuringHtmlRender = dynamicUsedBeforeContextCleanup;
     options.clearRequestContext();
   });
 
@@ -1006,6 +1044,7 @@ export async function renderAppPageLifecycle(
         status: 500,
       },
       policy: { cacheControl: NEVER_CACHE_CONTROL },
+      requestCacheLife: requestCacheLifeForPrerender,
       timing: htmlResponseTiming,
     });
     applyCdnResponseHeaders(response.headers, { cacheControl: NEVER_CACHE_CONTROL });
@@ -1029,6 +1068,7 @@ export async function renderAppPageLifecycle(
       isEdgeRuntime: options.isEdgeRuntime,
       middlewareContext: options.middlewareContext,
       policy: htmlResponsePolicy,
+      requestCacheLife: requestCacheLifeForPrerender,
       timing: htmlResponseTiming,
     });
 
@@ -1095,6 +1135,7 @@ export async function renderAppPageLifecycle(
     isEdgeRuntime: options.isEdgeRuntime,
     middlewareContext: options.middlewareContext,
     policy: htmlResponsePolicy,
+    requestCacheLife: requestCacheLifeForPrerender,
     timing: htmlResponseTiming,
   });
 }
