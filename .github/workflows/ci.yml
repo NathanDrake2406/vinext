@@ -376,6 +376,10 @@ jobs:
             label: app-router-bfcache
             shardIndex: 1
             shardTotal: 1
+          - project: app-router-prefetch-searchparams
+            label: app-router-prefetch-searchparams
+            shardIndex: 1
+            shardTotal: 1
           - project: app-router
             label: app-router 3/3
             shardIndex: 3
@@ -406,6 +410,14 @@ jobs:
             shardTotal: 1
           - project: cloudflare-workers
             label: cloudflare-workers
+            shardIndex: 1
+            shardTotal: 1
+          - project: cloudflare-sentry-app
+            label: cloudflare-sentry-app
+            shardIndex: 1
+            shardTotal: 1
+          - project: cloudflare-sentry-pages
+            label: cloudflare-sentry-pages
             shardIndex: 1
             shardTotal: 1
           - project: cloudflare-dev
