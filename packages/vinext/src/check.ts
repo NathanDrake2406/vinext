@@ -6,6 +6,7 @@
  */
 
 import { detectPackageManager, findDir } from "./utils/project.js";
+import { normalizePathSeparators } from "./utils/path.js";
 import { parseAst, type ESTree } from "vite";
 import fs from "node:fs";
 import path from "node:path";
@@ -183,7 +184,11 @@ const CONFIG_SUPPORT: Record<string, { status: Status; detail?: string }> = {
   headers: { status: "supported" },
   i18n: { status: "supported", detail: "path-prefix routing; domain routing for Pages Router" },
   env: { status: "supported" },
-  images: { status: "partial", detail: "remotePatterns validated, no local optimization" },
+  images: {
+    status: "partial",
+    detail:
+      "remotePatterns validated; on-the-fly optimization via images.optimizer (Cloudflare Images), passthrough otherwise",
+  },
   allowedDevOrigins: { status: "supported", detail: "dev server cross-origin allowlist" },
   output: {
     status: "supported",
@@ -240,6 +245,42 @@ const CONFIG_SUPPORT: Record<string, { status: Status; detail?: string }> = {
     status: "partial",
     detail: "config recognized; vinext does not implement navigation result caching",
   },
+  "experimental.middlewarePrefetch": {
+    status: "unsupported",
+    detail: "not recognized; use of this option is ignored",
+  },
+  "experimental.proxyPrefetch": {
+    status: "unsupported",
+    detail: "not recognized; use of this option is ignored",
+  },
+  "experimental.middlewareClientMaxBodySize": {
+    status: "unsupported",
+    detail: "not recognized; use of this option is ignored",
+  },
+  "experimental.proxyClientMaxBodySize": {
+    status: "unsupported",
+    detail: "not recognized; use of this option is ignored",
+  },
+  "experimental.externalMiddlewareRewritesResolve": {
+    status: "unsupported",
+    detail: "not recognized; use of this option is ignored",
+  },
+  "experimental.externalProxyRewritesResolve": {
+    status: "unsupported",
+    detail: "not recognized; use of this option is ignored",
+  },
+  "experimental.instrumentationHook": {
+    status: "unsupported",
+    detail: "not recognized; instrumentation files are enabled automatically",
+  },
+  skipMiddlewareUrlNormalize: {
+    status: "unsupported",
+    detail: "not recognized; use of this option is ignored",
+  },
+  skipProxyUrlNormalize: {
+    status: "unsupported",
+    detail: "not recognized; use of this option is ignored",
+  },
   "i18n.domains": {
     status: "partial",
     detail: "supported for Pages Router; App Router unchanged",
@@ -247,7 +288,7 @@ const CONFIG_SUPPORT: Record<string, { status: Status; detail?: string }> = {
   reactStrictMode: {
     status: "partial",
     detail:
-      "config option recognized but not yet enforced; root is not wrapped in <React.StrictMode>",
+      "enforced for the Pages Router (client root wrapped in <React.StrictMode> when true); App Router is not yet wrapped (Next.js defaults App Router strict mode on)",
   },
   poweredByHeader: {
     status: "supported",
@@ -570,9 +611,8 @@ export function hasFreeCjsGlobal(content: string): boolean {
 /**
  * Scan source files for `import ... from 'next/...'` statements.
  *
- * `root` must be forward-slash: it is passed to `findSourceFiles` (which
- * requires it) and used as the base of `path.posix.relative`, which only yields
- * a canonical relative path when both operands are forward-slash.
+ * `root` must be forward-slash: it is passed to `findSourceFiles`, which
+ * requires it.
  */
 export function scanImports(root: string): CheckItem[] {
   const files = findSourceFiles(root);
@@ -601,7 +641,7 @@ export function scanImports(root: string): CheckItem[] {
         // Normalize: next/font/google -> next/font/google
         const normalized = mod === "next" ? "next" : mod;
         if (!importUsage.has(normalized)) importUsage.set(normalized, []);
-        const relFile = path.posix.relative(root, file);
+        const relFile = normalizePathSeparators(path.relative(root, file));
         const usedInFiles = importUsage.get(normalized) ?? [];
         if (!usedInFiles.includes(relFile)) {
           usedInFiles.push(relFile);
@@ -878,6 +918,8 @@ export function analyzeConfig(root: string): CheckItem[] {
     "webpack",
     "reactStrictMode",
     "poweredByHeader",
+    "skipMiddlewareUrlNormalize",
+    "skipProxyUrlNormalize",
   ];
 
   for (const opt of configOptions) {
@@ -939,9 +981,8 @@ export function checkLibraries(root: string): CheckItem[] {
 /**
  * Check file conventions (pages, app directory, middleware, etc.)
  *
- * `root` must be forward-slash — joined with `path.posix.join`, passed to
- * `findDir`, and used as the base of `path.posix.relative`. Only called from
- * `runCheck`, which normalizes it.
+ * `root` must be forward-slash — joined with `path.posix.join` and passed to
+ * `findDir`. Only called from `runCheck`, which normalizes it.
  */
 export function checkConventions(root: string): CheckItem[] {
   const items: CheckItem[] = [];
@@ -1057,7 +1098,7 @@ export function checkConventions(root: string): CheckItem[] {
   const cjsGlobalFiles: string[] = [];
   for (const file of allSourceFiles) {
     const content = fs.readFileSync(file, "utf-8");
-    const rel = path.posix.relative(root, file);
+    const rel = normalizePathSeparators(path.relative(root, file));
 
     if (viewTransitionRegex.test(content)) {
       viewTransitionFiles.push(rel);

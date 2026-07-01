@@ -250,10 +250,12 @@ declare module "next/navigation" {
     outcome: "pending" | "cache-seeded";
     snapshot?: CachedRscResponse;
     pending?: Promise<void>;
+    prefetchKind?: "loading-shell" | "navigation" | "route-tree";
     timestamp: number;
   };
   export const MAX_PREFETCH_CACHE_SIZE: number;
   export const PREFETCH_CACHE_TTL: number;
+  export const DYNAMIC_NAVIGATION_CACHE_TTL: number;
   export function getPrefetchInterceptionContext(targetHref: string): string | null;
   export function getPrefetchCache(): Map<string, PrefetchCacheEntry>;
   export function getPrefetchedUrls(): Set<string>;
@@ -273,6 +275,13 @@ declare module "next/navigation" {
     interceptionContext?: string | null,
     options?: { onInvalidate?: () => void },
   ): void;
+  export function seedPrefetchResponseSnapshot(
+    rscUrl: string,
+    snapshot: CachedRscResponse,
+    interceptionContext?: string | null,
+    mountedSlotsHeader?: string | null,
+    fallbackTtlMs?: number,
+  ): void;
   export function snapshotRscResponse(response: Response): Promise<CachedRscResponse>;
   export function restoreRscResponse(cached: CachedRscResponse, copy?: boolean): Response;
   export function prefetchRscResponse(
@@ -281,7 +290,12 @@ declare module "next/navigation" {
     interceptionContext?: string | null,
     mountedSlotsHeader?: string | null,
     options?: { onInvalidate?: () => void },
-    behavior?: { cacheForNavigation?: boolean; optimisticRouteShell?: boolean },
+    behavior?: {
+      cacheForNavigation?: boolean;
+      fallbackTtlMs?: number;
+      optimisticRouteShell?: boolean;
+      prefetchKind?: "loading-shell" | "navigation" | "route-tree";
+    },
   ): void;
   export function consumePrefetchResponse(
     rscUrl: string,
@@ -529,6 +543,7 @@ declare module "next/compat/router" {
 
 declare module "next/server" {
   export class NextRequest extends Request {
+    readonly __isData?: boolean;
     get nextUrl(): any;
     get cookies(): any;
     get ip(): string | undefined;

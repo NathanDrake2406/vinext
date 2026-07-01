@@ -56,6 +56,7 @@ import {
   isAbsoluteAssetPrefix,
 } from "../utils/asset-prefix.js";
 import { computeClientRuntimeMetadata } from "../utils/client-runtime-metadata.js";
+import { setPagesClientAssets } from "./pages-client-assets.js";
 import { normalizePathnameForRouteMatchStrict } from "../routing/utils.js";
 import { isUnknownRecord } from "../utils/record.js";
 import type { ExecutionContextLike } from "vinext/shims/request-context";
@@ -91,6 +92,22 @@ import {
  * through a cache-busted URL instead.
  */
 const bareServerEntryMtimes = new Map<string, number>();
+
+function resolveCanonicalServerEntry(entryPath: string): { href: string; mtime: number } {
+  // The catch only covers realpathSync.native failing on filesystems that
+  // don't support it; it does not make a missing entry path "work" — that
+  // still throws at the statSync below, same as before this helper existed.
+  let canonicalEntryPath: string;
+  try {
+    canonicalEntryPath = fs.realpathSync.native(entryPath);
+  } catch {
+    canonicalEntryPath = entryPath;
+  }
+  return {
+    href: pathToFileURL(canonicalEntryPath).href,
+    mtime: fs.statSync(canonicalEntryPath).mtimeMs,
+  };
+}
 
 /**
  * Import a built server entry module (App Router RSC entry or Pages Router
@@ -129,23 +146,18 @@ const bareServerEntryMtimes = new Map<string, number>();
  * Exported for direct unit testing of the URL choice.
  */
 export function resolveServerEntryImportUrl(entryPath: string): string {
-  // The catch only covers realpathSync.native failing on filesystems that
-  // don't support it; it does not make a missing entry path "work" — that
-  // still throws at the statSync below, same as before this helper existed.
-  let canonicalEntryPath: string;
-  try {
-    canonicalEntryPath = fs.realpathSync.native(entryPath);
-  } catch {
-    canonicalEntryPath = entryPath;
-  }
-  const href = pathToFileURL(canonicalEntryPath).href;
-  const mtime = fs.statSync(canonicalEntryPath).mtimeMs;
+  const { href, mtime } = resolveCanonicalServerEntry(entryPath);
   const bareMtime = bareServerEntryMtimes.get(href);
   if (bareMtime === undefined || bareMtime === mtime) {
     bareServerEntryMtimes.set(href, mtime);
     return href;
   }
   return `${href}?t=${mtime}`;
+}
+
+export function rememberCurrentServerEntryImportMtime(entryPath: string): void {
+  const { href, mtime } = resolveCanonicalServerEntry(entryPath);
+  bareServerEntryMtimes.set(href, mtime);
 }
 
 // oxlint-disable-next-line typescript/no-explicit-any -- built entry modules are untyped, matching the previous inline `await import(...)`
@@ -211,6 +223,8 @@ export type ProdServerOptions = {
    * remains stable.
    */
   purpose?: "prerender";
+  /** Suppress the startup log for internal child-process servers. */
+  silent?: boolean;
 };
 
 /** Content types that benefit from compression. */
@@ -398,8 +412,11 @@ function installClientBuildManifestGlobals(
   assetPrefix: string,
 ): void {
   const metadata = computeClientRuntimeMetadata({ clientDir, assetBase, assetPrefix });
-  globalThis.__VINEXT_LAZY_CHUNKS__ = metadata.lazyChunks;
-  globalThis.__VINEXT_DYNAMIC_PRELOADS__ = metadata.dynamicPreloads;
+  setPagesClientAssets({
+    appBootstrapPreinitModules: metadata.appBootstrapPreinitModules,
+    lazyChunks: metadata.lazyChunks,
+    dynamicPreloads: metadata.dynamicPreloads,
+  });
 }
 function isNoBodyResponseStatus(status: number): boolean {
   return NO_BODY_RESPONSE_STATUSES.has(status);
@@ -439,7 +456,7 @@ function logProdServerStarted(host: string, port: number, purpose: ProdServerOpt
  * arguments in (headers, response) order. The request path now calls
  * `runPagesRequest`, which uses `mergeHeaders` directly; this wrapper is retained
  * only for its existing tests and any external callers, so there is a single
- * implementation to keep in sync. (deploy.ts still emits its own generated copy.)
+ * implementation to keep in sync. The init-owned Cloudflare Worker template delegates here.
  */
 function mergeWebResponse(
   middlewareHeaders: Record<string, string | string[]>,
@@ -951,6 +968,7 @@ export async function startProdServer(options: ProdServerOptions = {}) {
     outDir = path.resolve("dist"),
     noCompression = false,
     purpose,
+    silent = false,
   } = options;
 
   const compress = !noCompression;
@@ -970,10 +988,18 @@ export async function startProdServer(options: ProdServerOptions = {}) {
   }
 
   if (isAppRouter) {
-    return startAppRouterServer({ port, host, clientDir, rscEntryPath, compress, purpose });
+    return startAppRouterServer({ port, host, clientDir, rscEntryPath, compress, purpose, silent });
   }
 
-  return startPagesRouterServer({ port, host, clientDir, serverEntryPath, compress, purpose });
+  return startPagesRouterServer({
+    port,
+    host,
+    clientDir,
+    serverEntryPath,
+    compress,
+    purpose,
+    silent,
+  });
 }
 
 // ─── App Router Production Server ─────────────────────────────────────────────
@@ -985,6 +1011,7 @@ type AppRouterServerOptions = {
   rscEntryPath: string;
   compress: boolean;
   purpose?: ProdServerOptions["purpose"];
+  silent?: boolean;
 };
 
 type WorkerAppRouterEntry = {
@@ -1144,16 +1171,13 @@ function readSsrManifest(clientDir: string): Record<string, string[]> {
   return parsed;
 }
 
-function installPagesClientAssetGlobals(options: {
+function installPagesClientAssets(options: {
   clientDir: string;
   assetPrefix: string;
   assetBase: string;
   clientEntryLookup: PagesClientEntryLookup;
 }): Record<string, string[]> {
   const ssrManifest = readSsrManifest(options.clientDir);
-  globalThis.__VINEXT_SSR_MANIFEST__ =
-    Object.keys(ssrManifest).length > 0 ? ssrManifest : undefined;
-
   const metadata = computeClientRuntimeMetadata({
     clientDir: options.clientDir,
     assetBase: options.assetBase,
@@ -1162,9 +1186,13 @@ function installPagesClientAssetGlobals(options: {
       options.clientEntryLookup === "pages-client-entry" ? "pages-client-entry" : true,
   });
 
-  globalThis.__VINEXT_CLIENT_ENTRY__ = metadata.clientEntryFile;
-  globalThis.__VINEXT_LAZY_CHUNKS__ = metadata.lazyChunks;
-  globalThis.__VINEXT_DYNAMIC_PRELOADS__ = metadata.dynamicPreloads;
+  setPagesClientAssets({
+    clientEntry: metadata.clientEntryFile,
+    appBootstrapPreinitModules: metadata.appBootstrapPreinitModules,
+    ssrManifest: Object.keys(ssrManifest).length > 0 ? ssrManifest : undefined,
+    lazyChunks: metadata.lazyChunks,
+    dynamicPreloads: metadata.dynamicPreloads,
+  });
 
   return ssrManifest;
 }
@@ -1187,19 +1215,7 @@ function installPagesClientAssetGlobals(options: {
  * 4. Stream the Web Response back (with optional compression)
  */
 async function startAppRouterServer(options: AppRouterServerOptions) {
-  const { port, host, clientDir, rscEntryPath, compress, purpose } = options;
-
-  // Load image config written at build time by vinext:image-config plugin.
-  // This provides SVG/security header settings for the image optimization endpoint.
-  let imageConfig: ImageConfig | undefined;
-  const imageConfigPath = path.join(path.dirname(rscEntryPath), "image-config.json");
-  if (fs.existsSync(imageConfigPath)) {
-    try {
-      imageConfig = JSON.parse(fs.readFileSync(imageConfigPath, "utf-8"));
-    } catch {
-      /* ignore parse errors */
-    }
-  }
+  const { port, host, clientDir, rscEntryPath, compress, purpose, silent } = options;
 
   // Load prerender secret written at build time by vinext:server-manifest plugin.
   // Used to authenticate internal /__vinext/prerender/* HTTP endpoints.
@@ -1224,6 +1240,23 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     typeof rscModule.__basePath === "string" ? rscModule.__basePath : "";
   const appRouterInlineCss = rscModule.__inlineCss === true;
   const appRouterHasPagesDir = rscModule.__hasPagesDir === true;
+  const appImageAllowedWidths: number[] = Array.isArray(rscModule.__imageAllowedWidths)
+    ? rscModule.__imageAllowedWidths
+    : [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
+  let imageConfig: ImageConfig | undefined =
+    typeof rscModule.__imageConfig === "object" && rscModule.__imageConfig !== null
+      ? (rscModule.__imageConfig as ImageConfig)
+      : undefined;
+  if (imageConfig === undefined) {
+    const imageConfigPath = path.join(path.dirname(rscEntryPath), "image-config.json");
+    if (fs.existsSync(imageConfigPath)) {
+      try {
+        imageConfig = JSON.parse(fs.readFileSync(imageConfigPath, "utf-8"));
+      } catch {
+        /* Older or malformed build sidecar: fall back to defaults. */
+      }
+    }
+  }
   globalThis.__VINEXT_INLINE_CSS__ = appRouterInlineCss
     ? collectInlineCssManifest(clientDir, appRouterAssetPrefix)
     : undefined;
@@ -1234,7 +1267,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   const appAssetPathPrefix = assetPrefixPathname(appRouterAssetPrefix);
   const appAssetBase = appRouterBasePath ? `${appRouterBasePath}/` : "/";
   if (appRouterHasPagesDir) {
-    installPagesClientAssetGlobals({
+    installPagesClientAssets({
       clientDir,
       assetPrefix: appRouterAssetPrefix,
       assetBase: appAssetBase,
@@ -1341,11 +1374,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     // serves the original file with cache headers and security headers)
     if (isImageOptimizationPath(pathname)) {
       const parsedUrl = new URL(rawUrl, "http://localhost");
-      const allowedWidths = [
-        ...(imageConfig?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
-        ...(imageConfig?.imageSizes ?? DEFAULT_IMAGE_SIZES),
-      ];
-      const params = parseImageParams(parsedUrl, allowedWidths, imageConfig?.qualities);
+      const params = parseImageParams(parsedUrl, appImageAllowedWidths, imageConfig?.qualities);
       if (!params) {
         res.writeHead(400);
         res.end("Bad Request");
@@ -1460,7 +1489,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
-      logProdServerStarted(host, actualPort, purpose);
+      if (!silent) logProdServerStarted(host, actualPort, purpose);
       resolve();
     });
   });
@@ -1479,6 +1508,7 @@ type PagesRouterServerOptions = {
   serverEntryPath: string;
   compress: boolean;
   purpose?: ProdServerOptions["purpose"];
+  silent?: boolean;
 };
 
 type PagesServerEntryPageRoute = {
@@ -1513,7 +1543,7 @@ function readPagesServerEntryPageRoutes(value: unknown): PagesServerEntryPageRou
  * - vinextConfig — embedded next.config.js settings
  */
 async function startPagesRouterServer(options: PagesRouterServerOptions) {
-  const { port, host, clientDir, serverEntryPath, compress, purpose } = options;
+  const { port, host, clientDir, serverEntryPath, compress, purpose, silent } = options;
 
   // Import the server entry module. importServerEntryModule uses the bare
   // file:// URL so lazy chunks that import the entry back resolve to the same
@@ -1529,6 +1559,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   } = serverEntry;
   const matchPageRoute =
     typeof serverEntry.matchPageRoute === "function" ? serverEntry.matchPageRoute : undefined;
+  const hasMiddleware = serverEntry.hasMiddleware === true;
   const pageRoutes = readPagesServerEntryPageRoutes(serverEntry.pageRoutes);
 
   // Load prerender secret written at build time by vinext:server-manifest plugin.
@@ -1571,7 +1602,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   // Load client asset metadata used by the Pages renderer. Prerendered HTML is
   // rendered through this Node server too, so it needs the same globals that
   // Cloudflare builds inject into the Worker entry at build time.
-  const ssrManifest = installPagesClientAssetGlobals({
+  const ssrManifest = installPagesClientAssets({
     clientDir,
     assetPrefix,
     assetBase,
@@ -1793,6 +1824,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         hadBasePath,
         isDataReq,
         isDataRequest,
+        hasMiddleware,
         ctx: undefined, // Node has no ExecutionContext
         // Raw query from req.url so redirect Locations aren't re-encoded by URL parsing.
         rawSearch: rawQs,
@@ -1922,7 +1954,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
-      logProdServerStarted(host, actualPort, purpose);
+      if (!silent) logProdServerStarted(host, actualPort, purpose);
       resolve();
     });
   });

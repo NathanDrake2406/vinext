@@ -135,18 +135,16 @@ describe("normalizeRscRequest — basePath", () => {
     expect((result as Response).status).toBe(404);
   });
 
-  it("can preserve out-of-basePath pathname for delayed basePath:false rule evaluation", () => {
-    const result = normalized(
-      normalizeRscRequest(req("/outsideBasePath"), "/app", { allowOutOfBasePath: true }),
-    );
+  it("retains an out-of-basePath pathname for config rules that opt out", () => {
+    const result = normalized(normalizeRscRequest(req("/outside"), "/app", true));
+
+    expect(result.pathname).toBe("/outside");
+    expect(result.cleanPathname).toBe("/outside");
     expect(result.hadBasePath).toBe(false);
-    expect(result.pathname).toBe("/outsideBasePath");
-    expect(result.cleanPathname).toBe("/outsideBasePath");
   });
 
   it("strips basePath prefix so internal routing sees basePath-free pathname", () => {
     const result = normalized(normalizeRscRequest(req("/app/dashboard"), "/app"));
-    expect(result.hadBasePath).toBe(true);
     expect(result.pathname).toBe("/dashboard");
   });
 
@@ -225,9 +223,12 @@ describe("normalizeRscRequest — RSC detection and cleanPathname", () => {
     expect(result.isRscRequest).toBe(false);
   });
 
-  it("does not select RSC rendering by RSC header alone on an HTML URL", () => {
+  it("detects full-route RSC requests by RSC header alone on an HTML URL", () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/ppr-root-param-rsc-fallback/ppr-root-param-rsc-fallback.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/ppr-root-param-rsc-fallback/ppr-root-param-rsc-fallback.test.ts
     const result = normalized(normalizeRscRequest(req("/about", { [RSC_HEADER]: "1" }), ""));
-    expect(result.isRscRequest).toBe(false);
+    expect(result.isRscRequest).toBe(true);
     expect(result.cleanPathname).toBe("/about");
   });
 
@@ -573,6 +574,14 @@ describe("normalizeRscRequest — compound scenarios", () => {
     expect(result.pathname).toBe("/dashboard.rsc");
     expect(result.cleanPathname).toBe("/dashboard");
     expect(result.isRscRequest).toBe(true);
+    expect(result.hadBasePath).toBe(true);
+  });
+
+  it("preserves outside-basePath pathnames when config rules opt out", () => {
+    const result = normalized(normalizeRscRequest(req("/outside"), "/app", true));
+    expect(result.pathname).toBe("/outside");
+    expect(result.cleanPathname).toBe("/outside");
+    expect(result.hadBasePath).toBe(false);
   });
 
   it("returns the parsed URL object so middleware can later mutate url.search", () => {

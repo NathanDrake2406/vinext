@@ -65,7 +65,7 @@ const PILLARS = [
     icon: PlugsIcon,
     title: "Deploy anywhere",
     description:
-      "Cloudflare Workers is the first deployment target, with one-command deploys via vinext deploy. Vercel, Netlify, AWS, Deno Deploy, and more, work through Nitro, and standalone Node bundles are emitted on demand.",
+      "Cloudflare Workers is the first deployment target, with one-command deploys via npx @vinext/cloudflare deploy. Vercel, Netlify, AWS, Deno Deploy, and more, work through Nitro, and standalone Node bundles are emitted on demand.",
   },
 ] as const;
 
@@ -133,9 +133,10 @@ export default defineConfig({
   {
     title: "Deploy to Cloudflare Workers",
     description:
-      "Add the Cloudflare Vite plugin and back vinext's data cache with a Workers KV binding.",
+      "Add the Cloudflare Vite plugin, Workers KV caching, and Cloudflare Images optimization.",
     code: `import { cloudflare } from "@cloudflare/vite-plugin";
 import { kvDataAdapter } from "@vinext/cloudflare/cache/kv-data-adapter";
+import { imagesOptimizer } from "@vinext/cloudflare/images/images-optimizer";
 import { defineConfig } from "vite";
 import vinext from "vinext";
 
@@ -144,6 +145,9 @@ export default defineConfig({
     vinext({
       cache: {
         data: kvDataAdapter(),
+      },
+      images: {
+        optimizer: imagesOptimizer(),
       },
     }),
     cloudflare({

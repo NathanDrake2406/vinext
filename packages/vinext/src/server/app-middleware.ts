@@ -3,7 +3,7 @@ import { isExternalUrl, proxyExternalRequest } from "../config/config-matchers.j
 import { applyMiddlewareRequestHeaders, setHeadersContext } from "vinext/shims/headers";
 import { setNavigationContext } from "vinext/shims/navigation";
 import { FLIGHT_HEADERS, VINEXT_MW_CTX_HEADER } from "./headers.js";
-import { buildRequestHeadersFromMiddlewareResponse } from "./middleware-request-headers.js";
+import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import { executeMiddleware, type MiddlewareModule } from "./middleware-runtime.js";
 import { cloneRequestWithHeaders, processMiddlewareHeaders } from "./request-pipeline.js";
@@ -22,9 +22,8 @@ export type ApplyAppMiddlewareOptions = {
   hadBasePath?: boolean;
   i18nConfig?: NextI18nConfig | null;
   /**
-   * Whether the inbound request was a `_next/data` fetch. Captured from the
-   * raw incoming headers by the caller, because `x-nextjs-data` is in
-   * INTERNAL_HEADERS and is stripped before this function runs.
+   * Whether the inbound request was recognized as a `_next/data` fetch from
+   * trusted URL normalization before internal headers were stripped.
    */
   isDataRequest?: boolean;
   filePath?: string;
@@ -44,14 +43,8 @@ export type ApplyAppMiddlewareResult =
   | {
       kind: "continue";
       cleanPathname: string;
+      rewritten: boolean;
       search: string | null;
-      /**
-       * True only when middleware (or a forwarded dev-mode middleware context)
-       * explicitly rewrote the request to a new pathname. Callers use this to
-       * decide whether out-of-basePath requests become eligible for filesystem
-       * route matching.
-       */
-      didRewrite: boolean;
     }
   | {
       kind: "response";
@@ -219,8 +212,8 @@ export async function applyAppMiddleware(
   const forwarded = applyForwardedMiddlewareContext(options.request, options.context);
   const middlewareRequest = requestWithoutFlightHeaders(options.request);
   let cleanPathname = options.cleanPathname;
+  let rewritten = false;
   let search: string | null = null;
-  let didRewrite = false;
 
   if (forwarded.rewriteUrl) {
     try {
@@ -236,8 +229,8 @@ export async function applyAppMiddleware(
       }
       const rewriteParsed = new URL(forwarded.rewriteUrl, middlewareRequest.url);
       cleanPathname = rewriteParsed.pathname;
+      rewritten = true;
       search = rewriteParsed.search;
-      didRewrite = true;
     } catch (e) {
       console.error("[vinext] Failed to apply forwarded middleware rewrite:", e);
       forwarded.applied = false;
@@ -247,9 +240,6 @@ export async function applyAppMiddleware(
   if (!forwarded.applied) {
     const result = await executeMiddleware({
       basePath: options.basePath,
-      // App Router requests may be basePath-stripped before middleware, so the
-      // URL itself is not always enough to infer whether the original request
-      // carried the configured basePath.
       hadBasePath: options.hadBasePath ?? true,
       filePath: options.filePath,
       i18nConfig: options.i18nConfig,
@@ -295,8 +285,8 @@ export async function applyAppMiddleware(
       }
       const rewriteParsed = new URL(result.rewriteUrl, middlewareRequest.url);
       cleanPathname = rewriteParsed.pathname;
+      rewritten = true;
       search = rewriteParsed.search;
-      didRewrite = true;
     }
   }
 
@@ -306,5 +296,5 @@ export async function applyAppMiddleware(
     processMiddlewareHeaders(options.context.headers);
   }
 
-  return { kind: "continue", cleanPathname, search, didRewrite };
+  return { kind: "continue", cleanPathname, rewritten, search };
 }
