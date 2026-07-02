@@ -572,8 +572,59 @@ export function processMiddlewareHeaders(headers: Headers): void {
 export { INTERNAL_HEADERS, VINEXT_INTERNAL_HEADERS } from "./headers.js";
 
 const STRIPPED_INTERNAL_HEADERS = new Set([...INTERNAL_HEADERS, ...VINEXT_INTERNAL_HEADERS]);
+const NOOP_FILTERED_HEADERS_STATE = Symbol("vinext.noopFilteredHeadersState");
+const HEADERS_MUTATING_METHODS = new Set(["append", "delete", "set"]);
 
 type RequestInitWithCf = RequestInit & { cf?: unknown };
+type NoopFilteredHeadersState = {
+  readonly original: Headers;
+  materialized: Headers | null;
+};
+type HeadersWithNoopFilteredState = Headers & {
+  [NOOP_FILTERED_HEADERS_STATE]?: NoopFilteredHeadersState;
+};
+
+function noopFilteredHeadersState(headers: Headers): NoopFilteredHeadersState | undefined {
+  return (headers as HeadersWithNoopFilteredState)[NOOP_FILTERED_HEADERS_STATE];
+}
+
+function createNoopFilteredHeaders(headers: Headers): Headers {
+  const state: NoopFilteredHeadersState = { original: headers, materialized: null };
+
+  return new Proxy(headers as HeadersWithNoopFilteredState, {
+    get(target, prop, receiver) {
+      if (prop === NOOP_FILTERED_HEADERS_STATE) return state;
+
+      if (typeof prop === "string" && HEADERS_MUTATING_METHODS.has(prop)) {
+        return (...args: unknown[]) => {
+          state.materialized ??= new Headers(target);
+          const method = Reflect.get(state.materialized, prop, state.materialized);
+          return (method as (...methodArgs: unknown[]) => unknown)(...args);
+        };
+      }
+
+      const source = state.materialized ?? target;
+      const value = Reflect.get(source, prop, receiver);
+      return typeof value === "function" ? value.bind(source) : value;
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (prop === NOOP_FILTERED_HEADERS_STATE) {
+        return {
+          configurable: true,
+          enumerable: false,
+          value: state,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(state.materialized ?? target, prop);
+    },
+    has(target, prop) {
+      return prop === NOOP_FILTERED_HEADERS_STATE || prop in (state.materialized ?? target);
+    },
+    ownKeys(target) {
+      return Reflect.ownKeys(state.materialized ?? target);
+    },
+  }) as Headers;
+}
 
 /**
  * Strip internal headers from an inbound request so they cannot be forged by
@@ -582,22 +633,29 @@ type RequestInitWithCf = RequestInit & { cf?: unknown };
  * Must be called at every request entry point BEFORE middleware, routing,
  * or any handler logic accesses the request headers.
  *
- * Returns a new Headers object with internal headers removed. The input
- * is never mutated — Request.headers is immutable in Workers/miniflare
- * environments (see applyMiddlewareRequestHeaders in config-matchers.ts
- * for the same cloning pattern).
+ * Returns a fresh Headers object when internal headers are present. When the
+ * filter is a no-op, returns a lazy copy-on-write Headers proxy so callers can
+ * still attach trusted framework headers without mutating the original request,
+ * while cloneRequestWithHeaders() can skip rebuilding the Request if nothing was
+ * changed.
  *
  * @param headers - The source Headers (never modified)
- * @returns A new Headers with internal framework headers removed
+ * @returns Headers with internal framework headers removed
  */
 export function filterInternalHeaders(headers: Headers): Headers {
-  const filtered = new Headers();
-  for (const [key, value] of headers) {
-    if (!STRIPPED_INTERNAL_HEADERS.has(key.toLowerCase())) {
-      filtered.append(key, value);
+  for (const key of headers.keys()) {
+    if (STRIPPED_INTERNAL_HEADERS.has(key.toLowerCase())) {
+      const filtered = new Headers();
+      for (const [entryKey, value] of headers) {
+        if (!STRIPPED_INTERNAL_HEADERS.has(entryKey.toLowerCase())) {
+          filtered.append(entryKey, value);
+        }
+      }
+      return filtered;
     }
   }
-  return filtered;
+
+  return createNoopFilteredHeaders(headers);
 }
 
 function getRequestCf(request: Request): unknown {
@@ -614,6 +672,11 @@ function getRequestCf(request: Request): unknown {
  * a RequestInit with best-effort metadata.
  */
 export function cloneRequestWithHeaders(request: Request, headers: Headers): Request {
+  const filteredState = noopFilteredHeadersState(headers);
+  if (filteredState?.original === request.headers && filteredState.materialized === null) {
+    return request;
+  }
+
   let cloned: Request;
   try {
     cloned = new Request(request, { headers });
@@ -662,6 +725,8 @@ export function cloneRequestWithHeaders(request: Request, headers: Headers): Req
  * exists.
  */
 export function cloneRequestWithUrl(request: Request, url: string): Request {
+  if (url === request.url) return request;
+
   let cloned: Request;
   try {
     cloned = new Request(url, request);
