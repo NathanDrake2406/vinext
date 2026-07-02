@@ -1,14 +1,93 @@
+import { createRequire } from "node:module";
+import path from "node:path";
 import { PassThrough, type Readable as NodeReadable } from "node:stream";
 import type { ReactNode } from "react";
-import {
-  renderToPipeableStream,
-  type PipeableStream,
-  type RenderToPipeableStreamOptions,
-} from "react-dom/server";
+import type { PipeableStream, RenderToPipeableStreamOptions } from "react-dom/server";
+
+type ReactDomServerNode = Pick<
+  typeof import("react-dom/server"),
+  "renderToPipeableStream" | "renderToStaticMarkup"
+>;
+type ReactDomStaticNode = Pick<typeof import("react-dom/static"), "prerenderToNodeStream">;
 
 export type NodeFizzRenderOptions = RenderToPipeableStreamOptions & {
   maxHeadersLength?: number;
 };
+
+const nodeRequire = createRequire(import.meta.url);
+const cwdRequire = createRequire(path.join(process.cwd(), "package.json"));
+let reactDomServerNode: ReactDomServerNode | undefined;
+let reactDomStaticNode: ReactDomStaticNode | undefined;
+
+function isModuleNotFoundForSpecifier(error: unknown, specifier: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "MODULE_NOT_FOUND" &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message.includes(`'${specifier}'`)
+  );
+}
+
+function requireRuntimeDependency<T>(specifier: string): T {
+  try {
+    return nodeRequire(specifier) as T;
+  } catch (error) {
+    if (!isModuleNotFoundForSpecifier(error, specifier)) {
+      throw error;
+    }
+    return cwdRequire(specifier) as T;
+  }
+}
+
+function isReactDevelopmentBuild(): boolean {
+  const reactWithInternals = requireRuntimeDependency<typeof import("react")>(
+    "react",
+  ) as typeof import("react") & {
+    __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: unknown;
+  };
+  const internals =
+    reactWithInternals.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  return typeof internals === "object" && internals !== null && "actQueue" in internals;
+}
+
+function loadWithReactNodeEnv<T>(load: () => T): T {
+  const expectedNodeEnv = isReactDevelopmentBuild() ? "development" : "production";
+  const previousNodeEnv = process.env.NODE_ENV;
+
+  // React DOM chooses its dev/prod implementation at require time. In-process
+  // production builds can already have React's dev build cached by the test
+  // runner, so load the Node renderer in the same mode as that React instance.
+  if (previousNodeEnv !== expectedNodeEnv) {
+    process.env.NODE_ENV = expectedNodeEnv;
+  }
+
+  try {
+    return load();
+  } finally {
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  }
+}
+
+function getReactDomServerNode(): ReactDomServerNode {
+  reactDomServerNode ??= loadWithReactNodeEnv<ReactDomServerNode>(() =>
+    requireRuntimeDependency<ReactDomServerNode>("react-dom/server.node"),
+  );
+  return reactDomServerNode;
+}
+
+function getReactDomStaticNode(): ReactDomStaticNode {
+  reactDomStaticNode ??= loadWithReactNodeEnv<ReactDomStaticNode>(() =>
+    requireRuntimeDependency<ReactDomStaticNode>("react-dom/static.node"),
+  );
+  return reactDomStaticNode;
+}
 
 function waitAtLeastOneReactRenderTask(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -28,6 +107,17 @@ function createDeferred<T>(): {
   return { promise, resolve, reject };
 }
 
+export function renderToNodeStaticMarkup(element: ReactNode): string {
+  return getReactDomServerNode().renderToStaticMarkup(element);
+}
+
+export function prerenderToNodeFizzStream(
+  element: ReactNode,
+  options: Parameters<ReactDomStaticNode["prerenderToNodeStream"]>[1],
+): ReturnType<ReactDomStaticNode["prerenderToNodeStream"]> {
+  return getReactDomStaticNode().prerenderToNodeStream(element, options);
+}
+
 export async function renderToNodeFizzStream(
   element: ReactNode,
   renderOptions: NodeFizzRenderOptions = {},
@@ -41,7 +131,7 @@ export async function renderToNodeFizzStream(
   let pipeable: PipeableStream | null = null;
   let pipeWhenCreated = false;
 
-  pipeable = renderToPipeableStream(element, {
+  pipeable = getReactDomServerNode().renderToPipeableStream(element, {
     ...renderOptions,
     onShellReady() {
       shellReady.resolve();

@@ -1,10 +1,13 @@
 import { Readable, type Readable as NodeReadable } from "node:stream";
-import { renderToStaticMarkup } from "react-dom/server";
-import { prerenderToNodeStream } from "react-dom/static";
 import { renderSsrErrorDocumentShellHtml } from "./app-ssr-error-shell.js";
 import { createNodeTickBufferedTransform } from "./app-ssr-stream-node.js";
 import type { AppSsrRenderRuntime } from "./app-ssr-entry-core.js";
-import { renderToNodeFizzStream, type NodeFizzRenderOptions } from "./node-fizz-stream.js";
+import {
+  prerenderToNodeFizzStream,
+  renderToNodeFizzStream,
+  renderToNodeStaticMarkup,
+  type NodeFizzRenderOptions,
+} from "./node-fizz-stream.js";
 
 function nodeReadableToWeb(stream: NodeReadable): ReadableStream<Uint8Array> {
   return Readable.toWeb(stream) as ReadableStream<Uint8Array>;
@@ -16,7 +19,7 @@ function createUtf8NodeStream(html: string): NodeReadable {
 
 function renderSsrErrorDocumentShell(bootstrapModuleUrl?: string, nonce?: string): NodeReadable {
   return createUtf8NodeStream(
-    renderSsrErrorDocumentShellHtml(renderToStaticMarkup, bootstrapModuleUrl, nonce),
+    renderSsrErrorDocumentShellHtml(renderToNodeStaticMarkup, bootstrapModuleUrl, nonce),
   );
 }
 
@@ -39,7 +42,7 @@ function transformNodeHtmlStream(
 
 export const appSsrNodeRuntime: AppSsrRenderRuntime = {
   renderStaticMarkup(element) {
-    return renderToStaticMarkup(element);
+    return renderToNodeStaticMarkup(element);
   },
 
   async renderFinalHtmlStream(options) {
@@ -48,7 +51,7 @@ export const appSsrNodeRuntime: AppSsrRenderRuntime = {
 
     if (options.pprFallbackShellSignal) {
       const htmlAbortController = new AbortController();
-      const pendingHtml = prerenderToNodeStream(options.element, {
+      const pendingHtml = prerenderToNodeFizzStream(options.element, {
         ...(options.renderOptions as NodeFizzRenderOptions),
         signal: htmlAbortController.signal,
       });
