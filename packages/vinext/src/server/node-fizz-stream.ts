@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import { PassThrough, type Readable as NodeReadable } from "node:stream";
+import { PassThrough, type Duplex as NodeDuplex, type Readable as NodeReadable } from "node:stream";
 import type { ReactNode } from "react";
 import type { PipeableStream, RenderToPipeableStreamOptions } from "react-dom/server";
 
@@ -107,6 +107,32 @@ function createDeferred<T>(): {
   return { promise, resolve, reject };
 }
 
+export function abortReactWorkWhenConsumerCloses(
+  destination: NodeDuplex,
+  getPipeable: () => PipeableStream | null,
+): void {
+  let completed = false;
+  let aborted = false;
+
+  const markCompleted = () => {
+    completed = true;
+  };
+  const abort = () => {
+    if (completed || aborted) return;
+    aborted = true;
+    getPipeable()?.abort();
+  };
+
+  destination.once("end", markCompleted);
+  destination.once("finish", markCompleted);
+  destination.once("error", abort);
+  destination.once("close", () => {
+    if (!completed && !destination.readableEnded) {
+      abort();
+    }
+  });
+}
+
 export function renderToNodeStaticMarkup(element: ReactNode): string {
   return getReactDomServerNode().renderToStaticMarkup(element);
 }
@@ -130,6 +156,8 @@ export async function renderToNodeFizzStream(
   const onError = renderOptions.onError;
   let pipeable: PipeableStream | null = null;
   let pipeWhenCreated = false;
+
+  abortReactWorkWhenConsumerCloses(destination, () => pipeable);
 
   pipeable = getReactDomServerNode().renderToPipeableStream(element, {
     ...renderOptions,
