@@ -1,8 +1,6 @@
-import { createElement as createReactElement } from "react";
 import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server.edge";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
-import DefaultGlobalError from "vinext/shims/default-global-error";
-import { createNonceAttribute, escapeHtmlAttr } from "./html.js";
+import { renderSsrErrorDocumentShellHtml } from "./app-ssr-error-shell.js";
 import { createTickBufferedTransform } from "./app-ssr-stream.js";
 import type { AppSsrRenderRuntime } from "./app-ssr-entry-core.js";
 
@@ -36,36 +34,12 @@ function createUtf8Stream(html: string): ReadableStream<Uint8Array> {
   });
 }
 
-function buildBootstrapModuleScript(bootstrapModuleUrl?: string, nonce?: string): string {
-  if (!bootstrapModuleUrl) return "";
-  return (
-    `<script type="module"${createNonceAttribute(nonce)} src="` +
-    escapeHtmlAttr(bootstrapModuleUrl) +
-    '" id="_R_" async=""></script>'
-  );
-}
-
 function renderSsrErrorDocumentShell(
   bootstrapModuleUrl?: string,
   nonce?: string,
 ): ReadableStream<Uint8Array> {
-  const html = renderToStaticMarkup(
-    createReactElement(DefaultGlobalError, {
-      error: null,
-    }),
-  ).replace("<style>", '<style data-vinext-error-shell-style="">');
-  const bootstrapScript = buildBootstrapModuleScript(bootstrapModuleUrl, nonce);
-  if (!bootstrapScript) {
-    return createUtf8Stream(`<!DOCTYPE html>${html}`);
-  }
-
-  const documentClose = "</body></html>";
-  if (!html.endsWith(documentClose)) {
-    return createUtf8Stream(`<!DOCTYPE html>${html}${bootstrapScript}`);
-  }
-
   return createUtf8Stream(
-    `<!DOCTYPE html>${html.slice(0, -documentClose.length)}${bootstrapScript}${documentClose}`,
+    renderSsrErrorDocumentShellHtml(renderToStaticMarkup, bootstrapModuleUrl, nonce),
   );
 }
 

@@ -1105,16 +1105,15 @@ describe("Pages Router entry template", () => {
         "web",
       );
 
-      expect(nodeCode).toContain('from "react-dom/server"');
-      expect(nodeCode).toContain('from "node:stream"');
-      expect(nodeCode).toContain("renderToPipeableStream");
-      expect(nodeCode).toContain("Buffer.concat(chunks).toString");
+      expect(nodeCode).toContain("pages-render-runtime.node");
+      expect(nodeCode).not.toContain("pages-render-runtime.web");
       expect(nodeCode).not.toContain('from "react-dom/server.edge"');
       expect(nodeCode).not.toContain("new Response(stream).text()");
 
-      expect(webCode).toContain('from "react-dom/server.edge"');
-      expect(webCode).toContain("new Response(stream).text()");
+      expect(webCode).toContain("pages-render-runtime.web");
+      expect(webCode).not.toContain("pages-render-runtime.node");
       expect(webCode).not.toContain('from "node:stream"');
+      expect(webCode).not.toContain("new Response(stream).text()");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

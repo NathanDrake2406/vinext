@@ -192,75 +192,17 @@ export async function runMiddleware(request) {
 }
 `;
 
-  const renderImportCode =
-    serverRenderRuntime === "node"
-      ? `import { PassThrough, Readable } from "node:stream";
-import { renderToPipeableStream } from "react-dom/server";`
-      : `import { renderToReadableStream } from "react-dom/server.edge";`;
+  const pagesRenderRuntimePath = resolveEntryPath(
+    `../server/pages-render-runtime.${serverRenderRuntime}.js`,
+    import.meta.url,
+  );
 
-  const renderHelperCode =
-    serverRenderRuntime === "node"
-      ? `
-function _renderToNodeStream(element, waitForAllReady = false) {
-  return new Promise((resolve, reject) => {
-    const destination = new PassThrough();
-    let pipeable = null;
-    let settled = false;
-    const settle = () => {
-      if (settled) return;
-      settled = true;
-      pipeable.pipe(destination);
-      resolve(destination);
-    };
-    pipeable = renderToPipeableStream(element, {
-      onShellReady() {
-        if (!waitForAllReady) settle();
-      },
-      onAllReady() {
-        if (waitForAllReady) settle();
-      },
-      onShellError(error) {
-        if (!settled) {
-          settled = true;
-          reject(error);
-        }
-      },
-    });
-  });
-}
-
-async function _readNodeStreamAsString(stream) {
-  const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-async function _renderToReadableStream(element) {
-  return Readable.toWeb(await _renderToNodeStream(element));
-}
-
-async function _renderToStringAsync(element) {
-  return _readNodeStreamAsString(await _renderToNodeStream(element, true));
-}
-`
-      : `
-const _renderToReadableStream = renderToReadableStream;
-
-async function _renderToStringAsync(element) {
-  const stream = await _renderToReadableStream(element);
-  await stream.allReady;
-  return new Response(stream).text();
-}
-`;
-
-  // The server entry is a self-contained module that uses Web-standard APIs
-  // (Request/Response, renderToReadableStream) so it runs on Cloudflare Workers.
+  // Keep the generated entry as routing/config glue; the selected runtime
+  // module owns React's Node/Web render transport.
   return `
 import ${JSON.stringify(_serverGlobalsPath)};
 import React from "react";
-${renderImportCode}
+import { renderPagesToReadableStream as _renderToReadableStream, renderPagesToString as _renderToStringAsync } from ${JSON.stringify(pagesRenderRuntimePath)};
 import { resetSSRHead, getSSRHeadHTML, setDocumentInitialHead } from "next/head";
 import { flushPreloads } from "next/dynamic";
 import Router, { setSSRContext, wrapWithRouterContext, getPagesNavigationIsReadyFromSerializedState } from "next/router";
@@ -320,8 +262,6 @@ __configureMemoryCacheHandler({ cacheMaxMemorySize: vinextConfig.cacheMaxMemoryS
 // _app's CSS/JS chunks in the SSR manifest so any global styles imported
 // by _app are included in every page's <link rel="stylesheet"> set.
 const _appAssetPath = ${appAssetPathJson};
-
-${renderHelperCode}
 
 async function _renderIsrPassToStringAsync(element) {
   // The cache-fill render is a second render pass for the same request.

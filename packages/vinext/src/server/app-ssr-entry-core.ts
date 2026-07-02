@@ -59,7 +59,7 @@ import { setPagesClientAssets, type PagesClientAssets } from "./pages-client-ass
 
 setPagesClientAssets(pagesClientAssets as PagesClientAssets);
 
-export type SsrRenderOptions = {
+type SsrRenderOptions = {
   bootstrapModules?: string[];
   formState?: ReactFormState | null;
   nonce?: string;
