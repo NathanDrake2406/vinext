@@ -649,7 +649,7 @@ describe("paired performance benchmarks", () => {
     });
   });
 
-  it("renders paired PR comments without a dashboard upload response", () => {
+  it("renders paired PR comments when the dashboard upload response is missing", () => {
     const directory = mkdtempSync(join(tmpdir(), "vinext-perf-local-comment-"));
     const resultsPath = join(directory, "results.json");
     const responsePath = join(directory, "response.json");
@@ -677,7 +677,6 @@ describe("paired performance benchmarks", () => {
         ],
       }),
     );
-    writeFileSync(responsePath, JSON.stringify({ uploaded: false, reason: "missing_secret" }));
 
     execFileSync(
       process.execPath,
