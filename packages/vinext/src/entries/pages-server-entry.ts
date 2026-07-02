@@ -14,6 +14,7 @@ import { createValidFileMatcher } from "../routing/file-matcher.js";
 import { type ResolvedNextConfig } from "../config/next-config.js";
 import { isProxyFile } from "../server/middleware.js";
 import { findFileWithExts } from "./pages-entry-helpers.js";
+import type { ServerRenderRuntime } from "./app-ssr-entry.js";
 
 const _requestContextShimPath = resolveEntryPath("../shims/request-context.js", import.meta.url);
 const _middlewareRuntimePath = resolveEntryPath("../server/middleware-runtime.js", import.meta.url);
@@ -36,6 +37,7 @@ export async function generateServerEntry(
   fileMatcher: ReturnType<typeof createValidFileMatcher>,
   middlewarePath: string | null,
   instrumentationPath: string | null,
+  serverRenderRuntime: ServerRenderRuntime = "web",
 ): Promise<string> {
   const pageRoutes = await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
   const apiRoutes = await apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
@@ -190,12 +192,75 @@ export async function runMiddleware(request) {
 }
 `;
 
+  const renderImportCode =
+    serverRenderRuntime === "node"
+      ? `import { PassThrough, Readable } from "node:stream";
+import { renderToPipeableStream } from "react-dom/server";`
+      : `import { renderToReadableStream } from "react-dom/server.edge";`;
+
+  const renderHelperCode =
+    serverRenderRuntime === "node"
+      ? `
+function _renderToNodeStream(element, waitForAllReady = false) {
+  return new Promise((resolve, reject) => {
+    const destination = new PassThrough();
+    let pipeable = null;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      pipeable.pipe(destination);
+      resolve(destination);
+    };
+    pipeable = renderToPipeableStream(element, {
+      onShellReady() {
+        if (!waitForAllReady) settle();
+      },
+      onAllReady() {
+        if (waitForAllReady) settle();
+      },
+      onShellError(error) {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      },
+    });
+  });
+}
+
+async function _readNodeStreamAsString(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function _renderToReadableStream(element) {
+  return Readable.toWeb(await _renderToNodeStream(element));
+}
+
+async function _renderToStringAsync(element) {
+  return _readNodeStreamAsString(await _renderToNodeStream(element, true));
+}
+`
+      : `
+const _renderToReadableStream = renderToReadableStream;
+
+async function _renderToStringAsync(element) {
+  const stream = await _renderToReadableStream(element);
+  await stream.allReady;
+  return new Response(stream).text();
+}
+`;
+
   // The server entry is a self-contained module that uses Web-standard APIs
   // (Request/Response, renderToReadableStream) so it runs on Cloudflare Workers.
   return `
 import ${JSON.stringify(_serverGlobalsPath)};
 import React from "react";
-import { renderToReadableStream } from "react-dom/server.edge";
+${renderImportCode}
 import { resetSSRHead, getSSRHeadHTML, setDocumentInitialHead } from "next/head";
 import { flushPreloads } from "next/dynamic";
 import Router, { setSSRContext, wrapWithRouterContext, getPagesNavigationIsReadyFromSerializedState } from "next/router";
@@ -256,11 +321,7 @@ __configureMemoryCacheHandler({ cacheMaxMemorySize: vinextConfig.cacheMaxMemoryS
 // by _app are included in every page's <link rel="stylesheet"> set.
 const _appAssetPath = ${appAssetPathJson};
 
-async function _renderToStringAsync(element) {
-  const stream = await renderToReadableStream(element);
-  await stream.allReady;
-  return new Response(stream).text();
-}
+${renderHelperCode}
 
 async function _renderIsrPassToStringAsync(element) {
   // The cache-fill render is a second render pass for the same request.
@@ -401,7 +462,8 @@ const _renderPage = __createPagesPageHandler({
       return preloads;
     } catch { return []; }
   },
-  renderToReadableStream,
+  renderToReadableStream: _renderToReadableStream,
+  renderToString: _renderToStringAsync,
   renderIsrPassToStringAsync: _renderIsrPassToStringAsync,
   safeJsonStringify,
   sanitizeDestination: sanitizeDestinationLocal,

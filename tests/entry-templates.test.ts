@@ -1077,6 +1077,49 @@ describe("App Router entry templates", () => {
 // ── Pages Router entry template runtime bootstrap ─────────────────────
 
 describe("Pages Router entry template", () => {
+  it("selects Node render helpers for Node-targeted Pages builds", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-node-entry-"));
+    const pagesDir = path.join(tmpDir, "pages");
+
+    try {
+      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pagesDir, "index.tsx"),
+        "export default function Page() { return null; }",
+      );
+
+      const nodeCode = await generateServerEntry(
+        pagesDir,
+        await resolveNextConfig({}),
+        createValidFileMatcher(),
+        null,
+        null,
+        "node",
+      );
+      const webCode = await generateServerEntry(
+        pagesDir,
+        await resolveNextConfig({}),
+        createValidFileMatcher(),
+        null,
+        null,
+        "web",
+      );
+
+      expect(nodeCode).toContain('from "react-dom/server"');
+      expect(nodeCode).toContain('from "node:stream"');
+      expect(nodeCode).toContain("renderToPipeableStream");
+      expect(nodeCode).toContain("Buffer.concat(chunks).toString");
+      expect(nodeCode).not.toContain('from "react-dom/server.edge"');
+      expect(nodeCode).not.toContain("new Response(stream).text()");
+
+      expect(webCode).toContain('from "react-dom/server.edge"');
+      expect(webCode).toContain("new Response(stream).text()");
+      expect(webCode).not.toContain('from "node:stream"');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports trusted _next/data classification from URL normalization", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-data-entry-"));
     const pagesDir = path.join(tmpDir, "pages");

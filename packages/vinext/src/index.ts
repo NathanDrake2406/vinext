@@ -43,7 +43,7 @@ import { installSocketErrorBackstop } from "./server/socket-error-backstop.js";
 import { shouldInvalidateAppRouteFile } from "./server/dev-route-files.js";
 import { createDirectRunner } from "./server/dev-module-runner.js";
 import { generateRscEntry } from "./entries/app-rsc-entry.js";
-import { generateSsrEntry } from "./entries/app-ssr-entry.js";
+import { generateSsrEntry, type ServerRenderRuntime } from "./entries/app-ssr-entry.js";
 import {
   VIRTUAL_CACHE_ADAPTERS,
   generateCacheAdaptersModule,
@@ -1135,6 +1135,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let hasCloudflarePlugin = false;
   let warnedInlineNextConfigOverride = false;
   let hasNitroPlugin = false;
+  let serverRenderRuntime: ServerRenderRuntime = "node";
   let isServeCommand = false;
   let pagesOptimizeEntries: string[] = [];
   const pagesClientAssetsOutputDirs = new Set<string>();
@@ -1210,6 +1211,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       fileMatcher,
       middlewarePath,
       instrumentationPath,
+      serverRenderRuntime,
     );
   }
 
@@ -2071,6 +2073,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             typeof p.name === "string" &&
             (p.name === "nitro" || p.name.startsWith("nitro:")),
         );
+        serverRenderRuntime = hasCloudflarePlugin || hasNitroPlugin ? "web" : "node";
 
         // Resolve PostCSS string plugin names that Vite can't handle.
         // Next.js projects commonly use array-form plugins like
@@ -3342,7 +3345,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           return generateImageAdaptersModule(options.images);
         }
         if (id === RESOLVED_APP_SSR_ENTRY && hasAppDir) {
-          return generateSsrEntry(hasPagesDir);
+          return generateSsrEntry(hasPagesDir, serverRenderRuntime);
         }
         if (id === RESOLVED_APP_BROWSER_ENTRY && hasAppDir) {
           const graph = await appRouteGraph(appDir, nextConfig?.pageExtensions, fileMatcher);

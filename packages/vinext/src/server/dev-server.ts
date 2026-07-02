@@ -304,7 +304,7 @@ async function streamPageToResponse(
   const documentRenderPage = await runDocumentRenderPage({
     DocumentComponent,
     enhancePageElement,
-    renderToReadableStream,
+    renderToString: renderToStringAsync,
     renderStylesToString: renderToStringAsync,
     scriptNonce,
     context: documentContext,

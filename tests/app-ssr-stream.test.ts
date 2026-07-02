@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vite-plus/test";
+import { Buffer } from "node:buffer";
 import {
   createNavigationRuntimeRscMetadataScript,
   createRscEmbedTransform,
@@ -6,6 +7,7 @@ import {
   fixFlightHints,
   fixPreloadAs,
 } from "../packages/vinext/src/server/app-ssr-stream.js";
+import { createNodeTickBufferedTransform } from "../packages/vinext/src/server/app-ssr-stream-node.js";
 
 it("serializes dynamic stale time into the hydration bootstrap", () => {
   expect(
@@ -256,6 +258,41 @@ async function runTransform(
   return out;
 }
 
+async function runNodeTransform(
+  chunks: Array<string | Uint8Array>,
+  options: {
+    injectHTML?: string;
+    injectAfterHeadOpenHTML?: string;
+    inlineCss?: Record<string, string>;
+    inlineCssPrependCss?: string;
+    inlineCssPrependFallbackHTML?: string;
+    inlineCssScriptNonce?: string;
+  } = {},
+): Promise<string> {
+  const transform = createNodeTickBufferedTransform(
+    createNoopRscEmbedTransform(),
+    options.injectHTML ?? "",
+    options.injectAfterHeadOpenHTML ?? "",
+    options.inlineCss,
+    options.inlineCssPrependCss,
+    options.inlineCssPrependFallbackHTML,
+    options.inlineCssScriptNonce,
+  );
+  const output: Buffer[] = [];
+  transform.on("data", (chunk: Buffer | Uint8Array | string) => {
+    output.push(Buffer.from(chunk));
+  });
+  for (const chunk of chunks) {
+    transform.write(chunk);
+  }
+  transform.end();
+  await new Promise<void>((resolve, reject) => {
+    transform.on("end", resolve);
+    transform.on("error", reject);
+  });
+  return Buffer.concat(output).toString("utf8");
+}
+
 async function runDelayedTransform(
   chunks: string[],
   options: {
@@ -456,6 +493,47 @@ describe("createTickBufferedTransform pre-head splice", () => {
     // it's a small, bounded number rather than per-chunk.
     expect(calls).toBeGreaterThanOrEqual(1);
     expect(calls).toBeLessThan(10);
+  });
+});
+
+describe("App HTML insertion Node/Web parity", () => {
+  it("matches fragmented head, suffix, inline CSS, and nonce-sensitive insertions", async () => {
+    const chunks = [
+      "<!DOCTYPE html><html><he",
+      'ad><link rel="style',
+      'sheet" href="/_next/static/app.css" data-precedence="next"/></he',
+      "ad><body><div>ok</div></body>",
+      "</html>",
+    ];
+    const options = {
+      injectHTML: '<meta name="vinext" content="head"/>',
+      injectAfterHeadOpenHTML: '<script nonce="abc">before()</script>',
+      inlineCss: {
+        "/_next/static/app.css": "body { color: red; }",
+      },
+      inlineCssScriptNonce: "abc",
+    };
+
+    const web = await runTransform(chunks, options);
+    const node = await runNodeTransform(chunks, options);
+
+    expect(node).toBe(web);
+    expect(node).toContain('<head><script nonce="abc">before()</script>');
+    expect(node).toContain('<style data-vinext-inline-css nonce="abc"');
+    expect(node).toContain('<meta name="vinext" content="head"/></head>');
+    expect(node.endsWith("</body></html>")).toBe(true);
+  });
+
+  it("keeps split UTF-8 characters intact in the Node adapter", async () => {
+    const html = "<!DOCTYPE html><html><head></head><body>snowman: ☃</body></html>";
+    const bytes = new TextEncoder().encode(html);
+    const split = html.indexOf("☃");
+    const splitByte = new TextEncoder().encode(html.slice(0, split)).byteLength + 1;
+
+    const node = await runNodeTransform([bytes.slice(0, splitByte), bytes.slice(splitByte)]);
+
+    expect(node).toContain("snowman: ☃");
+    expect(node.endsWith("</body></html>")).toBe(true);
   });
 });
 
