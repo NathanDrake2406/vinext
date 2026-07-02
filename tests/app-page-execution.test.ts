@@ -322,6 +322,45 @@ describe("app page execution helpers", () => {
     expect(clearRequestContext).toHaveBeenCalledTimes(1);
   });
 
+  it("encodes RSC access fallback without an HTTP error status when no fallback page is available", async () => {
+    const clearRequestContext = vi.fn();
+    const buildRscHttpAccessFallbackFlightStream = vi.fn(
+      (options: { digest: string }) =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`E:${options.digest}`));
+            controller.close();
+          },
+        }),
+    );
+
+    const response = await buildAppPageSpecialErrorResponse({
+      buildRscHttpAccessFallbackFlightStream,
+      clearRequestContext,
+      isRscRequest: true,
+      middlewareContext: createMiddlewareContext(),
+      renderFallbackPage() {
+        return Promise.resolve(null);
+      },
+      request: new Request("https://example.com/start.rsc"),
+      specialError: {
+        kind: "http-access-fallback",
+        statusCode: 401,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/^text\/x-component/);
+    expect(response.headers.get("x-middleware-security")).toBe("present");
+    expect(response.headers.get("vary")).toBe("x-auth-state");
+    expect(response.headers.getSetCookie()).toContain("session=rotated; Path=/; HttpOnly");
+    expect(buildRscHttpAccessFallbackFlightStream).toHaveBeenCalledWith({
+      digest: "NEXT_HTTP_ERROR_FALLBACK;401",
+    });
+    await expect(response.text()).resolves.toBe("E:NEXT_HTTP_ERROR_FALLBACK;401");
+    expect(clearRequestContext).toHaveBeenCalledTimes(1);
+  });
+
   it("encodes redirect digest in flight payload + 200 when buildRscRedirectFlightStream is provided (RSC request)", async () => {
     // Mirrors Next.js's `generateDynamicFlightRenderResult` path: when a
     // server component throws redirect() during RSC rendering, the redirect
@@ -653,10 +692,9 @@ describe("app page execution helpers", () => {
     expect(response.status).toBe(404);
   });
 
-  it("returns the original status for non-metadata http-access-fallback errors", async () => {
-    // Page-level notFound() calls (fromMetadata absent/false) must still return
-    // the original 404 status — only metadata-originated errors get the 200
-    // override.
+  it("returns the original document status for non-metadata http-access-fallback errors", async () => {
+    // Page-level notFound() calls in document requests must still return the
+    // original 404 status. Raw RSC requests use the Flight transport contract.
     const fallbackResponse = new Response("page-level-not-found", { status: 404 });
 
     const response = await buildAppPageSpecialErrorResponse({
@@ -671,6 +709,28 @@ describe("app page execution helpers", () => {
     });
 
     expect(response.status).toBe(404);
+  });
+
+  it("keeps RSC access fallback on the Flight transport status when a fallback page renders", async () => {
+    const fallbackResponse = new Response("page-level-not-found-flight", {
+      headers: { "Content-Type": "text/x-component" },
+      status: 404,
+    });
+
+    const response = await buildAppPageSpecialErrorResponse({
+      clearRequestContext: vi.fn(),
+      isRscRequest: true,
+      renderFallbackPage: async () => fallbackResponse,
+      request: new Request("https://example.com/page.rsc"),
+      specialError: {
+        kind: "http-access-fallback",
+        statusCode: 404,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/x-component");
+    await expect(response.text()).resolves.toBe("page-level-not-found-flight");
   });
 
   it("probes layouts from inner to outer and stops on a handled special response", async () => {

@@ -5,8 +5,10 @@ import { decodeRedirectError, isRedirectError } from "./navigation-server.js";
 import { useErrorBoundaryPathname, useErrorBoundaryRouter } from "./error-boundary-navigation.js";
 import DefaultGlobalError from "./default-global-error.js";
 import { handleAppNavigationFailure } from "../client/app-nav-failure-handler.js";
+import { getNavigationRuntime } from "../client/navigation-runtime.js";
 import { VINEXT_DEV_ERROR_RECOVERY_EVENT } from "../utils/dev-error-recovery-event.js";
 import { isNavigationSignalError } from "../utils/navigation-signal.js";
+import { isDangerousScheme, reportBlockedDangerousNavigation } from "./url-safety.js";
 
 export type ErrorBoundaryProps = {
   fallback: React.ComponentType<{ error: unknown; reset: () => void }>;
@@ -113,6 +115,15 @@ function HandleRedirect({
   const router = useErrorBoundaryRouter();
 
   React.useEffect(() => {
+    if (isDangerousScheme(redirect)) {
+      const restored = getNavigationRuntime()?.functions.handleBlockedRedirect?.(redirect) ?? false;
+      reportBlockedDangerousNavigation();
+      if (restored) {
+        reset();
+      }
+      return;
+    }
+
     React.startTransition(() => {
       if (redirectType === "push") {
         router.push(redirect);
@@ -153,7 +164,6 @@ export class RedirectErrorBoundary extends React.Component<
           redirectType: null,
         };
       }
-
       const result = decodeRedirectError(error.digest);
       if (!result) {
         // Malformed digest (e.g. `NEXT_REDIRECT;push;` with an empty URL

@@ -48,7 +48,10 @@ export function parseNextRedirectDigest(digest: string): NextRedirectDigest | nu
   }
 
   const parts = digest.split(";");
-  const encodedUrl = parts[2];
+  const lastValueIndex = parts.length - (digest.endsWith(";") ? 2 : 1);
+  const parsedStatus = parseInt(parts[lastValueIndex] ?? "", 10);
+  const statusIndex = Number.isFinite(parsedStatus) ? lastValueIndex : parts.length;
+  const encodedUrl = parts.slice(2, Math.max(3, statusIndex)).join(";");
   if (!encodedUrl) {
     return null;
   }
@@ -56,7 +59,7 @@ export function parseNextRedirectDigest(digest: string): NextRedirectDigest | nu
   const type = parts[1];
 
   return {
-    status: parts[3] ? parseInt(parts[3], 10) : 307,
+    status: Number.isFinite(parsedStatus) ? parsedStatus : 307,
     type: type || null,
     url: decodeURIComponent(encodedUrl),
   };

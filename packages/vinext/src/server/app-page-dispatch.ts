@@ -901,6 +901,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         );
       },
       async probePageSpecialError() {
+        if (options.isRscRequest) {
+          return null;
+        }
         if (
           !shouldSuppressLoadingBoundaries(options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION) &&
           route.loading?.default
@@ -995,7 +998,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     },
     handlerStart: options.handlerStart,
     hasLoadingBoundary: hasActiveLoadingBoundary,
-    omitPendingDynamicCacheState: !options.isRscRequest && hasRequestSearchParams,
+    omitPendingDynamicCacheState: hasRequestSearchParams,
     formState: options.formState ?? null,
     isProgressiveActionRender: options.isProgressiveActionRender === true,
     isDynamicError,
@@ -1038,7 +1041,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     probePage() {
       return options.probePage(pageSearchParams);
     },
-    probePageBeforeRender: options.isRscRequest,
+    probePageBeforeRender: false,
     classification: {
       getLayoutId(index) {
         const treePosition = route.layoutTreePositions?.[index] ?? 0;
@@ -1083,6 +1086,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     hasCustomGlobalError: options.hasCustomGlobalError,
     prerenderToReadableStream: options.prerenderToReadableStream,
     routePattern: route.pattern,
+    requestUrl: options.request.url,
     runWithSuppressedHookWarning(probe) {
       return options.runWithSuppressedHookWarning(probe);
     },
@@ -1111,8 +1115,23 @@ function buildRscRedirectFlightStream<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
   digest: string,
 ): ReadableStream<Uint8Array> {
-  const throwingElement = React.createElement(function NextRedirectFlightThrower() {
-    const err = new Error("NEXT_REDIRECT") as Error & { digest: string };
+  return buildRscSpecialErrorFlightStream(options, digest, "NEXT_REDIRECT");
+}
+
+function buildRscHttpAccessFallbackFlightStream<TRoute extends AppPageDispatchRoute>(
+  options: DispatchAppPageOptions<TRoute>,
+  digest: string,
+): ReadableStream<Uint8Array> {
+  return buildRscSpecialErrorFlightStream(options, digest, "NEXT_HTTP_ERROR_FALLBACK");
+}
+
+function buildRscSpecialErrorFlightStream<TRoute extends AppPageDispatchRoute>(
+  options: DispatchAppPageOptions<TRoute>,
+  digest: string,
+  message: string,
+): ReadableStream<Uint8Array> {
+  const throwingElement = React.createElement(function NextSpecialErrorFlightThrower() {
+    const err = new Error(message) as Error & { digest: string };
     err.digest = digest;
     throw err;
   });
@@ -1129,6 +1148,8 @@ async function renderLayoutSpecialError<TRoute extends AppPageDispatchRoute>(
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
     basePath: options.basePath,
+    buildRscHttpAccessFallbackFlightStream: (rscOptions) =>
+      buildRscHttpAccessFallbackFlightStream(options, rscOptions.digest),
     buildRscRedirectFlightStream: (rscOptions) =>
       buildRscRedirectFlightStream(options, rscOptions.digest),
     clearRequestContext: options.clearRequestContext,
@@ -1172,6 +1193,8 @@ async function renderPageSpecialError<TRoute extends AppPageDispatchRoute>(
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
     basePath: options.basePath,
+    buildRscHttpAccessFallbackFlightStream: (rscOptions) =>
+      buildRscHttpAccessFallbackFlightStream(options, rscOptions.digest),
     buildRscRedirectFlightStream: (rscOptions) =>
       buildRscRedirectFlightStream(options, rscOptions.digest),
     clearRequestContext: options.clearRequestContext,

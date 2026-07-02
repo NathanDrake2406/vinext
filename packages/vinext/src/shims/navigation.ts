@@ -40,6 +40,7 @@ import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
+  VINEXT_RSC_REDIRECT_HEADER,
 } from "../server/headers.js";
 import {
   isAbsoluteOrProtocolRelativeUrl,
@@ -245,6 +246,7 @@ export type CachedRscResponse = {
   expiresAt?: number;
   mountedSlotsHeader?: string | null;
   paramsHeader: string | null;
+  streamedRedirectTarget?: string | null;
   url: string;
 };
 
@@ -814,6 +816,7 @@ export function createCachedRscResponseSnapshot(
     ...(dynamicStaleTimeSeconds !== undefined ? { dynamicStaleTimeSeconds } : {}),
     mountedSlotsHeader: response.headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
     paramsHeader: response.headers.get(VINEXT_PARAMS_HEADER),
+    streamedRedirectTarget: response.headers.get(VINEXT_RSC_REDIRECT_HEADER),
     url: responseUrl ?? response.url,
   };
 }
@@ -858,6 +861,9 @@ export function restoreRscResponse(cached: CachedRscResponse, copy = true): Resp
   }
   if (cached.paramsHeader != null) {
     headers.set(VINEXT_PARAMS_HEADER, cached.paramsHeader);
+  }
+  if (cached.streamedRedirectTarget != null) {
+    headers.set(VINEXT_RSC_REDIRECT_HEADER, cached.streamedRedirectTarget);
   }
 
   return new Response(copy ? cached.buffer.slice(0) : cached.buffer, {

@@ -421,6 +421,30 @@ describe("app page route wiring helpers", () => {
     });
   });
 
+  it("uses placeholder children during layout probes without invoking the page subtree", async () => {
+    const calls: string[] = [];
+    const layoutParamAccess = createAppLayoutParamAccessTracker();
+
+    function Layout(props: { children?: ReactNode }) {
+      calls.push("layout");
+      return createElement("section", null, props.children);
+    }
+
+    await probeAppPageLayoutWithTracking({
+      layoutIndex: 0,
+      layoutParamAccess,
+      makeThenableParams,
+      matchedParams: {},
+      route: {
+        layoutTreePositions: [0],
+        layouts: [{ default: Layout }],
+        routeSegments: ["dashboard"],
+      },
+    });
+
+    expect(calls).toEqual(["layout"]);
+  });
+
   it("renders generated metadata in a hidden body outlet for streaming-capable requests", async () => {
     // Ported from Next.js: test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts

@@ -251,6 +251,7 @@ const historyController = new AppBrowserHistoryController({
   readCurrentHref: () => window.location.href,
   pushHistoryState: (state, href) => pushHistoryStateWithoutNotify(state, "", href),
   replaceHistoryState: (state, href) => replaceHistoryStateWithoutNotify(state, "", href),
+  goHistory: (delta) => window.history.go(delta),
   readVisibleNavigationMetadata: () => {
     if (!hasBrowserRouterState()) return null;
     const routerState = getBrowserRouterState();
@@ -569,7 +570,9 @@ function createNavigationCommitEffect(options: {
   historyUpdateMode: HistoryUpdateMode | undefined;
   navId: number;
   params: Record<string, string | string[]>;
+  previousRouterState: AppRouterState;
   previousNextUrl: string | null;
+  renderId: number;
   targetHistoryIndex?: number | null;
 }): () => void {
   const {
@@ -578,7 +581,9 @@ function createNavigationCommitEffect(options: {
     historyUpdateMode,
     navId,
     params,
+    previousRouterState,
     previousNextUrl,
+    renderId,
     targetHistoryIndex,
   } = options;
 
@@ -592,7 +597,7 @@ function createNavigationCommitEffect(options: {
       return;
     }
 
-    historyController.commitNavigationHistory({
+    const historyRollback = historyController.commitNavigationHistory({
       bfcacheIds,
       href,
       historyUpdateMode,
@@ -600,11 +605,46 @@ function createNavigationCommitEffect(options: {
       stageClientParams: () => stageClientParams(params),
       targetHistoryIndex,
     });
+    if (historyRollback) {
+      browserNavigationController.armBlockedRedirectNavigationRollback({
+        historyRollback,
+        navId,
+        previousRouterState,
+        renderId,
+      });
+    }
 
     // URL has been updated; the recovery hard-nav target is no longer needed.
     clearAppNavigationFailureTarget(href);
     commitClientNavigationState(navId);
   };
+}
+
+function restoreBlockedRedirectNavigation(_redirect: string): boolean {
+  const rollback = browserNavigationController.consumeBlockedRedirectNavigationRollback();
+  if (rollback === null) return false;
+  if (!historyController.canRollbackNavigationHistory(rollback.historyRollback)) return false;
+
+  const navId = browserNavigationController.beginNavigation();
+  const restored = browserNavigationController.restoreHistorySnapshotVisibleState({
+    beforeCommit: () => {
+      historyController.rollbackNavigationHistory(rollback.historyRollback);
+      applyClientParams(rollback.previousRouterState.navigationSnapshot.params);
+    },
+    navId,
+    state: rollback.previousRouterState,
+    targetHref: rollback.historyRollback.previousHref,
+  });
+
+  if (!restored) {
+    browserNavigationController.finalizeNavigation(navId, null);
+    return false;
+  }
+
+  clearAppNavigationFailureTarget(rollback.historyRollback.committedHref);
+  commitClientNavigationState(navId, { releaseSnapshot: false });
+  browserNavigationController.finalizeNavigation(navId, null);
+  return true;
 }
 
 async function renderNavigationPayload(
@@ -1829,6 +1869,15 @@ function bootstrapHydration(
           visitedResponse,
         });
         if (reuseDecision.kind === "reuseVisitedResponse" && cachedRoute) {
+          const cachedStreamedRedirectTarget = cachedRoute.response.streamedRedirectTarget ?? null;
+          if (
+            blockDangerousStreamedRscRedirect(
+              restoreRscResponse(cachedRoute.response, false),
+              cachedStreamedRedirectTarget,
+            )
+          ) {
+            return;
+          }
           const cachedFetchDecision = navigationPlanner.classifyRscFetchResult({
             clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
             compatibilityIdHeader: cachedRoute.response.compatibilityIdHeader ?? null,
@@ -1842,7 +1891,7 @@ function bootstrapHydration(
             responseOk: true,
             responseUrl: cachedRoute.response.url,
             source: "cached",
-            streamedRedirectTarget: null,
+            streamedRedirectTarget: cachedStreamedRedirectTarget,
           });
           if (cachedFetchDecision.kind === "hardNavigate") {
             if (cachedFetchDecision.reason === "redirectDepthExhausted") {
@@ -2291,6 +2340,7 @@ function bootstrapHydration(
     clearNavigationCaches: clearClientNavigationCaches,
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
+    handleBlockedRedirect: restoreBlockedRedirectNavigation,
     navigate: navigateRsc,
   });
 

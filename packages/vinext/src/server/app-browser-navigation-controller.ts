@@ -47,6 +47,7 @@ import {
   clearAppNavigationFailureTarget,
   getAppNavigationFailureTarget,
 } from "../client/app-nav-failure-handler.js";
+import type { CommittedNavigationHistoryRollback } from "./app-browser-history-controller.js";
 
 export type HistoryUpdateMode = "push" | "replace";
 
@@ -66,12 +67,21 @@ type BrowserNavigationCommitEffectFactory = (options: {
   historyUpdateMode: HistoryUpdateMode | undefined;
   navId: number;
   params: Record<string, string | string[]>;
+  previousRouterState: AppRouterState;
   previousNextUrl: string | null;
+  renderId: number;
   targetHistoryIndex?: number | null;
 }) => BrowserNavigationCommitEffect;
 
 type BrowserRouterStateRef = {
   current: AppRouterState;
+};
+
+type BlockedRedirectNavigationRollback = {
+  historyRollback: CommittedNavigationHistoryRollback;
+  navId: number;
+  previousRouterState: AppRouterState;
+  renderId: number;
 };
 
 type SameUrlServerActionLifecycleOptions = {
@@ -112,6 +122,8 @@ type BrowserNavigationController = {
     state: AppRouterState;
     targetHref: string;
   }): boolean;
+  armBlockedRedirectNavigationRollback(rollback: BlockedRedirectNavigationRollback): void;
+  consumeBlockedRedirectNavigationRollback(): BlockedRedirectNavigationRollback | null;
   renderNavigationPayload(options: {
     actionType: "navigate" | "replace" | "traverse";
     createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
@@ -297,6 +309,7 @@ export function createAppBrowserNavigationController(
   >();
   const pendingNavigationFailureTargets = new Map<number, URL>();
   const pendingNavigationPrePaintEffects = new Map<number, BrowserNavigationCommitEffect>();
+  let pendingBlockedRedirectRollback: BlockedRedirectNavigationRollback | null = null;
 
   let setBrowserRouterState: Dispatch<AppRouterState | Promise<AppRouterState>> | null = null;
   let browserRouterStateRef: BrowserRouterStateRef | null = null;
@@ -345,6 +358,7 @@ export function createAppBrowserNavigationController(
     // User navigation owns the next visible result. Revoke any HMR payload
     // already suspended on RSC resolution so it cannot commit first and make
     // the still-current navigation look stale by advancing visible state.
+    pendingBlockedRedirectRollback = null;
     latestHmrUpdateId += 1;
     activeNavigationId += 1;
     pendingUserNavigationId = activeNavigationId;
@@ -701,6 +715,25 @@ export function createAppBrowserNavigationController(
     return true;
   }
 
+  function armBlockedRedirectNavigationRollback(rollback: BlockedRedirectNavigationRollback): void {
+    if (!isCurrentNavigation(rollback.navId)) return;
+    pendingBlockedRedirectRollback = rollback;
+  }
+
+  function consumeBlockedRedirectNavigationRollback(): BlockedRedirectNavigationRollback | null {
+    const rollback = pendingBlockedRedirectRollback;
+    if (rollback === null) return null;
+
+    const currentState = getBrowserRouterState();
+    if (!isCurrentNavigation(rollback.navId) || currentState.renderId !== rollback.renderId) {
+      pendingBlockedRedirectRollback = null;
+      return null;
+    }
+
+    pendingBlockedRedirectRollback = null;
+    return rollback;
+  }
+
   function notifyDiscardedServerActionRevalidation(
     lifecycleOptions: SameUrlServerActionLifecycleOptions | undefined,
   ): void {
@@ -816,7 +849,9 @@ export function createAppBrowserNavigationController(
           historyUpdateMode: options.historyUpdateMode,
           navId: options.navId,
           params: options.params,
+          previousRouterState: startedState,
           previousNextUrl: approvedCommit.previousNextUrl,
+          renderId,
           targetHistoryIndex: options.targetHistoryIndex,
         }),
       );
@@ -963,6 +998,8 @@ export function createAppBrowserNavigationController(
     beginPendingBrowserRouterState,
     finalizeNavigation,
     restoreHistorySnapshotVisibleState,
+    armBlockedRedirectNavigationRollback,
+    consumeBlockedRedirectNavigationRollback,
     renderNavigationPayload,
     commitSameUrlNavigatePayload,
     hmrReplaceTree,

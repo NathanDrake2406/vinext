@@ -30,6 +30,7 @@ import {
 import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
+  VINEXT_RSC_REDIRECT_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 import {
@@ -408,12 +409,13 @@ describe("form state rendering", () => {
 });
 
 describe("app page render lifecycle", () => {
-  it("returns pre-render special responses before starting the render stream", async () => {
+  it("returns document pre-render special responses before starting the render stream", async () => {
     const common = createCommonOptions();
 
     const response = await renderAppPageLifecycle({
       ...common.options,
-      isRscRequest: true,
+      isRscRequest: false,
+      probePageBeforeRender: true,
       probePage() {
         throw { digest: "NEXT_NOT_FOUND" };
       },
@@ -423,6 +425,61 @@ describe("app page render lifecycle", () => {
     await expect(response.text()).resolves.toBe("page:404");
     expect(common.renderToReadableStream).not.toHaveBeenCalled();
     expect(common.renderPageSpecialError).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects disabled page probing for no-loading RSC renders", async () => {
+    const common = createCommonOptions();
+    const probePage = vi.fn(() => {
+      throw new Error("RSC page probe should not execute");
+    });
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      hasLoadingBoundary: false,
+      isRscRequest: true,
+      probePage,
+      probePageBeforeRender: false,
+    });
+
+    expect(probePage).not.toHaveBeenCalled();
+    expect(common.renderToReadableStream).toHaveBeenCalledTimes(1);
+    expect(common.renderPageSpecialError).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/x-component");
+    await expect(response.text()).resolves.toBe("flight-data");
+  });
+
+  it("marks already-captured RSC redirects without page probing or HTTP conversion", async () => {
+    const common = createCommonOptions();
+    const dangerousUrl = "javascript:window.location.assign('/nextjs-compat/boom');";
+    const redirectError = Object.assign(new Error("redirect"), {
+      digest: `NEXT_REDIRECT;replace;${dangerousUrl};307;`,
+    });
+    const probePage = vi.fn(() => {
+      throw new Error("RSC page probe should not execute");
+    });
+    const renderToReadableStream = vi.fn((_element, options) => {
+      options.onError(redirectError, null, null);
+      return createStream(["flight-redirect"]);
+    });
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      hasLoadingBoundary: false,
+      isRscRequest: true,
+      probePage,
+      probePageBeforeRender: false,
+      renderToReadableStream,
+      requestUrl: "https://example.test/nextjs-compat/rsc-redirect.rsc",
+    });
+
+    expect(probePage).not.toHaveBeenCalled();
+    expect(renderToReadableStream).toHaveBeenCalledTimes(1);
+    expect(common.renderPageSpecialError).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/x-component");
+    expect(response.headers.get(VINEXT_RSC_REDIRECT_HEADER)).toBe(dangerousUrl);
+    await expect(response.text()).resolves.toBe("flight-redirect");
   });
 
   it("does not run the page probe before normal HTML rendering", async () => {
@@ -577,6 +634,50 @@ describe("app page render lifecycle", () => {
     });
     expect(JSON.stringify(cachedValue?.renderObservation)).not.toContain("secret");
     expect(consumeDynamicUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it("omits RSC cache state and skips cache writes when stream-time searchParams usage is dynamic", async () => {
+    const common = createCommonOptions();
+    const streamGate = createDeferred();
+    let dynamicUsed = false;
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      consumeDynamicUsage() {
+        const value = dynamicUsed;
+        dynamicUsed = false;
+        return value;
+      },
+      isProduction: true,
+      isRscRequest: true,
+      omitPendingDynamicCacheState: true,
+      renderToReadableStream() {
+        let sent = false;
+        return new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (sent) {
+              controller.close();
+              return;
+            }
+            sent = true;
+            await streamGate.promise;
+            dynamicUsed = true;
+            controller.enqueue(new TextEncoder().encode("flight-data"));
+          },
+        });
+      },
+      revalidateSeconds: 60,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("x-vinext-cache")).toBeNull();
+    expect(common.waitUntilPromises).toHaveLength(1);
+
+    streamGate.resolve();
+    await expect(response.text()).resolves.toBe("flight-data");
+    await Promise.all(common.waitUntilPromises);
+    expect(common.isrSet).not.toHaveBeenCalled();
   });
 
   it("does not cache RSC responses when skip transport omits layout records", async () => {

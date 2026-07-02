@@ -32,6 +32,7 @@ import {
   hydrateRootInTransition,
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
+import { AppBrowserHistoryController } from "../packages/vinext/src/server/app-browser-history-controller.js";
 import {
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
@@ -133,6 +134,7 @@ import {
   ACTION_REDIRECT_TYPE_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
+  VINEXT_RSC_REDIRECT_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type {
   GraphVersion,
@@ -849,6 +851,7 @@ describe("app browser entry navigation scheduling", () => {
           [VINEXT_MOUNTED_SLOTS_HEADER]: "children",
           [VINEXT_PARAMS_HEADER]: "%7B%22slug%22%3A%22target%22%7D",
           [VINEXT_RSC_COMPATIBILITY_ID_HEADER]: "compat-a",
+          [VINEXT_RSC_REDIRECT_HEADER]: "/redirected",
         },
       }),
       await new Response("flight").arrayBuffer(),
@@ -856,6 +859,7 @@ describe("app browser entry navigation scheduling", () => {
     );
 
     expect(snapshot.compatibilityIdHeader).toBe("compat-a");
+    expect(snapshot.streamedRedirectTarget).toBe("/redirected");
     expect(snapshot.url).toBe(responseUrl);
     expect(
       resolveRscCompatibilityNavigationDecision({
@@ -871,6 +875,7 @@ describe("app browser entry navigation scheduling", () => {
     expect(replayed.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe("compat-a");
     expect(replayed.headers.get(VINEXT_MOUNTED_SLOTS_HEADER)).toBe("children");
     expect(replayed.headers.get(VINEXT_PARAMS_HEADER)).toBe("%7B%22slug%22%3A%22target%22%7D");
+    expect(replayed.headers.get(VINEXT_RSC_REDIRECT_HEADER)).toBe("/redirected");
     expect(await replayed.text()).toBe("flight");
   });
 
@@ -3281,6 +3286,66 @@ describe("app browser navigation controller", () => {
       expect(createNavigationCommitEffect).toHaveBeenCalledTimes(1);
       expect(commitEffect).not.toHaveBeenCalled();
       expect(setBrowserRouterState).toHaveBeenCalledTimes(1);
+    } finally {
+      detach();
+    }
+  });
+
+  it("scopes blocked redirect rollback tokens to the current committed render", async () => {
+    const initialState = createState({
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/source", {}),
+      routeId: "route:/source",
+    });
+    const { controller, detach, stateRef } = createControllerHarness(initialState);
+    const navId = controller.beginNavigation();
+    const nextElements = Promise.resolve(
+      createResolvedElements("route:/redirecting", "/", null, {
+        "page:/redirecting": React.createElement("main", null, "redirecting"),
+      }),
+    );
+
+    try {
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect: () => () => {},
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot(
+          "https://example.com/redirecting",
+          {},
+        ),
+        nextElements,
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/redirecting",
+        navId,
+      });
+
+      await vi.waitFor(() => expect(stateRef.current.routeId).toBe("route:/redirecting"));
+
+      const rollback = {
+        historyRollback: {
+          committedHref: "https://example.com/redirecting",
+          historyUpdateMode: "push",
+          previousHistoryState: null,
+          previousHref: "https://example.com/source",
+          previousTraversalIndex: 0,
+        },
+        navId,
+        previousRouterState: initialState,
+        renderId: stateRef.current.renderId,
+      } as const;
+      controller.armBlockedRedirectNavigationRollback(rollback);
+
+      expect(controller.consumeBlockedRedirectNavigationRollback()).toBe(rollback);
+
+      controller.armBlockedRedirectNavigationRollback({
+        ...rollback,
+        renderId: stateRef.current.renderId + 1,
+      });
+      expect(controller.consumeBlockedRedirectNavigationRollback()).toBeNull();
     } finally {
       detach();
     }
@@ -6348,6 +6413,113 @@ describe("app browser entry bfcacheId helpers", () => {
     });
     expect(readHistoryStateBfcacheIds(state)).toEqual({ [pageX1Id]: "_b_9_" });
     expect(readHistoryStateBfcacheVersion(state)).toBe(3);
+  });
+
+  it("returns a rollback token for push history commits and rolls back with history.go", () => {
+    const initialHistoryState = createHistoryStateWithNavigationMetadata(
+      { source: true },
+      {
+        previousNextUrl: null,
+        traversalIndex: 2,
+      },
+    );
+    let currentHref = "https://example.com/source";
+    let historyState: unknown = initialHistoryState;
+    const pushHistoryState = vi.fn((state: unknown, href: string) => {
+      historyState = state;
+      currentHref = new URL(href, currentHref).href;
+    });
+    const replaceHistoryState = vi.fn();
+    const goHistory = vi.fn((delta: number) => {
+      expect(delta).toBe(-1);
+      currentHref = "https://example.com/source";
+      historyState = initialHistoryState;
+    });
+    const controller = new AppBrowserHistoryController({
+      initialHistoryState,
+      maxHistoryStateSnapshots: 2,
+      readCurrentHref: () => currentHref,
+      readHistoryState: () => historyState,
+      pushHistoryState,
+      replaceHistoryState,
+      goHistory,
+      readVisibleNavigationMetadata: () => null,
+    });
+    const stageClientParams = vi.fn();
+
+    const rollback = controller.commitNavigationHistory({
+      bfcacheIds: {},
+      href: "https://example.com/target",
+      historyUpdateMode: "push",
+      previousNextUrl: null,
+      stageClientParams,
+    });
+
+    expect(stageClientParams).toHaveBeenCalledOnce();
+    expect(pushHistoryState).toHaveBeenCalledOnce();
+    expect(controller.currentHistoryTraversalIndex).toBe(3);
+    expect(rollback).toEqual({
+      committedHref: "https://example.com/target",
+      historyUpdateMode: "push",
+      previousHistoryState: initialHistoryState,
+      previousHref: "https://example.com/source",
+      previousTraversalIndex: 2,
+    });
+
+    expect(controller.rollbackNavigationHistory(rollback!)).toBe(true);
+    expect(goHistory).toHaveBeenCalledWith(-1);
+    expect(replaceHistoryState).not.toHaveBeenCalled();
+    expect(controller.currentHistoryTraversalIndex).toBe(2);
+  });
+
+  it("returns a rollback token for replace history commits and restores the previous entry", () => {
+    const initialHistoryState = createHistoryStateWithNavigationMetadata(
+      { source: true },
+      {
+        previousNextUrl: null,
+        traversalIndex: 2,
+      },
+    );
+    let currentHref = "https://example.com/source";
+    let historyState: unknown = initialHistoryState;
+    const replaceHistoryState = vi.fn((state: unknown, href: string) => {
+      historyState = state;
+      currentHref = new URL(href, currentHref).href;
+    });
+    const controller = new AppBrowserHistoryController({
+      initialHistoryState,
+      maxHistoryStateSnapshots: 2,
+      readCurrentHref: () => currentHref,
+      readHistoryState: () => historyState,
+      pushHistoryState: vi.fn(),
+      replaceHistoryState,
+      readVisibleNavigationMetadata: () => null,
+    });
+
+    const rollback = controller.commitNavigationHistory({
+      bfcacheIds: {},
+      href: "https://example.com/target",
+      historyUpdateMode: "replace",
+      previousNextUrl: null,
+      stageClientParams: vi.fn(),
+    });
+
+    expect(readHistoryStateTraversalIndex(replaceHistoryState.mock.calls[0]?.[0])).toBe(2);
+    expect(replaceHistoryState.mock.calls[0]?.[1]).toBe("https://example.com/target");
+    expect(rollback).toEqual({
+      committedHref: "https://example.com/target",
+      historyUpdateMode: "replace",
+      previousHistoryState: initialHistoryState,
+      previousHref: "https://example.com/source",
+      previousTraversalIndex: 2,
+    });
+
+    expect(controller.rollbackNavigationHistory(rollback!)).toBe(true);
+    expect(replaceHistoryState).toHaveBeenLastCalledWith(
+      initialHistoryState,
+      "https://example.com/source",
+    );
+    expect(controller.currentHistoryTraversalIndex).toBe(2);
   });
 
   it("drops bfcache version metadata when bfcache ids are cleared", () => {

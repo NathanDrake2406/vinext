@@ -238,6 +238,7 @@ declare module "next/navigation" {
     expiresAt?: number;
     mountedSlotsHeader?: string | null;
     paramsHeader: string | null;
+    streamedRedirectTarget?: string | null;
     url: string;
   };
   export type PrefetchCacheEntry = {
