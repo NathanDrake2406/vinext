@@ -13,16 +13,6 @@ function enqueueStrings(stream: Transform, chunks: string[]): void {
   }
 }
 
-function toBufferView(chunk: Buffer | Uint8Array | string, encoding: BufferEncoding): Buffer {
-  if (typeof chunk === "string") {
-    return Buffer.from(chunk, encoding);
-  }
-  if (Buffer.isBuffer(chunk)) {
-    return chunk;
-  }
-  return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-}
-
 export function createNodeTickBufferedTransform(
   rscEmbed: RscEmbedTransform,
   injectHTML: HtmlInsertion = "",
@@ -45,8 +35,8 @@ export function createNodeTickBufferedTransform(
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const stream = new Transform({
-    transform(chunk: Buffer | Uint8Array | string, encoding, callback) {
-      state.push(decoder.write(toBufferView(chunk, encoding)));
+    transform(chunk: Buffer, _encoding, callback) {
+      state.push(decoder.write(chunk));
 
       if (timeoutId === null) {
         timeoutId = setTimeout(() => {
