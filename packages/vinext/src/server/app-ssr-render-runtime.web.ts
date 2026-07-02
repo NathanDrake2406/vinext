@@ -1,28 +1,9 @@
 import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server.edge";
+import { prerender } from "react-dom/static.edge";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
 import { renderSsrErrorDocumentShellHtml } from "./app-ssr-error-shell.js";
 import { createTickBufferedTransform } from "./app-ssr-stream.js";
 import type { AppSsrRenderRuntime } from "./app-ssr-entry-core.js";
-
-type StaticPrerender = typeof import("react-dom/static.edge").prerender;
-
-function isStaticPrerenderModule(value: unknown): value is { prerender: StaticPrerender } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "prerender" in value &&
-    typeof value.prerender === "function"
-  );
-}
-
-async function loadStaticPrerender(): Promise<StaticPrerender> {
-  const staticRenderer: unknown = await import("react-dom/static.edge");
-  if (isStaticPrerenderModule(staticRenderer)) {
-    return staticRenderer.prerender;
-  }
-
-  throw new Error("[vinext] react-dom/static.edge did not expose prerender().");
-}
 
 function createUtf8Stream(html: string): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -47,17 +28,7 @@ function transformHtmlStream(
   htmlStream: ReadableStream<Uint8Array>,
   options: Parameters<AppSsrRenderRuntime["renderFinalHtmlStream"]>[0]["transform"],
 ): ReadableStream<Uint8Array> {
-  return htmlStream.pipeThrough(
-    createTickBufferedTransform(
-      options.rscEmbed,
-      options.injectHTML,
-      options.injectAfterHeadOpenHTML,
-      options.inlineCssManifest,
-      options.inlineCssPrependCss,
-      options.inlineCssPrependFallbackHTML,
-      options.inlineCssScriptNonce,
-    ),
-  );
+  return htmlStream.pipeThrough(createTickBufferedTransform(options));
 }
 
 export const appSsrWebRuntime: AppSsrRenderRuntime = {
@@ -70,7 +41,6 @@ export const appSsrWebRuntime: AppSsrRenderRuntime = {
     let shellErrorRecovered = false;
 
     if (options.pprFallbackShellSignal) {
-      const prerender = await loadStaticPrerender();
       const htmlAbortController = new AbortController();
       const pendingHtml = prerender(options.element, {
         ...(options.renderOptions as RenderToReadableStreamOptions),

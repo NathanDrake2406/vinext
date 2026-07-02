@@ -19,7 +19,7 @@ export type RscEmbedTransform = {
   getRawBuffer(): Promise<ArrayBuffer>;
 };
 
-export type HtmlInsertion = string | (() => string);
+type HtmlInsertion = string | (() => string);
 export type InlineCssManifest = Record<string, string>;
 export type InitialNavigationCacheMetadata = {
   kind: "dynamic" | "static";
@@ -634,26 +634,12 @@ export function createAppHtmlInsertionState(
 }
 
 export function createTickBufferedTransform(
-  rscEmbed: RscEmbedTransform,
-  injectHTML: HtmlInsertion = "",
-  injectAfterHeadOpenHTML: HtmlInsertion = "",
-  inlineCssManifest?: InlineCssManifest,
-  inlineCssPrependCss = "",
-  inlineCssPrependFallbackHTML = "",
-  inlineCssScriptNonce?: string,
+  options: CreateAppHtmlInsertionStateOptions,
 ): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const state = createAppHtmlInsertionState({
-    rscEmbed,
-    injectHTML,
-    injectAfterHeadOpenHTML,
-    inlineCssManifest,
-    inlineCssPrependCss,
-    inlineCssPrependFallbackHTML,
-    inlineCssScriptNonce,
-  });
+  const state = createAppHtmlInsertionState(options);
 
   const enqueueStrings = (
     controller: TransformStreamDefaultController<Uint8Array>,

@@ -235,15 +235,15 @@ async function runTransform(
     inlineCssScriptNonce?: string;
   } = {},
 ): Promise<string> {
-  const transform = createTickBufferedTransform(
-    createNoopRscEmbedTransform(),
-    options.injectHTML ?? "",
-    options.injectAfterHeadOpenHTML ?? "",
-    options.inlineCss,
-    options.inlineCssPrependCss,
-    options.inlineCssPrependFallbackHTML,
-    options.inlineCssScriptNonce,
-  );
+  const transform = createTickBufferedTransform({
+    rscEmbed: createNoopRscEmbedTransform(),
+    injectHTML: options.injectHTML,
+    injectAfterHeadOpenHTML: options.injectAfterHeadOpenHTML,
+    inlineCssManifest: options.inlineCss,
+    inlineCssPrependCss: options.inlineCssPrependCss,
+    inlineCssPrependFallbackHTML: options.inlineCssPrependFallbackHTML,
+    inlineCssScriptNonce: options.inlineCssScriptNonce,
+  });
   const source = createTextStream(chunks);
   const piped = source.pipeThrough(transform);
   const reader = piped.getReader();
@@ -269,15 +269,15 @@ async function runNodeTransform(
     inlineCssScriptNonce?: string;
   } = {},
 ): Promise<string> {
-  const transform = createNodeTickBufferedTransform(
-    createNoopRscEmbedTransform(),
-    options.injectHTML ?? "",
-    options.injectAfterHeadOpenHTML ?? "",
-    options.inlineCss,
-    options.inlineCssPrependCss,
-    options.inlineCssPrependFallbackHTML,
-    options.inlineCssScriptNonce,
-  );
+  const transform = createNodeTickBufferedTransform({
+    rscEmbed: createNoopRscEmbedTransform(),
+    injectHTML: options.injectHTML,
+    injectAfterHeadOpenHTML: options.injectAfterHeadOpenHTML,
+    inlineCssManifest: options.inlineCss,
+    inlineCssPrependCss: options.inlineCssPrependCss,
+    inlineCssPrependFallbackHTML: options.inlineCssPrependFallbackHTML,
+    inlineCssScriptNonce: options.inlineCssScriptNonce,
+  });
   const output: Buffer[] = [];
   transform.on("data", (chunk: Buffer | Uint8Array | string) => {
     output.push(Buffer.from(chunk));
@@ -318,7 +318,10 @@ async function runDelayedTransform(
 
   return new Response(
     source.pipeThrough(
-      createTickBufferedTransform(createNoopRscEmbedTransform(), "", "", options.inlineCss),
+      createTickBufferedTransform({
+        rscEmbed: createNoopRscEmbedTransform(),
+        inlineCssManifest: options.inlineCss,
+      }),
     ),
   ).text();
 }
@@ -427,7 +430,7 @@ describe("createTickBufferedTransform pre-head splice", () => {
         finalize: async () => '<script id="trailing-rsc">rsc()</script>',
         getRawBuffer: async () => new ArrayBuffer(0),
       };
-      const transform = createTickBufferedTransform(rsc, "", "");
+      const transform = createTickBufferedTransform({ rscEmbed: rsc });
       const source = createTextStream([
         "<!DOCTYPE html><html><head></head><body><div>hi</div></body></html>",
       ]);
@@ -449,7 +452,10 @@ describe("createTickBufferedTransform pre-head splice", () => {
         finalize: async () => "",
         getRawBuffer: async () => new ArrayBuffer(0),
       };
-      const transform = createTickBufferedTransform(rsc, "<meta data-injected='1'/>", "");
+      const transform = createTickBufferedTransform({
+        rscEmbed: rsc,
+        injectHTML: "<meta data-injected='1'/>",
+      });
       const source = createTextStream(["<!DOCTYPE html><html><body></body></html>"]);
       const out = await new Response(source.pipeThrough(transform)).text();
 
@@ -467,7 +473,7 @@ describe("createTickBufferedTransform pre-head splice", () => {
         finalize: async () => "",
         getRawBuffer: async () => new ArrayBuffer(0),
       };
-      const transform = createTickBufferedTransform(rsc, "", "");
+      const transform = createTickBufferedTransform({ rscEmbed: rsc });
       const source = createTextStream(["<!DOCTYPE html><html><head></head><body>oops"]);
       const out = await new Response(source.pipeThrough(transform)).text();
 
@@ -481,9 +487,12 @@ describe("createTickBufferedTransform pre-head splice", () => {
     // (e.g. captured Script content) that may not be populated until the
     // tree has rendered.
     let calls = 0;
-    const transform = createTickBufferedTransform(createNoopRscEmbedTransform(), "", () => {
-      calls++;
-      return "<script>fn</script>";
+    const transform = createTickBufferedTransform({
+      rscEmbed: createNoopRscEmbedTransform(),
+      injectAfterHeadOpenHTML: () => {
+        calls++;
+        return "<script>fn</script>";
+      },
     });
     const source = createTextStream(["<!DOCTYPE html><html><head></head><body></body></html>"]);
     const out = await new Response(source.pipeThrough(transform)).text();
@@ -592,7 +601,7 @@ describe("createTickBufferedTransform inline CSS", () => {
   });
 
   it("does not buffer incomplete link-like text when inline CSS is disabled", async () => {
-    const transform = createTickBufferedTransform(createNoopRscEmbedTransform());
+    const transform = createTickBufferedTransform({ rscEmbed: createNoopRscEmbedTransform() });
 
     const out = await readSingleTransformChunk(
       transform,

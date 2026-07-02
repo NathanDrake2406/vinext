@@ -20,7 +20,7 @@ function createTransformedWebStream(destination: PassThrough): ReadableStream<Ui
   return Readable.toWeb(
     pipeWithCancellationPropagation(
       destination,
-      createNodeTickBufferedTransform(createNoopRscEmbedTransform()),
+      createNodeTickBufferedTransform({ rscEmbed: createNoopRscEmbedTransform() }),
     ),
   ) as ReadableStream<Uint8Array>;
 }

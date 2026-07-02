@@ -1,18 +1,10 @@
 import { Readable, type Readable as NodeReadable } from "node:stream";
+import { text } from "node:stream/consumers";
 import type { ReactNode } from "react";
 import { renderToNodeFizzStream } from "./node-fizz-stream.js";
 
 function nodeReadableToWeb(stream: NodeReadable): ReadableStream<Uint8Array> {
   return Readable.toWeb(stream) as ReadableStream<Uint8Array>;
-}
-
-async function readNodeStreamAsString(stream: NodeReadable): Promise<string> {
-  stream.setEncoding("utf8");
-  let html = "";
-  for await (const chunk of stream) {
-    html += chunk;
-  }
-  return html;
 }
 
 export async function renderPagesToReadableStream(
@@ -22,7 +14,5 @@ export async function renderPagesToReadableStream(
 }
 
 export async function renderPagesToString(element: ReactNode): Promise<string> {
-  return readNodeStreamAsString(
-    await renderToNodeFizzStream(element, {}, { waitForAllReady: true }),
-  );
+  return text(await renderToNodeFizzStream(element, {}, { waitForAllReady: true }));
 }

@@ -30,18 +30,7 @@ function transformNodeHtmlStream(
   htmlStream: NodeReadable,
   options: Parameters<AppSsrRenderRuntime["renderFinalHtmlStream"]>[0]["transform"],
 ): NodeReadable {
-  return pipeWithCancellationPropagation(
-    htmlStream,
-    createNodeTickBufferedTransform(
-      options.rscEmbed,
-      options.injectHTML,
-      options.injectAfterHeadOpenHTML,
-      options.inlineCssManifest,
-      options.inlineCssPrependCss,
-      options.inlineCssPrependFallbackHTML,
-      options.inlineCssScriptNonce,
-    ),
-  );
+  return pipeWithCancellationPropagation(htmlStream, createNodeTickBufferedTransform(options));
 }
 
 export const appSsrNodeRuntime: AppSsrRenderRuntime = {

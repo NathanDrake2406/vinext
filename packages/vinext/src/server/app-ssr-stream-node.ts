@@ -1,10 +1,8 @@
-import { Transform, type Readable as NodeReadable } from "node:stream";
+import { pipeline, Transform, type Readable as NodeReadable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
   createAppHtmlInsertionState,
-  type HtmlInsertion,
-  type InlineCssManifest,
-  type RscEmbedTransform,
+  type CreateAppHtmlInsertionStateOptions,
 } from "./app-ssr-stream.js";
 
 function enqueueStrings(stream: Transform, chunks: string[]): void {
@@ -14,24 +12,10 @@ function enqueueStrings(stream: Transform, chunks: string[]): void {
 }
 
 export function createNodeTickBufferedTransform(
-  rscEmbed: RscEmbedTransform,
-  injectHTML: HtmlInsertion = "",
-  injectAfterHeadOpenHTML: HtmlInsertion = "",
-  inlineCssManifest?: InlineCssManifest,
-  inlineCssPrependCss = "",
-  inlineCssPrependFallbackHTML = "",
-  inlineCssScriptNonce?: string,
+  options: CreateAppHtmlInsertionStateOptions,
 ): Transform {
   const decoder = new StringDecoder("utf8");
-  const state = createAppHtmlInsertionState({
-    rscEmbed,
-    injectHTML,
-    injectAfterHeadOpenHTML,
-    inlineCssManifest,
-    inlineCssPrependCss,
-    inlineCssPrependFallbackHTML,
-    inlineCssScriptNonce,
-  });
+  const state = createAppHtmlInsertionState(options);
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const stream = new Transform({
@@ -80,18 +64,5 @@ export function pipeWithCancellationPropagation(
   source: NodeReadable,
   transform: Transform,
 ): NodeReadable {
-  const transformed = source.pipe(transform);
-
-  transformed.once("error", (error) => {
-    if (!source.destroyed) {
-      source.destroy(error);
-    }
-  });
-  transformed.once("close", () => {
-    if (!transformed.readableEnded && !source.destroyed) {
-      source.destroy();
-    }
-  });
-
-  return transformed;
+  return pipeline(source, transform, () => {});
 }
