@@ -5,6 +5,10 @@
  * RSC, SSR, and the public next/navigation shim can share one implementation.
  */
 
+import { parseRedirectDigest } from "../utils/redirect-digest.js";
+
+export { parseRedirectDigest, type RedirectDigest } from "../utils/redirect-digest.js";
+
 export const HTTP_ERROR_FALLBACK_ERROR_CODE = "NEXT_HTTP_ERROR_FALLBACK";
 
 export function isHTTPAccessFallbackError(error: unknown): boolean {
@@ -90,16 +94,12 @@ export function isRedirectError(error: unknown): error is RedirectErrorShape {
 export function decodeRedirectError(
   digest: string,
 ): { url: string; type: "push" | "replace" } | null {
-  if (!digest.startsWith("NEXT_REDIRECT;")) return null;
-
-  const parts = digest.split(";");
-  const encodedTarget = parts.length >= 5 ? parts.slice(2, -2).join(";") : parts[2];
-  if (!encodedTarget) return null;
-
   try {
+    const redirect = parseRedirectDigest(digest);
+    if (!redirect) return null;
     return {
-      url: decodeURIComponent(encodedTarget),
-      type: parts[1] === "push" ? "push" : "replace",
+      url: redirect.url,
+      type: redirect.type === "push" ? "push" : "replace",
     };
   } catch {
     return null;

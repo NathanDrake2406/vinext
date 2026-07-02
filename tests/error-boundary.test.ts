@@ -399,6 +399,18 @@ describe("RedirectBoundary digest classification", () => {
     });
   });
 
+  it("preserves semicolons inside redirect digest URLs", () => {
+    const e = Object.assign(new Error("NEXT_REDIRECT"), {
+      digest: "NEXT_REDIRECT;replace;javascript:window.location.assign('/boom');;307;",
+    });
+
+    expect(RedirectErrorBoundaryClass).not.toBeNull();
+    expect(RedirectErrorBoundaryClass?.getDerivedStateFromError(e)).toEqual({
+      redirect: "javascript:window.location.assign('/boom');",
+      redirectType: "replace",
+    });
+  });
+
   it("re-throws non-redirect errors", () => {
     const e = Object.assign(new Error("NEXT_NOT_FOUND"), { digest: "NEXT_NOT_FOUND" });
 
