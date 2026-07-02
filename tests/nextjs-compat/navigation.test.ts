@@ -57,6 +57,20 @@ describe("Next.js compat: navigation", () => {
     expect(html).toContain("Result Page");
   });
 
+  it("RSC request for nested async child redirect() returns a Flight redirect payload", async () => {
+    const res = await fetch(`${baseUrl}/nextjs-compat/rsc-nested-special-errors/redirect.rsc`, {
+      headers: { Accept: "text/x-component" },
+      redirect: "manual",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/x-component");
+    expect(res.headers.get("location")).toBeNull();
+    const body = await res.text();
+    expect(body).toContain("NEXT_REDIRECT");
+    expect(body).toContain("/nextjs-compat/nav-redirect-result");
+  });
+
   // ── Server-side notFound ─────────────────────────────────────
   // Next.js: 'should trigger not-found in a server component'
   // Source: https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/navigation/navigation.test.ts#L136-L146

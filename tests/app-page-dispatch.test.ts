@@ -81,6 +81,7 @@ type TestRoute = {
   unauthorizeds?: readonly ({ default?: unknown } | null | undefined)[];
 };
 type DispatchOptions = Parameters<typeof dispatchAppPage<TestRoute>>[0];
+type RenderToReadableStream = NonNullable<DispatchOptions["renderToReadableStream"]>;
 
 function createStream(chunks: string[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -183,6 +184,26 @@ async function renderReactNodeText(node: unknown): Promise<string> {
     return renderReactNodeText(Reflect.apply(node.type, undefined, [node.props]));
   }
   return "";
+}
+
+function renderSpecialErrorElementToFlightStream(
+  element: Parameters<RenderToReadableStream>[0],
+  options: Parameters<RenderToReadableStream>[1],
+): ReturnType<RenderToReadableStream> {
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        await renderReactNodeText(element);
+      } catch (error) {
+        const digest = String(options.onError(error, null, null));
+        controller.enqueue(new TextEncoder().encode(`E:${digest}`));
+        controller.close();
+        return;
+      }
+      controller.enqueue(new TextEncoder().encode("OK"));
+      controller.close();
+    },
+  });
 }
 
 function renderPagePayloadToStream(payload: unknown): ReadableStream<Uint8Array> {
@@ -655,20 +676,24 @@ describe("app page dispatch", () => {
     const probePage = vi.fn(() => {
       throw createRedirectDigestError("/page-wins");
     });
+    const renderToReadableStream = vi.fn(renderSpecialErrorElementToFlightStream);
     const { options } = createDispatchOptions({
       async buildPageElement() {
         throw createNotFoundDigestError();
       },
       isRscRequest: true,
       probePage,
+      renderToReadableStream,
     });
 
     const response = await dispatchAppPage(options);
 
     expect(probePage).not.toHaveBeenCalled();
-    expect(response.status).toBe(404);
+    expect(renderToReadableStream).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/x-component");
     expect(response.headers.get("x-vinext-rsc-redirect")).toBeNull();
-    await expect(response.text()).resolves.toBe("Not Found");
+    await expect(response.text()).resolves.toBe("E:NEXT_HTTP_ERROR_FALLBACK;404");
   });
 
   it("preserves document page special-error priority when element construction throws", async () => {

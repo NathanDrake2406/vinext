@@ -408,12 +408,12 @@ describe("form state rendering", () => {
 });
 
 describe("app page render lifecycle", () => {
-  it("returns pre-render special responses before starting the render stream", async () => {
+  it("returns document pre-render special responses before starting the render stream", async () => {
     const common = createCommonOptions();
 
     const response = await renderAppPageLifecycle({
       ...common.options,
-      isRscRequest: true,
+      isRscRequest: false,
       probePageBeforeRender: true,
       probePage() {
         throw { digest: "NEXT_NOT_FOUND" };

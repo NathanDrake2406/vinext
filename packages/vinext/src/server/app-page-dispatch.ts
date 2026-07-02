@@ -241,7 +241,6 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     options?: {
       observeMetadataSearchParamsAccess?: boolean;
       observePageSearchParamsAccess?: boolean;
-      onPageRenderSettled?: (settled: Promise<void>) => void;
     },
   ) => Promise<AppPageElement>;
   clientReuseManifest?: ClientReuseManifestParseResult;
@@ -883,7 +882,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     return interceptResult.response;
   }
 
-  const pageRenderSettlements: Promise<void>[] = [];
   const buildCurrentPageElement = () =>
     buildAppPageElement({
       buildPageElement() {
@@ -899,9 +897,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
           {
             observeMetadataSearchParamsAccess: !isForceStatic,
             observePageSearchParamsAccess: !isForceStatic,
-            onPageRenderSettled(settled) {
-              pageRenderSettlements.push(settled);
-            },
           },
         );
       },
@@ -984,11 +979,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     consumeRenderObservationState: consumeAppPageRenderObservationState,
     createRscOnErrorHandler(pathname, routePath) {
       return options.createRscOnErrorHandler(pathname, routePath);
-    },
-    async awaitPageRenderSettlements() {
-      for (let index = 0; index < pageRenderSettlements.length; index += 1) {
-        await pageRenderSettlements[index];
-      }
     },
     element: pageBuildResult.element,
     clientReuseManifest: options.clientReuseManifest,
@@ -1124,8 +1114,23 @@ function buildRscRedirectFlightStream<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
   digest: string,
 ): ReadableStream<Uint8Array> {
-  const throwingElement = React.createElement(function NextRedirectFlightThrower() {
-    const err = new Error("NEXT_REDIRECT") as Error & { digest: string };
+  return buildRscSpecialErrorFlightStream(options, digest, "NEXT_REDIRECT");
+}
+
+function buildRscHttpAccessFallbackFlightStream<TRoute extends AppPageDispatchRoute>(
+  options: DispatchAppPageOptions<TRoute>,
+  digest: string,
+): ReadableStream<Uint8Array> {
+  return buildRscSpecialErrorFlightStream(options, digest, "NEXT_HTTP_ERROR_FALLBACK");
+}
+
+function buildRscSpecialErrorFlightStream<TRoute extends AppPageDispatchRoute>(
+  options: DispatchAppPageOptions<TRoute>,
+  digest: string,
+  message: string,
+): ReadableStream<Uint8Array> {
+  const throwingElement = React.createElement(function NextSpecialErrorFlightThrower() {
+    const err = new Error(message) as Error & { digest: string };
     err.digest = digest;
     throw err;
   });
@@ -1142,6 +1147,8 @@ async function renderLayoutSpecialError<TRoute extends AppPageDispatchRoute>(
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
     basePath: options.basePath,
+    buildRscHttpAccessFallbackFlightStream: (rscOptions) =>
+      buildRscHttpAccessFallbackFlightStream(options, rscOptions.digest),
     buildRscRedirectFlightStream: (rscOptions) =>
       buildRscRedirectFlightStream(options, rscOptions.digest),
     clearRequestContext: options.clearRequestContext,
@@ -1185,6 +1192,8 @@ async function renderPageSpecialError<TRoute extends AppPageDispatchRoute>(
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
     basePath: options.basePath,
+    buildRscHttpAccessFallbackFlightStream: (rscOptions) =>
+      buildRscHttpAccessFallbackFlightStream(options, rscOptions.digest),
     buildRscRedirectFlightStream: (rscOptions) =>
       buildRscRedirectFlightStream(options, rscOptions.digest),
     clearRequestContext: options.clearRequestContext,

@@ -5,7 +5,7 @@
  *
  * Tests not-found boundary behavior in the App Router:
  * - Root not-found.tsx renders for unmatched routes (404 status)
- * - notFound() called in page returns 404
+ * - notFound() called in page returns 404 for document requests
  * - Dynamic route [id] with scoped not-found boundary
  * - Escalation to parent layout when no not-found boundary exists
  * - notFound() propagates past error boundaries
@@ -304,12 +304,13 @@ describe("Next.js compat: not-found", () => {
     expect(html).not.toContain("not-found-layout-page-wrapper");
   });
 
-  it("layout+page notFound(): RSC request returns 404 (not 500)", async () => {
+  it("layout+page notFound(): RSC request returns Flight payload (not 500)", async () => {
     const res = await fetch(`${baseUrl}/nextjs-compat/not-found-layout-page/invalid.rsc`, {
       headers: { Accept: "text/x-component" },
     });
-    // RSC response must be 404 with valid flight data, not 500
-    expect(res.status).toBe(404);
+    // Raw RSC transports special errors through Flight; the App Router boundary
+    // handles the not-found state from the payload rather than the status line.
+    expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/x-component");
     const body = await res.text();
     expect(body.length).toBeGreaterThan(0);
@@ -321,7 +322,7 @@ describe("Next.js compat: not-found", () => {
   // When navigating client-side, the request goes to .rsc endpoint.
   // The RSC response must contain valid flight data with not-found content.
 
-  it("RSC request for unmatched route returns 404 with valid RSC payload", async () => {
+  it("RSC request for unmatched route keeps route-level 404 with valid RSC payload", async () => {
     const res = await fetch(`${baseUrl}/does-not-exist.rsc`, {
       headers: { Accept: "text/x-component" },
     });
@@ -333,11 +334,22 @@ describe("Next.js compat: not-found", () => {
     expect(body).toContain("404");
   });
 
-  it("RSC request for page calling notFound() returns 404 with valid RSC payload", async () => {
+  it("RSC request for page calling notFound() returns valid Flight not-found payload", async () => {
     const res = await fetch(`${baseUrl}/notfound-test.rsc`, {
       headers: { Accept: "text/x-component" },
     });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/x-component");
+    const body = await res.text();
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain("404");
+  });
+
+  it("RSC request for nested async child notFound() returns valid Flight not-found payload", async () => {
+    const res = await fetch(`${baseUrl}/nextjs-compat/rsc-nested-special-errors/not-found.rsc`, {
+      headers: { Accept: "text/x-component" },
+    });
+    expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/x-component");
     const body = await res.text();
     expect(body.length).toBeGreaterThan(0);

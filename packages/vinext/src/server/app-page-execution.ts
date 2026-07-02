@@ -36,6 +36,10 @@ function formatNextRedirectDigest(options: { url: string; statusCode: number }):
   return `NEXT_REDIRECT;replace;${options.url};${options.statusCode};`;
 }
 
+function formatNextHttpAccessFallbackDigest(statusCode: number): string {
+  return `NEXT_HTTP_ERROR_FALLBACK;${statusCode}`;
+}
+
 export type { LayoutFlags };
 
 /**
@@ -107,6 +111,10 @@ type AppPageRscStreamCapture = {
  */
 type BuildRscRedirectFlightStream = (options: { digest: string }) => ReadableStream<Uint8Array>;
 
+type BuildRscHttpAccessFallbackFlightStream = (options: {
+  digest: string;
+}) => ReadableStream<Uint8Array>;
+
 type BuildAppPageSpecialErrorResponseOptions = {
   /**
    * Optional configured basePath (e.g. "/blog"). When set, redirect Locations
@@ -125,6 +133,13 @@ type BuildAppPageSpecialErrorResponseOptions = {
    * that handle RSC requests must supply this.
    */
   buildRscRedirectFlightStream?: BuildRscRedirectFlightStream;
+  /**
+   * Builds an RSC flight payload used as a last resort when an access-fallback
+   * special error has no renderable fallback boundary. Normal app-page dispatch
+   * should usually prefer `renderFallbackPage`, which renders the actual
+   * not-found/forbidden/unauthorized boundary tree.
+   */
+  buildRscHttpAccessFallbackFlightStream?: BuildRscHttpAccessFallbackFlightStream;
   clearRequestContext: () => void;
   /**
    * Drains and returns Set-Cookie header values that were accumulated during
@@ -432,40 +447,50 @@ export async function buildAppPageSpecialErrorResponse(
   if (options.renderFallbackPage) {
     const fallbackResponse = await options.renderFallbackPage(options.specialError.statusCode);
     if (fallbackResponse) {
-      // When notFound() / forbidden() / unauthorized() is thrown from
-      // generateMetadata(), Next.js treats the error as a suspended metadata
-      // result — the not-found UI is rendered through the React boundary
-      // client-side while the HTTP response itself stays 200. Mirror that
-      // behavior by overriding the rendered boundary response status to 200.
-      // Mirrors the redirect-from-metadata path above, which also returns 200.
-      // Reference: test/e2e/app-dir/metadata-navigation
-      //   "should support notFound in generateMetadata"
+      // Raw RSC transports special errors through the Flight payload and client
+      // App Router boundaries, so the transport itself stays 200 even when the
+      // rendered boundary represents 404/403/401. Document requests preserve the
+      // pre-flush HTTP status, except for streaming metadata errors, which are
+      // already post-shell UI events.
       //
-      // Exception: when serveStreamingMetadata === false (html-limited bots),
-      // metadata blocks the render synchronously. Next.js sets the real HTTP
-      // error status in this case (app-render.tsx ~2845). Mirror by not
-      // overriding the status, symmetrically with the redirect-from-metadata
-      // path which is already gated on serveStreamingMetadata !== false.
-      const responseToMerge =
-        options.specialError.fromMetadata === true && options.serveStreamingMetadata !== false
-          ? new Response(fallbackResponse.body, {
-              headers: fallbackResponse.headers,
-              status: 200,
-              statusText: fallbackResponse.statusText,
-            })
-          : fallbackResponse;
+      // Exception: for document requests where serveStreamingMetadata === false
+      // (html-limited bots), metadata blocks the render synchronously. Keep the
+      // real HTTP error status in that path.
+      const shouldUseFlightStatus =
+        options.isRscRequest ||
+        (options.specialError.fromMetadata === true && options.serveStreamingMetadata !== false);
+      const responseToMerge = shouldUseFlightStatus
+        ? new Response(fallbackResponse.body, {
+            headers: fallbackResponse.headers,
+            status: 200,
+            statusText: fallbackResponse.statusText,
+          })
+        : fallbackResponse;
       return mergeAppPageSpecialErrorHeaders(responseToMerge, options.middlewareContext);
     }
   }
 
+  if (options.isRscRequest && options.buildRscHttpAccessFallbackFlightStream) {
+    options.clearRequestContext();
+    const digest = formatNextHttpAccessFallbackDigest(options.specialError.statusCode);
+    const stream = options.buildRscHttpAccessFallbackFlightStream({ digest });
+    const headers = new Headers({
+      "Content-Type": VINEXT_RSC_CONTENT_TYPE,
+    });
+    applyEdgeRuntimeHeader(headers, options.isEdgeRuntime);
+    applyRscCompatibilityIdHeader(headers);
+    applyRscDeploymentIdHeader(headers);
+    mergeMiddlewareResponseHeaders(headers, options.middlewareContext?.headers ?? null);
+
+    return new Response(stream, {
+      headers,
+      status: 200,
+    });
+  }
+
   options.clearRequestContext();
-  // When notFound() is thrown from generateMetadata() with no fallback page
-  // available, keep the 200 status to stay consistent with the streamed
-  // metadata contract (the error is surfaced in the page UI, not the status).
-  // Exception: when serveStreamingMetadata === false (html-limited bots),
-  // metadata blocks the render synchronously — Next.js sets the real HTTP
-  // error status in this case (app-render.tsx ~2845), symmetric with the
-  // redirect-from-metadata path that is already gated on the same flag.
+  // Non-RSC fallback without a renderable boundary. Streaming metadata keeps the
+  // 200 document transport; ordinary document errors keep their HTTP status.
   const responseStatus =
     options.specialError.fromMetadata === true && options.serveStreamingMetadata !== false
       ? 200
@@ -639,20 +664,9 @@ export async function probeAppPageThrownError(
 export async function readAppPageBinaryStream(
   stream: ReadableStream<Uint8Array>,
 ): Promise<ArrayBuffer> {
-  return readAppPageBinaryReader(stream.getReader());
-}
-
-export async function readAppPageBinaryReader(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  firstResult?: ReadableStreamReadResult<Uint8Array>,
-): Promise<ArrayBuffer> {
+  const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let totalLength = 0;
-
-  if (firstResult && !firstResult.done) {
-    chunks.push(firstResult.value);
-    totalLength += firstResult.value.byteLength;
-  }
 
   for (;;) {
     const { done, value } = await reader.read();

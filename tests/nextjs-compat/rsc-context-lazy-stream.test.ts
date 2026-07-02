@@ -151,7 +151,7 @@ describe("RSC lazy stream: headers() context survives until stream is consumed",
       },
     });
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/x-component");
 
     const body = await res.text();

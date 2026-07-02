@@ -101,8 +101,6 @@ export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = 
   observePageSearchParamsAccess?: boolean;
   /** Observe page metadata `searchParams` access for cache-safety classification. */
   observeMetadataSearchParamsAccess?: boolean;
-  /** Called when a server page component is invoked during the real RSC render. */
-  onPageRenderSettled?: (settled: Promise<void>) => void;
 };
 
 export type BuildPageElementsOptions<
@@ -200,7 +198,6 @@ export async function buildPageElements<
     renderMode = APP_RSC_RENDER_MODE_NAVIGATION,
     observeMetadataSearchParamsAccess = false,
     observePageSearchParamsAccess = false,
-    onPageRenderSettled,
   } = pageRequest;
 
   const pageModule: AppPageModule | null | undefined = route.page;
@@ -352,19 +349,7 @@ export async function buildPageElements<
           ? makeObservedAppPageSearchParamsThenable(pageSearchParams)
           : makeThenableParams(pageSearchParams);
       }
-      try {
-        const result = ServerPageComponent(invocationProps);
-        onPageRenderSettled?.(
-          Promise.resolve(result).then(
-            () => undefined,
-            () => undefined,
-          ),
-        );
-        return result;
-      } catch (error) {
-        onPageRenderSettled?.(Promise.resolve());
-        throw error;
-      }
+      return ServerPageComponent(invocationProps);
     };
     return createElement(PageInvoker as unknown as AppPageComponent);
   };
