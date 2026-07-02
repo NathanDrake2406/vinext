@@ -167,7 +167,6 @@ import {
 } from "./app-rsc-cache-busting.js";
 import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "./app-rsc-render-mode.js";
 import { blockDangerousStreamedRscRedirect } from "./app-browser-rsc-redirect.js";
-import { isDangerousScheme } from "vinext/shims/url-safety";
 import {
   createOptimisticRouteTemplate,
   getOptimisticPrefetchSourceKey,
@@ -621,9 +620,7 @@ function createNavigationCommitEffect(options: {
   };
 }
 
-function restoreBlockedRedirectNavigation(redirect: string): boolean {
-  if (!isDangerousScheme(redirect)) return false;
-
+function restoreBlockedRedirectNavigation(_redirect: string): boolean {
   const rollback = browserNavigationController.consumeBlockedRedirectNavigationRollback();
   if (rollback === null) return false;
   if (!historyController.canRollbackNavigationHistory(rollback.historyRollback)) return false;

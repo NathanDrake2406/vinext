@@ -368,11 +368,7 @@ export async function buildAppPageSpecialErrorResponse(
       options.request.url,
       options.basePath,
     );
-    const digestUrl = resolveAppPageRedirectDigestUrl({
-      basePath: options.basePath,
-      location: options.specialError.location,
-      requestUrl: options.request.url,
-    });
+    const digestUrl = sameOriginPathOrAbsolute(prefixedLocation, options.request.url);
     const digest = formatNextRedirectDigest({
       url: digestUrl,
       statusCode: options.specialError.statusCode,

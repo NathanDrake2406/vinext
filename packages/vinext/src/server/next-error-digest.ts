@@ -48,18 +48,18 @@ export function parseNextRedirectDigest(digest: string): NextRedirectDigest | nu
   }
 
   const parts = digest.split(";");
-  const statusIndex =
-    parts.length >= 4 ? (parts[parts.length - 1] === "" ? parts.length - 2 : parts.length - 1) : -1;
-  const encodedUrl = statusIndex > 2 ? parts.slice(2, statusIndex).join(";") : parts[2];
+  const lastValueIndex = parts.length - (digest.endsWith(";") ? 2 : 1);
+  const parsedStatus = parseInt(parts[lastValueIndex] ?? "", 10);
+  const statusIndex = Number.isFinite(parsedStatus) ? lastValueIndex : parts.length;
+  const encodedUrl = parts.slice(2, Math.max(3, statusIndex)).join(";");
   if (!encodedUrl) {
     return null;
   }
 
   const type = parts[1];
-  const status = statusIndex >= 0 ? parseInt(parts[statusIndex] ?? "", 10) : NaN;
 
   return {
-    status: Number.isFinite(status) ? status : 307,
+    status: Number.isFinite(parsedStatus) ? parsedStatus : 307,
     type: type || null,
     url: decodeURIComponent(encodedUrl),
   };
