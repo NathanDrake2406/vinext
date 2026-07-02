@@ -43,6 +43,12 @@ describe("Node render runtime", () => {
 
     try {
       await expect(fs.access(path.join(outDir, "server", "index.js"))).resolves.toBeUndefined();
+
+      const ssrEntry = await fs.readFile(path.join(outDir, "server", "ssr", "index.js"), "utf-8");
+      expect(ssrEntry).toContain("react-dom/server.node");
+      expect(ssrEntry).not.toContain("react-dom/server.edge");
+      expect(ssrEntry).not.toContain("app-ssr-entry.web");
+
       await withProdServer(outDir, async (baseUrl) => {
         const { res, html } = await fetchHtml(baseUrl, "/?message=node-fizz");
         expect(res.status, html).toBe(200);

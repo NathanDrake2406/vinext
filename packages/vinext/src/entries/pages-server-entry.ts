@@ -14,7 +14,7 @@ import { createValidFileMatcher } from "../routing/file-matcher.js";
 import { type ResolvedNextConfig } from "../config/next-config.js";
 import { isProxyFile } from "../server/middleware.js";
 import { findFileWithExts } from "./pages-entry-helpers.js";
-import type { ServerRenderRuntime } from "./app-ssr-entry.js";
+import type { SsrRenderTransport } from "./ssr-render-transport.js";
 
 const _requestContextShimPath = resolveEntryPath("../shims/request-context.js", import.meta.url);
 const _middlewareRuntimePath = resolveEntryPath("../server/middleware-runtime.js", import.meta.url);
@@ -37,7 +37,7 @@ export async function generateServerEntry(
   fileMatcher: ReturnType<typeof createValidFileMatcher>,
   middlewarePath: string | null,
   instrumentationPath: string | null,
-  serverRenderRuntime: ServerRenderRuntime = "web",
+  ssrRenderTransport: SsrRenderTransport = "web",
 ): Promise<string> {
   const pageRoutes = await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
   const apiRoutes = await apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
@@ -193,7 +193,7 @@ export async function runMiddleware(request) {
 `;
 
   const pagesRenderRuntimePath = resolveEntryPath(
-    `../server/pages-render-runtime.${serverRenderRuntime}.js`,
+    `../server/pages-render-runtime.${ssrRenderTransport}.js`,
     import.meta.url,
   );
 
