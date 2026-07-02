@@ -36,8 +36,8 @@ export function getNextErrorDigest(error: unknown): string | null {
 }
 
 /**
- * Parses a `NEXT_REDIRECT;<type>;<encodedUrl>;<status>` digest. Returns null
- * when the digest is not a redirect digest or the encoded URL segment is
+ * Parses a `NEXT_REDIRECT;<type>;<url>;<status>` digest. Returns null
+ * when the digest is not a redirect digest or the URL segment is
  * missing. The `url` is decoded with `decodeURIComponent`; the `status`
  * defaults to 307 when omitted; an omitted `type` is left as null so the
  * caller can apply the correct context-sensitive default.
@@ -48,7 +48,11 @@ export function parseNextRedirectDigest(digest: string): NextRedirectDigest | nu
   }
 
   const parts = digest.split(";");
-  const encodedUrl = parts[2];
+  const statusIndex = parts.length - (digest.endsWith(";") ? 2 : 1);
+  const parsedStatus = parseInt(parts[statusIndex] ?? "", 10);
+  const encodedUrl = parts
+    .slice(2, Number.isNaN(parsedStatus) ? parts.length : Math.max(3, statusIndex))
+    .join(";");
   if (!encodedUrl) {
     return null;
   }
@@ -56,7 +60,7 @@ export function parseNextRedirectDigest(digest: string): NextRedirectDigest | nu
   const type = parts[1];
 
   return {
-    status: parts[3] ? parseInt(parts[3], 10) : 307,
+    status: Number.isNaN(parsedStatus) ? 307 : parsedStatus,
     type: type || null,
     url: decodeURIComponent(encodedUrl),
   };
