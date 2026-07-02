@@ -414,6 +414,7 @@ describe("app page render lifecycle", () => {
     const response = await renderAppPageLifecycle({
       ...common.options,
       isRscRequest: true,
+      probePageBeforeRender: true,
       probePage() {
         throw { digest: "NEXT_NOT_FOUND" };
       },
@@ -423,6 +424,28 @@ describe("app page render lifecycle", () => {
     await expect(response.text()).resolves.toBe("page:404");
     expect(common.renderToReadableStream).not.toHaveBeenCalled();
     expect(common.renderPageSpecialError).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects disabled page probing for no-loading RSC renders", async () => {
+    const common = createCommonOptions();
+    const probePage = vi.fn(() => {
+      throw new Error("RSC page probe should not execute");
+    });
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      hasLoadingBoundary: false,
+      isRscRequest: true,
+      probePage,
+      probePageBeforeRender: false,
+    });
+
+    expect(probePage).not.toHaveBeenCalled();
+    expect(common.renderToReadableStream).toHaveBeenCalledTimes(1);
+    expect(common.renderPageSpecialError).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/x-component");
+    await expect(response.text()).resolves.toBe("flight-data");
   });
 
   it("does not run the page probe before normal HTML rendering", async () => {

@@ -639,9 +639,20 @@ export async function probeAppPageThrownError(
 export async function readAppPageBinaryStream(
   stream: ReadableStream<Uint8Array>,
 ): Promise<ArrayBuffer> {
-  const reader = stream.getReader();
+  return readAppPageBinaryReader(stream.getReader());
+}
+
+export async function readAppPageBinaryReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  firstResult?: ReadableStreamReadResult<Uint8Array>,
+): Promise<ArrayBuffer> {
   const chunks: Uint8Array[] = [];
   let totalLength = 0;
+
+  if (firstResult && !firstResult.done) {
+    chunks.push(firstResult.value);
+    totalLength += firstResult.value.byteLength;
+  }
 
   for (;;) {
     const { done, value } = await reader.read();

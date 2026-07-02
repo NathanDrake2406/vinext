@@ -93,6 +93,18 @@ function createStream(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function createDigestError(message: string, digest: string): Error & { digest: string } {
+  return Object.assign(new Error(message), { digest });
+}
+
+function createNotFoundDigestError(): Error & { digest: string } {
+  return createDigestError("NEXT_NOT_FOUND", "NEXT_NOT_FOUND");
+}
+
+function createRedirectDigestError(location: string): Error & { digest: string } {
+  return createDigestError("NEXT_REDIRECT", `NEXT_REDIRECT;replace;${location};307;`);
+}
+
 function captureRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !React.isValidElement(value) && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -582,6 +594,100 @@ describe("app page dispatch", () => {
     expect(response.status).toBe(200);
     expect(probePage).not.toHaveBeenCalled();
     await expect(response.text()).resolves.toBe("<html>page</html>");
+  });
+
+  it("renders no-loading RSC pages once without reaching generated page probes", async () => {
+    const calls: string[] = [];
+    function PrimaryPage() {
+      calls.push("primary");
+      return React.createElement("h1", null, "primary");
+    }
+    function ParallelPage() {
+      calls.push("parallel");
+      return React.createElement("h1", null, "parallel");
+    }
+    function InterceptPage() {
+      calls.push("intercept");
+      return React.createElement("h1", null, "intercept");
+    }
+
+    const probePage = vi.fn(() => {
+      throw new Error("generated page probe fan-out should not execute");
+    });
+    const renderToReadableStream = vi.fn((payload: unknown) => {
+      const record = captureRecord(payload);
+      return new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const rendered = await Promise.all(
+            ["page:primary", "page:parallel", "page:intercept"].map((key) =>
+              renderReactNodeText(record[key]),
+            ),
+          );
+          controller.enqueue(new TextEncoder().encode(rendered.join("|")));
+          controller.close();
+        },
+      });
+    });
+    const { options } = createDispatchOptions({
+      async buildPageElement() {
+        return {
+          "page:primary": React.createElement(PrimaryPage),
+          "page:parallel": React.createElement(ParallelPage),
+          "page:intercept": React.createElement(InterceptPage),
+        };
+      },
+      isRscRequest: true,
+      probePage,
+      renderToReadableStream,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(probePage).not.toHaveBeenCalled();
+    expect(renderToReadableStream).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/x-component");
+    await expect(response.text()).resolves.toBe("primary|parallel|intercept");
+    expect(calls).toEqual(["primary", "parallel", "intercept"]);
+  });
+
+  it("does not probe an RSC page to override a build special error", async () => {
+    const probePage = vi.fn(() => {
+      throw createRedirectDigestError("/page-wins");
+    });
+    const { options } = createDispatchOptions({
+      async buildPageElement() {
+        throw createNotFoundDigestError();
+      },
+      isRscRequest: true,
+      probePage,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(probePage).not.toHaveBeenCalled();
+    expect(response.status).toBe(404);
+    expect(response.headers.get("x-vinext-rsc-redirect")).toBeNull();
+    await expect(response.text()).resolves.toBe("Not Found");
+  });
+
+  it("preserves document page special-error priority when element construction throws", async () => {
+    const probePage = vi.fn(() => {
+      throw createRedirectDigestError("/page-wins");
+    });
+    const { options } = createDispatchOptions({
+      async buildPageElement() {
+        throw createNotFoundDigestError();
+      },
+      isRscRequest: false,
+      probePage,
+    });
+
+    const response = await dispatchAppPage(options);
+
+    expect(probePage).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("https://example.test/page-wins");
   });
 
   it.each([
@@ -1142,6 +1248,93 @@ describe("app page dispatch", () => {
     expect(cache.has("rsc:/rsc-loading-proof")).toBe(false);
   });
 
+  it("does not reuse no-loading RSC when the real render reads searchParams", async () => {
+    async function Page(props: Record<string, unknown>): Promise<React.ReactNode> {
+      const query = isPromiseLike(props.searchParams) ? await props.searchParams : {};
+      return React.createElement(
+        "h1",
+        null,
+        isQueryRecord(query) && typeof query.q === "string" ? query.q : "empty",
+      );
+    }
+    const route = createRoute({
+      pattern: "/rsc-search-proof",
+      routeSegments: ["rsc-search-proof"],
+    });
+    const cache = new Map<string, ISRCacheEntry>();
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const executionContext = {
+      waitUntil(promise) {
+        waitUntilPromises.push(promise);
+      },
+    } satisfies ExecutionContextLike;
+    const buildPageElement: DispatchOptions["buildPageElement"] = (
+      _route,
+      params,
+      _opts,
+      searchParams,
+      layoutParamAccess,
+      buildOptions,
+    ) =>
+      buildPageElements({
+        layoutParamAccess,
+        metadataRoutes: [],
+        params,
+        pageRequest: {
+          isRscRequest: true,
+          mountedSlotsHeader: null,
+          observeMetadataSearchParamsAccess:
+            buildOptions?.observeMetadataSearchParamsAccess === true,
+          observePageSearchParamsAccess: buildOptions?.observePageSearchParamsAccess === true,
+          opts: undefined,
+          request: new Request(`https://example.test/rsc-search-proof?${searchParams}`),
+          searchParams,
+        },
+        route: {
+          layouts: [],
+          page: { default: Page },
+          pattern: "/rsc-search-proof",
+          routeSegments: ["rsc-search-proof"],
+        },
+        routePath: "/rsc-search-proof",
+      }).then(toDispatchElementRecord);
+
+    async function request(q: string): Promise<string> {
+      const { options } = createDispatchOptions({
+        buildPageElement,
+        cleanPathname: "/rsc-search-proof",
+        isProduction: true,
+        isRscRequest: true,
+        isrGet: async (key) => cache.get(key) ?? null,
+        isrSet: async (key, value) => {
+          cache.set(key, {
+            isStale: false,
+            value: { lastModified: Date.now(), value },
+          });
+        },
+        params: {},
+        probePage() {
+          throw new Error("normal RSC should skip the eager page probe");
+        },
+        renderToReadableStream: renderPagePayloadToStream,
+        revalidateSeconds: 60,
+        route,
+        searchParams: new URLSearchParams({ q }),
+      });
+      const response = await runWithExecutionContext(executionContext, () =>
+        dispatchAppPage(options),
+      );
+      const text = await response.text();
+      await Promise.all(waitUntilPromises.splice(0));
+      expect(response.headers.get("x-vinext-cache")).not.toBe("HIT");
+      return text;
+    }
+
+    await expect(request("first")).resolves.toBe("first");
+    await expect(request("second")).resolves.toBe("second");
+    expect(cache.has("rsc:/rsc-search-proof")).toBe(false);
+  });
+
   it("serves cached production HTML when searchParams is only mentioned but not accessed", async () => {
     const isrGet = vi.fn(async () =>
       buildISRCacheEntry(
@@ -1309,7 +1502,7 @@ describe("app page dispatch", () => {
       await expect(response.text()).resolves.toBe(isRscRequest ? "empty" : "<html>empty</html>");
       expect(metadataQueries).toEqual(["empty"]);
       expect(viewportQueries).toEqual(["empty"]);
-      expect(probeQueries).toEqual(isRscRequest ? ["empty"] : []);
+      expect(probeQueries).toEqual([]);
       expect(pageHeaders).toEqual([null]);
       expect(pageDraftModes).toEqual([isDraftMode]);
       const navigationContext = setNavigationContext.mock.calls.at(-1)?.[0];

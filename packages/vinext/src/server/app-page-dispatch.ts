@@ -241,6 +241,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     options?: {
       observeMetadataSearchParamsAccess?: boolean;
       observePageSearchParamsAccess?: boolean;
+      onPageRenderSettled?: (settled: Promise<void>) => void;
     },
   ) => Promise<AppPageElement>;
   clientReuseManifest?: ClientReuseManifestParseResult;
@@ -882,6 +883,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     return interceptResult.response;
   }
 
+  const pageRenderSettlements: Promise<void>[] = [];
   const buildCurrentPageElement = () =>
     buildAppPageElement({
       buildPageElement() {
@@ -897,10 +899,16 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
           {
             observeMetadataSearchParamsAccess: !isForceStatic,
             observePageSearchParamsAccess: !isForceStatic,
+            onPageRenderSettled(settled) {
+              pageRenderSettlements.push(settled);
+            },
           },
         );
       },
       async probePageSpecialError() {
+        if (options.isRscRequest) {
+          return null;
+        }
         if (
           !shouldSuppressLoadingBoundaries(options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION) &&
           route.loading?.default
@@ -977,6 +985,11 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     createRscOnErrorHandler(pathname, routePath) {
       return options.createRscOnErrorHandler(pathname, routePath);
     },
+    async awaitPageRenderSettlements() {
+      for (let index = 0; index < pageRenderSettlements.length; index += 1) {
+        await pageRenderSettlements[index];
+      }
+    },
     element: pageBuildResult.element,
     clientReuseManifest: options.clientReuseManifest,
     getDraftModeCookieHeader,
@@ -1038,7 +1051,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     probePage() {
       return options.probePage(pageSearchParams);
     },
-    probePageBeforeRender: options.isRscRequest,
+    probePageBeforeRender: false,
     classification: {
       getLayoutId(index) {
         const treePosition = route.layoutTreePositions?.[index] ?? 0;

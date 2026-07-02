@@ -12,6 +12,7 @@ import {
 } from "./app-page-cache-finalizer.js";
 import {
   buildAppPageFontLinkHeader,
+  readAppPageBinaryReader,
   readAppPageBinaryStream,
   resolveAppPageSpecialError,
   teeAppPageRscStreamForCapture,
@@ -124,6 +125,7 @@ type RenderAppPageLifecycleOptions = {
   /** Read and clear any invalid dynamic usage error recorded during render (dev-only). */
   consumeInvalidDynamicUsageError?: () => unknown;
   createRscOnErrorHandler: (pathname: string, routePath: string) => AppPageBoundaryOnError;
+  awaitPageRenderSettlements?: () => Promise<void>;
   getFontLinks: () => string[];
   getFontPreloads: () => AppPageFontPreload[];
   getFontStyles: () => string[];
@@ -590,10 +592,9 @@ function wrapRscResponseForDevErrorReporting(
 export async function renderAppPageLifecycle(
   options: RenderAppPageLifecycleOptions,
 ): Promise<Response> {
-  const configuredProbePageBeforeRender = options.probePageBeforeRender ?? options.isRscRequest;
+  const configuredProbePageBeforeRender = options.probePageBeforeRender ?? false;
   const probePageBeforeRender =
-    options.isRscRequest ||
-    (configuredProbePageBeforeRender && !(options.peekDynamicUsage?.() ?? false));
+    configuredProbePageBeforeRender && !(options.peekDynamicUsage?.() ?? false);
   const preRenderResult = await probeAppPageBeforeRender({
     hasLoadingBoundary: options.hasLoadingBoundary,
     probePageBeforeRender,
@@ -726,6 +727,12 @@ export async function renderAppPageLifecycle(
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;
+  const shouldSettleRscForSpecialError =
+    options.isRscRequest &&
+    !options.hasLoadingBoundary &&
+    !probePageBeforeRender &&
+    options.awaitPageRenderSettlements !== undefined &&
+    pprFallbackShellRsc === null;
   const createBufferedRscStream = (close: boolean): ReadableStream<Uint8Array> =>
     new ReadableStream<Uint8Array>({
       start(controller) {
@@ -742,7 +749,10 @@ export async function renderAppPageLifecycle(
         ssrStream: createBufferedRscStream(false),
         ...(shouldCaptureRscForCacheMetadata ? { sideStream: createBufferedRscStream(true) } : {}),
       }
-    : teeAppPageRscStreamForCapture(rscStream, shouldCaptureRscForCacheMetadata);
+    : teeAppPageRscStreamForCapture(
+        rscStream,
+        shouldCaptureRscForCacheMetadata || shouldSettleRscForSpecialError,
+      );
   const rscForResponse = rscCapture.ssrStream;
 
   // When the fused tee (#981) is active, the sideStream carries both the embed
@@ -751,12 +761,50 @@ export async function renderAppPageLifecycle(
   // transform from it and fills capturedRscDataRef. The ref object is threaded
   // through so .value is read lazily after handleSsr completes.
   const capturedRscDataRef: { value: Promise<ArrayBuffer> | null } = { value: null };
+  let firstRscSideChunkSettled: Promise<void> | null = null;
   if (rscCapture.sideStream && options.isRscRequest) {
-    capturedRscDataRef.value = readAppPageBinaryStream(rscCapture.sideStream);
+    if (shouldSettleRscForSpecialError) {
+      const sideReader = rscCapture.sideStream.getReader();
+      const firstRead = sideReader.read();
+      firstRscSideChunkSettled = firstRead.then(
+        () => undefined,
+        () => undefined,
+      );
+      if (shouldCaptureRscForCacheMetadata) {
+        capturedRscDataRef.value = firstRead.then((firstResult) =>
+          readAppPageBinaryReader(sideReader, firstResult),
+        );
+      } else {
+        void firstRead.then(
+          () => sideReader.cancel().catch(() => {}),
+          () => undefined,
+        );
+      }
+    } else {
+      capturedRscDataRef.value = readAppPageBinaryStream(rscCapture.sideStream);
+    }
   }
 
   if (options.isRscRequest) {
     let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
+    if (shouldSettleRscForSpecialError) {
+      // No-loading RSC page renders historically surfaced page-level
+      // redirect()/notFound()/forbidden()/unauthorized() before headers via the
+      // eager page probe. Settle the real RSC stream instead, so status parity
+      // is preserved without invoking the page a second time.
+      await firstRscSideChunkSettled;
+      await options.awaitPageRenderSettlements?.();
+      await Promise.resolve();
+      const captured = rscErrorTracker.getCapturedSpecialError();
+      if (captured) {
+        const specialError = resolveAppPageSpecialError(captured);
+        if (specialError) {
+          void capturedRscDataRef.value?.catch(() => {});
+          void rscForResponse.cancel().catch(() => {});
+          return options.renderPageSpecialError(specialError);
+        }
+      }
+    }
     if (options.isPrerender === true) {
       await settleCapturedRscRenderForCacheMetadata(capturedRscDataRef.value);
       requestCacheLifeForPrerender = readRequestCacheLifeForPrerender(options);
