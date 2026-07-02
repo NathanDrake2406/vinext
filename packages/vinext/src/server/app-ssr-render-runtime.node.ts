@@ -1,6 +1,9 @@
 import { Readable, type Readable as NodeReadable } from "node:stream";
 import { renderSsrErrorDocumentShellHtml } from "./app-ssr-error-shell.js";
-import { createNodeTickBufferedTransform } from "./app-ssr-stream-node.js";
+import {
+  createNodeTickBufferedTransform,
+  pipeWithCancellationPropagation,
+} from "./app-ssr-stream-node.js";
 import type { AppSsrRenderRuntime } from "./app-ssr-entry-core.js";
 import {
   prerenderToNodeFizzStream,
@@ -27,7 +30,8 @@ function transformNodeHtmlStream(
   htmlStream: NodeReadable,
   options: Parameters<AppSsrRenderRuntime["renderFinalHtmlStream"]>[0]["transform"],
 ): NodeReadable {
-  return htmlStream.pipe(
+  return pipeWithCancellationPropagation(
+    htmlStream,
     createNodeTickBufferedTransform(
       options.rscEmbed,
       options.injectHTML,

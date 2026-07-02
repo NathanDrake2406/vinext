@@ -1,4 +1,4 @@
-import { Transform } from "node:stream";
+import { Transform, type Readable as NodeReadable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
   createAppHtmlInsertionState,
@@ -74,4 +74,24 @@ export function createNodeTickBufferedTransform(
   });
 
   return stream;
+}
+
+export function pipeWithCancellationPropagation(
+  source: NodeReadable,
+  transform: Transform,
+): NodeReadable {
+  const transformed = source.pipe(transform);
+
+  transformed.once("error", (error) => {
+    if (!source.destroyed) {
+      source.destroy(error);
+    }
+  });
+  transformed.once("close", () => {
+    if (!transformed.readableEnded && !source.destroyed) {
+      source.destroy();
+    }
+  });
+
+  return transformed;
 }
