@@ -156,6 +156,7 @@ import {
   clearAppNavigationFailureTarget,
   installAppNavigationFailureListeners,
 } from "../client/app-nav-failure-handler.js";
+import { registerBlockedRedirectRollbackHandler } from "../client/app-blocked-redirect-rollback.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
   createRscRequestHeaders,
@@ -563,12 +564,48 @@ function createActionInitiationSnapshot() {
 
 type ActionInitiationSnapshot = ReturnType<typeof createActionInitiationSnapshot>;
 
+type BlockedRedirectRollback = {
+  committedHref: string;
+  navId: number;
+  previousHistoryState: unknown;
+  previousHref: string;
+  previousRouterState: AppRouterState;
+};
+
+let pendingBlockedRedirectRollback: BlockedRedirectRollback | null = null;
+
+function normalizeBrowserHref(href: string): string {
+  try {
+    return new URL(href, window.location.href).href;
+  } catch {
+    return href;
+  }
+}
+
+function restoreBlockedRedirectNavigation(redirect: string): boolean {
+  void redirect;
+  const rollback = pendingBlockedRedirectRollback;
+  if (rollback === null) return false;
+  if (normalizeBrowserHref(window.location.href) !== rollback.committedHref) return false;
+
+  pendingBlockedRedirectRollback = null;
+  replaceHistoryStateWithoutNotify(rollback.previousHistoryState, "", rollback.previousHref);
+  applyClientParams(rollback.previousRouterState.navigationSnapshot.params);
+  browserNavigationController.restoreBlockedRedirectNavigationState(
+    rollback.previousRouterState,
+    rollback.navId,
+  );
+  clearAppNavigationFailureTarget(rollback.committedHref);
+  return true;
+}
+
 function createNavigationCommitEffect(options: {
   bfcacheIds: Readonly<Record<string, string>>;
   href: string;
   historyUpdateMode: HistoryUpdateMode | undefined;
   navId: number;
   params: Record<string, string | string[]>;
+  previousRouterState: AppRouterState;
   previousNextUrl: string | null;
   targetHistoryIndex?: number | null;
 }): () => void {
@@ -592,6 +629,15 @@ function createNavigationCommitEffect(options: {
       return;
     }
 
+    const previousHref = window.location.href;
+    const committedHref = normalizeBrowserHref(href);
+    pendingBlockedRedirectRollback = {
+      committedHref,
+      navId,
+      previousHistoryState: window.history.state,
+      previousHref,
+      previousRouterState: options.previousRouterState,
+    };
     historyController.commitNavigationHistory({
       bfcacheIds,
       href,
@@ -1055,6 +1101,9 @@ function BrowserRoot({
       setAppRouterStateValue,
       stateRef,
     );
+    const unregisterBlockedRedirectRollback = registerBlockedRedirectRollbackHandler(
+      restoreBlockedRedirectNavigation,
+    );
     registerNavigationRuntimeFunctions({
       navigateExternal: (href, historyUpdateMode) => {
         setTreeStateValue({
@@ -1070,6 +1119,7 @@ function BrowserRoot({
     return () => {
       hydrationCachePublication.invalidate();
       registerNavigationRuntimeFunctions({ navigateExternal: undefined });
+      unregisterBlockedRedirectRollback();
       detach();
       setMountedSlotsHeader(null);
     };
@@ -1829,6 +1879,15 @@ function bootstrapHydration(
           visitedResponse,
         });
         if (reuseDecision.kind === "reuseVisitedResponse" && cachedRoute) {
+          const cachedStreamedRedirectTarget = cachedRoute.response.streamedRedirectTarget ?? null;
+          if (
+            blockDangerousStreamedRscRedirect(
+              restoreRscResponse(cachedRoute.response, false),
+              cachedStreamedRedirectTarget,
+            )
+          ) {
+            return;
+          }
           const cachedFetchDecision = navigationPlanner.classifyRscFetchResult({
             clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
             compatibilityIdHeader: cachedRoute.response.compatibilityIdHeader ?? null,
@@ -1842,7 +1901,7 @@ function bootstrapHydration(
             responseOk: true,
             responseUrl: cachedRoute.response.url,
             source: "cached",
-            streamedRedirectTarget: null,
+            streamedRedirectTarget: cachedStreamedRedirectTarget,
           });
           if (cachedFetchDecision.kind === "hardNavigate") {
             if (cachedFetchDecision.reason === "redirectDepthExhausted") {

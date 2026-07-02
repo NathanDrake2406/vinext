@@ -133,6 +133,7 @@ import {
   ACTION_REDIRECT_TYPE_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
+  VINEXT_RSC_REDIRECT_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type {
   GraphVersion,
@@ -849,6 +850,7 @@ describe("app browser entry navigation scheduling", () => {
           [VINEXT_MOUNTED_SLOTS_HEADER]: "children",
           [VINEXT_PARAMS_HEADER]: "%7B%22slug%22%3A%22target%22%7D",
           [VINEXT_RSC_COMPATIBILITY_ID_HEADER]: "compat-a",
+          [VINEXT_RSC_REDIRECT_HEADER]: "/redirected",
         },
       }),
       await new Response("flight").arrayBuffer(),
@@ -856,6 +858,7 @@ describe("app browser entry navigation scheduling", () => {
     );
 
     expect(snapshot.compatibilityIdHeader).toBe("compat-a");
+    expect(snapshot.streamedRedirectTarget).toBe("/redirected");
     expect(snapshot.url).toBe(responseUrl);
     expect(
       resolveRscCompatibilityNavigationDecision({
@@ -871,6 +874,7 @@ describe("app browser entry navigation scheduling", () => {
     expect(replayed.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe("compat-a");
     expect(replayed.headers.get(VINEXT_MOUNTED_SLOTS_HEADER)).toBe("children");
     expect(replayed.headers.get(VINEXT_PARAMS_HEADER)).toBe("%7B%22slug%22%3A%22target%22%7D");
+    expect(replayed.headers.get(VINEXT_RSC_REDIRECT_HEADER)).toBe("/redirected");
     expect(await replayed.text()).toBe("flight");
   });
 
@@ -3281,6 +3285,58 @@ describe("app browser navigation controller", () => {
       expect(createNavigationCommitEffect).toHaveBeenCalledTimes(1);
       expect(commitEffect).not.toHaveBeenCalled();
       expect(setBrowserRouterState).toHaveBeenCalledTimes(1);
+    } finally {
+      detach();
+    }
+  });
+
+  it("restores the previous router state when a committed navigation blocks a Flight redirect", async () => {
+    const initialState = createState({
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/source", {}),
+      routeId: "route:/source",
+    });
+    const { controller, detach, stateRef } = createControllerHarness(initialState);
+    const commitEffect = vi.fn();
+    let previousRouterState: AppRouterState | null = null;
+    const createNavigationCommitEffect: Parameters<
+      typeof controller.renderNavigationPayload
+    >[0]["createNavigationCommitEffect"] = vi.fn((options) => {
+      previousRouterState = options.previousRouterState;
+      return commitEffect;
+    });
+
+    try {
+      const navId = controller.beginNavigation();
+      void controller.renderNavigationPayload({
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        actionType: "navigate",
+        createNavigationCommitEffect,
+        historyUpdateMode: "push",
+        navigationSnapshot: createClientNavigationRenderSnapshot(
+          "https://example.com/redirecting",
+          {},
+        ),
+        nextElements: Promise.resolve(
+          createResolvedElements("route:/redirecting", "/", null, {
+            "page:/redirecting": React.createElement("main", null, "redirecting"),
+          }),
+        ),
+        operationLane: "navigation",
+        params: {},
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref: "https://example.com/redirecting",
+        navId,
+      });
+
+      await vi.waitFor(() => expect(stateRef.current.routeId).toBe("route:/redirecting"));
+      if (!previousRouterState) {
+        throw new Error("Expected navigation commit effect to receive previous router state");
+      }
+      expect(previousRouterState).toBe(initialState);
+
+      controller.restoreBlockedRedirectNavigationState(previousRouterState, navId);
+      expect(stateRef.current.routeId).toBe("route:/source");
     } finally {
       detach();
     }

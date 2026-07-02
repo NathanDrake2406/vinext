@@ -66,6 +66,7 @@ type BrowserNavigationCommitEffectFactory = (options: {
   historyUpdateMode: HistoryUpdateMode | undefined;
   navId: number;
   params: Record<string, string | string[]>;
+  previousRouterState: AppRouterState;
   previousNextUrl: string | null;
   targetHistoryIndex?: number | null;
 }) => BrowserNavigationCommitEffect;
@@ -112,6 +113,7 @@ type BrowserNavigationController = {
     state: AppRouterState;
     targetHref: string;
   }): boolean;
+  restoreBlockedRedirectNavigationState(state: AppRouterState, navId: number): void;
   renderNavigationPayload(options: {
     actionType: "navigate" | "replace" | "traverse";
     createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
@@ -701,6 +703,12 @@ export function createAppBrowserNavigationController(
     return true;
   }
 
+  function restoreBlockedRedirectNavigationState(state: AppRouterState, navId: number): void {
+    const setter = getBrowserRouterStateSetter();
+    setter(state);
+    commitClientNavigationStateImpl(navId, { releaseSnapshot: false });
+  }
+
   function notifyDiscardedServerActionRevalidation(
     lifecycleOptions: SameUrlServerActionLifecycleOptions | undefined,
   ): void {
@@ -816,6 +824,7 @@ export function createAppBrowserNavigationController(
           historyUpdateMode: options.historyUpdateMode,
           navId: options.navId,
           params: options.params,
+          previousRouterState: startedState,
           previousNextUrl: approvedCommit.previousNextUrl,
           targetHistoryIndex: options.targetHistoryIndex,
         }),
@@ -963,6 +972,7 @@ export function createAppBrowserNavigationController(
     beginPendingBrowserRouterState,
     finalizeNavigation,
     restoreHistorySnapshotVisibleState,
+    restoreBlockedRedirectNavigationState,
     renderNavigationPayload,
     commitSameUrlNavigatePayload,
     hmrReplaceTree,
