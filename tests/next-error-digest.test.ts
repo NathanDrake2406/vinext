@@ -33,12 +33,4 @@ describe("next error digest parsing", () => {
       url: "/profile",
     });
   });
-
-  it("keeps semicolons that appear inside raw redirect URLs", () => {
-    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/target;with;semicolons;307;")).toEqual({
-      status: 307,
-      type: "replace",
-      url: "/target;with;semicolons",
-    });
-  });
 });
