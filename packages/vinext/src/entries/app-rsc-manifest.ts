@@ -325,6 +325,7 @@ ${interceptEntries.join(",\n")}
     layouts: ${moduleArray(route.layouts.length)},
     __loadLayouts: ${layoutLoaders},
     routeSegments: ${JSON.stringify(route.routeSegments)},
+    childrenRouteSegments: ${JSON.stringify(route.childrenRouteSegments ?? null)},
     templateTreePositions: ${JSON.stringify(route.templateTreePositions)},
     layoutTreePositions: ${JSON.stringify(route.layoutTreePositions)},
     templates: ${moduleArray(route.templates.length)},
@@ -337,6 +338,7 @@ ${interceptEntries.join(",\n")}
     slots: {
 ${slotEntries.join(",\n")}
     },
+    childrenSlot: ${JSON.stringify(route.childrenSlot ?? null)},
     siblingIntercepts: [
 ${siblingInterceptEntries.join(",\n")}
     ],

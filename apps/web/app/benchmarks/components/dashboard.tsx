@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { Table } from "@cloudflare/kumo/components/table";
 import {
@@ -8,14 +9,18 @@ import {
   type PerformanceMeasurement,
   type PerformanceRun,
 } from "./performance-results";
+import { CustomProfileViewer } from "./custom-profile-viewer";
 
 const RECENT_BASELINE_RUNS = 10;
 
 export function Dashboard({ runs }: { runs: PerformanceRun[] }) {
   if (runs.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-white px-6 py-12 text-center text-gray-400">
-        No benchmark data yet. Results will appear after the first merge to main.
+      <div className="space-y-8">
+        <div className="rounded-lg border border-gray-200 bg-white px-6 py-12 text-center text-gray-400">
+          No benchmark data yet. Results will appear after the first merge to main.
+        </div>
+        <CustomProfileViewer />
       </div>
     );
   }
@@ -68,13 +73,21 @@ export function Dashboard({ runs }: { runs: PerformanceRun[] }) {
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">Performance Trends</h2>
-        <PerformanceTrends runs={[...runs].reverse()} />
+        <Suspense
+          fallback={
+            <div className="h-[374px] animate-pulse rounded-lg border border-gray-200 bg-gray-50" />
+          }
+        >
+          <PerformanceTrends runs={[...runs].reverse()} />
+        </Suspense>
       </section>
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">Recent Main Runs</h2>
         <PerformanceRunHistory runs={runs} />
       </section>
+
+      <CustomProfileViewer />
     </div>
   );
 }

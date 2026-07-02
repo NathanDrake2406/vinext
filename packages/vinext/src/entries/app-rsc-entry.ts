@@ -16,12 +16,14 @@ import type {
   NextI18nConfig,
   NextRedirect,
   NextRewrite,
+  PrefetchInliningConfig,
 } from "../config/next-config.js";
 import type { ImageConfig } from "../server/image-optimization.js";
 import type { AppRoute } from "../routing/app-router.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import { isProxyFile } from "../server/middleware.js";
+import { DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "../server/image-optimization.js";
 
 const DEFAULT_EXPIRE_TIME = 31_536_000;
 const DEFAULT_REACT_MAX_HEADERS_LENGTH = 6000;
@@ -30,7 +32,7 @@ const DEFAULT_REACT_MAX_HEADERS_LENGTH = 6000;
 // entry can't use relative imports (it has no real file location), so we
 // resolve these at code-generation time and embed them as absolute paths.
 const middlewareRequestHeadersPath = resolveEntryPath(
-  "../server/middleware-request-headers.js",
+  "../utils/middleware-request-headers.js",
   import.meta.url,
 );
 const normalizePathModulePath = resolveEntryPath("../server/normalize-path.js", import.meta.url);
@@ -159,8 +161,12 @@ type AppRouterConfig = {
   cacheMaxMemorySize?: number;
   /** Inline app CSS into production HTML (from experimental.inlineCss). */
   inlineCss?: boolean;
+  /** Enable standalone route-miss 404 handling (from experimental.globalNotFound). */
+  globalNotFound?: boolean;
   /** Enables Next.js Cache Components semantics for App Router document HTML. */
   cacheComponents?: boolean;
+  /** Resolved `experimental.prefetchInlining` thresholds. */
+  prefetchInlining?: PrefetchInliningConfig;
   /** Whether the RSC build discovered any server references. Defaults to true. */
   hasServerActions?: boolean;
   /** Internationalization routing config for middleware matcher locale handling. */
@@ -224,16 +230,29 @@ export function generateRscEntry(
   const cacheMaxMemorySize = config?.cacheMaxMemorySize;
   const inlineCss = config?.inlineCss === true;
   const cacheComponents = config?.cacheComponents === true;
+  const prefetchInlining = config?.prefetchInlining ?? false;
   const hasServerActions = config?.hasServerActions !== false;
   const i18nConfig = config?.i18n ?? null;
   const hasPagesDir = config?.hasPagesDir ?? false;
   const publicFiles = config?.publicFiles ?? [];
   const draftModeSecret = config?.draftModeSecret ?? randomUUID();
+  const imageAllowedWidths = [
+    ...(config?.imageConfig?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
+    ...(config?.imageConfig?.imageSizes ?? DEFAULT_IMAGE_SIZES),
+  ];
+  const imageConfig = {
+    qualities: config?.imageConfig?.qualities,
+    dangerouslyAllowSVG: config?.imageConfig?.dangerouslyAllowSVG,
+    dangerouslyAllowLocalIP: config?.imageConfig?.dangerouslyAllowLocalIP,
+    contentDispositionType: config?.imageConfig?.contentDispositionType,
+    contentSecurityPolicy: config?.imageConfig?.contentSecurityPolicy,
+  };
   const manifestCode = buildAppRscManifestCode({
     routes,
     metadataRoutes,
     globalErrorPath,
-    globalNotFoundPath: config?.globalNotFoundPath ?? null,
+    globalNotFoundPath:
+      config?.globalNotFound === true ? (config.globalNotFoundPath ?? null) : null,
   });
   const {
     imports,
@@ -300,6 +319,8 @@ import { ensureInstrumentationRegistered as __ensureInstrumentationRegistered } 
 }
 import { createAppRscHandler } from "vinext/server/app-rsc-handler";
 import { registerConfiguredCacheAdapters as __registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
+import __pagesClientAssets from "virtual:vinext-pages-client-assets";
+import { setPagesClientAssets as __setPagesClientAssets } from "vinext/server/pages-client-assets";
 import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
 import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
 ${
@@ -561,6 +582,7 @@ const __fallbackRenderer = __createAppFallbackRenderer({
   },
   globalErrorModule: ${globalErrorVar ? globalErrorVar : "null"},
   loadGlobalNotFoundModule: __loadGlobalNotFoundModule,
+  globalNotFoundEnabled: ${config?.globalNotFound === true},
   metadataRoutes,
   ssrLoader() {
     return import.meta.viteRsc.loadModule("ssr", "index");
@@ -622,7 +644,7 @@ const __i18nConfig = ${JSON.stringify(i18nConfig)};
 const __configRedirects = ${JSON.stringify(redirects)};
 const __configRewrites = ${JSON.stringify(rewrites)};
 const __configHeaders = ${JSON.stringify(headers)};
-const __imageConfig = ${JSON.stringify(config?.imageConfig)};
+const __runtimeImageConfig = ${JSON.stringify(config?.imageConfig)};
 const __publicFiles = new Set(${JSON.stringify(publicFiles)});
 const __allowedOrigins = ${JSON.stringify(allowedOrigins)};
 const __expireTime = ${JSON.stringify(expireTime)};
@@ -633,6 +655,8 @@ const __reactMaxHeadersLength = ${JSON.stringify(reactMaxHeadersLength)};
 // mirrors the embedded \`__basePath\` pattern (and Pages Router's
 // \`vinextConfig\` export). Empty string when unset.
 export const __assetPrefix = ${JSON.stringify(assetPrefix)};
+export const __imageAllowedWidths = ${JSON.stringify(imageAllowedWidths)};
+export const __imageConfig = ${JSON.stringify(imageConfig)};
 export const __inlineCss = ${JSON.stringify(inlineCss)};
 export const __hasPagesDir = ${JSON.stringify(hasPagesDir)};
 export const getRenderedConcreteUrlPathsForRoute = __getRenderedConcreteUrlPathsForRoute;
@@ -681,10 +705,12 @@ const rootParamNamesMap = {
 ${rootParamNameEntries.join("\n")}
 };
 
+__setPagesClientAssets(__pagesClientAssets);
 export default createAppRscHandler({
   basePath: __basePath,
   buildId: process.env.__VINEXT_BUILD_ID ?? null,
   ensureRouteLoaded: __ensureRouteLoaded,
+  prefetchInlining: ${JSON.stringify(prefetchInlining)},
   clearRequestContext() {
     __clearRequestContext();
   },
@@ -699,7 +725,7 @@ export default createAppRscHandler({
   }
   configRedirects: __configRedirects,
   configRewrites: __configRewrites,
-  imageConfig: __imageConfig,
+  imageConfig: __runtimeImageConfig,
   isDev: process.env.NODE_ENV !== "production",
   draftModeSecret: __draftModeSecret,
   dispatchMatchedPage({
@@ -731,18 +757,32 @@ export default createAppRscHandler({
     const PageComponent = route.page?.default;
     const __segmentConfig = __resolveAppPageSegmentConfig({
       layouts: route.layouts,
+      layoutTreePositions: route.layoutTreePositions,
       page: route.page,
+      parallelBranches: Object.values(route.slots ?? {}).map((slot) => ({
+        layout: slot.layout,
+        configLayouts: slot.configLayouts,
+        configLayoutTreePositions: slot.configLayoutTreePositions,
+        page: slot.page ?? slot.default,
+        routeSegments: slot.routeSegments,
+      })),
       parallelPages: Object.values(route.slots ?? {}).map((slot) => slot.page ?? slot.default),
-      parallelSegments: Object.values(route.slots ?? {}).flatMap((slot) => [
-        slot.layout,
-        ...(slot.configLayouts ?? []),
-        slot.page ?? slot.default,
-      ]),
+      routeSegments: route.routeSegments,
     });
     const __generateStaticParams = __resolveAppPageGenerateStaticParamsSources({
       layouts: route.layouts,
       layoutTreePositions: route.layoutTreePositions,
       page: route.page,
+      parallelBranches: Object.values(route.slots ?? {}).map((slot) => ({
+        layout: slot.layout,
+        configLayouts: slot.configLayouts,
+        configLayoutTreePositions: slot.configLayoutTreePositions,
+        page: slot.page ?? slot.default,
+        paramNames: slot.slotParamNames,
+        patternParts: slot.slotPatternParts,
+        routeSegments: slot.routeSegments,
+      })),
+      routePatternParts: route.patternParts,
       routeSegments: route.routeSegments,
     });
     const _asyncRouteParams = makeThenableParams(params);
@@ -1162,11 +1202,12 @@ export default createAppRscHandler({
   matchRoute,
   ${
     middlewarePath
-      ? `runMiddleware({ cleanPathname, context, isDataRequest, request }) {
+      ? `runMiddleware({ cleanPathname, context, hadBasePath, isDataRequest, request }) {
     return __applyAppMiddleware({
       basePath: __basePath,
       cleanPathname,
       context,
+      hadBasePath,
       filePath: ${JSON.stringify(middlewarePath ? normalizePathSeparators(middlewarePath) : "")},
       i18nConfig: __i18nConfig,
       isDataRequest,
