@@ -30,6 +30,7 @@ import {
 import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
+  VINEXT_RSC_REDIRECT_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 import {
@@ -446,6 +447,39 @@ describe("app page render lifecycle", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/x-component");
     await expect(response.text()).resolves.toBe("flight-data");
+  });
+
+  it("marks already-captured RSC redirects without page probing or HTTP conversion", async () => {
+    const common = createCommonOptions();
+    const dangerousUrl = "javascript:window.location.assign('/nextjs-compat/boom');";
+    const redirectError = Object.assign(new Error("redirect"), {
+      digest: `NEXT_REDIRECT;replace;${dangerousUrl};307;`,
+    });
+    const probePage = vi.fn(() => {
+      throw new Error("RSC page probe should not execute");
+    });
+    const renderToReadableStream = vi.fn((_element, options) => {
+      options.onError(redirectError, null, null);
+      return createStream(["flight-redirect"]);
+    });
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      hasLoadingBoundary: false,
+      isRscRequest: true,
+      probePage,
+      probePageBeforeRender: false,
+      renderToReadableStream,
+      requestUrl: "https://example.test/nextjs-compat/rsc-redirect.rsc",
+    });
+
+    expect(probePage).not.toHaveBeenCalled();
+    expect(renderToReadableStream).toHaveBeenCalledTimes(1);
+    expect(common.renderPageSpecialError).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/x-component");
+    expect(response.headers.get(VINEXT_RSC_REDIRECT_HEADER)).toBe(dangerousUrl);
+    await expect(response.text()).resolves.toBe("flight-redirect");
   });
 
   it("does not run the page probe before normal HTML rendering", async () => {

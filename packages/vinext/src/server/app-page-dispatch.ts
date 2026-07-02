@@ -1086,6 +1086,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     hasCustomGlobalError: options.hasCustomGlobalError,
     prerenderToReadableStream: options.prerenderToReadableStream,
     routePattern: route.pattern,
+    requestUrl: options.request.url,
     runWithSuppressedHookWarning(probe) {
       return options.runWithSuppressedHookWarning(probe);
     },

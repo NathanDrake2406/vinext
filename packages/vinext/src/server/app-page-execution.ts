@@ -313,6 +313,19 @@ function sameOriginPathOrAbsolute(location: string, requestUrl: string): string 
   }
 }
 
+export function resolveAppPageRedirectDigestUrl(options: {
+  basePath?: string;
+  location: string;
+  requestUrl: string;
+}): string {
+  const prefixedLocation = applyAppPageRedirectBasePath(
+    options.location,
+    options.requestUrl,
+    options.basePath,
+  );
+  return sameOriginPathOrAbsolute(prefixedLocation, options.requestUrl);
+}
+
 function buildMetadataRedirectHtmlResponse(options: {
   digest: string;
   getAndClearPendingCookies?: () => string[];
@@ -348,13 +361,18 @@ export async function buildAppPageSpecialErrorResponse(
   if (options.specialError.kind === "redirect") {
     options.clearRequestContext();
     // Apply configured basePath first so app-internal targets land at
-    // /<basePath>/<target> before the RSC cache-busting transform sees them.
+    // /<basePath>/<target> before either the RSC cache-busting transform or
+    // the Flight digest side channel sees them.
     const prefixedLocation = applyAppPageRedirectBasePath(
       options.specialError.location,
       options.request.url,
       options.basePath,
     );
-    const digestUrl = sameOriginPathOrAbsolute(prefixedLocation, options.request.url);
+    const digestUrl = resolveAppPageRedirectDigestUrl({
+      basePath: options.basePath,
+      location: options.specialError.location,
+      requestUrl: options.request.url,
+    });
     const digest = formatNextRedirectDigest({
       url: digestUrl,
       statusCode: options.specialError.statusCode,

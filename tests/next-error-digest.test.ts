@@ -33,4 +33,16 @@ describe("next error digest parsing", () => {
       url: "/profile",
     });
   });
+
+  it("preserves semicolons inside redirect URLs", () => {
+    expect(
+      parseNextRedirectDigest(
+        "NEXT_REDIRECT;replace;javascript:window.location.assign('/boom');;307;",
+      ),
+    ).toEqual({
+      status: 307,
+      type: "replace",
+      url: "javascript:window.location.assign('/boom');",
+    });
+  });
 });

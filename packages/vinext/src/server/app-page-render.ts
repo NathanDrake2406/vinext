@@ -13,6 +13,7 @@ import {
 import {
   buildAppPageFontLinkHeader,
   readAppPageBinaryStream,
+  resolveAppPageRedirectDigestUrl,
   resolveAppPageSpecialError,
   teeAppPageRscStreamForCapture,
   type AppPageFontPreload,
@@ -82,6 +83,7 @@ import type {
 } from "./app-layout-param-observation.js";
 import { getStaticLayoutObservationSkipRejection } from "./app-layout-param-observation.js";
 import { peekDynamicUsage } from "vinext/shims/headers";
+import { VINEXT_RSC_REDIRECT_HEADER } from "./headers.js";
 
 type AppPageBoundaryOnError = (
   error: unknown,
@@ -196,6 +198,7 @@ type RenderAppPageLifecycleOptions = {
   skipDisposition?: ClientReuseManifestSkipDisposition;
   mountedSlotsHeader?: string | null;
   renderMode?: AppRscRenderMode;
+  requestUrl?: string;
   waitUntil?: (promise: Promise<void>) => void;
   // Per-layout observation tracker. Constructed in dispatch, consumed by the
   // skip transport planner to reject layouts that are unsafe for static reuse.
@@ -509,6 +512,28 @@ function createRenderLifecycleSkipDisposition(input: {
   return plan.skipDisposition;
 }
 
+function applyCapturedRscRedirectHeader(
+  response: Response,
+  capturedError: unknown,
+  options: {
+    basePath?: string;
+    requestUrl?: string;
+  },
+): void {
+  if (!options.requestUrl) return;
+  const specialError = resolveAppPageSpecialError(capturedError);
+  if (specialError?.kind !== "redirect") return;
+
+  response.headers.set(
+    VINEXT_RSC_REDIRECT_HEADER,
+    resolveAppPageRedirectDigestUrl({
+      basePath: options.basePath,
+      location: specialError.location,
+      requestUrl: options.requestUrl,
+    }),
+  );
+}
+
 function isSkipTransportEnabled(
   skipDisposition: ClientReuseManifestSkipDisposition | undefined,
 ): boolean {
@@ -811,6 +836,10 @@ export async function renderAppPageLifecycle(
         isProduction: options.isProduction,
         responseKind: "rsc",
       }),
+    });
+    applyCapturedRscRedirectHeader(rscResponse, rscErrorTracker.getCapturedSpecialError(), {
+      basePath: options.basePath,
+      requestUrl: options.requestUrl,
     });
 
     // In dev mode, wrap the RSC response body to forward invalid dynamic usage

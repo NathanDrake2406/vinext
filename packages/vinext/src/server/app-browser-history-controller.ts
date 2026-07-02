@@ -32,6 +32,8 @@ type AppBrowserHistoryControllerDeps = {
   pushHistoryState: (state: unknown, href: string) => void;
   /** Wraps `replaceHistoryStateWithoutNotify(state, "", href)`. */
   replaceHistoryState: (state: unknown, href: string) => void;
+  /** Wraps `window.history.go(delta)`. */
+  goHistory?: (delta: number) => void;
   readVisibleNavigationMetadata: () => VisibleNavigationMetadata | null;
 };
 
@@ -62,9 +64,25 @@ type CommitNavigationHistoryOptions = {
   stageClientParams: () => void;
 };
 
+export type CommittedNavigationHistoryRollback = {
+  committedHref: string;
+  historyUpdateMode: HistoryUpdateMode;
+  previousHistoryState: unknown;
+  previousHref: string;
+  previousTraversalIndex: number | null;
+};
+
 export function createCanonicalBrowserHistoryHref(href: string): string {
   const url = new URL(href);
   return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function normalizeAbsoluteHref(href: string): string {
+  try {
+    return new URL(href).href;
+  } catch {
+    return href;
+  }
 }
 
 function stripVinextScrollState(state: unknown): unknown {
@@ -102,6 +120,7 @@ export class AppBrowserHistoryController {
   readonly #readCurrentHref: () => string;
   readonly #pushHistoryState: (state: unknown, href: string) => void;
   readonly #replaceHistoryState: (state: unknown, href: string) => void;
+  readonly #goHistory: (delta: number) => void;
   readonly #readVisibleNavigationMetadata: () => VisibleNavigationMetadata | null;
 
   // Highest app-owned traversal index we know about (`#next`) versus the index
@@ -116,6 +135,7 @@ export class AppBrowserHistoryController {
     this.#readCurrentHref = deps.readCurrentHref;
     this.#pushHistoryState = deps.pushHistoryState;
     this.#replaceHistoryState = deps.replaceHistoryState;
+    this.#goHistory = deps.goHistory ?? ((delta) => window.history.go(delta));
     this.#readVisibleNavigationMetadata = deps.readVisibleNavigationMetadata;
     this.#restorableClientState = new RestorableClientStateController<AppRouterState>({
       initialHistoryState: deps.initialHistoryState,
@@ -247,17 +267,21 @@ export class AppBrowserHistoryController {
    * ordered relative to the history write. Mirrors Next.js committing tree state
    * into the history entry during the navigation commit.
    */
-  commitNavigationHistory(options: CommitNavigationHistoryOptions): void {
+  commitNavigationHistory(
+    options: CommitNavigationHistoryOptions,
+  ): CommittedNavigationHistoryRollback | null {
     const currentHref = this.#readCurrentHref();
     const origin = new URL(currentHref).origin;
     const targetHref = new URL(options.href, origin).href;
+    const previousHistoryState = this.#readHistoryState();
+    const previousTraversalIndex = this.#currentHistoryTraversalIndex;
     const preserveExistingState = options.historyUpdateMode === "replace";
     const navigationHistoryIndex =
       options.targetHistoryIndex !== undefined
         ? options.targetHistoryIndex
         : this.allocateNavigationHistoryTraversalIndex(options.historyUpdateMode);
     const historyState = createHistoryStateWithNavigationMetadata(
-      preserveExistingState ? this.#readHistoryState() : null,
+      preserveExistingState ? previousHistoryState : null,
       {
         bfcacheIds: options.bfcacheIds,
         bfcacheVersion: this.#restorableClientState.currentBfcacheVersion,
@@ -267,15 +291,30 @@ export class AppBrowserHistoryController {
     );
 
     let wroteHistoryState = false;
+    let rollback: CommittedNavigationHistoryRollback | null = null;
     if (options.historyUpdateMode === "replace" && currentHref !== targetHref) {
       options.stageClientParams();
       this.#replaceHistoryState(historyState, options.href);
       wroteHistoryState = true;
+      rollback = {
+        committedHref: targetHref,
+        historyUpdateMode: "replace",
+        previousHistoryState,
+        previousHref: currentHref,
+        previousTraversalIndex,
+      };
       this.commitHistoryTraversalIndex(navigationHistoryIndex);
     } else if (options.historyUpdateMode === "push" && currentHref !== targetHref) {
       options.stageClientParams();
       this.#pushHistoryState(historyState, options.href);
       wroteHistoryState = true;
+      rollback = {
+        committedHref: targetHref,
+        historyUpdateMode: "push",
+        previousHistoryState,
+        previousHref: currentHref,
+        previousTraversalIndex,
+      };
       this.commitHistoryTraversalIndex(navigationHistoryIndex);
     }
 
@@ -288,6 +327,29 @@ export class AppBrowserHistoryController {
         this.commitHistoryTraversalIndex(options.targetHistoryIndex);
       }
     }
+
+    return rollback;
+  }
+
+  canRollbackNavigationHistory(rollback: CommittedNavigationHistoryRollback): boolean {
+    return (
+      normalizeAbsoluteHref(this.#readCurrentHref()) ===
+      normalizeAbsoluteHref(rollback.committedHref)
+    );
+  }
+
+  rollbackNavigationHistory(rollback: CommittedNavigationHistoryRollback): boolean {
+    if (!this.canRollbackNavigationHistory(rollback)) {
+      return false;
+    }
+
+    if (rollback.historyUpdateMode === "push") {
+      this.#goHistory(-1);
+    } else {
+      this.#replaceHistoryState(rollback.previousHistoryState, rollback.previousHref);
+    }
+    this.commitHistoryTraversalIndex(rollback.previousTraversalIndex);
+    return true;
   }
 
   syncCurrentHistoryStatePreviousNextUrl(

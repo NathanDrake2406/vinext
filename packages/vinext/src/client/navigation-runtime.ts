@@ -49,6 +49,11 @@ export type NavigationRuntimeFunctions = {
     historyUpdateMode: NavigationRuntimeHistoryUpdateMode,
     scroll: boolean,
   ) => void;
+  /**
+   * Gives the App Router entry one chance to consume its scoped rollback token
+   * when a streamed Flight redirect is blocked by URL-safety checks.
+   */
+  handleBlockedRedirect?: (redirect: string) => boolean;
   navigateExternal?: (
     href: string,
     historyUpdateMode: NavigationRuntimeHistoryUpdateMode,
@@ -113,6 +118,7 @@ function isNavigationRuntimeFunctions(value: unknown): value is NavigationRuntim
   return (
     isOptionalRuntimeFunction(Reflect.get(value, "clearNavigationCaches")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "commitHashNavigation")) &&
+    isOptionalRuntimeFunction(Reflect.get(value, "handleBlockedRedirect")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "navigateExternal")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "navigate")) &&
     isOptionalRuntimeFunction(Reflect.get(value, "notifyLinkNavigationStart")) &&

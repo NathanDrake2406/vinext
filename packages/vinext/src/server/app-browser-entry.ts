@@ -156,7 +156,6 @@ import {
   clearAppNavigationFailureTarget,
   installAppNavigationFailureListeners,
 } from "../client/app-nav-failure-handler.js";
-import { registerBlockedRedirectRollbackHandler } from "../client/app-blocked-redirect-rollback.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
   createRscRequestHeaders,
@@ -168,6 +167,7 @@ import {
 } from "./app-rsc-cache-busting.js";
 import { APP_RSC_RENDER_MODE_REFRESH_PRESERVE_UI } from "./app-rsc-render-mode.js";
 import { blockDangerousStreamedRscRedirect } from "./app-browser-rsc-redirect.js";
+import { isDangerousScheme } from "vinext/shims/url-safety";
 import {
   createOptimisticRouteTemplate,
   getOptimisticPrefetchSourceKey,
@@ -252,6 +252,7 @@ const historyController = new AppBrowserHistoryController({
   readCurrentHref: () => window.location.href,
   pushHistoryState: (state, href) => pushHistoryStateWithoutNotify(state, "", href),
   replaceHistoryState: (state, href) => replaceHistoryStateWithoutNotify(state, "", href),
+  goHistory: (delta) => window.history.go(delta),
   readVisibleNavigationMetadata: () => {
     if (!hasBrowserRouterState()) return null;
     const routerState = getBrowserRouterState();
@@ -564,41 +565,6 @@ function createActionInitiationSnapshot() {
 
 type ActionInitiationSnapshot = ReturnType<typeof createActionInitiationSnapshot>;
 
-type BlockedRedirectRollback = {
-  committedHref: string;
-  navId: number;
-  previousHistoryState: unknown;
-  previousHref: string;
-  previousRouterState: AppRouterState;
-};
-
-let pendingBlockedRedirectRollback: BlockedRedirectRollback | null = null;
-
-function normalizeBrowserHref(href: string): string {
-  try {
-    return new URL(href, window.location.href).href;
-  } catch {
-    return href;
-  }
-}
-
-function restoreBlockedRedirectNavigation(redirect: string): boolean {
-  void redirect;
-  const rollback = pendingBlockedRedirectRollback;
-  if (rollback === null) return false;
-  if (normalizeBrowserHref(window.location.href) !== rollback.committedHref) return false;
-
-  pendingBlockedRedirectRollback = null;
-  replaceHistoryStateWithoutNotify(rollback.previousHistoryState, "", rollback.previousHref);
-  applyClientParams(rollback.previousRouterState.navigationSnapshot.params);
-  browserNavigationController.restoreBlockedRedirectNavigationState(
-    rollback.previousRouterState,
-    rollback.navId,
-  );
-  clearAppNavigationFailureTarget(rollback.committedHref);
-  return true;
-}
-
 function createNavigationCommitEffect(options: {
   bfcacheIds: Readonly<Record<string, string>>;
   href: string;
@@ -607,6 +573,7 @@ function createNavigationCommitEffect(options: {
   params: Record<string, string | string[]>;
   previousRouterState: AppRouterState;
   previousNextUrl: string | null;
+  renderId: number;
   targetHistoryIndex?: number | null;
 }): () => void {
   const {
@@ -615,7 +582,9 @@ function createNavigationCommitEffect(options: {
     historyUpdateMode,
     navId,
     params,
+    previousRouterState,
     previousNextUrl,
+    renderId,
     targetHistoryIndex,
   } = options;
 
@@ -629,16 +598,7 @@ function createNavigationCommitEffect(options: {
       return;
     }
 
-    const previousHref = window.location.href;
-    const committedHref = normalizeBrowserHref(href);
-    pendingBlockedRedirectRollback = {
-      committedHref,
-      navId,
-      previousHistoryState: window.history.state,
-      previousHref,
-      previousRouterState: options.previousRouterState,
-    };
-    historyController.commitNavigationHistory({
+    const historyRollback = historyController.commitNavigationHistory({
       bfcacheIds,
       href,
       historyUpdateMode,
@@ -646,11 +606,48 @@ function createNavigationCommitEffect(options: {
       stageClientParams: () => stageClientParams(params),
       targetHistoryIndex,
     });
+    if (historyRollback) {
+      browserNavigationController.armBlockedRedirectNavigationRollback({
+        historyRollback,
+        navId,
+        previousRouterState,
+        renderId,
+      });
+    }
 
     // URL has been updated; the recovery hard-nav target is no longer needed.
     clearAppNavigationFailureTarget(href);
     commitClientNavigationState(navId);
   };
+}
+
+function restoreBlockedRedirectNavigation(redirect: string): boolean {
+  if (!isDangerousScheme(redirect)) return false;
+
+  const rollback = browserNavigationController.consumeBlockedRedirectNavigationRollback();
+  if (rollback === null) return false;
+  if (!historyController.canRollbackNavigationHistory(rollback.historyRollback)) return false;
+
+  const navId = browserNavigationController.beginNavigation();
+  const restored = browserNavigationController.restoreHistorySnapshotVisibleState({
+    beforeCommit: () => {
+      historyController.rollbackNavigationHistory(rollback.historyRollback);
+      applyClientParams(rollback.previousRouterState.navigationSnapshot.params);
+    },
+    navId,
+    state: rollback.previousRouterState,
+    targetHref: rollback.historyRollback.previousHref,
+  });
+
+  if (!restored) {
+    browserNavigationController.finalizeNavigation(navId, null);
+    return false;
+  }
+
+  clearAppNavigationFailureTarget(rollback.historyRollback.committedHref);
+  commitClientNavigationState(navId, { releaseSnapshot: false });
+  browserNavigationController.finalizeNavigation(navId, null);
+  return true;
 }
 
 async function renderNavigationPayload(
@@ -1101,9 +1098,6 @@ function BrowserRoot({
       setAppRouterStateValue,
       stateRef,
     );
-    const unregisterBlockedRedirectRollback = registerBlockedRedirectRollbackHandler(
-      restoreBlockedRedirectNavigation,
-    );
     registerNavigationRuntimeFunctions({
       navigateExternal: (href, historyUpdateMode) => {
         setTreeStateValue({
@@ -1119,7 +1113,6 @@ function BrowserRoot({
     return () => {
       hydrationCachePublication.invalidate();
       registerNavigationRuntimeFunctions({ navigateExternal: undefined });
-      unregisterBlockedRedirectRollback();
       detach();
       setMountedSlotsHeader(null);
     };
@@ -2350,6 +2343,7 @@ function bootstrapHydration(
     clearNavigationCaches: clearClientNavigationCaches,
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
       historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
+    handleBlockedRedirect: restoreBlockedRedirectNavigation,
     navigate: navigateRsc,
   });
 
