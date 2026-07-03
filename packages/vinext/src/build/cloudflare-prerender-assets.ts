@@ -282,7 +282,7 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     const htmlTarget = path.join(clientDir, assetPath);
     const rscTarget = routePathname === "/" ? null : path.join(clientDir, `${assetPath}.rsc`);
     const shouldPublishRsc = rscTarget !== null && route.queryInvariant?.rsc === true;
-    if (fs.existsSync(htmlTarget) || (shouldPublishRsc && fs.existsSync(rscTarget))) continue;
+    if (fs.existsSync(htmlTarget) || (rscTarget && fs.existsSync(rscTarget))) continue;
 
     let routePublished = false;
     const htmlSource = path.join(options.prerenderDir, getOutputPath(routePathname, false));

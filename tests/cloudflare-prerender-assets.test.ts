@@ -243,6 +243,36 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(headers).not.toContain("/about.rsc");
   });
 
+  it("skips HTML publication when an RSC target already exists without RSC proof", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+    writeFile(path.join(clientDir, "about.rsc"), "existing-user-rsc-asset");
+
+    const result = publishCloudflarePrerenderedAppAssets({
+      config: await baseConfig(),
+      prerenderDir,
+      root,
+      routes: [
+        renderedAppRoute("/about", ["about.html", "about.rsc"], {
+          queryInvariant: { html: true, rsc: false },
+        }),
+      ],
+      serverDir,
+    });
+
+    expect(result).toEqual({ skipped: false, publishedFiles: 0, publishedRoutes: 0 });
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
+    expect(fs.readFileSync(path.join(clientDir, "about.rsc"), "utf-8")).toBe(
+      "existing-user-rsc-asset",
+    );
+    expect(fs.existsSync(path.join(clientDir, "_headers"))).toBe(false);
+  });
+
   it("preserves query-invariance proof in the prerender manifest", () => {
     const root = createTempRoot();
 
