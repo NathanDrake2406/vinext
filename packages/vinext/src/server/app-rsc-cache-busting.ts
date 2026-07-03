@@ -1,3 +1,4 @@
+import { encodeBase64Url } from "../utils/base64url.js";
 import { fnv1a64 } from "../utils/hash.js";
 import {
   APP_RSC_RENDER_MODE_NAVIGATION,
@@ -62,15 +63,6 @@ type ResolveInvalidRscCacheBustingRequestOptions = {
   isRscRequest: boolean;
   request: Request;
 };
-
-function encodeBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
 
 function normalizeHeaderValue(value: string | null): string {
   return value ?? "0";

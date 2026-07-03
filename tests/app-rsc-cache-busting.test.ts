@@ -24,19 +24,11 @@ import {
   VINEXT_STATIC_RSC_TRANSPORT_PREFIX,
   VINEXT_WORKER_RSC_TRANSPORT_PREFIX,
 } from "../packages/vinext/src/server/app-rsc-transport.js";
+import { encodeBase64Url } from "../packages/vinext/src/utils/base64url.js";
 import { fnv1a64 } from "../packages/vinext/src/utils/hash.js";
 import { withEnvVar } from "./env-test-helpers.js";
 
 const textEncoder = new TextEncoder();
-
-function encodeBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
 
 async function sha256CacheBustingHash(input: string): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest("SHA-256", textEncoder.encode(input));
@@ -65,10 +57,10 @@ describe("App Router RSC cache-busting", () => {
 
     await withEnvVar("__VINEXT_CLOUDFLARE_RSC_TRANSPORT", "true", async () => {
       await expect(createRscRequestUrl("/dashboard?tab=activity", headers)).resolves.toBe(
-        `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/dashboard.rsc?tab=activity&_rsc`,
+        `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/L2Rhc2hib2FyZA.rsc?tab=activity&_rsc`,
       );
       await expect(createRscRequestUrl("/", headers)).resolves.toBe(
-        `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/__root.rsc?_rsc`,
+        `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/Lw.rsc?_rsc`,
       );
     });
   });
@@ -82,7 +74,7 @@ describe("App Router RSC cache-busting", () => {
 
     await withEnvVar("__VINEXT_CLOUDFLARE_RSC_TRANSPORT", "true", async () => {
       await expect(createRscRequestUrl("/photos/42", headers)).resolves.toBe(
-        `${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}/photos/42.rsc?${VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM}=${hash}`,
+        `${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}/L3Bob3Rvcy80Mg.rsc?${VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM}=${hash}`,
       );
     });
   });
@@ -93,7 +85,7 @@ describe("App Router RSC cache-busting", () => {
     });
     const hash = await computeRscCacheBustingSearchParam(headers);
     const request = new Request(
-      `https://example.com${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}/photos/42.rsc?_rsc=stale`,
+      `https://example.com${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}/L3Bob3Rvcy80Mg.rsc?_rsc=stale`,
       { headers },
     );
 
@@ -103,7 +95,7 @@ describe("App Router RSC cache-busting", () => {
     });
 
     expect(response?.headers.get("Location")).toBe(
-      `${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}/photos/42.rsc?${VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM}=${hash}`,
+      `${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}/L3Bob3Rvcy80Mg.rsc?${VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM}=${hash}`,
     );
   });
 

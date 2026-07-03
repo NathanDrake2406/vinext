@@ -328,9 +328,10 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(new URL(staticRequest.url).search).toBe("?tab=1&_rsc");
 
     const workerRequest = resolveRscTransportRequest(
-      new Request(`https://example.test${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}/docs/__index.rsc`, {
-        headers: { RSC: "1" },
-      }),
+      new Request(
+        `https://example.test${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}${createRscTransportAssetPathname("/docs/")}`,
+        { headers: { RSC: "1" } },
+      ),
     );
     expect(new URL(workerRequest.url).pathname).toBe("/docs/");
   });

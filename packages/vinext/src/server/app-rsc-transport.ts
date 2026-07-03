@@ -1,3 +1,4 @@
+import { decodeBase64Url, encodeBase64Url } from "../utils/base64url.js";
 import { APP_RSC_RENDER_MODE_NAVIGATION } from "./app-rsc-render-mode.js";
 import {
   NEXT_ROUTER_PREFETCH_HEADER,
@@ -13,11 +14,31 @@ import {
 export const VINEXT_STATIC_RSC_TRANSPORT_PREFIX = "/_next/static/__vinext/prerendered-rsc";
 export const VINEXT_WORKER_RSC_TRANSPORT_PREFIX = "/__vinext/rsc";
 
-const ROOT_RSC_TRANSPORT_FILE = "__root.rsc";
-const TRAILING_SLASH_RSC_TRANSPORT_FILE = "__index.rsc";
-
 export function isCloudflareRscTransportEnabled(): boolean {
   return process.env.__VINEXT_CLOUDFLARE_RSC_TRANSPORT === "true";
+}
+
+/**
+ * Transport asset names encode the full visible pathname as one opaque
+ * base64url token. Structured filenames (`/about.rsc` plus `__root.rsc` /
+ * `__index.rsc` sentinels) are not injective: legal routes like `/__root` or
+ * `/docs/__index` alias the sentinels for `/` and `/docs/`. The token keeps
+ * the route-to-asset mapping bijective for every legal pathname.
+ */
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+// Reject non-canonical tokens (`+`, `/`, `=`) so each route has exactly one
+// accepted transport asset path, not every base64 spelling atob tolerates.
+const BASE64URL_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+function encodeRouteToken(routePathname: string): string {
+  return encodeBase64Url(textEncoder.encode(routePathname));
+}
+
+function decodeRouteToken(token: string): string | null {
+  if (!BASE64URL_TOKEN_PATTERN.test(token)) return null;
+  const bytes = decodeBase64Url(token);
+  return bytes === null ? null : textDecoder.decode(bytes);
 }
 
 function isStaticRscTransportEligible(headers: Headers): boolean {
@@ -35,14 +56,10 @@ function isStaticRscTransportEligible(headers: Headers): boolean {
 }
 
 export function createRscTransportAssetPathname(routePathname: string): string {
-  if (routePathname === "/") return `/${ROOT_RSC_TRANSPORT_FILE}`;
   if (!routePathname.startsWith("/")) {
     throw new Error(`Invalid RSC transport route pathname: ${routePathname}`);
   }
-  if (routePathname.endsWith("/")) {
-    return `${routePathname}${TRAILING_SLASH_RSC_TRANSPORT_FILE}`;
-  }
-  return `${routePathname}.rsc`;
+  return `/${encodeRouteToken(routePathname)}.rsc`;
 }
 
 export function createRscTransportRequestPathname(routePathname: string, headers: Headers): string {
@@ -62,13 +79,11 @@ export function resolveRscTransportRoutePathname(pathname: string): string | nul
     stripTransportPrefix(pathname, VINEXT_STATIC_RSC_TRANSPORT_PREFIX) ??
     stripTransportPrefix(pathname, VINEXT_WORKER_RSC_TRANSPORT_PREFIX);
   if (assetPathname === null) return null;
-  if (assetPathname === `/${ROOT_RSC_TRANSPORT_FILE}`) return "/";
-  if (assetPathname.endsWith(`/${TRAILING_SLASH_RSC_TRANSPORT_FILE}`)) {
-    return assetPathname.slice(0, -TRAILING_SLASH_RSC_TRANSPORT_FILE.length);
-  }
-  if (!assetPathname.endsWith(".rsc")) return null;
-  const routePathname = assetPathname.slice(0, -4);
-  return routePathname.startsWith("/") && routePathname.length > 1 ? routePathname : null;
+  if (!assetPathname.startsWith("/") || !assetPathname.endsWith(".rsc")) return null;
+  const token = assetPathname.slice(1, -4);
+  if (token.length === 0 || token.includes("/")) return null;
+  const routePathname = decodeRouteToken(token);
+  return routePathname !== null && routePathname.startsWith("/") ? routePathname : null;
 }
 
 export function resolveRscTransportRequest(request: Request, url = new URL(request.url)): Request {

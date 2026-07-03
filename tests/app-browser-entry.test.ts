@@ -774,8 +774,9 @@ describe("app browser entry navigation scheduling", () => {
         currentHref: "/about",
         origin: "https://example.com",
         responseCompatibilityId: "compat-b",
+        // Token pathnames are hand-derived base64url of the visible pathname.
         responseUrl:
-          "https://example.com/_next/static/__vinext/prerendered-rsc/about.rsc?_rsc=stale",
+          "https://example.com/_next/static/__vinext/prerendered-rsc/L2Fib3V0.rsc?_rsc=stale",
       }),
     ).toEqual({ hardNavigationTarget: "/about", kind: "hard-navigate" });
 
@@ -785,7 +786,7 @@ describe("app browser entry navigation scheduling", () => {
         currentHref: "/about?tab=1",
         origin: "https://example.com",
         responseCompatibilityId: null,
-        responseUrl: "https://example.com/__vinext/rsc/about.rsc?tab=1&_rsc=stale",
+        responseUrl: "https://example.com/__vinext/rsc/L2Fib3V0.rsc?tab=1&_rsc=stale",
       }),
     ).toEqual({ hardNavigationTarget: "/about?tab=1", kind: "hard-navigate" });
 
@@ -795,8 +796,7 @@ describe("app browser entry navigation scheduling", () => {
         currentHref: "/",
         origin: "https://example.com",
         responseCompatibilityId: "compat-b",
-        responseUrl:
-          "https://example.com/_next/static/__vinext/prerendered-rsc/__root.rsc?_rsc=stale",
+        responseUrl: "https://example.com/_next/static/__vinext/prerendered-rsc/Lw.rsc?_rsc=stale",
       }),
     ).toEqual({ hardNavigationTarget: "/", kind: "hard-navigate" });
 
@@ -807,7 +807,7 @@ describe("app browser entry navigation scheduling", () => {
         origin: "https://example.com",
         responseCompatibilityId: "compat-b",
         responseUrl:
-          "https://example.com/_next/static/__vinext/prerendered-rsc/docs/__index.rsc?_rsc=stale",
+          "https://example.com/_next/static/__vinext/prerendered-rsc/L2RvY3Mv.rsc?_rsc=stale",
       }),
     ).toEqual({ hardNavigationTarget: "/docs/", kind: "hard-navigate" });
   });
