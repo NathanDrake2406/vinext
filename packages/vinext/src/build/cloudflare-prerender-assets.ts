@@ -55,6 +55,30 @@ const RSC_AUTHORITATIVE_HEADERS = [
   NEXT_DEPLOYMENT_ID_HEADER,
 ];
 
+// Cloudflare Static Assets caps `_headers` at 100 rules; a bundle that exceeds
+// it is rejected at deploy time. Each published HTML route needs its own rule
+// (visible paths share no prefix), so the count is real for large static apps.
+// See https://developers.cloudflare.com/workers/static-assets/headers/
+const CLOUDFLARE_HEADERS_RULE_LIMIT = 100;
+
+function skipResult(reason: string): PublishCloudflarePrerenderedAppAssetsResult {
+  return { skipped: true, reason, publishedFiles: 0, publishedRoutes: 0 };
+}
+
+/**
+ * Count path rules in a `_headers` file. A rule is a line that begins a new
+ * path pattern: non-blank, not indented (header lines are indented), and not a
+ * comment. Used to budget generated rules against the Cloudflare limit.
+ */
+function countHeaderRules(content: string): number {
+  let count = 0;
+  for (const line of content.split("\n")) {
+    if (line.length === 0 || /^\s/.test(line) || line.trimStart().startsWith("#")) continue;
+    count++;
+  }
+  return count;
+}
+
 function hasMiddlewareOrProxy(root: string, config: ResolvedNextConfig): boolean {
   const matcher = createValidFileMatcher(config.pageExtensions);
   for (const conventionDir of [root, path.join(root, "src")]) {
@@ -223,52 +247,22 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   serverDir: string;
 }): PublishCloudflarePrerenderedAppAssetsResult {
   if (options.config.output === "export") {
-    return {
-      skipped: true,
-      reason: "static export already writes to client assets",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("static export already writes to client assets");
   }
   if (options.config.trailingSlash) {
-    return {
-      skipped: true,
-      reason: "trailingSlash would require preserving slash redirects",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("trailingSlash would require preserving slash redirects");
   }
   if (options.config.basePath) {
-    return {
-      skipped: true,
-      reason: "basePath asset route publication is not proven safe",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("basePath asset route publication is not proven safe");
   }
   if (options.config.i18n) {
-    return {
-      skipped: true,
-      reason: "i18n routing may require Worker redirects or locale negotiation",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("i18n routing may require Worker redirects or locale negotiation");
   }
   if (hasRequestTransformConfig(options.config)) {
-    return {
-      skipped: true,
-      reason: "config headers, redirects, or rewrites require Worker routing",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("config headers, redirects, or rewrites require Worker routing");
   }
   if (hasMiddlewareOrProxy(options.root, options.config)) {
-    return {
-      skipped: true,
-      reason: "middleware/proxy must run before page responses",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("middleware/proxy must run before page responses");
   }
 
   const rootAssetsConfig = readRootWranglerAssetsConfig(options.root, process.env.CLOUDFLARE_ENV);
@@ -276,42 +270,35 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     !rootAssetsConfig.ok ||
     !isCloudflareRscTransportAllowedForAssetsConfig(rootAssetsConfig.assets)
   ) {
-    return {
-      skipped: true,
-      reason: "Cloudflare RSC transport is disabled for the selected Wrangler environment",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("Cloudflare RSC transport is disabled for the selected Wrangler environment");
   }
 
   const assetsConfig = readEmittedWranglerAssetsConfig(options.serverDir);
   if (!assetsConfig.ok || !assetsConfig.assets?.directory) {
-    return {
-      skipped: true,
-      reason: "Cloudflare assets binding not found",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("Cloudflare assets binding not found");
   }
   if (!isCloudflareRscTransportAllowedForAssetsConfig(assetsConfig.assets)) {
-    return {
-      skipped: true,
-      reason: "Cloudflare assets not_found_handling is not none",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
+    return skipResult("Cloudflare assets not_found_handling is not none");
   }
 
   const clientDir = path.resolve(options.serverDir, assetsConfig.assets.directory);
   const routes = eligibleStaticAppRoutes(options.routes);
-  const headerEntries: Array<{
-    detachHeaders?: readonly string[];
-    headers: Record<string, string>;
-    pathname: string;
-  }> = [];
-  let publishedStaticRsc = false;
-  let publishedFiles = 0;
-  let publishedRoutes = 0;
+
+  // Phase 1: plan the publication without copying, so the generated `_headers`
+  // rule count can be checked against the Cloudflare limit before any file is
+  // written. A route that maps to a visible asset path with an available source
+  // and no target collision publishes HTML; RSC publishes when proven static.
+  type PublicationEntry = {
+    htmlSource: string;
+    htmlTarget: string;
+    publishHtml: boolean;
+    route: Extract<PrerenderRouteResult, { status: "rendered" }>;
+    routePathname: string;
+    publishRsc: boolean;
+    rscSource: string | null;
+    rscTarget: string;
+  };
+  const plan: PublicationEntry[] = [];
 
   for (const route of routes) {
     const routePathname = route.path ?? route.route;
@@ -331,31 +318,78 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     const htmlAssetPath = routePathname === "/" ? "index.html" : visibleAssetPath;
     const htmlTarget = path.join(clientDir, htmlAssetPath);
     const rscTarget = path.join(clientDir, `.${rscAssetPathname}`);
-    const shouldPublishRsc = route.queryInvariant?.rsc === true;
     if (fs.existsSync(htmlTarget) || fs.existsSync(rscTarget)) {
       continue;
     }
 
-    let routePublished = false;
-    const htmlHeaders = buildHtmlHeaders(route);
     const htmlSource = path.join(options.prerenderDir, getOutputPath(routePathname, false));
-    if (copyIfAbsent(htmlSource, htmlTarget) === "copied") {
+    const publishHtml = fs.existsSync(htmlSource);
+    const rscSource =
+      route.queryInvariant?.rsc === true
+        ? path.join(options.prerenderDir, getRscOutputPath(routePathname))
+        : null;
+    const publishRsc = rscSource !== null && fs.existsSync(rscSource);
+    if (!publishHtml && !publishRsc) continue;
+
+    plan.push({
+      htmlSource,
+      htmlTarget,
+      publishHtml,
+      route,
+      routePathname,
+      publishRsc,
+      rscSource,
+      rscTarget,
+    });
+  }
+
+  // Phase 2: budget generated rules (one per published HTML route, plus a single
+  // shared wildcard rule when any static RSC is published) against the preserved
+  // user rules. Skip entirely rather than emit an invalid asset bundle.
+  // ponytail: skip-all at the limit; add per-route capping if real apps exceed it.
+  const headersPath = path.join(clientDir, "_headers");
+  const existingHeaders = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf-8") : "";
+  const preservedRuleCount = countHeaderRules(removeGeneratedHeadersBlock(existingHeaders));
+  const generatedRuleCount =
+    plan.filter((entry) => entry.publishHtml).length +
+    (plan.some((entry) => entry.publishRsc) ? 1 : 0);
+  if (preservedRuleCount + generatedRuleCount > CLOUDFLARE_HEADERS_RULE_LIMIT) {
+    return skipResult(
+      `publishing static assets would exceed Cloudflare's ${CLOUDFLARE_HEADERS_RULE_LIMIT}-rule _headers limit`,
+    );
+  }
+
+  // Phase 3: execute the planned copies and collect the header rules to emit.
+  const headerEntries: Array<{
+    detachHeaders?: readonly string[];
+    headers: Record<string, string>;
+    pathname: string;
+  }> = [];
+  let publishedStaticRsc = false;
+  let publishedFiles = 0;
+  let publishedRoutes = 0;
+
+  for (const entry of plan) {
+    let routePublished = false;
+
+    if (entry.publishHtml && copyIfAbsent(entry.htmlSource, entry.htmlTarget) === "copied") {
       publishedFiles++;
       routePublished = true;
       headerEntries.push({
-        pathname: routePathname,
+        pathname: entry.routePathname,
         detachHeaders: HTML_AUTHORITATIVE_HEADERS,
-        headers: htmlHeaders,
+        headers: buildHtmlHeaders(entry.route),
       });
     }
 
-    if (shouldPublishRsc) {
-      const rscSource = path.join(options.prerenderDir, getRscOutputPath(routePathname));
-      if (copyIfAbsent(rscSource, rscTarget) === "copied") {
-        publishedFiles++;
-        routePublished = true;
-        publishedStaticRsc = true;
-      }
+    if (
+      entry.publishRsc &&
+      entry.rscSource &&
+      copyIfAbsent(entry.rscSource, entry.rscTarget) === "copied"
+    ) {
+      publishedFiles++;
+      routePublished = true;
+      publishedStaticRsc = true;
     }
 
     if (routePublished) {

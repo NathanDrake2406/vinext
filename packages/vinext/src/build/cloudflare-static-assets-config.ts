@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parseJsonc } from "../utils/jsonc.js";
+import { resolveWranglerJsonPath } from "../utils/project.js";
 import { isUnknownRecord } from "../utils/record.js";
 
 export type WranglerAssetsConfig = {
@@ -10,62 +12,6 @@ export type WranglerAssetsConfig = {
 export type WranglerAssetsConfigReadResult =
   | { assets: WranglerAssetsConfig | null; ok: true }
   | { ok: false };
-
-function stripJsonComments(source: string): string {
-  let output = "";
-  let inString = false;
-  let escaped = false;
-
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index];
-    const next = source[index + 1];
-
-    if (inString) {
-      output += char;
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-      output += char;
-      continue;
-    }
-
-    if (char === "/" && next === "/") {
-      while (index < source.length && source[index] !== "\n") index++;
-      output += "\n";
-      continue;
-    }
-
-    if (char === "/" && next === "*") {
-      index += 2;
-      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) {
-        output += source[index] === "\n" ? "\n" : " ";
-        index++;
-      }
-      index++;
-      continue;
-    }
-
-    output += char;
-  }
-  return output;
-}
-
-function parseJsonOrJsonc(source: string): unknown {
-  try {
-    return JSON.parse(source);
-  } catch {
-    return JSON.parse(stripJsonComments(source).replace(/,\s*([}\]])/g, "$1"));
-  }
-}
 
 function toAssetsConfig(value: unknown): WranglerAssetsConfigReadResult {
   if (value === undefined) return { ok: true, assets: null };
@@ -84,10 +30,22 @@ function toAssetsConfig(value: unknown): WranglerAssetsConfigReadResult {
 
 function readJsonWranglerConfig(filePath: string): unknown {
   try {
-    return parseJsonOrJsonc(fs.readFileSync(filePath, "utf-8"));
+    return parseJsonc(fs.readFileSync(filePath, "utf-8"));
   } catch {
     return undefined;
   }
+}
+
+function readAssetsConfigFromPath(
+  wranglerPath: string | null,
+  resolveAssets: (parsed: Record<string, unknown>) => unknown,
+): WranglerAssetsConfigReadResult {
+  if (!wranglerPath) return { ok: true, assets: null };
+
+  const parsed = readJsonWranglerConfig(wranglerPath);
+  if (!isUnknownRecord(parsed)) return { ok: false };
+
+  return toAssetsConfig(resolveAssets(parsed));
 }
 
 function resolveEnvironmentAssetsConfig(parsed: unknown, envName: string | undefined): unknown {
@@ -112,25 +70,17 @@ export function readRootWranglerAssetsConfig(
   root: string,
   envName: string | undefined,
 ): WranglerAssetsConfigReadResult {
-  const wranglerPath = ["wrangler.jsonc", "wrangler.json"]
-    .map((filename) => path.join(root, filename))
-    .find((candidate) => fs.existsSync(candidate));
-  if (!wranglerPath) return { ok: true, assets: null };
-
-  const parsed = readJsonWranglerConfig(wranglerPath);
-  if (!isUnknownRecord(parsed)) return { ok: false };
-
-  return toAssetsConfig(resolveEnvironmentAssetsConfig(parsed, envName));
+  return readAssetsConfigFromPath(resolveWranglerJsonPath(root), (parsed) =>
+    resolveEnvironmentAssetsConfig(parsed, envName),
+  );
 }
 
 export function readEmittedWranglerAssetsConfig(serverDir: string): WranglerAssetsConfigReadResult {
   const wranglerPath = path.join(serverDir, "wrangler.json");
-  if (!fs.existsSync(wranglerPath)) return { ok: true, assets: null };
-
-  const parsed = readJsonWranglerConfig(wranglerPath);
-  if (!isUnknownRecord(parsed)) return { ok: false };
-
-  return toAssetsConfig(parsed.assets);
+  return readAssetsConfigFromPath(
+    fs.existsSync(wranglerPath) ? wranglerPath : null,
+    (parsed) => parsed.assets,
+  );
 }
 
 export function isCloudflareRscTransportAllowedForAssetsConfig(

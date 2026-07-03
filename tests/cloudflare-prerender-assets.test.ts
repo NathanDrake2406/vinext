@@ -219,6 +219,38 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(rscHeaders.get("Cache-Control")).not.toContain("immutable");
   });
 
+  it("skips publication when generated _headers rules would exceed the Cloudflare limit", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+
+    // 100 user-authored rules already consume the entire Cloudflare budget, so
+    // even a single generated HTML rule pushes the file over the limit.
+    const userRules = Array.from({ length: 100 }, (_, index) => `/u${index}\n  X-Test: 1`).join(
+      "\n",
+    );
+    writeFile(path.join(clientDir, "_headers"), `${userRules}\n`);
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+
+    const result = publishCloudflarePrerenderedAppAssets({
+      config: await baseConfig(),
+      prerenderDir,
+      root,
+      routes: [renderedAppRoute("/about", ["about.html", "about.rsc"])],
+      serverDir,
+    });
+
+    expect(result.skipped).toBe(true);
+    expect(result.skipped && result.reason).toContain("100-rule");
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`))).toBe(false);
+    // The user's `_headers` file is left untouched when publication is skipped.
+    expect(fs.readFileSync(path.join(clientDir, "_headers"), "utf-8")).toBe(`${userRules}\n`);
+  });
+
   it("does not publish when middleware or config request transforms are present", async () => {
     const middlewareRoot = createTempRoot();
     const middlewareServerDir = path.join(middlewareRoot, "dist/server");
