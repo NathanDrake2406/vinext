@@ -119,15 +119,21 @@ function safeVisibleAssetPathForRoute(routePathname: string): string | null {
   return segments.join("/");
 }
 
-function copyIfAbsent(
-  sourcePath: string,
-  targetPath: string,
-): "copied" | "missing" | "target-exists" {
-  if (!fs.existsSync(sourcePath)) return "missing";
-  if (fs.existsSync(targetPath)) return "target-exists";
+/**
+ * Publish an asset to its target. Foreign-collision detection happens earlier in
+ * the plan phase, so every target reaching here is either absent or owned by a
+ * prior run — in both cases the current source is written, overwriting stale
+ * output so republished assets match the latest prerender. Copy through a
+ * temp file + rename so a crash cannot leave a partially written asset. Returns
+ * false only if the source is missing (already guarded by the caller).
+ */
+function publishAsset(sourcePath: string, targetPath: string): boolean {
+  if (!fs.existsSync(sourcePath)) return false;
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.copyFileSync(sourcePath, targetPath);
-  return "copied";
+  const tmpPath = `${targetPath}.vinext-tmp-${process.pid}`;
+  fs.copyFileSync(sourcePath, tmpPath);
+  fs.renameSync(tmpPath, targetPath);
+  return true;
 }
 
 function headerBlockForPath(options: {
@@ -413,33 +419,23 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   for (const entry of plan) {
     let routePublished = false;
 
-    if (entry.publishHtml) {
-      // Foreign collisions were filtered in Phase 1, so "target-exists" here is
-      // an asset we own from a prior run: emit its header rule regardless so a
-      // repeated prerender keeps the generated block instead of dropping it.
-      const outcome = copyIfAbsent(entry.htmlSource, entry.htmlTarget);
-      if (outcome === "copied") {
-        publishedFiles++;
-        routePublished = true;
-      }
-      if (outcome !== "missing") {
-        headerEntries.push({
-          pathname: entry.routePathname,
-          detachHeaders: HTML_AUTHORITATIVE_HEADERS,
-          headers: buildHtmlHeaders(entry.route),
-        });
-      }
+    // Owned and fresh targets are both (re)written with the current source, so a
+    // repeated prerender refreshes stale bodies rather than keeping old ones,
+    // and always re-emits the header rule so the generated block survives.
+    if (entry.publishHtml && publishAsset(entry.htmlSource, entry.htmlTarget)) {
+      publishedFiles++;
+      routePublished = true;
+      headerEntries.push({
+        pathname: entry.routePathname,
+        detachHeaders: HTML_AUTHORITATIVE_HEADERS,
+        headers: buildHtmlHeaders(entry.route),
+      });
     }
 
-    if (entry.publishRsc && entry.rscSource) {
-      const outcome = copyIfAbsent(entry.rscSource, entry.rscTarget);
-      if (outcome === "copied") {
-        publishedFiles++;
-        routePublished = true;
-      }
-      if (outcome !== "missing") {
-        publishedStaticRsc = true;
-      }
+    if (entry.publishRsc && entry.rscSource && publishAsset(entry.rscSource, entry.rscTarget)) {
+      publishedFiles++;
+      routePublished = true;
+      publishedStaticRsc = true;
     }
 
     if (routePublished) {

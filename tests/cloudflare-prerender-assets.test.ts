@@ -414,11 +414,11 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(first).toEqual({ skipped: false, publishedFiles: 2, publishedRoutes: 1 });
     const firstHeaders = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
 
-    // A second run against the same output copies nothing new, but must keep the
-    // generated block and its headers rather than dropping them (the assets it
-    // owns are still on disk and would otherwise be served without headers).
+    // A second run against the same output re-publishes the assets it owns and
+    // keeps the generated block and its headers rather than dropping them (the
+    // owned assets stay on disk and must not be served without headers).
     const second = await publish();
-    expect(second).toEqual({ skipped: false, publishedFiles: 0, publishedRoutes: 0 });
+    expect(second).toEqual({ skipped: false, publishedFiles: 2, publishedRoutes: 1 });
     expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("<h1>About</h1>");
     expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "utf-8")).toBe(
       "about-rsc",
@@ -432,6 +432,39 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     const rscHeaders = applyHeadersRules(secondHeaders, staticRscAssetPath("/about"));
     expect(rscHeaders.get("Content-Type")).toBe(VINEXT_RSC_CONTENT_TYPE);
     expect(rscHeaders.get("Cache-Control")).toBe(STATIC_CACHE_CONTROL);
+  });
+
+  it("overwrites owned assets when the prerender output changes", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "about.html"), "about-v1");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc-v1");
+
+    const publish = async () =>
+      publishCloudflarePrerenderedAppAssets({
+        config: await baseConfig(),
+        prerenderDir,
+        root,
+        routes: [renderedAppRoute("/about", ["about.html", "about.rsc"])],
+        serverDir,
+      });
+
+    await publish();
+    expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("about-v1");
+
+    // The same route re-renders to different output; the owned client assets
+    // must be replaced, not left stale.
+    writeFile(path.join(prerenderDir, "about.html"), "about-v2");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc-v2");
+    await publish();
+
+    expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("about-v2");
+    expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "utf-8")).toBe(
+      "about-rsc-v2",
+    );
   });
 
   it("uses the selected Wrangler environment when gating static transport publication", async () => {
