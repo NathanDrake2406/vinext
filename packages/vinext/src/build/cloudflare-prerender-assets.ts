@@ -159,6 +159,36 @@ function removeGeneratedHeadersBlock(content: string): string {
   );
 }
 
+/**
+ * Read the set of assets a previous run published, from the generated `_headers`
+ * block. This is vinext's ownership record: a target that is recorded here is
+ * ours to re-publish idempotently, whereas an existing target that is absent
+ * here belongs to the user/build and must not be touched. HTML rules are listed
+ * per route; static RSC is a single wildcard, and its transport namespace is
+ * reserved, so the wildcard's presence proves ownership of every RSC target.
+ */
+function readGeneratedAssetOwnership(existingHeaders: string): {
+  html: Set<string>;
+  rsc: boolean;
+} {
+  const html = new Set<string>();
+  let rsc = false;
+
+  const start = existingHeaders.indexOf(GENERATED_HEADERS_START);
+  if (start === -1) return { html, rsc };
+  const end = existingHeaders.indexOf(GENERATED_HEADERS_END, start);
+  const block = existingHeaders.slice(start, end === -1 ? undefined : end);
+
+  const rscWildcard = `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/*`;
+  for (const line of block.split("\n")) {
+    if (line.length === 0 || /^\s/.test(line) || line.startsWith("#")) continue;
+    const pathname = line.trim();
+    if (pathname === rscWildcard) rsc = true;
+    else html.add(pathname);
+  }
+  return { html, rsc };
+}
+
 function writeGeneratedHeadersBlock(
   clientDir: string,
   entries: Array<{
@@ -284,10 +314,19 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   const clientDir = path.resolve(options.serverDir, assetsConfig.assets.directory);
   const routes = eligibleStaticAppRoutes(options.routes);
 
+  // Read the existing `_headers` up front: its generated block records which
+  // assets a prior run owns, so repeated prerenders re-publish their own output
+  // idempotently instead of mistaking it for a user collision and dropping the
+  // headers that make it correct. The same content feeds the rule-count budget.
+  const headersPath = path.join(clientDir, "_headers");
+  const existingHeaders = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf-8") : "";
+  const owned = readGeneratedAssetOwnership(existingHeaders);
+
   // Phase 1: plan the publication without copying, so the generated `_headers`
   // rule count can be checked against the Cloudflare limit before any file is
   // written. A route that maps to a visible asset path with an available source
-  // and no target collision publishes HTML; RSC publishes when proven static.
+  // and no foreign target collision publishes HTML; RSC publishes when proven
+  // static.
   type PublicationEntry = {
     htmlSource: string;
     htmlTarget: string;
@@ -318,7 +357,11 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     const htmlAssetPath = routePathname === "/" ? "index.html" : visibleAssetPath;
     const htmlTarget = path.join(clientDir, htmlAssetPath);
     const rscTarget = path.join(clientDir, `.${rscAssetPathname}`);
-    if (fs.existsSync(htmlTarget) || fs.existsSync(rscTarget)) {
+    // An existing target is a foreign collision only when a prior vinext run did
+    // not publish it; targets we own are re-published so their headers survive.
+    const htmlForeign = fs.existsSync(htmlTarget) && !owned.html.has(routePathname);
+    const rscForeign = fs.existsSync(rscTarget) && !owned.rsc;
+    if (htmlForeign || rscForeign) {
       continue;
     }
 
@@ -347,8 +390,6 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   // shared wildcard rule when any static RSC is published) against the preserved
   // user rules. Skip entirely rather than emit an invalid asset bundle.
   // ponytail: skip-all at the limit; add per-route capping if real apps exceed it.
-  const headersPath = path.join(clientDir, "_headers");
-  const existingHeaders = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf-8") : "";
   const preservedRuleCount = countHeaderRules(removeGeneratedHeadersBlock(existingHeaders));
   const generatedRuleCount =
     plan.filter((entry) => entry.publishHtml).length +
@@ -372,24 +413,33 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   for (const entry of plan) {
     let routePublished = false;
 
-    if (entry.publishHtml && copyIfAbsent(entry.htmlSource, entry.htmlTarget) === "copied") {
-      publishedFiles++;
-      routePublished = true;
-      headerEntries.push({
-        pathname: entry.routePathname,
-        detachHeaders: HTML_AUTHORITATIVE_HEADERS,
-        headers: buildHtmlHeaders(entry.route),
-      });
+    if (entry.publishHtml) {
+      // Foreign collisions were filtered in Phase 1, so "target-exists" here is
+      // an asset we own from a prior run: emit its header rule regardless so a
+      // repeated prerender keeps the generated block instead of dropping it.
+      const outcome = copyIfAbsent(entry.htmlSource, entry.htmlTarget);
+      if (outcome === "copied") {
+        publishedFiles++;
+        routePublished = true;
+      }
+      if (outcome !== "missing") {
+        headerEntries.push({
+          pathname: entry.routePathname,
+          detachHeaders: HTML_AUTHORITATIVE_HEADERS,
+          headers: buildHtmlHeaders(entry.route),
+        });
+      }
     }
 
-    if (
-      entry.publishRsc &&
-      entry.rscSource &&
-      copyIfAbsent(entry.rscSource, entry.rscTarget) === "copied"
-    ) {
-      publishedFiles++;
-      routePublished = true;
-      publishedStaticRsc = true;
+    if (entry.publishRsc && entry.rscSource) {
+      const outcome = copyIfAbsent(entry.rscSource, entry.rscTarget);
+      if (outcome === "copied") {
+        publishedFiles++;
+        routePublished = true;
+      }
+      if (outcome !== "missing") {
+        publishedStaticRsc = true;
+      }
     }
 
     if (routePublished) {

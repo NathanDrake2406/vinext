@@ -391,6 +391,49 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(fs.existsSync(path.join(clientDir, "_headers"))).toBe(false);
   });
 
+  it("re-publishes its own assets idempotently on a repeated run", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+
+    const publish = async () =>
+      publishCloudflarePrerenderedAppAssets({
+        config: await baseConfig(),
+        prerenderDir,
+        root,
+        routes: [renderedAppRoute("/about", ["about.html", "about.rsc"])],
+        rscCompatibilityId: "rsc-compat-test",
+        serverDir,
+      });
+
+    const first = await publish();
+    expect(first).toEqual({ skipped: false, publishedFiles: 2, publishedRoutes: 1 });
+    const firstHeaders = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
+
+    // A second run against the same output copies nothing new, but must keep the
+    // generated block and its headers rather than dropping them (the assets it
+    // owns are still on disk and would otherwise be served without headers).
+    const second = await publish();
+    expect(second).toEqual({ skipped: false, publishedFiles: 0, publishedRoutes: 0 });
+    expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("<h1>About</h1>");
+    expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "utf-8")).toBe(
+      "about-rsc",
+    );
+
+    const secondHeaders = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
+    expect(secondHeaders).toBe(firstHeaders);
+    const htmlHeaders = applyHeadersRules(secondHeaders, "/about");
+    expect(htmlHeaders.get("Content-Type")).toBe("text/html; charset=utf-8");
+    expect(htmlHeaders.get("Cache-Control")).toBe(STATIC_CACHE_CONTROL);
+    const rscHeaders = applyHeadersRules(secondHeaders, staticRscAssetPath("/about"));
+    expect(rscHeaders.get("Content-Type")).toBe(VINEXT_RSC_CONTENT_TYPE);
+    expect(rscHeaders.get("Cache-Control")).toBe(STATIC_CACHE_CONTROL);
+  });
+
   it("uses the selected Wrangler environment when gating static transport publication", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");
