@@ -150,8 +150,16 @@ export function isDynamicServerError(error: unknown): error is DynamicServerErro
   );
 }
 
+/**
+ * Rethrow framework control-flow signals before user error handling consumes
+ * them. This covers the categories vinext can currently produce.
+ */
 export function unstable_rethrow(error: unknown): void {
   if (isNextRouterError(error) || isBailoutToCSRError(error) || isDynamicServerError(error)) {
     throw error;
+  }
+
+  if (error instanceof Error && "cause" in error) {
+    unstable_rethrow((error as Error & { cause: unknown }).cause);
   }
 }
