@@ -1,14 +1,16 @@
 import type {
+  Alias,
   CSSModulesOptions,
   Logger,
   Plugin,
   PluginOption,
   ResolvedConfig,
+  ResolverFunction,
   SassPreprocessorOptions,
   UserConfig,
   ViteDevServer,
 } from "vite";
-import { loadEnv, parseAst, transformWithOxc } from "vite";
+import { createLogger, loadEnv, parseAst, transformWithOxc } from "vite";
 import {
   pagesRouter,
   apiRouter,
@@ -190,11 +192,10 @@ import {
 import {
   createClientFileNameConfig,
   createClientManualChunks,
-  createClientOutputConfig,
   createClientCodeSplittingConfig,
   createClientAssetFileNames,
   createRscFrameworkChunkOutputConfig,
-  getClientTreeshakeConfigForVite,
+  getClientTreeshakeConfig,
   getBuildBundlerOptions,
   withBuildBundlerOptions,
 } from "./build/client-build-config.js";
@@ -233,8 +234,8 @@ import { createIgnoreDynamicRequestsPlugin } from "./plugins/ignore-dynamic-requ
 import { normalizePathSeparators, stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
 import { escapeRegExp } from "./utils/regex.js";
 import {
+  assertSupportedViteVersion,
   getDepOptimizeNodeEnvOptions,
-  getViteMajorVersion,
   serializeViteDefine,
 } from "./utils/vite-version.js";
 import {
@@ -339,7 +340,6 @@ function hasServerOnlyMarkerImport(code: string): boolean {
 
 const __dirname = import.meta.dirname;
 type VitePluginReactModule = typeof import("@vitejs/plugin-react");
-type ViteTsconfigPathsModule = typeof import("vite-tsconfig-paths");
 
 function resolveOptionalDependency(projectRoot: string, specifier: string): string | null {
   try {
@@ -353,19 +353,6 @@ function resolveOptionalDependency(projectRoot: string, specifier: string): stri
   } catch {}
 
   return null;
-}
-
-async function loadVite7TsconfigPathsPlugin(projectRoot: string): Promise<Plugin> {
-  const resolvedPath = resolveOptionalDependency(projectRoot, "vite-tsconfig-paths");
-  if (!resolvedPath) {
-    throw new Error(
-      "[vinext] Vite 7 requires the optional peer dependency vite-tsconfig-paths " +
-        "for tsconfig path alias support. Install vite-tsconfig-paths or upgrade to Vite 8.",
-    );
-  }
-
-  const module = (await import(pathToFileURL(resolvedPath).href)) as ViteTsconfigPathsModule;
-  return module.default();
 }
 
 function resolveShimModulePath(shimsDir: string, moduleName: string): string {
@@ -831,6 +818,19 @@ function suppressOptionalOptimizeDepsWarnings(logger: Logger): void {
 // transforms can see them via resolve.alias without re-reading config files per env.
 const _tsconfigAliasCache = new Map<string, Record<string, string>>();
 
+/**
+ * Order materialized tsconfig path aliases by descending prefix length.
+ *
+ * TypeScript (and Next.js) match `paths` patterns by longest matched prefix,
+ * regardless of declaration order, while Vite's alias plugin picks the first
+ * matching entry. Overlapping patterns like `@/*` + `@/public/*` must
+ * therefore be materialized longest-first or the general pattern shadows the
+ * specific one (`@/public/foo.svg` would resolve into `src/public/`).
+ */
+function sortTsconfigAliasesBySpecificity(aliases: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(aliases).sort((a, b) => b[0].length - a[0].length));
+}
+
 function resolveTsconfigAliases(projectRoot: string): Record<string, string> {
   if (_tsconfigAliasCache.has(projectRoot)) {
     return _tsconfigAliasCache.get(projectRoot)!;
@@ -840,12 +840,102 @@ function resolveTsconfigAliases(projectRoot: string): Record<string, string> {
   for (const name of TSCONFIG_FILES) {
     const candidate = path.join(projectRoot, name);
     if (!fs.existsSync(candidate)) continue;
-    aliases = loadTsconfigPathAliases(candidate, projectRoot);
+    aliases = sortTsconfigAliasesBySpecificity(loadTsconfigPathAliases(candidate, projectRoot));
     break;
   }
 
   _tsconfigAliasCache.set(projectRoot, aliases);
   return aliases;
+}
+
+/**
+ * Stylesheet importer contexts as seen by Vite's internal CSS resolvers.
+ *
+ * Vite resolves CSS `@import`/`composes`/`url()` specifiers through a
+ * dedicated resolver container that only runs the alias plugin plus Vite's
+ * own resolver — user plugins never participate. The importer is either the
+ * stylesheet's own path (sass, CSS modules `composes`, url() rewriting) or a
+ * synthetic `<basedir>/*` (postcss-import, less).
+ */
+const STYLESHEET_IMPORTER_RE = /\.(?:css|scss|sass|less|styl|stylus|pcss|sss)$/i;
+
+function isStylesheetImporter(importer: string | undefined): boolean {
+  if (!importer) return false;
+  if (importer.endsWith("/*") || importer.endsWith("\\*")) return true;
+  return STYLESHEET_IMPORTER_RE.test(stripViteModuleQuery(importer));
+}
+
+/**
+ * Alias resolver for tsconfig-derived path aliases that keeps them out of
+ * stylesheet resolution.
+ *
+ * TypeScript `paths` never apply to CSS in Next.js — `@import` specifiers in
+ * stylesheets use standard bundler resolution, including package.json
+ * `exports` maps. A blind prefix-replacement alias breaks that: with
+ * `"@scope/ui/*": ["../../packages/ui/src/*"]` in tsconfig, an
+ * `@import "@scope/ui/globals.css"` whose real target is `exports`-mapped
+ * gets rewritten to a nonexistent source path and fails with ENOENT.
+ *
+ * Returning `null` for stylesheet importers makes the alias plugin fall
+ * through, so Vite's own resolver handles the original specifier. JS/TS
+ * importers keep the default alias behavior (Next.js applies `paths` there,
+ * including for `import "@/styles/globals.css"` from a layout), and Vite's
+ * glob/dynamic-import transforms — which require blind prefix replacement
+ * because their patterns never exist on disk — keep working.
+ */
+// `ResolverFunction` is typed with rolldown's synchronous resolveId signature,
+// but the alias plugin awaits resolver results, so an async resolver is fine —
+// hence the cast.
+const tsconfigAliasCustomResolver = async function (
+  this: { resolve: ResolveFromImporter },
+  updatedId: string,
+  importer: string | undefined,
+  options?: { skipSelf?: boolean },
+) {
+  if (isStylesheetImporter(importer)) return null;
+  // Mirror the alias plugin's default resolution for every other importer.
+  const resolved = await this.resolve(updatedId, importer, { ...options, skipSelf: true });
+  return resolved ?? { id: updatedId };
+} as unknown as ResolverFunction;
+
+/**
+ * Convert the merged alias map into Vite alias entries, attaching the
+ * stylesheet-scoping resolver to entries that came from tsconfig `paths`.
+ * Array order preserves the map's first-match ordering.
+ */
+function buildResolveAliasEntries(
+  aliasMap: Record<string, string>,
+  tsconfigPathAliases: Record<string, string>,
+): Alias[] {
+  return Object.entries(aliasMap).map(([find, replacement]) =>
+    tsconfigPathAliases[find] === replacement
+      ? { find, replacement, customResolver: tsconfigAliasCustomResolver }
+      : { find, replacement },
+  );
+}
+
+// Vite 8 logs a deprecation warning when `resolve.alias` contains a
+// `customResolver`. vinext uses one deliberately (see
+// `tsconfigAliasCustomResolver`): the aliases must stay in `resolve.alias`
+// for Vite's glob/dynamic-import transforms and internal resolvers, but must
+// not apply inside stylesheet resolution — and only a `customResolver` can
+// observe the importer there. Filter the warning so every project with
+// tsconfig `paths` doesn't boot with it.
+const ALIAS_CUSTOM_RESOLVER_DEPRECATION_RE =
+  /`resolve\.alias` contains an alias with `customResolver` option/;
+const VINEXT_FILTERED_ALIAS_DEPRECATION_WARN = Symbol.for("vinext.filteredAliasDeprecationWarn");
+
+function suppressAliasCustomResolverDeprecationWarning(logger: Logger): Logger {
+  const marker = logger as Logger & { [VINEXT_FILTERED_ALIAS_DEPRECATION_WARN]?: true };
+  if (marker[VINEXT_FILTERED_ALIAS_DEPRECATION_WARN]) return logger;
+
+  const warn = logger.warn.bind(logger);
+  logger.warn = (msg, warnOptions) => {
+    if (ALIAS_CUSTOM_RESOLVER_DEPRECATION_RE.test(stripAnsi(msg))) return;
+    warn(msg, warnOptions);
+  };
+  marker[VINEXT_FILTERED_ALIAS_DEPRECATION_WARN] = true;
+  return logger;
 }
 
 // Virtual module IDs for Pages Router production build
@@ -1021,22 +1111,15 @@ const clientCodeSplittingConfig = createClientCodeSplittingConfig(clientManualCh
 const appClientManualChunks = createClientManualChunks(_shimsDir, true);
 const appClientCodeSplittingConfig = createClientCodeSplittingConfig(appClientManualChunks);
 
-function getClientOutputConfigForVite(
-  viteMajorVersion: number,
-  assetsDir: string,
-  preserveAppRouteBoundaries = false,
-) {
-  const manualChunks = preserveAppRouteBoundaries ? appClientManualChunks : clientManualChunks;
+function getClientOutputConfig(assetsDir: string, preserveAppRouteBoundaries = false) {
   const codeSplitting = preserveAppRouteBoundaries
     ? appClientCodeSplittingConfig
     : clientCodeSplittingConfig;
-  return viteMajorVersion >= 8
-    ? {
-        ...createClientFileNameConfig(assetsDir),
-        assetFileNames: createClientAssetFileNames(assetsDir),
-        codeSplitting,
-      }
-    : createClientOutputConfig(manualChunks, assetsDir);
+  return {
+    ...createClientFileNameConfig(assetsDir),
+    assetFileNames: createClientAssetFileNames(assetsDir),
+    codeSplitting,
+  };
 }
 
 export type VinextOptions = {
@@ -1187,8 +1270,8 @@ type NitroSetupContext = {
 };
 
 export default function vinext(options: VinextOptions = {}): PluginOption[] {
+  assertSupportedViteVersion();
   const prerenderConfig = normalizeVinextPrerenderConfig(options.prerender);
-  const viteMajorVersion = getViteMajorVersion();
   let root: string;
   let pagesDir: string;
   let canonicalPagesDir: string;
@@ -1502,7 +1585,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos
     // that use @/*, #/*, or baseUrl imports work out of the box.
     // Vite 8+ supports this natively via resolve.tsconfigPaths.
-    ...(viteMajorVersion >= 8 ? [] : [loadVite7TsconfigPathsPlugin(earlyBaseDir)]),
     createStyledJsxPlugin(earlyBaseDir),
     // React Fast Refresh + JSX transform for client components.
     reactPluginPromise,
@@ -1579,50 +1661,46 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     //   1. avoid re-parsing every `.js` in `node_modules` (build perf), and
     //   2. avoid forcibly applying `lang: "jsx"` to library code that may use
     //      syntax incompatible with the JSX-enabled OXC parser.
-    ...(viteMajorVersion >= 8
-      ? [
-          {
-            name: "vinext:jsx-in-js",
-            enforce: "pre" as const,
-            transform: {
-              filter: { id: /\.m?js(?:\?.*)?$/ },
-              async handler(code: string, id: string) {
-                const cleanId = id.split("?")[0];
+    {
+      name: "vinext:jsx-in-js",
+      enforce: "pre" as const,
+      transform: {
+        filter: { id: /\.m?js(?:\?.*)?$/ },
+        async handler(code: string, id: string) {
+          const cleanId = id.split("?")[0];
 
-                // vinext's published runtime is already compiled by tsdown.
-                // Workspace symlinks resolve these files outside node_modules,
-                // so skip them explicitly instead of parsing the whole runtime
-                // again as possible JSX on every cold request.
-                if (isInsideDirectory(__dirname, cleanId)) return;
+          // vinext's published runtime is already compiled by tsdown. Workspace
+          // symlinks resolve these files outside node_modules, so skip them
+          // explicitly instead of parsing the whole runtime again as possible
+          // JSX on every cold request.
+          if (isInsideDirectory(__dirname, cleanId)) return;
 
-                // Inside node_modules, restrict the JSX transform to files that
-                // carry a React directive. `@vitejs/plugin-rsc` only parses
-                // such modules (and only those failures have been observed in
-                // the wild). The cheap `includes` check avoids any work for the
-                // vast majority of `.js` files in `node_modules`.
-                if (cleanId.includes("/node_modules/")) {
-                  if (!code.includes("use client") && !code.includes("use server")) {
-                    return;
-                  }
-                  if (!hasReactDirective(code)) {
-                    return;
-                  }
-                }
+          // Inside node_modules, restrict the JSX transform to files that carry
+          // a React directive. `@vitejs/plugin-rsc` only parses such modules
+          // (and only those failures have been observed in the wild). The cheap
+          // `includes` check avoids any work for the vast majority of `.js`
+          // files in `node_modules`.
+          if (cleanId.includes("/node_modules/")) {
+            if (!code.includes("use client") && !code.includes("use server")) {
+              return;
+            }
+            if (!hasReactDirective(code)) {
+              return;
+            }
+          }
 
-                const result = await transformWithOxc(code, id, {
-                  lang: "jsx",
-                  jsx: { runtime: "automatic" as const },
-                  sourcemap: true,
-                });
-                return {
-                  code: result.code,
-                  map: result.map,
-                };
-              },
-            },
-          } satisfies Plugin,
-        ]
-      : []),
+          const result = await transformWithOxc(code, id, {
+            lang: "jsx",
+            jsx: { runtime: "automatic" as const },
+            sourcemap: true,
+          });
+          return {
+            code: result.code,
+            map: result.map,
+          };
+        },
+      },
+    } satisfies Plugin,
     // Allow `import 'server-only'` from middleware (and any module reachable
     // from it) in non-RSC environments. Registered before `vinext:config` so
     // its `enforce: "pre"` resolveId runs ahead of @vitejs/plugin-rsc's
@@ -1660,10 +1738,21 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         isServeCommand = env.command === "serve";
         root = normalizePathSeparators(config.root ?? process.cwd());
         const userResolve = config.resolve as UserResolveConfigWithTsconfigPaths | undefined;
-        const shouldEnableNativeTsconfigPaths =
-          viteMajorVersion >= 8 && userResolve?.tsconfigPaths === undefined;
+        const shouldEnableNativeTsconfigPaths = userResolve?.tsconfigPaths === undefined;
         const tsconfigPathAliases = resolveTsconfigAliases(root);
         const swcHelpersAlias = resolveSwcHelpersAlias(root);
+
+        // tsconfig-derived alias entries carry a customResolver, which Vite 8
+        // reports as deprecated during config resolution. Filter that warning
+        // (see suppressAliasCustomResolverDeprecationWarning). Mutating
+        // config.customLogger (rather than returning it) keeps mergeConfig
+        // from deep-cloning the logger and flattening its hasWarned getter.
+        if (Object.keys(tsconfigPathAliases).length > 0) {
+          config.customLogger = suppressAliasCustomResolverDeprecationWarning(
+            config.customLogger ??
+              createLogger(config.logLevel, { allowClearScreen: config.clearScreen }),
+          );
+        }
 
         // Load .env files into process.env before anything else.
         // Next.js loads .env files before evaluating next.config.js, so
@@ -2357,7 +2446,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             ...(!isSSR && !hasClientBuildEnvironment
               ? { assetsInlineLimit: clientAssetsInlineLimit }
               : {}),
-            ...withBuildBundlerOptions(viteMajorVersion, {
+            ...withBuildBundlerOptions({
               // Suppress "Module level directives cause errors when bundled"
               // warnings for "use client" / "use server" directives. Our shims
               // and third-party libraries legitimately use these directives;
@@ -2410,7 +2499,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 };
               })(),
               // Enable aggressive tree-shaking for client builds.
-              // See getClientTreeshakeConfigForVite JSDoc for rationale.
+              // See getClientTreeshakeConfig JSDoc for rationale.
               // Only apply globally for standalone client builds (Pages Router
               // CLI). For multi-environment builds (App Router, Cloudflare),
               // treeshake is set per-environment on the client env below to
@@ -2419,7 +2508,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // that rely on module-level side effects.
               ...(!isSSR && !isMultiEnv
                 ? {
-                    treeshake: getClientTreeshakeConfigForVite(viteMajorVersion),
+                    treeshake: getClientTreeshakeConfig(),
                   }
                 : {}),
               // Code-split client bundles: separate framework (React/ReactDOM),
@@ -2429,9 +2518,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               // Router). For multi-environment builds (App Router, Cloudflare),
               // manualChunks is set per-environment on the client env below
               // to avoid leaking into RSC/SSR environments.
-              ...(!isSSR && !isMultiEnv
-                ? { output: getClientOutputConfigForVite(viteMajorVersion, clientAssetsDir) }
-                : {}),
+              ...(!isSSR && !isMultiEnv ? { output: getClientOutputConfig(clientAssetsDir) } : {}),
             }),
           },
           // Let OPTIONS requests pass through Vite's CORS middleware to our
@@ -2486,13 +2573,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           resolve: {
             // Materialize simple tsconfig/jsconfig path aliases into resolve.alias
             // so Vite can transform import.meta.glob("@/...") and import(`@/...`).
-            alias: {
-              ...(swcHelpersAlias ? { "@swc/helpers/_": swcHelpersAlias } : {}),
-              ...tsconfigPathAliases,
-              ...nextConfig.aliases,
-              ...nextShimMap,
-              "vinext/server/pages-client-assets": _pagesClientAssetsPath,
-            },
+            // tsconfig-derived entries carry a customResolver that keeps them out
+            // of stylesheet resolution (see tsconfigAliasCustomResolver).
+            alias: buildResolveAliasEntries(
+              {
+                ...(swcHelpersAlias ? { "@swc/helpers/_": swcHelpersAlias } : {}),
+                ...tsconfigPathAliases,
+                ...nextConfig.aliases,
+                ...nextShimMap,
+                "vinext/server/pages-client-assets": _pagesClientAssetsPath,
+              },
+              tsconfigPathAliases,
+            ),
             // Dedupe React packages to prevent dual-instance errors.
             // When vinext is linked (npm link / bun link) or any dependency
             // brings its own React copy, multiple React instances can load,
@@ -2517,30 +2609,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           // so JSX syntax is parsed correctly, while TypeScript files
           // continue to use `vite:oxc`'s default `lang` inference.
           //
-          // Vite 7 uses `esbuild` for transforms, Vite 8+ uses `oxc`.
-          //
           // `typescript.onlyRemoveTypeImports: false` matches Next.js (SWC)
           // type-import elision: `import { type Metadata } from "next"` is
           // removed entirely when every specifier is type-only. Without it,
-          // OXC/esbuild honour `"verbatimModuleSyntax": true` from the app's
-          // tsconfig (emitted stock by create-t3-app and other scaffolds) and
-          // keep a side-effect `import "next"` — which pulls the real Next.js
-          // server runtime into the RSC graph, and pulls server-only modules
-          // into the client bundle when a `"use client"` file imports only
-          // types from them.
-          ...(viteMajorVersion >= 8
-            ? {
-                oxc: {
-                  jsx: { runtime: "automatic" },
-                  typescript: { onlyRemoveTypeImports: false },
-                },
-              }
-            : {
-                esbuild: {
-                  jsx: "automatic",
-                  tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: false } },
-                },
-              }),
+          // OXC honours `"verbatimModuleSyntax": true` from the app's tsconfig
+          // (emitted stock by create-t3-app and other scaffolds) and keeps a
+          // side-effect `import "next"` — which pulls the real Next.js server
+          // runtime into the RSC graph, and pulls server-only modules into the
+          // client bundle when a `"use client"` file imports only types from
+          // them.
+          oxc: {
+            jsx: { runtime: "automatic" },
+            typescript: { onlyRemoveTypeImports: false },
+          },
           // Define env vars for client bundle
           define: defines,
           // Set base path if configured.
@@ -2720,10 +2801,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             }
           },
         };
-        const depOptimizeNodeEnvOptions = getDepOptimizeNodeEnvOptions(
-          viteMajorVersion,
-          nodeEnvDefine,
-        );
+        const depOptimizeNodeEnvOptions = getDepOptimizeNodeEnvOptions(nodeEnvDefine);
         // Apply the define to the default optimizer and explicitly to server
         // environments, where Vite's keepProcessEnv default prevents replacement.
         viteConfig.optimizeDeps = {
@@ -2814,7 +2892,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               },
               build: {
                 outDir: options.rscOutDir ?? "dist/server",
-                ...withBuildBundlerOptions(viteMajorVersion, {
+                ...withBuildBundlerOptions({
                   input: { index: VIRTUAL_RSC_ENTRY },
                   // Split React (and the RSC flight runtime) into a dedicated
                   // CSS-free "framework" chunk so `app/global-not-found.tsx`
@@ -2823,7 +2901,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   // this, global-not-found inherits the layout's stylesheet and
                   // the route-miss 404 document resolves the cascade to the
                   // layout's rules instead of global-not-found's (issue #1549).
-                  output: createRscFrameworkChunkOutputConfig(viteMajorVersion),
+                  output: createRscFrameworkChunkOutputConfig(),
                 }),
               },
             },
@@ -2885,7 +2963,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               },
               build: {
                 outDir: options.ssrOutDir ?? "dist/server/ssr",
-                ...withBuildBundlerOptions(viteMajorVersion, {
+                ...withBuildBundlerOptions({
                   input: { index: VIRTUAL_APP_SSR_ENTRY },
                 }),
               },
@@ -2944,10 +3022,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 // Client-scoped so RSC/SSR keep their normal asset handling
                 // unless the user configured Vite globally.
                 assetsInlineLimit: clientAssetsInlineLimit,
-                ...withBuildBundlerOptions(viteMajorVersion, {
+                ...withBuildBundlerOptions({
                   input: appClientInput,
-                  output: getClientOutputConfigForVite(viteMajorVersion, clientAssetsDir, true),
-                  treeshake: getClientTreeshakeConfigForVite(viteMajorVersion),
+                  output: getClientOutputConfig(clientAssetsDir, true),
+                  treeshake: getClientTreeshakeConfig(),
                 }),
               },
             },
@@ -2968,10 +3046,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 manifest: true,
                 ssrManifest: true,
                 assetsInlineLimit: clientAssetsInlineLimit,
-                ...withBuildBundlerOptions(viteMajorVersion, {
+                ...withBuildBundlerOptions({
                   input: { index: VIRTUAL_CLIENT_ENTRY },
-                  output: getClientOutputConfigForVite(viteMajorVersion, clientAssetsDir),
-                  treeshake: getClientTreeshakeConfigForVite(viteMajorVersion),
+                  output: getClientOutputConfig(clientAssetsDir),
+                  treeshake: getClientTreeshakeConfig(),
                 }),
               },
             },
@@ -2997,10 +3075,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 manifest: true,
                 ssrManifest: true,
                 assetsInlineLimit: clientAssetsInlineLimit,
-                ...withBuildBundlerOptions(viteMajorVersion, {
+                ...withBuildBundlerOptions({
                   input: { index: VIRTUAL_CLIENT_ENTRY },
-                  output: getClientOutputConfigForVite(viteMajorVersion, clientAssetsDir),
-                  treeshake: getClientTreeshakeConfigForVite(viteMajorVersion),
+                  output: getClientOutputConfig(clientAssetsDir),
+                  treeshake: getClientTreeshakeConfig(),
                 }),
               },
             },
@@ -3027,7 +3105,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               },
               build: {
                 outDir: "dist/server",
-                ...withBuildBundlerOptions(viteMajorVersion, {
+                ...withBuildBundlerOptions({
                   input: { index: VIRTUAL_SERVER_ENTRY },
                   output: {
                     entryFileNames: "entry.js",
@@ -3683,7 +3761,7 @@ export const loadServerActionClient = ${
         );
         return {
           build: {
-            ...withBuildBundlerOptions(viteMajorVersion, {
+            ...withBuildBundlerOptions({
               output: { assetFileNames },
             }),
           },
