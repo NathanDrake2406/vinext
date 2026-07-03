@@ -8,15 +8,22 @@ import {
 } from "../packages/vinext/src/config/next-config.js";
 import { publishCloudflarePrerenderedAppAssets } from "../packages/vinext/src/build/cloudflare-prerender-assets.js";
 import {
+  isCloudflareRscTransportAllowedForAssetsConfig,
+  readRootWranglerAssetsConfig,
+} from "../packages/vinext/src/build/cloudflare-static-assets-config.js";
+import {
   writePrerenderIndex,
   type PrerenderRouteResult,
 } from "../packages/vinext/src/build/prerender.js";
+import { STATIC_CACHE_CONTROL } from "../packages/vinext/src/server/cache-control.js";
+import { VINEXT_RSC_CONTENT_TYPE } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import {
   createRscTransportAssetPathname,
   resolveRscTransportRequest,
   VINEXT_STATIC_RSC_TRANSPORT_PREFIX,
   VINEXT_WORKER_RSC_TRANSPORT_PREFIX,
 } from "../packages/vinext/src/server/app-rsc-transport.js";
+import { withEnvVar } from "./env-test-helpers.js";
 
 const tempRoots: string[] = [];
 
@@ -88,6 +95,39 @@ function staticRscAssetPath(routePathname: string): string {
   return `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}${createRscTransportAssetPathname(routePathname)}`;
 }
 
+function applyHeadersRules(content: string, pathname: string): Headers {
+  const headers = new Headers();
+  let activePattern: string | null = null;
+
+  for (const line of content.split(/\r?\n/)) {
+    if (line.trim().length === 0 || line.trimStart().startsWith("#")) continue;
+
+    if (!/^\s/.test(line)) {
+      activePattern = line.trim();
+      continue;
+    }
+    if (activePattern === null || !matchesHeaderRule(activePattern, pathname)) continue;
+
+    const trimmed = line.trim();
+    if (trimmed.startsWith("! ")) {
+      headers.delete(trimmed.slice(2));
+      continue;
+    }
+
+    const separator = trimmed.indexOf(":");
+    if (separator === -1) continue;
+    headers.append(trimmed.slice(0, separator), trimmed.slice(separator + 1).trim());
+  }
+
+  return headers;
+}
+
+function matchesHeaderRule(pattern: string, pathname: string): boolean {
+  if (!pattern.includes("*")) return pattern === pathname;
+  const [prefix, suffix] = pattern.split("*", 2);
+  return pathname.startsWith(prefix) && pathname.endsWith(suffix ?? "");
+}
+
 describe("publishCloudflarePrerenderedAppAssets", () => {
   it("publishes static App Router HTML at visible paths and RSC in the transport namespace", async () => {
     const root = createTempRoot();
@@ -152,14 +192,31 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     const headers = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
     expect(headers).toContain("/_next/static/*");
-    expect(headers).toContain("/\n  Content-Type: text/html; charset=utf-8");
-    expect(headers).toContain("/about\n  Content-Type: text/html; charset=utf-8");
+    expect(headers).toContain("/\n  ! Content-Type\n  ! Cache-Control");
+    expect(headers).toContain("/about\n  ! Content-Type\n  ! Cache-Control");
+    expect(headers).toContain("  Content-Type: text/html; charset=utf-8");
     expect(headers).toContain("  X-Vinext-Cache: STATIC");
     expect(headers).toContain("  x-nextjs-cache: HIT");
     expect(headers).toContain("  Link: </_next/static/about.css>; rel=preload");
-    expect(headers).toContain(`${staticRscAssetPath("/about")}\n  Content-Type: text/x-component`);
+    expect(headers).toContain(
+      `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/*\n  ! Content-Type\n  ! Cache-Control`,
+    );
+    expect(headers).not.toContain(`${staticRscAssetPath("/about")}\n`);
+    expect(
+      headers
+        .split(/\r?\n/)
+        .filter((line) => line.trim() === `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/*`),
+    ).toHaveLength(1);
     expect(headers).toContain("  X-Vinext-RSC-Compatibility-Id: rsc-compat-test");
     expect(headers).toContain("  x-deployment-id: deploy-test");
+
+    const regularStaticHeaders = applyHeadersRules(headers, "/_next/static/app.js");
+    expect(regularStaticHeaders.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+
+    const rscHeaders = applyHeadersRules(headers, staticRscAssetPath("/about"));
+    expect(rscHeaders.get("Cache-Control")).toBe(STATIC_CACHE_CONTROL);
+    expect(rscHeaders.get("Content-Type")).toBe(VINEXT_RSC_CONTENT_TYPE);
+    expect(rscHeaders.get("Cache-Control")).not.toContain("immutable");
   });
 
   it("does not publish when middleware or config request transforms are present", async () => {
@@ -300,6 +357,81 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
       "existing-rsc-asset",
     );
     expect(fs.existsSync(path.join(clientDir, "_headers"))).toBe(false);
+  });
+
+  it("uses the selected Wrangler environment when gating static transport publication", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    writeWrangler(serverDir);
+    writeFile(
+      path.join(root, "wrangler.jsonc"),
+      JSON.stringify({
+        assets: {
+          binding: "ASSETS",
+          directory: "dist/client",
+          not_found_handling: "none",
+        },
+        env: {
+          preview: {
+            assets: {
+              not_found_handling: "single-page-application",
+            },
+          },
+        },
+      }),
+    );
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+
+    await withEnvVar("CLOUDFLARE_ENV", "preview", async () => {
+      const result = publishCloudflarePrerenderedAppAssets({
+        config: await baseConfig(),
+        prerenderDir,
+        root,
+        routes: [renderedAppRoute("/about", ["about.html", "about.rsc"])],
+        serverDir,
+      });
+
+      expect(result).toEqual({
+        skipped: true,
+        reason: "Cloudflare RSC transport is disabled for the selected Wrangler environment",
+        publishedFiles: 0,
+        publishedRoutes: 0,
+      });
+    });
+  });
+
+  it("resolves env-specific Wrangler asset overrides for static transport gating", () => {
+    const root = createTempRoot();
+    writeFile(
+      path.join(root, "wrangler.jsonc"),
+      `{
+        // top-level production fallback is disabled for static RSC transport
+        "assets": {
+          "binding": "ASSETS",
+          "directory": "dist/client",
+          "not_found_handling": "single-page-application",
+        },
+        "env": {
+          "production": {
+            "assets": {
+              "not_found_handling": "none",
+            },
+          }
+        },
+      }`,
+    );
+
+    const topLevel = readRootWranglerAssetsConfig(root, undefined);
+    const production = readRootWranglerAssetsConfig(root, "production");
+
+    expect(topLevel.ok && isCloudflareRscTransportAllowedForAssetsConfig(topLevel.assets)).toBe(
+      false,
+    );
+    expect(production.ok && isCloudflareRscTransportAllowedForAssetsConfig(production.assets)).toBe(
+      true,
+    );
   });
 
   it("preserves query-invariance proof in the prerender manifest", () => {

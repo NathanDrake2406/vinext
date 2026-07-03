@@ -112,6 +112,10 @@ import {
 import { PHASE_PRODUCTION_BUILD, PHASE_DEVELOPMENT_SERVER } from "vinext/shims/constants";
 import { precompressAssets } from "./build/precompress.js";
 import { ensureAssetsIgnore } from "./build/assets-ignore.js";
+import {
+  isCloudflareRscTransportAllowedForAssetsConfig,
+  readRootWranglerAssetsConfig,
+} from "./build/cloudflare-static-assets-config.js";
 import { emitNextClientRuntimeManifests } from "./build/next-client-runtime-manifests.js";
 import { collectInlineCssManifest, injectInlineCssManifestGlobal } from "./build/inline-css.js";
 import { validateDevRequest } from "./server/dev-origin-check.js";
@@ -1290,80 +1294,11 @@ function hasCloudflareVitePlugin(plugins: unknown): boolean {
   return flattenPluginCandidates(plugins).some(isCloudflareVitePlugin);
 }
 
-function stripJsonComments(source: string): string {
-  let output = "";
-  let inString = false;
-  let escaped = false;
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index];
-    const next = source[index + 1];
-
-    if (inString) {
-      output += char;
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-      output += char;
-      continue;
-    }
-
-    if (char === "/" && next === "/") {
-      while (index < source.length && source[index] !== "\n") index++;
-      output += "\n";
-      continue;
-    }
-
-    if (char === "/" && next === "*") {
-      index += 2;
-      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) {
-        output += source[index] === "\n" ? "\n" : " ";
-        index++;
-      }
-      index++;
-      continue;
-    }
-
-    output += char;
-  }
-  return output;
-}
-
-function parseJsonOrJsonc(source: string): unknown {
-  try {
-    return JSON.parse(source);
-  } catch {
-    return JSON.parse(stripJsonComments(source).replace(/,\s*([}\]])/g, "$1"));
-  }
-}
-
 function shouldEnableCloudflareRscTransport(root: string, plugins: unknown): boolean {
   if (!hasCloudflareVitePlugin(plugins)) return false;
 
-  const wranglerPath = ["wrangler.jsonc", "wrangler.json"]
-    .map((filename) => path.join(root, filename))
-    .find((candidate) => fs.existsSync(candidate));
-  if (!wranglerPath) return true;
-
-  let parsed: unknown;
-  try {
-    parsed = parseJsonOrJsonc(fs.readFileSync(wranglerPath, "utf-8"));
-  } catch {
-    return false;
-  }
-
-  if (!isRecord(parsed) || parsed.assets === undefined) return true;
-  if (!isRecord(parsed.assets)) return false;
-  const notFoundHandling = parsed.assets.not_found_handling;
-  return notFoundHandling === undefined || notFoundHandling === "none";
+  const readResult = readRootWranglerAssetsConfig(root, process.env.CLOUDFLARE_ENV);
+  return readResult.ok && isCloudflareRscTransportAllowedForAssetsConfig(readResult.assets);
 }
 
 export default function vinext(options: VinextOptions = {}): PluginOption[] {
