@@ -17,6 +17,7 @@ import { NEXT_DEPLOYMENT_ID_HEADER } from "../utils/deployment-id.js";
 import { getOutputPath, getRscOutputPath } from "../utils/prerender-output-paths.js";
 import { isUnknownRecord } from "../utils/record.js";
 import type { PrerenderRouteResult } from "./prerender.js";
+import { getRouteHandlerAssetOutputPath } from "./static-route-handler-assets.js";
 
 type WranglerAssetsConfig = {
   directory: string;
@@ -191,7 +192,19 @@ function buildRscHeaders(options: {
   };
 }
 
-function eligibleStaticAppRoutes(
+function buildRouteHandlerHeaders(
+  route: Extract<PrerenderRouteResult, { status: "rendered" }>,
+): Record<string, string> {
+  const contentType = route.headers?.["content-type"] ?? route.headers?.["Content-Type"];
+  return {
+    ...(contentType ? { "Content-Type": contentType } : {}),
+    "Cache-Control": STATIC_CACHE_CONTROL,
+    [VINEXT_CACHE_HEADER]: "STATIC",
+    [NEXTJS_CACHE_HEADER]: "HIT",
+  };
+}
+
+function eligibleStaticAppPageRoutes(
   routes: readonly PrerenderRouteResult[],
 ): Array<Extract<PrerenderRouteResult, { status: "rendered" }>> {
   return routes.filter((route): route is Extract<PrerenderRouteResult, { status: "rendered" }> => {
@@ -199,6 +212,7 @@ function eligibleStaticAppRoutes(
     return (
       route.status === "rendered" &&
       route.router === "app" &&
+      route.appRouteKind !== "route-handler" &&
       route.revalidate === false &&
       route.queryInvariant?.html === true &&
       route.fallback !== true &&
@@ -206,6 +220,18 @@ function eligibleStaticAppRoutes(
       routePathname !== "/500"
     );
   });
+}
+
+function eligibleStaticAppRouteHandlerRoutes(
+  routes: readonly PrerenderRouteResult[],
+): Array<Extract<PrerenderRouteResult, { status: "rendered" }>> {
+  return routes.filter(
+    (route): route is Extract<PrerenderRouteResult, { status: "rendered" }> =>
+      route.status === "rendered" &&
+      route.router === "app" &&
+      route.appRouteKind === "route-handler" &&
+      route.revalidate === false,
+  );
 }
 
 export function publishCloudflarePrerenderedAppAssets(options: {
@@ -284,12 +310,11 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   }
 
   const clientDir = path.resolve(options.serverDir, assetsConfig.directory);
-  const routes = eligibleStaticAppRoutes(options.routes);
   const headerEntries: Array<{ headers: Record<string, string>; pathname: string }> = [];
   let publishedFiles = 0;
   let publishedRoutes = 0;
 
-  for (const route of routes) {
+  for (const route of eligibleStaticAppPageRoutes(options.routes)) {
     const routePathname = route.path ?? route.route;
     const visibleAssetPath = safeVisibleAssetPathForRoute(routePathname);
     if (!visibleAssetPath) continue;
@@ -342,6 +367,24 @@ export function publishCloudflarePrerenderedAppAssets(options: {
 
     if (routePublished) {
       publishedRoutes++;
+    }
+  }
+
+  for (const route of eligibleStaticAppRouteHandlerRoutes(options.routes)) {
+    const routePathname = route.path ?? route.route;
+    const assetPath = getRouteHandlerAssetOutputPath(routePathname);
+    if (!assetPath || !route.outputFiles.includes(assetPath)) continue;
+
+    const targetPath = path.join(clientDir, assetPath);
+    if (fs.existsSync(targetPath)) continue;
+
+    if (copyIfAbsent(path.join(options.prerenderDir, assetPath), targetPath) === "copied") {
+      publishedFiles++;
+      publishedRoutes++;
+      headerEntries.push({
+        pathname: routePathname,
+        headers: buildRouteHandlerHeaders(route),
+      });
     }
   }
 

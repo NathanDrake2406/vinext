@@ -109,6 +109,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(prerenderDir, "taken.rsc"), "route-rsc");
     writeFile(path.join(clientDir, "taken"), "<h1>Existing asset</h1>");
     writeFile(path.join(prerenderDir, "pages-home.html"), "<h1>Pages</h1>");
+    writeFile(path.join(prerenderDir, "api/static-hello"), '{"ok":true}');
 
     const result = publishCloudflarePrerenderedAppAssets({
       config: await baseConfig(),
@@ -122,6 +123,10 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
         renderedAppRoute("/isr", ["isr.html"], { revalidate: 60 }),
         renderedAppRoute("/404", ["404.html"]),
         renderedAppRoute("/taken", ["taken.html", "taken.rsc"]),
+        renderedAppRoute("/api/static-hello", ["api/static-hello"], {
+          appRouteKind: "route-handler",
+          headers: { "content-type": "application/json" },
+        }),
         {
           route: "/pages-home",
           status: "rendered",
@@ -134,10 +139,11 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
       serverDir,
     });
 
-    expect(result).toEqual({ skipped: false, publishedFiles: 4, publishedRoutes: 2 });
+    expect(result).toEqual({ skipped: false, publishedFiles: 5, publishedRoutes: 3 });
     expect(fs.readFileSync(path.join(clientDir, "index.html"), "utf-8")).toBe("<h1>Home</h1>");
     expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("<h1>About</h1>");
     expect(fs.existsSync(path.join(clientDir, "about.rsc"))).toBe(false);
+    expect(fs.readFileSync(path.join(clientDir, "api/static-hello"), "utf-8")).toBe('{"ok":true}');
     expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/")}`), "utf-8")).toBe(
       "home-rsc",
     );
@@ -160,6 +166,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(headers).toContain(`${staticRscAssetPath("/about")}\n  Content-Type: text/x-component`);
     expect(headers).toContain("  X-Vinext-RSC-Compatibility-Id: rsc-compat-test");
     expect(headers).toContain("  x-deployment-id: deploy-test");
+    expect(headers).toContain("/api/static-hello\n  Content-Type: application/json");
   });
 
   it("does not publish when middleware or config request transforms are present", async () => {
