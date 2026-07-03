@@ -31,7 +31,7 @@ const comparison = {
     ? {
         sha: results.run.baseSha,
         shortSha: shortSha(results.run.baseSha),
-        measuredAt: results.run.measuredAt,
+        measuredAt: comparisonSource.baseline?.measuredAt ?? null,
       }
     : comparisonSource.baseline,
   measurements: comparisonSource.measurements.map((measurement) => {
@@ -74,12 +74,17 @@ async function readUploadResponse(path) {
   try {
     return JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
+    // The skipped-upload fields are diagnostic metadata; comment formatting is
+    // gated by the presence of a dashboard comparison.
     if (error?.code === "ENOENT") return { uploaded: false, reason: "missing_response" };
     throw error;
   }
 }
 
 function localComparison(benchmarks) {
+  const hasLocalBaseline =
+    results.run.baseSha && benchmarks.some((benchmark) => benchmark.baselineSamples);
+
   return {
     uploaded: false,
     head: {
@@ -87,11 +92,11 @@ function localComparison(benchmarks) {
       shortSha: shortSha(results.run.commitSha),
       measuredAt: results.run.measuredAt,
     },
-    baseline: results.run.baseSha
+    baseline: hasLocalBaseline
       ? {
           sha: results.run.baseSha,
           shortSha: shortSha(results.run.baseSha),
-          measuredAt: results.run.measuredAt,
+          measuredAt: null,
         }
       : null,
     measurements: benchmarks.map((benchmark) => ({
