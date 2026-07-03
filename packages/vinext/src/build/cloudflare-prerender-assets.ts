@@ -5,6 +5,11 @@ import {
   readEmittedWranglerAssetsConfig,
   readRootWranglerAssetsConfig,
 } from "./cloudflare-static-assets-config.js";
+import {
+  matchesHeaderSource,
+  matchesRedirectSource,
+  matchesRewriteSource,
+} from "../config/config-matchers.js";
 import type { ResolvedNextConfig } from "../config/next-config.js";
 import { createValidFileMatcher } from "../routing/file-matcher.js";
 import {
@@ -70,13 +75,16 @@ function hasMiddlewareOrProxy(root: string, config: ResolvedNextConfig): boolean
   return false;
 }
 
-function hasRequestTransformConfig(config: ResolvedNextConfig): boolean {
+function isRouteAffectedByRequestTransformConfig(
+  routePathname: string,
+  config: ResolvedNextConfig,
+): boolean {
   return (
-    config.headers.length > 0 ||
-    config.redirects.length > 0 ||
-    config.rewrites.beforeFiles.length > 0 ||
-    config.rewrites.afterFiles.length > 0 ||
-    config.rewrites.fallback.length > 0
+    config.headers.some((header) => matchesHeaderSource(routePathname, header)) ||
+    config.redirects.some((redirect) => matchesRedirectSource(routePathname, redirect)) ||
+    config.rewrites.beforeFiles.some((rewrite) => matchesRewriteSource(routePathname, rewrite)) ||
+    config.rewrites.afterFiles.some((rewrite) => matchesRewriteSource(routePathname, rewrite)) ||
+    config.rewrites.fallback.some((rewrite) => matchesRewriteSource(routePathname, rewrite))
   );
 }
 
@@ -254,14 +262,6 @@ export function publishCloudflarePrerenderedAppAssets(options: {
       publishedRoutes: 0,
     };
   }
-  if (hasRequestTransformConfig(options.config)) {
-    return {
-      skipped: true,
-      reason: "config headers, redirects, or rewrites require Worker routing",
-      publishedFiles: 0,
-      publishedRoutes: 0,
-    };
-  }
   if (hasMiddlewareOrProxy(options.root, options.config)) {
     return {
       skipped: true,
@@ -315,6 +315,10 @@ export function publishCloudflarePrerenderedAppAssets(options: {
 
   for (const route of routes) {
     const routePathname = route.path ?? route.route;
+    if (isRouteAffectedByRequestTransformConfig(routePathname, options.config)) {
+      continue;
+    }
+
     const visibleAssetPath = safeVisibleAssetPathForRoute(routePathname);
     if (!visibleAssetPath) continue;
 

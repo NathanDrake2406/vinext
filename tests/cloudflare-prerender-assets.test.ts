@@ -219,7 +219,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(rscHeaders.get("Cache-Control")).not.toContain("immutable");
   });
 
-  it("does not publish when middleware or config request transforms are present", async () => {
+  it("does not publish when middleware or proxy are present", async () => {
     const middlewareRoot = createTempRoot();
     const middlewareServerDir = path.join(middlewareRoot, "dist/server");
     const middlewarePrerenderDir = path.join(middlewareServerDir, "prerendered-routes");
@@ -237,25 +237,58 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     expect(middlewareResult).toMatchObject({ skipped: true, publishedFiles: 0 });
     expect(fs.existsSync(path.join(middlewareRoot, "dist/client/about"))).toBe(false);
+  });
 
-    const headersRoot = createTempRoot();
-    const headersServerDir = path.join(headersRoot, "dist/server");
-    const headersPrerenderDir = path.join(headersServerDir, "prerendered-routes");
-    writeWrangler(headersServerDir);
-    writeFile(path.join(headersPrerenderDir, "about.html"), "<h1>About</h1>");
+  it("skips only routes affected by next.config request transforms", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+    writeFile(path.join(prerenderDir, "old.html"), "<h1>Old</h1>");
+    writeFile(path.join(prerenderDir, "old.rsc"), "old-rsc");
+    writeFile(path.join(prerenderDir, "docs/intro.html"), "<h1>Docs</h1>");
+    writeFile(path.join(prerenderDir, "docs/intro.rsc"), "docs-rsc");
+    writeFile(path.join(prerenderDir, "contact.html"), "<h1>Contact</h1>");
+    writeFile(path.join(prerenderDir, "contact.rsc"), "contact-rsc");
 
-    const headersResult = publishCloudflarePrerenderedAppAssets({
+    const result = publishCloudflarePrerenderedAppAssets({
       config: await baseConfig({
-        headers: [{ source: "/about", headers: [{ key: "x-test", value: "1" }] }],
+        headers: [
+          {
+            source: "/about",
+            has: [{ type: "cookie", key: "auth" }],
+            headers: [{ key: "x-test", value: "1" }],
+          },
+        ],
+        redirects: [{ source: "/old", destination: "/new", permanent: false }],
+        rewrites: {
+          beforeFiles: [{ source: "/docs/:slug", destination: "/internal/:slug" }],
+          afterFiles: [],
+          fallback: [],
+        },
       }),
-      prerenderDir: headersPrerenderDir,
-      root: headersRoot,
-      routes: [renderedAppRoute("/about", ["about.html"])],
-      serverDir: headersServerDir,
+      prerenderDir,
+      root,
+      routes: [
+        renderedAppRoute("/about", ["about.html", "about.rsc"]),
+        renderedAppRoute("/old", ["old.html", "old.rsc"]),
+        renderedAppRoute("/docs/intro", ["docs/intro.html", "docs/intro.rsc"]),
+        renderedAppRoute("/contact", ["contact.html", "contact.rsc"]),
+      ],
+      serverDir,
     });
 
-    expect(headersResult).toMatchObject({ skipped: true, publishedFiles: 0 });
-    expect(fs.existsSync(path.join(headersRoot, "dist/client/about"))).toBe(false);
+    expect(result).toEqual({ skipped: false, publishedFiles: 2, publishedRoutes: 1 });
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, "old"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, "docs/intro"))).toBe(false);
+    expect(fs.readFileSync(path.join(clientDir, "contact"), "utf-8")).toBe("<h1>Contact</h1>");
+    expect(
+      fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/contact")}`), "utf-8"),
+    ).toBe("contact-rsc");
   });
 
   it("requires query-invariant prerender proof before publishing assets", async () => {
