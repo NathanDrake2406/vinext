@@ -7,8 +7,6 @@
 
 import { parseRedirectDigest } from "../utils/redirect-digest.js";
 
-export { parseRedirectDigest, type RedirectDigest } from "../utils/redirect-digest.js";
-
 export const HTTP_ERROR_FALLBACK_ERROR_CODE = "NEXT_HTTP_ERROR_FALLBACK";
 
 export function isHTTPAccessFallbackError(error: unknown): boolean {
@@ -152,16 +150,8 @@ export function isDynamicServerError(error: unknown): error is DynamicServerErro
   );
 }
 
-/**
- * Rethrow framework control-flow signals before user error handling consumes
- * them. This covers the categories vinext can currently produce.
- */
 export function unstable_rethrow(error: unknown): void {
   if (isNextRouterError(error) || isBailoutToCSRError(error) || isDynamicServerError(error)) {
     throw error;
-  }
-
-  if (error instanceof Error && "cause" in error) {
-    unstable_rethrow((error as Error & { cause: unknown }).cause);
   }
 }
