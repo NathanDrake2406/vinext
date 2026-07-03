@@ -136,6 +136,16 @@ function publishAsset(sourcePath: string, targetPath: string): boolean {
   return true;
 }
 
+// Common filesystems cap a filename at 255 bytes, and publishAsset first
+// writes a `.vinext-tmp-<pid>` sibling. Skip assets whose filename cannot fit
+// instead of crashing the publish step with ENAMETOOLONG; the Worker serves
+// the route at runtime because the static request falls through on asset miss.
+const MAX_ASSET_FILENAME_BYTES = 255 - ".vinext-tmp-9999999".length;
+
+function isPublishableAssetTarget(targetPath: string): boolean {
+  return Buffer.byteLength(path.basename(targetPath), "utf-8") <= MAX_ASSET_FILENAME_BYTES;
+}
+
 function headerBlockForPath(options: {
   detachHeaders?: readonly string[];
   headers: Record<string, string>;
@@ -372,12 +382,13 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     }
 
     const htmlSource = path.join(options.prerenderDir, getOutputPath(routePathname, false));
-    const publishHtml = fs.existsSync(htmlSource);
+    const publishHtml = fs.existsSync(htmlSource) && isPublishableAssetTarget(htmlTarget);
     const rscSource =
       route.queryInvariant?.rsc === true
         ? path.join(options.prerenderDir, getRscOutputPath(routePathname))
         : null;
-    const publishRsc = rscSource !== null && fs.existsSync(rscSource);
+    const publishRsc =
+      rscSource !== null && fs.existsSync(rscSource) && isPublishableAssetTarget(rscTarget);
     if (!publishHtml && !publishRsc) continue;
 
     plan.push({

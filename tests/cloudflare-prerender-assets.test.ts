@@ -543,6 +543,39 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     );
   });
 
+  it("skips static assets whose filenames exceed the filesystem cap instead of crashing", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+
+    // 200-byte final segment: the visible HTML asset name fits the 255-byte
+    // filename cap, but its base64url RSC token (268 bytes + ".rsc") does not.
+    const longName = "a".repeat(200);
+    writeFile(path.join(prerenderDir, `${longName}.html`), "<h1>Long</h1>");
+    writeFile(path.join(prerenderDir, `${longName}.rsc`), "long-rsc");
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+
+    const result = publishCloudflarePrerenderedAppAssets({
+      config: await baseConfig(),
+      prerenderDir,
+      root,
+      routes: [
+        renderedAppRoute(`/${longName}`, [`${longName}.html`, `${longName}.rsc`]),
+        renderedAppRoute("/about", ["about.html", "about.rsc"]),
+      ],
+      serverDir,
+    });
+
+    expect(result).toEqual({ skipped: false, publishedFiles: 3, publishedRoutes: 2 });
+    expect(fs.existsSync(path.join(clientDir, longName))).toBe(true);
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`))).toBe(true);
+    const rscDir = path.join(clientDir, "_next/static/__vinext/prerendered-rsc");
+    expect(fs.readdirSync(rscDir)).toHaveLength(1);
+  });
+
   it("treats unparsable Wrangler config formats as unreadable for transport gating", () => {
     const root = createTempRoot();
     writeFile(
