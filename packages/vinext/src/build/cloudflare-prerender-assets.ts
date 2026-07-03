@@ -7,6 +7,10 @@ import {
   VINEXT_RSC_CONTENT_TYPE,
   VINEXT_RSC_VARY_HEADER,
 } from "../server/app-rsc-cache-busting.js";
+import {
+  createRscTransportAssetPathname,
+  VINEXT_STATIC_RSC_TRANSPORT_PREFIX,
+} from "../server/app-rsc-transport.js";
 import { STATIC_CACHE_CONTROL } from "../server/cache-control.js";
 import { NEXTJS_CACHE_HEADER, VINEXT_CACHE_HEADER } from "../server/headers.js";
 import { NEXT_DEPLOYMENT_ID_HEADER } from "../utils/deployment-id.js";
@@ -82,8 +86,8 @@ function hasRequestTransformConfig(config: ResolvedNextConfig): boolean {
   );
 }
 
-function safeAssetPathForRoute(routePathname: string): string | null {
-  if (routePathname === "/") return "index.html";
+function safeVisibleAssetPathForRoute(routePathname: string): string | null {
+  if (routePathname === "/") return "index";
   if (!routePathname.startsWith("/")) return null;
 
   const segments = routePathname.slice(1).split("/");
@@ -97,11 +101,15 @@ function safeAssetPathForRoute(routePathname: string): string | null {
   return segments.join("/");
 }
 
-function copyIfAbsent(sourcePath: string, targetPath: string): boolean {
-  if (!fs.existsSync(sourcePath) || fs.existsSync(targetPath)) return false;
+function copyIfAbsent(
+  sourcePath: string,
+  targetPath: string,
+): "copied" | "missing" | "target-exists" {
+  if (!fs.existsSync(sourcePath)) return "missing";
+  if (fs.existsSync(targetPath)) return "target-exists";
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.copyFileSync(sourcePath, targetPath);
-  return true;
+  return "copied";
 }
 
 function headerBlockForPath(pathname: string, headers: Record<string, string>): string[] {
@@ -129,11 +137,18 @@ function writeGeneratedHeadersBlock(
   clientDir: string,
   entries: Array<{ headers: Record<string, string>; pathname: string }>,
 ): void {
-  if (entries.length === 0) return;
-
   const headersPath = path.join(clientDir, "_headers");
   const existing = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf-8") : "";
   const preserved = removeGeneratedHeadersBlock(existing);
+  if (entries.length === 0) {
+    if (preserved.length > 0) {
+      fs.writeFileSync(headersPath, `${preserved}\n`);
+    } else {
+      fs.rmSync(headersPath, { force: true });
+    }
+    return;
+  }
+
   const generated = [
     GENERATED_HEADERS_START,
     ...entries.flatMap((entry) => headerBlockForPath(entry.pathname, entry.headers)),
@@ -276,41 +291,58 @@ export function publishCloudflarePrerenderedAppAssets(options: {
 
   for (const route of routes) {
     const routePathname = route.path ?? route.route;
-    const assetPath = safeAssetPathForRoute(routePathname);
-    if (!assetPath) continue;
+    const visibleAssetPath = safeVisibleAssetPathForRoute(routePathname);
+    if (!visibleAssetPath) continue;
 
-    const htmlTarget = path.join(clientDir, assetPath);
-    const rscTarget = routePathname === "/" ? null : path.join(clientDir, `${assetPath}.rsc`);
-    const shouldPublishRsc = rscTarget !== null && route.queryInvariant?.rsc === true;
-    if (fs.existsSync(htmlTarget) || (rscTarget && fs.existsSync(rscTarget))) continue;
+    let rscAssetPathname: string | null = null;
+    try {
+      rscAssetPathname = `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}${createRscTransportAssetPathname(
+        routePathname,
+      )}`;
+    } catch {
+      rscAssetPathname = null;
+    }
+    if (!rscAssetPathname) continue;
+
+    const htmlAssetPath = routePathname === "/" ? "index.html" : visibleAssetPath;
+    const htmlTarget = path.join(clientDir, htmlAssetPath);
+    const rscTarget = path.join(clientDir, `.${rscAssetPathname}`);
+    const shouldPublishRsc = route.queryInvariant?.rsc === true;
+    if (fs.existsSync(htmlTarget) || fs.existsSync(rscTarget)) {
+      continue;
+    }
 
     let routePublished = false;
+    const htmlHeaders = buildHtmlHeaders(route);
     const htmlSource = path.join(options.prerenderDir, getOutputPath(routePathname, false));
-    if (copyIfAbsent(htmlSource, htmlTarget)) {
+    if (copyIfAbsent(htmlSource, htmlTarget) === "copied") {
       publishedFiles++;
       routePublished = true;
       headerEntries.push({
         pathname: routePathname,
-        headers: buildHtmlHeaders(route),
+        headers: htmlHeaders,
       });
     }
 
     if (shouldPublishRsc) {
       const rscSource = path.join(options.prerenderDir, getRscOutputPath(routePathname));
-      if (copyIfAbsent(rscSource, rscTarget)) {
+      const rscHeaders = buildRscHeaders({
+        deploymentId: options.config.deploymentId,
+        rscCompatibilityId: options.rscCompatibilityId,
+      });
+      if (copyIfAbsent(rscSource, rscTarget) === "copied") {
         publishedFiles++;
         routePublished = true;
         headerEntries.push({
-          pathname: `${routePathname}.rsc`,
-          headers: buildRscHeaders({
-            deploymentId: options.config.deploymentId,
-            rscCompatibilityId: options.rscCompatibilityId,
-          }),
+          pathname: rscAssetPathname,
+          headers: rscHeaders,
         });
       }
     }
 
-    if (routePublished) publishedRoutes++;
+    if (routePublished) {
+      publishedRoutes++;
+    }
   }
 
   writeGeneratedHeadersBlock(clientDir, headerEntries);

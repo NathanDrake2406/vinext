@@ -8,9 +8,9 @@
  * Output files (HTML/RSC payloads) are written to
  * `dist/server/prerendered-routes/` for non-export builds, co-located with
  * server artifacts. After the prerender manifest is written, a conservative
- * Cloudflare publisher may copy fully static App Router artifacts into
- * `dist/client/` for ASSETS-first serving when no middleware or config
- * transforms can observe the request.
+ * Cloudflare publisher may copy fully static App Router HTML into visible
+ * assets and RSC payloads into a reserved transport namespace so browser RSC
+ * requests cannot be shadowed by document assets.
  * For `output: 'export'` builds the caller controls `outDir` via
  * `static-export.ts`, which passes `dist/client/` directly.
  *
@@ -224,7 +224,7 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
   // Non-export builds write to dist/server/prerendered-routes/ so ISR and
   // dynamic artifacts stay server-owned by default. Fully static App Router
   // artifacts are copied into Cloudflare's asset directory later only when
-  // that bypass is semantically safe.
+  // ASSETS-first document serving and the split RSC transport are semantically safe.
   //
   // output: 'export' builds use dist/client/ (handled by static-export.ts which
   // passes its own outDir — this path is only reached for non-export builds).

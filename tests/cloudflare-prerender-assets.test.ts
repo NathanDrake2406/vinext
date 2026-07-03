@@ -11,6 +11,12 @@ import {
   writePrerenderIndex,
   type PrerenderRouteResult,
 } from "../packages/vinext/src/build/prerender.js";
+import {
+  createRscTransportAssetPathname,
+  resolveRscTransportRequest,
+  VINEXT_STATIC_RSC_TRANSPORT_PREFIX,
+  VINEXT_WORKER_RSC_TRANSPORT_PREFIX,
+} from "../packages/vinext/src/server/app-rsc-transport.js";
 
 const tempRoots: string[] = [];
 
@@ -78,8 +84,12 @@ afterEach(() => {
   }
 });
 
+function staticRscAssetPath(routePathname: string): string {
+  return `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}${createRscTransportAssetPathname(routePathname)}`;
+}
+
 describe("publishCloudflarePrerenderedAppAssets", () => {
-  it("publishes fully static App Router prerender artifacts into Cloudflare assets", async () => {
+  it("publishes static App Router HTML at visible paths and RSC in the transport namespace", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");
     const prerenderDir = path.join(serverDir, "prerendered-routes");
@@ -124,15 +134,20 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
       serverDir,
     });
 
-    expect(result).toEqual({ skipped: false, publishedFiles: 3, publishedRoutes: 2 });
+    expect(result).toEqual({ skipped: false, publishedFiles: 4, publishedRoutes: 2 });
     expect(fs.readFileSync(path.join(clientDir, "index.html"), "utf-8")).toBe("<h1>Home</h1>");
     expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("<h1>About</h1>");
-    expect(fs.readFileSync(path.join(clientDir, "about.rsc"), "utf-8")).toBe("about-rsc");
-    expect(fs.existsSync(path.join(clientDir, "index.rsc"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, "about.rsc"))).toBe(false);
+    expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/")}`), "utf-8")).toBe(
+      "home-rsc",
+    );
+    expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "utf-8")).toBe(
+      "about-rsc",
+    );
     expect(fs.existsSync(path.join(clientDir, "isr"))).toBe(false);
     expect(fs.existsSync(path.join(clientDir, "404"))).toBe(false);
     expect(fs.readFileSync(path.join(clientDir, "taken"), "utf-8")).toBe("<h1>Existing asset</h1>");
-    expect(fs.existsSync(path.join(clientDir, "taken.rsc"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/taken")}`))).toBe(false);
     expect(fs.existsSync(path.join(clientDir, "pages-home"))).toBe(false);
 
     const headers = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
@@ -142,7 +157,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(headers).toContain("  X-Vinext-Cache: STATIC");
     expect(headers).toContain("  x-nextjs-cache: HIT");
     expect(headers).toContain("  Link: </_next/static/about.css>; rel=preload");
-    expect(headers).toContain("/about.rsc\n  Content-Type: text/x-component");
+    expect(headers).toContain(`${staticRscAssetPath("/about")}\n  Content-Type: text/x-component`);
     expect(headers).toContain("  X-Vinext-RSC-Compatibility-Id: rsc-compat-test");
     expect(headers).toContain("  x-deployment-id: deploy-test");
   });
@@ -210,10 +225,28 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(result).toEqual({ skipped: false, publishedFiles: 0, publishedRoutes: 0 });
     expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
     expect(fs.existsSync(path.join(clientDir, "about.rsc"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`))).toBe(false);
     expect(fs.existsSync(path.join(clientDir, "_headers"))).toBe(false);
   });
 
-  it("publishes RSC assets only when the RSC query-invariance proof is present", async () => {
+  it("maps static and Worker RSC transport requests back to visible routes", () => {
+    const staticRequest = resolveRscTransportRequest(
+      new Request(`https://example.test${staticRscAssetPath("/about")}?tab=1&_rsc`, {
+        headers: { RSC: "1" },
+      }),
+    );
+    expect(new URL(staticRequest.url).pathname).toBe("/about");
+    expect(new URL(staticRequest.url).search).toBe("?tab=1&_rsc");
+
+    const workerRequest = resolveRscTransportRequest(
+      new Request(`https://example.test${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}/docs/__index.rsc`, {
+        headers: { RSC: "1" },
+      }),
+    );
+    expect(new URL(workerRequest.url).pathname).toBe("/docs/");
+  });
+
+  it("publishes HTML without static RSC when only the HTML query-invariance proof is present", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");
     const prerenderDir = path.join(serverDir, "prerendered-routes");
@@ -236,14 +269,10 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     expect(result).toEqual({ skipped: false, publishedFiles: 1, publishedRoutes: 1 });
     expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("<h1>About</h1>");
-    expect(fs.existsSync(path.join(clientDir, "about.rsc"))).toBe(false);
-
-    const headers = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
-    expect(headers).toContain("/about\n  Content-Type: text/html; charset=utf-8");
-    expect(headers).not.toContain("/about.rsc");
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`))).toBe(false);
   });
 
-  it("skips HTML publication when an RSC target already exists without RSC proof", async () => {
+  it("skips HTML publication when the reserved RSC transport target already exists", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");
     const prerenderDir = path.join(serverDir, "prerendered-routes");
@@ -251,7 +280,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeWrangler(serverDir);
     writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
     writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
-    writeFile(path.join(clientDir, "about.rsc"), "existing-user-rsc-asset");
+    writeFile(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "existing-rsc-asset");
 
     const result = publishCloudflarePrerenderedAppAssets({
       config: await baseConfig(),
@@ -267,8 +296,8 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     expect(result).toEqual({ skipped: false, publishedFiles: 0, publishedRoutes: 0 });
     expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
-    expect(fs.readFileSync(path.join(clientDir, "about.rsc"), "utf-8")).toBe(
-      "existing-user-rsc-asset",
+    expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "utf-8")).toBe(
+      "existing-rsc-asset",
     );
     expect(fs.existsSync(path.join(clientDir, "_headers"))).toBe(false);
   });
