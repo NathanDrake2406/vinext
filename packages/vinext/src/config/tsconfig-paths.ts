@@ -25,8 +25,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { parseStaticObjectLiteral } from "../plugins/fonts.js";
 import { isUnknownRecord as isRecord } from "../utils/record.js";
+import { parseStaticObjectLiteral } from "../utils/static-object-literal.js";
 
 const TSCONFIG_FILES = ["tsconfig.json", "jsconfig.json"];
 

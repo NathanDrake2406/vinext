@@ -165,11 +165,11 @@ import { createServerExternalsManifestPlugin } from "./plugins/server-externals-
 import {
   VIRTUAL_GOOGLE_FONTS,
   RESOLVED_VIRTUAL_GOOGLE_FONTS,
-  parseStaticObjectLiteral,
   generateGoogleFontsVirtualModule,
   createGoogleFontsPlugin,
   createLocalFontsPlugin,
 } from "./plugins/fonts.js";
+import { parseStaticObjectLiteral } from "./utils/static-object-literal.js";
 import { computeClientRuntimeMetadata } from "./utils/client-runtime-metadata.js";
 import {
   VINEXT_CLIENT_ENTRY_MANIFEST,
