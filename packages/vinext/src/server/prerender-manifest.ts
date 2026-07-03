@@ -9,6 +9,10 @@ type PrerenderManifestRoute = {
   router?: string;
   fallback?: boolean;
   headers?: Record<string, string>;
+  queryInvariant?: {
+    html?: boolean;
+    rsc?: boolean;
+  };
 };
 
 export type PrerenderManifest = {

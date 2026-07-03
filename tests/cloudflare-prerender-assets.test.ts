@@ -7,7 +7,10 @@ import {
   type ResolvedNextConfig,
 } from "../packages/vinext/src/config/next-config.js";
 import { publishCloudflarePrerenderedAppAssets } from "../packages/vinext/src/build/cloudflare-prerender-assets.js";
-import type { PrerenderRouteResult } from "../packages/vinext/src/build/prerender.js";
+import {
+  writePrerenderIndex,
+  type PrerenderRouteResult,
+} from "../packages/vinext/src/build/prerender.js";
 
 const tempRoots: string[] = [];
 
@@ -62,6 +65,7 @@ function renderedAppRoute(
     route,
     status: "rendered",
     outputFiles,
+    queryInvariant: { html: true, rsc: true },
     revalidate: false,
     router: "app",
     ...extra,
@@ -180,5 +184,82 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     expect(headersResult).toMatchObject({ skipped: true, publishedFiles: 0 });
     expect(fs.existsSync(path.join(headersRoot, "dist/client/about"))).toBe(false);
+  });
+
+  it("requires query-invariant prerender proof before publishing assets", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+
+    const result = publishCloudflarePrerenderedAppAssets({
+      config: await baseConfig(),
+      prerenderDir,
+      root,
+      routes: [
+        renderedAppRoute("/about", ["about.html", "about.rsc"], {
+          queryInvariant: undefined,
+        }),
+      ],
+      serverDir,
+    });
+
+    expect(result).toEqual({ skipped: false, publishedFiles: 0, publishedRoutes: 0 });
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, "about.rsc"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, "_headers"))).toBe(false);
+  });
+
+  it("publishes RSC assets only when the RSC query-invariance proof is present", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+
+    const result = publishCloudflarePrerenderedAppAssets({
+      config: await baseConfig(),
+      prerenderDir,
+      root,
+      routes: [
+        renderedAppRoute("/about", ["about.html", "about.rsc"], {
+          queryInvariant: { html: true, rsc: false },
+        }),
+      ],
+      serverDir,
+    });
+
+    expect(result).toEqual({ skipped: false, publishedFiles: 1, publishedRoutes: 1 });
+    expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("<h1>About</h1>");
+    expect(fs.existsSync(path.join(clientDir, "about.rsc"))).toBe(false);
+
+    const headers = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
+    expect(headers).toContain("/about\n  Content-Type: text/html; charset=utf-8");
+    expect(headers).not.toContain("/about.rsc");
+  });
+
+  it("preserves query-invariance proof in the prerender manifest", () => {
+    const root = createTempRoot();
+
+    writePrerenderIndex(
+      [
+        renderedAppRoute("/about", ["about.html", "about.rsc"], {
+          queryInvariant: { html: true, rsc: false },
+        }),
+      ],
+      root,
+    );
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, "vinext-prerender.json"), "utf-8"));
+    expect(manifest.routes[0]).toMatchObject({
+      route: "/about",
+      status: "rendered",
+      queryInvariant: { html: true, rsc: false },
+    });
   });
 });
