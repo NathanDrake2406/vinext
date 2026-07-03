@@ -76,4 +76,44 @@ describe("Cloudflare static RSC transport config", () => {
       );
     });
   });
+
+  it("disables client RSC transport when only a wrangler.toml config exists", async () => {
+    const root = createTempRoot();
+    fs.writeFileSync(
+      path.join(root, "wrangler.toml"),
+      `[assets]\ndirectory = "dist/client"\nnot_found_handling = "single-page-application"\n`,
+    );
+
+    const result = await findConfigPlugin().config!(
+      {
+        root,
+        plugins: [{ name: "vite-plugin-cloudflare" }],
+      },
+      { command: "build", mode: "production" },
+    );
+
+    expect(result.define["process.env.__VINEXT_CLOUDFLARE_RSC_TRANSPORT"]).toBe(
+      JSON.stringify("false"),
+    );
+  });
+
+  it("disables client RSC transport when only a cloudflare.config.ts config exists", async () => {
+    const root = createTempRoot();
+    fs.writeFileSync(
+      path.join(root, "cloudflare.config.ts"),
+      `export default { assets: { directory: "dist/client" } };\n`,
+    );
+
+    const result = await findConfigPlugin().config!(
+      {
+        root,
+        plugins: [{ name: "vite-plugin-cloudflare" }],
+      },
+      { command: "build", mode: "production" },
+    );
+
+    expect(result.define["process.env.__VINEXT_CLOUDFLARE_RSC_TRANSPORT"]).toBe(
+      JSON.stringify("false"),
+    );
+  });
 });

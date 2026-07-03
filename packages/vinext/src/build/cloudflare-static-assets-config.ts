@@ -66,11 +66,29 @@ function resolveEnvironmentAssetsConfig(parsed: unknown, envName: string | undef
   return envAssets;
 }
 
+/**
+ * Wrangler config formats this reader cannot parse. When one exists without a
+ * JSON/JSONC config, the assets config is unknown — callers gate transport on
+ * a proven `not_found_handling`, so unknown must read as unreadable (`ok:
+ * false`), not as "no config".
+ */
+const UNSUPPORTED_WRANGLER_CONFIG_FILES = ["wrangler.toml", "cloudflare.config.ts"];
+
+function hasUnsupportedWranglerConfig(root: string): boolean {
+  return UNSUPPORTED_WRANGLER_CONFIG_FILES.some((fileName) =>
+    fs.existsSync(path.join(root, fileName)),
+  );
+}
+
 export function readRootWranglerAssetsConfig(
   root: string,
   envName: string | undefined,
 ): WranglerAssetsConfigReadResult {
-  return readAssetsConfigFromPath(resolveWranglerJsonPath(root), (parsed) =>
+  const wranglerPath = resolveWranglerJsonPath(root);
+  if (wranglerPath === null && hasUnsupportedWranglerConfig(root)) {
+    return { ok: false };
+  }
+  return readAssetsConfigFromPath(wranglerPath, (parsed) =>
     resolveEnvironmentAssetsConfig(parsed, envName),
   );
 }

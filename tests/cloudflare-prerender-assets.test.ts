@@ -542,6 +542,16 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     );
   });
 
+  it("treats unparsable Wrangler config formats as unreadable for transport gating", () => {
+    const root = createTempRoot();
+    writeFile(
+      path.join(root, "wrangler.toml"),
+      `[assets]\ndirectory = "dist/client"\nnot_found_handling = "single-page-application"\n`,
+    );
+
+    expect(readRootWranglerAssetsConfig(root, undefined)).toEqual({ ok: false });
+  });
+
   it("preserves query-invariance proof in the prerender manifest", () => {
     const root = createTempRoot();
 

@@ -7,6 +7,7 @@ import {
 import {
   createRscTransportRequestPathname,
   isCloudflareRscTransportEnabled,
+  resolveRscTransportRoutePathname,
 } from "./app-rsc-transport.js";
 import {
   NEXT_ROUTER_PREFETCH_HEADER,
@@ -133,7 +134,10 @@ export function resolveHardNavigationTargetFromRscResponse(
   const parsed = new URL(responseUrl, origin);
   stripRscCacheBustingSearchParam(parsed);
   const origUrl = new URL(currentHref, origin);
-  let pathname = stripRscSuffix(parsed.pathname);
+  // Cloudflare RSC transport response URLs live in an internal namespace; a
+  // hard navigation must target the visible route, never the transport path.
+  let pathname =
+    resolveRscTransportRoutePathname(parsed.pathname) ?? stripRscSuffix(parsed.pathname);
   if (origUrl.pathname.length > 1 && origUrl.pathname.endsWith("/") && !pathname.endsWith("/")) {
     pathname += "/";
   }

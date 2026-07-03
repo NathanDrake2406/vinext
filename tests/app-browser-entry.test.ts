@@ -765,6 +765,53 @@ describe("app browser entry navigation scheduling", () => {
     });
   });
 
+  it("hard-navigates Cloudflare transport RSC responses to the visible route", () => {
+    stubWindow("https://example.com/current");
+
+    expect(
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: "compat-a",
+        currentHref: "/about",
+        origin: "https://example.com",
+        responseCompatibilityId: "compat-b",
+        responseUrl:
+          "https://example.com/_next/static/__vinext/prerendered-rsc/about.rsc?_rsc=stale",
+      }),
+    ).toEqual({ hardNavigationTarget: "/about", kind: "hard-navigate" });
+
+    expect(
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: "compat-a",
+        currentHref: "/about?tab=1",
+        origin: "https://example.com",
+        responseCompatibilityId: null,
+        responseUrl: "https://example.com/__vinext/rsc/about.rsc?tab=1&_rsc=stale",
+      }),
+    ).toEqual({ hardNavigationTarget: "/about?tab=1", kind: "hard-navigate" });
+
+    expect(
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: "compat-a",
+        currentHref: "/",
+        origin: "https://example.com",
+        responseCompatibilityId: "compat-b",
+        responseUrl:
+          "https://example.com/_next/static/__vinext/prerendered-rsc/__root.rsc?_rsc=stale",
+      }),
+    ).toEqual({ hardNavigationTarget: "/", kind: "hard-navigate" });
+
+    expect(
+      resolveRscCompatibilityNavigationDecision({
+        clientCompatibilityId: "compat-a",
+        currentHref: "/docs/",
+        origin: "https://example.com",
+        responseCompatibilityId: "compat-b",
+        responseUrl:
+          "https://example.com/_next/static/__vinext/prerendered-rsc/docs/__index.rsc?_rsc=stale",
+      }),
+    ).toEqual({ hardNavigationTarget: "/docs/", kind: "hard-navigate" });
+  });
+
   it("keeps RSC responses on the soft-navigation path when compatibility IDs match", () => {
     stubWindow("https://example.com/current");
 
