@@ -56,11 +56,17 @@ describe("next error digest parsing", () => {
     });
   });
 
-  it("treats malformed trailing status-like segments as part of the URL", () => {
+  it("treats malformed trailing status segments as part of the URL", () => {
     expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/foo;307garbage;")).toEqual({
       status: 307,
       type: "replace",
-      url: "/foo;307garbage",
+      url: "/foo;307garbage;",
+    });
+
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/foo;abc;")).toEqual({
+      status: 307,
+      type: "replace",
+      url: "/foo;abc;",
     });
   });
 });
