@@ -36,6 +36,26 @@ describe("App Router RSC transport encoding", () => {
     expect(createRscTransportAssetPathname("/docs/")).toBe("/L2RvY3Mv.rsc");
   });
 
+  it("rejects non-canonical base64url spellings of a canonical token", () => {
+    // Forgiving base64 decodes Lx/Ly/Lz and padded Lw== to the same byte as
+    // the canonical Lw ("/"); only the canonical spelling may resolve.
+    expect(resolveRscTransportRoutePathname(`${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/Lw.rsc`)).toBe(
+      "/",
+    );
+    for (const alias of ["Lx", "Ly", "Lz", "Lw=="]) {
+      expect(
+        resolveRscTransportRoutePathname(`${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/${alias}.rsc`),
+      ).toBe(null);
+    }
+  });
+
+  it("rejects tokens whose bytes are not valid UTF-8", () => {
+    // "L_8" is the canonical base64url of 0x2F 0xFF — rooted but invalid UTF-8.
+    expect(resolveRscTransportRoutePathname(`${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/L_8.rsc`)).toBe(
+      null,
+    );
+  });
+
   it("rejects transport paths that do not decode to a rooted pathname", () => {
     // "YWJvdXQ" decodes to "about" — valid base64url, not a rooted pathname.
     expect(

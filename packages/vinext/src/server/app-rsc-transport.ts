@@ -26,19 +26,25 @@ export function isCloudflareRscTransportEnabled(): boolean {
  * the route-to-asset mapping bijective for every legal pathname.
  */
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
-// Reject non-canonical tokens (`+`, `/`, `=`) so each route has exactly one
-// accepted transport asset path, not every base64 spelling atob tolerates.
-const BASE64URL_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
+// fatal: invalid UTF-8 must reject the token, not collapse different byte
+// sequences into the same replacement-character route.
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
 function encodeRouteToken(routePathname: string): string {
   return encodeBase64Url(textEncoder.encode(routePathname));
 }
 
 function decodeRouteToken(token: string): string | null {
-  if (!BASE64URL_TOKEN_PATTERN.test(token)) return null;
   const bytes = decodeBase64Url(token);
-  return bytes === null ? null : textDecoder.decode(bytes);
+  // Accept only the canonical spelling: forgiving base64 tolerates nonzero
+  // padding bits, `=` padding, and the `+`/`/` alphabet, which would give one
+  // route many accepted transport URLs (e.g. Lx/Ly/Lz all decode like Lw).
+  if (bytes === null || encodeBase64Url(bytes) !== token) return null;
+  try {
+    return textDecoder.decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 function isStaticRscTransportEligible(headers: Headers): boolean {
