@@ -353,6 +353,16 @@ function eligibleStaticAppRoutes(
 
 export function publishCloudflarePrerenderedAppAssets(options: {
   config: ResolvedNextConfig;
+  /**
+   * Whether the built app contains any server action references. Server
+   * actions POST to the visible page path (both the fetch client and the
+   * progressive no-JS form fallback), and Cloudflare's asset worker claims a
+   * published asset path for every method — non-GET/HEAD requests get a 405
+   * from the asset worker, never reaching the user Worker. Visible HTML must
+   * therefore not be published when actions exist; the reserved static RSC
+   * transport path stays safe because nothing POSTs to it.
+   */
+  hasServerActions: boolean;
   prerenderDir: string;
   root: string;
   routes: readonly PrerenderRouteResult[];
@@ -464,7 +474,10 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     }
 
     const htmlSource = path.join(options.prerenderDir, getOutputPath(routePathname, false));
-    const publishHtml = fs.existsSync(htmlSource) && isPublishableAssetTarget(htmlTarget);
+    const publishHtml =
+      !options.hasServerActions &&
+      fs.existsSync(htmlSource) &&
+      isPublishableAssetTarget(htmlTarget);
     const rscSource =
       route.queryInvariant?.rsc === true
         ? path.join(options.prerenderDir, getRscOutputPath(routePathname))

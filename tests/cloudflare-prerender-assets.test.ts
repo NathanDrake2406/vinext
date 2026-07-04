@@ -151,6 +151,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(prerenderDir, "pages-home.html"), "<h1>Pages</h1>");
 
     const result = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir,
       root,
@@ -219,6 +220,49 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(rscHeaders.get("Cache-Control")).not.toContain("immutable");
   });
 
+  it("publishes only transport RSC when the app has server actions", async () => {
+    // Server actions POST to the visible page path; a published HTML asset at
+    // that path makes Cloudflare's asset worker answer 405 instead of invoking
+    // the Worker. The GET-only reserved RSC transport path stays published.
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "about.html"), "<h1>About</h1>");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+
+    const publish = async (hasServerActions: boolean) =>
+      publishCloudflarePrerenderedAppAssets({
+        hasServerActions,
+        config: await baseConfig(),
+        prerenderDir,
+        root,
+        routes: [renderedAppRoute("/about", ["about.html", "about.rsc"])],
+        serverDir,
+      });
+
+    const result = await publish(true);
+    expect(result).toEqual({ skipped: false, publishedFiles: 1, publishedRoutes: 1 });
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
+    expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "utf-8")).toBe(
+      "about-rsc",
+    );
+    const headers = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
+    expect(headers).not.toContain("/about\n");
+    expect(headers).toContain(`${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/*`);
+
+    // A repeat prerender of a build that gained server actions must prune the
+    // previously-owned visible HTML, not leave a stale POST-shadowing asset.
+    await publish(false);
+    expect(fs.readFileSync(path.join(clientDir, "about"), "utf-8")).toBe("<h1>About</h1>");
+    await publish(true);
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
+    expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "utf-8")).toBe(
+      "about-rsc",
+    );
+  });
+
   it("skips publication when generated _headers rules would exceed the Cloudflare limit", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");
@@ -236,6 +280,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
 
     const result = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir,
       root,
@@ -260,6 +305,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(middlewarePrerenderDir, "about.html"), "<h1>About</h1>");
 
     const middlewareResult = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir: middlewarePrerenderDir,
       root: middlewareRoot,
@@ -277,6 +323,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(headersPrerenderDir, "about.html"), "<h1>About</h1>");
 
     const headersResult = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig({
         headers: [{ source: "/about", headers: [{ key: "x-test", value: "1" }] }],
       }),
@@ -300,6 +347,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
 
     const result = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir,
       root,
@@ -346,6 +394,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
 
     const result = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir,
       root,
@@ -373,6 +422,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(clientDir, `.${staticRscAssetPath("/about")}`), "existing-rsc-asset");
 
     const result = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir,
       root,
@@ -403,6 +453,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     const publish = async () =>
       publishCloudflarePrerenderedAppAssets({
+        hasServerActions: false,
         config: await baseConfig(),
         prerenderDir,
         root,
@@ -446,6 +497,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     const publish = async () =>
       publishCloudflarePrerenderedAppAssets({
+        hasServerActions: false,
         config: await baseConfig(),
         prerenderDir,
         root,
@@ -481,6 +533,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     const publish = async (routes: PrerenderRouteResult[]) =>
       publishCloudflarePrerenderedAppAssets({
+        hasServerActions: false,
         config: await baseConfig(),
         prerenderDir,
         root,
@@ -521,6 +574,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
 
     const first = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir,
       root,
@@ -533,6 +587,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     writeFile(path.join(root, "middleware.ts"), "export function middleware() {}\n");
     const second = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir,
       root,
@@ -578,6 +633,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
 
     await withEnvVar("CLOUDFLARE_ENV", "preview", async () => {
       const result = publishCloudflarePrerenderedAppAssets({
+        hasServerActions: false,
         config: await baseConfig(),
         prerenderDir,
         root,
@@ -642,6 +698,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
 
     const result = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
       config: await baseConfig(),
       prerenderDir,
       root,

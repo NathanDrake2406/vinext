@@ -37,6 +37,7 @@ import { findDir } from "../utils/project.js";
 import { injectPregeneratedConcretePaths } from "./inject-pregenerated-paths.js";
 import { rememberCurrentServerEntryImportMtime, startProdServer } from "../server/prod-server.js";
 import { publishCloudflarePrerenderedAppAssets } from "./cloudflare-prerender-assets.js";
+import { readServerManifest } from "./server-manifest.js";
 
 // ─── Progress UI ──────────────────────────────────────────────────────────────
 
@@ -362,6 +363,11 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
     });
     publishCloudflarePrerenderedAppAssets({
       config,
+      // Server actions POST to the visible page path, and Cloudflare's asset
+      // worker answers 405 for non-GET/HEAD requests to a published asset
+      // instead of falling through to the Worker. Absence of the flag means
+      // an older or partial build — treat it as "actions may exist".
+      hasServerActions: readServerManifest(serverDir)?.hasServerActions ?? true,
       prerenderDir: outDir,
       root,
       routes: allRoutes,

@@ -111,6 +111,7 @@ import {
 } from "./server/instrumentation.js";
 import { PHASE_PRODUCTION_BUILD, PHASE_DEVELOPMENT_SERVER } from "vinext/shims/constants";
 import { precompressAssets } from "./build/precompress.js";
+import { readServerManifest } from "./build/server-manifest.js";
 import { ensureAssetsIgnore } from "./build/assets-ignore.js";
 import {
   isCloudflareRscTransportAllowedForAssetsConfig,
@@ -5978,7 +5979,7 @@ export const loadServerActionClient = ${
         writeBundle: {
           sequential: true,
           order: "post" as const,
-          handler(options: { dir?: string }) {
+          async handler(options: { dir?: string }) {
             const envName = this.environment?.name;
             // Fire for App Router RSC builds (rsc env) and Pages Router SSR builds
             // (ssr env). Skip client and other environments.
@@ -5987,8 +5988,28 @@ export const loadServerActionClient = ${
             const outDir = options.dir;
             if (!outDir) return;
 
-            const manifest = { prerenderSecret };
-            fs.writeFileSync(path.join(outDir, "vinext-server.json"), JSON.stringify(manifest));
+            // Only the rsc environment can see the server reference map, so it
+            // owns the hasServerActions flag. The ssr environment may write the
+            // manifest before or after rsc within the same build; it preserves
+            // an existing same-build flag (matched by the shared secret) and
+            // otherwise omits it, so a stale flag from a previous build can
+            // never leak forward.
+            const manifestPath = path.join(outDir, "vinext-server.json");
+            let hasServerActions: boolean | undefined;
+            if (envName === "rsc") {
+              hasServerActions = await resolveHasServerActions(this.environment.config);
+            } else {
+              const existing = readServerManifest(outDir);
+              hasServerActions =
+                existing?.prerenderSecret === prerenderSecret
+                  ? existing.hasServerActions
+                  : undefined;
+            }
+            const manifest = {
+              prerenderSecret,
+              ...(hasServerActions === undefined ? {} : { hasServerActions }),
+            };
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest));
           },
         },
       };
