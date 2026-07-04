@@ -209,7 +209,7 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
         .filter((line) => line.trim() === `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/*`),
     ).toHaveLength(1);
     expect(headers).toContain("  X-Vinext-RSC-Compatibility-Id: rsc-compat-test");
-    expect(headers).toContain("  x-deployment-id: deploy-test");
+    expect(headers).toContain("  x-nextjs-deployment-id: deploy-test");
 
     const regularStaticHeaders = applyHeadersRules(headers, "/_next/static/app.js");
     expect(regularStaticHeaders.get("Cache-Control")).toBe("public, max-age=31536000, immutable");

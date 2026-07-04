@@ -17,8 +17,11 @@ import {
   VINEXT_STATIC_RSC_TRANSPORT_PREFIX,
 } from "../server/app-rsc-transport.js";
 import { STATIC_CACHE_CONTROL } from "../server/cache-control.js";
-import { NEXTJS_CACHE_HEADER, VINEXT_CACHE_HEADER } from "../server/headers.js";
-import { NEXT_DEPLOYMENT_ID_HEADER } from "../utils/deployment-id.js";
+import {
+  NEXTJS_CACHE_HEADER,
+  NEXTJS_DEPLOYMENT_ID_HEADER,
+  VINEXT_CACHE_HEADER,
+} from "../server/headers.js";
 import { getOutputPath, getRscOutputPath } from "../utils/prerender-output-paths.js";
 import type { PrerenderRouteResult } from "./prerender.js";
 
@@ -52,7 +55,7 @@ const RSC_AUTHORITATIVE_HEADERS = [
   VINEXT_CACHE_HEADER,
   NEXTJS_CACHE_HEADER,
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
-  NEXT_DEPLOYMENT_ID_HEADER,
+  NEXTJS_DEPLOYMENT_ID_HEADER,
 ];
 
 // Cloudflare Static Assets caps `_headers` at 100 rules; a bundle that exceeds
@@ -363,7 +366,7 @@ function buildRscHeaders(options: {
     ...(options.rscCompatibilityId
       ? { [VINEXT_RSC_COMPATIBILITY_ID_HEADER]: options.rscCompatibilityId }
       : {}),
-    ...(options.deploymentId ? { [NEXT_DEPLOYMENT_ID_HEADER]: options.deploymentId } : {}),
+    ...(options.deploymentId ? { [NEXTJS_DEPLOYMENT_ID_HEADER]: options.deploymentId } : {}),
   };
 }
 
