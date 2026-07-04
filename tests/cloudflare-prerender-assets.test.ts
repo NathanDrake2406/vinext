@@ -468,6 +468,89 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     );
   });
 
+  it("removes owned assets that are no longer desired", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "about.html"), "about-html");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+    writeFile(path.join(prerenderDir, "contact.html"), "contact-html");
+    writeFile(path.join(prerenderDir, "contact.rsc"), "contact-rsc");
+
+    const publish = async (routes: PrerenderRouteResult[]) =>
+      publishCloudflarePrerenderedAppAssets({
+        config: await baseConfig(),
+        prerenderDir,
+        root,
+        routes,
+        serverDir,
+      });
+
+    await publish([
+      renderedAppRoute("/about", ["about.html", "about.rsc"]),
+      renderedAppRoute("/contact", ["contact.html", "contact.rsc"]),
+    ]);
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(true);
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`))).toBe(true);
+
+    await publish([renderedAppRoute("/contact", ["contact.html", "contact.rsc"])]);
+
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`))).toBe(false);
+    expect(fs.readFileSync(path.join(clientDir, "contact"), "utf-8")).toBe("contact-html");
+    expect(
+      fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/contact")}`), "utf-8"),
+    ).toBe("contact-rsc");
+
+    const headers = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
+    expect(headers).not.toContain("/about\n");
+    expect(headers).toContain("/contact\n");
+    expect(headers).toContain(`${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/*`);
+  });
+
+  it("unpublishes owned assets when a global safety gate skips publication", async () => {
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(clientDir, "_headers"), "/user\n  X-User: 1\n");
+    writeFile(path.join(prerenderDir, "about.html"), "about-html");
+    writeFile(path.join(prerenderDir, "about.rsc"), "about-rsc");
+
+    const first = publishCloudflarePrerenderedAppAssets({
+      config: await baseConfig(),
+      prerenderDir,
+      root,
+      routes: [renderedAppRoute("/about", ["about.html", "about.rsc"])],
+      serverDir,
+    });
+    expect(first).toEqual({ skipped: false, publishedFiles: 2, publishedRoutes: 1 });
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(true);
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`))).toBe(true);
+
+    writeFile(path.join(root, "middleware.ts"), "export function middleware() {}\n");
+    const second = publishCloudflarePrerenderedAppAssets({
+      config: await baseConfig(),
+      prerenderDir,
+      root,
+      routes: [renderedAppRoute("/about", ["about.html", "about.rsc"])],
+      serverDir,
+    });
+
+    expect(second).toEqual({
+      skipped: true,
+      reason: "middleware/proxy must run before page responses",
+      publishedFiles: 0,
+      publishedRoutes: 0,
+    });
+    expect(fs.existsSync(path.join(clientDir, "about"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, `.${staticRscAssetPath("/about")}`))).toBe(false);
+    expect(fs.readFileSync(path.join(clientDir, "_headers"), "utf-8")).toBe("/user\n  X-User: 1\n");
+  });
+
   it("uses the selected Wrangler environment when gating static transport publication", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");

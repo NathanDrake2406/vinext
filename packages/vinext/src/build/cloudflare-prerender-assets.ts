@@ -146,6 +146,68 @@ function isPublishableAssetTarget(targetPath: string): boolean {
   return Buffer.byteLength(path.basename(targetPath), "utf-8") <= MAX_ASSET_FILENAME_BYTES;
 }
 
+function removeOwnedFileTarget(targetPath: string): void {
+  try {
+    const stat = fs.lstatSync(targetPath);
+    if (!stat.isFile() && !stat.isSymbolicLink()) return;
+    fs.rmSync(targetPath, { force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+function pruneOwnedStaticRscAssets(clientDir: string, desiredTargets: ReadonlySet<string>): void {
+  const rscDir = path.join(clientDir, `.${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}`);
+  if (!fs.existsSync(rscDir)) return;
+
+  const visit = (dir: string): boolean => {
+    let remainingEntries = 0;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!visit(entryPath)) remainingEntries++;
+        continue;
+      }
+
+      if (desiredTargets.has(entryPath)) {
+        remainingEntries++;
+        continue;
+      }
+      removeOwnedFileTarget(entryPath);
+      if (fs.existsSync(entryPath)) remainingEntries++;
+    }
+
+    if (remainingEntries === 0) {
+      fs.rmdirSync(dir);
+      return true;
+    }
+    return false;
+  };
+
+  visit(rscDir);
+}
+
+function pruneOwnedAssets(
+  clientDir: string,
+  owned: ReturnType<typeof readGeneratedAssetOwnership>,
+  desired: {
+    html: ReadonlySet<string>;
+    rsc: ReadonlySet<string>;
+  },
+): void {
+  for (const pathname of owned.html) {
+    if (desired.html.has(pathname)) continue;
+    const visibleAssetPath = safeVisibleAssetPathForRoute(pathname);
+    if (!visibleAssetPath) continue;
+    const htmlAssetPath = pathname === "/" ? "index.html" : visibleAssetPath;
+    removeOwnedFileTarget(path.join(clientDir, htmlAssetPath));
+  }
+
+  if (owned.rsc) {
+    pruneOwnedStaticRscAssets(clientDir, desired.rsc);
+  }
+}
+
 function headerBlockForPath(options: {
   detachHeaders?: readonly string[];
   headers: Record<string, string>;
@@ -292,23 +354,46 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   rscCompatibilityId?: string;
   serverDir: string;
 }): PublishCloudflarePrerenderedAppAssetsResult {
+  const assetsConfig = readEmittedWranglerAssetsConfig(options.serverDir);
+  const emittedAssets = assetsConfig.ok ? assetsConfig.assets : null;
+  const clientDir = emittedAssets?.directory
+    ? path.resolve(options.serverDir, emittedAssets.directory)
+    : null;
+  const headersPath = clientDir ? path.join(clientDir, "_headers") : null;
+  const existingHeaders =
+    headersPath && fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf-8") : "";
+  const owned = readGeneratedAssetOwnership(existingHeaders);
+  const unpublishOwnedAssetsAndSkip = (
+    reason: string,
+  ): PublishCloudflarePrerenderedAppAssetsResult => {
+    if (clientDir) {
+      pruneOwnedAssets(clientDir, owned, { html: new Set(), rsc: new Set() });
+      writeGeneratedHeadersBlock(clientDir, []);
+    }
+    return skipResult(reason);
+  };
+
   if (options.config.output === "export") {
-    return skipResult("static export already writes to client assets");
+    return unpublishOwnedAssetsAndSkip("static export already writes to client assets");
   }
   if (options.config.trailingSlash) {
-    return skipResult("trailingSlash would require preserving slash redirects");
+    return unpublishOwnedAssetsAndSkip("trailingSlash would require preserving slash redirects");
   }
   if (options.config.basePath) {
-    return skipResult("basePath asset route publication is not proven safe");
+    return unpublishOwnedAssetsAndSkip("basePath asset route publication is not proven safe");
   }
   if (options.config.i18n) {
-    return skipResult("i18n routing may require Worker redirects or locale negotiation");
+    return unpublishOwnedAssetsAndSkip(
+      "i18n routing may require Worker redirects or locale negotiation",
+    );
   }
   if (hasRequestTransformConfig(options.config)) {
-    return skipResult("config headers, redirects, or rewrites require Worker routing");
+    return unpublishOwnedAssetsAndSkip(
+      "config headers, redirects, or rewrites require Worker routing",
+    );
   }
   if (hasMiddlewareOrProxy(options.root, options.config)) {
-    return skipResult("middleware/proxy must run before page responses");
+    return unpublishOwnedAssetsAndSkip("middleware/proxy must run before page responses");
   }
 
   const rootAssetsConfig = readRootWranglerAssetsConfig(options.root, process.env.CLOUDFLARE_ENV);
@@ -316,27 +401,19 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     !rootAssetsConfig.ok ||
     !isCloudflareRscTransportAllowedForAssetsConfig(rootAssetsConfig.assets)
   ) {
-    return skipResult("Cloudflare RSC transport is disabled for the selected Wrangler environment");
+    return unpublishOwnedAssetsAndSkip(
+      "Cloudflare RSC transport is disabled for the selected Wrangler environment",
+    );
   }
 
-  const assetsConfig = readEmittedWranglerAssetsConfig(options.serverDir);
-  if (!assetsConfig.ok || !assetsConfig.assets?.directory) {
+  if (!clientDir) {
     return skipResult("Cloudflare assets binding not found");
   }
-  if (!isCloudflareRscTransportAllowedForAssetsConfig(assetsConfig.assets)) {
-    return skipResult("Cloudflare assets not_found_handling is not none");
+  if (!isCloudflareRscTransportAllowedForAssetsConfig(emittedAssets)) {
+    return unpublishOwnedAssetsAndSkip("Cloudflare assets not_found_handling is not none");
   }
 
-  const clientDir = path.resolve(options.serverDir, assetsConfig.assets.directory);
   const routes = eligibleStaticAppRoutes(options.routes);
-
-  // Read the existing `_headers` up front: its generated block records which
-  // assets a prior run owns, so repeated prerenders re-publish their own output
-  // idempotently instead of mistaking it for a user collision and dropping the
-  // headers that make it correct. The same content feeds the rule-count budget.
-  const headersPath = path.join(clientDir, "_headers");
-  const existingHeaders = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf-8") : "";
-  const owned = readGeneratedAssetOwnership(existingHeaders);
 
   // Phase 1: plan the publication without copying, so the generated `_headers`
   // rule count can be checked against the Cloudflare limit before any file is
@@ -412,10 +489,17 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     plan.filter((entry) => entry.publishHtml).length +
     (plan.some((entry) => entry.publishRsc) ? 1 : 0);
   if (preservedRuleCount + generatedRuleCount > CLOUDFLARE_HEADERS_RULE_LIMIT) {
+    pruneOwnedAssets(clientDir, owned, { html: new Set(), rsc: new Set() });
+    writeGeneratedHeadersBlock(clientDir, []);
     return skipResult(
       `publishing static assets would exceed Cloudflare's ${CLOUDFLARE_HEADERS_RULE_LIMIT}-rule _headers limit`,
     );
   }
+
+  pruneOwnedAssets(clientDir, owned, {
+    html: new Set(plan.filter((entry) => entry.publishHtml).map((entry) => entry.routePathname)),
+    rsc: new Set(plan.filter((entry) => entry.publishRsc).map((entry) => entry.rscTarget)),
+  });
 
   // Phase 3: execute the planned copies and collect the header rules to emit.
   const headerEntries: Array<{
