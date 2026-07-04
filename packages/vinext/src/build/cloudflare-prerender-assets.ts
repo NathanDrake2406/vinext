@@ -128,15 +128,23 @@ function safeVisibleAssetPathForRoute(routePathname: string): string | null {
  * false only if the source disappears after planning.
  */
 function publishAsset(sourcePath: string, targetPath: string): boolean {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   const tmpPath = `${targetPath}.vinext-tmp-${process.pid}`;
   try {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.copyFileSync(sourcePath, tmpPath);
     fs.renameSync(tmpPath, targetPath);
     return true;
   } catch (error) {
     fs.rmSync(tmpPath, { force: true });
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    // ENOENT: the planned source disappeared. The directory-shape conflicts
+    // (a directory where the file target should be, or a file blocking a
+    // parent directory) mean this route's visible HTML cannot exist on this
+    // filesystem layout; the Worker keeps serving the route, so degrade to
+    // "not published" instead of aborting the whole prerender.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "EISDIR" || code === "ENOTDIR" || code === "ENOTEMPTY") {
+      return false;
+    }
     throw error;
   }
 }
@@ -206,6 +214,18 @@ function pruneOwnedAssets(
     if (!visibleAssetPath) continue;
     const htmlAssetPath = pathname === "/" ? "index.html" : visibleAssetPath;
     removeOwnedFileTarget(path.join(clientDir, htmlAssetPath));
+    // Remove directories the pruned file leaves empty: an ancestor route's
+    // HTML target is a plain file at the directory's path, so a leftover empty
+    // directory would keep that route unpublishable forever.
+    let parentDir = path.dirname(path.join(clientDir, htmlAssetPath));
+    while (parentDir !== clientDir && parentDir.startsWith(clientDir)) {
+      try {
+        fs.rmdirSync(parentDir);
+      } catch {
+        break;
+      }
+      parentDir = path.dirname(parentDir);
+    }
   }
 
   if (owned.rsc) {
@@ -436,6 +456,7 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   // and no foreign target collision publishes HTML; RSC publishes when proven
   // static.
   type PublicationEntry = {
+    htmlAssetPath: string;
     htmlSource: string;
     htmlTarget: string;
     publishHtml: boolean;
@@ -467,7 +488,13 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     const rscTarget = path.join(clientDir, `.${rscAssetPathname}`);
     // An existing target is a foreign collision only when a prior vinext run did
     // not publish it; targets we own are re-published so their headers survive.
-    const htmlForeign = fs.existsSync(htmlTarget) && !owned.html.has(routePathname);
+    // A directory at the HTML target is not a foreign file: it is the parent of
+    // descendant route assets (owned ones are pruned before publication) and
+    // publishAsset degrades safely if it persists.
+    const htmlForeign =
+      fs.existsSync(htmlTarget) &&
+      !fs.statSync(htmlTarget).isDirectory() &&
+      !owned.html.has(routePathname);
     const rscForeign = fs.existsSync(rscTarget) && !owned.rsc;
     if (htmlForeign || rscForeign) {
       continue;
@@ -487,6 +514,7 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     if (!publishHtml && !publishRsc) continue;
 
     plan.push({
+      htmlAssetPath,
       htmlSource,
       htmlTarget,
       publishHtml,
@@ -496,6 +524,23 @@ export function publishCloudflarePrerenderedAppAssets(options: {
       rscSource,
       rscTarget,
     });
+  }
+
+  // A route's visible HTML target is a plain file, so it cannot coexist with a
+  // descendant route whose target needs that same path as a directory (e.g.
+  // `/blog` -> `dist/client/blog` vs `/blog/post` -> `dist/client/blog/post`).
+  // Publish the descendants and let the Worker keep serving the ancestor
+  // document; skipping HTML never changes behavior, only the fast path. The
+  // tokenised RSC transport is flat and cannot conflict.
+  const plannedHtmlAssetPaths = plan
+    .filter((entry) => entry.publishHtml)
+    .map((entry) => entry.htmlAssetPath);
+  for (const entry of plan) {
+    if (!entry.publishHtml) continue;
+    const dirPrefix = `${entry.htmlAssetPath}/`;
+    if (plannedHtmlAssetPaths.some((assetPath) => assetPath.startsWith(dirPrefix))) {
+      entry.publishHtml = false;
+    }
   }
 
   // Phase 2: budget generated rules (one per published HTML route, plus a single

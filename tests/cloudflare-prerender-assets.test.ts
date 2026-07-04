@@ -263,6 +263,58 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     );
   });
 
+  it("publishes descendants and skips ancestor HTML when visible paths conflict", async () => {
+    // `/blog` needs dist/client/blog as a file while `/blog/post` needs it as
+    // a directory; they cannot coexist. The ancestor keeps Worker rendering
+    // (HTML skipped, RSC still published) and the descendant publishes fully.
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(prerenderDir, "blog.html"), "<h1>Blog</h1>");
+    writeFile(path.join(prerenderDir, "blog.rsc"), "blog-rsc");
+    writeFile(path.join(prerenderDir, "blog/post.html"), "<h1>Post</h1>");
+    writeFile(path.join(prerenderDir, "blog/post.rsc"), "post-rsc");
+
+    const publish = async (
+      routes: Parameters<typeof publishCloudflarePrerenderedAppAssets>[0]["routes"],
+    ) =>
+      publishCloudflarePrerenderedAppAssets({
+        hasServerActions: false,
+        config: await baseConfig(),
+        prerenderDir,
+        root,
+        routes,
+        serverDir,
+      });
+
+    const result = await publish([
+      renderedAppRoute("/blog", ["blog.html", "blog.rsc"]),
+      renderedAppRoute("/blog/post", ["blog/post.html", "blog/post.rsc"]),
+    ]);
+
+    expect(result).toEqual({ skipped: false, publishedFiles: 3, publishedRoutes: 2 });
+    expect(fs.statSync(path.join(clientDir, "blog")).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(clientDir, "blog/post"), "utf-8")).toBe("<h1>Post</h1>");
+    expect(fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/blog")}`), "utf-8")).toBe(
+      "blog-rsc",
+    );
+    expect(
+      fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/blog/post")}`), "utf-8"),
+    ).toBe("post-rsc");
+    const headers = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
+    expect(headers).toContain("/blog/post\n");
+    expect(headers).not.toContain("/blog\n");
+
+    // Once the descendant disappears, a repeat prerender prunes its file and
+    // the now-empty directory so the ancestor's HTML can publish as a file.
+    const ancestorOnly = await publish([renderedAppRoute("/blog", ["blog.html", "blog.rsc"])]);
+    expect(ancestorOnly).toEqual({ skipped: false, publishedFiles: 2, publishedRoutes: 1 });
+    expect(fs.readFileSync(path.join(clientDir, "blog"), "utf-8")).toBe("<h1>Blog</h1>");
+    expect(fs.existsSync(path.join(clientDir, "blog/post"))).toBe(false);
+  });
+
   it("skips publication when generated _headers rules would exceed the Cloudflare limit", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");
