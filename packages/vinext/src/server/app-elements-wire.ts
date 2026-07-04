@@ -12,7 +12,7 @@ import type {
   RenderObservation,
 } from "./cache-proof.js";
 import type { ClientReuseManifestSkipDisposition } from "./client-reuse-manifest.js";
-import { isInterceptionMatchedUrlPath } from "./normalize-path.js";
+import { isSameOriginPathname } from "./normalize-path.js";
 import { releaseAppElementRenderDependency } from "./app-render-dependency.js";
 import { compareStrings } from "../utils/compare.js";
 import { isUnknownRecord } from "../utils/record.js";
@@ -571,7 +571,7 @@ function readRequiredInterceptionString(
 }
 
 function parseInterceptionMatchedUrl(value: string): string {
-  if (!isInterceptionMatchedUrlPath(value)) {
+  if (!isSameOriginPathname(value)) {
     throw new Error("[vinext] Invalid __interception in App Router payload: expected path URLs");
   }
   return value;

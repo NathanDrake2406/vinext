@@ -125,15 +125,20 @@ function safeVisibleAssetPathForRoute(routePathname: string): string | null {
  * prior run — in both cases the current source is written, overwriting stale
  * output so republished assets match the latest prerender. Copy through a
  * temp file + rename so a crash cannot leave a partially written asset. Returns
- * false only if the source is missing (already guarded by the caller).
+ * false only if the source disappears after planning.
  */
 function publishAsset(sourcePath: string, targetPath: string): boolean {
-  if (!fs.existsSync(sourcePath)) return false;
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   const tmpPath = `${targetPath}.vinext-tmp-${process.pid}`;
-  fs.copyFileSync(sourcePath, tmpPath);
-  fs.renameSync(tmpPath, targetPath);
-  return true;
+  try {
+    fs.copyFileSync(sourcePath, tmpPath);
+    fs.renameSync(tmpPath, targetPath);
+    return true;
+  } catch (error) {
+    fs.rmSync(tmpPath, { force: true });
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 // Common filesystems cap a filename at 255 bytes, and publishAsset first
@@ -483,7 +488,6 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   // Phase 2: budget generated rules (one per published HTML route, plus a single
   // shared wildcard rule when any static RSC is published) against the preserved
   // user rules. Skip entirely rather than emit an invalid asset bundle.
-  // ponytail: skip-all at the limit; add per-route capping if real apps exceed it.
   const preservedRuleCount = countHeaderRules(removeGeneratedHeadersBlock(existingHeaders));
   const generatedRuleCount =
     plan.filter((entry) => entry.publishHtml).length +

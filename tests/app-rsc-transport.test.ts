@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   createRscTransportAssetPathname,
+  resolveRscTransportRequest,
   resolveRscTransportRoutePathname,
   VINEXT_STATIC_RSC_TRANSPORT_PREFIX,
   VINEXT_WORKER_RSC_TRANSPORT_PREFIX,
@@ -72,5 +73,21 @@ describe("App Router RSC transport encoding", () => {
     );
     expect(resolveRscTransportRoutePathname(`${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/Lw`)).toBe(null);
     expect(resolveRscTransportRoutePathname("/other/Lw.rsc")).toBe(null);
+  });
+
+  it("rejects decoded tokens that contain URL query or fragment syntax", () => {
+    // Hand-crafted canonical base64url tokens for "/about?x=1" and
+    // "/about#frag". The public encoder rejects these because they are not
+    // pathnames; the decoder has to reject them too.
+    const withQuery = `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/L2Fib3V0P3g9MQ.rsc`;
+    const withFragment = `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/L2Fib3V0I2ZyYWc.rsc`;
+
+    expect(resolveRscTransportRoutePathname(withQuery)).toBe(null);
+    expect(resolveRscTransportRoutePathname(withFragment)).toBe(null);
+
+    const request = new Request(`https://example.test${withQuery}?_rsc=fresh`, {
+      headers: { RSC: "1" },
+    });
+    expect(resolveRscTransportRequest(request)).toBe(request);
   });
 });

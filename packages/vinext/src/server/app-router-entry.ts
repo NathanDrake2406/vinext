@@ -96,15 +96,18 @@ async function handleRequest(
   registerConfiguredImageOptimizer(env as Record<string, unknown> | undefined);
 
   let url = new URL(request.url);
-  if (resolveRscTransportRoutePathname(url.pathname) !== null) {
+  const rscTransportRoutePathname = resolveRscTransportRoutePathname(url.pathname);
+  if (rscTransportRoutePathname !== null) {
     const redirect = await resolveInvalidRscCacheBustingRequest({
       isRscRequest: true,
       request,
     });
     if (redirect) return redirect;
   }
-  request = resolveRscTransportRequest(request, url);
-  url = new URL(request.url);
+  request = resolveRscTransportRequest(request, url, rscTransportRoutePathname);
+  if (rscTransportRoutePathname !== null) {
+    url = new URL(request.url);
+  }
 
   if (isImageOptimizationPath(url.pathname) && env?.ASSETS && getImageOptimizer()) {
     const assetFetcher = env.ASSETS;

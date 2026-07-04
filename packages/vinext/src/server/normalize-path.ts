@@ -43,7 +43,7 @@ export function decodePathParams(pathname: string): string {
     .join("/");
 }
 
-export function isInterceptionMatchedUrlPath(value: string): boolean {
+export function isSameOriginPathname(value: string): boolean {
   return (
     value.startsWith("/") &&
     !value.startsWith("//") &&

@@ -336,8 +336,7 @@ export function resolveWranglerJsonPath(root: string): string | null {
 /** Check whether a wrangler config file exists in the given directory. */
 export function hasWranglerConfig(root: string): boolean {
   return (
-    fs.existsSync(path.join(root, "wrangler.jsonc")) ||
-    fs.existsSync(path.join(root, "wrangler.json")) ||
+    resolveWranglerJsonPath(root) !== null ||
     fs.existsSync(path.join(root, "wrangler.toml")) ||
     fs.existsSync(path.join(root, "cloudflare.config.ts"))
   );

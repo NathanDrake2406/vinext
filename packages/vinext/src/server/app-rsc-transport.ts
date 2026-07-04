@@ -10,6 +10,7 @@ import {
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "./headers.js";
+import { isSameOriginPathname } from "./normalize-path.js";
 
 export const VINEXT_STATIC_RSC_TRANSPORT_PREFIX = "/_next/static/__vinext/prerendered-rsc";
 export const VINEXT_WORKER_RSC_TRANSPORT_PREFIX = "/__vinext/rsc";
@@ -62,7 +63,7 @@ function isStaticRscTransportEligible(headers: Headers): boolean {
 }
 
 export function createRscTransportAssetPathname(routePathname: string): string {
-  if (!routePathname.startsWith("/")) {
+  if (!isSameOriginPathname(routePathname)) {
     throw new Error(`Invalid RSC transport route pathname: ${routePathname}`);
   }
   return `/${encodeRouteToken(routePathname)}.rsc`;
@@ -89,13 +90,17 @@ export function resolveRscTransportRoutePathname(pathname: string): string | nul
   const token = assetPathname.slice(1, -4);
   if (token.length === 0 || token.includes("/")) return null;
   const routePathname = decodeRouteToken(token);
-  return routePathname !== null && routePathname.startsWith("/") ? routePathname : null;
+  return routePathname !== null && isSameOriginPathname(routePathname) ? routePathname : null;
 }
 
-export function resolveRscTransportRequest(request: Request, url = new URL(request.url)): Request {
-  const routePathname = resolveRscTransportRoutePathname(url.pathname);
+export function resolveRscTransportRequest(
+  request: Request,
+  url = new URL(request.url),
+  routePathname = resolveRscTransportRoutePathname(url.pathname),
+): Request {
   if (routePathname === null) return request;
 
-  const mappedUrl = `${url.protocol}//${url.host}${routePathname}${url.search}`;
+  const mappedUrl = new URL(url);
+  mappedUrl.pathname = routePathname;
   return new Request(mappedUrl, request);
 }
