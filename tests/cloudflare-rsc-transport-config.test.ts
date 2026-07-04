@@ -77,6 +77,36 @@ describe("Cloudflare static RSC transport config", () => {
     });
   });
 
+  it('disables client RSC transport for output: "export" builds', async () => {
+    // Export builds write plain `about.rsc` files next to the HTML and the
+    // Cloudflare publisher never emits the reserved transport assets, so the
+    // client must keep requesting RSC at the public route URL.
+    const root = createTempRoot();
+    fs.writeFileSync(
+      path.join(root, "wrangler.jsonc"),
+      JSON.stringify({
+        assets: { binding: "ASSETS", directory: "dist/client", not_found_handling: "none" },
+      }),
+    );
+
+    const enabled = await findConfigPlugin().config!(
+      { root, plugins: [{ name: "vite-plugin-cloudflare" }] },
+      { command: "build", mode: "production" },
+    );
+    expect(enabled.define["process.env.__VINEXT_CLOUDFLARE_RSC_TRANSPORT"]).toBe(
+      JSON.stringify("true"),
+    );
+
+    fs.writeFileSync(path.join(root, "next.config.mjs"), `export default { output: "export" };\n`);
+    const exported = await findConfigPlugin().config!(
+      { root, plugins: [{ name: "vite-plugin-cloudflare" }] },
+      { command: "build", mode: "production" },
+    );
+    expect(exported.define["process.env.__VINEXT_CLOUDFLARE_RSC_TRANSPORT"]).toBe(
+      JSON.stringify("false"),
+    );
+  });
+
   it("disables client RSC transport when only a wrangler.toml config exists", async () => {
     const root = createTempRoot();
     fs.writeFileSync(

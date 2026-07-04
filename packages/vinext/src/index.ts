@@ -1975,8 +1975,13 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         defines["process.env.__VINEXT_PREFETCH_INLINING"] = JSON.stringify(
           nextConfig.prefetchInlining ? "true" : "false",
         );
+        // Export builds write plain `about.rsc` files next to the HTML and the
+        // publisher never emits the reserved transport assets, so the client
+        // must keep requesting RSC at the public route URL.
         defines["process.env.__VINEXT_CLOUDFLARE_RSC_TRANSPORT"] = JSON.stringify(
-          shouldEnableCloudflareRscTransport(root, config.plugins) ? "true" : "false",
+          nextConfig.output !== "export" && shouldEnableCloudflareRscTransport(root, config.plugins)
+            ? "true"
+            : "false",
         );
         // Emit a raw boolean (not the "true"/"false" string form used by the
         // sibling defines above): the consumer guards with
