@@ -355,6 +355,15 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
     else errors++;
   }
 
+  // A thrown generateStaticParams/getStaticPaths is a fatal build error in ANY
+  // mode (default included), matching Next.js — unlike intentionally-skipped
+  // dynamic/SSR routes. These are flagged `fatal` by prerenderApp/prerenderPages.
+  // Refs cloudflare/vinext#1982
+  //
+  // Run this BEFORE publishing static assets: a fatal route must not mutate
+  // dist/client before the build aborts.
+  assertNoFatalPrerenderRoutes(allRoutes);
+
   try {
     fs.mkdirSync(manifestDir, { recursive: true });
     writePrerenderIndex(allRoutes, manifestDir, {
@@ -377,12 +386,6 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
   } finally {
     progress.finish(rendered, skipped, errors);
   }
-
-  // A thrown generateStaticParams/getStaticPaths is a fatal build error in ANY
-  // mode (default included), matching Next.js — unlike intentionally-skipped
-  // dynamic/SSR routes. These are flagged `fatal` by prerenderApp/prerenderPages.
-  // Refs cloudflare/vinext#1982
-  assertNoFatalPrerenderRoutes(allRoutes);
 
   // In export mode, any error route means the build should fail — the app
   // contains dynamic functionality that cannot be statically exported.

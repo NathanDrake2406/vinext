@@ -150,14 +150,17 @@ function publishAsset(sourcePath: string, targetPath: string): boolean {
     // parent directory — ENOTDIR on POSIX, EEXIST on Windows mkdir) mean this
     // route's visible HTML cannot exist on this filesystem layout; the Worker
     // keeps serving the route, so degrade to "not published" instead of
-    // aborting the whole prerender.
+    // aborting the whole prerender. ENAMETOOLONG covers a deeply nested route
+    // whose individual segments are short enough to pass the basename guard
+    // above but whose full path exceeds the OS limit.
     const code = (error as NodeJS.ErrnoException).code;
     if (
       code === "ENOENT" ||
       code === "EISDIR" ||
       code === "ENOTDIR" ||
       code === "ENOTEMPTY" ||
-      code === "EEXIST"
+      code === "EEXIST" ||
+      code === "ENAMETOOLONG"
     ) {
       return false;
     }
