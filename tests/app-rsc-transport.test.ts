@@ -90,4 +90,21 @@ describe("App Router RSC transport encoding", () => {
     });
     expect(resolveRscTransportRequest(request)).toBe(request);
   });
+
+  it("rejects decoded tokens the URL implementation would rewrite", () => {
+    // Hand-crafted canonical base64url tokens for pathnames that a URL
+    // pathname assignment would silently rewrite, breaking the bijective
+    // route-token invariant: "/foo\bar" (backslash → "/foo/bar"),
+    // "/\evil.com" (→ "//evil.com"), "/foo\nbar" (newline stripped), and
+    // "/foo/../bar" (dot segments resolved to "/bar").
+    for (const token of ["L2Zvb1xiYXI", "L1xldmlsLmNvbQ", "L2ZvbwpiYXI", "L2Zvby8uLi9iYXI"]) {
+      const transportPathname = `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/${token}.rsc`;
+      expect(resolveRscTransportRoutePathname(transportPathname)).toBe(null);
+
+      const request = new Request(`https://example.test${transportPathname}`, {
+        headers: { RSC: "1" },
+      });
+      expect(resolveRscTransportRequest(request)).toBe(request);
+    }
+  });
 });
