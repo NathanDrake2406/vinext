@@ -315,6 +315,38 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(fs.existsSync(path.join(clientDir, "blog/post"))).toBe(false);
   });
 
+  it("degrades to Worker rendering when a foreign parent file blocks a descendant target", async () => {
+    // A pre-existing user asset file at dist/client/blog blocks the parent
+    // directory /blog/post needs. The exact-target foreign check cannot see
+    // it, so publishAsset must degrade to "not published" (mkdir and even the
+    // temp-file cleanup throw ENOTDIR here) instead of aborting the prerender.
+    const root = createTempRoot();
+    const serverDir = path.join(root, "dist/server");
+    const prerenderDir = path.join(serverDir, "prerendered-routes");
+    const clientDir = path.join(root, "dist/client");
+    writeWrangler(serverDir);
+    writeFile(path.join(clientDir, "blog"), "user asset");
+    writeFile(path.join(prerenderDir, "blog/post.html"), "<h1>Post</h1>");
+    writeFile(path.join(prerenderDir, "blog/post.rsc"), "post-rsc");
+
+    const result = publishCloudflarePrerenderedAppAssets({
+      hasServerActions: false,
+      config: await baseConfig(),
+      prerenderDir,
+      root,
+      routes: [renderedAppRoute("/blog/post", ["blog/post.html", "blog/post.rsc"])],
+      serverDir,
+    });
+
+    expect(result).toEqual({ skipped: false, publishedFiles: 1, publishedRoutes: 1 });
+    expect(fs.readFileSync(path.join(clientDir, "blog"), "utf-8")).toBe("user asset");
+    expect(
+      fs.readFileSync(path.join(clientDir, `.${staticRscAssetPath("/blog/post")}`), "utf-8"),
+    ).toBe("post-rsc");
+    const headers = fs.readFileSync(path.join(clientDir, "_headers"), "utf-8");
+    expect(headers).not.toContain("/blog/post\n");
+  });
+
   it("skips publication when generated _headers rules would exceed the Cloudflare limit", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");

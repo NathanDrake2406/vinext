@@ -135,14 +135,27 @@ function publishAsset(sourcePath: string, targetPath: string): boolean {
     fs.renameSync(tmpPath, targetPath);
     return true;
   } catch (error) {
-    fs.rmSync(tmpPath, { force: true });
+    // Best-effort cleanup: when a parent path component is a file, even this
+    // rmSync throws ENOTDIR, and it must not mask the fallback decision below.
+    try {
+      fs.rmSync(tmpPath, { force: true });
+    } catch {
+      // tmpPath cannot exist if its parent directory does not
+    }
     // ENOENT: the planned source disappeared. The directory-shape conflicts
     // (a directory where the file target should be, or a file blocking a
-    // parent directory) mean this route's visible HTML cannot exist on this
-    // filesystem layout; the Worker keeps serving the route, so degrade to
-    // "not published" instead of aborting the whole prerender.
+    // parent directory — ENOTDIR on POSIX, EEXIST on Windows mkdir) mean this
+    // route's visible HTML cannot exist on this filesystem layout; the Worker
+    // keeps serving the route, so degrade to "not published" instead of
+    // aborting the whole prerender.
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "EISDIR" || code === "ENOTDIR" || code === "ENOTEMPTY") {
+    if (
+      code === "ENOENT" ||
+      code === "EISDIR" ||
+      code === "ENOTDIR" ||
+      code === "ENOTEMPTY" ||
+      code === "EEXIST"
+    ) {
       return false;
     }
     throw error;
