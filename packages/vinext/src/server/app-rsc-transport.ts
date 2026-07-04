@@ -10,8 +10,6 @@ import {
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RSC_RENDER_MODE_HEADER,
 } from "./headers.js";
-import { isSameOriginPathname } from "./normalize-path.js";
-
 export const VINEXT_STATIC_RSC_TRANSPORT_PREFIX = "/_next/static/__vinext/prerendered-rsc";
 export const VINEXT_WORKER_RSC_TRANSPORT_PREFIX = "/__vinext/rsc";
 
@@ -27,6 +25,26 @@ export function isCloudflareRscTransportEnabled(): boolean {
  * the route-to-asset mapping bijective for every legal pathname.
  */
 const textEncoder = new TextEncoder();
+
+// Transport route pathnames come from `url.pathname` and go back into
+// `mappedUrl.pathname`, so they must already be in URL-serialized form:
+// parsing the value as a path and reading the pathname back must be the
+// identity. This rejects everything the URL implementation would rewrite on
+// pathname assignment — `?`/`#` (truncated), `\` (normalized to `/`),
+// tab/newline (stripped), other control chars, spaces, and raw non-ASCII
+// (percent-encoded), plus `.`/`..` segments (resolved) — keeping decoded
+// route tokens bijective with the request pathname they map to. This is
+// deliberately stricter than `isInterceptionMatchedUrlPath`, which accepts
+// decoded pathnames like `/café`.
+function isUrlSerializedPathname(value: string): boolean {
+  // `//` parses as a protocol-relative authority, never as a pathname.
+  if (!value.startsWith("/") || value.startsWith("//")) return false;
+  try {
+    return new URL(value, "http://n").pathname === value;
+  } catch {
+    return false;
+  }
+}
 // fatal: invalid UTF-8 must reject the token, not collapse different byte
 // sequences into the same replacement-character route.
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
@@ -63,7 +81,7 @@ function isStaticRscTransportEligible(headers: Headers): boolean {
 }
 
 export function createRscTransportAssetPathname(routePathname: string): string {
-  if (!isSameOriginPathname(routePathname)) {
+  if (!isUrlSerializedPathname(routePathname)) {
     throw new Error(`Invalid RSC transport route pathname: ${routePathname}`);
   }
   return `/${encodeRouteToken(routePathname)}.rsc`;
@@ -90,7 +108,7 @@ export function resolveRscTransportRoutePathname(pathname: string): string | nul
   const token = assetPathname.slice(1, -4);
   if (token.length === 0 || token.includes("/")) return null;
   const routePathname = decodeRouteToken(token);
-  return routePathname !== null && isSameOriginPathname(routePathname) ? routePathname : null;
+  return routePathname !== null && isUrlSerializedPathname(routePathname) ? routePathname : null;
 }
 
 export function resolveRscTransportRequest(

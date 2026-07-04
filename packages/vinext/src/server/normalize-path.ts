@@ -43,22 +43,14 @@ export function decodePathParams(pathname: string): string {
     .join("/");
 }
 
-export function isSameOriginPathname(value: string): boolean {
-  // `//` parses as a protocol-relative authority, never as a pathname; reject
-  // it up front so the URL round-trip below only sees path-shaped input.
-  if (!value.startsWith("/") || value.startsWith("//")) return false;
-  // The value must already be in URL-serialized form: parsing it as a path
-  // and reading the pathname back must be the identity. This rejects every
-  // character the URL implementation would rewrite when the value is later
-  // assigned to `url.pathname` — `?`/`#` (truncated), `\` (normalized to
-  // `/`), tab/newline (stripped), other control chars, spaces, and raw
-  // non-ASCII (percent-encoded), plus `.`/`..` segments (resolved) — keeping
-  // decoded route tokens bijective with the request pathname they map to.
-  try {
-    return new URL(value, "http://n").pathname === value;
-  } catch {
-    return false;
-  }
+export function isInterceptionMatchedUrlPath(value: string): boolean {
+  return (
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.includes("?") &&
+    !value.includes("#") &&
+    !value.includes("\0")
+  );
 }
 
 /**
