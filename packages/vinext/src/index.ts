@@ -5989,22 +5989,17 @@ export const loadServerActionClient = ${
             if (!outDir) return;
 
             // Only the rsc environment can see the server reference map, so it
-            // owns the hasServerActions flag. The ssr environment may write the
-            // manifest before or after rsc within the same build; it preserves
-            // an existing same-build flag (matched by the shared secret) and
-            // otherwise omits it, so a stale flag from a previous build can
-            // never leak forward.
+            // owns the hasServerActions flag. The ssr environment preserves an
+            // existing flag rather than dropping it: in hybrid CLI builds the
+            // Pages Router SSR bundle is a second builder with a separate
+            // vinext() closure (see cli.ts), and it writes this manifest after
+            // the App Router build already recorded the flag. Pages Router has
+            // no server actions of its own, so preserving is always correct.
             const manifestPath = path.join(outDir, "vinext-server.json");
-            let hasServerActions: boolean | undefined;
-            if (envName === "rsc") {
-              hasServerActions = await resolveHasServerActions(this.environment.config);
-            } else {
-              const existing = readServerManifest(outDir);
-              hasServerActions =
-                existing?.prerenderSecret === prerenderSecret
-                  ? existing.hasServerActions
-                  : undefined;
-            }
+            const hasServerActions =
+              envName === "rsc"
+                ? await resolveHasServerActions(this.environment.config)
+                : readServerManifest(outDir)?.hasServerActions;
             const manifest = {
               prerenderSecret,
               ...(hasServerActions === undefined ? {} : { hasServerActions }),
