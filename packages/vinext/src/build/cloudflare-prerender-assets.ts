@@ -390,6 +390,20 @@ function eligibleStaticAppRoutes(
   });
 }
 
+type PlannedAssetBase = {
+  routePathname: string;
+  source: string;
+  target: string;
+};
+
+type PlannedAsset =
+  | (PlannedAssetBase & {
+      kind: "html";
+      assetPath: string;
+      route: Extract<PrerenderRouteResult, { status: "rendered" }>;
+    })
+  | (PlannedAssetBase & { kind: "rsc" });
+
 export function publishCloudflarePrerenderedAppAssets(options: {
   config: ResolvedNextConfig;
   /**
@@ -469,23 +483,7 @@ export function publishCloudflarePrerenderedAppAssets(options: {
 
   const routes = eligibleStaticAppRoutes(options.routes);
 
-  // Phase 1: plan the publication without copying, so the generated `_headers`
-  // rule count can be checked against the Cloudflare limit before any file is
-  // written. A route that maps to a visible asset path with an available source
-  // and no foreign target collision publishes HTML; RSC publishes when proven
-  // static.
-  type PublicationEntry = {
-    htmlAssetPath: string;
-    htmlSource: string;
-    htmlTarget: string;
-    publishHtml: boolean;
-    route: Extract<PrerenderRouteResult, { status: "rendered" }>;
-    routePathname: string;
-    publishRsc: boolean;
-    rscSource: string | null;
-    rscTarget: string;
-  };
-  const plan: PublicationEntry[] = [];
+  const plannedAssets: PlannedAsset[] = [];
 
   for (const route of routes) {
     const routePathname = route.path ?? route.route;
@@ -520,29 +518,32 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     }
 
     const htmlSource = path.join(options.prerenderDir, getOutputPath(routePathname, false));
-    const publishHtml =
+    if (
       !options.hasServerActions &&
       fs.existsSync(htmlSource) &&
-      isPublishableAssetTarget(htmlTarget);
-    const rscSource =
-      route.queryInvariant?.rsc === true
-        ? path.join(options.prerenderDir, getRscOutputPath(routePathname))
-        : null;
-    const publishRsc =
-      rscSource !== null && fs.existsSync(rscSource) && isPublishableAssetTarget(rscTarget);
-    if (!publishHtml && !publishRsc) continue;
+      isPublishableAssetTarget(htmlTarget)
+    ) {
+      plannedAssets.push({
+        kind: "html",
+        assetPath: htmlAssetPath,
+        route,
+        routePathname,
+        source: htmlSource,
+        target: htmlTarget,
+      });
+    }
 
-    plan.push({
-      htmlAssetPath,
-      htmlSource,
-      htmlTarget,
-      publishHtml,
-      route,
-      routePathname,
-      publishRsc,
-      rscSource,
-      rscTarget,
-    });
+    if (route.queryInvariant?.rsc === true) {
+      const rscSource = path.join(options.prerenderDir, getRscOutputPath(routePathname));
+      if (fs.existsSync(rscSource) && isPublishableAssetTarget(rscTarget)) {
+        plannedAssets.push({
+          kind: "rsc",
+          routePathname,
+          source: rscSource,
+          target: rscTarget,
+        });
+      }
+    }
   }
 
   // A route's visible HTML target is a plain file, so it cannot coexist with a
@@ -551,24 +552,32 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   // Publish the descendants and let the Worker keep serving the ancestor
   // document; skipping HTML never changes behavior, only the fast path. The
   // tokenised RSC transport is flat and cannot conflict.
-  const plannedHtmlAssetPaths = plan
-    .filter((entry) => entry.publishHtml)
-    .map((entry) => entry.htmlAssetPath);
-  for (const entry of plan) {
-    if (!entry.publishHtml) continue;
-    const dirPrefix = `${entry.htmlAssetPath}/`;
-    if (plannedHtmlAssetPaths.some((assetPath) => assetPath.startsWith(dirPrefix))) {
-      entry.publishHtml = false;
+  const plannedHtmlAssetPaths: string[] = [];
+  for (const asset of plannedAssets) {
+    if (asset.kind === "html") plannedHtmlAssetPaths.push(asset.assetPath);
+  }
+  const plan = plannedAssets.filter((asset) => {
+    if (asset.kind !== "html") return true;
+    const dirPrefix = `${asset.assetPath}/`;
+    return !plannedHtmlAssetPaths.some((assetPath) => assetPath.startsWith(dirPrefix));
+  });
+
+  let generatedRuleCount = 0;
+  const desiredHtmlRoutes = new Set<string>();
+  const desiredRscTargets = new Set<string>();
+  for (const asset of plan) {
+    if (asset.kind === "html") {
+      generatedRuleCount++;
+      desiredHtmlRoutes.add(asset.routePathname);
+    } else {
+      desiredRscTargets.add(asset.target);
     }
   }
+  if (desiredRscTargets.size > 0) {
+    generatedRuleCount++;
+  }
 
-  // Phase 2: budget generated rules (one per published HTML route, plus a single
-  // shared wildcard rule when any static RSC is published) against the preserved
-  // user rules. Skip entirely rather than emit an invalid asset bundle.
   const preservedRuleCount = countHeaderRules(removeGeneratedHeadersBlock(existingHeaders));
-  const generatedRuleCount =
-    plan.filter((entry) => entry.publishHtml).length +
-    (plan.some((entry) => entry.publishRsc) ? 1 : 0);
   if (preservedRuleCount + generatedRuleCount > CLOUDFLARE_HEADERS_RULE_LIMIT) {
     pruneOwnedAssets(clientDir, owned, { html: new Set(), rsc: new Set() });
     writeGeneratedHeadersBlock(clientDir, []);
@@ -578,11 +587,10 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   }
 
   pruneOwnedAssets(clientDir, owned, {
-    html: new Set(plan.filter((entry) => entry.publishHtml).map((entry) => entry.routePathname)),
-    rsc: new Set(plan.filter((entry) => entry.publishRsc).map((entry) => entry.rscTarget)),
+    html: desiredHtmlRoutes,
+    rsc: desiredRscTargets,
   });
 
-  // Phase 3: execute the planned copies and collect the header rules to emit.
   const headerEntries: Array<{
     detachHeaders?: readonly string[];
     headers: Record<string, string>;
@@ -590,33 +598,23 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   }> = [];
   let publishedStaticRsc = false;
   let publishedFiles = 0;
-  let publishedRoutes = 0;
+  const publishedRoutePathnames = new Set<string>();
 
-  for (const entry of plan) {
-    let routePublished = false;
-
-    // Owned and fresh targets are both (re)written with the current source, so a
-    // repeated prerender refreshes stale bodies rather than keeping old ones,
-    // and always re-emits the header rule so the generated block survives.
-    if (entry.publishHtml && publishAsset(entry.htmlSource, entry.htmlTarget)) {
-      publishedFiles++;
-      routePublished = true;
-      headerEntries.push({
-        pathname: entry.routePathname,
-        detachHeaders: HTML_AUTHORITATIVE_HEADERS,
-        headers: buildHtmlHeaders(entry.route),
-      });
-    }
-
-    if (entry.publishRsc && entry.rscSource && publishAsset(entry.rscSource, entry.rscTarget)) {
-      publishedFiles++;
-      routePublished = true;
+  // Re-copy owned targets so repeated prerenders refresh stale bodies and keep
+  // the generated header block authoritative.
+  for (const asset of plan) {
+    if (!publishAsset(asset.source, asset.target)) continue;
+    publishedFiles++;
+    publishedRoutePathnames.add(asset.routePathname);
+    if (asset.kind === "rsc") {
       publishedStaticRsc = true;
+      continue;
     }
-
-    if (routePublished) {
-      publishedRoutes++;
-    }
+    headerEntries.push({
+      pathname: asset.routePathname,
+      detachHeaders: HTML_AUTHORITATIVE_HEADERS,
+      headers: buildHtmlHeaders(asset.route),
+    });
   }
 
   if (publishedStaticRsc) {
@@ -631,5 +629,5 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   }
 
   writeGeneratedHeadersBlock(clientDir, headerEntries);
-  return { skipped: false, publishedFiles, publishedRoutes };
+  return { skipped: false, publishedFiles, publishedRoutes: publishedRoutePathnames.size };
 }
