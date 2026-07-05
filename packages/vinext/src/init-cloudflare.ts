@@ -50,7 +50,7 @@ export function validateCloudflarePlatformSetup(
 ): void {
   const projectInfo = detectProject(context.root);
   const wranglerConfigPlan = createExistingWranglerConfigUpdatePlan(context.root, cloudflare);
-  const imagesBinding = wranglerConfigPlan?.imagesBinding ?? "IMAGES";
+  const imagesBinding = wranglerConfigPlan?.imagesBinding ?? DEFAULT_IMAGES_BINDING;
 
   if (context.existingViteConfigPath) {
     updateViteConfigForCloudflare(
@@ -73,7 +73,7 @@ export function setupCloudflarePlatform(
 ): CloudflarePlatformSetupResult {
   const projectInfo = detectProject(context.root);
   const wranglerConfigPlan = createExistingWranglerConfigUpdatePlan(context.root, cloudflare);
-  const imagesBinding = wranglerConfigPlan?.imagesBinding ?? "IMAGES";
+  const imagesBinding = wranglerConfigPlan?.imagesBinding ?? DEFAULT_IMAGES_BINDING;
 
   let generatedViteConfig = false;
   let skippedViteConfig = false;
@@ -201,7 +201,7 @@ function vinextExpression(
   options: CloudflareInitOptions,
   binding = "vinext",
   imageBinding = "imagesOptimizer",
-  imagesBinding = "IMAGES",
+  imagesBinding = DEFAULT_IMAGES_BINDING,
   prerender = false,
 ): string {
   const cacheEntries: string[] = [];
@@ -215,7 +215,9 @@ function vinextExpression(
   }
   if (options.imageOptimization === "cloudflare-images") {
     const adapterOptions =
-      imagesBinding === "IMAGES" ? "" : `{ binding: ${JSON.stringify(imagesBinding)} }`;
+      imagesBinding === DEFAULT_IMAGES_BINDING
+        ? ""
+        : `{ binding: ${JSON.stringify(imagesBinding)} }`;
     optionEntries.push(`images: { optimizer: ${imageBinding}(${adapterOptions}) }`);
   }
   if (prerender) {
@@ -230,7 +232,7 @@ function vinextExpression(
 export function generateAppRouterViteConfig(
   info?: CloudflareProjectInfo,
   options: CloudflareInitOptions = DEFAULT_CLOUDFLARE_INIT_OPTIONS,
-  imagesBinding = "IMAGES",
+  imagesBinding = DEFAULT_IMAGES_BINDING,
   prerender = false,
 ): string {
   const imports: string[] = [
@@ -289,7 +291,7 @@ ${plugins.join("\n")}
 export function generatePagesRouterViteConfig(
   info?: CloudflareProjectInfo,
   options: CloudflareInitOptions = DEFAULT_CLOUDFLARE_INIT_OPTIONS,
-  imagesBinding = "IMAGES",
+  imagesBinding = DEFAULT_IMAGES_BINDING,
   prerender = false,
 ): string {
   const imports: string[] = [
@@ -1173,7 +1175,7 @@ export function updateViteConfigForCloudflare(
         ? ensureNamedRequire(program, output, source, imported, local)
         : ensureNamedImport(program, output, source, imported, local);
       const bindingOption =
-        options.imagesBinding && options.imagesBinding !== "IMAGES"
+        options.imagesBinding && options.imagesBinding !== DEFAULT_IMAGES_BINDING
           ? `{ binding: ${JSON.stringify(options.imagesBinding)} }`
           : "";
       imageOptimizerExpression = `${imageBinding}(${bindingOption})`;
