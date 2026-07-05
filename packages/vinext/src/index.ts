@@ -49,6 +49,7 @@ import { generateSsrEntry } from "./entries/app-ssr-entry.js";
 import {
   VIRTUAL_CACHE_ADAPTERS,
   generateCacheAdaptersModule,
+  VINEXT_CACHE_CONFIG_PLUGIN_PROPERTY,
   type VinextCacheConfig,
 } from "./cache/cache-adapters-virtual.js";
 import {
@@ -246,6 +247,7 @@ import {
 import {
   normalizeVinextPrerenderConfig,
   VINEXT_PRERENDER_CONFIG_PLUGIN_PROPERTY,
+  VINEXT_ROUTE_ROOT_CONFIG_PLUGIN_PROPERTY,
   type VinextPrerenderConfig,
 } from "./config/prerender.js";
 
@@ -1333,7 +1335,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let pagesClientAssetsModule: string | null = null;
   let rscCompatibilityId: string | undefined;
   const draftModeSecret = randomUUID();
-
   // Per-plugin-instance binding of the Sass-aware CSS Modules Loader. The
   // `config` hook injects `Loader` as `css.modules.Loader` and
   // `configResolved` binds the resolved config, so multiple vinext builds in
@@ -1763,6 +1764,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       // Expose normalized prerender config to build/deploy metadata loaders that
       // inspect the Vite plugin array after a fresh config load.
       ...({ [VINEXT_PRERENDER_CONFIG_PLUGIN_PROPERTY]: prerenderConfig } as Record<
+        string,
+        unknown
+      >),
+      ...({
+        [VINEXT_ROUTE_ROOT_CONFIG_PLUGIN_PROPERTY]: {
+          appDir: options.appDir,
+          disableAppRouter: options.disableAppRouter,
+          rscOutDir: options.rscOutDir,
+          ssrOutDir: options.ssrOutDir,
+        },
+      } as Record<string, unknown>),
+      ...({ [VINEXT_CACHE_CONFIG_PLUGIN_PROPERTY]: options.cache ?? null } as Record<
         string,
         unknown
       >),
@@ -3448,173 +3461,180 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         },
       },
 
-      async load(id) {
-        if (id === RESOLVED_WORKER_ENTRY) {
-          const entry = hasAppDir
-            ? "vinext/server/app-router-entry"
-            : "vinext/server/pages-router-entry";
-          return `export { default } from ${JSON.stringify(entry)};`;
-        }
-        // Pages Router virtual modules
-        if (id === RESOLVED_SERVER_ENTRY) {
-          return await generateServerEntry();
-        }
-        if (id === RESOLVED_CLIENT_ENTRY) {
-          return await generateClientEntry();
-        }
-        if (id === RESOLVED_PAGES_CLIENT_ASSETS) {
-          const metadata: {
-            clientEntry: string;
-            ssrManifest?: Record<string, string[]>;
-          } = { clientEntry: DEV_PAGES_CLIENT_ENTRY };
-          const ssrManifest: Record<string, string[]> = {};
-          const appFilePath = findFileWithExts(pagesDir, "_app", fileMatcher);
-          const pagesRoutes = await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
-          const moduleFilePaths = [
-            ...(appFilePath ? [appFilePath] : []),
-            ...pagesRoutes.map((route) => route.filePath),
-          ];
-          for (const moduleFilePath of moduleFilePaths) {
-            const stylesheetAssets = await collectDevPagesAppStylesheetAssets(
-              root,
-              moduleFilePath,
-              this.resolve.bind(this),
-            );
-            if (stylesheetAssets.length > 0) {
-              ssrManifest[normalizePathSeparators(moduleFilePath)] = stylesheetAssets;
-            }
+      load: {
+        filter: { id: /virtual:vinext-/ },
+        async handler(id) {
+          if (id === RESOLVED_WORKER_ENTRY) {
+            const entry = hasAppDir
+              ? "vinext/server/app-router-entry"
+              : "vinext/server/pages-router-entry";
+            return `export { default } from ${JSON.stringify(entry)};`;
           }
-          if (Object.keys(ssrManifest).length > 0) metadata.ssrManifest = ssrManifest;
-          return `export default ${JSON.stringify(metadata)};`;
-        }
-        // App Router virtual modules
-        if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
-          const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
-          const metaRoutes = scanMetadataFiles(appDir);
-          const hasServerActions = await resolveHasServerActions(this.environment.config);
-          // Check for global-error.tsx at app root
-          const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
-          // Check for global-not-found.tsx at app root (Next.js 16+ feature)
-          // When present, this file replaces the root layout when serving a
-          // route-miss 404. The file is responsible for emitting its own
-          // <html> and <body> tags (similar to global-error.tsx).
-          // See https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/global-not-found
-          const globalNotFoundPath = nextConfig?.globalNotFound
-            ? findFileWithExts(appDir, "global-not-found", fileMatcher)
-            : null;
-          // Collect Layer 1 (segment config) classifications for all layouts.
-          // Layer 2 (module graph) runs later in renderChunk once Rollup's
-          // module info is available.
-          // Invariant: rscClassificationManifest must be built from the same
-          // `routes` value passed to generateRscEntry below so that layout
-          // indices in the manifest correspond 1:1 to the route.layouts arrays
-          // used during codegen. renderChunk clears this after patching.
-          rscClassificationManifest = collectRouteClassificationManifest(routes);
-          return generateRscEntry(
-            appDir,
-            routes,
-            middlewarePath,
-            metaRoutes,
-            globalErrorPath,
-            nextConfig?.basePath,
-            nextConfig?.trailingSlash,
-            {
-              redirects: nextConfig?.redirects,
-              rewrites: nextConfig?.rewrites,
-              headers: nextConfig?.headers,
-              allowedOrigins: nextConfig?.serverActionsAllowedOrigins,
-              allowedDevOrigins: nextConfig?.allowedDevOrigins,
-              bodySizeLimit: nextConfig?.serverActionsBodySizeLimit,
-              bodySizeLimitLabel: nextConfig?.serverActionsBodySizeLimitLabel,
-              htmlLimitedBots: nextConfig?.htmlLimitedBots,
-              clientTraceMetadata: nextConfig?.clientTraceMetadata,
-              assetPrefix: nextConfig?.assetPrefix,
-              expireTime: nextConfig?.expireTime,
-              reactMaxHeadersLength: nextConfig?.reactMaxHeadersLength,
-              cacheMaxMemorySize: nextConfig?.cacheMaxMemorySize,
-              inlineCss: nextConfig?.inlineCss,
-              globalNotFound: nextConfig?.globalNotFound,
-              cacheComponents: nextConfig?.cacheComponents,
-              prefetchInlining: nextConfig?.prefetchInlining,
-              hasServerActions,
-              i18n: nextConfig?.i18n,
-              imageConfig: {
-                deviceSizes: nextConfig?.images?.deviceSizes,
-                imageSizes: nextConfig?.images?.imageSizes,
-                qualities: nextConfig?.images?.qualities,
-                dangerouslyAllowSVG: nextConfig?.images?.dangerouslyAllowSVG,
-                dangerouslyAllowLocalIP: nextConfig?.images?.dangerouslyAllowLocalIP,
-                contentDispositionType: nextConfig?.images?.contentDispositionType,
-                contentSecurityPolicy: nextConfig?.images?.contentSecurityPolicy,
+          // Pages Router virtual modules
+          if (id === RESOLVED_SERVER_ENTRY) {
+            return await generateServerEntry();
+          }
+          if (id === RESOLVED_CLIENT_ENTRY) {
+            return await generateClientEntry();
+          }
+          if (id === RESOLVED_PAGES_CLIENT_ASSETS) {
+            const metadata: {
+              clientEntry: string;
+              ssrManifest?: Record<string, string[]>;
+            } = { clientEntry: DEV_PAGES_CLIENT_ENTRY };
+            const ssrManifest: Record<string, string[]> = {};
+            const appFilePath = findFileWithExts(pagesDir, "_app", fileMatcher);
+            const pagesRoutes = await pagesRouter(
+              pagesDir,
+              nextConfig?.pageExtensions,
+              fileMatcher,
+            );
+            const moduleFilePaths = [
+              ...(appFilePath ? [appFilePath] : []),
+              ...pagesRoutes.map((route) => route.filePath),
+            ];
+            for (const moduleFilePath of moduleFilePaths) {
+              const stylesheetAssets = await collectDevPagesAppStylesheetAssets(
+                root,
+                moduleFilePath,
+                this.resolve.bind(this),
+              );
+              if (stylesheetAssets.length > 0) {
+                ssrManifest[normalizePathSeparators(moduleFilePath)] = stylesheetAssets;
+              }
+            }
+            if (Object.keys(ssrManifest).length > 0) metadata.ssrManifest = ssrManifest;
+            return `export default ${JSON.stringify(metadata)};`;
+          }
+          // App Router virtual modules
+          if (id === RESOLVED_RSC_ENTRY && hasAppDir) {
+            const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
+            const metaRoutes = scanMetadataFiles(appDir);
+            const hasServerActions = await resolveHasServerActions(this.environment.config);
+            // Check for global-error.tsx at app root
+            const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
+            // Check for global-not-found.tsx at app root (Next.js 16+ feature)
+            // When present, this file replaces the root layout when serving a
+            // route-miss 404. The file is responsible for emitting its own
+            // <html> and <body> tags (similar to global-error.tsx).
+            // See https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/global-not-found
+            const globalNotFoundPath = nextConfig?.globalNotFound
+              ? findFileWithExts(appDir, "global-not-found", fileMatcher)
+              : null;
+            // Collect Layer 1 (segment config) classifications for all layouts.
+            // Layer 2 (module graph) runs later in renderChunk once Rollup's
+            // module info is available.
+            // Invariant: rscClassificationManifest must be built from the same
+            // `routes` value passed to generateRscEntry below so that layout
+            // indices in the manifest correspond 1:1 to the route.layouts arrays
+            // used during codegen. renderChunk clears this after patching.
+            rscClassificationManifest = collectRouteClassificationManifest(routes);
+            return generateRscEntry(
+              appDir,
+              routes,
+              middlewarePath,
+              metaRoutes,
+              globalErrorPath,
+              nextConfig?.basePath,
+              nextConfig?.trailingSlash,
+              {
+                redirects: nextConfig?.redirects,
+                rewrites: nextConfig?.rewrites,
+                headers: nextConfig?.headers,
+                allowedOrigins: nextConfig?.serverActionsAllowedOrigins,
+                allowedDevOrigins: nextConfig?.allowedDevOrigins,
+                bodySizeLimit: nextConfig?.serverActionsBodySizeLimit,
+                bodySizeLimitLabel: nextConfig?.serverActionsBodySizeLimitLabel,
+                htmlLimitedBots: nextConfig?.htmlLimitedBots,
+                clientTraceMetadata: nextConfig?.clientTraceMetadata,
+                assetPrefix: nextConfig?.assetPrefix,
+                expireTime: nextConfig?.expireTime,
+                reactMaxHeadersLength: nextConfig?.reactMaxHeadersLength,
+                cacheMaxMemorySize: nextConfig?.cacheMaxMemorySize,
+                inlineCss: nextConfig?.inlineCss,
+                globalNotFound: nextConfig?.globalNotFound,
+                cacheComponents: nextConfig?.cacheComponents,
+                prefetchInlining: nextConfig?.prefetchInlining,
+                hasServerActions,
+                i18n: nextConfig?.i18n,
+                imageConfig: {
+                  deviceSizes: nextConfig?.images?.deviceSizes,
+                  imageSizes: nextConfig?.images?.imageSizes,
+                  qualities: nextConfig?.images?.qualities,
+                  dangerouslyAllowSVG: nextConfig?.images?.dangerouslyAllowSVG,
+                  dangerouslyAllowLocalIP: nextConfig?.images?.dangerouslyAllowLocalIP,
+                  contentDispositionType: nextConfig?.images?.contentDispositionType,
+                  contentSecurityPolicy: nextConfig?.images?.contentSecurityPolicy,
+                },
+                hasPagesDir,
+                publicFiles: scanPublicFileRoutes(root),
+                globalNotFoundPath,
+                draftModeSecret,
               },
-              hasPagesDir,
-              publicFiles: scanPublicFileRoutes(root),
-              globalNotFoundPath,
-              draftModeSecret,
-            },
-            instrumentationPath,
-          );
-        }
-        if (id === RESOLVED_ROOT_PARAMS) {
-          const routes = hasAppDir
-            ? await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher)
-            : [];
-          return generateRootParamsModule(routes.flatMap((route) => route.rootParamNames ?? []));
-        }
-        if (id === RESOLVED_CACHE_ADAPTERS) {
-          return generateCacheAdaptersModule(options.cache);
-        }
-        if (id === RESOLVED_IMAGE_ADAPTERS) {
-          return generateImageAdaptersModule(options.images);
-        }
-        if (id === RESOLVED_APP_SSR_ENTRY && hasAppDir) {
-          return generateSsrEntry(hasPagesDir);
-        }
-        if (id === RESOLVED_APP_BROWSER_ENTRY && hasAppDir) {
-          const graph = await appRouteGraph(appDir, nextConfig?.pageExtensions, fileMatcher);
-          // In a hybrid build, the App browser entry also exposes the Pages
-          // route manifest so a user who lands on an App page can still
-          // see Pages ownership from a `<Link>` click.
-          const pagesPrefetchRoutes = hasPagesDir
-            ? [
-                ...(await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher)).map(
-                  (route) => ({
-                    canPrefetchLoadingShell: false as const,
-                    isDynamic: route.isDynamic,
-                    patternParts: [...route.patternParts],
-                  }),
-                ),
-                ...(await apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher)).map(
-                  (route) => ({
-                    canPrefetchLoadingShell: false as const,
-                    documentOnly: true,
-                    isDynamic: route.isDynamic,
-                    patternParts: [...route.patternParts],
-                  }),
-                ),
-              ]
-            : [];
-          return generateBrowserEntry(
-            graph.routes,
-            graph.routeManifest,
-            pagesPrefetchRoutes,
-            nextConfig.rewrites,
-          );
-        }
-        if (id === RESOLVED_APP_CAPABILITIES && hasAppDir) {
-          const hasServerActions = await resolveHasServerActions(this.environment.config);
-          return `
+              instrumentationPath,
+            );
+          }
+          if (id === RESOLVED_ROOT_PARAMS) {
+            const routes = hasAppDir
+              ? await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher)
+              : [];
+            return generateRootParamsModule(routes.flatMap((route) => route.rootParamNames ?? []));
+          }
+          if (id === RESOLVED_CACHE_ADAPTERS) {
+            return generateCacheAdaptersModule(options.cache);
+          }
+          if (id === RESOLVED_IMAGE_ADAPTERS) {
+            return generateImageAdaptersModule(options.images);
+          }
+          if (id === RESOLVED_APP_SSR_ENTRY && hasAppDir) {
+            return generateSsrEntry(hasPagesDir);
+          }
+          if (id === RESOLVED_APP_BROWSER_ENTRY && hasAppDir) {
+            const graph = await appRouteGraph(appDir, nextConfig?.pageExtensions, fileMatcher);
+            // In a hybrid build, the App browser entry also exposes the Pages
+            // route manifest so a user who lands on an App page can still
+            // see Pages ownership from a `<Link>` click.
+            const pagesPrefetchRoutes = hasPagesDir
+              ? [
+                  ...(await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher)).map(
+                    (route) => ({
+                      canPrefetchLoadingShell: false as const,
+                      isDynamic: route.isDynamic,
+                      patternParts: [...route.patternParts],
+                    }),
+                  ),
+                  ...(await apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher)).map(
+                    (route) => ({
+                      canPrefetchLoadingShell: false as const,
+                      documentOnly: true,
+                      isDynamic: route.isDynamic,
+                      patternParts: [...route.patternParts],
+                    }),
+                  ),
+                ]
+              : [];
+            return generateBrowserEntry(
+              graph.routes,
+              graph.routeManifest,
+              pagesPrefetchRoutes,
+              nextConfig.rewrites,
+            );
+          }
+          if (id === RESOLVED_APP_CAPABILITIES && hasAppDir) {
+            const hasServerActions = await resolveHasServerActions(this.environment.config);
+            return `
 export const hasServerActions = ${JSON.stringify(hasServerActions)};
 export const loadServerActionClient = ${
-            hasServerActions
-              ? `() => import(${JSON.stringify(_appBrowserServerActionClientPath)})`
-              : "null"
-          };
+              hasServerActions
+                ? `() => import(${JSON.stringify(_appBrowserServerActionClientPath)})`
+                : "null"
+            };
 `;
-        }
-        if (id.startsWith(RESOLVED_VIRTUAL_GOOGLE_FONTS + "?")) {
-          return generateGoogleFontsVirtualModule(id, _fontGoogleShimPath);
-        }
+          }
+          if (id.startsWith(RESOLVED_VIRTUAL_GOOGLE_FONTS + "?")) {
+            return generateGoogleFontsVirtualModule(id, _fontGoogleShimPath);
+          }
+        },
       },
 
       // Layer 2 build-time layout classification. The generated RSC entry
@@ -3873,14 +3893,20 @@ export const loadServerActionClient = ${
       name: "vinext:instrumentation-client-inject",
       enforce: "pre",
 
-      resolveId(id) {
-        if (id !== VIRTUAL_INSTRUMENTATION_CLIENT) return null;
-        return clientInjectModule !== null ? RESOLVED_INSTRUMENTATION_CLIENT : null;
+      resolveId: {
+        filter: { id: /^private-next-instrumentation-client$/ },
+        handler(id) {
+          if (id !== VIRTUAL_INSTRUMENTATION_CLIENT) return null;
+          return clientInjectModule !== null ? RESOLVED_INSTRUMENTATION_CLIENT : null;
+        },
       },
 
-      load(id) {
-        if (id !== RESOLVED_INSTRUMENTATION_CLIENT) return null;
-        return clientInjectModule;
+      load: {
+        filter: { id: /private-next-instrumentation-client\.mjs$/ },
+        handler(id) {
+          if (id !== RESOLVED_INSTRUMENTATION_CLIENT) return null;
+          return clientInjectModule;
+        },
       },
     },
     // Dedup client references from RSC proxy modules — see src/plugins/client-reference-dedup.ts
@@ -3936,20 +3962,27 @@ export const loadServerActionClient = ${
       name: "vinext:react-canary",
       enforce: "pre",
 
-      resolveId(id) {
-        if (id === "virtual:vinext-react-canary") return "\0virtual:vinext-react-canary";
+      resolveId: {
+        filter: { id: /^virtual:vinext-react-canary$/ },
+        handler(id) {
+          if (id === "virtual:vinext-react-canary") return "\0virtual:vinext-react-canary";
+        },
       },
 
-      load(id) {
-        if (id === "\0virtual:vinext-react-canary") {
-          return [
-            `export * from "react";`,
-            `export { default } from "react";`,
-            `import * as _React from "react";`,
-            `export const ViewTransition = _React.ViewTransition || function ViewTransition({ children }) { return children; };`,
-            `export const addTransitionType = _React.addTransitionType || function addTransitionType() {};`,
-          ].join("\n");
-        }
+      load: {
+        // oxlint-disable-next-line no-control-regex -- null byte prefix is intentional (Vite virtual module convention)
+        filter: { id: /^\u0000virtual:vinext-react-canary$/ },
+        handler(id) {
+          if (id === "\0virtual:vinext-react-canary") {
+            return [
+              `export * from "react";`,
+              `export { default } from "react";`,
+              `import * as _React from "react";`,
+              `export const ViewTransition = _React.ViewTransition || function ViewTransition({ children }) { return children; };`,
+              `export const addTransitionType = _React.addTransitionType || function addTransitionType() {};`,
+            ].join("\n");
+          }
+        },
       },
 
       transform: {
