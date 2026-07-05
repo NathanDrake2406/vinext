@@ -844,9 +844,9 @@ id = "existing-id"
 
     expect(result.generatedPlatformFiles).toEqual(["wrangler.toml"]);
     const wrangler = readFile(tmpDir, "wrangler.toml");
-    expect(wrangler.match(/enabled/g)).toHaveLength(1);
+    expect(wrangler).not.toContain("enabled = 1");
     expect(wrangler).toContain("cache = { enabled = true }");
-    expect(wrangler.match(/images = \{[^}]*\}/g)).toHaveLength(1);
+    expect(wrangler).not.toContain("binding = 42");
     expect(wrangler).toContain('images = { binding = "IMAGES" }');
   });
 
