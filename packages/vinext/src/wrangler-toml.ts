@@ -1,15 +1,12 @@
 import type { CloudflareInitOptions } from "./init-platform.js";
 
 type TomlAssignment = {
-  key: string;
   valueStart: number;
   valueEnd: number;
   value: string;
 };
 
 type TomlSection = {
-  name: string;
-  isArray: boolean;
   bodyStart: number;
   bodyEnd: number;
 };
@@ -20,10 +17,9 @@ export type WranglerTomlConfigUpdate = {
   needsKvNamespaceId: boolean;
 };
 
-// Source-preserving Wrangler TOML edits are intentionally narrow. Supported
-// owned shapes are inline tables, normal tables, and KV array tables; other
-// valid TOML shapes are rejected before mutation so init does not duplicate
-// fields it does not understand.
+// This is not a general TOML editor. It only patches Wrangler fields owned by
+// vinext init when their syntax can be updated in place without rewriting the
+// user's config. Other owned shapes are rejected before mutation.
 function stripTomlLineComment(line: string): string {
   let quote: "'" | '"' | undefined;
   let escaped = false;
@@ -48,15 +44,6 @@ function stripTomlLineComment(line: string): string {
   return line;
 }
 
-function parseTomlHeader(line: string): { name: string; isArray: boolean } | undefined {
-  const trimmed = stripTomlLineComment(line).trim();
-  const match = trimmed.match(/^(\[\[?)\s*([^[\]]+?)\s*(\]\]?)$/);
-  if (!match) return undefined;
-  const isArray = match[1] === "[[";
-  if (isArray !== (match[3] === "]]")) return undefined;
-  return { name: match[2].trim(), isArray };
-}
-
 function forEachTomlLine(
   code: string,
   callback: (line: string, lineStart: number, lineEnd: number) => void,
@@ -72,6 +59,15 @@ function forEachTomlLine(
   }
 }
 
+function parseTomlHeader(line: string): { name: string; isArray: boolean } | undefined {
+  const trimmed = stripTomlLineComment(line).trim();
+  const match = trimmed.match(/^(\[\[?)\s*([^[\]]+?)\s*(\]\]?)$/);
+  if (!match) return undefined;
+  const isArray = match[1] === "[[";
+  if (isArray !== (match[3] === "]]")) return undefined;
+  return { name: match[2].trim(), isArray };
+}
+
 function findFirstTomlSectionStart(code: string): number | undefined {
   let firstSectionStart: number | undefined;
   forEachTomlLine(code, (line, lineStart) => {
@@ -81,9 +77,42 @@ function findFirstTomlSectionStart(code: string): number | undefined {
   return firstSectionStart;
 }
 
+function findTopLevelTomlAssignment(code: string, name: string): TomlAssignment | undefined {
+  const topLevelEnd = findFirstTomlSectionStart(code) ?? code.length;
+  let match: TomlAssignment | undefined;
+  const pattern = new RegExp(`^\\s*${name}\\s*=`);
+  forEachTomlLine(code.slice(0, topLevelEnd), (line, lineStart) => {
+    if (match) return;
+    const uncommented = stripTomlLineComment(line);
+    if (!pattern.test(uncommented)) return;
+    const equals = uncommented.indexOf("=");
+    let valueStart = equals + 1;
+    while (/\s/.test(uncommented[valueStart] ?? "")) valueStart++;
+    let valueEnd = uncommented.length;
+    while (valueEnd > valueStart && /\s/.test(uncommented[valueEnd - 1])) valueEnd--;
+    match = {
+      valueStart: lineStart + valueStart,
+      valueEnd: lineStart + valueEnd,
+      value: uncommented.slice(valueStart, valueEnd),
+    };
+  });
+  return match;
+}
+
+function hasTopLevelDottedKey(code: string, name: string): boolean {
+  const topLevelEnd = findFirstTomlSectionStart(code) ?? code.length;
+  const pattern = new RegExp(`^\\s*${name}\\s*\\.`);
+  let found = false;
+  forEachTomlLine(code.slice(0, topLevelEnd), (line) => {
+    if (found) return;
+    found = pattern.test(stripTomlLineComment(line));
+  });
+  return found;
+}
+
 function findTomlSections(code: string, name: string, isArray: boolean): TomlSection[] {
-  const sections: TomlSection[] = [];
-  let current: TomlSection | undefined;
+  const sections: Array<TomlSection & { name: string; isArray: boolean }> = [];
+  let current: (TomlSection & { name: string; isArray: boolean }) | undefined;
   forEachTomlLine(code, (line, lineStart, lineEnd) => {
     const header = parseTomlHeader(line);
     if (!header) return;
@@ -102,150 +131,26 @@ function findTomlSections(code: string, name: string, isArray: boolean): TomlSec
   return sections.filter((section) => section.name === name && section.isArray === isArray);
 }
 
-function findUnquotedEquals(line: string): number | undefined {
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
-  for (let index = 0; index < line.length; index++) {
-    const char = line[index];
-    if (quote === '"') {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') quote = undefined;
-      continue;
-    }
-    if (quote === "'") {
-      if (char === "'") quote = undefined;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === "=") return index;
-  }
-  return undefined;
-}
-
-function parseTomlKeyPart(part: string): string | undefined {
-  const trimmed = part.trim();
-  if (/^[A-Za-z0-9_-]+$/.test(trimmed)) return trimmed;
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      return typeof parsed === "string" ? parsed : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
-  return undefined;
-}
-
-function parseTomlKeyPath(key: string): string[] | undefined {
-  const parts: string[] = [];
-  let partStart = 0;
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
-  for (let index = 0; index <= key.length; index++) {
-    const char = key[index];
-    if (quote === '"') {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') quote = undefined;
-      continue;
-    }
-    if (quote === "'") {
-      if (char === "'") quote = undefined;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char !== "." && index !== key.length) continue;
-
-    const part = parseTomlKeyPart(key.slice(partStart, index));
-    if (part === undefined) return undefined;
-    parts.push(part);
-    partStart = index + 1;
-  }
-  return quote ? undefined : parts;
-}
-
-function parseTomlAssignmentLine(line: string):
-  | {
-      key: string;
-      valueStart: number;
-      valueEnd: number;
-      value: string;
-    }
-  | undefined {
-  const uncommented = stripTomlLineComment(line);
-  const equalsIndex = findUnquotedEquals(uncommented);
-  if (equalsIndex === undefined) return undefined;
-
-  const key = uncommented.slice(0, equalsIndex).trim();
-  if (!key) return undefined;
-
-  let valueStart = equalsIndex + 1;
-  while (/\s/.test(uncommented[valueStart] ?? "")) valueStart++;
-  let valueEnd = uncommented.length;
-  while (valueEnd > valueStart && /\s/.test(uncommented[valueEnd - 1])) valueEnd--;
-
-  return {
-    key,
-    valueStart,
-    valueEnd,
-    value: uncommented.slice(valueStart, valueEnd),
-  };
-}
-
-function findTomlAssignmentInRange(
+function findTomlAssignmentInSection(
   code: string,
+  section: TomlSection,
   name: string,
-  start: number,
-  end: number,
 ): TomlAssignment | undefined {
   let match: TomlAssignment | undefined;
-  forEachTomlLine(code.slice(start, end), (line, relativeLineStart) => {
+  const pattern = new RegExp(`^\\s*${name}\\s*=`);
+  forEachTomlLine(code.slice(section.bodyStart, section.bodyEnd), (line, lineStart) => {
     if (match) return;
-    const assignment = parseTomlAssignmentLine(line);
-    if (!assignment) return;
-    const keyPath = parseTomlKeyPath(assignment.key);
-    if (!keyPath || keyPath.length !== 1 || keyPath[0] !== name) return;
-
+    const uncommented = stripTomlLineComment(line);
+    if (!pattern.test(uncommented)) return;
+    const equals = uncommented.indexOf("=");
+    let valueStart = equals + 1;
+    while (/\s/.test(uncommented[valueStart] ?? "")) valueStart++;
+    let valueEnd = uncommented.length;
+    while (valueEnd > valueStart && /\s/.test(uncommented[valueEnd - 1])) valueEnd--;
     match = {
-      key: assignment.key,
-      valueStart: start + relativeLineStart + assignment.valueStart,
-      valueEnd: start + relativeLineStart + assignment.valueEnd,
-      value: assignment.value,
-    };
-  });
-  return match;
-}
-
-function findTopLevelTomlAssignment(code: string, name: string): TomlAssignment | undefined {
-  return findTomlAssignmentInRange(code, name, 0, findFirstTomlSectionStart(code) ?? code.length);
-}
-
-function findTopLevelTomlDottedAssignment(
-  code: string,
-  rootName: string,
-): TomlAssignment | undefined {
-  let match: TomlAssignment | undefined;
-  const end = findFirstTomlSectionStart(code) ?? code.length;
-  forEachTomlLine(code.slice(0, end), (line, relativeLineStart) => {
-    if (match) return;
-    const assignment = parseTomlAssignmentLine(line);
-    if (!assignment) return;
-    const keyPath = parseTomlKeyPath(assignment.key);
-    if (!keyPath || keyPath.length < 2 || keyPath[0] !== rootName) return;
-
-    match = {
-      key: assignment.key,
-      valueStart: relativeLineStart + assignment.valueStart,
-      valueEnd: relativeLineStart + assignment.valueEnd,
-      value: assignment.value,
+      valueStart: section.bodyStart + lineStart + valueStart,
+      valueEnd: section.bodyStart + lineStart + valueEnd,
+      value: uncommented.slice(valueStart, valueEnd),
     };
   });
   return match;
@@ -272,11 +177,6 @@ function parseTomlBoolean(value: string): boolean | undefined {
   return undefined;
 }
 
-function isInlineTomlObject(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("{") && trimmed.endsWith("}");
-}
-
 function findInlineTomlProperty(
   value: string,
   name: string,
@@ -285,67 +185,26 @@ function findInlineTomlProperty(
   const close = value.lastIndexOf("}");
   if (open < 0 || close < open) return undefined;
 
-  let cursor = open + 1;
-  while (cursor < close) {
-    while (/[\s,]/.test(value[cursor] ?? "") && cursor < close) cursor++;
-    if (cursor >= close) break;
+  const pattern = new RegExp(
+    `(?:^|,)\\s*${name}\\s*=\\s*("[^"\\\\]*(?:\\\\.[^"\\\\]*)*"|'[^']*'|true|false)`,
+    "g",
+  );
+  const inner = value.slice(open + 1, close);
+  const match = pattern.exec(inner);
+  if (!match || match.index === undefined) return undefined;
 
-    const keyStart = cursor;
-    while (/[A-Za-z0-9_-]/.test(value[cursor] ?? "")) cursor++;
-    const key = value.slice(keyStart, cursor);
-    while (/\s/.test(value[cursor] ?? "") && cursor < close) cursor++;
-    if (value[cursor] !== "=") return undefined;
-    cursor++;
-    while (/\s/.test(value[cursor] ?? "") && cursor < close) cursor++;
-
-    const valueStart = cursor;
-    let quote: "'" | '"' | undefined;
-    let escaped = false;
-    let nestedDepth = 0;
-    for (; cursor < close; cursor++) {
-      const char = value[cursor];
-      if (quote === '"') {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === '"') quote = undefined;
-        continue;
-      }
-      if (quote === "'") {
-        if (char === "'") quote = undefined;
-        continue;
-      }
-      if (char === '"' || char === "'") {
-        quote = char;
-      } else if (char === "{" || char === "[") {
-        nestedDepth++;
-      } else if (char === "}" || char === "]") {
-        if (nestedDepth > 0) nestedDepth--;
-      } else if (char === "," && nestedDepth === 0) {
-        break;
-      }
-    }
-    let valueEnd = cursor;
-    while (valueEnd > valueStart && /\s/.test(value[valueEnd - 1])) valueEnd--;
-    if (key === name) {
-      return {
-        valueStart,
-        valueEnd,
-        value: value.slice(valueStart, valueEnd),
-      };
-    }
-    if (value[cursor] === ",") cursor++;
-  }
-  return undefined;
+  const rawValue = match[1];
+  const propertyValueStart = open + 1 + match.index + match[0].lastIndexOf(rawValue);
+  return {
+    valueStart: propertyValueStart,
+    valueEnd: propertyValueStart + rawValue.length,
+    value: rawValue,
+  };
 }
 
-function addInlineTomlProperty(value: string, property: string): string {
-  const close = value.lastIndexOf("}");
-  if (close < 0) throw new Error("Expected an inline TOML object.");
-  const open = value.indexOf("{");
-  const content = value.slice(open + 1, close);
-  const separator =
-    content.trim().length > 0 ? `${content.trimEnd().endsWith(",") ? "" : ","} ` : " ";
-  return `${value.slice(0, close)}${separator}${property} ${value.slice(close)}`;
+function isInlineTomlObject(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("{") && trimmed.endsWith("}");
 }
 
 function replaceTomlAssignmentValue(
@@ -354,6 +213,43 @@ function replaceTomlAssignmentValue(
   value: string,
 ): string {
   return `${code.slice(0, assignment.valueStart)}${value}${code.slice(assignment.valueEnd)}`;
+}
+
+function setInlineTomlPropertyValue(
+  code: string,
+  assignment: TomlAssignment,
+  name: string,
+  value: string,
+): string {
+  const property = findInlineTomlProperty(assignment.value, name);
+  if (property) {
+    return `${code.slice(0, assignment.valueStart + property.valueStart)}${value}${code.slice(
+      assignment.valueStart + property.valueEnd,
+    )}`;
+  }
+
+  const close = assignment.value.lastIndexOf("}");
+  if (close < 0) throw new Error("Expected an inline TOML object.");
+  const beforeClose = assignment.value.slice(0, close);
+  const separator = beforeClose.trim().endsWith("{") ? " " : ", ";
+  return replaceTomlAssignmentValue(
+    code,
+    assignment,
+    `${beforeClose}${separator}${name} = ${value} }`,
+  );
+}
+
+function setTomlTableAssignmentValue(
+  code: string,
+  section: TomlSection,
+  name: string,
+  value: string,
+): string {
+  const assignment = findTomlAssignmentInSection(code, section, name);
+  if (assignment) return replaceTomlAssignmentValue(code, assignment, value);
+
+  const insertion = `${name} = ${value}\n`;
+  return `${code.slice(0, section.bodyEnd)}${code[section.bodyEnd - 1] === "\n" ? "" : "\n"}${insertion}${code.slice(section.bodyEnd)}`;
 }
 
 function appendTomlTopLevelAssignment(code: string, assignment: string): string {
@@ -377,45 +273,19 @@ function appendTomlArrayTable(code: string, table: string): string {
   return `${code}${separator}${table}\n`;
 }
 
-function setInlineTomlPropertyValue(
-  code: string,
-  assignment: TomlAssignment,
-  name: string,
-  value: string,
-): string {
-  const property = findInlineTomlProperty(assignment.value, name);
-  if (property) {
-    return `${code.slice(0, assignment.valueStart + property.valueStart)}${value}${code.slice(
-      assignment.valueStart + property.valueEnd,
-    )}`;
-  }
-  return replaceTomlAssignmentValue(
-    code,
-    assignment,
-    addInlineTomlProperty(assignment.value, `${name} = ${value}`),
-  );
-}
-
-function setTomlTableAssignmentValue(
-  code: string,
-  section: TomlSection,
-  name: string,
-  value: string,
-): string {
-  const assignment = findTomlAssignmentInRange(code, name, section.bodyStart, section.bodyEnd);
-  if (assignment) return replaceTomlAssignmentValue(code, assignment, value);
-
-  const insertion = `${name} = ${value}\n`;
-  return `${code.slice(0, section.bodyEnd)}${code[section.bodyEnd - 1] === "\n" ? "" : "\n"}${insertion}${code.slice(section.bodyEnd)}`;
+function singleTomlTable(code: string, name: string): TomlSection | undefined {
+  const sections = findTomlSections(code, name, false);
+  if (sections.length > 1) throw new Error(`Wrangler TOML defines ${name} twice.`);
+  return sections[0];
 }
 
 function ensureTomlCacheEnabled(code: string): string {
-  if (findTopLevelTomlDottedAssignment(code, "cache")) {
+  if (hasTopLevelDottedKey(code, "cache")) {
     throw new Error("Wrangler TOML uses unsupported dotted cache keys.");
   }
 
   const inlineCache = findTopLevelTomlAssignment(code, "cache");
-  const tableCache = findTomlSections(code, "cache", false)[0];
+  const tableCache = singleTomlTable(code, "cache");
   if (inlineCache && tableCache) throw new Error("Wrangler TOML defines cache twice.");
 
   if (inlineCache) {
@@ -428,12 +298,7 @@ function ensureTomlCacheEnabled(code: string): string {
   }
 
   if (tableCache) {
-    const enabled = findTomlAssignmentInRange(
-      code,
-      "enabled",
-      tableCache.bodyStart,
-      tableCache.bodyEnd,
-    );
+    const enabled = findTomlAssignmentInSection(code, tableCache, "enabled");
     if (enabled && parseTomlBoolean(enabled.value) === true) return code;
     return setTomlTableAssignmentValue(code, tableCache, "enabled", "true");
   }
@@ -449,14 +314,9 @@ function getWranglerTomlImagesBinding(code: string): string {
     if (value) return value;
   }
 
-  const tableImages = findTomlSections(code, "images", false)[0];
+  const tableImages = singleTomlTable(code, "images");
   if (tableImages) {
-    const binding = findTomlAssignmentInRange(
-      code,
-      "binding",
-      tableImages.bodyStart,
-      tableImages.bodyEnd,
-    );
+    const binding = findTomlAssignmentInSection(code, tableImages, "binding");
     const value = binding ? parseTomlString(binding.value) : undefined;
     if (value) return value;
   }
@@ -465,12 +325,12 @@ function getWranglerTomlImagesBinding(code: string): string {
 }
 
 function ensureTomlImagesBinding(code: string): string {
-  if (findTopLevelTomlDottedAssignment(code, "images")) {
+  if (hasTopLevelDottedKey(code, "images")) {
     throw new Error("Wrangler TOML uses unsupported dotted images keys.");
   }
 
   const inlineImages = findTopLevelTomlAssignment(code, "images");
-  const tableImages = findTomlSections(code, "images", false)[0];
+  const tableImages = singleTomlTable(code, "images");
   if (inlineImages && tableImages) throw new Error("Wrangler TOML defines images twice.");
 
   if (inlineImages) {
@@ -484,12 +344,7 @@ function ensureTomlImagesBinding(code: string): string {
   }
 
   if (tableImages) {
-    const binding = findTomlAssignmentInRange(
-      code,
-      "binding",
-      tableImages.bodyStart,
-      tableImages.bodyEnd,
-    );
+    const binding = findTomlAssignmentInSection(code, tableImages, "binding");
     const value = binding ? parseTomlString(binding.value) : undefined;
     if (value) return code;
     return setTomlTableAssignmentValue(code, tableImages, "binding", '"IMAGES"');
@@ -500,7 +355,7 @@ function ensureTomlImagesBinding(code: string): string {
 
 function findTomlKvNamespaceSection(code: string): TomlSection | undefined {
   return findTomlSections(code, "kv_namespaces", true).find((section) => {
-    const binding = findTomlAssignmentInRange(code, "binding", section.bodyStart, section.bodyEnd);
+    const binding = findTomlAssignmentInSection(code, section, "binding");
     return binding ? parseTomlString(binding.value) === "VINEXT_KV_CACHE" : false;
   });
 }
@@ -509,7 +364,7 @@ function ensureTomlKvNamespace(code: string): string {
   if (findTopLevelTomlAssignment(code, "kv_namespaces")) {
     throw new Error("Wrangler TOML uses unsupported inline kv_namespaces.");
   }
-  if (findTopLevelTomlDottedAssignment(code, "kv_namespaces")) {
+  if (hasTopLevelDottedKey(code, "kv_namespaces")) {
     throw new Error("Wrangler TOML uses unsupported dotted kv_namespaces keys.");
   }
   if (findTomlKvNamespaceSection(code)) return code;
@@ -522,7 +377,7 @@ function ensureTomlKvNamespace(code: string): string {
 function tomlKvNamespaceNeedsId(code: string): boolean {
   const section = findTomlKvNamespaceSection(code);
   if (!section) return true;
-  const id = findTomlAssignmentInRange(code, "id", section.bodyStart, section.bodyEnd);
+  const id = findTomlAssignmentInSection(code, section, "id");
   const value = id ? parseTomlString(id.value) : undefined;
   return !value || value === "<your-kv-namespace-id>";
 }
