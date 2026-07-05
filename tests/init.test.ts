@@ -761,16 +761,63 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     expect(config).toContain('prerender: { routes: "*" }');
   });
 
-  it("rejects Wrangler TOML", async () => {
+  it("updates an existing Wrangler TOML config", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(
       tmpDir,
       "wrangler.toml",
       'name = "existing"\nimages = { binding = "CUSTOM_IMAGES" }\n',
     );
-    const before = snapshotProject(tmpDir);
 
-    await expect(runInit(tmpDir)).rejects.toThrow("wrangler.toml is not supported");
+    const { result, output } = await runInit(tmpDir);
+
+    expect(result.generatedPlatformFiles).toEqual(["wrangler.toml"]);
+    expect(fs.existsSync(path.join(tmpDir, "wrangler.jsonc"))).toBe(false);
+    const wrangler = readFile(tmpDir, "wrangler.toml");
+    expect(wrangler).toContain('name = "existing"');
+    expect(wrangler).toContain('images = { binding = "CUSTOM_IMAGES" }');
+    expect(wrangler).toContain("cache = { enabled = true }");
+    expect(wrangler).toContain("[[kv_namespaces]]");
+    expect(wrangler).toContain('binding = "VINEXT_KV_CACHE"');
+    expect(wrangler).toContain('id = "<your-kv-namespace-id>"');
+    expect(readFile(tmpDir, "vite.config.ts")).toContain(
+      'images: { optimizer: imagesOptimizer({ binding: "CUSTOM_IMAGES" }) }',
+    );
+    expect(output).toContain(
+      "2. Copy the returned namespace ID into the VINEXT_KV_CACHE entry in wrangler.toml:",
+    );
+  });
+
+  it("omits KV setup steps when Wrangler TOML already has a namespace ID", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      'name = "existing"\n\n[[kv_namespaces]]\nbinding = "VINEXT_KV_CACHE"\nid = "existing-id"\n',
+    );
+
+    const { output } = await runInit(tmpDir);
+
+    const wrangler = readFile(tmpDir, "wrangler.toml");
+    expect(wrangler.match(/binding = "VINEXT_KV_CACHE"/g)).toHaveLength(1);
+    expect(wrangler.indexOf("cache = { enabled = true }")).toBeLessThan(
+      wrangler.indexOf("[[kv_namespaces]]"),
+    );
+    expect(output).not.toContain(
+      "Cloudflare setup is incomplete until you finish KV configuration:",
+    );
+  });
+
+  it("rejects unsupported Wrangler TOML before mutating the project", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(tmpDir, "wrangler.toml", 'name = "existing"\nimages = "IMAGES"\n');
+    const before = snapshotProject(tmpDir);
+    const exec = vi.fn();
+
+    await expect(runInit(tmpDir, { _exec: exec })).rejects.toThrow(
+      "Could not update the existing Wrangler TOML config",
+    );
+    expect(exec).not.toHaveBeenCalled();
     expect(snapshotProject(tmpDir)).toBe(before);
   });
 

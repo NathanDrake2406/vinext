@@ -23,6 +23,17 @@ const DEFAULT_CLOUDFLARE_INIT_OPTIONS: CloudflareInitOptions = {
   imageOptimization: "cloudflare-images",
 };
 
+type WranglerConfigFormat = "json" | "toml";
+
+type ExistingWranglerConfig = {
+  path: string;
+  format: WranglerConfigFormat;
+};
+
+type ExistingWranglerConfigFile = ExistingWranglerConfig & {
+  code: string;
+};
+
 export type CloudflarePlatformSetupContext = {
   root: string;
   isAppRouter: boolean;
@@ -42,24 +53,17 @@ export function validateCloudflarePlatformSetup(
   context: CloudflarePlatformSetupContext,
   cloudflare: CloudflareInitOptions,
 ): void {
-  const tomlPath = path.join(context.root, "wrangler.toml");
-  if (fs.existsSync(tomlPath)) {
-    throw new Error(
-      "wrangler.toml is not supported by vinext init. Convert it to wrangler.jsonc and rerun.",
-    );
-  }
-
   const projectInfo = detectProject(context.root);
-  const wranglerPath = ["wrangler.jsonc", "wrangler.json"]
-    .map((fileName) => path.join(context.root, fileName))
-    .find((candidate) => fs.existsSync(candidate));
-  const wranglerCode = wranglerPath ? fs.readFileSync(wranglerPath, "utf-8") : undefined;
-  const updatedWranglerCode = wranglerCode
-    ? updateWranglerConfigForCloudflare(wranglerCode, cloudflare)
-    : undefined;
-  const imagesBinding = updatedWranglerCode
-    ? getWranglerImagesBinding(updatedWranglerCode)
-    : "IMAGES";
+  const wranglerConfig = readExistingWranglerConfig(context.root);
+  let imagesBinding = "IMAGES";
+  if (wranglerConfig) {
+    const updatedWranglerCode = updateExistingWranglerConfigForCloudflare(
+      wranglerConfig,
+      wranglerConfig.code,
+      cloudflare,
+    );
+    imagesBinding = getExistingWranglerImagesBinding(wranglerConfig, updatedWranglerCode);
+  }
 
   if (context.existingViteConfigPath) {
     updateViteConfigForCloudflare(
@@ -81,11 +85,10 @@ export function setupCloudflarePlatform(
   cloudflare: CloudflareInitOptions,
 ): CloudflarePlatformSetupResult {
   const projectInfo = detectProject(context.root);
-  const wranglerPath = ["wrangler.jsonc", "wrangler.json"]
-    .map((fileName) => path.join(context.root, fileName))
-    .find((candidate) => fs.existsSync(candidate));
-  const wranglerCode = wranglerPath ? fs.readFileSync(wranglerPath, "utf-8") : undefined;
-  const imagesBinding = wranglerCode ? getWranglerImagesBinding(wranglerCode) : "IMAGES";
+  const wranglerConfig = readExistingWranglerConfig(context.root);
+  const imagesBinding = wranglerConfig
+    ? getExistingWranglerImagesBinding(wranglerConfig, wranglerConfig.code)
+    : "IMAGES";
 
   let generatedViteConfig = false;
   let skippedViteConfig = false;
@@ -117,35 +120,36 @@ export function setupCloudflarePlatform(
   }
 
   const generatedPlatformFiles: string[] = [];
-  if (!wranglerPath) {
+  if (!wranglerConfig) {
     fs.writeFileSync(
       path.join(context.root, "wrangler.jsonc"),
       generateWranglerConfig(projectInfo, cloudflare, context.today),
       "utf-8",
     );
     generatedPlatformFiles.push("wrangler.jsonc");
-  } else if (wranglerCode) {
-    const updatedConfig = updateWranglerConfigForCloudflare(wranglerCode, cloudflare);
-    if (updatedConfig !== wranglerCode) {
-      fs.writeFileSync(wranglerPath, updatedConfig, "utf-8");
-      generatedPlatformFiles.push(path.basename(wranglerPath));
+  } else {
+    const updatedConfig = updateExistingWranglerConfigForCloudflare(
+      wranglerConfig,
+      wranglerConfig.code,
+      cloudflare,
+    );
+    if (updatedConfig !== wranglerConfig.code) {
+      fs.writeFileSync(wranglerConfig.path, updatedConfig, "utf-8");
+      generatedPlatformFiles.push(path.basename(wranglerConfig.path));
     }
   }
 
-  const finalWranglerPath = wranglerPath ?? path.join(context.root, "wrangler.jsonc");
-  const finalWranglerFileName = path.basename(finalWranglerPath);
-  const finalWranglerConfig = JSON.parse(
-    stripJsonComments(fs.readFileSync(finalWranglerPath, "utf-8")),
-  ) as { kv_namespaces?: Array<{ binding?: unknown; id?: unknown }> };
-  const kvBinding = finalWranglerConfig.kv_namespaces?.find(
-    (namespace) => namespace.binding === "VINEXT_KV_CACHE",
+  const finalWranglerConfig = wranglerConfig ?? {
+    path: path.join(context.root, "wrangler.jsonc"),
+    format: "json" as const,
+  };
+  const finalWranglerFileName = path.basename(finalWranglerConfig.path);
+  const finalWranglerCode = fs.readFileSync(finalWranglerConfig.path, "utf-8");
+  const needsKvNamespaceId = needsWranglerKvNamespaceId(
+    finalWranglerConfig,
+    finalWranglerCode,
+    cloudflare,
   );
-  const needsKvNamespaceId =
-    cloudflare.dataCache === "kv" &&
-    (!kvBinding ||
-      typeof kvBinding.id !== "string" ||
-      kvBinding.id.length === 0 ||
-      kvBinding.id === "<your-kv-namespace-id>");
 
   return {
     generatedViteConfig,
@@ -161,6 +165,72 @@ export function setupCloudflarePlatform(
         ]
       : [],
   };
+}
+
+function findExistingWranglerConfig(root: string): ExistingWranglerConfig | undefined {
+  for (const fileName of ["wrangler.jsonc", "wrangler.json", "wrangler.toml"]) {
+    const candidate = path.join(root, fileName);
+    if (!fs.existsSync(candidate)) continue;
+    return {
+      path: candidate,
+      format: fileName.endsWith(".toml") ? "toml" : "json",
+    };
+  }
+  return undefined;
+}
+
+function readExistingWranglerConfig(root: string): ExistingWranglerConfigFile | undefined {
+  const config = findExistingWranglerConfig(root);
+  if (!config) return undefined;
+  return { ...config, code: fs.readFileSync(config.path, "utf-8") };
+}
+
+function updateExistingWranglerConfigForCloudflare(
+  config: ExistingWranglerConfig,
+  code: string,
+  options: CloudflareInitOptions,
+): string {
+  if (config.format === "json") {
+    return updateWranglerConfigForCloudflare(code, options);
+  }
+  try {
+    return updateWranglerTomlConfigForCloudflare(code, options);
+  } catch (cause) {
+    throw new Error("Could not update the existing Wrangler TOML config.", { cause });
+  }
+}
+
+function getExistingWranglerImagesBinding(config: ExistingWranglerConfig, code: string): string {
+  if (config.format === "json") {
+    return getWranglerImagesBinding(code);
+  }
+  try {
+    return getWranglerTomlImagesBinding(code);
+  } catch (cause) {
+    throw new Error("Could not update the existing Wrangler TOML config.", { cause });
+  }
+}
+
+function needsWranglerKvNamespaceId(
+  config: ExistingWranglerConfig,
+  code: string,
+  options: CloudflareInitOptions,
+): boolean {
+  if (options.dataCache !== "kv") return false;
+  if (config.format === "toml") return tomlKvNamespaceNeedsId(code);
+
+  const finalWranglerConfig = JSON.parse(stripJsonComments(code)) as {
+    kv_namespaces?: Array<{ binding?: unknown; id?: unknown }>;
+  };
+  const kvBinding = finalWranglerConfig.kv_namespaces?.find(
+    (namespace) => namespace.binding === "VINEXT_KV_CACHE",
+  );
+  return (
+    !kvBinding ||
+    typeof kvBinding.id !== "string" ||
+    kvBinding.id.length === 0 ||
+    kvBinding.id === "<your-kv-namespace-id>"
+  );
 }
 
 // Cloudflare deployment scaffolding belongs to `vinext init`.
@@ -429,6 +499,415 @@ export function getWranglerImagesBinding(code: string): string {
   return images && typeof images.binding === "string" && images.binding.length > 0
     ? images.binding
     : "IMAGES";
+}
+
+type TomlAssignment = {
+  valueStart: number;
+  valueEnd: number;
+  value: string;
+};
+
+type TomlSection = {
+  name: string;
+  isArray: boolean;
+  bodyStart: number;
+  bodyEnd: number;
+};
+
+// This is a targeted Wrangler TOML updater, not a general TOML serializer.
+// It only edits the top-level fields vinext init owns and throws when those
+// fields have shapes that cannot be patched without rewriting user config.
+function stripTomlLineComment(line: string): string {
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (quote === '"') {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quote = undefined;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "#") return line.slice(0, index);
+  }
+  return line;
+}
+
+function parseTomlHeader(line: string): { name: string; isArray: boolean } | undefined {
+  const trimmed = stripTomlLineComment(line).trim();
+  const match = trimmed.match(/^(\[\[?)\s*([^[\]]+?)\s*(\]\]?)$/);
+  if (!match) return undefined;
+  const isArray = match[1] === "[[";
+  if (isArray !== (match[3] === "]]")) return undefined;
+  return { name: match[2].trim(), isArray };
+}
+
+function forEachTomlLine(
+  code: string,
+  callback: (line: string, lineStart: number, lineEnd: number) => void,
+): void {
+  let lineStart = 0;
+  while (lineStart <= code.length) {
+    const newline = code.indexOf("\n", lineStart);
+    const lineEndWithoutNewline = newline === -1 ? code.length : newline;
+    const lineEnd = newline === -1 ? code.length : newline + 1;
+    callback(code.slice(lineStart, lineEndWithoutNewline), lineStart, lineEnd);
+    if (newline === -1) break;
+    lineStart = newline + 1;
+  }
+}
+
+function findFirstTomlSectionStart(code: string): number | undefined {
+  let firstSectionStart: number | undefined;
+  forEachTomlLine(code, (line, lineStart) => {
+    if (firstSectionStart !== undefined) return;
+    if (parseTomlHeader(line)) firstSectionStart = lineStart;
+  });
+  return firstSectionStart;
+}
+
+function findTomlSections(code: string, name: string, isArray: boolean): TomlSection[] {
+  const sections: TomlSection[] = [];
+  let current: TomlSection | undefined;
+  forEachTomlLine(code, (line, lineStart, lineEnd) => {
+    const header = parseTomlHeader(line);
+    if (!header) return;
+    if (current) {
+      current.bodyEnd = lineStart;
+      sections.push(current);
+    }
+    current = {
+      name: header.name,
+      isArray: header.isArray,
+      bodyStart: lineEnd,
+      bodyEnd: code.length,
+    };
+  });
+  if (current) sections.push(current);
+  return sections.filter((section) => section.name === name && section.isArray === isArray);
+}
+
+function findTomlAssignmentInRange(
+  code: string,
+  name: string,
+  start: number,
+  end: number,
+): TomlAssignment | undefined {
+  let match: TomlAssignment | undefined;
+  forEachTomlLine(code.slice(start, end), (line, relativeLineStart) => {
+    if (match) return;
+    const uncommented = stripTomlLineComment(line);
+    const keyMatch = uncommented.match(/^\s*([A-Za-z0-9_-]+)\s*=/);
+    if (!keyMatch || keyMatch[1] !== name) return;
+
+    let relativeValueStart = keyMatch[0].length;
+    while (/\s/.test(uncommented[relativeValueStart] ?? "")) relativeValueStart++;
+    let relativeValueEnd = uncommented.length;
+    while (relativeValueEnd > relativeValueStart && /\s/.test(uncommented[relativeValueEnd - 1])) {
+      relativeValueEnd--;
+    }
+
+    match = {
+      valueStart: start + relativeLineStart + relativeValueStart,
+      valueEnd: start + relativeLineStart + relativeValueEnd,
+      value: code.slice(
+        start + relativeLineStart + relativeValueStart,
+        start + relativeLineStart + relativeValueEnd,
+      ),
+    };
+  });
+  return match;
+}
+
+function findTopLevelTomlAssignment(code: string, name: string): TomlAssignment | undefined {
+  return findTomlAssignmentInRange(code, name, 0, findFirstTomlSectionStart(code) ?? code.length);
+}
+
+function parseTomlString(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return typeof parsed === "string" ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
+  return undefined;
+}
+
+function parseTomlBoolean(value: string): boolean | undefined {
+  const trimmed = value.trim();
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  return undefined;
+}
+
+function isInlineTomlObject(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("{") && trimmed.endsWith("}");
+}
+
+function findInlineTomlProperty(
+  value: string,
+  name: string,
+): { valueStart: number; valueEnd: number; value: string } | undefined {
+  const open = value.indexOf("{");
+  const close = value.lastIndexOf("}");
+  if (open < 0 || close < open) return undefined;
+
+  let cursor = open + 1;
+  while (cursor < close) {
+    while (/[\s,]/.test(value[cursor] ?? "") && cursor < close) cursor++;
+    if (cursor >= close) break;
+
+    const keyStart = cursor;
+    while (/[A-Za-z0-9_-]/.test(value[cursor] ?? "")) cursor++;
+    const key = value.slice(keyStart, cursor);
+    while (/\s/.test(value[cursor] ?? "") && cursor < close) cursor++;
+    if (value[cursor] !== "=") return undefined;
+    cursor++;
+    while (/\s/.test(value[cursor] ?? "") && cursor < close) cursor++;
+
+    const valueStart = cursor;
+    let quote: "'" | '"' | undefined;
+    let escaped = false;
+    let nestedDepth = 0;
+    for (; cursor < close; cursor++) {
+      const char = value[cursor];
+      if (quote === '"') {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') quote = undefined;
+        continue;
+      }
+      if (quote === "'") {
+        if (char === "'") quote = undefined;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === "{" || char === "[") {
+        nestedDepth++;
+      } else if (char === "}" || char === "]") {
+        if (nestedDepth > 0) nestedDepth--;
+      } else if (char === "," && nestedDepth === 0) {
+        break;
+      }
+    }
+    let valueEnd = cursor;
+    while (valueEnd > valueStart && /\s/.test(value[valueEnd - 1])) valueEnd--;
+    if (key === name) {
+      return {
+        valueStart,
+        valueEnd,
+        value: value.slice(valueStart, valueEnd),
+      };
+    }
+    if (value[cursor] === ",") cursor++;
+  }
+  return undefined;
+}
+
+function addInlineTomlProperty(value: string, property: string): string {
+  const close = value.lastIndexOf("}");
+  if (close < 0) throw new Error("Expected an inline TOML object.");
+  const open = value.indexOf("{");
+  const content = value.slice(open + 1, close);
+  const separator =
+    content.trim().length > 0 ? `${content.trimEnd().endsWith(",") ? "" : ","} ` : " ";
+  return `${value.slice(0, close)}${separator}${property} ${value.slice(close)}`;
+}
+
+function replaceTomlAssignmentValue(
+  code: string,
+  assignment: TomlAssignment,
+  value: string,
+): string {
+  return `${code.slice(0, assignment.valueStart)}${value}${code.slice(assignment.valueEnd)}`;
+}
+
+function appendTomlTopLevelAssignment(code: string, assignment: string): string {
+  const firstSectionStart = findFirstTomlSectionStart(code);
+  if (firstSectionStart === undefined) {
+    const separator = code.length === 0 || code.endsWith("\n") ? "" : "\n";
+    return `${code}${separator}${assignment}\n`;
+  }
+
+  let before = code.slice(0, firstSectionStart);
+  const after = code.slice(firstSectionStart);
+  if (before.length > 0 && !before.endsWith("\n")) before += "\n";
+  const separatorBefore = before.trim().length > 0 && !before.endsWith("\n\n") ? "\n" : "";
+  const separatorAfter = after.length > 0 ? "\n" : "";
+  return `${before}${separatorBefore}${assignment}\n${separatorAfter}${after}`;
+}
+
+function appendTomlArrayTable(code: string, table: string): string {
+  const separator =
+    code.length === 0 ? "" : code.endsWith("\n\n") ? "" : code.endsWith("\n") ? "\n" : "\n\n";
+  return `${code}${separator}${table}\n`;
+}
+
+function setInlineTomlPropertyValue(
+  code: string,
+  assignment: TomlAssignment,
+  name: string,
+  value: string,
+): string {
+  const property = findInlineTomlProperty(assignment.value, name);
+  if (property) {
+    return `${code.slice(0, assignment.valueStart + property.valueStart)}${value}${code.slice(
+      assignment.valueStart + property.valueEnd,
+    )}`;
+  }
+  return replaceTomlAssignmentValue(
+    code,
+    assignment,
+    addInlineTomlProperty(assignment.value, `${name} = ${value}`),
+  );
+}
+
+function setTomlTableAssignmentValue(
+  code: string,
+  section: TomlSection,
+  name: string,
+  value: string,
+): string {
+  const assignment = findTomlAssignmentInRange(code, name, section.bodyStart, section.bodyEnd);
+  if (assignment) return replaceTomlAssignmentValue(code, assignment, value);
+
+  const insertion = `${name} = ${value}\n`;
+  return `${code.slice(0, section.bodyEnd)}${code[section.bodyEnd - 1] === "\n" ? "" : "\n"}${insertion}${code.slice(section.bodyEnd)}`;
+}
+
+function ensureTomlCacheEnabled(code: string): string {
+  const inlineCache = findTopLevelTomlAssignment(code, "cache");
+  const tableCache = findTomlSections(code, "cache", false)[0];
+  if (inlineCache && tableCache) throw new Error("Wrangler TOML defines cache twice.");
+
+  if (inlineCache) {
+    if (!isInlineTomlObject(inlineCache.value)) {
+      throw new Error("Expected top-level cache to be a TOML object.");
+    }
+    const enabled = findInlineTomlProperty(inlineCache.value, "enabled");
+    if (enabled && parseTomlBoolean(enabled.value) === true) return code;
+    return setInlineTomlPropertyValue(code, inlineCache, "enabled", "true");
+  }
+
+  if (tableCache) {
+    const enabled = findTomlAssignmentInRange(
+      code,
+      "enabled",
+      tableCache.bodyStart,
+      tableCache.bodyEnd,
+    );
+    if (enabled && parseTomlBoolean(enabled.value) === true) return code;
+    return setTomlTableAssignmentValue(code, tableCache, "enabled", "true");
+  }
+
+  return appendTomlTopLevelAssignment(code, "cache = { enabled = true }");
+}
+
+function getWranglerTomlImagesBinding(code: string): string {
+  const inlineImages = findTopLevelTomlAssignment(code, "images");
+  if (inlineImages && isInlineTomlObject(inlineImages.value)) {
+    const binding = findInlineTomlProperty(inlineImages.value, "binding");
+    const value = binding ? parseTomlString(binding.value) : undefined;
+    if (value) return value;
+  }
+
+  const tableImages = findTomlSections(code, "images", false)[0];
+  if (tableImages) {
+    const binding = findTomlAssignmentInRange(
+      code,
+      "binding",
+      tableImages.bodyStart,
+      tableImages.bodyEnd,
+    );
+    const value = binding ? parseTomlString(binding.value) : undefined;
+    if (value) return value;
+  }
+
+  return "IMAGES";
+}
+
+function ensureTomlImagesBinding(code: string): string {
+  const inlineImages = findTopLevelTomlAssignment(code, "images");
+  const tableImages = findTomlSections(code, "images", false)[0];
+  if (inlineImages && tableImages) throw new Error("Wrangler TOML defines images twice.");
+
+  if (inlineImages) {
+    if (!isInlineTomlObject(inlineImages.value)) {
+      throw new Error("Expected top-level images to be a TOML object.");
+    }
+    const binding = findInlineTomlProperty(inlineImages.value, "binding");
+    const value = binding ? parseTomlString(binding.value) : undefined;
+    if (value) return code;
+    return setInlineTomlPropertyValue(code, inlineImages, "binding", '"IMAGES"');
+  }
+
+  if (tableImages) {
+    const binding = findTomlAssignmentInRange(
+      code,
+      "binding",
+      tableImages.bodyStart,
+      tableImages.bodyEnd,
+    );
+    const value = binding ? parseTomlString(binding.value) : undefined;
+    if (value) return code;
+    return setTomlTableAssignmentValue(code, tableImages, "binding", '"IMAGES"');
+  }
+
+  return appendTomlTopLevelAssignment(code, 'images = { binding = "IMAGES" }');
+}
+
+function findTomlKvNamespaceSection(code: string): TomlSection | undefined {
+  return findTomlSections(code, "kv_namespaces", true).find((section) => {
+    const binding = findTomlAssignmentInRange(code, "binding", section.bodyStart, section.bodyEnd);
+    return binding ? parseTomlString(binding.value) === "VINEXT_KV_CACHE" : false;
+  });
+}
+
+function ensureTomlKvNamespace(code: string): string {
+  if (findTomlKvNamespaceSection(code)) return code;
+  return appendTomlArrayTable(
+    code,
+    '[[kv_namespaces]]\nbinding = "VINEXT_KV_CACHE"\nid = "<your-kv-namespace-id>"',
+  );
+}
+
+function tomlKvNamespaceNeedsId(code: string): boolean {
+  const section = findTomlKvNamespaceSection(code);
+  if (!section) return true;
+  const id = findTomlAssignmentInRange(code, "id", section.bodyStart, section.bodyEnd);
+  const value = id ? parseTomlString(id.value) : undefined;
+  return !value || value === "<your-kv-namespace-id>";
+}
+
+function updateWranglerTomlConfigForCloudflare(
+  code: string,
+  options: CloudflareInitOptions,
+): string {
+  let output = code;
+  if (options.cdnCache === "workers-cache") {
+    output = ensureTomlCacheEnabled(output);
+  }
+  if (options.imageOptimization === "cloudflare-images") {
+    output = ensureTomlImagesBinding(output);
+  }
+  if (options.dataCache === "kv") {
+    output = ensureTomlKvNamespace(output);
+  }
+  return output;
 }
 
 function cacheImports(options: CloudflareInitOptions): string[] {
