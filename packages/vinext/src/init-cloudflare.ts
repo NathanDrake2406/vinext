@@ -5,7 +5,12 @@ import MagicString from "magic-string";
 import type { ESTree } from "vite";
 import type { CloudflareInitOptions } from "./init-platform.js";
 import { detectProject } from "./utils/project.js";
-import { createExistingWranglerConfigUpdatePlan } from "./wrangler-config.js";
+import { createExistingWranglerConfigUpdatePlan } from "./wrangler/plan.js";
+import {
+  DEFAULT_IMAGES_BINDING,
+  KV_NAMESPACE_ID_PLACEHOLDER,
+  VINEXT_KV_CACHE_BINDING,
+} from "./wrangler/constants.js";
 
 const require = createRequire(import.meta.url);
 
@@ -163,14 +168,14 @@ export function generateWranglerConfig(
   if (options.cdnCache === "workers-cache") config.cache = { enabled: true };
 
   if (options.imageOptimization === "cloudflare-images") {
-    config.images = { binding: "IMAGES" };
+    config.images = { binding: DEFAULT_IMAGES_BINDING };
   }
 
   if (options.dataCache === "kv") {
     config.kv_namespaces = [
       {
-        binding: "VINEXT_KV_CACHE",
-        id: "<your-kv-namespace-id>",
+        binding: VINEXT_KV_CACHE_BINDING,
+        id: KV_NAMESPACE_ID_PLACEHOLDER,
       },
     ];
   }

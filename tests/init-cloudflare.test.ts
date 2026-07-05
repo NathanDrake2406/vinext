@@ -8,7 +8,7 @@ import {
 import {
   getWranglerJsonImagesBinding as getWranglerImagesBinding,
   updateWranglerJsonConfigForCloudflare as updateWranglerConfigForCloudflare,
-} from "../packages/vinext/src/wrangler-config.js";
+} from "../packages/vinext/src/wrangler/json.js";
 import { readPagesRouterEntrySource } from "./worker-entry-source.js";
 
 function expectValidConfig(output: string): void {

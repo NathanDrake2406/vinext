@@ -1,49 +1,10 @@
-import fs from "node:fs";
-import path from "node:path";
-import type { CloudflareInitOptions } from "./init-platform.js";
-import { parseJsonc, stripJsonComments } from "./utils/jsonc.js";
-import { resolveWranglerJsonPath } from "./utils/project.js";
-import { updateWranglerTomlConfigForCloudflare } from "./wrangler-toml.js";
-
-type WranglerConfigFormat = "json" | "toml";
-
-type ExistingWranglerConfig = {
-  path: string;
-  format: WranglerConfigFormat;
-};
-
-type ExistingWranglerConfigFile = ExistingWranglerConfig & {
-  code: string;
-};
-
-export type ExistingWranglerConfigUpdatePlan = {
-  path: string;
-  fileName: string;
-  code: string;
-  imagesBinding: string;
-  needsKvNamespaceId: boolean;
-  changed: boolean;
-};
-
-function findExistingWranglerConfig(root: string): ExistingWranglerConfig | undefined {
-  const jsonPath = resolveWranglerJsonPath(root);
-  if (jsonPath) return { path: jsonPath, format: "json" };
-
-  const tomlPath = path.join(root, "wrangler.toml");
-  if (fs.existsSync(tomlPath)) {
-    return {
-      path: tomlPath,
-      format: "toml",
-    };
-  }
-  return undefined;
-}
-
-function readExistingWranglerConfig(root: string): ExistingWranglerConfigFile | undefined {
-  const config = findExistingWranglerConfig(root);
-  if (!config) return undefined;
-  return { ...config, code: fs.readFileSync(config.path, "utf-8") };
-}
+import type { CloudflareInitOptions } from "../init-platform.js";
+import { parseJsonc, stripJsonComments } from "../utils/jsonc.js";
+import {
+  DEFAULT_IMAGES_BINDING,
+  KV_NAMESPACE_ID_PLACEHOLDER,
+  VINEXT_KV_CACHE_BINDING,
+} from "./constants.js";
 
 function findTopLevelJsonProperty(
   code: string,
@@ -189,13 +150,16 @@ export function updateWranglerJsonConfigForCloudflare(
   if (options.imageOptimization === "cloudflare-images") {
     const imagesProperty = findTopLevelJsonProperty(output, "images");
     if (!imagesProperty) {
-      output = appendTopLevelJsonProperty(output, '  "images": { "binding": "IMAGES" }');
+      output = appendTopLevelJsonProperty(
+        output,
+        `  "images": { "binding": ${JSON.stringify(DEFAULT_IMAGES_BINDING)} }`,
+      );
     } else {
       const images = parseJsonc(
         output.slice(imagesProperty.valueStart, imagesProperty.valueEnd),
       ) as { binding?: unknown } | null;
       if (!images || typeof images.binding !== "string" || images.binding.length === 0) {
-        output = `${output.slice(0, imagesProperty.valueStart)}{ "binding": "IMAGES" }${output.slice(imagesProperty.valueEnd)}`;
+        output = `${output.slice(0, imagesProperty.valueStart)}{ "binding": ${JSON.stringify(DEFAULT_IMAGES_BINDING)} }${output.slice(imagesProperty.valueEnd)}`;
       }
     }
   }
@@ -204,16 +168,16 @@ export function updateWranglerJsonConfigForCloudflare(
     if (!kvProperty) {
       output = appendTopLevelJsonProperty(
         output,
-        '  "kv_namespaces": [{ "binding": "VINEXT_KV_CACHE", "id": "<your-kv-namespace-id>" }]',
+        `  "kv_namespaces": [{ "binding": ${JSON.stringify(VINEXT_KV_CACHE_BINDING)}, "id": ${JSON.stringify(KV_NAMESPACE_ID_PLACEHOLDER)} }]`,
       );
     } else {
       const rawValue = output.slice(kvProperty.valueStart, kvProperty.valueEnd);
       const namespaces = parseJsonc(rawValue) as Array<{ binding?: string }>;
-      if (!namespaces.some((namespace) => namespace.binding === "VINEXT_KV_CACHE")) {
+      if (!namespaces.some((namespace) => namespace.binding === VINEXT_KV_CACHE_BINDING)) {
         const closing = kvProperty.valueEnd - 1;
         const content = output.slice(kvProperty.valueStart + 1, closing);
         const separator = content.trim() ? `${/,\s*$/.test(content) ? "" : ","}\n    ` : "";
-        output = `${output.slice(0, closing)}${separator}{ "binding": "VINEXT_KV_CACHE", "id": "<your-kv-namespace-id>" }${output.slice(closing)}`;
+        output = `${output.slice(0, closing)}${separator}{ "binding": ${JSON.stringify(VINEXT_KV_CACHE_BINDING)}, "id": ${JSON.stringify(KV_NAMESPACE_ID_PLACEHOLDER)} }${output.slice(closing)}`;
       }
     }
   }
@@ -222,62 +186,31 @@ export function updateWranglerJsonConfigForCloudflare(
 
 export function getWranglerJsonImagesBinding(code: string): string {
   const property = findTopLevelJsonProperty(code, "images");
-  if (!property) return "IMAGES";
+  if (!property) return DEFAULT_IMAGES_BINDING;
   const images = parseJsonc(code.slice(property.valueStart, property.valueEnd)) as {
     binding?: unknown;
   } | null;
   return images && typeof images.binding === "string" && images.binding.length > 0
     ? images.binding
-    : "IMAGES";
+    : DEFAULT_IMAGES_BINDING;
 }
 
-function wranglerJsonKvNamespaceNeedsId(code: string, options: CloudflareInitOptions): boolean {
+export function wranglerJsonKvNamespaceNeedsId(
+  code: string,
+  options: CloudflareInitOptions,
+): boolean {
   if (options.dataCache !== "kv") return false;
 
   const finalWranglerConfig = parseJsonc(code) as {
     kv_namespaces?: Array<{ binding?: unknown; id?: unknown }>;
   };
   const kvBinding = finalWranglerConfig.kv_namespaces?.find(
-    (namespace) => namespace.binding === "VINEXT_KV_CACHE",
+    (namespace) => namespace.binding === VINEXT_KV_CACHE_BINDING,
   );
   return (
     !kvBinding ||
     typeof kvBinding.id !== "string" ||
     kvBinding.id.length === 0 ||
-    kvBinding.id === "<your-kv-namespace-id>"
+    kvBinding.id === KV_NAMESPACE_ID_PLACEHOLDER
   );
-}
-
-export function createExistingWranglerConfigUpdatePlan(
-  root: string,
-  options: CloudflareInitOptions,
-): ExistingWranglerConfigUpdatePlan | undefined {
-  const config = readExistingWranglerConfig(root);
-  if (!config) return undefined;
-
-  if (config.format === "json") {
-    const updatedCode = updateWranglerJsonConfigForCloudflare(config.code, options);
-    return {
-      path: config.path,
-      fileName: path.basename(config.path),
-      code: updatedCode,
-      imagesBinding: getWranglerJsonImagesBinding(updatedCode),
-      needsKvNamespaceId: wranglerJsonKvNamespaceNeedsId(updatedCode, options),
-      changed: updatedCode !== config.code,
-    };
-  }
-
-  try {
-    const update = updateWranglerTomlConfigForCloudflare(config.code, options);
-    return {
-      path: config.path,
-      fileName: path.basename(config.path),
-      code: update.code,
-      imagesBinding: update.imagesBinding,
-      needsKvNamespaceId: update.needsKvNamespaceId,
-      changed: update.code !== config.code,
-    };
-  } catch (cause) {
-    throw new Error("Could not update the existing Wrangler TOML config.", { cause });
-  }
 }

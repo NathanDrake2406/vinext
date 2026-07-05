@@ -1,4 +1,10 @@
-import type { CloudflareInitOptions } from "./init-platform.js";
+import type { CloudflareInitOptions } from "../init-platform.js";
+import {
+  DEFAULT_IMAGES_BINDING,
+  KV_NAMESPACE_ID_PLACEHOLDER,
+  VINEXT_KV_CACHE_BINDING,
+} from "./constants.js";
+import type { WranglerConfigUpdateFacts } from "./types.js";
 
 type TomlAssignment = {
   valueStart: number;
@@ -11,10 +17,8 @@ type TomlSection = {
   bodyEnd: number;
 };
 
-export type WranglerTomlConfigUpdate = {
+export type WranglerTomlConfigUpdate = WranglerConfigUpdateFacts & {
   code: string;
-  imagesBinding: string;
-  needsKvNamespaceId: boolean;
 };
 
 // This is not a general TOML editor. It only patches Wrangler fields owned by
@@ -177,6 +181,13 @@ function parseTomlBoolean(value: string): boolean | undefined {
   return undefined;
 }
 
+// Finds `name = <value>` inside an inline TOML table (the substring between
+// `{` and `}`) structurally, regardless of the value's TOML type. Depth
+// tracking over `{`/`[` and quote tracking over strings means a comma or
+// brace inside a nested value never gets mistaken for the entry boundary.
+// Callers validate the returned value's shape themselves — this only finds
+// the entry, so an owned key holding an unexpected type (e.g. a number or
+// array) is found and can be replaced instead of silently duplicated.
 function findInlineTomlProperty(
   value: string,
   name: string,
@@ -184,22 +195,56 @@ function findInlineTomlProperty(
   const open = value.indexOf("{");
   const close = value.lastIndexOf("}");
   if (open < 0 || close < open) return undefined;
-
-  const pattern = new RegExp(
-    `(?:^|,)\\s*${name}\\s*=\\s*("[^"\\\\]*(?:\\\\.[^"\\\\]*)*"|'[^']*'|true|false)`,
-    "g",
-  );
   const inner = value.slice(open + 1, close);
-  const match = pattern.exec(inner);
-  if (!match || match.index === undefined) return undefined;
 
-  const rawValue = match[1];
-  const propertyValueStart = open + 1 + match.index + match[0].lastIndexOf(rawValue);
-  return {
-    valueStart: propertyValueStart,
-    valueEnd: propertyValueStart + rawValue.length,
-    value: rawValue,
+  const checkEntry = (
+    start: number,
+    end: number,
+  ): { valueStart: number; valueEnd: number; value: string } | undefined => {
+    const entry = inner.slice(start, end);
+    const equals = entry.indexOf("=");
+    if (equals < 0 || entry.slice(0, equals).trim() !== name) return undefined;
+    let entryValueStart = equals + 1;
+    while (/\s/.test(entry[entryValueStart] ?? "")) entryValueStart++;
+    let entryValueEnd = entry.length;
+    while (entryValueEnd > entryValueStart && /\s/.test(entry[entryValueEnd - 1])) entryValueEnd--;
+    const offset = open + 1 + start;
+    return {
+      valueStart: offset + entryValueStart,
+      valueEnd: offset + entryValueEnd,
+      value: entry.slice(entryValueStart, entryValueEnd),
+    };
   };
+
+  let depth = 0;
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  let entryStart = 0;
+  for (let index = 0; index < inner.length; index++) {
+    const char = inner[index];
+    if (quote === '"') {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quote = undefined;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "{" || char === "[") depth++;
+    else if (char === "}" || char === "]") depth--;
+    else if (char === "," && depth === 0) {
+      const match = checkEntry(entryStart, index);
+      if (match) return match;
+      entryStart = index + 1;
+    }
+  }
+  return checkEntry(entryStart, inner.length);
 }
 
 function isInlineTomlObject(value: string): boolean {
@@ -321,7 +366,7 @@ function getWranglerTomlImagesBinding(code: string): string {
     if (value) return value;
   }
 
-  return "IMAGES";
+  return DEFAULT_IMAGES_BINDING;
 }
 
 function ensureTomlImagesBinding(code: string): string {
@@ -340,23 +385,36 @@ function ensureTomlImagesBinding(code: string): string {
     const binding = findInlineTomlProperty(inlineImages.value, "binding");
     const value = binding ? parseTomlString(binding.value) : undefined;
     if (value) return code;
-    return setInlineTomlPropertyValue(code, inlineImages, "binding", '"IMAGES"');
+    return setInlineTomlPropertyValue(
+      code,
+      inlineImages,
+      "binding",
+      JSON.stringify(DEFAULT_IMAGES_BINDING),
+    );
   }
 
   if (tableImages) {
     const binding = findTomlAssignmentInSection(code, tableImages, "binding");
     const value = binding ? parseTomlString(binding.value) : undefined;
     if (value) return code;
-    return setTomlTableAssignmentValue(code, tableImages, "binding", '"IMAGES"');
+    return setTomlTableAssignmentValue(
+      code,
+      tableImages,
+      "binding",
+      JSON.stringify(DEFAULT_IMAGES_BINDING),
+    );
   }
 
-  return appendTomlTopLevelAssignment(code, 'images = { binding = "IMAGES" }');
+  return appendTomlTopLevelAssignment(
+    code,
+    `images = { binding = ${JSON.stringify(DEFAULT_IMAGES_BINDING)} }`,
+  );
 }
 
 function findTomlKvNamespaceSection(code: string): TomlSection | undefined {
   return findTomlSections(code, "kv_namespaces", true).find((section) => {
     const binding = findTomlAssignmentInSection(code, section, "binding");
-    return binding ? parseTomlString(binding.value) === "VINEXT_KV_CACHE" : false;
+    return binding ? parseTomlString(binding.value) === VINEXT_KV_CACHE_BINDING : false;
   });
 }
 
@@ -370,7 +428,7 @@ function ensureTomlKvNamespace(code: string): string {
   if (findTomlKvNamespaceSection(code)) return code;
   return appendTomlArrayTable(
     code,
-    '[[kv_namespaces]]\nbinding = "VINEXT_KV_CACHE"\nid = "<your-kv-namespace-id>"',
+    `[[kv_namespaces]]\nbinding = ${JSON.stringify(VINEXT_KV_CACHE_BINDING)}\nid = ${JSON.stringify(KV_NAMESPACE_ID_PLACEHOLDER)}`,
   );
 }
 
@@ -379,7 +437,7 @@ function tomlKvNamespaceNeedsId(code: string): boolean {
   if (!section) return true;
   const id = findTomlAssignmentInSection(code, section, "id");
   const value = id ? parseTomlString(id.value) : undefined;
-  return !value || value === "<your-kv-namespace-id>";
+  return !value || value === KV_NAMESPACE_ID_PLACEHOLDER;
 }
 
 export function updateWranglerTomlConfigForCloudflare(

@@ -832,6 +832,24 @@ id = "existing-id"
     );
   });
 
+  it("replaces an owned inline TOML key holding an unexpected value type instead of duplicating it", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      'name = "existing"\ncache = { enabled = 1 }\nimages = { binding = 42 }\n',
+    );
+
+    const { result } = await runInit(tmpDir);
+
+    expect(result.generatedPlatformFiles).toEqual(["wrangler.toml"]);
+    const wrangler = readFile(tmpDir, "wrangler.toml");
+    expect(wrangler.match(/enabled/g)).toHaveLength(1);
+    expect(wrangler).toContain("cache = { enabled = true }");
+    expect(wrangler.match(/images = \{[^}]*\}/g)).toHaveLength(1);
+    expect(wrangler).toContain('images = { binding = "IMAGES" }');
+  });
+
   it.each([
     ["scalar images config", 'name = "existing"\nimages = "IMAGES"\n'],
     ["dotted images config", 'name = "existing"\nimages.binding = "CUSTOM_IMAGES"\n'],
