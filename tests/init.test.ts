@@ -220,6 +220,15 @@ async function runInitExpectExit(dir: string, opts: Partial<InitOptions> = {}): 
   }
 }
 
+async function expectInitRejectsWithoutMutation(dir: string, message: string): Promise<void> {
+  const before = snapshotProject(dir);
+  const exec = vi.fn();
+
+  await expect(runInit(dir, { _exec: exec })).rejects.toThrow(message);
+  expect(exec).not.toHaveBeenCalled();
+  expect(snapshotProject(dir)).toBe(before);
+}
+
 beforeEach(() => {
   tmpDir = createTmpDir();
 });
@@ -761,7 +770,7 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     expect(config).toContain('prerender: { routes: "*" }');
   });
 
-  it("updates an existing Wrangler TOML config", async () => {
+  it("reuses an existing Wrangler TOML config instead of generating JSONC", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(
       tmpDir,
@@ -788,63 +797,75 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     );
   });
 
-  it("omits KV setup steps when Wrangler TOML already has a namespace ID", async () => {
+  it("honors table-form Wrangler TOML fields during Cloudflare init", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(
       tmpDir,
       "wrangler.toml",
-      'name = "existing"\n\n[[kv_namespaces]]\nbinding = "VINEXT_KV_CACHE"\nid = "existing-id"\n',
+      `name = "existing"
+
+[images]
+binding = "CUSTOM_IMAGES"
+
+[cache]
+enabled = false
+
+[[kv_namespaces]]
+binding = "VINEXT_KV_CACHE"
+id = "existing-id"
+`,
     );
 
-    const { output } = await runInit(tmpDir);
+    const { result, output } = await runInit(tmpDir);
 
+    expect(result.generatedPlatformFiles).toEqual(["wrangler.toml"]);
+    expect(fs.existsSync(path.join(tmpDir, "wrangler.jsonc"))).toBe(false);
     const wrangler = readFile(tmpDir, "wrangler.toml");
+    expect(wrangler).toContain('[images]\nbinding = "CUSTOM_IMAGES"');
+    expect(wrangler).toContain("[cache]\nenabled = true");
     expect(wrangler.match(/binding = "VINEXT_KV_CACHE"/g)).toHaveLength(1);
-    expect(wrangler.indexOf("cache = { enabled = true }")).toBeLessThan(
-      wrangler.indexOf("[[kv_namespaces]]"),
+    expect(readFile(tmpDir, "vite.config.ts")).toContain(
+      'images: { optimizer: imagesOptimizer({ binding: "CUSTOM_IMAGES" }) }',
     );
     expect(output).not.toContain(
       "Cloudflare setup is incomplete until you finish KV configuration:",
     );
   });
 
-  it("rejects unsupported Wrangler TOML before mutating the project", async () => {
+  it.each([
+    ["scalar images config", 'name = "existing"\nimages = "IMAGES"\n'],
+    ["dotted images config", 'name = "existing"\nimages.binding = "CUSTOM_IMAGES"\n'],
+    ["dotted cache config", 'name = "existing"\ncache.enabled = false\n'],
+    [
+      "inline KV namespace array",
+      'name = "existing"\nkv_namespaces = [{ binding = "VINEXT_KV_CACHE", id = "existing-id" }]\n',
+    ],
+    ["malformed images inline table", 'name = "existing"\nimages = { binding = "IMAGES"\n'],
+  ])("rejects unsupported Wrangler TOML %s before mutating the project", async (_name, toml) => {
     setupProject(tmpDir, { router: "app" });
-    writeFile(tmpDir, "wrangler.toml", 'name = "existing"\nimages = "IMAGES"\n');
-    const before = snapshotProject(tmpDir);
-    const exec = vi.fn();
+    writeFile(tmpDir, "wrangler.toml", toml);
 
-    await expect(runInit(tmpDir, { _exec: exec })).rejects.toThrow(
+    await expectInitRejectsWithoutMutation(
+      tmpDir,
       "Could not update the existing Wrangler TOML config",
     );
-    expect(exec).not.toHaveBeenCalled();
-    expect(snapshotProject(tmpDir)).toBe(before);
   });
 
   it("rejects malformed Wrangler JSONC before mutating the project", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(tmpDir, "wrangler.jsonc", `{ "name": "broken",\n`);
-    const before = snapshotProject(tmpDir);
-    const exec = vi.fn();
 
-    await expect(runInit(tmpDir, { _exec: exec })).rejects.toThrow(
+    await expectInitRejectsWithoutMutation(
+      tmpDir,
       "Could not parse the existing Wrangler JSON/JSONC config",
     );
-    expect(exec).not.toHaveBeenCalled();
-    expect(snapshotProject(tmpDir)).toBe(before);
   });
 
   it("rejects unsupported Vite config structures before mutating the project", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(tmpDir, "vite.config.ts", `const config = getConfig(); export default config;\n`);
-    const before = snapshotProject(tmpDir);
-    const exec = vi.fn();
 
-    await expect(runInit(tmpDir, { _exec: exec })).rejects.toThrow(
-      "Could not find a static Vite config object",
-    );
-    expect(exec).not.toHaveBeenCalled();
-    expect(snapshotProject(tmpDir)).toBe(before);
+    await expectInitRejectsWithoutMutation(tmpDir, "Could not find a static Vite config object");
   });
 
   it("points wrangler.jsonc at an existing JavaScript worker entry", async () => {
