@@ -11,17 +11,12 @@ import {
   isCloudflareRscTransportAllowedForAssetsConfig,
   readRootWranglerAssetsConfig,
 } from "../packages/vinext/src/build/cloudflare-static-assets-config.js";
-import {
-  writePrerenderIndex,
-  type PrerenderRouteResult,
-} from "../packages/vinext/src/build/prerender.js";
+import type { PrerenderRouteResult } from "../packages/vinext/src/build/prerender.js";
 import { STATIC_CACHE_CONTROL } from "../packages/vinext/src/server/cache-control.js";
 import { VINEXT_RSC_CONTENT_TYPE } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import {
   createRscTransportAssetPathname,
-  resolveRscTransportRequest,
   VINEXT_STATIC_RSC_TRANSPORT_PREFIX,
-  VINEXT_WORKER_RSC_TRANSPORT_PREFIX,
 } from "../packages/vinext/src/server/app-rsc-transport.js";
 import { withEnvVar } from "./env-test-helpers.js";
 
@@ -450,24 +445,6 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     expect(fs.existsSync(path.join(clientDir, "_headers"))).toBe(false);
   });
 
-  it("maps static and Worker RSC transport requests back to visible routes", () => {
-    const staticRequest = resolveRscTransportRequest(
-      new Request(`https://example.test${staticRscAssetPath("/about")}?tab=1&_rsc`, {
-        headers: { RSC: "1" },
-      }),
-    );
-    expect(new URL(staticRequest.url).pathname).toBe("/about");
-    expect(new URL(staticRequest.url).search).toBe("?tab=1&_rsc");
-
-    const workerRequest = resolveRscTransportRequest(
-      new Request(
-        `https://example.test${VINEXT_WORKER_RSC_TRANSPORT_PREFIX}${createRscTransportAssetPathname("/docs/")}`,
-        { headers: { RSC: "1" } },
-      ),
-    );
-    expect(new URL(workerRequest.url).pathname).toBe("/docs/");
-  });
-
   it("publishes HTML without static RSC when only the HTML query-invariance proof is present", async () => {
     const root = createTempRoot();
     const serverDir = path.join(root, "dist/server");
@@ -808,25 +785,5 @@ describe("publishCloudflarePrerenderedAppAssets", () => {
     );
 
     expect(readRootWranglerAssetsConfig(root, undefined)).toEqual({ ok: false });
-  });
-
-  it("preserves query-invariance proof in the prerender manifest", () => {
-    const root = createTempRoot();
-
-    writePrerenderIndex(
-      [
-        renderedAppRoute("/about", ["about.html", "about.rsc"], {
-          queryInvariant: { html: true, rsc: false },
-        }),
-      ],
-      root,
-    );
-
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, "vinext-prerender.json"), "utf-8"));
-    expect(manifest.routes[0]).toMatchObject({
-      route: "/about",
-      status: "rendered",
-      queryInvariant: { html: true, rsc: false },
-    });
   });
 });

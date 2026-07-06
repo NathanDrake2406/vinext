@@ -311,14 +311,13 @@ function readGeneratedAssetOwnership(existingHeaders: string): {
   return { html, rsc };
 }
 
-function writeGeneratedHeadersBlock(
-  clientDir: string,
-  entries: Array<{
-    detachHeaders?: readonly string[];
-    headers: Record<string, string>;
-    pathname: string;
-  }>,
-): void {
+type HeaderEntry = {
+  detachHeaders?: readonly string[];
+  headers: Record<string, string>;
+  pathname: string;
+};
+
+function writeGeneratedHeadersBlock(clientDir: string, entries: HeaderEntry[]): void {
   const headersPath = path.join(clientDir, "_headers");
   const existing = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf-8") : "";
   const preserved = removeGeneratedHeadersBlock(existing);
@@ -404,7 +403,7 @@ type PlannedAsset =
     })
   | (PlannedAssetBase & { kind: "rsc" });
 
-export function publishCloudflarePrerenderedAppAssets(options: {
+type PublishCloudflarePrerenderedAppAssetsOptions = {
   config: ResolvedNextConfig;
   /**
    * Whether the built app contains any server action references. Server
@@ -421,7 +420,60 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   routes: readonly PrerenderRouteResult[];
   rscCompatibilityId?: string;
   serverDir: string;
-}): PublishCloudflarePrerenderedAppAssetsResult {
+};
+
+type PublicationRouteFact = {
+  htmlAssetPath: string;
+  htmlSource: string;
+  htmlSourceExists: boolean;
+  htmlTarget: string;
+  htmlTargetExists: boolean;
+  htmlTargetIsDirectory: boolean;
+  route: Extract<PrerenderRouteResult, { status: "rendered" }>;
+  routePathname: string;
+  rscSource: string;
+  rscSourceExists: boolean;
+  rscTarget: string;
+  rscTargetExists: boolean;
+};
+
+type CloudflarePublicationFacts = {
+  clientDir: string | null;
+  config: ResolvedNextConfig;
+  emittedRscTransportAllowed: boolean;
+  existingHeaders: string;
+  hasMiddlewareOrProxy: boolean;
+  hasServerActions: boolean;
+  owned: ReturnType<typeof readGeneratedAssetOwnership>;
+  rootRscTransportAllowed: boolean;
+  routeFacts: PublicationRouteFact[];
+  rscCompatibilityId: string | undefined;
+};
+
+type CloudflarePublicationPlan =
+  | {
+      action: "skip";
+      clientDir: string | null;
+      owned: ReturnType<typeof readGeneratedAssetOwnership>;
+      pruneOwned: boolean;
+      reason: string;
+    }
+  | {
+      action: "publish";
+      assets: PlannedAsset[];
+      clientDir: string;
+      deploymentId: string | undefined;
+      desired: {
+        html: Set<string>;
+        rsc: Set<string>;
+      };
+      owned: ReturnType<typeof readGeneratedAssetOwnership>;
+      rscCompatibilityId: string | undefined;
+    };
+
+function collectCloudflarePublicationFacts(
+  options: PublishCloudflarePrerenderedAppAssetsOptions,
+): CloudflarePublicationFacts {
   const assetsConfig = readEmittedWranglerAssetsConfig(options.serverDir);
   const emittedAssets = assetsConfig.ok ? assetsConfig.assets : null;
   const clientDir = emittedAssets?.directory
@@ -431,116 +483,145 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   const existingHeaders =
     headersPath && fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf-8") : "";
   const owned = readGeneratedAssetOwnership(existingHeaders);
-  const unpublishOwnedAssetsAndSkip = (
-    reason: string,
-  ): PublishCloudflarePrerenderedAppAssetsResult => {
-    if (clientDir) {
-      pruneOwnedAssets(clientDir, owned, { html: new Set(), rsc: new Set() });
-      writeGeneratedHeadersBlock(clientDir, []);
-    }
-    return skipResult(reason);
-  };
-
-  if (options.config.output === "export") {
-    return unpublishOwnedAssetsAndSkip("static export already writes to client assets");
-  }
-  if (options.config.trailingSlash) {
-    return unpublishOwnedAssetsAndSkip("trailingSlash would require preserving slash redirects");
-  }
-  if (options.config.basePath) {
-    return unpublishOwnedAssetsAndSkip("basePath asset route publication is not proven safe");
-  }
-  if (options.config.i18n) {
-    return unpublishOwnedAssetsAndSkip(
-      "i18n routing may require Worker redirects or locale negotiation",
-    );
-  }
-  if (hasRequestTransformConfig(options.config)) {
-    return unpublishOwnedAssetsAndSkip(
-      "config headers, redirects, or rewrites require Worker routing",
-    );
-  }
-  if (hasMiddlewareOrProxy(options.root, options.config)) {
-    return unpublishOwnedAssetsAndSkip("middleware/proxy must run before page responses");
-  }
-
   const rootAssetsConfig = readRootWranglerAssetsConfig(options.root, process.env.CLOUDFLARE_ENV);
-  if (
-    !rootAssetsConfig.ok ||
-    !isCloudflareRscTransportAllowedForAssetsConfig(rootAssetsConfig.assets)
-  ) {
-    return unpublishOwnedAssetsAndSkip(
-      "Cloudflare RSC transport is disabled for the selected Wrangler environment",
-    );
+  const rootRscTransportAllowed =
+    rootAssetsConfig.ok && isCloudflareRscTransportAllowedForAssetsConfig(rootAssetsConfig.assets);
+  const routeFacts: PublicationRouteFact[] = [];
+
+  if (clientDir) {
+    for (const route of eligibleStaticAppRoutes(options.routes)) {
+      const routePathname = route.path ?? route.route;
+      const visibleAssetPath = safeVisibleAssetPathForRoute(routePathname);
+      if (!visibleAssetPath) continue;
+
+      let rscAssetPathname: string | null = null;
+      try {
+        rscAssetPathname = `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}${createRscTransportAssetPathname(
+          routePathname,
+        )}`;
+      } catch {
+        rscAssetPathname = null;
+      }
+      if (!rscAssetPathname) continue;
+
+      const htmlAssetPath = routePathname === "/" ? "index.html" : visibleAssetPath;
+      const htmlSource = path.join(options.prerenderDir, getOutputPath(routePathname, false));
+      const htmlTarget = path.join(clientDir, htmlAssetPath);
+      const htmlTargetExists = fs.existsSync(htmlTarget);
+      const rscSource = path.join(options.prerenderDir, getRscOutputPath(routePathname));
+      const rscTarget = path.join(clientDir, `.${rscAssetPathname}`);
+
+      routeFacts.push({
+        htmlAssetPath,
+        htmlSource,
+        htmlSourceExists: fs.existsSync(htmlSource),
+        htmlTarget,
+        htmlTargetExists,
+        htmlTargetIsDirectory: htmlTargetExists ? fs.statSync(htmlTarget).isDirectory() : false,
+        route,
+        routePathname,
+        rscSource,
+        rscSourceExists: fs.existsSync(rscSource),
+        rscTarget,
+        rscTargetExists: fs.existsSync(rscTarget),
+      });
+    }
   }
 
-  if (!clientDir) {
-    return skipResult("Cloudflare assets binding not found");
-  }
-  if (!isCloudflareRscTransportAllowedForAssetsConfig(emittedAssets)) {
-    return unpublishOwnedAssetsAndSkip("Cloudflare assets not_found_handling is not none");
-  }
+  return {
+    clientDir,
+    config: options.config,
+    emittedRscTransportAllowed: emittedAssets
+      ? isCloudflareRscTransportAllowedForAssetsConfig(emittedAssets)
+      : false,
+    existingHeaders,
+    hasMiddlewareOrProxy: hasMiddlewareOrProxy(options.root, options.config),
+    hasServerActions: options.hasServerActions,
+    owned,
+    rootRscTransportAllowed,
+    routeFacts,
+    rscCompatibilityId: options.rscCompatibilityId,
+  };
+}
 
-  const routes = eligibleStaticAppRoutes(options.routes);
+function skipPublication(
+  facts: CloudflarePublicationFacts,
+  reason: string,
+  pruneOwned: boolean,
+): CloudflarePublicationPlan {
+  return { action: "skip", clientDir: facts.clientDir, owned: facts.owned, reason, pruneOwned };
+}
+
+function planCloudflarePublication(facts: CloudflarePublicationFacts): CloudflarePublicationPlan {
+  const skip = (reason: string, pruneOwned: boolean) => skipPublication(facts, reason, pruneOwned);
+
+  if (facts.config.output === "export") {
+    return skip("static export already writes to client assets", true);
+  }
+  if (facts.config.trailingSlash) {
+    return skip("trailingSlash would require preserving slash redirects", true);
+  }
+  if (facts.config.basePath) {
+    return skip("basePath asset route publication is not proven safe", true);
+  }
+  if (facts.config.i18n) {
+    return skip("i18n routing may require Worker redirects or locale negotiation", true);
+  }
+  if (hasRequestTransformConfig(facts.config)) {
+    return skip("config headers, redirects, or rewrites require Worker routing", true);
+  }
+  if (facts.hasMiddlewareOrProxy) {
+    return skip("middleware/proxy must run before page responses", true);
+  }
+  if (!facts.rootRscTransportAllowed) {
+    return skip("Cloudflare RSC transport is disabled for the selected Wrangler environment", true);
+  }
+  if (!facts.clientDir) {
+    return skip("Cloudflare assets binding not found", false);
+  }
+  if (!facts.emittedRscTransportAllowed) {
+    return skip("Cloudflare assets not_found_handling is not none", true);
+  }
 
   const plannedAssets: PlannedAsset[] = [];
 
-  for (const route of routes) {
-    const routePathname = route.path ?? route.route;
-    const visibleAssetPath = safeVisibleAssetPathForRoute(routePathname);
-    if (!visibleAssetPath) continue;
-
-    let rscAssetPathname: string | null = null;
-    try {
-      rscAssetPathname = `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}${createRscTransportAssetPathname(
-        routePathname,
-      )}`;
-    } catch {
-      rscAssetPathname = null;
-    }
-    if (!rscAssetPathname) continue;
-
-    const htmlAssetPath = routePathname === "/" ? "index.html" : visibleAssetPath;
-    const htmlTarget = path.join(clientDir, htmlAssetPath);
-    const rscTarget = path.join(clientDir, `.${rscAssetPathname}`);
+  for (const routeFact of facts.routeFacts) {
     // An existing target is a foreign collision only when a prior vinext run did
     // not publish it; targets we own are re-published so their headers survive.
     // A directory at the HTML target is not a foreign file: it is the parent of
     // descendant route assets (owned ones are pruned before publication) and
     // publishAsset degrades safely if it persists.
     const htmlForeign =
-      fs.existsSync(htmlTarget) &&
-      !fs.statSync(htmlTarget).isDirectory() &&
-      !owned.html.has(routePathname);
-    const rscForeign = fs.existsSync(rscTarget) && !owned.rsc;
+      routeFact.htmlTargetExists &&
+      !routeFact.htmlTargetIsDirectory &&
+      !facts.owned.html.has(routeFact.routePathname);
+    const rscForeign = routeFact.rscTargetExists && !facts.owned.rsc;
     if (htmlForeign || rscForeign) {
       continue;
     }
 
-    const htmlSource = path.join(options.prerenderDir, getOutputPath(routePathname, false));
     if (
-      !options.hasServerActions &&
-      fs.existsSync(htmlSource) &&
-      isPublishableAssetTarget(htmlTarget)
+      !facts.hasServerActions &&
+      routeFact.htmlSourceExists &&
+      isPublishableAssetTarget(routeFact.htmlTarget)
     ) {
       plannedAssets.push({
         kind: "html",
-        assetPath: htmlAssetPath,
-        route,
-        routePathname,
-        source: htmlSource,
-        target: htmlTarget,
+        assetPath: routeFact.htmlAssetPath,
+        route: routeFact.route,
+        routePathname: routeFact.routePathname,
+        source: routeFact.htmlSource,
+        target: routeFact.htmlTarget,
       });
     }
 
-    if (route.queryInvariant?.rsc === true) {
-      const rscSource = path.join(options.prerenderDir, getRscOutputPath(routePathname));
-      if (fs.existsSync(rscSource) && isPublishableAssetTarget(rscTarget)) {
+    if (routeFact.route.queryInvariant?.rsc === true) {
+      if (routeFact.rscSourceExists && isPublishableAssetTarget(routeFact.rscTarget)) {
         plannedAssets.push({
           kind: "rsc",
-          routePathname,
-          source: rscSource,
-          target: rscTarget,
+          routePathname: routeFact.routePathname,
+          source: routeFact.rscSource,
+          target: routeFact.rscTarget,
         });
       }
     }
@@ -556,7 +637,7 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   for (const asset of plannedAssets) {
     if (asset.kind === "html") plannedHtmlAssetPaths.push(asset.assetPath);
   }
-  const plan = plannedAssets.filter((asset) => {
+  const assets = plannedAssets.filter((asset) => {
     if (asset.kind !== "html") return true;
     const dirPrefix = `${asset.assetPath}/`;
     return !plannedHtmlAssetPaths.some((assetPath) => assetPath.startsWith(dirPrefix));
@@ -565,7 +646,7 @@ export function publishCloudflarePrerenderedAppAssets(options: {
   let generatedRuleCount = 0;
   const desiredHtmlRoutes = new Set<string>();
   const desiredRscTargets = new Set<string>();
-  for (const asset of plan) {
+  for (const asset of assets) {
     if (asset.kind === "html") {
       generatedRuleCount++;
       desiredHtmlRoutes.add(asset.routePathname);
@@ -577,32 +658,49 @@ export function publishCloudflarePrerenderedAppAssets(options: {
     generatedRuleCount++;
   }
 
-  const preservedRuleCount = countHeaderRules(removeGeneratedHeadersBlock(existingHeaders));
+  const preservedRuleCount = countHeaderRules(removeGeneratedHeadersBlock(facts.existingHeaders));
   if (preservedRuleCount + generatedRuleCount > CLOUDFLARE_HEADERS_RULE_LIMIT) {
-    pruneOwnedAssets(clientDir, owned, { html: new Set(), rsc: new Set() });
-    writeGeneratedHeadersBlock(clientDir, []);
-    return skipResult(
+    return skip(
       `publishing static assets would exceed Cloudflare's ${CLOUDFLARE_HEADERS_RULE_LIMIT}-rule _headers limit`,
+      true,
     );
   }
 
-  pruneOwnedAssets(clientDir, owned, {
-    html: desiredHtmlRoutes,
-    rsc: desiredRscTargets,
-  });
+  return {
+    action: "publish",
+    assets,
+    clientDir: facts.clientDir,
+    deploymentId: facts.config.deploymentId,
+    desired: {
+      html: desiredHtmlRoutes,
+      rsc: desiredRscTargets,
+    },
+    owned: facts.owned,
+    rscCompatibilityId: facts.rscCompatibilityId,
+  };
+}
 
-  const headerEntries: Array<{
-    detachHeaders?: readonly string[];
-    headers: Record<string, string>;
-    pathname: string;
-  }> = [];
+function applyCloudflarePublicationPlan(
+  plan: CloudflarePublicationPlan,
+): PublishCloudflarePrerenderedAppAssetsResult {
+  if (plan.action === "skip") {
+    if (plan.pruneOwned && plan.clientDir) {
+      pruneOwnedAssets(plan.clientDir, plan.owned, { html: new Set(), rsc: new Set() });
+      writeGeneratedHeadersBlock(plan.clientDir, []);
+    }
+    return skipResult(plan.reason);
+  }
+
+  pruneOwnedAssets(plan.clientDir, plan.owned, plan.desired);
+
+  const headerEntries: HeaderEntry[] = [];
   let publishedStaticRsc = false;
   let publishedFiles = 0;
   const publishedRoutePathnames = new Set<string>();
 
   // Re-copy owned targets so repeated prerenders refresh stale bodies and keep
   // the generated header block authoritative.
-  for (const asset of plan) {
+  for (const asset of plan.assets) {
     if (!publishAsset(asset.source, asset.target)) continue;
     publishedFiles++;
     publishedRoutePathnames.add(asset.routePathname);
@@ -622,12 +720,20 @@ export function publishCloudflarePrerenderedAppAssets(options: {
       pathname: `${VINEXT_STATIC_RSC_TRANSPORT_PREFIX}/*`,
       detachHeaders: RSC_AUTHORITATIVE_HEADERS,
       headers: buildRscHeaders({
-        deploymentId: options.config.deploymentId,
-        rscCompatibilityId: options.rscCompatibilityId,
+        deploymentId: plan.deploymentId,
+        rscCompatibilityId: plan.rscCompatibilityId,
       }),
     });
   }
 
-  writeGeneratedHeadersBlock(clientDir, headerEntries);
+  writeGeneratedHeadersBlock(plan.clientDir, headerEntries);
   return { skipped: false, publishedFiles, publishedRoutes: publishedRoutePathnames.size };
+}
+
+export function publishCloudflarePrerenderedAppAssets(
+  options: PublishCloudflarePrerenderedAppAssetsOptions,
+): PublishCloudflarePrerenderedAppAssetsResult {
+  return applyCloudflarePublicationPlan(
+    planCloudflarePublication(collectCloudflarePublicationFacts(options)),
+  );
 }
