@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
+import path from "pathslash";
 import type { CloudflareInitOptions } from "../init-platform.js";
 import { resolveWranglerJsonPath } from "../utils/project.js";
 import {
