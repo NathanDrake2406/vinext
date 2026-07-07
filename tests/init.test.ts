@@ -287,7 +287,22 @@ describe("addScripts", () => {
 
     expect(added).toContain("deploy:vinext");
     const pkg = readPkg(tmpDir) as { scripts: Record<string, string> };
-    expect(pkg.scripts["deploy:vinext"]).toBe("vinext-cloudflare deploy");
+    expect(pkg.scripts["start:vinext"]).toBe("wrangler dev --config dist/server/wrangler.json");
+    expect(pkg.scripts["deploy:vinext"]).toBe(
+      "vinext-cloudflare deploy --config dist/server/wrangler.json",
+    );
+  });
+
+  it("adds the warm CDN cache flag to deploy:vinext when requested", () => {
+    setupProject(tmpDir, { router: "app" });
+
+    const added = addScripts(tmpDir, 3001, "cloudflare", { warmCdnCache: true });
+
+    expect(added).toContain("deploy:vinext");
+    const pkg = readPkg(tmpDir) as { scripts: Record<string, string> };
+    expect(pkg.scripts["deploy:vinext"]).toBe(
+      "vinext-cloudflare deploy --config dist/server/wrangler.json --experimental-warm-cdn-cache",
+    );
   });
 
   it("uses custom port", () => {
@@ -319,6 +334,7 @@ describe("addScripts", () => {
 
     const pkg = readPkg(tmpDir) as { scripts: Record<string, string> };
     expect(pkg.scripts["dev:vinext"]).toBe("custom-command");
+    expect(pkg.scripts["start:vinext"]).toBe("wrangler dev --config dist/server/wrangler.json");
     expect(pkg.scripts["deploy:vinext"]).toBe("custom-deploy");
   });
 
@@ -827,8 +843,39 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     const pkg = readPkg(tmpDir) as { scripts: Record<string, string> };
     expect(pkg.scripts["dev:vinext"]).toBe("vinext dev --port 3001");
     expect(pkg.scripts["build:vinext"]).toBe("vinext build");
-    expect(pkg.scripts["start:vinext"]).toBe("vinext start");
-    expect(pkg.scripts["deploy:vinext"]).toBe("vinext-cloudflare deploy");
+    expect(pkg.scripts["start:vinext"]).toBe("wrangler dev --config dist/server/wrangler.json");
+    expect(pkg.scripts["deploy:vinext"]).toBe(
+      "vinext-cloudflare deploy --config dist/server/wrangler.json",
+    );
+  });
+
+  it("does not add a warm CDN cache deploy script by default for Workers Cache init", async () => {
+    setupProject(tmpDir, { router: "app" });
+
+    await runInit(tmpDir);
+
+    const pkg = readPkg(tmpDir) as { scripts: Record<string, string> };
+    expect(pkg.scripts["deploy:vinext"]).toBe(
+      "vinext-cloudflare deploy --config dist/server/wrangler.json",
+    );
+  });
+
+  it("skips the warm CDN cache deploy flag when Cloudflare init opts out", async () => {
+    setupProject(tmpDir, { router: "app" });
+
+    await runInit(tmpDir, {
+      cloudflare: {
+        dataCache: "kv",
+        cdnCache: "workers-cache",
+        imageOptimization: "cloudflare-images",
+        warmCdnCache: false,
+      },
+    });
+
+    const pkg = readPkg(tmpDir) as { scripts: Record<string, string> };
+    expect(pkg.scripts["deploy:vinext"]).toBe(
+      "vinext-cloudflare deploy --config dist/server/wrangler.json",
+    );
   });
 
   it("does not add deploy:vinext for Node init", async () => {
@@ -838,6 +885,7 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
 
     expect(result.addedScripts).not.toContain("deploy:vinext");
     const pkg = readPkg(tmpDir) as { scripts: Record<string, string> };
+    expect(pkg.scripts["start:vinext"]).toBe("vinext start");
     expect(pkg.scripts["deploy:vinext"]).toBeUndefined();
   });
 
@@ -938,11 +986,13 @@ describe("init — dependency installation", () => {
 
     const { output } = await runInit(tmpDir);
 
+    expect(output).toContain("  Installing dependencies:\n    - vinext\n    - @vinext/cloudflare");
     expect(output).toContain(
-      "  Installing dependencies:\n    - vinext\n    - vite\n    - @vitejs/plugin-react",
+      "  Installing devDependencies:\n    - vite\n    - @vitejs/plugin-react",
     );
+    expect(output).toContain("    ✓ Added dependencies to dependencies:\n      - vinext");
     expect(output).toContain(
-      "    ✓ Added dependencies to devDependencies:\n      - vinext\n      - vite\n      - @vitejs/plugin-react",
+      "    ✓ Added dependencies to devDependencies:\n      - vite\n      - @vitejs/plugin-react",
     );
     expect(output).not.toContain("Installing vinext, vite");
   });
@@ -973,8 +1023,8 @@ describe("init — dependency installation", () => {
       expect(setup.scripts).toMatchObject({
         "dev:vinext": "vinext dev --port 3001",
         "build:vinext": "vinext build",
-        "start:vinext": "vinext start",
-        "deploy:vinext": "vinext-cloudflare deploy",
+        "start:vinext": "wrangler dev --config dist/server/wrangler.json",
+        "deploy:vinext": "vinext-cloudflare deploy --config dist/server/wrangler.json",
       });
       expect(setup.viteConfigExists).toBe(true);
       expect(setup.wranglerConfigExists).toBe(true);
@@ -1000,8 +1050,8 @@ describe("init — dependency installation", () => {
       scripts: {
         "dev:vinext": "vinext dev --port 3001",
         "build:vinext": "vinext build",
-        "start:vinext": "vinext start",
-        "deploy:vinext": "vinext-cloudflare deploy",
+        "start:vinext": "wrangler dev --config dist/server/wrangler.json",
+        "deploy:vinext": "vinext-cloudflare deploy --config dist/server/wrangler.json",
       },
     });
     expect(fs.existsSync(path.join(tmpDir, "vite.config.ts"))).toBe(true);
@@ -1093,7 +1143,7 @@ describe("init — dependency installation", () => {
     });
 
     expect(
-      commands.some((cmd) => cmd.includes("react-server-dom-webpack") && cmd.includes("-D")),
+      commands.some((cmd) => cmd.includes("react-server-dom-webpack") && !cmd.includes("-D")),
     ).toBe(true);
     expect(result.installedDeps).toContain("react-server-dom-webpack");
     expect(output).toContain("pnpm approve-builds");
@@ -1181,19 +1231,27 @@ describe("init — dependency installation", () => {
     // The React upgrade should NOT use -D flag (keeps them in dependencies)
     expect(reactUpgradeCall!.cmd).not.toContain("-D");
 
-    // The second exec call should be the dev deps install (with -D)
+    // The second exec call should install runtime framework deps (without -D).
+    const runtimeDepsCall = execCalls.find(
+      (c) => c.cmd.includes("react-server-dom-webpack") && !c.cmd.includes("-D"),
+    );
+    expect(runtimeDepsCall).toBeDefined();
+
+    // The dev deps install should still use -D.
     const devDepsCall = execCalls.find(
       (c) =>
         c.cmd.includes("@vitejs/plugin-react") &&
-        c.cmd.includes("react-server-dom-webpack") &&
+        c.cmd.includes("@vitejs/plugin-rsc") &&
         c.cmd.includes("-D"),
     );
     expect(devDepsCall).toBeDefined();
 
-    // React upgrade should come before dev deps install
+    // React upgrade should come before framework deps that peer on React.
     const upgradeIdx = execCalls.indexOf(reactUpgradeCall!);
+    const runtimeDepsIdx = execCalls.indexOf(runtimeDepsCall!);
     const devDepsIdx = execCalls.indexOf(devDepsCall!);
-    expect(upgradeIdx).toBeLessThan(devDepsIdx);
+    expect(upgradeIdx).toBeLessThan(runtimeDepsIdx);
+    expect(runtimeDepsIdx).toBeLessThan(devDepsIdx);
   });
 
   it("does not upgrade React when version is already compatible", async () => {
@@ -1235,6 +1293,49 @@ describe("init — dependency installation", () => {
     );
     expect(installCall).toBeDefined();
     expect(installCall!.cmd).toMatch(/^pnpm add -D/);
+  });
+
+  it("can write missing dependency entries without installing them", async () => {
+    setupProject(tmpDir, { router: "app" });
+
+    const { execCalls } = await runInit(tmpDir, { install: false });
+    const pkg = readPkg(tmpDir) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+
+    expect(execCalls).toEqual([]);
+    expect(pkg.dependencies).toMatchObject({
+      vinext: "latest",
+      "react-server-dom-webpack": "latest",
+      "@vinext/cloudflare": "latest",
+    });
+    expect(pkg.devDependencies).toMatchObject({
+      vite: "latest",
+      "@vitejs/plugin-react": "latest",
+      "@vitejs/plugin-rsc": "latest",
+      "@cloudflare/vite-plugin": "latest",
+      wrangler: "latest",
+    });
+  });
+
+  it("updates old React dependency entries without installing when install is disabled", async () => {
+    setupProject(tmpDir, { router: "app" });
+    setupFakeReact(tmpDir, "19.2.3");
+
+    const { execCalls, output } = await runInit(tmpDir, { install: false });
+    const pkg = readPkg(tmpDir) as {
+      dependencies?: Record<string, string>;
+    };
+
+    expect(execCalls).toEqual([]);
+    expect(pkg.dependencies).toMatchObject({
+      react: "latest",
+      "react-dom": "latest",
+    });
+    expect(output).toContain(
+      "Added dependencies to dependencies:\n      - react\n      - react-dom",
+    );
   });
 
   it("calls exec with bun when bun.lock exists", async () => {

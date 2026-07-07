@@ -11,6 +11,7 @@ export type CloudflareInitOptions = {
   dataCache: InitDataCache;
   cdnCache: InitCdnCache;
   imageOptimization: InitImageOptimization;
+  warmCdnCache?: boolean;
 };
 
 export const INIT_PLATFORMS = {
@@ -24,15 +25,27 @@ export const INIT_PLATFORMS = {
   },
 } satisfies Record<
   InitPlatform,
-  { name: string; options: (args: string[]) => Promise<CloudflareInitOptions | undefined> }
+  {
+    name: string;
+    options: (
+      args: string[],
+      options?: PlatformPromptOptions,
+    ) => Promise<CloudflareInitOptions | undefined>;
+  }
 >;
 
-type PlatformPromptOptions = {
+export type PlatformPromptOptions = {
   env?: Record<string, string | undefined>;
   input?: Readable;
   output?: Writable;
   isInteractive?: boolean;
   question?: (prompt: string) => Promise<string>;
+};
+
+export type ResolvedInitOptions = {
+  platform: InitPlatform;
+  cloudflare?: CloudflareInitOptions;
+  prerender: boolean;
 };
 
 export function isAgentEnvironment(env: Record<string, string | undefined> = process.env): boolean {
@@ -106,15 +119,38 @@ export function parseImageOptimizationArg(args: string[]): InitImageOptimization
 }
 
 export function parsePrerenderArg(args: string[]): boolean | undefined {
-  for (const arg of args) {
-    if (arg === "--prerender") return true;
-    if (arg === "--no-prerender") return false;
-    if (!arg.startsWith("--prerender=")) continue;
+  return parseBooleanArg(
+    args,
+    "--prerender",
+    "--no-prerender",
+    '--prerender expects true or false when using the "--prerender=value" form.',
+  );
+}
 
-    const value = arg.slice("--prerender=".length).toLowerCase();
+export function parseWarmCdnCacheArg(args: string[]): boolean | undefined {
+  return parseBooleanArg(
+    args,
+    "--experimental-warm-cdn-cache",
+    "--no-experimental-warm-cdn-cache",
+    '--experimental-warm-cdn-cache expects true or false when using the "--experimental-warm-cdn-cache=value" form.',
+  );
+}
+
+function parseBooleanArg(
+  args: string[],
+  enabledFlag: string,
+  disabledFlag: string,
+  errorMessage: string,
+): boolean | undefined {
+  for (const arg of args) {
+    if (arg === enabledFlag) return true;
+    if (arg === disabledFlag) return false;
+    if (!arg.startsWith(`${enabledFlag}=`)) continue;
+
+    const value = arg.slice(enabledFlag.length + 1).toLowerCase();
     if (value === "true" || value === "yes" || value === "1") return true;
     if (value === "false" || value === "no" || value === "0") return false;
-    throw new Error('--prerender expects true or false when using the "--prerender=value" form.');
+    throw new Error(errorMessage);
   }
 
   return undefined;
@@ -171,6 +207,35 @@ export async function resolveInitPlatform(
   }
 }
 
+export async function resolveInitOptions(
+  args: string[],
+  options: PlatformPromptOptions = {},
+): Promise<ResolvedInitOptions> {
+  const platform = await resolveInitPlatform(args, options);
+  const platformOptions = await INIT_PLATFORMS[platform].options(args, options);
+  const explicitWarmCdnCache = parseWarmCdnCacheArg(args);
+  if (platform === "cloudflare" && platformOptions?.cdnCache !== "workers-cache") {
+    if (explicitWarmCdnCache === true) {
+      throw new Error("--experimental-warm-cdn-cache requires --cdn-cache=workers-cache.");
+    }
+  }
+
+  const prerender = await resolveInitPrerender(args, options);
+  const warmCdnCache =
+    platform === "cloudflare" && platformOptions?.cdnCache === "workers-cache"
+      ? await resolveInitWarmCdnCache(args, options)
+      : false;
+
+  return {
+    platform,
+    prerender,
+    cloudflare:
+      platform === "cloudflare" && platformOptions
+        ? { ...platformOptions, warmCdnCache }
+        : undefined,
+  };
+}
+
 export async function resolveInitPrerender(
   args: string[],
   options: PlatformPromptOptions = {},
@@ -191,6 +256,49 @@ export async function resolveInitPrerender(
   try {
     while (true) {
       const answer = (await question("  Pre-render all static routes after build? [y/N]: "))
+        .trim()
+        .toLowerCase();
+      if (answer === "") {
+        output.write("\n");
+        return false;
+      }
+      if (answer === "y" || answer === "yes") {
+        output.write("\n");
+        return true;
+      }
+      if (answer === "n" || answer === "no") {
+        output.write("\n");
+        return false;
+      }
+      output.write("  Please answer yes or no.\n");
+    }
+  } finally {
+    readline?.close();
+  }
+}
+
+export async function resolveInitWarmCdnCache(
+  args: string[],
+  options: PlatformPromptOptions = {},
+): Promise<boolean> {
+  const explicitWarmCdnCache = parseWarmCdnCacheArg(args);
+  if (explicitWarmCdnCache !== undefined) return explicitWarmCdnCache;
+
+  const env = options.env ?? process.env;
+  const input = options.input ?? process.stdin;
+  const output = options.output ?? process.stdout;
+  const isInteractive =
+    options.isInteractive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  if (isAgentEnvironment(env) || !isInteractive) return false;
+
+  const readline = options.question ? undefined : createInterface({ input, output });
+  const question = options.question ?? ((prompt: string) => readline!.question(prompt));
+
+  try {
+    while (true) {
+      const answer = (
+        await question("  Enable Workers Cache experimental pre-warm during deploy? [y/N]: ")
+      )
         .trim()
         .toLowerCase();
       if (answer === "") {
