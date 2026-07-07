@@ -17,6 +17,8 @@ type TomlSection = {
   bodyEnd: number;
 };
 
+type TomlMultilineStringDelimiter = `"""` | "'''";
+
 export type WranglerTomlConfigUpdate = WranglerConfigUpdateFacts & {
   code: string;
 };
@@ -63,6 +65,77 @@ function forEachTomlLine(
   }
 }
 
+function updateTomlMultilineStringDelimiter(
+  line: string,
+  delimiter: TomlMultilineStringDelimiter | undefined,
+): TomlMultilineStringDelimiter | undefined {
+  let index = 0;
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  let multilineDelimiter = delimiter;
+
+  while (index < line.length) {
+    if (multilineDelimiter) {
+      if (multilineDelimiter === `"""` && line[index] === "\\") {
+        index += 2;
+        continue;
+      }
+      if (line.startsWith(multilineDelimiter, index)) {
+        index += multilineDelimiter.length;
+        multilineDelimiter = undefined;
+        continue;
+      }
+      index++;
+      continue;
+    }
+
+    const char = line[index];
+    if (quote === '"') {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quote = undefined;
+      index++;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") quote = undefined;
+      index++;
+      continue;
+    }
+    if (char === "#") break;
+    if (line.startsWith(`"""`, index)) {
+      multilineDelimiter = `"""`;
+      index += 3;
+      continue;
+    }
+    if (line.startsWith("'''", index)) {
+      multilineDelimiter = "'''";
+      index += 3;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      index++;
+      continue;
+    }
+    index++;
+  }
+
+  return multilineDelimiter;
+}
+
+function forEachTomlSyntaxLine(
+  code: string,
+  callback: (line: string, lineStart: number, lineEnd: number) => void,
+): void {
+  let multilineDelimiter: TomlMultilineStringDelimiter | undefined;
+  forEachTomlLine(code, (line, lineStart, lineEnd) => {
+    const startsInsideMultilineString = multilineDelimiter !== undefined;
+    multilineDelimiter = updateTomlMultilineStringDelimiter(line, multilineDelimiter);
+    if (!startsInsideMultilineString) callback(line, lineStart, lineEnd);
+  });
+}
+
 function parseTomlHeader(line: string): { name: string; isArray: boolean } | undefined {
   const trimmed = stripTomlLineComment(line).trim();
   const match = trimmed.match(/^(\[\[?)\s*([^[\]]+?)\s*(\]\]?)$/);
@@ -74,7 +147,7 @@ function parseTomlHeader(line: string): { name: string; isArray: boolean } | und
 
 function findFirstTomlSectionStart(code: string): number | undefined {
   let firstSectionStart: number | undefined;
-  forEachTomlLine(code, (line, lineStart) => {
+  forEachTomlSyntaxLine(code, (line, lineStart) => {
     if (firstSectionStart !== undefined) return;
     if (parseTomlHeader(line)) firstSectionStart = lineStart;
   });
@@ -85,7 +158,7 @@ function findTopLevelTomlAssignment(code: string, name: string): TomlAssignment 
   const topLevelEnd = findFirstTomlSectionStart(code) ?? code.length;
   let match: TomlAssignment | undefined;
   const pattern = new RegExp(`^\\s*${name}\\s*=`);
-  forEachTomlLine(code.slice(0, topLevelEnd), (line, lineStart) => {
+  forEachTomlSyntaxLine(code.slice(0, topLevelEnd), (line, lineStart) => {
     if (match) return;
     const uncommented = stripTomlLineComment(line);
     if (!pattern.test(uncommented)) return;
@@ -107,7 +180,7 @@ function hasTopLevelDottedKey(code: string, name: string): boolean {
   const topLevelEnd = findFirstTomlSectionStart(code) ?? code.length;
   const pattern = new RegExp(`^\\s*${name}\\s*\\.`);
   let found = false;
-  forEachTomlLine(code.slice(0, topLevelEnd), (line) => {
+  forEachTomlSyntaxLine(code.slice(0, topLevelEnd), (line) => {
     if (found) return;
     found = pattern.test(stripTomlLineComment(line));
   });
@@ -117,7 +190,7 @@ function hasTopLevelDottedKey(code: string, name: string): boolean {
 function findTomlSections(code: string, name: string, isArray: boolean): TomlSection[] {
   const sections: Array<TomlSection & { name: string; isArray: boolean }> = [];
   let current: (TomlSection & { name: string; isArray: boolean }) | undefined;
-  forEachTomlLine(code, (line, lineStart, lineEnd) => {
+  forEachTomlSyntaxLine(code, (line, lineStart, lineEnd) => {
     const header = parseTomlHeader(line);
     if (!header) return;
     if (current) {
@@ -142,7 +215,7 @@ function findTomlAssignmentInSection(
 ): TomlAssignment | undefined {
   let match: TomlAssignment | undefined;
   const pattern = new RegExp(`^\\s*${name}\\s*=`);
-  forEachTomlLine(code.slice(section.bodyStart, section.bodyEnd), (line, lineStart) => {
+  forEachTomlSyntaxLine(code.slice(section.bodyStart, section.bodyEnd), (line, lineStart) => {
     if (match) return;
     const uncommented = stripTomlLineComment(line);
     if (!pattern.test(uncommented)) return;

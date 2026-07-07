@@ -14,6 +14,11 @@ import {
 
 const require = createRequire(import.meta.url);
 
+export {
+  getWranglerJsonImagesBinding as getWranglerImagesBinding,
+  updateWranglerJsonConfigForCloudflare as updateWranglerConfigForCloudflare,
+} from "./wrangler/json.js";
+
 export type CloudflareProjectInfo = {
   root: string;
   projectName: string;

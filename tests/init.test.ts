@@ -832,6 +832,66 @@ id = "existing-id"
     );
   });
 
+  it("ignores section-like lines inside Wrangler TOML multiline strings", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `name = "existing"
+
+[vars]
+BASIC_BANNER = """
+[cache]
+enabled = false
+[images]
+binding = "FAKE_IMAGES"
+"""
+LITERAL_BANNER = '''
+[[kv_namespaces]]
+binding = "VINEXT_KV_CACHE"
+id = "fake-id"
+'''
+`,
+    );
+
+    const { result, output } = await runInit(tmpDir);
+
+    expect(result.generatedPlatformFiles).toEqual(["wrangler.toml"]);
+    const wrangler = readFile(tmpDir, "wrangler.toml");
+    const viteConfig = readFile(tmpDir, "vite.config.ts");
+    const varsStart = wrangler.indexOf("[vars]");
+    const basicBannerStart = `BASIC_BANNER = """`;
+    const literalBannerStart = "LITERAL_BANNER = '''";
+    const basicBannerClose = wrangler.indexOf(
+      `"""`,
+      wrangler.indexOf(basicBannerStart) + basicBannerStart.length,
+    );
+    const literalBannerClose = wrangler.indexOf(
+      "'''",
+      wrangler.indexOf(literalBannerStart) + literalBannerStart.length,
+    );
+    const realKvNamespace = wrangler.indexOf("[[kv_namespaces]]", literalBannerClose);
+    const cacheConfig = wrangler.indexOf("cache = { enabled = true }");
+    const imagesConfig = wrangler.indexOf('images = { binding = "IMAGES" }');
+
+    expect(varsStart).toBeGreaterThanOrEqual(0);
+    expect(basicBannerClose).toBeGreaterThanOrEqual(0);
+    expect(literalBannerClose).toBeGreaterThanOrEqual(0);
+    expect(cacheConfig).toBeGreaterThanOrEqual(0);
+    expect(imagesConfig).toBeGreaterThanOrEqual(0);
+    expect(cacheConfig).toBeLessThan(varsStart);
+    expect(imagesConfig).toBeLessThan(varsStart);
+    expect(realKvNamespace).toBeGreaterThan(literalBannerClose);
+    expect(wrangler.slice(realKvNamespace)).toContain('binding = "VINEXT_KV_CACHE"');
+    expect(wrangler.slice(realKvNamespace)).toContain('id = "<your-kv-namespace-id>"');
+    expect(wrangler.slice(wrangler.indexOf("[vars]"), basicBannerClose)).not.toContain(
+      "enabled = true",
+    );
+    expect(viteConfig).toContain("imagesOptimizer()");
+    expect(viteConfig).not.toContain("FAKE_IMAGES");
+    expect(output).toContain("Cloudflare setup is incomplete until you finish KV configuration:");
+  });
+
   it("replaces an owned inline TOML key holding an unexpected value type instead of duplicating it", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(

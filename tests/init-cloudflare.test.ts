@@ -3,12 +3,10 @@ import { parseSync } from "vite";
 import {
   generateAppRouterViteConfig,
   generatePagesRouterViteConfig,
+  getWranglerImagesBinding,
   updateViteConfigForCloudflare,
+  updateWranglerConfigForCloudflare,
 } from "../packages/vinext/src/init-cloudflare.js";
-import {
-  getWranglerJsonImagesBinding as getWranglerImagesBinding,
-  updateWranglerJsonConfigForCloudflare as updateWranglerConfigForCloudflare,
-} from "../packages/vinext/src/wrangler/json.js";
 import { readPagesRouterEntrySource } from "./worker-entry-source.js";
 
 function expectValidConfig(output: string): void {
