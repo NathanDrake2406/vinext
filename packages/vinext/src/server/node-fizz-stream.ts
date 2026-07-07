@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import path from "node:path";
+import path from "pathslash";
 import { PassThrough, type Duplex as NodeDuplex, type Readable as NodeReadable } from "node:stream";
 import type { ReactNode } from "react";
 import type { PipeableStream, RenderToPipeableStreamOptions } from "react-dom/server";

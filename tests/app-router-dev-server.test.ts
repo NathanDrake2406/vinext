@@ -1,7 +1,7 @@
 import http from "node:http";
 import fsp from "node:fs/promises";
 import { type ViteDevServer } from "vite";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { APP_FIXTURE_DIR, fetchHtml, startFixtureServer } from "./helpers.js";
 
 function decodeHtmlText(text: string): string {
@@ -1979,7 +1979,7 @@ describe("App Router integration", () => {
   });
 
   it("sets optimizeDeps.entries for rsc, ssr, and client environments so deps are discovered at startup", () => {
-    // Without optimizeDeps.entries, Vite only crawls build.rollupOptions.input
+    // Without optimizeDeps.entries, Vite only crawls build.rolldownOptions.input
     // for dependency discovery — but those are virtual modules that don't
     // import user dependencies. This causes lazy discovery, re-optimisation
     // cascades, and "Invalid hook call" errors on first load.
