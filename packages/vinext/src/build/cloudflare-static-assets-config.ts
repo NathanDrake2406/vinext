@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
+import path from "pathslash";
 import { parseJsonc } from "../utils/jsonc.js";
 import { resolveWranglerJsonPath } from "../utils/project.js";
 import { isUnknownRecord } from "../utils/record.js";
