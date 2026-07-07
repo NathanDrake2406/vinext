@@ -1,5 +1,6 @@
 import type { CloudflareInitOptions } from "../init-platform.js";
 import { parseJsonc, stripJsonComments } from "../utils/jsonc.js";
+import { isUnknownRecord } from "../utils/record.js";
 import {
   DEFAULT_IMAGES_BINDING,
   KV_NAMESPACE_ID_PLACEHOLDER,
@@ -123,6 +124,14 @@ function appendTopLevelJsonProperty(code: string, property: string): string {
   return `${before}${needsComma ? "," : ""}\n${property}\n${code.slice(closing)}`;
 }
 
+function findVinextKvNamespace(value: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.find(
+    (namespace): namespace is Record<string, unknown> =>
+      isUnknownRecord(namespace) && namespace.binding === VINEXT_KV_CACHE_BINDING,
+  );
+}
+
 export function updateWranglerJsonConfigForCloudflare(
   code: string,
   options: CloudflareInitOptions,
@@ -138,10 +147,11 @@ export function updateWranglerJsonConfigForCloudflare(
     if (!cacheProperty) {
       output = appendTopLevelJsonProperty(output, '  "cache": { "enabled": true }');
     } else {
-      const cache = parseJsonc(
+      const parsedCache = parseJsonc(
         output.slice(cacheProperty.valueStart, cacheProperty.valueEnd),
-      ) as Record<string, unknown> | null;
-      if (!cache || cache.enabled !== true) {
+      );
+      const cache = isUnknownRecord(parsedCache) ? parsedCache : {};
+      if (cache.enabled !== true) {
         const updatedCache = JSON.stringify({ ...cache, enabled: true });
         output = `${output.slice(0, cacheProperty.valueStart)}${updatedCache}${output.slice(cacheProperty.valueEnd)}`;
       }
@@ -155,10 +165,9 @@ export function updateWranglerJsonConfigForCloudflare(
         `  "images": { "binding": ${JSON.stringify(DEFAULT_IMAGES_BINDING)} }`,
       );
     } else {
-      const images = parseJsonc(
-        output.slice(imagesProperty.valueStart, imagesProperty.valueEnd),
-      ) as { binding?: unknown } | null;
-      if (!images || typeof images.binding !== "string" || images.binding.length === 0) {
+      const images = parseJsonc(output.slice(imagesProperty.valueStart, imagesProperty.valueEnd));
+      const binding = isUnknownRecord(images) ? images.binding : undefined;
+      if (typeof binding !== "string" || binding.length === 0) {
         output = `${output.slice(0, imagesProperty.valueStart)}{ "binding": ${JSON.stringify(DEFAULT_IMAGES_BINDING)} }${output.slice(imagesProperty.valueEnd)}`;
       }
     }
@@ -172,8 +181,7 @@ export function updateWranglerJsonConfigForCloudflare(
       );
     } else {
       const rawValue = output.slice(kvProperty.valueStart, kvProperty.valueEnd);
-      const namespaces = parseJsonc(rawValue) as Array<{ binding?: string }>;
-      if (!namespaces.some((namespace) => namespace.binding === VINEXT_KV_CACHE_BINDING)) {
+      if (!findVinextKvNamespace(parseJsonc(rawValue))) {
         const closing = kvProperty.valueEnd - 1;
         const content = output.slice(kvProperty.valueStart + 1, closing);
         const separator = content.trim() ? `${/,\s*$/.test(content) ? "" : ","}\n    ` : "";
@@ -187,12 +195,9 @@ export function updateWranglerJsonConfigForCloudflare(
 export function getWranglerJsonImagesBinding(code: string): string {
   const property = findTopLevelJsonProperty(code, "images");
   if (!property) return DEFAULT_IMAGES_BINDING;
-  const images = parseJsonc(code.slice(property.valueStart, property.valueEnd)) as {
-    binding?: unknown;
-  } | null;
-  return images && typeof images.binding === "string" && images.binding.length > 0
-    ? images.binding
-    : DEFAULT_IMAGES_BINDING;
+  const images = parseJsonc(code.slice(property.valueStart, property.valueEnd));
+  const binding = isUnknownRecord(images) ? images.binding : undefined;
+  return typeof binding === "string" && binding.length > 0 ? binding : DEFAULT_IMAGES_BINDING;
 }
 
 export function wranglerJsonKvNamespaceNeedsId(
@@ -201,16 +206,12 @@ export function wranglerJsonKvNamespaceNeedsId(
 ): boolean {
   if (options.dataCache !== "kv") return false;
 
-  const finalWranglerConfig = parseJsonc(code) as {
-    kv_namespaces?: Array<{ binding?: unknown; id?: unknown }>;
-  };
-  const kvBinding = finalWranglerConfig.kv_namespaces?.find(
-    (namespace) => namespace.binding === VINEXT_KV_CACHE_BINDING,
-  );
+  const finalWranglerConfig = parseJsonc(code);
+  const kvBinding = isUnknownRecord(finalWranglerConfig)
+    ? findVinextKvNamespace(finalWranglerConfig.kv_namespaces)
+    : undefined;
+  const id = kvBinding?.id;
   return (
-    !kvBinding ||
-    typeof kvBinding.id !== "string" ||
-    kvBinding.id.length === 0 ||
-    kvBinding.id === KV_NAMESPACE_ID_PLACEHOLDER
+    !kvBinding || typeof id !== "string" || id.length === 0 || id === KV_NAMESPACE_ID_PLACEHOLDER
   );
 }
