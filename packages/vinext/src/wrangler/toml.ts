@@ -235,6 +235,7 @@ function findTomlAssignmentInSection(
 
 function parseTomlString(value: string): string | undefined {
   const trimmed = value.trim();
+  if (startsWithTomlMultilineString(trimmed)) return undefined;
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     try {
       const parsed = JSON.parse(trimmed);
@@ -245,6 +246,17 @@ function parseTomlString(value: string): string | undefined {
   }
   if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
   return undefined;
+}
+
+function startsWithTomlMultilineString(value: string): boolean {
+  const trimmed = value.trimStart();
+  return trimmed.startsWith(`"""`) || trimmed.startsWith("'''");
+}
+
+function assertSupportedOwnedTomlValue(value: { value: string }, description: string): void {
+  if (startsWithTomlMultilineString(value.value)) {
+    throw new Error(`Wrangler TOML uses unsupported multiline ${description}.`);
+  }
 }
 
 function parseTomlBoolean(value: string): boolean | undefined {
@@ -341,6 +353,7 @@ function setInlineTomlPropertyValue(
 ): string {
   const property = findInlineTomlProperty(assignment.value, name);
   if (property) {
+    assertSupportedOwnedTomlValue(property, name);
     return `${code.slice(0, assignment.valueStart + property.valueStart)}${value}${code.slice(
       assignment.valueStart + property.valueEnd,
     )}`;
@@ -364,7 +377,10 @@ function setTomlTableAssignmentValue(
   value: string,
 ): string {
   const assignment = findTomlAssignmentInSection(code, section, name);
-  if (assignment) return replaceTomlAssignmentValue(code, assignment, value);
+  if (assignment) {
+    assertSupportedOwnedTomlValue(assignment, name);
+    return replaceTomlAssignmentValue(code, assignment, value);
+  }
 
   const insertion = `${name} = ${value}\n`;
   return `${code.slice(0, section.bodyEnd)}${code[section.bodyEnd - 1] === "\n" ? "" : "\n"}${insertion}${code.slice(section.bodyEnd)}`;
@@ -487,6 +503,7 @@ function ensureTomlImagesBinding(code: string): string {
 function findTomlKvNamespaceSection(code: string): TomlSection | undefined {
   return findTomlSections(code, "kv_namespaces", true).find((section) => {
     const binding = findTomlAssignmentInSection(code, section, "binding");
+    if (binding) assertSupportedOwnedTomlValue(binding, "kv_namespaces values");
     return binding ? parseTomlString(binding.value) === VINEXT_KV_CACHE_BINDING : false;
   });
 }
@@ -509,6 +526,7 @@ function tomlKvNamespaceNeedsId(code: string): boolean {
   const section = findTomlKvNamespaceSection(code);
   if (!section) return true;
   const id = findTomlAssignmentInSection(code, section, "id");
+  if (id) assertSupportedOwnedTomlValue(id, "kv_namespaces values");
   const value = id ? parseTomlString(id.value) : undefined;
   return !value || value === KV_NAMESPACE_ID_PLACEHOLDER;
 }

@@ -918,6 +918,32 @@ id = "fake-id"
       "inline KV namespace array",
       'name = "existing"\nkv_namespaces = [{ binding = "VINEXT_KV_CACHE", id = "existing-id" }]\n',
     ],
+    [
+      "multiline table images binding",
+      `name = "existing"
+cache = { enabled = false }
+
+[images]
+binding = """
+CUSTOM_IMAGES
+"""
+`,
+    ],
+    [
+      "triple-quoted inline images binding",
+      "name = \"existing\"\nimages = { binding = '''CUSTOM_IMAGES''' }\n",
+    ],
+    [
+      "multiline KV namespace binding",
+      `name = "existing"
+
+[[kv_namespaces]]
+binding = """
+VINEXT_KV_CACHE
+"""
+id = "existing-id"
+`,
+    ],
     ["malformed images inline table", 'name = "existing"\nimages = { binding = "IMAGES"\n'],
   ])("rejects unsupported Wrangler TOML %s before mutating the project", async (_name, toml) => {
     setupProject(tmpDir, { router: "app" });
