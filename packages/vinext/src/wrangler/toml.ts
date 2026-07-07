@@ -184,6 +184,12 @@ function parseDirectTomlKeyName(source: string): string | undefined {
   return skipTomlWhitespace(source, key.end) === source.length ? key.name : undefined;
 }
 
+function parseFirstDottedTomlKeyName(source: string): string | undefined {
+  const key = readTomlKeyToken(source);
+  if (!key) return undefined;
+  return source[skipTomlWhitespace(source, key.end)] === "." ? key.name : undefined;
+}
+
 function findTomlAssignmentInLine(
   line: string,
   name: string,
@@ -204,14 +210,17 @@ function findTomlAssignmentInLine(
   };
 }
 
-function parseTomlHeader(line: string): { name: string; isArray: boolean } | undefined {
+function parseTomlHeader(
+  line: string,
+): { name: string; rawName: string; isArray: boolean } | undefined {
   const trimmed = stripTomlLineComment(line).trim();
   const match = trimmed.match(/^(\[\[?)\s*([^[\]]+?)\s*(\]\]?)$/);
   if (!match) return undefined;
   const isArray = match[1] === "[[";
   if (isArray !== (match[3] === "]]")) return undefined;
-  const name = parseDirectTomlKeyName(match[2]) ?? match[2].trim();
-  return { name, isArray };
+  const rawName = match[2];
+  const name = parseDirectTomlKeyName(rawName) ?? rawName.trim();
+  return { name, rawName, isArray };
 }
 
 function findFirstTomlSectionStart(code: string): number | undefined {
@@ -249,6 +258,16 @@ function hasTopLevelDottedKey(code: string, name: string): boolean {
     const key = readTomlKeyToken(uncommented);
     if (!key || key.name !== name) return;
     found = uncommented[skipTomlWhitespace(uncommented, key.end)] === ".";
+  });
+  return found;
+}
+
+function hasDottedTomlSectionHeader(code: string, name: string): boolean {
+  let found = false;
+  forEachTomlSyntaxLine(code, (line) => {
+    if (found) return;
+    const header = parseTomlHeader(line);
+    found = header ? parseFirstDottedTomlKeyName(header.rawName) === name : false;
   });
   return found;
 }
@@ -471,6 +490,9 @@ function singleTomlTable(code: string, name: string): TomlSection | undefined {
 }
 
 function ensureTomlCacheEnabled(code: string): string {
+  if (hasDottedTomlSectionHeader(code, "cache")) {
+    throw new Error("Wrangler TOML uses unsupported dotted cache tables.");
+  }
   if (hasTopLevelDottedKey(code, "cache")) {
     throw new Error("Wrangler TOML uses unsupported dotted cache keys.");
   }
@@ -516,6 +538,9 @@ function getWranglerTomlImagesBinding(code: string): string {
 }
 
 function ensureTomlImagesBinding(code: string): string {
+  if (hasDottedTomlSectionHeader(code, "images")) {
+    throw new Error("Wrangler TOML uses unsupported dotted images tables.");
+  }
   if (hasTopLevelDottedKey(code, "images")) {
     throw new Error("Wrangler TOML uses unsupported dotted images keys.");
   }
@@ -566,6 +591,9 @@ function findTomlKvNamespaceSection(code: string): TomlSection | undefined {
 }
 
 function ensureTomlKvNamespace(code: string): string {
+  if (hasDottedTomlSectionHeader(code, "kv_namespaces")) {
+    throw new Error("Wrangler TOML uses unsupported dotted kv_namespaces tables.");
+  }
   if (findTopLevelTomlAssignment(code, "kv_namespaces")) {
     throw new Error("Wrangler TOML uses unsupported inline kv_namespaces.");
   }

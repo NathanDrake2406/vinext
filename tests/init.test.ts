@@ -978,6 +978,15 @@ id = "fake-id"
     ["scalar images config", 'name = "existing"\nimages = "IMAGES"\n'],
     ["dotted images config", 'name = "existing"\nimages.binding = "CUSTOM_IMAGES"\n'],
     ["dotted cache config", 'name = "existing"\ncache.enabled = false\n'],
+    ["dotted cache table", 'name = "existing"\n\n[cache.foo]\nbar = "baz"\n'],
+    [
+      "quoted dotted images table",
+      'name = "existing"\n\n[ "images" . "foo" ]\nbinding = "CUSTOM_IMAGES"\n',
+    ],
+    [
+      "dotted KV namespace array table",
+      'name = "existing"\n\n[[kv_namespaces.foo]]\nbinding = "VINEXT_KV_CACHE"\nid = "existing-id"\n',
+    ],
     [
       "inline KV namespace array",
       'name = "existing"\nkv_namespaces = [{ binding = "VINEXT_KV_CACHE", id = "existing-id" }]\n',
