@@ -19,6 +19,11 @@ type TomlSection = {
 
 type TomlMultilineStringDelimiter = `"""` | "'''";
 
+type TomlKeyToken = {
+  name: string;
+  end: number;
+};
+
 export type WranglerTomlConfigUpdate = WranglerConfigUpdateFacts & {
   code: string;
 };
@@ -136,13 +141,77 @@ function forEachTomlSyntaxLine(
   });
 }
 
+function skipTomlWhitespace(source: string, index: number): number {
+  let cursor = index;
+  while (/\s/.test(source[cursor] ?? "")) cursor++;
+  return cursor;
+}
+
+function readTomlKeyToken(source: string, start = 0): TomlKeyToken | undefined {
+  const index = skipTomlWhitespace(source, start);
+  const char = source[index];
+
+  if (char === '"' || char === "'") {
+    const delimiter = char === '"' ? `"""` : "'''";
+    if (source.startsWith(delimiter, index)) return undefined;
+
+    let escaped = false;
+    for (let cursor = index + 1; cursor < source.length; cursor++) {
+      const tokenChar = source[cursor];
+      if (char === '"' && escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '"' && tokenChar === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (tokenChar === char) {
+        const value = parseTomlString(source.slice(index, cursor + 1));
+        return value === undefined ? undefined : { name: value, end: cursor + 1 };
+      }
+    }
+    return undefined;
+  }
+
+  const bare = /^[A-Za-z0-9_-]+/.exec(source.slice(index));
+  return bare ? { name: bare[0], end: index + bare[0].length } : undefined;
+}
+
+function parseDirectTomlKeyName(source: string): string | undefined {
+  const key = readTomlKeyToken(source);
+  if (!key) return undefined;
+  return skipTomlWhitespace(source, key.end) === source.length ? key.name : undefined;
+}
+
+function findTomlAssignmentInLine(
+  line: string,
+  name: string,
+): { valueStart: number; valueEnd: number; value: string } | undefined {
+  const key = readTomlKeyToken(line);
+  if (!key || key.name !== name) return undefined;
+
+  let valueStart = skipTomlWhitespace(line, key.end);
+  if (line[valueStart] !== "=") return undefined;
+  valueStart = skipTomlWhitespace(line, valueStart + 1);
+
+  let valueEnd = line.length;
+  while (valueEnd > valueStart && /\s/.test(line[valueEnd - 1])) valueEnd--;
+  return {
+    valueStart,
+    valueEnd,
+    value: line.slice(valueStart, valueEnd),
+  };
+}
+
 function parseTomlHeader(line: string): { name: string; isArray: boolean } | undefined {
   const trimmed = stripTomlLineComment(line).trim();
   const match = trimmed.match(/^(\[\[?)\s*([^[\]]+?)\s*(\]\]?)$/);
   if (!match) return undefined;
   const isArray = match[1] === "[[";
   if (isArray !== (match[3] === "]]")) return undefined;
-  return { name: match[2].trim(), isArray };
+  const name = parseDirectTomlKeyName(match[2]) ?? match[2].trim();
+  return { name, isArray };
 }
 
 function findFirstTomlSectionStart(code: string): number | undefined {
@@ -157,20 +226,15 @@ function findFirstTomlSectionStart(code: string): number | undefined {
 function findTopLevelTomlAssignment(code: string, name: string): TomlAssignment | undefined {
   const topLevelEnd = findFirstTomlSectionStart(code) ?? code.length;
   let match: TomlAssignment | undefined;
-  const pattern = new RegExp(`^\\s*${name}\\s*=`);
   forEachTomlSyntaxLine(code.slice(0, topLevelEnd), (line, lineStart) => {
     if (match) return;
     const uncommented = stripTomlLineComment(line);
-    if (!pattern.test(uncommented)) return;
-    const equals = uncommented.indexOf("=");
-    let valueStart = equals + 1;
-    while (/\s/.test(uncommented[valueStart] ?? "")) valueStart++;
-    let valueEnd = uncommented.length;
-    while (valueEnd > valueStart && /\s/.test(uncommented[valueEnd - 1])) valueEnd--;
+    const assignment = findTomlAssignmentInLine(uncommented, name);
+    if (!assignment) return;
     match = {
-      valueStart: lineStart + valueStart,
-      valueEnd: lineStart + valueEnd,
-      value: uncommented.slice(valueStart, valueEnd),
+      valueStart: lineStart + assignment.valueStart,
+      valueEnd: lineStart + assignment.valueEnd,
+      value: assignment.value,
     };
   });
   return match;
@@ -178,11 +242,13 @@ function findTopLevelTomlAssignment(code: string, name: string): TomlAssignment 
 
 function hasTopLevelDottedKey(code: string, name: string): boolean {
   const topLevelEnd = findFirstTomlSectionStart(code) ?? code.length;
-  const pattern = new RegExp(`^\\s*${name}\\s*\\.`);
   let found = false;
   forEachTomlSyntaxLine(code.slice(0, topLevelEnd), (line) => {
     if (found) return;
-    found = pattern.test(stripTomlLineComment(line));
+    const uncommented = stripTomlLineComment(line);
+    const key = readTomlKeyToken(uncommented);
+    if (!key || key.name !== name) return;
+    found = uncommented[skipTomlWhitespace(uncommented, key.end)] === ".";
   });
   return found;
 }
@@ -214,20 +280,15 @@ function findTomlAssignmentInSection(
   name: string,
 ): TomlAssignment | undefined {
   let match: TomlAssignment | undefined;
-  const pattern = new RegExp(`^\\s*${name}\\s*=`);
   forEachTomlSyntaxLine(code.slice(section.bodyStart, section.bodyEnd), (line, lineStart) => {
     if (match) return;
     const uncommented = stripTomlLineComment(line);
-    if (!pattern.test(uncommented)) return;
-    const equals = uncommented.indexOf("=");
-    let valueStart = equals + 1;
-    while (/\s/.test(uncommented[valueStart] ?? "")) valueStart++;
-    let valueEnd = uncommented.length;
-    while (valueEnd > valueStart && /\s/.test(uncommented[valueEnd - 1])) valueEnd--;
+    const assignment = findTomlAssignmentInLine(uncommented, name);
+    if (!assignment) return;
     match = {
-      valueStart: section.bodyStart + lineStart + valueStart,
-      valueEnd: section.bodyStart + lineStart + valueEnd,
-      value: uncommented.slice(valueStart, valueEnd),
+      valueStart: section.bodyStart + lineStart + assignment.valueStart,
+      valueEnd: section.bodyStart + lineStart + assignment.valueEnd,
+      value: assignment.value,
     };
   });
   return match;
@@ -287,17 +348,13 @@ function findInlineTomlProperty(
     end: number,
   ): { valueStart: number; valueEnd: number; value: string } | undefined => {
     const entry = inner.slice(start, end);
-    const equals = entry.indexOf("=");
-    if (equals < 0 || entry.slice(0, equals).trim() !== name) return undefined;
-    let entryValueStart = equals + 1;
-    while (/\s/.test(entry[entryValueStart] ?? "")) entryValueStart++;
-    let entryValueEnd = entry.length;
-    while (entryValueEnd > entryValueStart && /\s/.test(entry[entryValueEnd - 1])) entryValueEnd--;
+    const assignment = findTomlAssignmentInLine(entry, name);
+    if (!assignment) return undefined;
     const offset = open + 1 + start;
     return {
-      valueStart: offset + entryValueStart,
-      valueEnd: offset + entryValueEnd,
-      value: entry.slice(entryValueStart, entryValueEnd),
+      valueStart: offset + assignment.valueStart,
+      valueEnd: offset + assignment.valueEnd,
+      value: assignment.value,
     };
   };
 

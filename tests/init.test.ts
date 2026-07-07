@@ -832,6 +832,70 @@ id = "existing-id"
     );
   });
 
+  it("honors quoted Wrangler TOML owned keys during Cloudflare init", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `name = "existing"
+"cache" = { "enabled" = false }
+"images" = { "binding" = "CUSTOM_IMAGES" }
+
+[[ "kv_namespaces" ]]
+"binding" = "VINEXT_KV_CACHE"
+"id" = "existing-id"
+`,
+    );
+
+    const { result, output } = await runInit(tmpDir);
+
+    expect(result.generatedPlatformFiles).toEqual(["wrangler.toml"]);
+    const wrangler = readFile(tmpDir, "wrangler.toml");
+    expect(wrangler).toContain('"cache" = { "enabled" = true }');
+    expect(wrangler).toContain('"images" = { "binding" = "CUSTOM_IMAGES" }');
+    expect(wrangler.match(/VINEXT_KV_CACHE/g)).toHaveLength(1);
+    expect(readFile(tmpDir, "vite.config.ts")).toContain(
+      'images: { optimizer: imagesOptimizer({ binding: "CUSTOM_IMAGES" }) }',
+    );
+    expect(output).not.toContain(
+      "Cloudflare setup is incomplete until you finish KV configuration:",
+    );
+  });
+
+  it("honors quoted Wrangler TOML tables during Cloudflare init", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `name = "existing"
+
+[ "images" ]
+binding = "CUSTOM_IMAGES"
+
+[ "cache" ]
+enabled = false
+
+[[ "kv_namespaces" ]]
+binding = "VINEXT_KV_CACHE"
+id = "existing-id"
+`,
+    );
+
+    const { result, output } = await runInit(tmpDir);
+
+    expect(result.generatedPlatformFiles).toEqual(["wrangler.toml"]);
+    const wrangler = readFile(tmpDir, "wrangler.toml");
+    expect(wrangler).toContain('[ "images" ]\nbinding = "CUSTOM_IMAGES"');
+    expect(wrangler).toContain('[ "cache" ]\nenabled = true');
+    expect(wrangler.match(/VINEXT_KV_CACHE/g)).toHaveLength(1);
+    expect(readFile(tmpDir, "vite.config.ts")).toContain(
+      'images: { optimizer: imagesOptimizer({ binding: "CUSTOM_IMAGES" }) }',
+    );
+    expect(output).not.toContain(
+      "Cloudflare setup is incomplete until you finish KV configuration:",
+    );
+  });
+
   it("ignores section-like lines inside Wrangler TOML multiline strings", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(
