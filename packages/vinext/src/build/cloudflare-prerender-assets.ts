@@ -122,6 +122,11 @@ function safeVisibleAssetPathForRoute(routePathname: string): string | null {
   return segments.join("/");
 }
 
+function getErrnoCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 /**
  * Publish an asset to its target. Foreign-collision detection happens earlier in
  * the plan phase, so every target reaching here is either absent or owned by a
@@ -153,7 +158,7 @@ function publishAsset(sourcePath: string, targetPath: string): boolean {
     // aborting the whole prerender. ENAMETOOLONG covers a deeply nested route
     // whose individual segments are short enough to pass the basename guard
     // above but whose full path exceeds the OS limit.
-    const code = (error as NodeJS.ErrnoException).code;
+    const code = getErrnoCode(error);
     if (
       code === "ENOENT" ||
       code === "EISDIR" ||
@@ -184,7 +189,7 @@ function removeOwnedFileTarget(targetPath: string): void {
     if (!stat.isFile() && !stat.isSymbolicLink()) return;
     fs.rmSync(targetPath, { force: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (getErrnoCode(error) !== "ENOENT") throw error;
   }
 }
 
