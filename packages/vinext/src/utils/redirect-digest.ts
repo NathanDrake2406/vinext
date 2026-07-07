@@ -13,13 +13,22 @@ export function parseRedirectDigest(digest: string): RedirectDigest | null {
   if (firstSemi === -1) return null;
 
   const rest = digest.slice(firstSemi + 1);
+  // Only canonical redirect statuses (303, 307, 308) are recognized;
+  // anything else is treated as URL content.
   const statusMatch = rest.match(/;(303|307|308);?$/);
   const target = statusMatch ? rest.slice(0, -statusMatch[0].length) : rest;
   if (!target) return null;
 
+  let url: string;
+  try {
+    url = decodeURIComponent(target);
+  } catch {
+    return null;
+  }
+
   return {
     status: statusMatch ? Number(statusMatch[1]) : 307,
     type: digest.slice(NEXT_REDIRECT_PREFIX.length, firstSemi) || null,
-    url: decodeURIComponent(target),
+    url,
   };
 }
