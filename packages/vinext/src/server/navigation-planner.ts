@@ -187,6 +187,13 @@ type RscRedirectFollow = {
   redirectDepth: number;
 };
 
+function mergeRscRedirectHistoryMode(
+  navigationMode: "push" | "replace",
+  redirectType: "push" | "replace" | null | undefined,
+): "push" | "replace" {
+  return navigationMode === "push" || redirectType === "push" ? "push" : "replace";
+}
+
 type RscFetchResultHardNavReason =
   | "invalidRscPayload"
   | "rscCompatibilityMismatch"
@@ -532,9 +539,13 @@ function classifyRscFetchResult(facts: RscFetchResultFacts): RscFetchResultDecis
   }
 
   if (facts.streamedRedirectTarget !== null) {
+    const streamedHistoryMode = mergeRscRedirectHistoryMode(
+      facts.effectiveHistoryUpdateMode,
+      facts.streamedRedirectType,
+    );
     const redirectDecision = resolveStreamedRscRedirectLifecycleHop({
       currentHref: facts.currentHref,
-      historyUpdateMode: facts.streamedRedirectType ?? facts.effectiveHistoryUpdateMode,
+      historyUpdateMode: streamedHistoryMode,
       origin: facts.origin,
       redirectDepth: facts.redirectDepth,
       requestPreviousNextUrl: facts.requestPreviousNextUrl,
@@ -548,7 +559,7 @@ function classifyRscFetchResult(facts: RscFetchResultFacts): RscFetchResultDecis
         reason: terminalReason.hardNavigationReason,
         reasonCode: terminalReason.traceReasonCode,
         redirectSignal: "streamed-header",
-        hardNavigationMode: facts.streamedRedirectType === "replace" ? "replace" : "assign",
+        hardNavigationMode: streamedHistoryMode === "push" ? "assign" : "replace",
         url: redirectDecision.href,
       });
     }
@@ -558,7 +569,7 @@ function classifyRscFetchResult(facts: RscFetchResultFacts): RscFetchResultDecis
         facts,
         redirect: {
           href: redirectDecision.href,
-          historyUpdateMode: facts.streamedRedirectType ?? facts.effectiveHistoryUpdateMode,
+          historyUpdateMode: streamedHistoryMode,
           previousNextUrl: redirectDecision.previousNextUrl,
           redirectDepth: redirectDecision.redirectDepth,
         },

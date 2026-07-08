@@ -7012,7 +7012,7 @@ describe("app browser RSC redirect lifecycle", () => {
     });
   });
 
-  it("uses the streamed redirect history mode instead of the initiating navigation mode", () => {
+  it("lets explicit push redirects upgrade an initiating replace navigation", () => {
     const decision = navigationPlanner.classifyRscFetchResult({
       clientCompatibilityId: null,
       compatibilityIdHeader: null,
@@ -7034,6 +7034,33 @@ describe("app browser RSC redirect lifecycle", () => {
       kind: "followRedirect",
       redirect: {
         href: "/new",
+        historyUpdateMode: "push",
+      },
+    });
+  });
+
+  it("preserves an initiating push across a replace-style server redirect", () => {
+    const decision = navigationPlanner.classifyRscFetchResult({
+      clientCompatibilityId: null,
+      compatibilityIdHeader: null,
+      currentHref: "/source",
+      effectiveHistoryUpdateMode: "push",
+      hasBody: true,
+      isRscContentType: true,
+      origin: "https://example.com",
+      redirectDepth: 0,
+      requestPreviousNextUrl: null,
+      responseOk: true,
+      responseUrl: null,
+      source: "live",
+      streamedRedirectTarget: "/destination",
+      streamedRedirectType: "replace",
+    });
+
+    expect(decision).toMatchObject({
+      kind: "followRedirect",
+      redirect: {
+        href: "/destination",
         historyUpdateMode: "push",
       },
     });
@@ -7143,7 +7170,7 @@ describe("app browser RSC redirect lifecycle", () => {
     });
 
     expect(replaceDecision).toMatchObject({
-      hardNavigationMode: "replace",
+      hardNavigationMode: "assign",
       kind: "hardNavigate",
     });
     expect(pushDecision).toMatchObject({
