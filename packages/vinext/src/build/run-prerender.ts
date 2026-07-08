@@ -357,7 +357,7 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
       buildId: config.buildId,
       trailingSlash: config.trailingSlash,
     });
-    publishCloudflarePrerenderedAppAssets({
+    const publishResult = publishCloudflarePrerenderedAppAssets({
       config,
       // Server actions POST to the visible page path, and Cloudflare's asset
       // worker answers 405 for non-GET/HEAD requests to a published asset
@@ -370,6 +370,14 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
       rscCompatibilityId: process.env.__VINEXT_SHARED_RSC_COMPATIBILITY_ID || config.deploymentId,
       serverDir,
     });
+    // The publisher gates static publication behind a dozen disqualifiers
+    // (middleware, config transforms, basePath, i18n, trailingSlash, server
+    // actions, _headers rule limit, …). When a route silently keeps hitting the
+    // Worker, this is the only place the reason exists — surface it under the
+    // same VINEXT_DEBUG_* opt-in the classification channel uses.
+    if (publishResult.skipped && process.env.VINEXT_DEBUG_STATIC_ASSETS === "1") {
+      console.log(`  Static asset publication skipped: ${publishResult.reason}`);
+    }
   } finally {
     progress.finish(rendered, skipped, errors);
   }
