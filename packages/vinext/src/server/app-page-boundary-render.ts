@@ -13,7 +13,7 @@ import type { NavigationContext } from "vinext/shims/navigation";
 import { isNavigationSignalError } from "../utils/navigation-signal.js";
 import {
   buildAppPageSpecialErrorResponse,
-  readAppPageBinaryStream,
+  bufferAppPageBinaryStream,
   resolveAppPageSpecialError,
   type AppPageFontPreload,
   type AppPageSpecialError,
@@ -431,8 +431,7 @@ async function renderAppPageBoundaryElementResponse<TModule extends AppPageModul
   // and correctness must not depend on whether the boundary happens to be a
   // route miss. Mirrors app-page-render.ts's pre-flush special-error capture.
   if (options.isRscRequest && response.body) {
-    const [bufferedStream, drainStream] = response.body.tee();
-    await readAppPageBinaryStream(drainStream);
+    const bufferedStream = await bufferAppPageBinaryStream(response.body);
     response = new Response(bufferedStream, {
       status: response.status,
       headers: response.headers,

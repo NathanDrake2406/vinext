@@ -21,16 +21,16 @@ describe("app RSC redirect flight encoding", () => {
   it("formats the canonical NEXT_REDIRECT digest with a replace-style default", () => {
     // Next.js's getRedirectError writes `${CODE};${type};${url};${status};`
     // with the raw URL and a replace default outside server actions.
-    expect(formatNextRedirectDigest({ url: "/about", statusCode: 307 })).toBe(
+    expect(formatNextRedirectDigest({ type: "replace", url: "/about", statusCode: 307 })).toBe(
       "NEXT_REDIRECT;replace;/about;307;",
     );
-    expect(formatNextRedirectDigest({ url: "https://example.com/x", statusCode: 308 })).toBe(
-      "NEXT_REDIRECT;replace;https://example.com/x;308;",
-    );
+    expect(
+      formatNextRedirectDigest({ type: "push", url: "https://example.com/x", statusCode: 308 }),
+    ).toBe("NEXT_REDIRECT;push;https://example.com/x;308;");
   });
 
   it("renders an element that throws the digest and reports it through onError", async () => {
-    const digest = formatNextRedirectDigest({ url: "/login", statusCode: 307 });
+    const digest = formatNextRedirectDigest({ type: "replace", url: "/login", statusCode: 307 });
     let thrown: unknown;
     let reportedDigest: unknown;
 

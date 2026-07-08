@@ -177,6 +177,7 @@ export type RscFetchResultFacts = {
   compatibilityIdHeader: string | null;
   responseUrl: string | null;
   streamedRedirectTarget: string | null;
+  streamedRedirectType?: "push" | "replace" | null;
 };
 
 type RscRedirectFollow = {
@@ -205,6 +206,7 @@ export type RscFetchResultDecision =
       kind: "hardNavigate";
       discardBody: boolean;
       url: string;
+      hardNavigationMode?: "assign" | "replace";
       reason: RscFetchResultHardNavReason;
       trace: NavigationTrace;
     };
@@ -394,11 +396,15 @@ function createRscFetchResultHardNavigationDecision(options: {
   reason: RscFetchResultHardNavReason;
   reasonCode: NavigationTraceReasonCode;
   redirectSignal?: RscRedirectSignal;
+  hardNavigationMode?: "assign" | "replace";
   url: string;
 }): RscFetchResultDecision {
   return {
     discardBody: options.discardBody,
     kind: "hardNavigate",
+    ...(options.hardNavigationMode !== undefined
+      ? { hardNavigationMode: options.hardNavigationMode }
+      : {}),
     reason: options.reason,
     trace: createNavigationTrace(
       options.reasonCode,
@@ -528,7 +534,7 @@ function classifyRscFetchResult(facts: RscFetchResultFacts): RscFetchResultDecis
   if (facts.streamedRedirectTarget !== null) {
     const redirectDecision = resolveStreamedRscRedirectLifecycleHop({
       currentHref: facts.currentHref,
-      historyUpdateMode: facts.effectiveHistoryUpdateMode,
+      historyUpdateMode: facts.streamedRedirectType ?? facts.effectiveHistoryUpdateMode,
       origin: facts.origin,
       redirectDepth: facts.redirectDepth,
       requestPreviousNextUrl: facts.requestPreviousNextUrl,
@@ -542,6 +548,7 @@ function classifyRscFetchResult(facts: RscFetchResultFacts): RscFetchResultDecis
         reason: terminalReason.hardNavigationReason,
         reasonCode: terminalReason.traceReasonCode,
         redirectSignal: "streamed-header",
+        hardNavigationMode: facts.streamedRedirectType === "replace" ? "replace" : "assign",
         url: redirectDecision.href,
       });
     }
@@ -551,7 +558,7 @@ function classifyRscFetchResult(facts: RscFetchResultFacts): RscFetchResultDecis
         facts,
         redirect: {
           href: redirectDecision.href,
-          historyUpdateMode: facts.effectiveHistoryUpdateMode,
+          historyUpdateMode: facts.streamedRedirectType ?? facts.effectiveHistoryUpdateMode,
           previousNextUrl: redirectDecision.previousNextUrl,
           redirectDepth: redirectDecision.redirectDepth,
         },

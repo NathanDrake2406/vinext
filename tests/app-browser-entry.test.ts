@@ -7012,6 +7012,33 @@ describe("app browser RSC redirect lifecycle", () => {
     });
   });
 
+  it("uses the streamed redirect history mode instead of the initiating navigation mode", () => {
+    const decision = navigationPlanner.classifyRscFetchResult({
+      clientCompatibilityId: null,
+      compatibilityIdHeader: null,
+      currentHref: "/old",
+      effectiveHistoryUpdateMode: "replace",
+      hasBody: true,
+      isRscContentType: true,
+      origin: "https://example.com",
+      redirectDepth: 0,
+      requestPreviousNextUrl: null,
+      responseOk: true,
+      responseUrl: null,
+      source: "live",
+      streamedRedirectTarget: "/new",
+      streamedRedirectType: "push",
+    });
+
+    expect(decision).toMatchObject({
+      kind: "followRedirect",
+      redirect: {
+        href: "/new",
+        historyUpdateMode: "push",
+      },
+    });
+  });
+
   it("treats streamed hash-only same-path changes as redirects", () => {
     const decision = resolveStreamedRscRedirectLifecycleHop({
       currentHref: "/same#old",
@@ -7078,6 +7105,50 @@ describe("app browser RSC redirect lifecycle", () => {
       kind: "terminal-hard-navigation",
       reason: "externalRedirect",
       redirectDepth: 0,
+    });
+  });
+
+  it("maps streamed redirect history mode onto external hard navigation mode", () => {
+    const replaceDecision = navigationPlanner.classifyRscFetchResult({
+      clientCompatibilityId: null,
+      compatibilityIdHeader: null,
+      currentHref: "/account",
+      effectiveHistoryUpdateMode: "push",
+      hasBody: true,
+      isRscContentType: true,
+      origin: "https://example.com",
+      redirectDepth: 0,
+      requestPreviousNextUrl: null,
+      responseOk: true,
+      responseUrl: null,
+      source: "live",
+      streamedRedirectTarget: "https://idp.example/login",
+      streamedRedirectType: "replace",
+    });
+    const pushDecision = navigationPlanner.classifyRscFetchResult({
+      clientCompatibilityId: null,
+      compatibilityIdHeader: null,
+      currentHref: "/account",
+      effectiveHistoryUpdateMode: "replace",
+      hasBody: true,
+      isRscContentType: true,
+      origin: "https://example.com",
+      redirectDepth: 0,
+      requestPreviousNextUrl: null,
+      responseOk: true,
+      responseUrl: null,
+      source: "live",
+      streamedRedirectTarget: "https://idp.example/login",
+      streamedRedirectType: "push",
+    });
+
+    expect(replaceDecision).toMatchObject({
+      hardNavigationMode: "replace",
+      kind: "hardNavigate",
+    });
+    expect(pushDecision).toMatchObject({
+      hardNavigationMode: "assign",
+      kind: "hardNavigate",
     });
   });
 

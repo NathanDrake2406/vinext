@@ -25,8 +25,12 @@ import { createElement, type ReactNode } from "react";
  *   `.nextjs-ref/packages/next/src/client/components/redirect.ts:20-23`
  *   `.nextjs-ref/packages/next/src/client/components/redirect-error.ts`
  */
-export function formatNextRedirectDigest(options: { url: string; statusCode: number }): string {
-  return `NEXT_REDIRECT;replace;${options.url};${options.statusCode};`;
+export function formatNextRedirectDigest(options: {
+  type: "push" | "replace";
+  url: string;
+  statusCode: number;
+}): string {
+  return `NEXT_REDIRECT;${options.type};${options.url};${options.statusCode};`;
 }
 
 /**
