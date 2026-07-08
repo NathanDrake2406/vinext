@@ -46,27 +46,41 @@ describe("next error digest parsing", () => {
     });
   });
 
-  it("preserves semicolons inside redirect URLs when status is omitted", () => {
-    expect(
-      parseNextRedirectDigest("NEXT_REDIRECT;replace;javascript:window.location.assign('/boom');"),
-    ).toEqual({
+  it("preserves percent escapes and literal percent signs in Next-style raw URLs", () => {
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/docs%2Fguide%3Bpart;307;")).toEqual({
       status: 307,
       type: "replace",
-      url: "javascript:window.location.assign('/boom');",
+      url: "/docs%2Fguide%3Bpart",
+    });
+
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/discount/100%;307;")).toEqual({
+      status: 307,
+      type: "replace",
+      url: "/discount/100%",
     });
   });
 
-  it("treats malformed trailing status segments as part of the URL", () => {
-    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/foo;307garbage;")).toEqual({
-      status: 307,
-      type: "replace",
-      url: "/foo;307garbage;",
-    });
+  it("decodes vinext's encoded redirect URLs", () => {
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;%2Fdocs%252Fguide%253Bpart;307")).toEqual(
+      {
+        status: 307,
+        type: "replace",
+        url: "/docs%2Fguide%3Bpart",
+      },
+    );
+  });
 
-    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/foo;abc;")).toEqual({
+  it("preserves semicolons inside redirect URLs when status is omitted", () => {
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;%2Fdocs%3Bpart")).toEqual({
       status: 307,
       type: "replace",
-      url: "/foo;abc;",
+      url: "/docs;part",
     });
+  });
+
+  it("rejects malformed Next-style trailing status segments", () => {
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/foo;307garbage;")).toBeNull();
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/foo;abc;")).toBeNull();
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;/foo;")).toBeNull();
   });
 });
