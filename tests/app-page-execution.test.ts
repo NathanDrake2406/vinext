@@ -7,6 +7,7 @@ import {
   resolveAppPageSpecialError,
   teeAppPageRscStreamForCapture,
 } from "../packages/vinext/src/server/app-page-execution.js";
+import { parseNextRedirectDigest } from "../packages/vinext/src/server/next-error-digest.js";
 import { readStreamAsText } from "../packages/vinext/src/utils/text-stream.js";
 
 function createStream(chunks: string[]): ReadableStream<Uint8Array> {
@@ -359,6 +360,42 @@ describe("app page execution helpers", () => {
       digest: "NEXT_REDIRECT;replace;/redirected;307;",
     });
     await expect(response.text()).resolves.toBe("E:NEXT_REDIRECT;replace;/redirected;307;");
+  });
+
+  it("preserves semicolons through encoded redirect parsing and raw Flight re-emission", async () => {
+    const specialError = resolveAppPageSpecialError({
+      digest: "NEXT_REDIRECT;;%2Fdocs%3Bpart;307",
+    });
+    expect(specialError).toEqual({
+      kind: "redirect",
+      location: "/docs;part",
+      statusCode: 307,
+    });
+
+    const buildRscRedirectFlightStream = vi.fn(
+      (options: { digest: string }) =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(options.digest));
+            controller.close();
+          },
+        }),
+    );
+    const response = await buildAppPageSpecialErrorResponse({
+      buildRscRedirectFlightStream,
+      clearRequestContext: vi.fn(),
+      isRscRequest: true,
+      request: new Request("https://example.com/start.rsc"),
+      specialError: specialError!,
+    });
+    const emittedDigest = await response.text();
+
+    expect(emittedDigest).toBe("NEXT_REDIRECT;replace;/docs;part;307;");
+    expect(parseNextRedirectDigest(emittedDigest)).toEqual({
+      status: 307,
+      type: "replace",
+      url: "/docs;part",
+    });
   });
 
   it("keeps metadata-originated RSC redirects on the Flight digest path", async () => {
