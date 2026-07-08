@@ -17,7 +17,8 @@ export function parseRedirectDigest(digest: string): RedirectDigest | null {
   // anything else is treated as URL content.
   const statusMatch = rest.match(/;(303|307|308);?$/);
   // Next.js emits raw, semicolon-terminated digests. Vinext's encoded form
-  // cannot end in a URL semicolon because encodeURIComponent escapes it.
+  // cannot end in a URL semicolon because encodeURIComponent escapes it, so
+  // canonical targets must be preserved verbatim rather than URL-decoded.
   const isCanonical = rest !== "" && digest.endsWith(";");
   if (isCanonical && !statusMatch) return null;
 
@@ -34,6 +35,8 @@ export function parseRedirectDigest(digest: string): RedirectDigest | null {
 
   return {
     status: statusMatch ? Number(statusMatch[1]) : 307,
+    // Vinext permits an empty type so catch sites can choose push for Server
+    // Actions and replace elsewhere; other raw values retain prior behavior.
     type: digest.slice(NEXT_REDIRECT_PREFIX.length, firstSemi) || null,
     url,
   };

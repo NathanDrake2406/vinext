@@ -92,16 +92,12 @@ export function isRedirectError(error: unknown): error is RedirectErrorShape {
 export function decodeRedirectError(
   digest: string,
 ): { url: string; type: "push" | "replace" } | null {
-  try {
-    const redirect = parseRedirectDigest(digest);
-    if (!redirect) return null;
-    return {
-      url: redirect.url,
-      type: redirect.type === "push" ? "push" : "replace",
-    };
-  } catch {
-    return null;
-  }
+  const redirect = parseRedirectDigest(digest);
+  if (!redirect) return null;
+  return {
+    url: redirect.url,
+    type: redirect.type === "push" ? "push" : "replace",
+  };
 }
 
 export function isNextRouterError(error: unknown): boolean {
