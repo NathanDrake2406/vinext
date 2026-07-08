@@ -405,9 +405,15 @@ async function renderAppPageBoundaryElementResponse<TModule extends AppPageModul
   // copy to force the render to settle so the special error is captured before
   // we commit the raw boundary response, then hand the buffered copy back as
   // the body. The document path already consumes the stream in
-  // createHtmlResponse, so this only applies to RSC. Boundary responses are
-  // small, terminal documents, so buffering them is an acceptable cost for
-  // correct redirect handling. Mirrors app-page-render.ts's pre-flush capture.
+  // createHtmlResponse, so this only applies to RSC.
+  //
+  // This applies to every HTTP-access fallback render, not just route misses:
+  // a matched route's notFound()/forbidden()/unauthorized() renders its
+  // boundary through this same path, and a layout there can async-redirect too.
+  // These are terminal error documents (a not-found/forbidden UI), so buffering
+  // one before responding is an acceptable cost for correct redirect handling —
+  // and correctness must not depend on whether the boundary happens to be a
+  // route miss. Mirrors app-page-render.ts's pre-flush special-error capture.
   if (options.isRscRequest && response.body) {
     const [bufferedStream, drainStream] = response.body.tee();
     await readAppPageBinaryStream(drainStream);

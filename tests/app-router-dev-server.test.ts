@@ -2342,4 +2342,42 @@ describe("App Router route-miss root layout redirects", () => {
     expect(body).toContain("NEXT_REDIRECT");
     expect(body).toContain("/result");
   });
+
+  // The RSC drain applies to every HTTP-access fallback, not only route misses:
+  // `/gated` is a *matched* route that calls notFound(), so its not-found
+  // boundary renders through the same path and the root layout can redirect
+  // during that render. Proves the broad drain catches matched-route async
+  // redirects (rather than silently 404-ing them like the route-miss bug did).
+  it("encodes a matched-route not-found's async layout redirect into the RSC flight", async () => {
+    const res = await fetch(`${baseUrl}/gated.rsc`, {
+      redirect: "manual",
+      headers: {
+        "x-vinext-root-layout-redirect": "1",
+        Accept: "text/x-component",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/x-component");
+    expect(res.headers.get("x-vinext-rsc-redirect")).toBe("/result");
+    const body = await res.text();
+    expect(body).toContain("NEXT_REDIRECT");
+    expect(body).toContain("/result");
+  });
+
+  // Guards the drain's cost side: a matched-route not-found with no redirect
+  // must still produce a normal 404 flight. The stream is now buffered before
+  // responding, so this proves buffering does not corrupt or drop the payload.
+  it("still returns a normal 404 flight for a matched-route not-found without a redirect", async () => {
+    const res = await fetch(`${baseUrl}/gated.rsc`, {
+      redirect: "manual",
+      headers: { Accept: "text/x-component" },
+    });
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/x-component");
+    expect(res.headers.get("x-vinext-rsc-redirect")).toBeNull();
+    const body = await res.text();
+    expect(body).toContain("Root Not Found");
+  });
 });
