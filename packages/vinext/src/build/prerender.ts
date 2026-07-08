@@ -59,6 +59,7 @@ import {
 } from "./prerender-server-pool.js";
 import { readPrerenderSecret } from "./server-manifest.js";
 import { getOutputPath, getRscOutputPath } from "../utils/prerender-output-paths.js";
+import { isUnknownRecord } from "../utils/record.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import {
   createAppPprFallbackShells,
@@ -1739,7 +1740,8 @@ function readPrerenderQueryInvariantHeader(headers: Headers): PrerenderQueryInva
   if (!value) return null;
 
   try {
-    const parsed = JSON.parse(value) as { html?: unknown; rsc?: unknown };
+    const parsed: unknown = JSON.parse(value);
+    if (!isUnknownRecord(parsed)) return null;
     return {
       html: parsed.html === true,
       rsc: parsed.rsc === true,
