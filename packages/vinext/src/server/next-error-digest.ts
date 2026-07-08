@@ -37,10 +37,10 @@ export function getNextErrorDigest(error: unknown): string | null {
 /**
  * Parses redirect digests from vinext's encoded three-part form and Next.js's
  * raw, semicolon-terminated form. Returns null when the digest is not a
- * redirect digest or the URL segment is missing. The `url` is decoded with
- * `decodeURIComponent`; the `status` defaults to 307 when omitted; an omitted
- * `type` is left as null so the caller can apply the correct context-sensitive
- * default.
+ * redirect digest. Vinext's encoded URL is decoded with `decodeURIComponent`;
+ * Next.js's canonical raw URL is preserved verbatim. The `status` defaults to
+ * 307 when omitted; an omitted `type` is left as null so the caller can apply
+ * the correct context-sensitive default.
  */
 export function parseNextRedirectDigest(digest: string): NextRedirectDigest | null {
   return parseRedirectDigest(digest);

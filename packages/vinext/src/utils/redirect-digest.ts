@@ -16,11 +16,10 @@ export function parseRedirectDigest(digest: string): RedirectDigest | null {
   // Only canonical redirect statuses (303, 307, 308) are recognized;
   // anything else is treated as URL content.
   const statusMatch = rest.match(/;(303|307|308);?$/);
-  const isCanonical = digest.endsWith(";");
+  const isCanonical = rest !== "" && digest.endsWith(";");
   if (isCanonical && !statusMatch) return null;
 
   const target = statusMatch ? rest.slice(0, -statusMatch[0].length) : rest;
-  if (!target) return null;
 
   let url = target;
   if (!isCanonical) {

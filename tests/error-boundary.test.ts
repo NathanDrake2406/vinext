@@ -423,6 +423,18 @@ describe("RedirectBoundary digest classification", () => {
     });
   });
 
+  it("catches Next-style redirect digests with an empty URL", () => {
+    const e = Object.assign(new Error("NEXT_REDIRECT"), {
+      digest: "NEXT_REDIRECT;replace;;307;",
+    });
+
+    expect(RedirectErrorBoundaryClass).not.toBeNull();
+    expect(RedirectErrorBoundaryClass?.getDerivedStateFromError(e)).toEqual({
+      redirect: "",
+      redirectType: "replace",
+    });
+  });
+
   it("re-throws non-redirect errors", () => {
     const e = Object.assign(new Error("NEXT_NOT_FOUND"), { digest: "NEXT_NOT_FOUND" });
 
@@ -430,9 +442,9 @@ describe("RedirectBoundary digest classification", () => {
     expect(() => RedirectErrorBoundaryClass?.getDerivedStateFromError(e)).toThrow(e);
   });
 
-  it("re-throws redirect errors with malformed/empty URL", () => {
+  it("re-throws incomplete redirect digests", () => {
     const e = Object.assign(new Error("NEXT_REDIRECT"), {
-      digest: "NEXT_REDIRECT;push;",
+      digest: "NEXT_REDIRECT;push",
     });
 
     expect(RedirectErrorBoundaryClass).not.toBeNull();

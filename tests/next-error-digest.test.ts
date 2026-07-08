@@ -70,6 +70,20 @@ describe("next error digest parsing", () => {
     );
   });
 
+  it("accepts empty redirect URLs", () => {
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;;307;")).toEqual({
+      status: 307,
+      type: "replace",
+      url: "",
+    });
+
+    expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;;307")).toEqual({
+      status: 307,
+      type: "replace",
+      url: "",
+    });
+  });
+
   it("preserves semicolons inside redirect URLs when status is omitted", () => {
     expect(parseNextRedirectDigest("NEXT_REDIRECT;replace;%2Fdocs%3Bpart")).toEqual({
       status: 307,

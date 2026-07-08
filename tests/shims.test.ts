@@ -879,6 +879,23 @@ describe("next/navigation shim", () => {
     }
   });
 
+  it("redirect() round-trips an empty URL through the shared digest parser", async () => {
+    const { redirect } = await import("../packages/vinext/src/shims/navigation.js");
+    const { parseNextRedirectDigest } =
+      await import("../packages/vinext/src/server/next-error-digest.js");
+
+    try {
+      redirect("");
+      expect.unreachable("should have thrown");
+    } catch (error: any) {
+      expect(parseNextRedirectDigest(error.digest)).toEqual({
+        status: 307,
+        type: null,
+        url: "",
+      });
+    }
+  });
+
   it("permanentRedirect() accepts an optional type parameter", async () => {
     const { permanentRedirect } = await import("../packages/vinext/src/shims/navigation.js");
     try {
@@ -901,6 +918,23 @@ describe("next/navigation shim", () => {
     } catch (e: any) {
       const parts = e.digest.split(";");
       expect(parts[1]).toBe("replace");
+    }
+  });
+
+  it("permanentRedirect() round-trips an empty URL through the shared digest parser", async () => {
+    const { permanentRedirect } = await import("../packages/vinext/src/shims/navigation.js");
+    const { parseNextRedirectDigest } =
+      await import("../packages/vinext/src/server/next-error-digest.js");
+
+    try {
+      permanentRedirect("");
+      expect.unreachable("should have thrown");
+    } catch (error: any) {
+      expect(parseNextRedirectDigest(error.digest)).toEqual({
+        status: 308,
+        type: "replace",
+        url: "",
+      });
     }
   });
 
