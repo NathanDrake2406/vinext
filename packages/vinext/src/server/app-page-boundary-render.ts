@@ -13,10 +13,12 @@ import type { NavigationContext } from "vinext/shims/navigation";
 import { isNavigationSignalError } from "../utils/navigation-signal.js";
 import {
   buildAppPageSpecialErrorResponse,
+  readAppPageBinaryStream,
   resolveAppPageSpecialError,
   type AppPageFontPreload,
   type AppPageSpecialError,
 } from "./app-page-execution.js";
+import { buildRscRedirectFlightStream } from "./app-rsc-redirect-flight.js";
 import type { AppPageMiddlewareContext } from "./app-page-response.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
 import { resolveAppPageHead, type ApplyAppPageFileBasedMetadata } from "./app-page-head.js";
@@ -280,21 +282,17 @@ function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
   };
 }
 
-function buildBoundaryRscRedirectFlightStream(
-  options: Pick<AppPageBoundaryRenderCommonOptions, "renderToReadableStream">,
-  digest: string,
-): ReadableStream<Uint8Array> {
-  const throwingElement = createElement(function NextRedirectFlightThrower() {
-    const error = new Error("NEXT_REDIRECT") as Error & { digest: string };
-    error.digest = digest;
-    throw error;
-  });
-
-  return options.renderToReadableStream(throwingElement, {
-    onError: () => digest,
-  });
-}
-
+// Terminal special-error responder for the route-miss boundary path (a
+// redirect/not-found/forbidden/unauthorized thrown *while* rendering the root
+// not-found or error boundary). It deliberately omits `renderFallbackPage`,
+// which scopes the guarantee here to redirects:
+//   - redirect() → 307 (document) or a 200 flight payload (RSC), fully handled.
+//   - notFound()/forbidden()/unauthorized() → the shared builder falls through
+//     to a plain status-text response. That is intentional: we are already
+//     inside boundary rendering, so re-entering fallback rendering would recurse
+//     on the same boundary. The matched layout/page paths pass a
+//     `renderFallbackPage` because they can climb to a *parent* boundary; the
+//     root boundary has none.
 function renderBoundarySpecialErrorResponse<TModule extends AppPageModule>(
   options: AppPageBoundaryRenderCommonOptions<TModule>,
   specialError: AppPageSpecialError,
@@ -302,7 +300,10 @@ function renderBoundarySpecialErrorResponse<TModule extends AppPageModule>(
   return buildAppPageSpecialErrorResponse({
     basePath: options.basePath,
     buildRscRedirectFlightStream: (rscOptions) =>
-      buildBoundaryRscRedirectFlightStream(options, rscOptions.digest),
+      buildRscRedirectFlightStream({
+        renderToReadableStream: options.renderToReadableStream,
+        digest: rscOptions.digest,
+      }),
     clearRequestContext: options.clearRequestContext,
     getAndClearPendingCookies: options.getAndClearPendingCookies,
     isEdgeRuntime: options.isEdgeRuntime,
@@ -395,6 +396,25 @@ async function renderAppPageBoundaryElementResponse<TModule extends AppPageModul
 
   if (!handleSpecialErrors) {
     return response;
+  }
+
+  // RSC responses are returned without being consumed here, so a
+  // redirect()/notFound() thrown by an *async* server component — e.g. a root
+  // layout that `await headers()` before redirect() — has not yet surfaced
+  // through React's onError when the capture check below runs. Drain a tee'd
+  // copy to force the render to settle so the special error is captured before
+  // we commit the raw boundary response, then hand the buffered copy back as
+  // the body. The document path already consumes the stream in
+  // createHtmlResponse, so this only applies to RSC. Boundary responses are
+  // small, terminal documents, so buffering them is an acceptable cost for
+  // correct redirect handling. Mirrors app-page-render.ts's pre-flush capture.
+  if (options.isRscRequest && response.body) {
+    const [bufferedStream, drainStream] = response.body.tee();
+    await readAppPageBinaryStream(drainStream);
+    response = new Response(bufferedStream, {
+      status: response.status,
+      headers: response.headers,
+    });
   }
 
   const specialError = resolveCapturedSpecialError();

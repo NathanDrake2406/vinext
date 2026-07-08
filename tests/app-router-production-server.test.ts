@@ -1123,6 +1123,24 @@ describe("App Router Production server (startProdServer)", () => {
       const location = redirectRes.headers.get("location");
       expect(location).toBeTruthy();
       expect(new URL(location!, redirectBaseUrl).pathname).toBe("/result");
+
+      // RSC navigations encode the redirect in the flight body (200), not a
+      // 307 status line — mirrors the dev-server RSC test and pins the built
+      // production path through the same boundary redirect-flight builder.
+      // vinext routes RSC by the `.rsc` suffix (app-rsc-request-normalization).
+      const rscRedirectRes = await fetch(`${redirectBaseUrl}/random-content.rsc`, {
+        redirect: "manual",
+        headers: {
+          "x-vinext-root-layout-redirect": "1",
+          Accept: "text/x-component",
+        },
+      });
+      expect(rscRedirectRes.status).toBe(200);
+      expect(rscRedirectRes.headers.get("content-type")).toContain("text/x-component");
+      expect(rscRedirectRes.headers.get("x-vinext-rsc-redirect")).toBe("/result");
+      const rscBody = await rscRedirectRes.text();
+      expect(rscBody).toContain("NEXT_REDIRECT");
+      expect(rscBody).toContain("/result");
     } finally {
       await new Promise<void>((resolve, reject) => {
         if (!redirectServer) {

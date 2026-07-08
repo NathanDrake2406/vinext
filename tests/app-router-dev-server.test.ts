@@ -2315,4 +2315,31 @@ describe("App Router route-miss root layout redirects", () => {
     expect(location).toBeTruthy();
     expect(new URL(location!, baseUrl).pathname).toBe("/result");
   });
+
+  // Ported from Next.js: test/e2e/app-dir/rsc-redirect/rsc-redirect.test.ts
+  // A redirect() during an RSC navigation (RSC: 1) does not become a 307 — it
+  // rides inside the flight body as a 200 so the client router decodes the
+  // NEXT_REDIRECT digest. Pins the boundary path's RSC branch, where the
+  // redirect propagates through renderToReadableStream's onError into the
+  // lazily-consumed flight stream rather than the status line.
+  it("encodes a route-miss root layout redirect into the flight payload for RSC requests", async () => {
+    // vinext routes RSC navigations by the `.rsc` suffix (see
+    // app-rsc-request-normalization.ts), matching the existing rsc-redirect
+    // tests above.
+    const res = await fetch(`${baseUrl}/random-content.rsc`, {
+      redirect: "manual",
+      headers: {
+        "x-vinext-root-layout-redirect": "1",
+        Accept: "text/x-component",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/x-component");
+    expect(res.headers.get("x-vinext-rsc-redirect")).toBe("/result");
+
+    const body = await res.text();
+    expect(body).toContain("NEXT_REDIRECT");
+    expect(body).toContain("/result");
+  });
 });

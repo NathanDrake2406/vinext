@@ -13,28 +13,8 @@ import { parseNextHttpErrorDigest, parseNextRedirectDigest } from "./next-error-
 import { renderSsrErrorMetaTags } from "./app-ssr-error-meta.js";
 import { addBasePathToPathname } from "../utils/base-path.js";
 import { isPromiseLike } from "../utils/promise.js";
+import { formatNextRedirectDigest } from "./app-rsc-redirect-flight.js";
 import { runWithConnectionProbe } from "vinext/shims/headers";
-
-/**
- * Builds the canonical `NEXT_REDIRECT;<type>;<url>;<status>;` digest that
- * Next.js encodes on `redirect()` / `permanentRedirect()` throws. Used when
- * we synthesize a flight payload for an RSC navigation: the digest must
- * round-trip through the client's `RedirectErrorBoundary` so the same
- * `getURLFromRedirectError` / `getRedirectTypeFromError` helpers decode it.
- *
- * The URL is included verbatim, not encoded — Next.js's `getRedirectError`
- * sets `digest = ${CODE};${type};${url};${status};` with the raw URL, and the
- * client decodes via `error.digest.split(';').slice(2, -2).join(';')`. We
- * default `type=replace` because `redirect()` is replace-style outside of
- * server actions, matching Next.js's `getRedirectError` default.
- *
- * Reference:
- *   `.nextjs-ref/packages/next/src/client/components/redirect.ts:20-23`
- *   `.nextjs-ref/packages/next/src/client/components/redirect-error.ts`
- */
-function formatNextRedirectDigest(options: { url: string; statusCode: number }): string {
-  return `NEXT_REDIRECT;replace;${options.url};${options.statusCode};`;
-}
 
 export type { LayoutFlags };
 
@@ -227,7 +207,7 @@ export function resolveAppPageSpecialError(error: unknown): AppPageSpecialError 
   }
 
   const digest = String(error.digest);
-  const fromMetadata = (error as Record<symbol, unknown>)[APP_PAGE_METADATA_ERROR_MARKER] === true;
+  const fromMetadata = Reflect.get(error, APP_PAGE_METADATA_ERROR_MARKER) === true;
 
   const redirect = parseNextRedirectDigest(digest);
   if (redirect) {
