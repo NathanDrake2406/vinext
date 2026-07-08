@@ -1,18 +1,5 @@
 {
   "name": "root-layout-not-found-redirect-fixture",
   "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vite --host 127.0.0.1"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vinext": "workspace:*",
-    "vite": "latest"
-  },
-  "devDependencies": {
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "typescript": "latest"
-  }
+  "type": "module"
 }
