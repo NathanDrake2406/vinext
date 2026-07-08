@@ -77,7 +77,8 @@ type RedirectErrorShape = Error & { digest: string };
 
 /**
  * vinext accepts its three-part redirect digest and Next.js's five-part form.
- * A prefix check is deliberate because vinext permits an empty redirect type.
+ * This is deliberately only a cheap prefix gate because vinext permits an
+ * empty redirect type; parseRedirectDigest is the authoritative validator.
  */
 export function isRedirectError(error: unknown): error is RedirectErrorShape {
   return (

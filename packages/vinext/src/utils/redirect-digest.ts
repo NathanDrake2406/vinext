@@ -26,6 +26,8 @@ export function parseRedirectDigest(digest: string): RedirectDigest | null {
 
   let url = target;
   if (!isCanonical) {
+    // Only vinext's encodeURIComponent-produced form reaches this branch;
+    // raw redirect digests must use Next.js's status-terminated format.
     try {
       url = decodeURIComponent(target);
     } catch {
