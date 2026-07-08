@@ -248,6 +248,8 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         if (globalNotFoundComponent) {
           return renderAppPageHttpAccessFallback({
             applyFileBasedMetadata,
+            basePath,
+            trailingSlash,
             boundaryComponent: globalNotFoundComponent,
             boundaryModule: globalNotFoundModule ?? null,
             buildFontLinkHeader: fontProviders.buildFontLinkHeader,

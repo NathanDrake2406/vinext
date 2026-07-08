@@ -293,10 +293,11 @@ function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
   };
 }
 
-// Terminal special-error responder for the route-miss boundary path (a
-// redirect/not-found/forbidden/unauthorized thrown *while* rendering the root
-// not-found or error boundary). It deliberately omits `renderFallbackPage`,
-// which scopes the guarantee here to redirects:
+// Terminal special-error responder for HTTP-access fallback rendering — a
+// redirect/not-found/forbidden/unauthorized thrown *while* rendering a
+// not-found/forbidden/unauthorized boundary, whether that boundary comes from a
+// route miss or a matched route's own signal. It deliberately omits
+// `renderFallbackPage`, which scopes the guarantee here to redirects:
 //   - redirect() → 307 (document) or a 200 flight payload (RSC), fully handled.
 //   - notFound()/forbidden()/unauthorized() → the shared builder falls through
 //     to a plain status-text response. That is intentional: we are already
