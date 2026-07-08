@@ -50,6 +50,7 @@ type AppFallbackRendererOptions<TModule extends AppPageModule = AppPageModule> =
     routePath: string,
   ) => AppPageBoundaryOnError;
   fontProviders: AppFallbackRendererFontProviders;
+  getAndClearPendingCookies?: () => string[];
   getNavigationContext: () => NavigationContext | null;
   globalErrorModule?: TModule | null;
   /** Whether experimental.globalNotFound is enabled for route-miss 404s. */
@@ -152,6 +153,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
     clearRequestContext,
     createRscOnErrorHandler: buildRscOnErrorHandler,
     fontProviders,
+    getAndClearPendingCookies,
     getNavigationContext,
     globalErrorModule,
     globalNotFoundEnabled = false,
@@ -239,6 +241,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
             getFontLinks: fontProviders.getFontLinks,
             getFontPreloads: fontProviders.getFontPreloads,
             getFontStyles: fontProviders.getFontStyles,
+            getAndClearPendingCookies,
             getNavigationContext,
             globalErrorModule: effectiveGlobalErrorModule,
             isEdgeRuntime: callContext?.isEdgeRuntime,
@@ -249,6 +252,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
             matchedParams: opts?.matchedParams ?? {},
             middlewareContext: middlewareContext ?? EMPTY_MW_CTX,
             metadataRoutes,
+            request,
             requestUrl: request.url,
             resolveChildSegments,
             rootForbiddenModule: null,
@@ -282,6 +286,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         getFontLinks: fontProviders.getFontLinks,
         getFontPreloads: fontProviders.getFontPreloads,
         getFontStyles: fontProviders.getFontStyles,
+        getAndClearPendingCookies,
         getNavigationContext,
         globalErrorModule: effectiveGlobalErrorModule,
         isEdgeRuntime: callContext?.isEdgeRuntime,
@@ -292,6 +297,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         matchedParams: opts?.matchedParams ?? route?.params ?? {},
         middlewareContext: middlewareContext ?? EMPTY_MW_CTX,
         metadataRoutes,
+        request,
         requestUrl: request.url,
         resolveChildSegments,
         rootForbiddenModule,
@@ -353,6 +359,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         getFontLinks: fontProviders.getFontLinks,
         getFontPreloads: fontProviders.getFontPreloads,
         getFontStyles: fontProviders.getFontStyles,
+        getAndClearPendingCookies,
         getNavigationContext,
         globalErrorModule: effectiveGlobalErrorModule,
         isEdgeRuntime: callContext?.isEdgeRuntime,
@@ -362,6 +369,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         matchedParams: matchedParams ?? route?.params ?? {},
         middlewareContext: middlewareContext ?? EMPTY_MW_CTX,
         metadataRoutes,
+        request,
         requestUrl: request.url,
         resolveChildSegments,
         rootLayouts,

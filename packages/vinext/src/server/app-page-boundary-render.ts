@@ -11,7 +11,12 @@ import { LayoutSegmentProvider } from "vinext/shims/layout-segment-context";
 import { MetadataHead, ViewportHead } from "vinext/shims/metadata";
 import type { NavigationContext } from "vinext/shims/navigation";
 import { isNavigationSignalError } from "../utils/navigation-signal.js";
-import { resolveAppPageSpecialError, type AppPageFontPreload } from "./app-page-execution.js";
+import {
+  buildAppPageSpecialErrorResponse,
+  resolveAppPageSpecialError,
+  type AppPageFontPreload,
+  type AppPageSpecialError,
+} from "./app-page-execution.js";
 import type { AppPageMiddlewareContext } from "./app-page-response.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
 import { resolveAppPageHead, type ApplyAppPageFileBasedMetadata } from "./app-page-head.js";
@@ -24,6 +29,7 @@ import {
 } from "./app-page-boundary.js";
 import {
   createAppPageFontData,
+  createAppPageRscErrorTracker,
   renderAppPageHtmlResponse,
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
@@ -81,6 +87,7 @@ type AppPageBoundaryRenderCommonOptions<TModule extends AppPageModule = AppPageM
   buildFontLinkHeader: (preloads: readonly AppPageFontPreload[] | null | undefined) => string;
   clearRequestContext: () => void;
   createRscOnErrorHandler: (pathname: string, routePath: string) => AppPageBoundaryOnError;
+  getAndClearPendingCookies?: () => string[];
   getFontLinks: () => string[];
   getFontPreloads: () => AppPageFontPreload[];
   getFontStyles: () => string[];
@@ -100,6 +107,7 @@ type AppPageBoundaryRenderCommonOptions<TModule extends AppPageModule = AppPageM
     element: ReactNode | AppElements,
     options: { onError: AppPageBoundaryOnError },
   ) => ReadableStream<Uint8Array>;
+  request: Request;
   requestUrl: string;
   resolveChildSegments: (
     routeSegments: readonly string[],
@@ -272,9 +280,43 @@ function createAppPageBoundaryRscPayload<TModule extends AppPageModule>(
   };
 }
 
+function buildBoundaryRscRedirectFlightStream(
+  options: Pick<AppPageBoundaryRenderCommonOptions, "renderToReadableStream">,
+  digest: string,
+): ReadableStream<Uint8Array> {
+  const throwingElement = createElement(function NextRedirectFlightThrower() {
+    const error = new Error("NEXT_REDIRECT") as Error & { digest: string };
+    error.digest = digest;
+    throw error;
+  });
+
+  return options.renderToReadableStream(throwingElement, {
+    onError: () => digest,
+  });
+}
+
+function renderBoundarySpecialErrorResponse<TModule extends AppPageModule>(
+  options: AppPageBoundaryRenderCommonOptions<TModule>,
+  specialError: AppPageSpecialError,
+): Promise<Response> {
+  return buildAppPageSpecialErrorResponse({
+    basePath: options.basePath,
+    buildRscRedirectFlightStream: (rscOptions) =>
+      buildBoundaryRscRedirectFlightStream(options, rscOptions.digest),
+    clearRequestContext: options.clearRequestContext,
+    getAndClearPendingCookies: options.getAndClearPendingCookies,
+    isEdgeRuntime: options.isEdgeRuntime,
+    isRscRequest: options.isRscRequest,
+    middlewareContext: options.middlewareContext,
+    request: options.request,
+    specialError,
+  });
+}
+
 async function renderAppPageBoundaryElementResponse<TModule extends AppPageModule>(
   options: AppPageBoundaryRenderCommonOptions<TModule> & {
     element: ReactNode;
+    handleSpecialErrors?: boolean;
     initialDevServerError?: unknown;
     layoutModules: readonly (TModule | null | undefined)[];
     navigationParams?: AppPageParams;
@@ -293,42 +335,84 @@ async function renderAppPageBoundaryElementResponse<TModule extends AppPageModul
     sourcePageSegments: options.sourcePageSegments,
   });
 
-  return renderAppPageBoundaryResponse({
-    async createHtmlResponse(rscStream, responseStatus) {
-      const fontData = createAppPageFontData({
-        getLinks: options.getFontLinks,
-        getPreloads: options.getFontPreloads,
-        getStyles: options.getFontStyles,
-      });
-      const ssrHandler = await options.loadSsrHandler();
-      return renderAppPageHtmlResponse({
-        clearRequestContext: options.clearRequestContext,
-        fontData,
-        fontLinkHeader: options.buildFontLinkHeader(fontData.preloads),
-        isEdgeRuntime: options.isEdgeRuntime,
-        middlewareHeaders: options.middlewareContext.headers,
-        navigationContext: options.getNavigationContext() ?? {
-          pathname,
-          searchParams: requestUrl.searchParams,
-          params: options.navigationParams ?? options.route?.params ?? {},
-        },
-        rscStream,
-        scriptNonce: options.scriptNonce,
-        ssrHandler,
-        status: responseStatus,
-        initialDevServerError: options.initialDevServerError,
-      });
-    },
-    createRscOnErrorHandler() {
-      return options.createRscOnErrorHandler(pathname, options.routePattern ?? pathname);
-    },
-    element: payload,
-    isEdgeRuntime: options.isEdgeRuntime,
-    isRscRequest: options.isRscRequest,
-    middlewareHeaders: options.middlewareContext.headers,
-    renderToReadableStream: options.renderToReadableStream,
-    status: options.status,
-  });
+  const baseRscOnErrorHandler = options.createRscOnErrorHandler(
+    pathname,
+    options.routePattern ?? pathname,
+  );
+  const rscErrorTracker = createAppPageRscErrorTracker(baseRscOnErrorHandler);
+  const resolveCapturedSpecialError = (error?: unknown) =>
+    resolveAppPageSpecialError(error) ??
+    resolveAppPageSpecialError(rscErrorTracker.getCapturedSpecialError());
+  const renderSpecialErrorResponse = (specialError: AppPageSpecialError) =>
+    renderBoundarySpecialErrorResponse(options, specialError);
+  const handleSpecialErrors = options.handleSpecialErrors === true;
+
+  let response: Response;
+  try {
+    response = await renderAppPageBoundaryResponse({
+      async createHtmlResponse(rscStream, responseStatus) {
+        const fontData = createAppPageFontData({
+          getLinks: options.getFontLinks,
+          getPreloads: options.getFontPreloads,
+          getStyles: options.getFontStyles,
+        });
+        const ssrHandler = await options.loadSsrHandler();
+        return renderAppPageHtmlResponse({
+          clearRequestContext: options.clearRequestContext,
+          fontData,
+          fontLinkHeader: options.buildFontLinkHeader(fontData.preloads),
+          isEdgeRuntime: options.isEdgeRuntime,
+          middlewareHeaders: options.middlewareContext.headers,
+          navigationContext: options.getNavigationContext() ?? {
+            pathname,
+            searchParams: requestUrl.searchParams,
+            params: options.navigationParams ?? options.route?.params ?? {},
+          },
+          rscStream,
+          scriptNonce: options.scriptNonce,
+          ssrHandler,
+          status: responseStatus,
+          initialDevServerError: options.initialDevServerError,
+        });
+      },
+      createRscOnErrorHandler() {
+        return rscErrorTracker.onRenderError;
+      },
+      element: payload,
+      isEdgeRuntime: options.isEdgeRuntime,
+      isRscRequest: options.isRscRequest,
+      middlewareHeaders: options.middlewareContext.headers,
+      renderToReadableStream: options.renderToReadableStream,
+      status: options.status,
+    });
+  } catch (error) {
+    const specialError = handleSpecialErrors ? resolveCapturedSpecialError(error) : null;
+    if (specialError !== null) {
+      return renderSpecialErrorResponse(specialError);
+    }
+    throw error;
+  }
+
+  if (!handleSpecialErrors) {
+    return response;
+  }
+
+  const specialError = resolveCapturedSpecialError();
+  if (!specialError) {
+    return response;
+  }
+
+  if (response.body) {
+    try {
+      await response.body.cancel();
+    } catch {
+      // Best-effort cleanup. The response is being replaced by a terminal
+      // redirect/http-access response, so a cancellation race cannot affect
+      // the observable request result.
+    }
+  }
+
+  return renderSpecialErrorResponse(specialError);
 }
 
 export async function renderAppPageHttpAccessFallback<TModule extends AppPageModule>(
@@ -357,20 +441,30 @@ export async function renderAppPageHttpAccessFallback<TModule extends AppPageMod
   const layoutModules = options.layoutModules ?? options.route?.layouts ?? options.rootLayouts;
   const pathname = new URL(options.requestUrl).pathname;
   const routeSegments = resolveHttpAccessFallbackHeadRouteSegments(options.route, layoutModules);
-  const { metadata, viewport } = await resolveAppPageHead({
-    applyFileBasedMetadata: options.applyFileBasedMetadata,
-    basePath: options.basePath ?? "",
-    layoutModules,
-    layoutTreePositions: resolveHttpAccessFallbackHeadLayoutTreePositions(
-      options.route,
+  let head: Awaited<ReturnType<typeof resolveAppPageHead>>;
+  try {
+    head = await resolveAppPageHead({
+      applyFileBasedMetadata: options.applyFileBasedMetadata,
+      basePath: options.basePath ?? "",
       layoutModules,
-    ),
-    metadataRoutes: options.metadataRoutes,
-    pageModule: boundaryModule,
-    params: options.matchedParams,
-    routePath: options.route?.pattern ?? pathname,
-    routeSegments,
-  });
+      layoutTreePositions: resolveHttpAccessFallbackHeadLayoutTreePositions(
+        options.route,
+        layoutModules,
+      ),
+      metadataRoutes: options.metadataRoutes,
+      pageModule: boundaryModule,
+      params: options.matchedParams,
+      routePath: options.route?.pattern ?? pathname,
+      routeSegments,
+    });
+  } catch (error) {
+    const specialError = resolveAppPageSpecialError(error);
+    if (specialError) {
+      return renderBoundarySpecialErrorResponse(options, specialError);
+    }
+    throw error;
+  }
+  const { metadata, viewport } = head;
 
   const headElements: ReactNode[] = [
     createElement("meta", { charSet: "utf-8", key: "charset" }),
@@ -409,6 +503,7 @@ export async function renderAppPageHttpAccessFallback<TModule extends AppPageMod
     // the RSC payload's layout entries either — otherwise the SSR pipeline
     // would expect a root-layout tree path that doesn't exist in the markup.
     element,
+    handleSpecialErrors: true,
     layoutModules: skipLayoutWrapping ? [] : layoutModules,
     navigationParams: options.matchedParams,
     route: skipLayoutWrapping ? null : options.route,

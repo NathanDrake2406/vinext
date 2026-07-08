@@ -9,7 +9,12 @@ import {
   getPagesClientAssets,
   setPagesClientAssets,
 } from "../packages/vinext/src/server/pages-client-assets.js";
-import { APP_FIXTURE_DIR } from "./helpers.js";
+import { APP_FIXTURE_DIR, createIsolatedFixture } from "./helpers.js";
+
+const ROOT_LAYOUT_NOT_FOUND_REDIRECT_FIXTURE_DIR = path.resolve(
+  import.meta.dirname,
+  "./fixtures/root-layout-not-found-redirect",
+);
 
 function getStylesheetHrefs(html: string): string[] {
   const hrefs: string[] = [];
@@ -1048,6 +1053,94 @@ describe("App Router Production server (startProdServer)", () => {
   it("returns 404 for nonexistent routes", async () => {
     const res = await fetch(`${baseUrl}/no-such-page`);
     expect(res.status).toBe(404);
+  });
+
+  // Faithfully combines two Next.js contracts:
+  // - route misses render the root not-found page inside the root layout:
+  //   https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/not-found/basic/index.test.ts
+  // - redirect() thrown during an RSC document request becomes a 307 response:
+  //   https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/rsc-redirect/rsc-redirect.test.ts
+  it("handles route-miss root layout redirects in production", async () => {
+    const fixtureRoot = await createIsolatedFixture(
+      ROOT_LAYOUT_NOT_FOUND_REDIRECT_FIXTURE_DIR,
+      "vinext-root-layout-not-found-redirect-",
+    );
+    const redirectOutDir = path.join(fixtureRoot, "dist");
+    let redirectServer: http.Server | undefined;
+    const previousPagesClientAssets = getPagesClientAssets();
+    const prodGlobalKeys = [
+      "__vite_rsc_client_require__",
+      "__vite_rsc_require__",
+      "__vite_rsc_server_require__",
+      "__webpack_chunk_load__",
+      "__webpack_require__",
+    ];
+    const previousGlobals = new Map(
+      prodGlobalKeys.map((key) => [
+        key,
+        {
+          exists: Reflect.has(globalThis, key),
+          value: Reflect.get(globalThis, key),
+        },
+      ]),
+    );
+
+    try {
+      const builder = await createBuilder({
+        root: fixtureRoot,
+        configFile: false,
+        plugins: [vinext({ appDir: fixtureRoot })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+      const { startProdServer } = await import("../packages/vinext/src/server/prod-server.js");
+      const started = await startProdServer({
+        port: 0,
+        outDir: redirectOutDir,
+        noCompression: true,
+      });
+      redirectServer = started.server;
+
+      const address = redirectServer.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Production redirect fixture did not bind to a TCP port");
+      }
+      const redirectBaseUrl = `http://127.0.0.1:${address.port}`;
+
+      const notFoundRes = await fetch(`${redirectBaseUrl}/random-content`);
+      expect(notFoundRes.status).toBe(404);
+      const html = await notFoundRes.text();
+      expect(html).toContain("Root Not Found");
+      expect(html).toContain('id="layout-nav"');
+
+      const redirectRes = await fetch(`${redirectBaseUrl}/random-content`, {
+        redirect: "manual",
+        headers: {
+          "x-vinext-root-layout-redirect": "1",
+        },
+      });
+      expect(redirectRes.status).toBe(307);
+      const location = redirectRes.headers.get("location");
+      expect(location).toBeTruthy();
+      expect(new URL(location!, redirectBaseUrl).pathname).toBe("/result");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        if (!redirectServer) {
+          resolve();
+          return;
+        }
+        redirectServer.close((error) => (error ? reject(error) : resolve()));
+      });
+      setPagesClientAssets(previousPagesClientAssets);
+      for (const [key, previous] of previousGlobals) {
+        if (previous.exists) {
+          Reflect.set(globalThis, key, previous.value);
+        } else {
+          Reflect.deleteProperty(globalThis, key);
+        }
+      }
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   // Ported from Next.js: test/e2e/app-dir/rsc-redirect/rsc-redirect.test.ts

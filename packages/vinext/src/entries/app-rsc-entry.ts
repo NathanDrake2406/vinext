@@ -596,6 +596,7 @@ const __fallbackRenderer = __createAppFallbackRenderer({
   makeThenableParams,
   sanitizer: __sanitizeErrorForClient,
   rscRenderer: renderToReadableStream,
+  getAndClearPendingCookies,
   getNavigationContext: _getNavigationContext,
   resolveChildSegments: __resolveAppPageChildSegments,
   clearRequestContext() {

@@ -1,8 +1,14 @@
 import http from "node:http";
 import fsp from "node:fs/promises";
+import path from "node:path";
 import { type ViteDevServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import { APP_FIXTURE_DIR, fetchHtml, startFixtureServer } from "./helpers.js";
+
+const ROOT_LAYOUT_NOT_FOUND_REDIRECT_FIXTURE_DIR = path.resolve(
+  import.meta.dirname,
+  "./fixtures/root-layout-not-found-redirect",
+);
 
 function decodeHtmlText(text: string): string {
   return text
@@ -2265,5 +2271,48 @@ describe("App Router integration", () => {
   it("allows page requests without Origin header", async () => {
     const res = await fetch(`${baseUrl}/`);
     expect(res.status).toBe(200);
+  });
+});
+
+describe("App Router route-miss root layout redirects", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    ({ server, baseUrl } = await startFixtureServer(ROOT_LAYOUT_NOT_FOUND_REDIRECT_FIXTURE_DIR, {
+      appRouter: true,
+    }));
+  }, 30000);
+
+  afterAll(async () => {
+    await server?.close();
+  });
+
+  // Faithfully combines two Next.js contracts:
+  // - route misses render the root not-found page inside the root layout:
+  //   https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/not-found/basic/index.test.ts
+  // - redirect() thrown during an RSC document request becomes a 307 response:
+  //   https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/rsc-redirect/rsc-redirect.test.ts
+  it("renders root not-found content for non-matching routes", async () => {
+    const res = await fetch(`${baseUrl}/random-content`);
+
+    expect(res.status).toBe(404);
+    const html = await res.text();
+    expect(html).toContain("Root Not Found");
+    expect(html).toContain('id="layout-nav"');
+  });
+
+  it("converts redirect() from the root layout during route-miss not-found rendering into a redirect response", async () => {
+    const res = await fetch(`${baseUrl}/random-content`, {
+      redirect: "manual",
+      headers: {
+        "x-vinext-root-layout-redirect": "1",
+      },
+    });
+
+    expect(res.status).toBe(307);
+    const location = res.headers.get("location");
+    expect(location).toBeTruthy();
+    expect(new URL(location!, baseUrl).pathname).toBe("/result");
   });
 });

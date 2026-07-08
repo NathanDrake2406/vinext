@@ -82,6 +82,7 @@ function createCommonOptions() {
     },
     metadataRoutes: [],
     renderToReadableStream: renderElementToStream,
+    request: new Request("https://example.com/posts/missing"),
     requestUrl: "https://example.com/posts/missing",
     resolveChildSegments() {
       return [];
@@ -162,6 +163,17 @@ const notFoundModule = {
   default: NotFoundBoundary,
 } satisfies TestModule;
 
+function RedirectingRootLayout(): React.ReactNode {
+  const error = Object.assign(new Error("NEXT_REDIRECT"), {
+    digest: "NEXT_REDIRECT;replace;/login;307;",
+  });
+  throw error;
+}
+
+const redirectingRootLayoutModule = {
+  default: RedirectingRootLayout,
+} satisfies TestModule;
+
 const notFoundModuleWithMetadata = {
   default: NotFoundBoundary,
   metadata: { title: "notfound title" },
@@ -217,6 +229,25 @@ describe("app page boundary render helpers", () => {
     expect(response).toBeNull();
     expect(common.loadSsrHandler).not.toHaveBeenCalled();
     expect(common.clearRequestContext).not.toHaveBeenCalled();
+  });
+
+  it("converts redirects thrown while rendering HTTP access fallbacks into redirect responses", async () => {
+    const common = createCommonOptions();
+
+    const response = await renderAppPageHttpAccessFallback<TestModule>({
+      ...common,
+      matchedParams: { slug: "missing" },
+      rootLayouts: [redirectingRootLayoutModule],
+      rootNotFoundModule: notFoundModule,
+      route: null,
+      statusCode: 404,
+    });
+
+    expect(response?.status).toBe(307);
+    const location = response?.headers.get("location");
+    expect(location).toBeTruthy();
+    expect(new URL(location!, common.request.url).pathname).toBe("/login");
+    expect(common.clearRequestContext).toHaveBeenCalledTimes(1);
   });
 
   it("renders HTTP access fallbacks with layout metadata and wrapped HTML", async () => {
