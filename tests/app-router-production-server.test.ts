@@ -1144,14 +1144,16 @@ describe("App Router Production server (startProdServer)", () => {
 
       // The RSC drain applies to matched-route HTTP-access fallbacks too, not
       // only route misses. `/gated` is a matched route that calls notFound();
-      // its boundary renders through the same path and the root layout can
-      // redirect during that render. With the trigger → 200 flight redirect;
-      // without it → a normal 404 flight (proving the buffering does not drop
-      // or corrupt the matched-route payload).
+      // its route-level not-found boundary (app/gated/not-found.tsx) redirects
+      // on its own header, so it renders during the fallback (not the layout
+      // probe) and its async redirect is caught by the boundary drain. With the
+      // trigger → 200 flight redirect; without it → a normal 404 flight
+      // (proving the buffering does not drop or corrupt the matched-route
+      // payload).
       const matchedRedirectRes = await fetch(`${redirectBaseUrl}/gated.rsc`, {
         redirect: "manual",
         headers: {
-          "x-vinext-root-layout-redirect": "1",
+          "x-vinext-gated-notfound-redirect": "1",
           Accept: "text/x-component",
         },
       });
@@ -1165,7 +1167,7 @@ describe("App Router Production server (startProdServer)", () => {
       });
       expect(matchedNotFoundRes.status).toBe(404);
       expect(matchedNotFoundRes.headers.get("x-vinext-rsc-redirect")).toBeNull();
-      expect(await matchedNotFoundRes.text()).toContain("Root Not Found");
+      expect(await matchedNotFoundRes.text()).toContain("Gated Not Found");
     } finally {
       await new Promise<void>((resolve, reject) => {
         if (!redirectServer) {

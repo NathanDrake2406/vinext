@@ -101,6 +101,17 @@ type AppPageBoundaryRenderCommonOptions<TModule extends AppPageModule = AppPageM
   makeThenableParams: (params: AppPageParams) => unknown;
   middlewareContext: AppPageMiddlewareContext;
   metadataRoutes: MetadataFileRoute[];
+  /**
+   * Whether metadata-origin redirects should ride as a 200 streaming response
+   * (HTML meta-refresh / RSC flight) rather than a blocking 307. Mirrors the
+   * matched-page dispatch decision `shouldServeStreamingMetadata(userAgent,
+   * htmlLimitedBots)`: html-limited bots get the blocking 307, so a
+   * `generateMetadata()` redirect thrown from a fallback boundary matches the
+   * matched-page path instead of always defaulting to streaming. Undefined
+   * means "not computed" and is treated as streaming, preserving prior behavior
+   * for callers that never hit metadata redirects.
+   */
+  serveStreamingMetadata?: boolean;
   /** Configured next.config `basePath`, threaded into file-based metadata href emission. */
   basePath?: string;
   /** Configured next.config `trailingSlash`, threaded into canonical URL rendering. */
@@ -309,6 +320,10 @@ function renderBoundarySpecialErrorResponse<TModule extends AppPageModule>(
     isEdgeRuntime: options.isEdgeRuntime,
     isRscRequest: options.isRscRequest,
     middlewareContext: options.middlewareContext,
+    // Thread the streaming-metadata decision so a generateMetadata() redirect
+    // from this fallback boundary honors html-limited bots (blocking 307),
+    // matching the matched-page dispatch path. Undefined stays streaming.
+    serveStreamingMetadata: options.serveStreamingMetadata,
     request: options.request,
     specialError,
   });

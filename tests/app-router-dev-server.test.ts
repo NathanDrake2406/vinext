@@ -2343,16 +2343,20 @@ describe("App Router route-miss root layout redirects", () => {
     expect(body).toContain("/result");
   });
 
-  // The RSC drain applies to every HTTP-access fallback, not only route misses:
-  // `/gated` is a *matched* route that calls notFound(), so its not-found
-  // boundary renders through the same path and the root layout can redirect
-  // during that render. Proves the broad drain catches matched-route async
-  // redirects (rather than silently 404-ing them like the route-miss bug did).
-  it("encodes a matched-route not-found's async layout redirect into the RSC flight", async () => {
+  // The RSC drain applies to every HTTP-access fallback, not only route misses.
+  // `/gated` is a *matched* route that calls notFound(); its route-level
+  // not-found boundary (app/gated/not-found.tsx) redirects on its own header.
+  // That boundary renders only during the not-found fallback — not the
+  // matched-route layout probe — so the async redirect is caught by the
+  // renderAppPageBoundaryElementResponse drain, the new code path, rather than
+  // the layout special-error path. (The layout-redirect header is intentionally
+  // NOT sent here, so the root layout renders normally and we actually reach
+  // the fallback.)
+  it("encodes a matched-route not-found boundary's async redirect into the RSC flight", async () => {
     const res = await fetch(`${baseUrl}/gated.rsc`, {
       redirect: "manual",
       headers: {
-        "x-vinext-root-layout-redirect": "1",
+        "x-vinext-gated-notfound-redirect": "1",
         Accept: "text/x-component",
       },
     });
@@ -2378,6 +2382,35 @@ describe("App Router route-miss root layout redirects", () => {
     expect(res.headers.get("content-type")).toContain("text/x-component");
     expect(res.headers.get("x-vinext-rsc-redirect")).toBeNull();
     const body = await res.text();
-    expect(body).toContain("Root Not Found");
+    expect(body).toContain("Gated Not Found");
+  });
+
+  // A generateMetadata() redirect from a fallback boundary must honor the same
+  // streaming-vs-blocking rule as matched pages: streaming-capable document
+  // requests get a 200 meta-refresh, html-limited bots get the blocking 307.
+  // Proves the fallback path threads serveStreamingMetadata (previously it
+  // always defaulted to streaming, even for bots).
+  it("serves a 200 meta-refresh for a fallback-boundary metadata redirect on streaming document requests", async () => {
+    const res = await fetch(`${baseUrl}/gated`, {
+      redirect: "manual",
+      headers: { "x-vinext-gated-metadata-redirect": "1" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(await res.text()).toContain("/result");
+  });
+
+  it("serves a blocking 307 for a fallback-boundary metadata redirect to html-limited bots", async () => {
+    const res = await fetch(`${baseUrl}/gated`, {
+      redirect: "manual",
+      headers: {
+        "x-vinext-gated-metadata-redirect": "1",
+        "user-agent": "Bingbot/2.0",
+      },
+    });
+
+    expect(res.status).toBe(307);
+    expect(new URL(res.headers.get("location")!, baseUrl).pathname).toBe("/result");
   });
 });
