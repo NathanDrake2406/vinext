@@ -83,3 +83,37 @@ export function formatMultiple(ratio: number): string {
 export function formatKb(bytes: number): string {
   return `${Math.round(bytes / 1024)} KB`;
 }
+
+/**
+ * Comparative framing for a vinext-vs-Next.js pair, derived once so copy can
+ * never disagree with the measured ordering. The numbers are live: a
+ * regression must read "1.2× slower", not "0.8× faster".
+ */
+export type Verdict = "better" | "worse" | "par";
+
+export type BuildComparison = {
+  verdict: Verdict;
+  /** Winner-relative multiple, always ≥ 1 (e.g. "2×"). "1×" on "par". */
+  multiple: string;
+};
+
+export function compareBuild(seconds: LandingStats["buildSeconds"]): BuildComparison {
+  // Decide on the displayed (rounded) ratio so we never render "1× faster".
+  const ratio = Math.round((seconds.nextjs / seconds.vinext) * 10) / 10;
+  if (ratio === 1) return { verdict: "par", multiple: "1×" };
+  return ratio > 1
+    ? { verdict: "better", multiple: formatMultiple(ratio) }
+    : { verdict: "worse", multiple: formatMultiple(1 / ratio) };
+}
+
+export type BundleComparison = {
+  verdict: Verdict;
+  /** Absolute size difference as integer percent of the Next.js bundle. */
+  pct: number;
+};
+
+export function compareBundle(bytes: LandingStats["bundleBytes"]): BundleComparison {
+  const pct = Math.round((1 - bytes.vinext / bytes.nextjs) * 100);
+  if (pct === 0) return { verdict: "par", pct: 0 };
+  return pct > 0 ? { verdict: "better", pct } : { verdict: "worse", pct: -pct };
+}

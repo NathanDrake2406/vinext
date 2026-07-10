@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { LandingMotion } from "./_components/landing-motion";
-import { formatKb, formatMultiple, getLandingStats } from "./lib/landing-stats";
+import { compareBuild, compareBundle, formatKb, getLandingStats } from "./lib/landing-stats";
 
 // ISR: headline numbers come from the same D1 data as /compatibility and
 // /benchmarks; 5 minutes of staleness matches those pages.
@@ -23,10 +23,22 @@ const landingRootStyle = {
 
 export default async function HomePage() {
   const stats = await getLandingStats();
-  const buildMultiple = formatMultiple(stats.buildSeconds.nextjs / stats.buildSeconds.vinext);
-  const bundleReductionPct = Math.round(
-    (1 - stats.bundleBytes.vinext / stats.bundleBytes.nextjs) * 100,
-  );
+  const build = compareBuild(stats.buildSeconds);
+  const bundle = compareBundle(stats.bundleBytes);
+  // Winner-honest copy: these numbers are live, so a regression must say so.
+  const buildHeadline =
+    build.verdict === "better"
+      ? `${build.multiple} faster build time.`
+      : build.verdict === "worse"
+        ? `${build.multiple} slower build time.`
+        : "Build time on par with Next.js.";
+  const buildStatCaption =
+    build.verdict === "better"
+      ? "faster production builds"
+      : build.verdict === "worse"
+        ? "slower production builds"
+        : "production build parity";
+  const bundleStatCaption = bundle.verdict === "worse" ? "larger" : "smaller";
 
   return (
     <>
@@ -1282,7 +1294,7 @@ export default async function HomePage() {
                   }
                 >
                   <span style={{ color: "var(--orange)" } satisfies LandingStyle}>
-                    {buildMultiple} faster build time.
+                    {buildHeadline}
                   </span>
                 </h2>{" "}
               </div>
@@ -1482,7 +1494,7 @@ export default async function HomePage() {
                       } satisfies LandingStyle
                     }
                   >
-                    {buildMultiple}
+                    {build.multiple}
                   </span>
                   <span
                     style={
@@ -1495,7 +1507,7 @@ export default async function HomePage() {
                       } satisfies LandingStyle
                     }
                   >
-                    faster production builds
+                    {buildStatCaption}
                   </span>
                 </div>
                 <div
@@ -1524,7 +1536,7 @@ export default async function HomePage() {
                       } satisfies LandingStyle
                     }
                   >
-                    ~{bundleReductionPct}%
+                    ~{bundle.pct}%
                   </span>
                   <span
                     style={
@@ -1537,7 +1549,7 @@ export default async function HomePage() {
                       } satisfies LandingStyle
                     }
                   >
-                    smaller client bundle · {formatKb(stats.bundleBytes.nextjs)} → 
+                    {bundleStatCaption} client bundle · {formatKb(stats.bundleBytes.nextjs)} → 
                     {formatKb(stats.bundleBytes.vinext)} gzipped
                   </span>
                 </div>
