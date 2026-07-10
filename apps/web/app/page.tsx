@@ -47,6 +47,9 @@ export default async function HomePage() {
           }
         />
 
+        {/* Static atmosphere. These blobs used to drift on 47–61s infinite
+            alternating keyframes; three full-viewport gradients repainting
+            forever bought no meaning, so only the scroll-linked fade remains. */}
         <div
           data-el="heroBg"
           aria-hidden="true"
@@ -72,7 +75,6 @@ export default async function HomePage() {
                 margin: "-45vmax 0 0 -45vmax",
                 background:
                   "radial-gradient(closest-side,rgba(var(--orange-rgb),.13),rgba(var(--orange-rgb),.05) 42%,transparent 68%)",
-                animation: "aur1 47s ease-in-out infinite alternate",
               } satisfies LandingStyle
             }
           />
@@ -87,7 +89,6 @@ export default async function HomePage() {
                 margin: "-55vmax 0 0 -55vmax",
                 background:
                   "radial-gradient(closest-side,rgba(var(--aur2-rgb),.17),rgba(var(--aur2-rgb),.07) 45%,transparent 70%)",
-                animation: "aur2 61s ease-in-out infinite alternate",
               } satisfies LandingStyle
             }
           />
@@ -101,7 +102,6 @@ export default async function HomePage() {
                 height: "60vmax",
                 margin: "-30vmax 0 0 -30vmax",
                 background: "radial-gradient(closest-side,rgba(251,173,65,.07),transparent 65%)",
-                animation: "aur3 53s ease-in-out infinite alternate",
               } satisfies LandingStyle
             }
           />
@@ -249,7 +249,7 @@ export default async function HomePage() {
                       display: "flex",
                       flexDirection: "column",
                       alignItems: "center",
-                      gap: "18px",
+                      gap: "16px",
                     } satisfies LandingStyle
                   }
                 >
@@ -274,7 +274,7 @@ export default async function HomePage() {
                         alignItems: "center",
                         justifyContent: "center",
                         flexWrap: "wrap",
-                        gap: "18px 30px",
+                        gap: "16px 32px",
                         color: "var(--ink)",
                         opacity: ".92",
                       } satisfies LandingStyle
@@ -345,7 +345,7 @@ export default async function HomePage() {
               {
                 position: "relative",
                 zIndex: "2",
-                padding: "22px 0 14px",
+                padding: "24px 0 16px",
                 overflow: "hidden",
               } satisfies LandingStyle
             }
@@ -560,7 +560,7 @@ export default async function HomePage() {
                     style={
                       {
                         display: "flex",
-                        gap: "14px",
+                        gap: "16px",
                         justifyContent: "center",
                         flexWrap: "wrap",
                       } satisfies LandingStyle
@@ -569,7 +569,7 @@ export default async function HomePage() {
                     <div
                       style={
                         {
-                          padding: "13px 20px",
+                          padding: "12px 20px",
                           border: "1px solid var(--line)",
                           borderRadius: "13px",
                           background: "rgba(var(--surface-rgb),.65)",
@@ -585,7 +585,7 @@ export default async function HomePage() {
                     <div
                       style={
                         {
-                          padding: "13px 20px",
+                          padding: "12px 20px",
                           border: "1px solid var(--line)",
                           borderRadius: "13px",
                           background: "rgba(var(--surface-rgb),.65)",
@@ -601,7 +601,7 @@ export default async function HomePage() {
                     <div
                       style={
                         {
-                          padding: "13px 20px",
+                          padding: "12px 20px",
                           border: "1px solid var(--line)",
                           borderRadius: "13px",
                           background: "rgba(var(--surface-rgb),.65)",
@@ -635,7 +635,7 @@ export default async function HomePage() {
                       {
                         width: "2px",
                         height: "48px",
-                        margin: "14px 0",
+                        margin: "16px 0",
                         background:
                           "linear-gradient(180deg,rgba(var(--orange-rgb),.3),transparent)",
                         opacity: ".3",
@@ -648,8 +648,12 @@ export default async function HomePage() {
                     style={
                       {
                         position: "relative",
-                        minWidth: "min(360px,82vw)",
-                        padding: "26px 44px 22px",
+                        // Floor is set by the "Vite" wordmark + lightning logo
+                        // at the clamped 76px max: ~203px of ink + 64px padding.
+                        // Below this the logo wraps onto the caption at wide
+                        // viewports, so do not drop it without shrinking the mark.
+                        minWidth: "min(285px,82vw)",
+                        padding: "24px 32px",
                         border: "1px solid rgba(var(--orange-rgb),.12)",
                         borderRadius: "18px",
                         background:
@@ -679,7 +683,10 @@ export default async function HomePage() {
                           margin: "8px 0 4px",
                           fontFamily: "'Geist',system-ui,sans-serif",
                           fontWeight: "700",
-                          fontSize: "clamp(40px,6vw,76px)",
+                          // 1.1875 × the section h2 (5.4vw) so both hit their
+                          // min/max at the same 593–1185px viewports and the
+                          // plate:heading ratio stays constant while fluid.
+                          fontSize: "clamp(38px,6.4vw,76px)",
                           letterSpacing: "-.03em",
                           lineHeight: "1",
                         } satisfies LandingStyle
@@ -1297,7 +1304,7 @@ export default async function HomePage() {
                         display: "flex",
                         alignItems: "baseline",
                         justifyContent: "space-between",
-                        marginBottom: "10px",
+                        marginBottom: "8px",
                       } satisfies LandingStyle
                     }
                   >
@@ -1306,7 +1313,7 @@ export default async function HomePage() {
                         {
                           display: "flex",
                           alignItems: "center",
-                          gap: "10px",
+                          gap: "8px",
                           fontFamily: "'JetBrains Mono',monospace",
                           fontSize: "14px",
                           color: "var(--ink)",
@@ -1324,7 +1331,7 @@ export default async function HomePage() {
                             color: "var(--ok)",
                             border: "1px solid rgba(70,211,154,.3)",
                             borderRadius: "999px",
-                            padding: "2px 9px",
+                            padding: "2px 8px",
                           } satisfies LandingStyle
                         }
                       >
@@ -1382,7 +1389,7 @@ export default async function HomePage() {
                         display: "flex",
                         alignItems: "baseline",
                         justifyContent: "space-between",
-                        marginBottom: "10px",
+                        marginBottom: "8px",
                       } satisfies LandingStyle
                     }
                   >
@@ -1459,7 +1466,7 @@ export default async function HomePage() {
               >
                 <div
                   style={
-                    { display: "flex", alignItems: "center", gap: "14px" } satisfies LandingStyle
+                    { display: "flex", alignItems: "center", gap: "16px" } satisfies LandingStyle
                   }
                 >
                   <span
@@ -1502,7 +1509,7 @@ export default async function HomePage() {
                 />
                 <div
                   style={
-                    { display: "flex", alignItems: "center", gap: "14px" } satisfies LandingStyle
+                    { display: "flex", alignItems: "center", gap: "16px" } satisfies LandingStyle
                   }
                 >
                   <span
@@ -1541,10 +1548,7 @@ export default async function HomePage() {
                     {
                       fontFamily: "'JetBrains Mono',monospace",
                       fontSize: "12px",
-                      color: "var(--orange-soft)",
                       textDecoration: "none",
-                      borderBottom: "1px solid transparent",
-                      transition: "border-color .2s,color .2s",
                     } satisfies LandingStyle
                   }
                 >
@@ -1632,7 +1636,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                       borderBottom: "1px solid var(--line-soft)",
                     } satisfies LandingStyle
                   }
@@ -1686,7 +1690,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                       borderBottom: "1px solid var(--line-soft)",
                     } satisfies LandingStyle
                   }
@@ -1740,7 +1744,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                       borderBottom: "1px solid var(--line-soft)",
                     } satisfies LandingStyle
                   }
@@ -1781,7 +1785,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                       borderBottom: "1px solid var(--line-soft)",
                     } satisfies LandingStyle
                   }
@@ -1822,7 +1826,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                     } satisfies LandingStyle
                   }
                 >
@@ -1906,7 +1910,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                       borderBottom: "1px solid var(--line-soft)",
                     } satisfies LandingStyle
                   }
@@ -1960,7 +1964,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                       borderBottom: "1px solid var(--line-soft)",
                     } satisfies LandingStyle
                   }
@@ -2001,7 +2005,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                       borderBottom: "1px solid var(--line-soft)",
                     } satisfies LandingStyle
                   }
@@ -2042,7 +2046,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                       borderBottom: "1px solid var(--line-soft)",
                     } satisfies LandingStyle
                   }
@@ -2096,7 +2100,7 @@ export default async function HomePage() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: "16px",
-                      padding: "17px 24px",
+                      padding: "16px 24px",
                     } satisfies LandingStyle
                   }
                 >
@@ -2149,12 +2153,11 @@ export default async function HomePage() {
               href="/compatibility"
               style={
                 {
+                  display: "inline-block",
+                  marginTop: "48px",
                   fontFamily: "'JetBrains Mono',monospace",
                   fontSize: "12px",
-                  color: "var(--orange-soft)",
                   textDecoration: "none",
-                  borderBottom: "1px solid transparent",
-                  transition: "border-color .2s,color .2s",
                 } satisfies LandingStyle
               }
             >
@@ -2176,351 +2179,7 @@ export default async function HomePage() {
           }
         >
           <div
-            data-el="globe"
-            aria-hidden="true"
-            style={
-              {
-                position: "absolute",
-                left: "44vw",
-                bottom: "-6vw",
-                width: "58vw",
-                pointerEvents: "none",
-                userSelect: "none",
-                willChange: "transform",
-              } satisfies LandingStyle
-            }
-          >
-            <img className="globe-art" src="/img/globe.svg" alt="" loading="lazy" />
-
-            <div
-              data-gpin=""
-              style={
-                {
-                  position: "absolute",
-                  left: "47.9%",
-                  top: "28%",
-                  width: "12px",
-                  height: "12px",
-                  opacity: "0",
-                  transform: "translateY(12px) scale(.8)",
-                  transition: "opacity .6s ease .15s,transform .7s cubic-bezier(.2,1,.25,1) .15s",
-                } satisfies LandingStyle
-              }
-            >
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    inset: "0",
-                    borderRadius: "50%",
-                    background: "var(--orange)",
-                    boxShadow:
-                      "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
-                  } satisfies LandingStyle
-                }
-              />
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    left: "8px",
-                    bottom: "14px",
-                    width: "46px",
-                    height: "46px",
-                    borderRadius: "13px",
-                    background: "var(--surface)",
-                    border: "1px solid var(--line)",
-                    boxShadow: "var(--pin-shadow)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  } satisfies LandingStyle
-                }
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24" fill="#f38020">
-                  <path d="M16.5088 16.8447c.1475-.5068.0908-.9707-.1553-1.3154-.2246-.3164-.6045-.499-1.0615-.5205l-8.6592-.1123a.1559.1559 0 0 1-.1333-.0713c-.0283-.042-.0351-.0986-.021-.1553.0278-.084.1123-.1484.2036-.1562l8.7359-.1123c1.0351-.0489 2.1601-.8868 2.5537-1.9136l.499-1.3013c.0215-.0561.0293-.1128.0147-.168-.5625-2.5463-2.835-4.4453-5.5499-4.4453-2.5039 0-4.6284 1.6177-5.3876 3.8614-.4927-.3658-1.1187-.5625-1.794-.499-1.2026.119-2.1665 1.083-2.2861 2.2856-.0283.31-.0069.6128.0635.894C1.5683 13.171 0 14.7754 0 16.752c0 .1748.0142.3515.0352.5273.0141.083.0844.1475.1689.1475h15.9814c.0909 0 .1758-.0645.2032-.1553l.12-.4268zm2.7568-5.5634c-.0771 0-.1611 0-.2383.0112-.0566 0-.1054.0415-.127.0976l-.3378 1.1744c-.1475.5068-.0918.9707.1543 1.3164.2256.3164.6055.498 1.0625.5195l1.8437.1133c.0557 0 .1055.0263.1329.0703.0283.043.0351.1074.0214.1562-.0283.084-.1132.1485-.204.1553l-1.921.1123c-1.041.0488-2.1582.8867-2.5527 1.914l-.1406.3585c-.0283.0713.0215.1416.0986.1416h6.5977c.0771 0 .1474-.0489.169-.126.1122-.4082.1757-.837.1757-1.2803 0-2.6025-2.125-4.727-4.7344-4.727" />
-                </svg>
-              </span>
-            </div>
-            <div
-              data-gpin=""
-              style={
-                {
-                  position: "absolute",
-                  left: "88.6%",
-                  top: "40.6%",
-                  width: "12px",
-                  height: "12px",
-                  opacity: "0",
-                  transform: "translateY(12px) scale(.8)",
-                  transition: "opacity .6s ease .3s,transform .7s cubic-bezier(.2,1,.25,1) .3s",
-                } satisfies LandingStyle
-              }
-            >
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    inset: "0",
-                    borderRadius: "50%",
-                    background: "var(--orange)",
-                    boxShadow:
-                      "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
-                  } satisfies LandingStyle
-                }
-              />
-
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    right: "8px",
-                    bottom: "14px",
-                    width: "46px",
-                    height: "46px",
-                    borderRadius: "13px",
-                    background: "var(--surface)",
-                    border: "1px solid var(--line)",
-                    boxShadow: "var(--pin-shadow)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  } satisfies LandingStyle
-                }
-              >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  width="22"
-                  height="22"
-                  fill="currentColor"
-                >
-                  <path d="m12 1.608 12 20.784H0Z" />
-                </svg>
-              </span>
-            </div>
-            <div
-              data-gpin=""
-              style={
-                {
-                  position: "absolute",
-                  left: "72.5%",
-                  top: "62.6%",
-                  width: "12px",
-                  height: "12px",
-                  opacity: "0",
-                  transform: "translateY(12px) scale(.8)",
-                  transition: "opacity .6s ease .45s,transform .7s cubic-bezier(.2,1,.25,1) .45s",
-                } satisfies LandingStyle
-              }
-            >
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    inset: "0",
-                    borderRadius: "50%",
-                    background: "var(--orange)",
-                    boxShadow:
-                      "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
-                  } satisfies LandingStyle
-                }
-              />
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    left: "8px",
-                    bottom: "14px",
-                    width: "46px",
-                    height: "46px",
-                    borderRadius: "13px",
-                    background: "var(--surface)",
-                    border: "1px solid var(--line)",
-                    boxShadow: "var(--pin-shadow)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  } satisfies LandingStyle
-                }
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24" width="23" height="23" fill="#00c7b7">
-                  <path d="M6.49 19.04h-.23L5.13 17.9v-.23l1.73-1.71h1.2l.15.15v1.2L6.5 19.04ZM5.13 6.31V6.1l1.13-1.13h.23L8.2 6.68v1.2l-.15.15h-1.2L5.13 6.31Zm9.96 9.09h-1.65l-.14-.13v-3.83c0-.68-.27-1.2-1.1-1.23-.42 0-.9 0-1.43.02l-.07.08v4.96l-.14.14H8.9l-.13-.14V8.73l.13-.14h3.7a2.6 2.6 0 0 1 2.61 2.6v4.08l-.13.14Zm-8.37-2.44H.14L0 12.82v-1.64l.14-.14h6.58l.14.14v1.64l-.14.14Zm17.14 0h-6.58l-.14-.14v-1.64l.14-.14h6.58l.14.14v1.64l-.14.14ZM11.05 6.55V1.64l.14-.14h1.65l.14.14v4.9l-.14.14h-1.65l-.14-.13Zm0 15.81v-4.9l.14-.14h1.65l.14.13v4.91l-.14.14h-1.65l-.14-.14Z" />
-                </svg>
-              </span>
-            </div>
-
-            <div
-              data-gpin=""
-              style={
-                {
-                  position: "absolute",
-                  left: "78%",
-                  top: "20%",
-                  width: "12px",
-                  height: "12px",
-                  opacity: "0",
-                  transform: "translateY(12px) scale(.8)",
-                  transition: "opacity .6s ease .6s,transform .7s cubic-bezier(.2,1,.25,1) .6s",
-                } satisfies LandingStyle
-              }
-            >
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    inset: "0",
-                    borderRadius: "50%",
-                    background: "var(--orange)",
-                    boxShadow:
-                      "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
-                  } satisfies LandingStyle
-                }
-              />
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    left: "8px",
-                    bottom: "14px",
-                    width: "46px",
-                    height: "46px",
-                    borderRadius: "13px",
-                    background: "var(--surface)",
-                    border: "1px solid var(--line)",
-                    boxShadow: "var(--pin-shadow)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  aria-hidden="true"
-                  style={
-                    {
-                      font: "600 22px/1 'JetBrains Mono',monospace",
-                      color: "#ff9900",
-                    } satisfies LandingStyle
-                  }
-                >
-                  λ
-                </span>
-              </span>
-            </div>
-            <div
-              data-gpin=""
-              style={
-                {
-                  position: "absolute",
-                  left: "26%",
-                  top: "57%",
-                  width: "12px",
-                  height: "12px",
-                  opacity: "0",
-                  transform: "translateY(12px) scale(.8)",
-                  transition: "opacity .6s ease .75s,transform .7s cubic-bezier(.2,1,.25,1) .75s",
-                } satisfies LandingStyle
-              }
-            >
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    inset: "0",
-                    borderRadius: "50%",
-                    background: "var(--orange)",
-                    boxShadow:
-                      "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
-                  } satisfies LandingStyle
-                }
-              />
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    left: "8px",
-                    bottom: "14px",
-                    width: "46px",
-                    height: "46px",
-                    borderRadius: "13px",
-                    background: "var(--surface)",
-                    border: "1px solid var(--line)",
-                    boxShadow: "var(--pin-shadow)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  } satisfies LandingStyle
-                }
-              >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  width="22"
-                  height="22"
-                  fill="currentColor"
-                >
-                  <path d="M1.105 18.02A11.9 11.9 0 0 1 0 12.985q0-.698.078-1.376a12 12 0 0 1 .231-1.34A12 12 0 0 1 4.025 4.02a12 12 0 0 1 5.46-2.771 12 12 0 0 1 3.428-.23c1.452.112 2.825.477 4.077 1.05a12 12 0 0 1 2.78 1.774 12.02 12.02 0 0 1 4.053 7.078A12 12 0 0 1 24 12.985q0 .454-.036.914a12 12 0 0 1-.728 3.305 12 12 0 0 1-2.38 3.875c-1.33 1.357-3.02 1.962-4.43 1.936a4.4 4.4 0 0 1-2.724-1.024c-.99-.853-1.391-1.83-1.53-2.919a5 5 0 0 1 .128-1.518c.105-.38.37-1.116.76-1.437-.455-.197-1.04-.624-1.226-.829-.045-.05-.04-.13 0-.183a.155.155 0 0 1 .177-.053c.392.134.869.267 1.372.35.66.111 1.484.25 2.317.292 2.03.1 4.153-.813 4.812-2.627s.403-3.609-1.96-4.685-3.454-2.356-5.363-3.128c-1.247-.505-2.636-.205-4.06.582-3.838 2.121-7.277 8.822-5.69 15.032a.191.191 0 0 1-.315.19 12 12 0 0 1-1.25-1.634 12 12 0 0 1-.769-1.404M11.57 6.087c.649-.051 1.214.501 1.31 1.236.13.979-.228 1.99-1.41 2.013-1.01.02-1.315-.997-1.248-1.614.066-.616.574-1.575 1.35-1.635" />
-                </svg>
-              </span>
-            </div>
-            <div
-              data-gpin=""
-              style={
-                {
-                  position: "absolute",
-                  left: "44%",
-                  top: "66%",
-                  width: "12px",
-                  height: "12px",
-                  opacity: "0",
-                  transform: "translateY(12px) scale(.8)",
-                  transition: "opacity .6s ease .9s,transform .7s cubic-bezier(.2,1,.25,1) .9s",
-                } satisfies LandingStyle
-              }
-            >
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    inset: "0",
-                    borderRadius: "50%",
-                    background: "var(--orange)",
-                    boxShadow:
-                      "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
-                  } satisfies LandingStyle
-                }
-              />
-              <span
-                style={
-                  {
-                    position: "absolute",
-                    left: "8px",
-                    bottom: "14px",
-                    width: "46px",
-                    height: "46px",
-                    borderRadius: "13px",
-                    background: "var(--surface)",
-                    border: "1px solid var(--line)",
-                    boxShadow: "var(--pin-shadow)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  } satisfies LandingStyle
-                }
-              >
-                <img
-                  src="/img/brand-nodedotjs.svg"
-                  alt=""
-                  aria-hidden="true"
-                  width="22"
-                  height="22"
-                  style={{ display: "block" } satisfies LandingStyle}
-                />
-              </span>
-            </div>
-          </div>
-          <div
+            className="deploy-inner"
             style={
               {
                 position: "relative",
@@ -2592,7 +2251,7 @@ export default async function HomePage() {
                   {
                     display: "flex",
                     justifyContent: "space-between",
-                    padding: "0 2px 10px",
+                    padding: "0 2px 8px",
                     fontSize: "10.5px",
                     letterSpacing: ".16em",
                     textTransform: "uppercase",
@@ -2610,8 +2269,8 @@ export default async function HomePage() {
                     display: "flex",
                     alignItems: "baseline",
                     justifyContent: "space-between",
-                    gap: "14px",
-                    padding: "13px 2px",
+                    gap: "16px",
+                    padding: "12px 2px",
                     borderTop: "1px solid var(--line-soft)",
                   } satisfies LandingStyle
                 }
@@ -2644,8 +2303,8 @@ export default async function HomePage() {
                     display: "flex",
                     alignItems: "baseline",
                     justifyContent: "space-between",
-                    gap: "14px",
-                    padding: "13px 2px",
+                    gap: "16px",
+                    padding: "12px 2px",
                     borderTop: "1px solid var(--line-soft)",
                   } satisfies LandingStyle
                 }
@@ -2680,8 +2339,8 @@ export default async function HomePage() {
                     display: "flex",
                     alignItems: "baseline",
                     justifyContent: "space-between",
-                    gap: "14px",
-                    padding: "13px 2px",
+                    gap: "16px",
+                    padding: "12px 2px",
                     borderTop: "1px solid var(--line-soft)",
                   } satisfies LandingStyle
                 }
@@ -2714,8 +2373,8 @@ export default async function HomePage() {
                     display: "flex",
                     alignItems: "baseline",
                     justifyContent: "space-between",
-                    gap: "14px",
-                    padding: "13px 2px",
+                    gap: "16px",
+                    padding: "12px 2px",
                     borderTop: "1px solid var(--line-soft)",
                   } satisfies LandingStyle
                 }
@@ -2755,8 +2414,8 @@ export default async function HomePage() {
                     display: "flex",
                     alignItems: "baseline",
                     justifyContent: "space-between",
-                    gap: "14px",
-                    padding: "13px 2px",
+                    gap: "16px",
+                    padding: "12px 2px",
                     borderTop: "1px solid var(--line-soft)",
                   } satisfies LandingStyle
                 }
@@ -2791,8 +2450,8 @@ export default async function HomePage() {
                     display: "flex",
                     alignItems: "baseline",
                     justifyContent: "space-between",
-                    gap: "14px",
-                    padding: "13px 2px",
+                    gap: "16px",
+                    padding: "12px 2px",
                     borderTop: "1px solid var(--line-soft)",
                     borderBottom: "1px solid var(--line-soft)",
                   } satisfies LandingStyle
@@ -2817,6 +2476,356 @@ export default async function HomePage() {
                   style={{ color: "var(--mute)", transition: "color .5s" } satisfies LandingStyle}
                 >
                   adapter
+                </span>
+              </div>
+            </div>
+            {/* Second column of the deploy section, and a child of this
+                container on purpose: anchored to the viewport (`left: 44vw`) it
+                drifted across the target table at every width below ~1250px,
+                and again above 1180px once the container starts centering.
+                `--globe-column` is where the 520px table ends, plus a gutter. */}
+            <div
+              data-el="globe"
+              aria-hidden="true"
+              style={
+                {
+                  position: "absolute",
+                  left: "var(--globe-column)",
+                  bottom: "-6vw",
+                  width: "min(58vw, 820px)",
+                  pointerEvents: "none",
+                  userSelect: "none",
+                  willChange: "transform",
+                } satisfies LandingStyle
+              }
+            >
+              <img className="globe-art" src="/img/globe.svg" alt="" loading="lazy" />
+
+              <div
+                data-gpin=""
+                style={
+                  {
+                    position: "absolute",
+                    left: "47.9%",
+                    top: "28%",
+                    width: "12px",
+                    height: "12px",
+                    opacity: "0",
+                    transform: "translateY(12px) scale(.8)",
+                    transition: "opacity .6s ease .15s,transform .7s cubic-bezier(.2,1,.25,1) .15s",
+                  } satisfies LandingStyle
+                }
+              >
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      inset: "0",
+                      borderRadius: "50%",
+                      background: "var(--orange)",
+                      boxShadow:
+                        "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
+                    } satisfies LandingStyle
+                  }
+                />
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      left: "8px",
+                      bottom: "14px",
+                      width: "46px",
+                      height: "46px",
+                      borderRadius: "13px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--line)",
+                      boxShadow: "var(--pin-shadow)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    } satisfies LandingStyle
+                  }
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24" fill="#f38020">
+                    <path d="M16.5088 16.8447c.1475-.5068.0908-.9707-.1553-1.3154-.2246-.3164-.6045-.499-1.0615-.5205l-8.6592-.1123a.1559.1559 0 0 1-.1333-.0713c-.0283-.042-.0351-.0986-.021-.1553.0278-.084.1123-.1484.2036-.1562l8.7359-.1123c1.0351-.0489 2.1601-.8868 2.5537-1.9136l.499-1.3013c.0215-.0561.0293-.1128.0147-.168-.5625-2.5463-2.835-4.4453-5.5499-4.4453-2.5039 0-4.6284 1.6177-5.3876 3.8614-.4927-.3658-1.1187-.5625-1.794-.499-1.2026.119-2.1665 1.083-2.2861 2.2856-.0283.31-.0069.6128.0635.894C1.5683 13.171 0 14.7754 0 16.752c0 .1748.0142.3515.0352.5273.0141.083.0844.1475.1689.1475h15.9814c.0909 0 .1758-.0645.2032-.1553l.12-.4268zm2.7568-5.5634c-.0771 0-.1611 0-.2383.0112-.0566 0-.1054.0415-.127.0976l-.3378 1.1744c-.1475.5068-.0918.9707.1543 1.3164.2256.3164.6055.498 1.0625.5195l1.8437.1133c.0557 0 .1055.0263.1329.0703.0283.043.0351.1074.0214.1562-.0283.084-.1132.1485-.204.1553l-1.921.1123c-1.041.0488-2.1582.8867-2.5527 1.914l-.1406.3585c-.0283.0713.0215.1416.0986.1416h6.5977c.0771 0 .1474-.0489.169-.126.1122-.4082.1757-.837.1757-1.2803 0-2.6025-2.125-4.727-4.7344-4.727" />
+                  </svg>
+                </span>
+              </div>
+              <div
+                data-gpin=""
+                style={
+                  {
+                    position: "absolute",
+                    left: "88.6%",
+                    top: "40.6%",
+                    width: "12px",
+                    height: "12px",
+                    opacity: "0",
+                    transform: "translateY(12px) scale(.8)",
+                    transition: "opacity .6s ease .3s,transform .7s cubic-bezier(.2,1,.25,1) .3s",
+                  } satisfies LandingStyle
+                }
+              >
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      inset: "0",
+                      borderRadius: "50%",
+                      background: "var(--orange)",
+                      boxShadow:
+                        "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
+                    } satisfies LandingStyle
+                  }
+                />
+
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      right: "8px",
+                      bottom: "14px",
+                      width: "46px",
+                      height: "46px",
+                      borderRadius: "13px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--line)",
+                      boxShadow: "var(--pin-shadow)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    } satisfies LandingStyle
+                  }
+                >
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    width="22"
+                    height="22"
+                    fill="currentColor"
+                  >
+                    <path d="m12 1.608 12 20.784H0Z" />
+                  </svg>
+                </span>
+              </div>
+              <div
+                data-gpin=""
+                style={
+                  {
+                    position: "absolute",
+                    left: "72.5%",
+                    top: "62.6%",
+                    width: "12px",
+                    height: "12px",
+                    opacity: "0",
+                    transform: "translateY(12px) scale(.8)",
+                    transition: "opacity .6s ease .45s,transform .7s cubic-bezier(.2,1,.25,1) .45s",
+                  } satisfies LandingStyle
+                }
+              >
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      inset: "0",
+                      borderRadius: "50%",
+                      background: "var(--orange)",
+                      boxShadow:
+                        "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
+                    } satisfies LandingStyle
+                  }
+                />
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      left: "8px",
+                      bottom: "14px",
+                      width: "46px",
+                      height: "46px",
+                      borderRadius: "13px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--line)",
+                      boxShadow: "var(--pin-shadow)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    } satisfies LandingStyle
+                  }
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="23" height="23" fill="#00c7b7">
+                    <path d="M6.49 19.04h-.23L5.13 17.9v-.23l1.73-1.71h1.2l.15.15v1.2L6.5 19.04ZM5.13 6.31V6.1l1.13-1.13h.23L8.2 6.68v1.2l-.15.15h-1.2L5.13 6.31Zm9.96 9.09h-1.65l-.14-.13v-3.83c0-.68-.27-1.2-1.1-1.23-.42 0-.9 0-1.43.02l-.07.08v4.96l-.14.14H8.9l-.13-.14V8.73l.13-.14h3.7a2.6 2.6 0 0 1 2.61 2.6v4.08l-.13.14Zm-8.37-2.44H.14L0 12.82v-1.64l.14-.14h6.58l.14.14v1.64l-.14.14Zm17.14 0h-6.58l-.14-.14v-1.64l.14-.14h6.58l.14.14v1.64l-.14.14ZM11.05 6.55V1.64l.14-.14h1.65l.14.14v4.9l-.14.14h-1.65l-.14-.13Zm0 15.81v-4.9l.14-.14h1.65l.14.13v4.91l-.14.14h-1.65l-.14-.14Z" />
+                  </svg>
+                </span>
+              </div>
+
+              <div
+                data-gpin=""
+                style={
+                  {
+                    position: "absolute",
+                    left: "78%",
+                    top: "20%",
+                    width: "12px",
+                    height: "12px",
+                    opacity: "0",
+                    transform: "translateY(12px) scale(.8)",
+                    transition: "opacity .6s ease .6s,transform .7s cubic-bezier(.2,1,.25,1) .6s",
+                  } satisfies LandingStyle
+                }
+              >
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      inset: "0",
+                      borderRadius: "50%",
+                      background: "var(--orange)",
+                      boxShadow:
+                        "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
+                    } satisfies LandingStyle
+                  }
+                />
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      left: "8px",
+                      bottom: "14px",
+                      width: "46px",
+                      height: "46px",
+                      borderRadius: "13px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--line)",
+                      boxShadow: "var(--pin-shadow)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    } satisfies LandingStyle
+                  }
+                >
+                  <span
+                    aria-hidden="true"
+                    style={
+                      {
+                        font: "600 22px/1 'JetBrains Mono',monospace",
+                        color: "#ff9900",
+                      } satisfies LandingStyle
+                    }
+                  >
+                    λ
+                  </span>
+                </span>
+              </div>
+              <div
+                data-gpin=""
+                style={
+                  {
+                    position: "absolute",
+                    left: "26%",
+                    top: "57%",
+                    width: "12px",
+                    height: "12px",
+                    opacity: "0",
+                    transform: "translateY(12px) scale(.8)",
+                    transition: "opacity .6s ease .75s,transform .7s cubic-bezier(.2,1,.25,1) .75s",
+                  } satisfies LandingStyle
+                }
+              >
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      inset: "0",
+                      borderRadius: "50%",
+                      background: "var(--orange)",
+                      boxShadow:
+                        "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
+                    } satisfies LandingStyle
+                  }
+                />
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      left: "8px",
+                      bottom: "14px",
+                      width: "46px",
+                      height: "46px",
+                      borderRadius: "13px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--line)",
+                      boxShadow: "var(--pin-shadow)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    } satisfies LandingStyle
+                  }
+                >
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    width="22"
+                    height="22"
+                    fill="currentColor"
+                  >
+                    <path d="M1.105 18.02A11.9 11.9 0 0 1 0 12.985q0-.698.078-1.376a12 12 0 0 1 .231-1.34A12 12 0 0 1 4.025 4.02a12 12 0 0 1 5.46-2.771 12 12 0 0 1 3.428-.23c1.452.112 2.825.477 4.077 1.05a12 12 0 0 1 2.78 1.774 12.02 12.02 0 0 1 4.053 7.078A12 12 0 0 1 24 12.985q0 .454-.036.914a12 12 0 0 1-.728 3.305 12 12 0 0 1-2.38 3.875c-1.33 1.357-3.02 1.962-4.43 1.936a4.4 4.4 0 0 1-2.724-1.024c-.99-.853-1.391-1.83-1.53-2.919a5 5 0 0 1 .128-1.518c.105-.38.37-1.116.76-1.437-.455-.197-1.04-.624-1.226-.829-.045-.05-.04-.13 0-.183a.155.155 0 0 1 .177-.053c.392.134.869.267 1.372.35.66.111 1.484.25 2.317.292 2.03.1 4.153-.813 4.812-2.627s.403-3.609-1.96-4.685-3.454-2.356-5.363-3.128c-1.247-.505-2.636-.205-4.06.582-3.838 2.121-7.277 8.822-5.69 15.032a.191.191 0 0 1-.315.19 12 12 0 0 1-1.25-1.634 12 12 0 0 1-.769-1.404M11.57 6.087c.649-.051 1.214.501 1.31 1.236.13.979-.228 1.99-1.41 2.013-1.01.02-1.315-.997-1.248-1.614.066-.616.574-1.575 1.35-1.635" />
+                  </svg>
+                </span>
+              </div>
+              <div
+                data-gpin=""
+                style={
+                  {
+                    position: "absolute",
+                    left: "44%",
+                    top: "66%",
+                    width: "12px",
+                    height: "12px",
+                    opacity: "0",
+                    transform: "translateY(12px) scale(.8)",
+                    transition: "opacity .6s ease .9s,transform .7s cubic-bezier(.2,1,.25,1) .9s",
+                  } satisfies LandingStyle
+                }
+              >
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      inset: "0",
+                      borderRadius: "50%",
+                      background: "var(--orange)",
+                      boxShadow:
+                        "0 0 0 3px rgba(var(--bg-rgb),.7),0 0 0 5px rgba(var(--orange-rgb),.55),0 0 18px var(--orange-glow-hover)",
+                    } satisfies LandingStyle
+                  }
+                />
+                <span
+                  style={
+                    {
+                      position: "absolute",
+                      left: "8px",
+                      bottom: "14px",
+                      width: "46px",
+                      height: "46px",
+                      borderRadius: "13px",
+                      background: "var(--surface)",
+                      border: "1px solid var(--line)",
+                      boxShadow: "var(--pin-shadow)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    } satisfies LandingStyle
+                  }
+                >
+                  <img
+                    src="/img/brand-nodedotjs.svg"
+                    alt=""
+                    aria-hidden="true"
+                    width="22"
+                    height="22"
+                    style={{ display: "block" } satisfies LandingStyle}
+                  />
                 </span>
               </div>
             </div>
@@ -2916,7 +2925,7 @@ export default async function HomePage() {
                   alignItems: "center",
                   gap: "16px",
                   maxWidth: "460px",
-                  padding: "16px 18px",
+                  padding: "16px",
                   border: "1px solid var(--line)",
                   borderRadius: "12px",
                   background: "var(--surface)",
@@ -2961,13 +2970,13 @@ export default async function HomePage() {
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    minWidth: "78px",
+                    minWidth: "80px",
                     fontFamily: "'JetBrains Mono',monospace",
                     color: "var(--mute)",
                     fontSize: "10.5px",
                     letterSpacing: ".1em",
                     textTransform: "uppercase",
-                    padding: "7px 13px",
+                    padding: "8px 12px",
                     borderRadius: "8px",
                     border: "1px solid var(--line-soft)",
                     background: "none",
@@ -2990,14 +2999,13 @@ export default async function HomePage() {
                   position: "relative",
                   overflow: "hidden",
                   marginTop: "24px",
-                  display: "flex",
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                  justifyContent: "flex-start",
-                  gap: "32px",
+                  // Same 460px rail as the command box above so both cards
+                  // share edges at every viewport instead of this one
+                  // spanning the full container.
+                  maxWidth: "460px",
                   border: "1px solid var(--line)",
                   borderRadius: "18px",
-                  padding: "38px",
+                  padding: "32px",
                   background:
                     "radial-gradient(130% 200% at 100% 0,rgba(var(--orange-rgb),.1),transparent 55%),var(--surface)",
                 } satisfies LandingStyle
@@ -3035,28 +3043,14 @@ export default async function HomePage() {
                   <a
                     className="text-link"
                     href="https://github.com/cloudflare/vinext#quick-start"
-                    style={
-                      {
-                        color: "var(--orange-soft)",
-                        textDecoration: "none",
-                        borderBottom: "1px solid transparent",
-                        transition: "border-color .2s,color .2s",
-                      } satisfies LandingStyle
-                    }
+                    style={{ textDecoration: "none" } satisfies LandingStyle}
                   >
                     Quick start
                   </a>
                   <a
                     className="text-link"
                     href="https://github.com/cloudflare/vinext"
-                    style={
-                      {
-                        color: "var(--orange-soft)",
-                        textDecoration: "none",
-                        borderBottom: "1px solid transparent",
-                        transition: "border-color .2s,color .2s",
-                      } satisfies LandingStyle
-                    }
+                    style={{ textDecoration: "none" } satisfies LandingStyle}
                   >
                     GitHub
                   </a>

@@ -33,7 +33,9 @@ type TrendChartProps = {
 
 // ─── SVG Trend Chart ─────────────────────────────────────────────────────────
 
-const PADDING = { top: 20, right: 20, bottom: 40, left: 70 };
+// left must fit the widest tick ("115.6 KB" ≈ 53px at 11px mono) plus the
+// rotated unit label at x=14 and an 8px gutter between them.
+const PADDING = { top: 20, right: 20, bottom: 40, left: 90 };
 const TREND_WINDOW = 7;
 
 export function TrendChart({

@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+/* Tailwind v4 already gates `hover:` behind `(hover: hover)`, but hybrid and
+   some Android browsers report that and still latch the hover state after a
+   tap. Redefining the variant here also fixes every variant derived from it
+   (`group-hover:`, `peer-hover:`), so components keep using plain `hover:`.
+   `:focus-visible` remains the keyboard path and is untouched. */
+@custom-variant hover {
+  @media (hover: hover) and (pointer: fine) {
+    &:hover {
+      @slot;
+    }
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -61,46 +74,35 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
-@keyframes aur1 {
-  0% {
-    transform: translate3d(-4vw, -2vh, 0) scale(1);
-  }
-  100% {
-    transform: translate3d(5vw, 4vh, 0) scale(1.15);
-  }
-}
-@keyframes aur2 {
-  0% {
-    transform: translate3d(3vw, 2vh, 0) scale(1.1);
-  }
-  100% {
-    transform: translate3d(-5vw, -4vh, 0) scale(0.95);
-  }
-}
-@keyframes aur3 {
-  0% {
-    transform: translate3d(0, 3vh, 0) scale(1);
-  }
-  100% {
-    transform: translate3d(-4vw, -3vh, 0) scale(1.12);
-  }
-}
+/* Theme swap fades the page ground only. `.theme-fade *` put background,
+   color, border and shadow transitions on every element in the document — over
+   400 on the landing page — so one toggle click repainted the whole tree. */
 .theme-fade,
-.theme-fade * {
+.theme-fade body,
+.theme-fade #app {
   transition:
     background-color 0.24s cubic-bezier(0.23, 1, 0.32, 1),
-    color 0.24s cubic-bezier(0.23, 1, 0.32, 1),
-    border-color 0.24s cubic-bezier(0.23, 1, 0.32, 1),
-    box-shadow 0.24s cubic-bezier(0.23, 1, 0.32, 1) !important;
+    color 0.24s cubic-bezier(0.23, 1, 0.32, 1) !important;
 }
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+    /* Zeroing duration alone left the staggered inline delays (200–620ms) in
+       place, so reveals still arrived one by one, just instantly each. */
+    transition-delay: 0ms !important;
     scroll-behavior: auto !important;
+  }
+  /* Reveal elements ship hidden and are unhidden by the motion controller.
+     Pin them visible in CSS so the page is complete before (and without) JS. */
+  [data-intro],
+  [data-rv] {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }
 a,
@@ -191,6 +193,16 @@ button:active {
   border-color: rgba(var(--orange-rgb), 0.45);
   box-shadow: 0 0 44px rgba(var(--orange-rgb), 0.2);
 }
+/* Base lives on the class, not inline. The port set color + border-bottom
+   inline on every .text-link, and inline declarations outrank the stylesheet
+   `:hover` rule (no !important), so the hover was dead on all of them. */
+.text-link {
+  color: var(--orange-soft);
+  border-bottom: 1px solid transparent;
+  transition:
+    border-color 0.2s,
+    color 0.2s;
+}
 @media (hover: hover) and (pointer: fine) {
   .primary-action:hover {
     transform: translateY(-2px);
@@ -219,14 +231,42 @@ button:active {
     grid-template-columns: 1fr !important;
   }
 }
-@media (max-width: 600px) {
+/* The globe is the deploy section's right column. It is absolutely positioned
+   against this container (not the viewport) so it clears the 520px target
+   table at every width — including above 1180px, where the container starts
+   centering and the table's right edge outruns any `vw` offset. */
+.deploy-inner {
+  --globe-column: 576px; /* 32px container padding + 520px table + 24px gutter */
+  display: flex;
+  flex-direction: column;
+}
+/* Below this there is no room for a globe beside the table. It is decoration
+   (aria-hidden, lazy <img>), so drop it rather than let it crowd the content —
+   display:none also means narrow viewports never fetch the asset. */
+@media (max-width: 939px) {
   [data-el="globe"] {
-    left: 50vw !important;
-    bottom: -4vw !important;
-    width: 74vw !important;
+    display: none;
   }
+}
+@media (max-width: 600px) {
+  /* Icon-only chrome: the labels wrap the bar at this width, but hiding the
+     links outright left the site with no navigation at all. The label stays in
+     the accessibility tree so each link keeps its name. */
   .chrome-link {
-    display: none !important;
+    padding: 10px;
+  }
+  .chrome-link svg {
+    width: 16px;
+    height: 16px;
+    opacity: 1;
+  }
+  .chrome-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 @media (prefers-reduced-transparency: reduce) {

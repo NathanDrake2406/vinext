@@ -27,9 +27,9 @@ class Landing {
   nextLabel: HTMLElement | null = null;
   viteLabel: HTMLElement | null = null;
   plate: HTMLElement | null = null;
+  plateGhost: HTMLElement | null = null;
   plateSub: HTMLElement | null = null;
   conn: HTMLElement | null = null;
-  plateGhost: HTMLElement | null = null;
   raceOuter: HTMLElement | null = null;
   vFill: HTMLElement | null = null;
   nFill: HTMLElement | null = null;
@@ -57,7 +57,6 @@ class Landing {
   _copyHandler: ((event: MouseEvent) => void) | null = null;
   _copyResetTimer: ReturnType<typeof setTimeout> | null = null;
   _drawParticles: ((now: number, heroProgress: number) => void) | null = null;
-  _previousScrollRestoration: History["scrollRestoration"] | null = null;
 
   componentDidMount() {
     const root = this.root;
@@ -83,9 +82,9 @@ class Landing {
     this.nextLabel = $('[data-el="nextLabel"]');
     this.viteLabel = $('[data-el="viteLabel"]');
     this.plate = $('[data-el="plate"]');
+    this.plateGhost = $('[data-el="plateGhost"]');
     this.plateSub = $('[data-el="plateSub"]');
     this.conn = $('[data-el="conn"]');
-    this.plateGhost = $('[data-el="plateGhost"]');
     this.raceOuter = $('[data-el="raceOuter"]');
     this.vFill = $('[data-el="vinextFill"]');
     this.nFill = $('[data-el="nextFill"]');
@@ -101,17 +100,6 @@ class Landing {
     this._intro = $$("[data-intro]");
 
     this.setupCopy(root);
-
-    this._previousScrollRestoration = history.scrollRestoration;
-    history.scrollRestoration = "manual";
-    if (!location.hash) {
-      window.scrollTo({ top: 0, left: 0 });
-      setTimeout(() => {
-        if (!this._dead && !location.hash && window.scrollY > 4) {
-          window.scrollTo({ top: 0, left: 0 });
-        }
-      }, 60);
-    }
 
     if (this.reduce) {
       this.staticFinish();
@@ -166,9 +154,6 @@ class Landing {
       this.root.removeEventListener("click", this._copyHandler);
     }
     if (this._copyResetTimer !== null) clearTimeout(this._copyResetTimer);
-    if (this._previousScrollRestoration !== null) {
-      history.scrollRestoration = this._previousScrollRestoration;
-    }
   }
 
   hexToRgb(hex: string): Accent {

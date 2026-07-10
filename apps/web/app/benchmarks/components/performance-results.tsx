@@ -80,8 +80,11 @@ export function PerformanceResultsTable({
             {comparisonMode && <Table.Head>{baselineLabel}</Table.Head>}
             <Table.Head>{comparisonMode ? "Current" : "Median"}</Table.Head>
             {comparisonMode && <Table.Head>Change</Table.Head>}
-            <Table.Head>Range</Table.Head>
-            <Table.Head>Rounds</Table.Head>
+            {/* Secondary columns. On narrow screens they pushed the median and
+                its result badge past the viewport; they reappear under the
+                median value instead of forcing a horizontal scroll. */}
+            <Table.Head className="hidden sm:table-cell">Range</Table.Head>
+            <Table.Head className="hidden sm:table-cell">Rounds</Table.Head>
           </Table.Row>
         </Table.Header>
         {/* One tbody per scenario: rows in a group share the rowSpan'd scenario
@@ -139,7 +142,7 @@ export function PerformanceResultsTable({
                     </Table.Cell>
                   )}
                   <Table.Cell>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono text-sm">
                         {formatPerformanceValue(measurement.median, measurement.unit)}
                       </span>
@@ -158,6 +161,11 @@ export function PerformanceResultsTable({
                           </Badge>
                         </span>
                       )}
+                    </div>
+                    <div className="mt-1 text-xs text-[var(--sub)] sm:hidden">
+                      {formatPerformanceValue(measurement.min, measurement.unit)}–
+                      {formatPerformanceValue(measurement.max, measurement.unit)} ·{" "}
+                      {measurement.rounds} rounds
                     </div>
                   </Table.Cell>
                   {comparisonMode && (
@@ -179,11 +187,11 @@ export function PerformanceResultsTable({
                       )}
                     </Table.Cell>
                   )}
-                  <Table.Cell className="text-xs text-[var(--sub)]">
+                  <Table.Cell className="hidden text-xs text-[var(--sub)] sm:table-cell">
                     {formatPerformanceValue(measurement.min, measurement.unit)}–
                     {formatPerformanceValue(measurement.max, measurement.unit)}
                   </Table.Cell>
-                  <Table.Cell>{measurement.rounds}</Table.Cell>
+                  <Table.Cell className="hidden sm:table-cell">{measurement.rounds}</Table.Cell>
                 </Table.Row>
               );
             })}
