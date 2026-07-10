@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Dialog } from "@/app/_components/ui";
 import { ArrowSquareOut, Clock, Flame, MagnifyingGlassPlus, X } from "@phosphor-icons/react";
 import type { FlameGraphData, PerformanceComparisonData } from "@/app/lib/benchmarks/server";
-import { formatMs } from "./format";
+import { formatMs, formatUtcDateTime } from "./format";
 import { PerformanceResultsTable, type PerformanceMeasurement } from "./performance-results";
 import { profileToFlameGraph, readGzipProfile } from "./profile";
 import { filteredTraceGraph, selfValue, type TraceCategory } from "./trace";
@@ -679,9 +679,7 @@ function RunCard({
         <ArrowSquareOut aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="sr-only"> (opens in a new tab)</span>
       </a>
-      {date && (
-        <div className="mt-1 text-xs text-[var(--sub)]">{new Date(date).toLocaleString()}</div>
-      )}
+      {date && <div className="mt-1 text-xs text-[var(--sub)]">{formatUtcDateTime(date)}</div>}
     </div>
   );
 }

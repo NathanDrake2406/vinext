@@ -1,5 +1,23 @@
 /** Shared formatting and comparison helpers for the benchmarks dashboard. */
 
+// These render during SSR on Workers and again in the browser. Pin locale and
+// timezone so both passes produce identical text; Date.toLocaleString() uses
+// the runtime's locale/timezone and causes hydration mismatches.
+const UTC_DATE_TIME = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
+const UTC_DATE = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
+
+export function formatUtcDateTime(iso: string): string {
+  return `${UTC_DATE_TIME.format(new Date(iso))} UTC`;
+}
+
+export function formatUtcDate(iso: string): string {
+  return UTC_DATE.format(new Date(iso));
+}
+
 export function formatMs(ms: number | null): string {
   if (ms === null) return "-";
   if (ms < 1000) return `${Math.round(ms)} ms`;

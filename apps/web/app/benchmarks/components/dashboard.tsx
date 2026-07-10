@@ -8,6 +8,7 @@ import {
   type PerformanceRun,
 } from "./performance-results";
 import { CustomProfileViewer } from "./custom-profile-viewer";
+import { formatUtcDate, formatUtcDateTime } from "./format";
 import { recentMedianMeasurements } from "./recent-median-measurements";
 
 const RECENT_BASELINE_RUNS = 10;
@@ -42,9 +43,7 @@ export function Dashboard({ runs }: { runs: PerformanceRun[] }) {
           <a href={`/benchmarks/commit/${latest.commitSha}`}>
             <Badge variant="secondary">{latest.shortSha}</Badge>
           </a>
-          <span className="text-xs text-[var(--mute)]">
-            {new Date(latest.measuredAt).toLocaleDateString()}
-          </span>
+          <span className="text-xs text-[var(--mute)]">{formatUtcDate(latest.measuredAt)}</span>
         </div>
         <div className="space-y-5">
           {otherMeasurements.length > 0 && (
@@ -118,7 +117,7 @@ function PerformanceRunHistory({ runs }: { runs: PerformanceRun[] }) {
                 {run.measurements.length} measurements
               </Table.Cell>
               <Table.Cell className="text-xs text-[var(--sub)]">
-                {new Date(run.measuredAt).toLocaleString()}
+                {formatUtcDateTime(run.measuredAt)}
               </Table.Cell>
             </Table.Row>
           ))}
