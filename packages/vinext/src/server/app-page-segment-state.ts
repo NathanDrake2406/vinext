@@ -1,14 +1,14 @@
 import type { AppPageParams } from "./app-page-boundary.js";
-import {
-  isCatchAllSegment,
-  isOptionalCatchAllSegment,
-  isRouteGroupSegment,
-} from "../routing/utils.js";
+import { isCatchAllSegment, isOptionalCatchAllSegment } from "../routing/utils.js";
 
 export const APP_PAGE_SEGMENT_KEY = "__PAGE__";
 
 function isDynamicSegment(segment: string): boolean {
   return segment.startsWith("[") && segment.endsWith("]") && !segment.includes(".");
+}
+
+function isRouteGroupSegment(segment: string): boolean {
+  return segment.startsWith("(") && segment.endsWith(")");
 }
 
 type AppPageSegmentParamType = "d" | "c" | "oc";

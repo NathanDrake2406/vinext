@@ -1,21 +1,19 @@
 import path, { toSlash } from "pathslash";
-import type { AppRouteGraphRoute } from "./app-route-graph.js";
-import { appRouteGraph } from "./app-router.js";
-import { findFileWithExts, type ValidFileMatcher } from "./file-matcher.js";
-
-/** The root URL whose render decides the startup optimizer entries. */
-const ROOT_PATTERN = "/";
-
-// Boundary conventions that live at app/ root and are resolved by filename
-// rather than attached to a route in the graph (see index.ts's global-error /
-// global-not-found discovery). They wrap the very first render, so they belong
-// in the startup set even though no route object carries them.
-const ROOT_LEVEL_CONVENTIONS = Object.freeze(["global-error", "global-not-found"]);
+import { appRouteGraph, matchAppRoute } from "./app-router.js";
+import type { ValidFileMatcher } from "./file-matcher.js";
+import {
+  getAppRootBoundaryPath,
+  getAppRootLayoutPaths,
+  selectAppRootBoundaryRoute,
+  visitAppRouteModulePaths,
+} from "./app-route-module-load-plan.js";
 
 export type CollectAppRouterStartupOptimizeEntriesOptions = {
   root: string;
   appDir: string;
   matcher: ValidFileMatcher;
+  globalErrorPath?: string | null;
+  globalNotFoundPath?: string | null;
 };
 
 /**
@@ -42,53 +40,57 @@ export async function collectAppRouterStartupOptimizeEntries({
   root,
   appDir,
   matcher,
+  globalErrorPath,
+  globalNotFoundPath,
 }: CollectAppRouterStartupOptimizeEntriesOptions): Promise<string[]> {
   const entries = new Set<string>();
   const add = (absPath: string | null | undefined): void => {
     if (absPath) entries.add(toSlash(path.relative(root, absPath)));
   };
 
-  for (const convention of ROOT_LEVEL_CONVENTIONS) {
-    add(findFileWithExts(appDir, convention, matcher));
-  }
-
   const { routes } = await appRouteGraph(appDir, undefined, matcher);
-  for (const route of routes) {
-    if (route.pattern !== ROOT_PATTERN) continue;
-    addRouteConventionFiles(route, add);
+  const matchedRootRoute = matchAppRoute("/", routes)?.route ?? null;
+  const rootBoundaryRoute = selectAppRootBoundaryRoute(routes, matchedRootRoute);
+
+  add(globalErrorPath);
+  getAppRootLayoutPaths(rootBoundaryRoute).forEach(add);
+  add(
+    getAppRootBoundaryPath(
+      rootBoundaryRoute,
+      rootBoundaryRoute?.notFoundPaths,
+      rootBoundaryRoute?.notFoundPath,
+    ),
+  );
+  add(
+    getAppRootBoundaryPath(
+      rootBoundaryRoute,
+      rootBoundaryRoute?.forbiddenPaths,
+      rootBoundaryRoute?.forbiddenPath,
+    ),
+  );
+  add(
+    getAppRootBoundaryPath(
+      rootBoundaryRoute,
+      rootBoundaryRoute?.unauthorizedPaths,
+      rootBoundaryRoute?.unauthorizedPath,
+    ),
+  );
+
+  if (matchedRootRoute) {
+    visitAppRouteModulePaths(
+      matchedRootRoute,
+      {
+        includeBaseModules: true,
+        includeSlotModules: true,
+        includeInterceptions: false,
+      },
+      add,
+    );
+  } else {
+    // A route-miss request loads global-not-found lazily when the experiment is
+    // enabled. It is not part of matched-root startup and stays code-split.
+    add(globalNotFoundPath);
   }
 
   return [...entries];
-}
-
-function addRouteConventionFiles(
-  route: AppRouteGraphRoute,
-  add: (absPath: string | null | undefined) => void,
-): void {
-  add(route.pagePath);
-  add(route.routePath);
-  route.layouts.forEach(add);
-  route.templates.forEach(add);
-  add(route.loadingPath);
-  add(route.errorPath);
-  route.layoutErrorPaths.forEach(add);
-  route.errorPaths?.forEach(add);
-  add(route.notFoundPath);
-  route.notFoundPaths.forEach(add);
-  add(route.forbiddenPath);
-  route.forbiddenPaths.forEach(add);
-  add(route.unauthorizedPath);
-  route.unauthorizedPaths.forEach(add);
-
-  // Parallel slots render alongside the root page. Only the convention files the
-  // renderer actually loads for the slot's root content are startup modules; the
-  // slot's intercepting routes load on interception navigations, not on "/".
-  for (const slot of route.parallelSlots) {
-    add(slot.layoutPath);
-    slot.configLayoutPaths?.forEach(add);
-    add(slot.pagePath);
-    add(slot.defaultPath);
-    add(slot.loadingPath);
-    add(slot.errorPath);
-  }
 }

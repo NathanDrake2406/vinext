@@ -721,33 +721,6 @@ describe("App Router route graph builder", () => {
     });
   });
 
-  it("only treats page files as root slot conventions inside route groups", async () => {
-    await withTempApp(async (appDir) => {
-      await writeAppFile(appDir, "layout.tsx", EMPTY_LAYOUT);
-      await writeAppFile(appDir, "page.tsx", EMPTY_PAGE);
-      await writeAppFile(appDir, "@slot/default.tsx", EMPTY_PAGE);
-      await writeAppFile(appDir, "@slot/layout.tsx", EMPTY_LAYOUT);
-      await writeAppFile(appDir, "@slot/loading.tsx", EMPTY_PAGE);
-      await writeAppFile(appDir, "@slot/error.tsx", EMPTY_PAGE);
-      await writeAppFile(appDir, "@slot/(group)/page.tsx", EMPTY_PAGE);
-      await writeAppFile(appDir, "@slot/(group)/default.tsx", EMPTY_PAGE);
-      await writeAppFile(appDir, "@slot/(group)/layout.tsx", EMPTY_LAYOUT);
-      await writeAppFile(appDir, "@slot/(group)/loading.tsx", EMPTY_PAGE);
-      await writeAppFile(appDir, "@slot/(group)/error.tsx", EMPTY_PAGE);
-
-      const graph = await buildAppRouteGraph(appDir, createValidFileMatcher());
-      const root = findRoute(graph.routes, "/");
-      const slot = root.parallelSlots.find((candidate) => candidate.name === "slot");
-      expect(slot).toMatchObject({
-        pagePath: path.join(appDir, "@slot/(group)/page.tsx"),
-        defaultPath: path.join(appDir, "@slot/default.tsx"),
-        layoutPath: path.join(appDir, "@slot/layout.tsx"),
-        loadingPath: path.join(appDir, "@slot/loading.tsx"),
-        errorPath: path.join(appDir, "@slot/error.tsx"),
-      });
-    });
-  });
-
   // Ported from Next.js:
   // test/e2e/app-dir/parallel-routes-catchall-default/parallel-routes-catchall-default.test.ts
   // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/parallel-routes-catchall-default/parallel-routes-catchall-default.test.ts

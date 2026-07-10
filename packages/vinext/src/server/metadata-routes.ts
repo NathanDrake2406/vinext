@@ -18,7 +18,6 @@
 import fs from "node:fs";
 import path from "pathslash";
 import { matchRoutePattern } from "../routing/route-pattern.js";
-import { isParallelRouteSegment, isRouteGroupSegment } from "../routing/utils.js";
 
 // -------------------------------------------------------------------
 // Types matching Next.js MetadataRoute
@@ -376,6 +375,14 @@ function serializeDate(value: string | Date): string {
  */
 const PARAMETER_PATTERN = /^([^[]*)\[((?:\[[^\]]*\])|[^\]]+)\](.*)$/;
 
+function isGroupSegment(segment: string): boolean {
+  return segment.startsWith("(") && segment.endsWith(")");
+}
+
+function isParallelRouteSegment(segment: string): boolean {
+  return segment.startsWith("@") && segment !== "@children";
+}
+
 function normalizeStaticMetadataRouteSegment(segment: string): string {
   let normalizedSegment = segment;
   let match = normalizedSegment.match(PARAMETER_PATTERN);
@@ -393,7 +400,7 @@ function getStaticMetadataRoute(appDirPath: string): string {
     // Strip route groups and all parallel route slots (including @children)
     // from the URL path. The @children slot is the default parallel route
     // and must also be invisible in the URL, matching Next.js behavior.
-    if (isRouteGroupSegment(seg) || seg.startsWith("@")) continue;
+    if (isGroupSegment(seg) || seg.startsWith("@")) continue;
     normalizedSegments.push(normalizeStaticMetadataRouteSegment(seg));
   }
   return normalizedSegments.length > 0 ? `/${normalizedSegments.join("/")}` : "";
@@ -413,7 +420,7 @@ function getMetadataRouteSuffix(page: string): string {
   if (page.endsWith("/sitemap") || page.endsWith("/sitemap.xml")) return "";
   const segments = parentPathname.split("/");
   const hasInvisibleParent = segments.some(
-    (seg) => isRouteGroupSegment(seg) || isParallelRouteSegment(seg),
+    (seg) => isGroupSegment(seg) || isParallelRouteSegment(seg),
   );
   if (!hasInvisibleParent) return "";
   return hashMetadataRouteParentPath(parentPathname);

@@ -1317,6 +1317,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let instrumentationPath: string | null = null;
   let instrumentationClientPath: string | null = null;
   let clientInjectModule: string | null = null;
+  let startupGlobalErrorPath: string | null = null;
+  let startupGlobalNotFoundPath: string | null = null;
   let globalNotFoundCssIsolationPath: string | null = null;
   // Resolved in the `config` hook from the user's `build.assetsInlineLimit`
   // (default 0 = always emit files, matching Next's `asset/resource`). Read by
@@ -1999,10 +2001,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               : createRscCompatibilityId(nextConfig);
         }
         fileMatcher = createValidFileMatcher(nextConfig.pageExtensions);
-        globalNotFoundCssIsolationPath =
-          env?.command === "build" && nextConfig.globalNotFound
+        startupGlobalErrorPath = hasAppDir
+          ? findFileWithExts(appDir, "global-error", fileMatcher)
+          : null;
+        startupGlobalNotFoundPath =
+          hasAppDir && nextConfig.globalNotFound
             ? findFileWithExts(appDir, "global-not-found", fileMatcher)
             : null;
+        globalNotFoundCssIsolationPath =
+          env?.command === "build" ? startupGlobalNotFoundPath : null;
         instrumentationPath = findInstrumentationFile(root, fileMatcher);
         instrumentationClientPath = findInstrumentationClientFile(root, fileMatcher);
         const middlewareConventionDir =
@@ -2954,12 +2961,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             root,
             appDir,
             matcher: fileMatcher,
+            globalErrorPath: startupGlobalErrorPath,
+            globalNotFoundPath: startupGlobalNotFoundPath,
           });
           const explicitInstrumentationEntries = [
             instrumentationPath,
             instrumentationClientPath,
           ].flatMap((entry) => (entry ? [toRelativeFileEntry(root, entry)] : []));
           const optimizeEntries = [...new Set([...appEntries, ...explicitInstrumentationEntries])];
+          const dynamicMetadataEntries = scanMetadataFiles(appDir)
+            .filter((route) => route.isDynamic)
+            .map((route) => toRelativeFileEntry(root, route.filePath));
+          const rscOptimizeEntries = [...new Set([...optimizeEntries, ...dynamicMetadataEntries])];
           const appClientInput: Record<string, string> = { index: VIRTUAL_APP_BROWSER_ENTRY };
           if (hasPagesDir) {
             appClientInput["vinext-client-entry"] = VIRTUAL_CLIENT_ENTRY;
@@ -3000,7 +3013,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   }),
               optimizeDeps: {
                 exclude: mergeOptimizeDepsExclude(incomingExclude, VINEXT_OPTIMIZE_DEPS_EXCLUDE),
-                entries: optimizeEntries,
+                entries: rscOptimizeEntries,
                 // plugin-rsc pre-includes server.edge, but not its vendored
                 // static.edge import, which it rewrites to this package specifier.
                 // Prebundle both so they share the large development renderer
@@ -3590,13 +3603,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             const routes = await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher);
             const metaRoutes = scanMetadataFiles(appDir);
             const hasServerActions = await resolveHasServerActions(this.environment.config);
-            // Check for global-error.tsx at app root
             const globalErrorPath = findFileWithExts(appDir, "global-error", fileMatcher);
-            // Check for global-not-found.tsx at app root (Next.js 16+ feature)
-            // When present, this file replaces the root layout when serving a
-            // route-miss 404. The file is responsible for emitting its own
-            // <html> and <body> tags (similar to global-error.tsx).
-            // See https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/global-not-found
             const globalNotFoundPath = nextConfig?.globalNotFound
               ? findFileWithExts(appDir, "global-not-found", fileMatcher)
               : null;

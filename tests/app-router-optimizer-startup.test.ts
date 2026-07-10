@@ -23,7 +23,17 @@ async function withTempApp(
       await fsp.writeFile(filePath, contents);
     }
     const matcher = createValidFileMatcher();
-    await run(() => collectAppRouterStartupOptimizeEntries({ root, appDir, matcher }));
+    await run(() =>
+      collectAppRouterStartupOptimizeEntries({
+        root,
+        appDir,
+        matcher,
+        globalErrorPath: files["global-error.tsx"] ? path.join(appDir, "global-error.tsx") : null,
+        globalNotFoundPath: files["global-not-found.tsx"]
+          ? path.join(appDir, "global-not-found.tsx")
+          : null,
+      }),
+    );
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
@@ -165,6 +175,13 @@ export default function RouteGroupSlotError() {
 }
 `,
   );
+  await fsp.writeFile(
+    path.join(appDir, "opengraph-image.tsx"),
+    `export default function OpenGraphImage() {
+  return new Response("dynamic metadata");
+}
+`,
+  );
 }
 
 describe("collectAppRouterStartupOptimizeEntries (projection of the route graph)", () => {
@@ -223,6 +240,65 @@ describe("collectAppRouterStartupOptimizeEntries (projection of the route graph)
       },
     );
   });
+
+  it("uses the canonical matcher when an optional catch-all owns the root URL", async () => {
+    await withTempApp(
+      {
+        "layout.tsx": LAYOUT,
+        "[[...slug]]/page.tsx": PAGE,
+      },
+      async (collect) => {
+        const entries = await collect();
+        expect(entries).toEqual(
+          expect.arrayContaining(["app/layout.tsx", "app/[[...slug]]/page.tsx"]),
+        );
+      },
+    );
+  });
+
+  it("includes only root fallback modules when no route matches the root URL", async () => {
+    await withTempApp(
+      {
+        "layout.tsx": LAYOUT,
+        "not-found.tsx": PAGE,
+        "forbidden.tsx": PAGE,
+        "unauthorized.tsx": PAGE,
+        "about/layout.tsx": LAYOUT,
+        "about/page.tsx": PAGE,
+        "about/not-found.tsx": PAGE,
+      },
+      async (collect) => {
+        const entries = await collect();
+        expect(entries).toEqual(
+          expect.arrayContaining([
+            "app/layout.tsx",
+            "app/not-found.tsx",
+            "app/forbidden.tsx",
+            "app/unauthorized.tsx",
+          ]),
+        );
+        expect(entries).not.toContain("app/about/layout.tsx");
+        expect(entries).not.toContain("app/about/page.tsx");
+        expect(entries).not.toContain("app/about/not-found.tsx");
+      },
+    );
+  });
+
+  it("uses resolved global boundaries only on startup paths that load them", async () => {
+    await withTempApp(
+      {
+        "global-error.tsx": PAGE,
+        "global-not-found.tsx": PAGE,
+        "layout.tsx": LAYOUT,
+        "about/page.tsx": PAGE,
+      },
+      async (collect) => {
+        const entries = await collect();
+        expect(entries).toContain("app/global-error.tsx");
+        expect(entries).toContain("app/global-not-found.tsx");
+      },
+    );
+  });
 });
 
 it("includes URL-invisible root files in focused App Router optimizeDeps.entries", async () => {
@@ -257,6 +333,10 @@ it("includes URL-invisible root files in focused App Router optimizeDeps.entries
       expect(entries, name).not.toContain("app/@drawer/(startup-slot)/error.tsx");
       expect(entries, name).not.toContain("app/about/page.tsx");
     }
+
+    expect(rscEntries).toContain("app/opengraph-image.tsx");
+    expect(ssrEntries).not.toContain("app/opengraph-image.tsx");
+    expect(clientEntries).not.toContain("app/opengraph-image.tsx");
 
     const rootResponse = await fetch(`${fixtureBaseUrl}/`);
     const html = await rootResponse.text();
