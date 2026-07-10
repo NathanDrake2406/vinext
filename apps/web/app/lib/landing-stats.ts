@@ -150,12 +150,13 @@ export type BuildComparison = {
 };
 
 export function compareBuild(seconds: LandingStats["buildSeconds"]): BuildComparison {
-  // Decide on the displayed (rounded) ratio so we never render "1× faster".
-  const ratio = Math.round((seconds.nextjs / seconds.vinext) * 10) / 10;
-  if (ratio === 1) return { verdict: "par", multiple: "1×" };
-  return ratio > 1
-    ? { verdict: "better", multiple: formatMultiple(ratio) }
-    : { verdict: "worse", multiple: formatMultiple(1 / ratio) };
+  const ratio = Math.max(seconds.vinext, seconds.nextjs) / Math.min(seconds.vinext, seconds.nextjs);
+  // Decide on the displayed ratio so a near-tie never renders "1× faster".
+  if (Math.round(ratio * 10) / 10 === 1) return { verdict: "par", multiple: "1×" };
+  return {
+    verdict: seconds.vinext < seconds.nextjs ? "better" : "worse",
+    multiple: formatMultiple(ratio),
+  };
 }
 
 export type BundleComparison = {

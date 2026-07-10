@@ -7,6 +7,7 @@ export type RaceFrame = {
   vinextFill: number;
   nextjsFill: number;
   vinextDone: boolean;
+  nextjsDone: boolean;
 };
 
 export function getRaceFrame(race: RaceSeconds, progress: number): RaceFrame {
@@ -22,5 +23,6 @@ export function getRaceFrame(race: RaceSeconds, progress: number): RaceFrame {
     vinextFill: vinextTime / longest,
     nextjsFill: nextjsTime / longest,
     vinextDone: simTime >= race.vinext,
+    nextjsDone: simTime >= race.nextjs,
   };
 }

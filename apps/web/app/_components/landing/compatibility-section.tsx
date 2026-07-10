@@ -2,6 +2,149 @@ import { formatUtcDateTime } from "../../benchmarks/components/format";
 import type { LandingStats } from "../../lib/landing-stats";
 import { provenanceStyle, type LandingStyle } from "./landing-styles";
 
+type CompatibilityStatus = "Supported" | "Experimental";
+type CompatibilityRow = { label: string; subtitle?: string; status: CompatibilityStatus };
+type CompatibilityGroup = { title: string; rows: readonly CompatibilityRow[] };
+
+const compatibilityGroups = [
+  {
+    title: "Core routing & components",
+    rows: [
+      {
+        label: "App Router",
+        subtitle: "layouts · server components · streaming",
+        status: "Supported",
+      },
+      { label: "Pages Router", subtitle: "getServerSideProps · API routes", status: "Supported" },
+      { label: "React Server Components", status: "Supported" },
+      { label: "Server Actions", status: "Supported" },
+      { label: "next/font", subtitle: "local & Google fonts", status: "Supported" },
+    ],
+  },
+  {
+    title: "Advanced tooling & optimization",
+    rows: [
+      { label: "Middleware", subtitle: "rewrites · headers · redirects", status: "Supported" },
+      { label: "ISR / revalidate", status: "Supported" },
+      { label: "Parallel & intercepting routes", status: "Supported" },
+      { label: "Image optimization", subtitle: "Cloudflare Images", status: "Supported" },
+      {
+        label: "Traffic-aware Pre-Rendering",
+        subtitle: "zone analytics at deploy time",
+        status: "Experimental",
+      },
+    ],
+  },
+] satisfies readonly CompatibilityGroup[];
+
+function StatusLabel({ status }: { status: CompatibilityStatus }) {
+  const supported = status === "Supported";
+  return (
+    <span
+      style={
+        {
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "8px",
+          fontFamily: "'JetBrains Mono',monospace",
+          fontSize: "12px",
+          color: supported ? "var(--ok)" : "var(--partial)",
+          whiteSpace: "nowrap",
+        } satisfies LandingStyle
+      }
+    >
+      <span
+        style={
+          {
+            width: "7px",
+            height: "7px",
+            borderRadius: "50%",
+            background: supported ? "var(--ok)" : undefined,
+            border: supported ? undefined : "1.4px solid var(--partial)",
+          } satisfies LandingStyle
+        }
+      />
+      {status}
+    </span>
+  );
+}
+
+function CompatibilityRow({ row, isLast }: { row: CompatibilityRow; isLast: boolean }) {
+  return (
+    <div
+      style={
+        {
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "16px",
+          padding: "16px 24px",
+          borderBottom: isLast ? undefined : "1px solid var(--line-soft)",
+        } satisfies LandingStyle
+      }
+    >
+      <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
+        {row.label}
+        {row.subtitle ? (
+          <small
+            style={
+              {
+                display: "block",
+                color: "var(--mute)",
+                fontSize: "11.5px",
+                marginTop: "4px",
+                fontFamily: "'JetBrains Mono',monospace",
+              } satisfies LandingStyle
+            }
+          >
+            {row.subtitle}
+          </small>
+        ) : null}
+      </span>
+      <StatusLabel status={row.status} />
+    </div>
+  );
+}
+
+function CompatibilityGroupCard({ group, index }: { group: CompatibilityGroup; index: number }) {
+  return (
+    <div
+      data-rv=""
+      style={
+        {
+          opacity: "0",
+          transform: "translateY(24px)",
+          transition: "opacity var(--t),transform var(--t)",
+          transitionDelay: index === 0 ? undefined : ".08s",
+          border: "1px solid var(--line)",
+          borderRadius: "16px",
+          background: "var(--surface)",
+          overflow: "hidden",
+        } satisfies LandingStyle
+      }
+    >
+      <div
+        style={
+          {
+            padding: "16px 24px",
+            fontFamily: "'JetBrains Mono',monospace",
+            fontSize: "11px",
+            color: "var(--mute)",
+            letterSpacing: ".06em",
+            textTransform: "uppercase",
+            borderBottom: "1px solid var(--line-soft)",
+          } satisfies LandingStyle
+        }
+      >
+        {group.title}
+      </div>
+      {group.rows.map((row, rowIndex) => (
+        <CompatibilityRow key={row.label} row={row} isLast={rowIndex === group.rows.length - 1} />
+      ))}
+    </div>
+  );
+}
+
 export function CompatibilitySection({ stats }: { stats: LandingStats }) {
   const source = stats.provenance.compatibility;
   const compatibilityProvenance =
@@ -52,553 +195,9 @@ export function CompatibilitySection({ stats }: { stats: LandingStats }) {
             } satisfies LandingStyle
           }
         >
-          <div
-            data-rv=""
-            style={
-              {
-                opacity: "0",
-                transform: "translateY(24px)",
-                transition: "opacity var(--t),transform var(--t)",
-                border: "1px solid var(--line)",
-                borderRadius: "16px",
-                background: "var(--surface)",
-                overflow: "hidden",
-              } satisfies LandingStyle
-            }
-          >
-            <div
-              style={
-                {
-                  padding: "16px 24px",
-                  fontFamily: "'JetBrains Mono',monospace",
-                  fontSize: "11px",
-                  color: "var(--mute)",
-                  letterSpacing: ".06em",
-                  textTransform: "uppercase",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              Core routing &amp; components
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                App Router
-                <small
-                  style={
-                    {
-                      display: "block",
-                      color: "var(--mute)",
-                      fontSize: "11.5px",
-                      marginTop: "4px",
-                      fontFamily: "'JetBrains Mono',monospace",
-                    } satisfies LandingStyle
-                  }
-                >
-                  layouts · server components · streaming
-                </small>
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                Pages Router
-                <small
-                  style={
-                    {
-                      display: "block",
-                      color: "var(--mute)",
-                      fontSize: "11.5px",
-                      marginTop: "4px",
-                      fontFamily: "'JetBrains Mono',monospace",
-                    } satisfies LandingStyle
-                  }
-                >
-                  getServerSideProps · API routes
-                </small>
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                React Server Components
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                Server Actions
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                next/font
-                <small
-                  style={
-                    {
-                      display: "block",
-                      color: "var(--mute)",
-                      fontSize: "11.5px",
-                      marginTop: "4px",
-                      fontFamily: "'JetBrains Mono',monospace",
-                    } satisfies LandingStyle
-                  }
-                >
-                  local &amp; Google fonts
-                </small>
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-          </div>
-          <div
-            data-rv=""
-            style={
-              {
-                opacity: "0",
-                transform: "translateY(24px)",
-                transition: "opacity var(--t),transform var(--t)",
-                transitionDelay: ".08s",
-                border: "1px solid var(--line)",
-                borderRadius: "16px",
-                background: "var(--surface)",
-                overflow: "hidden",
-              } satisfies LandingStyle
-            }
-          >
-            <div
-              style={
-                {
-                  padding: "16px 24px",
-                  fontFamily: "'JetBrains Mono',monospace",
-                  fontSize: "11px",
-                  color: "var(--mute)",
-                  letterSpacing: ".06em",
-                  textTransform: "uppercase",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              Advanced tooling &amp; optimization
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                Middleware
-                <small
-                  style={
-                    {
-                      display: "block",
-                      color: "var(--mute)",
-                      fontSize: "11.5px",
-                      marginTop: "4px",
-                      fontFamily: "'JetBrains Mono',monospace",
-                    } satisfies LandingStyle
-                  }
-                >
-                  rewrites · headers · redirects
-                </small>
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                ISR / revalidate
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                Parallel &amp; intercepting routes
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                  borderBottom: "1px solid var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                Image optimization
-                <small
-                  style={
-                    {
-                      display: "block",
-                      color: "var(--mute)",
-                      fontSize: "11.5px",
-                      marginTop: "4px",
-                      fontFamily: "'JetBrains Mono',monospace",
-                    } satisfies LandingStyle
-                  }
-                >
-                  Cloudflare Images
-                </small>
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--ok)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      background: "var(--ok)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Supported
-              </span>
-            </div>
-            <div
-              style={
-                {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "16px",
-                  padding: "16px 24px",
-                } satisfies LandingStyle
-              }
-            >
-              <span style={{ fontSize: "15px", color: "var(--ink)" } satisfies LandingStyle}>
-                Traffic-aware Pre-Rendering
-                <small
-                  style={
-                    {
-                      display: "block",
-                      color: "var(--mute)",
-                      fontSize: "11.5px",
-                      marginTop: "4px",
-                      fontFamily: "'JetBrains Mono',monospace",
-                    } satisfies LandingStyle
-                  }
-                >
-                  zone analytics at deploy time
-                </small>
-              </span>
-              <span
-                style={
-                  {
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontFamily: "'JetBrains Mono',monospace",
-                    fontSize: "12px",
-                    color: "var(--partial)",
-                    whiteSpace: "nowrap",
-                  } satisfies LandingStyle
-                }
-              >
-                <span
-                  style={
-                    {
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      border: "1.4px solid var(--partial)",
-                    } satisfies LandingStyle
-                  }
-                />
-                Experimental
-              </span>
-            </div>
-          </div>
+          {compatibilityGroups.map((group, index) => (
+            <CompatibilityGroupCard key={group.title} group={group} index={index} />
+          ))}
         </div>
         <a
           className="text-link"

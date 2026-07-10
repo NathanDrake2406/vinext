@@ -18,6 +18,7 @@ type LandingElementName =
   | "l2"
   | "mq"
   | "nextFill"
+  | "nextjsDone"
   | "nextLabel"
   | "nextTime"
   | "payoff"
@@ -32,8 +33,6 @@ type LandingElementName =
   | "vinextFill"
   | "vinextTime"
   | "viteLabel";
-
-const ACCENT = "#f6821f";
 
 function findElement<T extends HTMLElement = HTMLElement>(
   root: HTMLElement,
@@ -67,39 +66,32 @@ function reveal(element: HTMLElement) {
   element.style.transform = "none";
 }
 
-function applyRaceFrame(root: HTMLElement, frame: RaceFrame) {
+function applyRaceFrame(root: HTMLElement, frame: RaceFrame, race: RaceSeconds) {
   const vinextFill = findElement(root, "vinextFill");
   const nextFill = findElement(root, "nextFill");
   const vinextTime = findElement(root, "vinextTime");
   const nextTime = findElement(root, "nextTime");
   const vinextDone = findElement(root, "vinextDone");
+  const nextjsDone = findElement(root, "nextjsDone");
 
   if (vinextFill) vinextFill.style.transform = `scaleX(${frame.vinextFill.toFixed(4)})`;
   if (nextFill) nextFill.style.transform = `scaleX(${frame.nextjsFill.toFixed(4)})`;
   if (vinextTime) vinextTime.textContent = `${frame.vinextTime.toFixed(1)}s`;
   if (nextTime) nextTime.textContent = `${frame.nextjsTime.toFixed(1)}s`;
-  if (vinextDone) vinextDone.style.opacity = frame.vinextDone ? "1" : "0";
+  if (vinextDone) {
+    vinextDone.style.opacity = frame.vinextDone && race.vinext < race.nextjs ? "1" : "0";
+  }
+  if (nextjsDone) {
+    nextjsDone.style.opacity = frame.nextjsDone && race.nextjs < race.vinext ? "1" : "0";
+  }
 }
 
-function useMotionFoundation(rootRef: RootRef) {
+function useMotionFoundation() {
   useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-
-    const normalized = ACCENT.slice(1);
-    const numeric = Number.parseInt(normalized, 16);
-    const color = { r: (numeric >> 16) & 255, g: (numeric >> 8) & 255, b: numeric & 255 };
-    root.style.setProperty("--orange", ACCENT);
-    root.style.setProperty("--orange-rgb", `${color.r},${color.g},${color.b}`);
-    root.style.setProperty(
-      "--amber",
-      `rgb(${Math.min(255, color.r + 8)},${Math.min(255, color.g + 43)},${Math.min(255, color.b + 34)})`,
-    );
-
     if (prefersReducedMotion()) return;
     document.documentElement.classList.add("motion-ready");
     return () => document.documentElement.classList.remove("motion-ready");
-  }, [rootRef]);
+  }, []);
 }
 
 function useIntroAndRevealMotion(rootRef: RootRef) {
@@ -387,12 +379,12 @@ function useRaceMotion(rootRef: RootRef, race: RaceSeconds) {
     const payoff = findElement(root, "payoff");
     const values = { vinext: vinextSeconds, nextjs: nextjsSeconds };
     if (prefersReducedMotion()) {
-      applyRaceFrame(root, getRaceFrame(values, 1));
+      applyRaceFrame(root, getRaceFrame(values, 1), values);
       if (payoff) reveal(payoff);
       return;
     }
 
-    applyRaceFrame(root, getRaceFrame(values, 0));
+    applyRaceFrame(root, getRaceFrame(values, 0), values);
     if (payoff) {
       payoff.style.opacity = "0";
       payoff.style.transform = "translateY(16px)";
@@ -409,7 +401,7 @@ function useRaceMotion(rootRef: RootRef, race: RaceSeconds) {
       const step = (now: number) => {
         if (dead) return;
         const time = Math.min(1, (now - start) / duration);
-        applyRaceFrame(root, getRaceFrame(values, time));
+        applyRaceFrame(root, getRaceFrame(values, time), values);
         if (time < 1) frame = requestAnimationFrame(step);
         else if (payoff) reveal(payoff);
       };
@@ -553,7 +545,7 @@ type LandingMotionProps = {
 
 export function LandingMotion({ children, race, style }: LandingMotionProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  useMotionFoundation(rootRef);
+  useMotionFoundation();
   useIntroAndRevealMotion(rootRef);
   useHeroMotion(rootRef);
   useEngineSwapMotion(rootRef);

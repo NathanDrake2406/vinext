@@ -12,6 +12,7 @@ describe("landing build race", () => {
       vinextFill: 0.5,
       nextjsFill: 0.5,
       vinextDone: false,
+      nextjsDone: true,
     });
 
     expect(getRaceFrame({ vinext: 6, nextjs: 3 }, 1)).toEqual({
@@ -21,6 +22,7 @@ describe("landing build race", () => {
       vinextFill: 1,
       nextjsFill: 0.5,
       vinextDone: true,
+      nextjsDone: true,
     });
   });
 
@@ -32,6 +34,7 @@ describe("landing build race", () => {
       vinextFill: 0.5,
       nextjsFill: 0.5,
       vinextDone: false,
+      nextjsDone: false,
     });
 
     expect(getRaceFrame({ vinext: 4, nextjs: 4 }, 1)).toEqual({
@@ -41,6 +44,7 @@ describe("landing build race", () => {
       vinextFill: 1,
       nextjsFill: 1,
       vinextDone: true,
+      nextjsDone: true,
     });
   });
 });

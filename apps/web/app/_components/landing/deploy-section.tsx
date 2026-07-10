@@ -1,5 +1,113 @@
 import type { LandingStyle } from "./landing-styles";
 
+type DeployIcon = "aws" | "cloudflare" | "deno" | "netlify" | "node" | "vercel";
+type DeployTarget = { name: string; icon: DeployIcon; status: "adapter" | "first-class" };
+
+const deployTargets = [
+  { name: "Cloudflare Workers", icon: "cloudflare", status: "first-class" },
+  { name: "Vercel", icon: "vercel", status: "adapter" },
+  { name: "Netlify", icon: "netlify", status: "adapter" },
+  { name: "AWS Lambda", icon: "aws", status: "adapter" },
+  { name: "Deno Deploy", icon: "deno", status: "adapter" },
+  { name: "Node (standalone)", icon: "node", status: "adapter" },
+] satisfies readonly DeployTarget[];
+
+function DeployIcon({ icon }: { icon: DeployIcon }) {
+  if (icon === "cloudflare" || icon === "netlify" || icon === "node") {
+    const size = icon === "netlify" ? 14 : 15;
+    return (
+      <img
+        src={`/img/brand-${icon === "node" ? "nodedotjs" : icon}.svg`}
+        alt=""
+        aria-hidden="true"
+        width={size}
+        height={size}
+        style={{ marginRight: "11px", verticalAlign: "-2px" } satisfies LandingStyle}
+      />
+    );
+  }
+  if (icon === "aws") {
+    return (
+      <span
+        aria-hidden="true"
+        style={
+          {
+            display: "inline-block",
+            width: "15px",
+            marginRight: "11px",
+            fontWeight: "600",
+            textAlign: "center",
+            color: "#ff9900",
+          } satisfies LandingStyle
+        }
+      >
+        λ
+      </span>
+    );
+  }
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width={icon === "vercel" ? 13 : 14}
+      height={icon === "vercel" ? 13 : 14}
+      fill="currentColor"
+      style={
+        {
+          marginRight: "11px",
+          verticalAlign: icon === "vercel" ? "-1px" : "-2px",
+        } satisfies LandingStyle
+      }
+    >
+      <path
+        d={
+          icon === "vercel"
+            ? "m12 1.608 12 20.784H0Z"
+            : "M1.105 18.02A11.9 11.9 0 0 1 0 12.985q0-.698.078-1.376a12 12 0 0 1 .231-1.34A12 12 0 0 1 4.025 4.02a12 12 0 0 1 5.46-2.771 12 12 0 0 1 3.428-.23c1.452.112 2.825.477 4.077 1.05a12 12 0 0 1 2.78 1.774 12.02 12.02 0 0 1 4.053 7.078A12 12 0 0 1 24 12.985q0 .454-.036.914a12 12 0 0 1-.728 3.305 12 12 0 0 1-2.38 3.875c-1.33 1.357-3.02 1.962-4.43 1.936a4.4 4.4 0 0 1-2.724-1.024c-.99-.853-1.391-1.83-1.53-2.919a5 5 0 0 1 .128-1.518c.105-.38.37-1.116.76-1.437-.455-.197-1.04-.624-1.226-.829-.045-.05-.04-.13 0-.183a.155.155 0 0 1 .177-.053c.392.134.869.267 1.372.35.66.111 1.484.25 2.317.292 2.03.1 4.153-.813 4.812-2.627s.403-3.609-1.96-4.685-3.454-2.356-5.363-3.128c-1.247-.505-2.636-.205-4.06.582-3.838 2.121-7.277 8.822-5.69 15.032a.191.191 0 0 1-.315.19 12 12 0 0 1-1.25-1.634 12 12 0 0 1-.769-1.404M11.57 6.087c.649-.051 1.214.501 1.31 1.236.13.979-.228 1.99-1.41 2.013-1.01.02-1.315-.997-1.248-1.614.066-.616.574-1.575 1.35-1.635"
+        }
+      />
+    </svg>
+  );
+}
+
+function DeployTargetRow({ target, isLast }: { target: DeployTarget; isLast: boolean }) {
+  return (
+    <div
+      data-el="dcell"
+      style={
+        {
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: "16px",
+          padding: "12px 2px",
+          borderTop: "1px solid var(--line-soft)",
+          borderBottom: isLast ? "1px solid var(--line-soft)" : undefined,
+        } satisfies LandingStyle
+      }
+    >
+      <span
+        data-name=""
+        style={{ color: "var(--sub)", transition: "color .5s" } satisfies LandingStyle}
+      >
+        <DeployIcon icon={target.icon} />
+        {target.name}
+      </span>
+      <span
+        data-tag=""
+        style={
+          {
+            color: target.status === "first-class" ? "var(--ok)" : "var(--mute)",
+            transition: "color .5s",
+          } satisfies LandingStyle
+        }
+      >
+        {target.status}
+      </span>
+    </div>
+  );
+}
+
 export function DeploySection() {
   return (
     <section
@@ -96,222 +204,13 @@ export function DeploySection() {
             <span>target</span>
             <span>status</span>
           </div>
-          <div
-            data-el="dcell"
-            style={
-              {
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                gap: "16px",
-                padding: "12px 2px",
-                borderTop: "1px solid var(--line-soft)",
-              } satisfies LandingStyle
-            }
-          >
-            <span
-              data-name=""
-              style={{ color: "var(--sub)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              <img
-                src="/img/brand-cloudflare.svg"
-                alt=""
-                aria-hidden="true"
-                width="15"
-                height="15"
-                style={{ marginRight: "11px", verticalAlign: "-2px" } satisfies LandingStyle}
-              />
-              Cloudflare Workers
-            </span>
-            <span
-              data-tag=""
-              style={{ color: "var(--ok)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              first-class
-            </span>
-          </div>
-          <div
-            data-el="dcell"
-            style={
-              {
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                gap: "16px",
-                padding: "12px 2px",
-                borderTop: "1px solid var(--line-soft)",
-              } satisfies LandingStyle
-            }
-          >
-            <span
-              data-name=""
-              style={{ color: "var(--sub)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                width="13"
-                height="13"
-                fill="currentColor"
-                style={{ marginRight: "11px", verticalAlign: "-1px" } satisfies LandingStyle}
-              >
-                <path d="m12 1.608 12 20.784H0Z" />
-              </svg>
-              Vercel
-            </span>
-            <span
-              data-tag=""
-              style={{ color: "var(--mute)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              adapter
-            </span>
-          </div>
-          <div
-            data-el="dcell"
-            style={
-              {
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                gap: "16px",
-                padding: "12px 2px",
-                borderTop: "1px solid var(--line-soft)",
-              } satisfies LandingStyle
-            }
-          >
-            <span
-              data-name=""
-              style={{ color: "var(--sub)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              <img
-                src="/img/brand-netlify.svg"
-                alt=""
-                aria-hidden="true"
-                width="14"
-                height="14"
-                style={{ marginRight: "11px", verticalAlign: "-2px" } satisfies LandingStyle}
-              />
-              Netlify
-            </span>
-            <span
-              data-tag=""
-              style={{ color: "var(--mute)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              adapter
-            </span>
-          </div>
-          <div
-            data-el="dcell"
-            style={
-              {
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                gap: "16px",
-                padding: "12px 2px",
-                borderTop: "1px solid var(--line-soft)",
-              } satisfies LandingStyle
-            }
-          >
-            <span
-              data-name=""
-              style={{ color: "var(--sub)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              <span
-                aria-hidden="true"
-                style={
-                  {
-                    display: "inline-block",
-                    width: "15px",
-                    marginRight: "11px",
-                    fontWeight: "600",
-                    textAlign: "center",
-                    color: "#ff9900",
-                  } satisfies LandingStyle
-                }
-              >
-                λ
-              </span>
-              AWS Lambda
-            </span>
-            <span
-              data-tag=""
-              style={{ color: "var(--mute)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              adapter
-            </span>
-          </div>
-          <div
-            data-el="dcell"
-            style={
-              {
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                gap: "16px",
-                padding: "12px 2px",
-                borderTop: "1px solid var(--line-soft)",
-              } satisfies LandingStyle
-            }
-          >
-            <span
-              data-name=""
-              style={{ color: "var(--sub)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                width="14"
-                height="14"
-                fill="currentColor"
-                style={{ marginRight: "11px", verticalAlign: "-2px" } satisfies LandingStyle}
-              >
-                <path d="M1.105 18.02A11.9 11.9 0 0 1 0 12.985q0-.698.078-1.376a12 12 0 0 1 .231-1.34A12 12 0 0 1 4.025 4.02a12 12 0 0 1 5.46-2.771 12 12 0 0 1 3.428-.23c1.452.112 2.825.477 4.077 1.05a12 12 0 0 1 2.78 1.774 12.02 12.02 0 0 1 4.053 7.078A12 12 0 0 1 24 12.985q0 .454-.036.914a12 12 0 0 1-.728 3.305 12 12 0 0 1-2.38 3.875c-1.33 1.357-3.02 1.962-4.43 1.936a4.4 4.4 0 0 1-2.724-1.024c-.99-.853-1.391-1.83-1.53-2.919a5 5 0 0 1 .128-1.518c.105-.38.37-1.116.76-1.437-.455-.197-1.04-.624-1.226-.829-.045-.05-.04-.13 0-.183a.155.155 0 0 1 .177-.053c.392.134.869.267 1.372.35.66.111 1.484.25 2.317.292 2.03.1 4.153-.813 4.812-2.627s.403-3.609-1.96-4.685-3.454-2.356-5.363-3.128c-1.247-.505-2.636-.205-4.06.582-3.838 2.121-7.277 8.822-5.69 15.032a.191.191 0 0 1-.315.19 12 12 0 0 1-1.25-1.634 12 12 0 0 1-.769-1.404M11.57 6.087c.649-.051 1.214.501 1.31 1.236.13.979-.228 1.99-1.41 2.013-1.01.02-1.315-.997-1.248-1.614.066-.616.574-1.575 1.35-1.635" />
-              </svg>
-              Deno Deploy
-            </span>
-            <span
-              data-tag=""
-              style={{ color: "var(--mute)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              adapter
-            </span>
-          </div>
-          <div
-            data-el="dcell"
-            style={
-              {
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                gap: "16px",
-                padding: "12px 2px",
-                borderTop: "1px solid var(--line-soft)",
-                borderBottom: "1px solid var(--line-soft)",
-              } satisfies LandingStyle
-            }
-          >
-            <span
-              data-name=""
-              style={{ color: "var(--sub)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              <img
-                src="/img/brand-nodedotjs.svg"
-                alt=""
-                aria-hidden="true"
-                width="15"
-                height="15"
-                style={{ marginRight: "11px", verticalAlign: "-2px" } satisfies LandingStyle}
-              />
-              Node (standalone)
-            </span>
-            <span
-              data-tag=""
-              style={{ color: "var(--mute)", transition: "color .5s" } satisfies LandingStyle}
-            >
-              adapter
-            </span>
-          </div>
+          {deployTargets.map((target, index) => (
+            <DeployTargetRow
+              key={target.name}
+              target={target}
+              isLast={index === deployTargets.length - 1}
+            />
+          ))}
         </div>
         {/* Second column of the deploy section, and a child of this
                 container on purpose: anchored to the viewport (`left: 44vw`) it

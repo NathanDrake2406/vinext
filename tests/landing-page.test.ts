@@ -2,7 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { LandingPage } from "../apps/web/app/page";
-import { resolveLandingStats, type LandingStats } from "../apps/web/app/lib/landing-stats";
+import {
+  compareBuild,
+  resolveLandingStats,
+  type LandingStats,
+} from "../apps/web/app/lib/landing-stats";
 
 vi.mock("@/app/lib/db/client", () => ({ getDb: vi.fn() }));
 vi.mock("@/app/lib/db/schema", () => ({ compatRuns: {} }));
@@ -108,6 +112,20 @@ describe("landing statistics", () => {
   });
 });
 
+describe("landing build comparison", () => {
+  it("rounds a slower build only after calculating the winner-relative ratio", () => {
+    expect(compareBuild({ vinext: 100, nextjs: 84 })).toEqual({
+      verdict: "worse",
+      multiple: "1.2×",
+    });
+  });
+
+  it("labels equal and display-equivalent build times as parity", () => {
+    expect(compareBuild({ vinext: 10, nextjs: 10 })).toEqual({ verdict: "par", multiple: "1×" });
+    expect(compareBuild({ vinext: 100, nextjs: 96 })).toEqual({ verdict: "par", multiple: "1×" });
+  });
+});
+
 describe("landing page claims", () => {
   it("qualifies live measurements and server-renders the completed race", () => {
     const html = renderToStaticMarkup(createElement(LandingPage, { stats: LIVE_STATS }));
@@ -132,6 +150,29 @@ describe("landing page claims", () => {
     expect(html).toContain(">6.2s</span>");
     expect(html).not.toContain(">0.0s</span>");
     expect(html).toContain("transform:scaleX(0.5000)");
+    expect(html).toMatch(/data-el="nextjsDone"[^>]*display:none/);
+  });
+
+  it("shows the completion badge on Next.js when Next.js wins the race", () => {
+    const stats: LandingStats = {
+      ...LIVE_STATS,
+      buildSeconds: { vinext: 6, nextjs: 3 },
+    };
+    const html = renderToStaticMarkup(createElement(LandingPage, { stats }));
+
+    expect(html).toMatch(/data-el="vinextDone"[^>]*opacity:0/);
+    expect(html).toMatch(/data-el="nextjsDone"[^>]*display:inline-flex[^>]*opacity:1/);
+  });
+
+  it("does not assign a one-sided completion badge when build times are equal", () => {
+    const stats: LandingStats = {
+      ...LIVE_STATS,
+      buildSeconds: { vinext: 4, nextjs: 4 },
+    };
+    const html = renderToStaticMarkup(createElement(LandingPage, { stats }));
+
+    expect(html).toMatch(/data-el="vinextDone"[^>]*opacity:0/);
+    expect(html).toMatch(/data-el="nextjsDone"[^>]*display:none[^>]*opacity:0/);
   });
 
   it("labels fallback figures instead of presenting them as live comparisons", () => {

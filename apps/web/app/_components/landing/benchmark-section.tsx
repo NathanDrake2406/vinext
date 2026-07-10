@@ -3,12 +3,23 @@ import { getRaceFrame } from "../../lib/landing-race";
 import { compareBuild, compareBundle, formatKb, type LandingStats } from "../../lib/landing-stats";
 import { provenanceStyle, type LandingStyle } from "./landing-styles";
 
+const doneBadgeStyle = {
+  transition: "opacity .3s",
+  fontSize: "11px",
+  color: "var(--ok)",
+  border: "1px solid rgba(70,211,154,.3)",
+  borderRadius: "999px",
+  padding: "2px 8px",
+} satisfies LandingStyle;
+
 export function BenchmarkSection({ stats }: { stats: LandingStats }) {
   const build = compareBuild(stats.buildSeconds);
   const bundle = compareBundle(stats.bundleBytes);
   const source = stats.provenance.benchmark;
   const isLive = source.source === "live";
   const finalRace = getRaceFrame(stats.buildSeconds, 1);
+  const vinextWins = stats.buildSeconds.vinext < stats.buildSeconds.nextjs;
+  const nextjsWins = stats.buildSeconds.nextjs < stats.buildSeconds.vinext;
   const buildHeadline = !isLive
     ? "33-route benchmark snapshot."
     : build.verdict === "better"
@@ -107,13 +118,8 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
                   data-el="vinextDone"
                   style={
                     {
-                      opacity: finalRace.vinextDone ? "1" : "0",
-                      transition: "opacity .3s",
-                      fontSize: "11px",
-                      color: "var(--ok)",
-                      border: "1px solid rgba(70,211,154,.3)",
-                      borderRadius: "999px",
-                      padding: "2px 8px",
+                      ...doneBadgeStyle,
+                      opacity: finalRace.vinextDone && vinextWins ? "1" : "0",
                     } satisfies LandingStyle
                   }
                 >
@@ -178,6 +184,9 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
               <span
                 style={
                   {
+                    display: nextjsWins ? "flex" : undefined,
+                    alignItems: nextjsWins ? "center" : undefined,
+                    gap: nextjsWins ? "8px" : undefined,
                     fontFamily: "'JetBrains Mono',monospace",
                     fontSize: "14px",
                     color: "var(--sub)",
@@ -185,6 +194,18 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
                 }
               >
                 Next.js 16 · turbopack
+                <span
+                  data-el="nextjsDone"
+                  style={
+                    {
+                      ...doneBadgeStyle,
+                      display: nextjsWins ? "inline-flex" : "none",
+                      opacity: finalRace.nextjsDone && nextjsWins ? "1" : "0",
+                    } satisfies LandingStyle
+                  }
+                >
+                  ✓ done
+                </span>
               </span>
               <span
                 data-el="nextTime"
