@@ -3,10 +3,15 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  createImportMetaUrlPlugin,
   rewriteImportMetaUrl,
   rewriteServerCjsGlobals,
 } from "../packages/vinext/src/plugins/import-meta-url.js";
 import { toSlash } from "pathslash";
+
+function unwrapHook(hook: any): Function {
+  return typeof hook === "function" ? hook : hook?.handler;
+}
 
 describe("vinext:import-meta-url plugin", () => {
   let tmpDir: string;
@@ -563,5 +568,31 @@ describe("vinext:import-meta-url plugin", () => {
       `var __dirname = ${JSON.stringify(path.dirname(canonicalPagePath))};`,
     );
     expect(result?.code).not.toContain(`var __filename =`);
+  });
+
+  it("reuses the cached plugin transform result per environment kind", () => {
+    const plugin = createImportMetaUrlPlugin({ getRoot: () => realRoot });
+    const configResolved = unwrapHook(plugin.configResolved).bind(plugin);
+    configResolved({ root: realRoot, build: { outDir: "dist" } });
+    const transform = unwrapHook(plugin.transform);
+    const source = `export const url = import.meta.url;\n`;
+    const serverContext = { environment: { name: "rsc" } };
+    const clientContext = { environment: { name: "client" } };
+
+    const serverResult = transform.call(serverContext, source, pagePath);
+    expect(serverResult).toBeTruthy();
+    expect(transform.call(serverContext, source, pagePath)).toBe(serverResult);
+    // The SSR environment maps to the same "server" replacement, so it shares
+    // the server entry rather than recomputing.
+    expect(transform.call({ environment: { name: "ssr" } }, source, pagePath)).toBe(serverResult);
+
+    const clientResult = transform.call(clientContext, source, pagePath);
+    expect(clientResult).not.toBe(serverResult);
+    expect(clientResult?.code).toContain(`"file:///ROOT/pages/index.tsx"`);
+    expect(transform.call(clientContext, source, pagePath)).toBe(clientResult);
+
+    expect(transform.call(serverContext, `${source}console.log("changed");\n`, pagePath)).not.toBe(
+      serverResult,
+    );
   });
 });

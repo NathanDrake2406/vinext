@@ -241,6 +241,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { getPagesPreviewModeId } from "./server/pages-preview.js";
 import commonjs from "vite-plugin-commonjs";
 import { createIgnoreDynamicRequestsPlugin } from "./plugins/ignore-dynamic-requests.js";
+import { createTransformCache } from "./plugins/transform-cache.js";
 import { stripJsExtension, stripViteModuleQuery } from "./utils/path.js";
 import {
   assertSupportedViteVersion,
@@ -1672,15 +1673,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     },
   };
 
-  const typeofWindowTransformCache = new Map<
-    string,
-    {
-      source: string;
-      results: Map<
-        ReturnType<typeof getTypeofWindowReplacement>,
-        ReturnType<typeof replaceTypeofWindow>
-      >;
-    }
+  const cachedTypeofWindowTransform = createTransformCache<
+    ReturnType<typeof getTypeofWindowReplacement>,
+    ReturnType<typeof replaceTypeofWindow>
   >();
 
   const plugins: PluginOption[] = [
@@ -5472,21 +5467,9 @@ export const loadServerActionClient = ${
           if (toSlash(id).startsWith(cacheDir)) return null;
 
           const replacement = getTypeofWindowReplacement(this.environment);
-          const cached = typeofWindowTransformCache.get(id);
-          if (cached?.source === code && cached.results.has(replacement)) {
-            return cached.results.get(replacement) ?? null;
-          }
-
-          const result = replaceTypeofWindow(code, replacement, id);
-          if (cached?.source === code) {
-            cached.results.set(replacement, result);
-          } else {
-            typeofWindowTransformCache.set(id, {
-              source: code,
-              results: new Map([[replacement, result]]),
-            });
-          }
-          return result;
+          return cachedTypeofWindowTransform(id, code, replacement, () =>
+            replaceTypeofWindow(code, replacement, id),
+          );
         },
       },
     },
