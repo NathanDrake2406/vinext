@@ -387,15 +387,18 @@ class Landing {
     if (this._raceRun) return;
     this._raceRun = true;
     const start = performance.now();
-    const duration = 2800;
     const nextDuration = this.race.nextjs;
     const vinextDuration = this.race.vinext;
+    // Play the race in real time so the counters are honest stopwatches
+    // (linear, no easing — a second on screen is a build second). Capped so
+    // a slow ingest or a heavier benchmark suite can't drag the animation
+    // past attention span; beyond the cap it compresses proportionally.
+    const duration = Math.min(nextDuration, 5) * 1000;
 
     const step = (now: number) => {
       if (this._dead) return;
       const time = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - time, 1.8);
-      const nextTime = eased * nextDuration;
+      const nextTime = time * nextDuration;
       const vinextTime = Math.min(vinextDuration, nextTime);
       if (this.vFill) {
         this.vFill.style.transform = `scaleX(${(vinextTime / nextDuration).toFixed(4)})`;
