@@ -80,7 +80,7 @@ export function TrendChart({
   const allValues = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
   if (allValues.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12 text-gray-400 text-sm">
+      <div className="flex items-center justify-center py-12 text-[var(--mute)] text-sm">
         No data points to display
       </div>
     );
@@ -151,10 +151,17 @@ export function TrendChart({
               y1={tick.y}
               x2={chartWidth - PADDING.right}
               y2={tick.y}
-              stroke="#e5e7eb"
+              stroke="var(--line-soft)"
               strokeDasharray="4 4"
             />
-            <text x={PADDING.left - 8} y={tick.y + 4} textAnchor="end" fontSize="11" fill="#9ca3af">
+            <text
+              x={PADDING.left - 8}
+              y={tick.y + 4}
+              textAnchor="end"
+              fontSize="11"
+              fontFamily="var(--font-geist-mono)"
+              fill="var(--mute)"
+            >
               {formatY(tick.value)}
             </text>
           </g>
@@ -170,7 +177,8 @@ export function TrendChart({
               y={height - 8}
               textAnchor={i === 0 ? "start" : i === numPoints - 1 ? "end" : "middle"}
               fontSize="10"
-              fill="#9ca3af"
+              fontFamily="var(--font-geist-mono)"
+              fill="var(--mute)"
             >
               {label}
             </text>
@@ -279,7 +287,8 @@ export function TrendChart({
             textAnchor="middle"
             transform={`rotate(-90, 14, ${height / 2})`}
             fontSize="11"
-            fill="#6b7280"
+            fontFamily="var(--font-geist-mono)"
+            fill="var(--mute)"
           >
             {yLabel}
           </text>
@@ -287,13 +296,13 @@ export function TrendChart({
       </svg>
 
       {/* Chart visibility controls */}
-      <div className="mt-3 flex flex-wrap justify-center gap-2 text-xs text-gray-500">
+      <div className="mt-3 flex flex-wrap justify-center gap-2 text-xs text-[var(--sub)]">
         {series.map((s) => (
           <button
             key={s.name}
             type="button"
             aria-pressed={!hiddenSeries.has(s.name)}
-            className="flex items-center gap-1.5 rounded px-2 py-1 hover:bg-gray-100 aria-pressed:text-gray-700 aria-pressed:[&>span]:opacity-100"
+            className="flex items-center gap-1.5 rounded px-2 py-1 hover:bg-[var(--surface-2)] aria-pressed:text-[var(--ink)] aria-pressed:[&>span]:opacity-100"
             onClick={() => {
               setTooltip(null);
               setHiddenSeries((current) => {
@@ -315,7 +324,7 @@ export function TrendChart({
           <button
             type="button"
             aria-pressed={showIndividualRuns}
-            className="flex items-center gap-1.5 rounded px-2 py-1 hover:bg-gray-100 aria-pressed:text-gray-700 aria-pressed:[&>span]:opacity-100"
+            className="flex items-center gap-1.5 rounded px-2 py-1 hover:bg-[var(--surface-2)] aria-pressed:text-[var(--ink)] aria-pressed:[&>span]:opacity-100"
             onClick={() => {
               setTooltip(null);
               const visible = !showIndividualRuns;
@@ -331,13 +340,13 @@ export function TrendChart({
               );
             }}
           >
-            <span className="inline-block w-4 border-t-2 border-gray-500 opacity-30" />
+            <span className="inline-block w-4 border-t-2 border-[var(--mute)] opacity-30" />
             Individual runs
           </button>
         )}
       </div>
       {hasTrend && (
-        <div className="mt-1 text-center text-[11px] text-gray-400">
+        <div className="mt-1 text-center text-[11px] text-[var(--mute)]">
           Dashed lines show the {TREND_WINDOW}-run rolling median · Select controls to show or hide
         </div>
       )}
@@ -345,7 +354,7 @@ export function TrendChart({
       {/* Tooltip */}
       {tooltip && (
         <div
-          className="pointer-events-none absolute z-10 rounded bg-gray-900 px-2 py-1 text-xs text-white shadow-lg"
+          className="pointer-events-none absolute z-10 rounded border border-[var(--line)] bg-[var(--surface-2)] px-2 py-1 font-mono text-xs text-[var(--ink)] shadow-lg"
           style={{ left: tooltip.x, top: tooltip.y, transform: "translate(-50%, -100%)" }}
         >
           {tooltip.content}

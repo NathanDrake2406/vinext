@@ -6,9 +6,11 @@
  * Each dot is one test file. Raw pass/partial/fail/skip colors are overridden
  * by compatibility-scope colors for deferred, unsupported, and
  * Vite-equivalent suites. The raw result remains visible in the tooltip and
- * continues to contribute to the overall pass rate.
+ * continues to contribute to the overall pass rate. The text legend and
+ * tooltip carry the exact status without relying on color alone.
  *
- * Hovering a dot shows the file path and counts.
+ * Hovering a dot shows the file path and counts; selecting it pins those
+ * details so they can be copied.
  *
  * Layout: dots have a fixed pixel size and the number of columns is derived
  * from the container width at render time (via ResizeObserver). This keeps
@@ -17,11 +19,7 @@
  * scaling, so tooltip positioning math stays straightforward.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Button } from "@cloudflare/kumo/components/button";
-import { Dialog } from "@cloudflare/kumo/components/dialog";
-import { Input } from "@cloudflare/kumo/components/input";
-import { Select } from "@cloudflare/kumo/components/select";
-import { Table } from "@cloudflare/kumo/components/table";
+import { Dialog, Table } from "@/app/_components/ui";
 import { Table as TableIcon, X } from "@phosphor-icons/react";
 import type { FileStatus, RouterKind } from "@/app/lib/db/schema";
 import { cellMatchesFilter, type RouterFilter } from "./router-buckets";
@@ -50,14 +48,17 @@ export type GridCell = {
 
 type DisplayStatus = FileStatus | Exclude<SuiteSupportStatus, "supported">;
 
+// Raw results use the pass/fail token set; scope classifications get their
+// own hues (--deferred / --vite-equivalent) so they never read as results.
+// "unsupported" (classification) is --faint: out of scope, visually dead.
 const COLORS: Record<DisplayStatus, string> = {
-  pass: "#2da44e", // green
-  partial: "#e08600", // orange
-  fail: "#cf222e", // red
-  skip: "#afb8c1", // light gray
-  deferred: "#0969da", // blue
-  "needs-vite-equivalent": "#8250df", // purple
-  unsupported: "#6e7781", // dark gray
+  pass: "var(--ok)",
+  partial: "var(--partial)",
+  fail: "var(--unsupported)",
+  skip: "var(--mute)",
+  deferred: "var(--deferred)",
+  "needs-vite-equivalent": "var(--vite-equivalent)",
+  unsupported: "var(--faint)",
 };
 
 const LABELS: Record<DisplayStatus, string> = {
@@ -78,7 +79,7 @@ const SUPPORT_LABELS: Record<SuiteSupportStatus, string> = {
 };
 
 const SUPPORT_COLORS: Record<SuiteSupportStatus, string> = {
-  supported: "#2da44e",
+  supported: "var(--ok)",
   deferred: COLORS.deferred,
   "needs-vite-equivalent": COLORS["needs-vite-equivalent"],
   unsupported: COLORS.unsupported,
@@ -109,6 +110,12 @@ const STRIDE = CELL_SIZE + GAP;
 // the initial paint is close to the final layout; useLayoutEffect snaps to
 // the real width on the first frame.
 const SSR_COLS = 60;
+
+type GridTooltip = {
+  cell: GridCell;
+  x: number;
+  y: number;
+};
 
 function summarize(cell: GridCell): string {
   const parts = [`${cell.passed}/${cell.total} passed`];
@@ -146,97 +153,85 @@ export function CompatibilityTableDialog({ cells }: { cells: GridCell[] }) {
   }, [cells, query, resultFilter, supportFilter]);
   const hasFilters = query !== "" || supportFilter !== "all" || resultFilter !== "all";
 
+  const controlClass =
+    "rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--ink)] transition focus:border-[var(--faint)] focus:outline-none";
+
   return (
     <Dialog.Root>
       <Dialog.Trigger
-        render={(props) => (
-          <Button
-            {...props}
-            size="sm"
-            variant="outline"
-            icon={TableIcon}
-            disabled={cells.length === 0}
-          >
-            View table
-          </Button>
-        )}
-      />
-      <Dialog
-        size="xl"
-        className="flex max-h-[90vh] w-[min(96vw,80rem)] max-w-none flex-col overflow-hidden p-0"
+        className="inline-flex items-center gap-2 rounded-lg border border-[var(--line)] px-3 py-2 text-sm text-[var(--sub)] transition hover:border-[var(--faint)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={cells.length === 0}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-kumo-hairline px-5 py-4">
+        <TableIcon size={16} aria-hidden="true" />
+        View table
+      </Dialog.Trigger>
+      <Dialog className="flex max-h-[90vh] w-[min(96vw,80rem)] max-w-none flex-col overflow-hidden p-0">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
           <div>
-            <Dialog.Title className="text-xl font-semibold tracking-tight text-kumo-default">
+            <Dialog.Title className="text-xl font-semibold tracking-tight text-[var(--ink)]">
               Compatibility test files
             </Dialog.Title>
-            <Dialog.Description className="mt-1 text-sm text-kumo-subtle">
+            <Dialog.Description className="mt-1 text-sm text-[var(--sub)]">
               Showing {filteredCells.length} of {cells.length} files for the current router filter.
               Classifications do not alter the raw test results.
             </Dialog.Description>
           </div>
           <Dialog.Close
-            render={(props) => (
-              <Button
-                {...props}
-                shape="square"
-                size="sm"
-                variant="ghost"
-                icon={X}
-                aria-label="Close compatibility table"
-              />
-            )}
-          />
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--sub)] transition hover:border-[var(--faint)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)]"
+            aria-label="Close compatibility table"
+          >
+            <X size={16} aria-hidden="true" />
+          </Dialog.Close>
         </div>
-        <div className="grid gap-3 border-b border-kumo-hairline bg-kumo-base px-5 py-3 sm:grid-cols-[minmax(16rem,1fr)_14rem_12rem_auto] sm:items-center">
-          <Input
-            size="sm"
+        <div className="grid gap-3 border-b border-[var(--line)] bg-[var(--surface)] px-5 py-3 sm:grid-cols-[minmax(16rem,1fr)_14rem_12rem_auto] sm:items-center">
+          <input
+            type="search"
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
             placeholder="Search test files and features"
             aria-label="Search compatibility test files"
-            className="w-full"
+            className={`${controlClass} w-full placeholder:text-[var(--mute)]`}
           />
-          <Select
-            size="sm"
+          <select
             value={supportFilter}
-            onValueChange={(value) => setSupportFilter(value as SupportFilter)}
+            onChange={(event) => setSupportFilter(event.currentTarget.value as SupportFilter)}
             aria-label="Filter by classification"
+            className={controlClass}
           >
-            <Select.Option value="all">All classifications</Select.Option>
-            <Select.Option value="supported">Supported</Select.Option>
-            <Select.Option value="deferred">Deferred</Select.Option>
-            <Select.Option value="needs-vite-equivalent">Needs Vite equivalent</Select.Option>
-            <Select.Option value="unsupported">Unsupported</Select.Option>
-          </Select>
-          <Select
-            size="sm"
+            <option value="all">All classifications</option>
+            <option value="supported">Supported</option>
+            <option value="deferred">Deferred</option>
+            <option value="needs-vite-equivalent">Needs Vite equivalent</option>
+            <option value="unsupported">Unsupported</option>
+          </select>
+          <select
             value={resultFilter}
-            onValueChange={(value) => setResultFilter(value as ResultFilter)}
+            onChange={(event) => setResultFilter(event.currentTarget.value as ResultFilter)}
             aria-label="Filter by raw result"
+            className={controlClass}
           >
-            <Select.Option value="all">All raw results</Select.Option>
-            <Select.Option value="pass">Pass</Select.Option>
-            <Select.Option value="partial">Partial</Select.Option>
-            <Select.Option value="fail">Fail</Select.Option>
-            <Select.Option value="skip">Skipped by Next.js</Select.Option>
-          </Select>
-          <Button
-            size="sm"
-            variant="ghost"
+            <option value="all">All raw results</option>
+            <option value="pass">Pass</option>
+            <option value="partial">Partial</option>
+            <option value="fail">Fail</option>
+            <option value="skip">Skipped by Next.js</option>
+          </select>
+          <button
+            type="button"
             disabled={!hasFilters}
             onClick={() => {
               setQuery("");
               setSupportFilter("all");
               setResultFilter("all");
             }}
+            className="rounded-lg px-3 py-2 text-sm text-[var(--sub)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             Clear
-          </Button>
+          </button>
         </div>
         <div className="min-h-0 overflow-auto">
           <Table aria-label="Compatibility test files">
-            <Table.Header sticky>
+            <Table.Header className="sticky top-0 z-10 bg-[var(--surface)]">
               <Table.Row>
                 <Table.Head>Test file</Table.Head>
                 <Table.Head>Classification</Table.Head>
@@ -265,7 +260,7 @@ export function CompatibilityTableDialog({ cells }: { cells: GridCell[] }) {
                       </span>
                     </div>
                     {cell.reason ? (
-                      <div className="mt-1 max-w-72 text-xs text-kumo-subtle">{cell.reason}</div>
+                      <div className="mt-1 max-w-72 text-xs text-[var(--sub)]">{cell.reason}</div>
                     ) : null}
                   </Table.Cell>
                   <Table.Cell className="min-w-56 text-sm">{cell.feature ?? "—"}</Table.Cell>
@@ -279,7 +274,7 @@ export function CompatibilityTableDialog({ cells }: { cells: GridCell[] }) {
               ))}
               {filteredCells.length === 0 ? (
                 <Table.Row>
-                  <Table.Cell colSpan={7} className="py-10 text-center text-sm text-kumo-subtle">
+                  <Table.Cell colSpan={7} className="py-10 text-center text-sm text-[var(--sub)]">
                     No test files match these filters.
                   </Table.Cell>
                 </Table.Row>
@@ -335,16 +330,19 @@ export function ContributionGrid({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [cols, setCols] = useState(SSR_COLS);
-  const [hover, setHover] = useState<{
-    cell: GridCell;
-    x: number; // pixels relative to containerRef
-    y: number;
-  } | null>(null);
+  const [hover, setHover] = useState<GridTooltip | null>(null);
+  const [selected, setSelected] = useState<GridTooltip | null>(null);
 
   const visibleCells = useMemo(
     () => (filter === "all" ? cells : cells.filter((c) => cellMatchesFilter(c, filter))),
     [cells, filter],
   );
+
+  useEffect(() => {
+    setSelected((current) =>
+      current && visibleCells.some((cell) => cell.suite === current.cell.suite) ? current : null,
+    );
+  }, [visibleCells]);
 
   // Measure the container synchronously before paint so the first client
   // render uses the real column count (no layout flash if the SSR guess is
@@ -364,9 +362,9 @@ export function ContributionGrid({
     return () => ro.disconnect();
   }, []);
 
-  // Hide the tooltip if the cursor leaves the wrapper entirely (e.g. cursor
-  // moves into a gap between cells then off the edge before triggering a
-  // rect's onMouseLeave).
+  // Hide the hover-only tooltip if the cursor leaves the wrapper entirely.
+  // A selected cell remains visible until the user selects another square,
+  // toggles it off, clicks elsewhere, or changes the router filter.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -375,9 +373,19 @@ export function ContributionGrid({
     return () => el.removeEventListener("mouseleave", onLeave);
   }, []);
 
+  useEffect(() => {
+    const dismissOnOutsideClick = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      if (event.target.closest('rect[role="button"], [data-compat-tooltip]')) return;
+      setSelected(null);
+    };
+    document.addEventListener("click", dismissOnOutsideClick);
+    return () => document.removeEventListener("click", dismissOnOutsideClick);
+  }, []);
+
   if (cells.length === 0) {
     return (
-      <div className="text-sm text-kumo-subtle">
+      <div className="text-sm text-[var(--sub)]">
         No test results yet. The grid will populate once the deploy suite runs.
       </div>
     );
@@ -394,11 +402,24 @@ export function ContributionGrid({
   const rows = Math.ceil(visibleCells.length / effectiveCols);
   const svgWidth = Math.max(0, effectiveCols * STRIDE - GAP);
   const svgHeight = Math.max(0, rows * STRIDE - GAP);
+  const details = selected ?? hover;
+
+  function positionTooltip(cell: GridCell, target: SVGRectElement): GridTooltip | null {
+    const container = containerRef.current;
+    if (!container) return null;
+    const cRect = container.getBoundingClientRect();
+    const tRect = target.getBoundingClientRect();
+    return {
+      cell,
+      x: tRect.left - cRect.left + tRect.width / 2,
+      y: tRect.top - cRect.top + tRect.height + 6,
+    };
+  }
 
   return (
     <div ref={containerRef} className="relative w-full">
       {visibleCells.length === 0 ? (
-        <div className="py-8 text-center text-sm text-kumo-subtle">
+        <div className="py-8 text-center text-sm text-[var(--sub)]">
           No test files in this category.
         </div>
       ) : (
@@ -425,19 +446,29 @@ export function ContributionGrid({
                 rx={2}
                 ry={2}
                 fill={COLORS[displayStatus]}
+                stroke={selected?.cell.suite === cell.suite ? "var(--ink)" : undefined}
+                strokeWidth={selected?.cell.suite === cell.suite ? 1.5 : undefined}
+                role="button"
+                tabIndex={0}
+                aria-label={`${summarize(cell)}. Select to pin details.`}
                 onMouseEnter={(e) => {
-                  const container = containerRef.current;
-                  if (!container) return;
-                  const cRect = container.getBoundingClientRect();
-                  const tRect = (e.currentTarget as SVGRectElement).getBoundingClientRect();
-                  setHover({
-                    cell,
-                    x: tRect.left - cRect.left + tRect.width / 2,
-                    y: tRect.top - cRect.top + tRect.height + 6,
-                  });
+                  const tooltip = positionTooltip(cell, e.currentTarget);
+                  if (tooltip) setHover(tooltip);
                 }}
                 onMouseLeave={() => setHover(null)}
-                style={{ cursor: "pointer" }}
+                onClick={(e) => {
+                  const tooltip = positionTooltip(cell, e.currentTarget);
+                  if (!tooltip) return;
+                  setSelected((current) => (current?.cell.suite === cell.suite ? null : tooltip));
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  const tooltip = positionTooltip(cell, e.currentTarget);
+                  if (!tooltip) return;
+                  setSelected((current) => (current?.cell.suite === cell.suite ? null : tooltip));
+                }}
+                style={{ cursor: "pointer", outline: "none" }}
               >
                 <title>{summarize(cell)}</title>
               </rect>
@@ -445,41 +476,44 @@ export function ContributionGrid({
           })}
         </svg>
       )}
-      {hover
+      {details
         ? (() => {
-            const group = deriveSuiteGroup(hover.cell.suite);
-            const routerLabel = ROUTER_LABELS[hover.cell.router];
+            const group = deriveSuiteGroup(details.cell.suite);
+            const routerLabel = ROUTER_LABELS[details.cell.router];
             return (
               <div
-                className="pointer-events-none absolute z-10 max-w-sm rounded-md bg-kumo-elevated px-3 py-2 text-xs text-kumo-default shadow-lg ring ring-kumo-hairline"
-                style={{ left: hover.x, top: hover.y, transform: "translateX(-50%)" }}
+                data-compat-tooltip
+                className={`${selected ? "pointer-events-auto select-text" : "pointer-events-none"} absolute z-10 max-w-sm rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--ink)] shadow-lg`}
+                style={{ left: details.x, top: details.y, transform: "translateX(-50%)" }}
               >
-                <div className="mb-1 flex items-center gap-2 text-[10px] font-medium tracking-wide text-kumo-subtle uppercase">
+                <div className="mb-1 flex items-center gap-2 font-mono text-[10px] font-medium tracking-wide text-[var(--mute)] uppercase">
                   {group ? <span>{group}</span> : null}
                   {group ? <span aria-hidden>·</span> : null}
                   <span>{routerLabel}</span>
                 </div>
-                <div className="font-mono break-all">{hover.cell.suite}</div>
-                <div className="mt-1 text-kumo-subtle">{summarize(hover.cell).split(" — ")[1]}</div>
-                {hover.cell.feature ? (
-                  <div className="mt-1 font-medium text-kumo-default">{hover.cell.feature}</div>
+                <div className="font-mono break-all">{details.cell.suite}</div>
+                <div className="mt-1 text-[var(--sub)]">
+                  {summarize(details.cell).split(" — ")[1]}
+                </div>
+                {details.cell.feature ? (
+                  <div className="mt-1 font-medium text-[var(--ink)]">{details.cell.feature}</div>
                 ) : null}
-                {hover.cell.reason ? (
-                  <div className="mt-1 text-kumo-subtle">{hover.cell.reason}</div>
+                {details.cell.reason ? (
+                  <div className="mt-1 text-[var(--sub)]">{details.cell.reason}</div>
                 ) : null}
               </div>
             );
           })()
         : null}
-      <div className="mt-4 flex flex-wrap items-center gap-4 text-xs text-kumo-subtle">
-        {LEGEND_ORDER.map((s) => (
-          <div key={s} className="flex items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-4 font-mono text-xs text-[var(--sub)]">
+        {LEGEND_ORDER.map((status) => (
+          <div key={status} className="flex items-center gap-2">
             <span
               className="inline-block h-3 w-3 rounded-sm"
-              style={{ backgroundColor: COLORS[s] }}
+              style={{ backgroundColor: COLORS[status] }}
               aria-hidden="true"
             />
-            <span>{LABELS[s]}</span>
+            <span>{LABELS[status]}</span>
           </div>
         ))}
       </div>

@@ -14,6 +14,6 @@ export function formatBytes(b: number | null): string {
 }
 
 export const RUNNER_COLORS: Record<string, string> = {
-  nextjs: "var(--color-chart-nextjs, #f97316)",
-  vinext: "var(--color-chart-vinext, #3b82f6)",
+  nextjs: "var(--color-chart-nextjs, #4a5261)",
+  vinext: "var(--color-chart-vinext, #f6821f)",
 };

@@ -1,13 +1,539 @@
-@import "@cloudflare/kumo/styles";
 @import "tailwindcss";
 
-@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+.landing-root {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* The canonical prototype names its typefaces directly. next/font exposes
+   those same files through generated variables, so bind the port's inline
+   declarations to the bundled faces instead of relying on local fonts. */
+#app,
+#app [style*="Geist"] {
+  font-family: var(--font-geist-sans), "Geist", system-ui, sans-serif !important;
+}
+#app [style*="JetBrains Mono"] {
+  font-family: var(--font-geist-mono), "JetBrains Mono", monospace !important;
+}
+
+.landing-viewport-height {
+  height: 100vh;
+  height: 100dvh;
+}
+
+.token-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(6px);
+}
+html {
+  scroll-behavior: smooth;
+}
+body {
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection {
+  background: var(--orange);
+  color: var(--on-accent);
+}
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 7px;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+@keyframes aur1 {
+  0% {
+    transform: translate3d(-4vw, -2vh, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(5vw, 4vh, 0) scale(1.15);
+  }
+}
+@keyframes aur2 {
+  0% {
+    transform: translate3d(3vw, 2vh, 0) scale(1.1);
+  }
+  100% {
+    transform: translate3d(-5vw, -4vh, 0) scale(0.95);
+  }
+}
+@keyframes aur3 {
+  0% {
+    transform: translate3d(0, 3vh, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(-4vw, -3vh, 0) scale(1.12);
+  }
+}
+.theme-fade,
+.theme-fade * {
+  transition:
+    background-color 0.24s cubic-bezier(0.23, 1, 0.32, 1),
+    color 0.24s cubic-bezier(0.23, 1, 0.32, 1),
+    border-color 0.24s cubic-bezier(0.23, 1, 0.32, 1),
+    box-shadow 0.24s cubic-bezier(0.23, 1, 0.32, 1) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+a,
+button {
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+h1,
+h2 {
+  text-wrap: balance;
+}
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 100;
+  transform: translate(-50%, -160%);
+  padding: 10px 15px;
+  border-radius: 10px;
+  background: var(--orange);
+  color: var(--on-accent);
+  font-family: var(--font-geist-sans), "Geist", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+  box-shadow: 0 12px 30px -10px var(--orange-glow);
+}
+.skip-link:focus {
+  transform: translate(-50%, 0);
+}
+[data-copy] {
+  position: relative;
+}
+[data-copy]:hover,
+[data-copy]:focus-visible {
+  color: var(--ink) !important;
+  border-color: var(--faint) !important;
+  background: var(--surface-2) !important;
+}
+[data-copy]::after,
+.theme-toggle::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
+a[href]:active,
+button:active {
+  transform: scale(0.97) !important;
+  transition-duration: 0.08s !important;
+}
+/* quiet copy feedback: tint text and border only — a filled pill flash reads as an alert */
+[data-copy][data-copy-state="copied"] {
+  color: var(--ok) !important;
+  border-color: rgba(70, 211, 154, 0.35) !important;
+}
+[data-copy][data-copy-state="error"] {
+  color: var(--partial) !important;
+  border-color: rgba(242, 176, 74, 0.35) !important;
+}
+[data-el="vinextFill"],
+[data-el="nextFill"] {
+  transform-origin: left center;
+  will-change: transform;
+}
+.engine-plate::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid rgba(var(--orange-rgb), 0.62);
+  border-radius: inherit;
+  box-shadow: 0 0 88px rgba(var(--orange-rgb), 0.42);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.7s var(--ease-out);
+}
+.engine-plate.is-swapped::before {
+  opacity: 1;
+}
+[data-theme="light"] .engine-plate::before {
+  border-color: rgba(var(--orange-rgb), 0.45);
+  box-shadow: 0 0 44px rgba(var(--orange-rgb), 0.2);
+}
+@media (hover: hover) and (pointer: fine) {
+  .primary-action:hover {
+    transform: translateY(-2px);
+  }
+  .primary-action:hover .action-arrow {
+    transform: translateX(3px);
+  }
+  .text-link:hover {
+    color: var(--orange);
+    border-color: currentColor;
+  }
+  .subtle-link:hover {
+    color: var(--ink);
+  }
+  /* One effect, no movement or boxes: label firms to ink, icon comes up to
+     full strength with it. */
+  .chrome-link:hover svg {
+    opacity: 1;
+  }
+  .footer-link:hover {
+    color: var(--orange);
+  }
+}
+@media (max-width: 760px) {
+  #compatGrid {
+    grid-template-columns: 1fr !important;
+  }
+}
+@media (max-width: 600px) {
+  [data-el="globe"] {
+    left: 50vw !important;
+    bottom: -4vw !important;
+    width: 74vw !important;
+  }
+  .chrome-link {
+    display: none !important;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  [style*="backdrop-filter"] {
+    background: var(--surface) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+@media (prefers-contrast: more) {
+  a:focus-visible,
+  button:focus-visible {
+    outline-width: 3px;
+  }
+}
+
+:root {
+  color-scheme: dark;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --bg: #0a0b0d;
+  --bg-rgb: 10, 11, 13;
+  --surface: #161a23;
+  --surface-rgb: 22, 26, 35;
+  --surface-2: #11141b;
+  --surface-2-rgb: 17, 20, 27;
+  --line: rgba(238, 241, 245, 0.09);
+  --line-soft: rgba(238, 241, 245, 0.05);
+  --ink: #eef1f5;
+  --ink-rgb: 238, 241, 245;
+  /* --mute is the smallest text on cards (--surface): #7b8492 is the minimum
+       value clearing WCAG 4.5:1 there. --faint fails as text — border/rule use only. */
+  --ink-sub: #aeb5c2;
+  --sub: #8b94a3;
+  --mute: #7b8492;
+  --faint: #454c58;
+  --orange: #f6821f;
+  --orange-rgb: 246, 130, 31;
+  --amber: #fbad41;
+  --orange-soft: #f59b4a;
+  --ok: #46d39a;
+  --partial: #f2b04a;
+  --unsupported: #ef5b5b;
+  /* Compatibility-scope classifications (suite-support.ts). Distinct hues from
+     the raw pass/fail set so a dot's classification never reads as a result. */
+  --deferred: #6f9bd8;
+  --vite-equivalent: #a78bda;
+  --scrollbar-thumb: #262b35;
+  --scrollbar-thumb-hover: #323844;
+  --aur2-rgb: 96, 130, 184;
+  --next-bar-1: #3a4150;
+  --next-bar-2: #4a5261;
+  --pin-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.6);
+  --orange-glow: rgba(var(--orange-rgb), 0.5);
+  --orange-glow-hover: rgba(var(--orange-rgb), 0.6);
+  --on-accent: #0a0b0d;
+}
+[data-theme="light"] {
+  color-scheme: light;
+  /* Warm paper: every neutral leans toward the brand orange's hue family so
+       light mode feels designed-for, not an inverted dark theme. */
+  --bg: #faf8f3;
+  --bg-rgb: 250, 248, 243;
+  --surface: #fffdf9;
+  --surface-rgb: 255, 253, 249;
+  --surface-2: #f2eee6;
+  --surface-2-rgb: 242, 238, 230;
+  --line: rgba(62, 54, 40, 0.13);
+  --line-soft: rgba(62, 54, 40, 0.075);
+  --ink: #211d16;
+  --ink-rgb: 33, 29, 22;
+  /* --mute must clear WCAG 4.5:1 on --surface (#fffdf9): #675f52 ≈ 5.5:1. */
+  --ink-sub: #4e483d;
+  --sub: #6e675a;
+  --mute: #675f52;
+  --faint: #c2bbac;
+  --orange: #f6821f;
+  --orange-rgb: 246, 130, 31;
+  --amber: #fbad41;
+  --orange-soft: #a2540a;
+  --ok: #147a53;
+  --partial: #8f6009;
+  --unsupported: #b42318;
+  --deferred: #3d6ca3;
+  --vite-equivalent: #6d4fa8;
+  --scrollbar-thumb: #d8d2c4;
+  --scrollbar-thumb-hover: #aca492;
+  --aur2-rgb: 205, 193, 172;
+  --next-bar-1: #d8d2c6;
+  --next-bar-2: #c3bcae;
+  --pin-shadow: 0 12px 28px -6px rgba(64, 52, 30, 0.16);
+  --orange-glow: rgba(var(--orange-rgb), 0.16);
+  --orange-glow-hover: rgba(var(--orange-rgb), 0.28);
+  --on-accent: #211d16;
+}
+.site-chrome {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  right: 18px;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+/* Boxless legibility: full-width scrim fading from the page ground keeps the
+   bare chrome readable when display headings scroll under it. z-index -1 sits
+   it behind the links but above all page content (chrome is z 90). */
+.site-chrome::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: -18px;
+  right: -18px;
+  height: 96px;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--bg-rgb), 0.88) 0%,
+    rgba(var(--bg-rgb), 0.55) 52%,
+    transparent 100%
+  );
+}
+/* Bare wordmark, no pill: brand is identity, not a control. Padding keeps
+   the hit target honest without drawing a box. */
+.site-wordmark {
+  pointer-events: auto;
+  padding: 8px 4px;
+  color: var(--ink);
+  font-family: var(--font-geist-mono), "JetBrains Mono", monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .site-wordmark:hover {
+    color: var(--orange);
+  }
+}
+/* Bare text chrome: no pill, no separators. The links are quiet mono labels
+   that firm up on hover; the fixed dark/paper ground keeps them legible
+   without a frosted box. */
+.site-actions {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chrome-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  color: var(--sub);
+  font-family: var(--font-geist-mono), "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+/* Icons sit a step quieter than their labels so the pill doesn't read busy;
+   hover brings icon and text up together via currentColor. */
+.chrome-link svg {
+  opacity: 0.72;
+  transition: opacity 0.18s ease;
+}
+.theme-toggle {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sub);
+  transition:
+    color 0.18s ease,
+    transform 0.16s var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .theme-toggle:hover {
+    color: var(--orange);
+    border-color: rgba(var(--orange-rgb), 0.5);
+    transform: translateY(-1px);
+  }
+}
+.theme-toggle .sun {
+  display: none;
+}
+.theme-toggle .moon {
+  display: block;
+}
+[data-theme="light"] .theme-toggle .sun {
+  display: block;
+}
+[data-theme="light"] .theme-toggle .moon {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle {
+    transition: none;
+  }
+}
+/* Globe is the dot-vector globe.svg (brand orange baked in), replacing the
+     raster Figma export whose glow rim read as a sticker. It must load via
+     <img>, not a CSS mask: Chrome fetches mask images in CORS mode, which
+     fails when the page is opened from file:// — the element goes invisible.
+     Same reason the brand marks below are inline <svg>/<img>, never masks. */
+.globe-art {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1140/764;
+  opacity: 0.92;
+}
+/* The dot fill (#f8902a) is baked into globe.svg and loads via <img>, so the
+   only recolor lever is a filter. On the warm paper bg the raw orange at low
+   opacity reads as a washed-out stain; darken it toward burnt orange and keep
+   the opacity high enough that the dot texture stays legible. */
+[data-theme="light"] .globe-art {
+  opacity: 0.8;
+  filter: brightness(0.62) saturate(1.25);
+}
+/* Soft atmosphere behind the dots (the raster export's baked rim was the janky
+     part, not the glow itself). Bottom mask fades it out before the section's
+     overflow:hidden clips it into a hard horizon line. z-index:-1 keeps it under
+     the dots; the wrapper's will-change:transform scopes the stacking context. */
+[data-el="globe"]::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -8% -6%;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle at 63% 108%,
+      rgba(var(--orange-rgb), 0.32),
+      rgba(var(--orange-rgb), 0.12) 44%,
+      transparent 68%
+    ),
+    radial-gradient(circle at 63% 108%, rgba(255, 214, 170, 0.16), transparent 36%);
+  mask: linear-gradient(180deg, #000 74%, transparent 98%);
+  -webkit-mask: linear-gradient(180deg, #000 74%, transparent 98%);
+}
+[data-theme="light"] [data-el="globe"]::before {
+  opacity: 0.4;
+}
+/* Aurora blobs are tuned for dark; on paper they read as stains at full strength */
+[data-theme="light"] [data-el="heroBg"] > div:nth-child(-n + 3) {
+  opacity: 0.45;
+}
+/* Light-mode adaptation: this design is dark-native. Glow halos, outlined
+     text-stroke, frosted backdrop, and overlay grain all collapse or muddy on
+     a light ground, so neutralise them per-theme rather than via token swap. */
+[data-theme="light"] [data-el="l2"] [style*="text-shadow"],
+[data-theme="light"] [data-el="viteLabel"],
+[data-theme="light"] [data-el="mq"] [style*="text-shadow"],
+[data-theme="light"] [data-el="payoff"] [style*="text-shadow"] {
+  text-shadow: none !important;
+}
+[data-theme="light"] [data-el="mq"] [style*="text-stroke"] {
+  -webkit-text-stroke-color: rgba(var(--ink-rgb), 0.42) !important;
+}
+[data-theme="light"] [data-el="conn"] {
+  background: linear-gradient(180deg, rgba(var(--orange-rgb), 0.5), transparent) !important;
+}
+[data-theme="light"] [style*="backdrop-filter"] {
+  background: var(--surface) !important;
+  backdrop-filter: none !important;
+}
+[data-theme="light"] [style*="mix-blend-mode:overlay"],
+[data-theme="light"] [style*="mix-blend-mode: overlay"] {
+  mix-blend-mode: multiply !important;
+  opacity: 0.035 !important;
+}
+[data-theme="light"] [data-el="plate"] {
+  background: linear-gradient(180deg, var(--surface), var(--surface-2)) !important;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 12px 28px -10px rgba(15, 23, 42, 0.1) !important;
+}
+[data-theme="light"] [style*="radial-gradient(130% 200% at 100% 0"] {
+  background:
+    linear-gradient(135deg, rgba(var(--orange-rgb), 0.08), transparent 60%), var(--surface) !important;
+}
+/* Tailwind preflight forces img/svg to display:block for layout safety, but
+   these brand marks sit inline next to text (the Vite wordmark, the deploy
+   platform rows). Block display drops them to their own line. */
+[data-el="viteLabel"] svg,
+[data-name] img,
+[data-name] svg {
+  display: inline;
+}
 
 @theme inline {
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --color-chart-nextjs: #f97316;
-  --color-chart-vinext: #3b82f6;
+  --color-chart-vinext: var(--orange);
+  --color-chart-nextjs: var(--next-bar-2);
 }
 
 html,
