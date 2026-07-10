@@ -1,8 +1,7 @@
-import path from "node:path";
+import path, { toSlash } from "pathslash";
 import type { AppRouteGraphRoute } from "./app-route-graph.js";
 import { appRouteGraph } from "./app-router.js";
 import { findFileWithExts, type ValidFileMatcher } from "./file-matcher.js";
-import { normalizePathSeparators } from "../utils/path.js";
 
 /** The root URL whose render decides the startup optimizer entries. */
 const ROOT_PATTERN = "/";
@@ -46,7 +45,7 @@ export async function collectAppRouterStartupOptimizeEntries({
 }: CollectAppRouterStartupOptimizeEntriesOptions): Promise<string[]> {
   const entries = new Set<string>();
   const add = (absPath: string | null | undefined): void => {
-    if (absPath) entries.add(normalizePathSeparators(path.relative(root, absPath)));
+    if (absPath) entries.add(toSlash(path.relative(root, absPath)));
   };
 
   for (const convention of ROOT_LEVEL_CONVENTIONS) {
