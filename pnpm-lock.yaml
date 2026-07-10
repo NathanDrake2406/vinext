@@ -6,21 +6,12 @@ settings:
 
 catalogs:
   default:
-    '@cloudflare/kumo':
-      specifier: ^2.2.0
-      version: 2.2.0
     '@cloudflare/vite-plugin':
       specifier: ^1.31.0
       version: 1.31.0
     '@cloudflare/workers-types':
       specifier: ^4.0.0
       version: 4.20260313.1
-    '@heroicons/react':
-      specifier: 2.2.0
-      version: 2.2.0
-    '@mdx-js/loader':
-      specifier: 3.1.0
-      version: 3.1.0
     '@mdx-js/react':
       specifier: ^3.1.1
       version: 3.1.1
@@ -30,48 +21,18 @@ catalogs:
     '@mswjs/interceptors':
       specifier: ^0.41.3
       version: 0.41.9
-    '@next/mdx':
-      specifier: 16.2.7
-      version: 16.2.7
     '@phosphor-icons/react':
       specifier: ^2.1.10
       version: 2.1.10
     '@playwright/test':
       specifier: ^1.60.0
       version: 1.60.0
-    '@radix-ui/react-dialog':
-      specifier: ^1.1.14
-      version: 1.1.15
-    '@radix-ui/react-dropdown-menu':
-      specifier: ^2.1.15
-      version: 2.1.16
-    '@radix-ui/react-slot':
-      specifier: ^1.2.3
-      version: 1.2.4
     '@sentry/nextjs':
       specifier: 10.62.0
       version: 10.62.0
-    '@tailwindcss/forms':
-      specifier: 0.5.10
-      version: 0.5.10
     '@tailwindcss/postcss':
       specifier: 4.1.4
       version: 4.1.4
-    '@tailwindcss/typography':
-      specifier: 0.5.16
-      version: 0.5.16
-    '@tailwindcss/vite':
-      specifier: ^4.1.0
-      version: 4.2.0
-    '@takumi-rs/image-response':
-      specifier: ^0.72.0
-      version: 0.72.0
-    '@types/mdx':
-      specifier: 2.0.13
-      version: 2.0.13
-    '@types/ms':
-      specifier: 2.1.0
-      version: 2.1.0
     '@types/node':
       specifier: ^25.9.2
       version: 25.9.2
@@ -81,12 +42,6 @@ catalogs:
     '@types/react-dom':
       specifier: ^19.2.3
       version: 19.2.3
-    '@unpic/react':
-      specifier: ^1.0.2
-      version: 1.0.2
-    '@vercel/og':
-      specifier: ^0.8.6
-      version: 0.8.6
     '@vitejs/plugin-react':
       specifier: ^6.0.1
       version: 6.0.1
@@ -96,81 +51,21 @@ catalogs:
     '@vitest/coverage-istanbul':
       specifier: 4.1.9
       version: 4.1.9
-    am-i-vibing:
-      specifier: ^0.5.0
-      version: 0.5.0
-    better-auth:
-      specifier: ^1.5.6
-      version: 1.5.6
-    better-sqlite3:
-      specifier: ^12.0.0
-      version: 12.6.2
-    class-variance-authority:
-      specifier: ^0.7.1
-      version: 0.7.1
-    clsx:
-      specifier: ^2.1.1
-      version: 2.1.1
-    codehike:
-      specifier: 1.0.7
-      version: 1.0.7
-    date-fns:
-      specifier: 4.1.0
-      version: 4.1.0
     drizzle-kit:
       specifier: ^0.31.10
       version: 0.31.10
     drizzle-orm:
       specifier: ^0.45.2
       version: 0.45.2
-    fumadocs-core:
-      specifier: 16.7.9
-      version: 16.7.9
-    fumadocs-mdx:
-      specifier: 14.2.10
-      version: 14.2.10
-    fumadocs-ui:
-      specifier: 16.7.9
-      version: 16.7.9
-    image-size:
-      specifier: 2.0.2
-      version: 2.0.2
-    ipaddr.js:
-      specifier: ^2.1.0
-      version: 2.4.0
     knip:
       specifier: ^6.16.0
       version: 6.16.0
-    lucide-react:
-      specifier: ^0.577.0
-      version: 0.577.0
-    magic-string:
-      specifier: ^0.30.21
-      version: 0.30.21
-    ms:
-      specifier: 3.0.0-canary.1
-      version: 3.0.0-canary.1
     msw:
       specifier: ^2.14.6
       version: 2.14.6
     next:
       specifier: 16.2.7
       version: 16.2.7
-    next-intl:
-      specifier: ^4.9.2
-      version: 4.11.1
-    next-themes:
-      specifier: ^0.4.6
-      version: 0.4.6
-    next-view-transitions:
-      specifier: ^0.3.5
-      version: 0.3.5
-    nitro:
-      specifier: npm:nitro-nightly@latest
-      version: 3.0.1-20260707-232134-a13bd4ee
-    nuqs:
-      specifier: ^2.8.8
-      version: 2.8.8
     pathslash:
       specifier: ^0.1.0
       version: 0.1.0
@@ -189,57 +84,21 @@ catalogs:
     react-server-dom-webpack:
       specifier: ^19.2.7
       version: 19.2.7
-    recma-codehike:
-      specifier: 0.0.1
-      version: 0.0.1
-    remark-codehike:
-      specifier: 0.0.1
-      version: 0.0.1
-    sanitize-html:
-      specifier: ^2.17.3
-      version: 2.17.3
     sass:
       specifier: 1.100.0
       version: 1.100.0
-    server-only:
-      specifier: ^0.0.1
-      version: 0.0.1
-    shiki:
-      specifier: 4.0.2
-      version: 4.0.2
-    swr:
-      specifier: ^2.0.0
-      version: 2.4.0
-    tailwind-merge:
-      specifier: ^3.3.0
-      version: 3.5.0
     tailwindcss:
       specifier: 4.1.4
       version: 4.1.4
     typescript:
       specifier: ^7.0.0
       version: 7.0.2
-    use-count-up:
-      specifier: 3.0.1
-      version: 3.0.1
-    validator:
-      specifier: ^13.15.26
-      version: 13.15.26
-    vite-plugin-commonjs:
-      specifier: ^0.10.4
-      version: 0.10.4
     vite-plus:
       specifier: 0.2.2
       version: 0.2.2
-    web-vitals:
-      specifier: ^4.2.4
-      version: 4.2.4
     wrangler:
       specifier: ^4.80.0
       version: 4.80.0
-    zod:
-      specifier: 3.24.3
-      version: 3.24.3
 
 overrides:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.2
@@ -334,7 +193,7 @@ importers:
         version: link:../../packages/cloudflare
       drizzle-orm:
         specifier: 'catalog:'
-        version: 0.45.2(@cloudflare/workers-types@4.20260313.1)(@opentelemetry/api@1.9.1)(better-sqlite3@12.6.2)(kysely@0.28.15)
+        version: 0.45.2(@cloudflare/workers-types@4.20260313.1)(@opentelemetry/api@1.9.1)
       next:
         specifier: 'catalog:'
         version: 16.2.7(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(sass@1.100.0)
@@ -350,7 +209,7 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: 'catalog:'
-        version: 1.31.0(@voidzero-dev/vite-plus-core@0.2.2(@types/node@25.9.2)(esbuild@0.27.3)(jiti@2.7.0)(sass@1.100.0)(tsx@4.21.1)(typescript@7.0.2)(yaml@2.9.0))(workerd@1.20260401.1)(wrangler@4.80.0)
+        version: 1.31.0(@voidzero-dev/vite-plus-core@0.2.2(@types/node@25.9.2)(esbuild@0.27.3)(jiti@2.7.0)(sass@1.100.0)(tsx@4.21.1)(typescript@7.0.2)(yaml@2.9.0))(workerd@1.20260401.1)(wrangler@4.80.0(@cloudflare/workers-types@4.20260313.1))
       '@cloudflare/workers-types':
         specifier: 'catalog:'
         version: 4.20260313.1
@@ -8519,6 +8378,19 @@ snapshots:
     optionalDependencies:
       workerd: 1.20260401.1
 
+  '@cloudflare/vite-plugin@1.31.0(@voidzero-dev/vite-plus-core@0.2.2(@types/node@25.9.2)(esbuild@0.27.3)(jiti@2.7.0)(sass@1.100.0)(tsx@4.21.1)(typescript@7.0.2)(yaml@2.9.0))(workerd@1.20260401.1)(wrangler@4.80.0(@cloudflare/workers-types@4.20260313.1))':
+    dependencies:
+      '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260401.1)
+      miniflare: 4.20260401.0
+      unenv: 2.0.0-rc.24
+      vite: '@voidzero-dev/vite-plus-core@0.2.2(@types/node@25.9.2)(esbuild@0.27.3)(jiti@2.7.0)(sass@1.100.0)(tsx@4.21.1)(typescript@7.0.2)(yaml@2.9.0)'
+      wrangler: 4.80.0(@cloudflare/workers-types@4.20260313.1)
+      ws: 8.18.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+      - workerd
+
   '@cloudflare/vite-plugin@1.31.0(@voidzero-dev/vite-plus-core@0.2.2(@types/node@25.9.2)(esbuild@0.27.3)(jiti@2.7.0)(sass@1.100.0)(tsx@4.21.1)(typescript@7.0.2)(yaml@2.9.0))(workerd@1.20260401.1)(wrangler@4.80.0)':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260401.1)
@@ -11263,12 +11135,18 @@ snapshots:
       esbuild: 0.25.12
       tsx: 4.21.1
 
+  drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260313.1)(@opentelemetry/api@1.9.1):
+    optionalDependencies:
+      '@cloudflare/workers-types': 4.20260313.1
+      '@opentelemetry/api': 1.9.1
+
   drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260313.1)(@opentelemetry/api@1.9.1)(better-sqlite3@12.6.2)(kysely@0.28.15):
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260313.1
       '@opentelemetry/api': 1.9.1
       better-sqlite3: 12.6.2
       kysely: 0.28.15
+    optional: true
 
   electron-to-chromium@1.5.348: {}
 
