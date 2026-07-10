@@ -2,12 +2,12 @@ import { toSlash } from "pathslash";
 import {
   computeAppRouteStaticSiblings,
   convertSegmentsToRouteParts,
-  matchAppRoute,
   type AppRoute,
 } from "../routing/app-router.js";
 import {
   getAppRootBoundaryPath,
   getAppRootLayoutPaths,
+  matchAppRootRoute,
   selectAppRootBoundaryRoute,
   visitAppRouteModulePaths,
 } from "../routing/app-route-module-load-plan.js";
@@ -408,7 +408,7 @@ export function buildAppRscManifestCode(
   imports.sealLazyLoaderPaths();
   const routeEntries = buildRouteEntries(options.routes, imports);
 
-  const matchedRootRoute = matchAppRoute("/", options.routes)?.route ?? null;
+  const matchedRootRoute = matchAppRootRoute(options.routes);
   const rootRoute = selectAppRootBoundaryRoute(options.routes, matchedRootRoute);
   const rootNotFoundPath = getAppRootBoundaryPath(
     rootRoute,

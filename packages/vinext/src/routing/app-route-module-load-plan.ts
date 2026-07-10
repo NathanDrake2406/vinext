@@ -1,4 +1,5 @@
 import type { AppRoute } from "./app-route-graph.js";
+import { matchAppRoute } from "./app-router.js";
 
 export type VisitAppRouteModulePathsOptions = {
   includeBaseModules: boolean;
@@ -19,22 +20,22 @@ export function visitAppRouteModulePaths(
   if (options.includeBaseModules) {
     if (route.pagePath) visit(route.pagePath);
     if (route.routePath) visit(route.routePath);
-    route.layouts.forEach(visit);
-    route.templates.forEach(visit);
+    route.layouts?.forEach(visit);
+    route.templates?.forEach(visit);
     if (route.loadingPath) visit(route.loadingPath);
     if (route.errorPath) visit(route.errorPath);
-    route.layoutErrorPaths.forEach((filePath) => filePath && visit(filePath));
+    route.layoutErrorPaths?.forEach((filePath) => filePath && visit(filePath));
     route.errorPaths?.forEach(visit);
     if (route.notFoundPath) visit(route.notFoundPath);
-    route.notFoundPaths.forEach((filePath) => filePath && visit(filePath));
+    route.notFoundPaths?.forEach((filePath) => filePath && visit(filePath));
     if (route.forbiddenPath) visit(route.forbiddenPath);
-    route.forbiddenPaths.forEach((filePath) => filePath && visit(filePath));
+    route.forbiddenPaths?.forEach((filePath) => filePath && visit(filePath));
     if (route.unauthorizedPath) visit(route.unauthorizedPath);
-    route.unauthorizedPaths.forEach((filePath) => filePath && visit(filePath));
+    route.unauthorizedPaths?.forEach((filePath) => filePath && visit(filePath));
   }
 
   if (options.includeSlotModules) {
-    for (const slot of route.parallelSlots) {
+    for (const slot of route.parallelSlots ?? []) {
       if (slot.pagePath) visit(slot.pagePath);
       if (slot.defaultPath) visit(slot.defaultPath);
       if (slot.layoutPath) visit(slot.layoutPath);
@@ -46,16 +47,30 @@ export function visitAppRouteModulePaths(
 
   if (!options.includeInterceptions) return;
 
-  for (const slot of route.parallelSlots) {
-    for (const interception of slot.interceptingRoutes) {
+  for (const slot of route.parallelSlots ?? []) {
+    for (const interception of slot.interceptingRoutes ?? []) {
       visit(interception.pagePath);
       interception.layoutPaths.forEach(visit);
     }
   }
-  for (const interception of route.siblingIntercepts) {
+  for (const interception of route.siblingIntercepts ?? []) {
     visit(interception.pagePath);
     interception.layoutPaths.forEach(visit);
   }
+}
+
+/**
+ * Resolve the startup route through the route matcher when the graph carries
+ * its cached pattern parts. A few code-generation callers still construct the
+ * older, partial route shape directly; preserve their former exact-root
+ * behavior until those fixtures move to graph-built routes.
+ */
+export function matchAppRootRoute(routes: AppRoute[]): AppRoute | null {
+  if (routes.every((route) => Array.isArray(route.patternParts))) {
+    return matchAppRoute("/", routes)?.route ?? null;
+  }
+
+  return routes.find((route) => route.pattern === "/") ?? null;
 }
 
 /** Select the route whose root layout and boundaries back startup rendering. */

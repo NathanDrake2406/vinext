@@ -1,9 +1,10 @@
 import path, { toSlash } from "pathslash";
-import { appRouteGraph, matchAppRoute } from "./app-router.js";
+import { appRouteGraph } from "./app-router.js";
 import type { ValidFileMatcher } from "./file-matcher.js";
 import {
   getAppRootBoundaryPath,
   getAppRootLayoutPaths,
+  matchAppRootRoute,
   selectAppRootBoundaryRoute,
   visitAppRouteModulePaths,
 } from "./app-route-module-load-plan.js";
@@ -49,7 +50,7 @@ export async function collectAppRouterStartupOptimizeEntries({
   };
 
   const { routes } = await appRouteGraph(appDir, undefined, matcher);
-  const matchedRootRoute = matchAppRoute("/", routes)?.route ?? null;
+  const matchedRootRoute = matchAppRootRoute(routes);
   const rootBoundaryRoute = selectAppRootBoundaryRoute(routes, matchedRootRoute);
 
   add(globalErrorPath);
