@@ -105,12 +105,11 @@ body {
     transform: none !important;
   }
 }
-/* Reveal elements ship with inline opacity:0 and are unhidden by the motion
-   controller. The head script stamps html.js synchronously; when it never ran
-   (JS disabled or blocked) pin everything visible so the server render is the
-   complete page, not a blank one. */
-html:not(.js) [data-intro],
-html:not(.js) [data-rv] {
+/* The server render is complete and visible. Hydration opts into the inline
+   reveal states only after the motion controller has captured its elements;
+   a delayed or failed client bundle therefore cannot blank the page. */
+html:not(.motion-ready) [data-intro],
+html:not(.motion-ready) [data-rv] {
   opacity: 1 !important;
   transform: none !important;
 }

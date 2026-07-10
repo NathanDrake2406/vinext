@@ -17,10 +17,6 @@ const geistMono = JetBrains_Mono({
 const themeScript = `
 (function(){
   var root=document.documentElement, key='vinext-theme';
-  // Reveal styles only hide content when this marker is present, so no-JS
-  // visits render everything visible instead of waiting on the motion
-  // controller. Runs synchronously in <head>: no flash either way.
-  root.classList.add('js');
   function sysLight(){ return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches; }
   function stored(){ try{ var s=localStorage.getItem(key); return (s==='dark'||s==='light')?s:null; }catch(e){ return null; } }
   function current(){ var s=stored(); return s || (sysLight()?'light':'dark'); }
@@ -35,7 +31,7 @@ const themeScript = `
 export const metadata: Metadata = {
   title: "vinext",
   description:
-    "Take any Next.js app and deploy it anywhere with one command. App Router, Pages Router, RSC, ISR — all on Vite.",
+    "Bring a Next.js app to Vite and deploy it anywhere. App Router, Pages Router, RSC, ISR — with compatibility checks for known gaps.",
 };
 
 export default function RootLayout({

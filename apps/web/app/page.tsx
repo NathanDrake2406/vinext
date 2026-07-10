@@ -1,6 +1,14 @@
 import type { CSSProperties } from "react";
 import { LandingMotion } from "./_components/landing-motion";
-import { compareBuild, compareBundle, formatKb, getLandingStats } from "./lib/landing-stats";
+import { formatUtcDateTime } from "./benchmarks/components/format";
+import { getRaceFrame } from "./lib/landing-race";
+import {
+  compareBuild,
+  compareBundle,
+  formatKb,
+  getLandingStats,
+  type LandingStats,
+} from "./lib/landing-stats";
 
 // ISR: headline numbers come from the same D1 data as /compatibility and
 // /benchmarks; 5 minutes of staleness matches those pages.
@@ -21,24 +29,53 @@ const landingRootStyle = {
   fontFamily: "'Geist',system-ui,-apple-system,sans-serif",
 } satisfies LandingStyle;
 
-export default async function HomePage() {
-  const stats = await getLandingStats();
+const provenanceStyle = {
+  opacity: "0",
+  transform: "translateY(24px)",
+  transition: "opacity var(--t),transform var(--t)",
+  transitionDelay: ".1s",
+  margin: "16px 0 0",
+  fontFamily: "'JetBrains Mono',monospace",
+  fontSize: "11px",
+  lineHeight: "1.5",
+  color: "var(--mute)",
+} satisfies LandingStyle;
+
+export function LandingPage({ stats }: { stats: LandingStats }) {
   const build = compareBuild(stats.buildSeconds);
   const bundle = compareBundle(stats.bundleBytes);
-  // Winner-honest copy: these numbers are live, so a regression must say so.
-  const buildHeadline =
-    build.verdict === "better"
-      ? `${build.multiple} faster build time.`
+  const benchmarkSource = stats.provenance.benchmark;
+  const benchmarkIsLive = benchmarkSource.source === "live";
+  const finalRace = getRaceFrame(stats.buildSeconds, 1);
+  const buildHeadline = !benchmarkIsLive
+    ? "33-route benchmark snapshot."
+    : build.verdict === "better"
+      ? `${build.multiple} faster in our 33-route benchmark.`
       : build.verdict === "worse"
-        ? `${build.multiple} slower build time.`
-        : "Build time on par with Next.js.";
-  const buildStatCaption =
-    build.verdict === "better"
-      ? "faster production builds"
+        ? `${build.multiple} slower in our 33-route benchmark.`
+        : "Build time on par in our 33-route benchmark.";
+  const buildStatCaption = benchmarkIsLive
+    ? build.verdict === "better"
+      ? "faster benchmark build"
       : build.verdict === "worse"
-        ? "slower production builds"
-        : "production build parity";
-  const bundleStatCaption = bundle.verdict === "worse" ? "larger" : "smaller";
+        ? "slower benchmark build"
+        : "benchmark build parity"
+    : "reference build snapshot";
+  const bundleStatCaption = benchmarkIsLive
+    ? bundle.verdict === "better"
+      ? "smaller client bundle in the same benchmark"
+      : bundle.verdict === "worse"
+        ? "larger client bundle in the same benchmark"
+        : "client bundle size on par in the same benchmark"
+    : "reference client bundle snapshot";
+  const benchmarkProvenance = benchmarkIsLive
+    ? `33-route dynamic-render benchmark · commit ${benchmarkSource.commitSha?.slice(0, 7) ?? "unknown"} · ${formatUtcDateTime(benchmarkSource.measuredAt)}`
+    : "33-route dynamic-render benchmark · reference snapshot · live benchmark data unavailable";
+  const compatibilitySource = stats.provenance.compatibility;
+  const compatibilityProvenance =
+    compatibilitySource.source === "live"
+      ? `Latest deploy-suite run${compatibilitySource.commitSha ? ` · commit ${compatibilitySource.commitSha.slice(0, 7)}` : ""} · ${formatUtcDateTime(compatibilitySource.measuredAt)}`
+      : "Reference snapshot · live deploy-suite data unavailable";
 
   return (
     <>
@@ -245,7 +282,7 @@ export default async function HomePage() {
                     } satisfies LandingStyle
                   }
                 >
-                  Your code stays exactly the same.
+                  Keep your app structure.
                   <br />
                   Faster dev loop, smaller bundles, deploy anywhere.
                 </p>
@@ -385,7 +422,7 @@ export default async function HomePage() {
                   } satisfies LandingStyle
                 }
               >
-                Same code · 
+                Same structure · 
               </span>
               <span
                 style={
@@ -405,7 +442,7 @@ export default async function HomePage() {
                   } satisfies LandingStyle
                 }
               >
-                Same code · 
+                Same structure · 
               </span>
               <span
                 style={
@@ -425,7 +462,7 @@ export default async function HomePage() {
                   } satisfies LandingStyle
                 }
               >
-                Same code · 
+                Same structure · 
               </span>
               <span
                 style={
@@ -445,7 +482,7 @@ export default async function HomePage() {
                   } satisfies LandingStyle
                 }
               >
-                Same code · 
+                Same structure · 
               </span>
               <span
                 style={
@@ -506,7 +543,7 @@ export default async function HomePage() {
                     } satisfies LandingStyle
                   }
                 >
-                  Nothing to rewrite.
+                  Start with the app you have.
                 </h2>
                 <p
                   data-rv=""
@@ -524,7 +561,7 @@ export default async function HomePage() {
                     } satisfies LandingStyle
                   }
                 >
-                  Every{" "}
+                  vinext keeps your app structure and maps supported{" "}
                   <code
                     style={
                       {
@@ -539,7 +576,7 @@ export default async function HomePage() {
                   >
                     next/*
                   </code>{" "}
-                  import resolves to a vinext shim on{" "}
+                  APIs to Vite-compatible shims on{" "}
                   <code
                     style={
                       {
@@ -555,7 +592,7 @@ export default async function HomePage() {
                   >
                     @vitejs/plugin-rsc
                   </code>
-                  .
+                  . Run vinext check to flag known behavior gaps before migrating.
                 </p>
 
                 <div
@@ -639,7 +676,7 @@ export default async function HomePage() {
                       } satisfies LandingStyle
                     }
                   >
-                    your code · unchanged
+                    app structure · preserved
                   </div>
                   <div
                     data-el="conn"
@@ -650,12 +687,12 @@ export default async function HomePage() {
                         margin: "16px 0",
                         background:
                           "linear-gradient(180deg,rgba(var(--orange-rgb),.3),transparent)",
-                        opacity: ".3",
+                        opacity: "1",
                       } satisfies LandingStyle
                     }
                   />
                   <div
-                    className="engine-plate"
+                    className="engine-plate is-swapped"
                     data-el="plate"
                     style={
                       {
@@ -709,7 +746,7 @@ export default async function HomePage() {
                         aria-hidden="true"
                         style={{ visibility: "hidden" } satisfies LandingStyle}
                       >
-                        Turbopack
+                        Vite
                       </span>
                       <span
                         data-el="nextLabel"
@@ -720,6 +757,7 @@ export default async function HomePage() {
                             right: "0",
                             top: "0",
                             color: "var(--ink)",
+                            opacity: "0",
                           } satisfies LandingStyle
                         }
                       >
@@ -734,8 +772,8 @@ export default async function HomePage() {
                             right: "0",
                             top: "0",
                             color: "var(--orange)",
-                            opacity: "0",
-                            transform: "translateY(44px)",
+                            opacity: "1",
+                            transform: "none",
                             textShadow: "0 0 50px var(--orange-glow)",
                           } satisfies LandingStyle
                         }
@@ -1251,12 +1289,12 @@ export default async function HomePage() {
                         {
                           fontFamily: "'JetBrains Mono',monospace",
                           fontSize: "12px",
-                          color: "var(--mute)",
+                          color: "var(--orange-soft)",
                           transition: "color .3s",
                         } satisfies LandingStyle
                       }
                     >
-                      next build · next.js 16
+                      vite + @vitejs/plugin-rsc
                     </div>
                   </div>
                 </div>
@@ -1297,12 +1335,15 @@ export default async function HomePage() {
                     {buildHeadline}
                   </span>
                 </h2>{" "}
+                <p data-rv="" style={provenanceStyle}>
+                  {benchmarkProvenance}
+                </p>
               </div>
 
               <div
                 style={
                   {
-                    marginTop: "48px",
+                    marginTop: "40px",
                     display: "flex",
                     flexDirection: "column",
                     gap: "24px",
@@ -1337,7 +1378,7 @@ export default async function HomePage() {
                         data-el="vinextDone"
                         style={
                           {
-                            opacity: "0",
+                            opacity: finalRace.vinextDone ? "1" : "0",
                             transition: "opacity .3s",
                             fontSize: "11px",
                             color: "var(--ok)",
@@ -1362,7 +1403,7 @@ export default async function HomePage() {
                         } satisfies LandingStyle
                       }
                     >
-                      0.0s
+                      {finalRace.vinextTime.toFixed(1)}s
                     </span>
                   </div>
                   <div
@@ -1385,7 +1426,7 @@ export default async function HomePage() {
                           left: "0",
                           bottom: "0",
                           width: "100%",
-                          transform: "scaleX(0)",
+                          transform: `scaleX(${finalRace.vinextFill.toFixed(4)})`,
                           background: "linear-gradient(90deg,var(--orange),var(--amber))",
                           borderRadius: "999px",
                           boxShadow: "0 0 20px rgba(var(--orange-rgb),.4)",
@@ -1428,7 +1469,7 @@ export default async function HomePage() {
                         } satisfies LandingStyle
                       }
                     >
-                      0.0s
+                      {finalRace.nextjsTime.toFixed(1)}s
                     </span>
                   </div>
                   <div
@@ -1451,7 +1492,7 @@ export default async function HomePage() {
                           left: "0",
                           bottom: "0",
                           width: "100%",
-                          transform: "scaleX(0)",
+                          transform: `scaleX(${finalRace.nextjsFill.toFixed(4)})`,
                           background: "linear-gradient(90deg,var(--next-bar-1),var(--next-bar-2))",
                           borderRadius: "999px",
                         } satisfies LandingStyle
@@ -1465,8 +1506,8 @@ export default async function HomePage() {
                 data-el="payoff"
                 style={
                   {
-                    opacity: "0",
-                    transform: "translateY(16px)",
+                    opacity: "1",
+                    transform: "none",
                     transition: "opacity .5s ease,transform .5s ease",
                     marginTop: "32px",
                     display: "flex",
@@ -1549,7 +1590,7 @@ export default async function HomePage() {
                       } satisfies LandingStyle
                     }
                   >
-                    {bundleStatCaption} client bundle · {formatKb(stats.bundleBytes.nextjs)} → 
+                    {bundleStatCaption} · {formatKb(stats.bundleBytes.nextjs)} → 
                     {formatKb(stats.bundleBytes.vinext)} gzipped
                   </span>
                 </div>
@@ -1599,13 +1640,16 @@ export default async function HomePage() {
                 } satisfies LandingStyle
               }
             >
-              {stats.compatPassRate}% Next.JS API surface
+              {stats.compatPassRate}% deploy-suite test pass rate
             </h2>
+            <p data-rv="" style={provenanceStyle}>
+              {compatibilityProvenance}
+            </p>
             <div
               id="compatGrid"
               style={
                 {
-                  marginTop: "48px",
+                  marginTop: "40px",
                   display: "grid",
                   gridTemplateColumns: "1fr 1fr",
                   gap: "24px",
@@ -3087,4 +3131,8 @@ export default async function HomePage() {
       </div>
     </>
   );
+}
+
+export default async function HomePage() {
+  return <LandingPage stats={await getLandingStats()} />;
 }

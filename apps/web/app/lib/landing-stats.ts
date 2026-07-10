@@ -9,8 +9,7 @@ import { getPerformanceRuns } from "@/app/lib/benchmarks/server";
  *
  * Every field carries a static fallback (the last hand-verified numbers) so
  * the page still renders in dev without a D1 binding or before the first
- * ingest. Failures fall back silently: the landing page is not the place to
- * surface pipeline errors — /compatibility and /benchmarks already do.
+ * ingest. Provenance keeps those reference values distinct from live results.
  */
 export type LandingStats = {
   /** Latest deploy-suite pass rate, integer percent. */
@@ -19,28 +18,61 @@ export type LandingStats = {
   buildSeconds: { vinext: number; nextjs: number };
   /** Gzipped client bundle, bytes (median of latest main run). */
   bundleBytes: { vinext: number; nextjs: number };
+  provenance: {
+    compatibility: MetricProvenance;
+    benchmark: MetricProvenance;
+  };
 };
+
+type MetricProvenance =
+  | { source: "live"; measuredAt: string; commitSha: string | null }
+  | { source: "fallback" };
 
 const FALLBACK: LandingStats = {
   compatPassRate: 92,
   buildSeconds: { vinext: 3.1, nextjs: 6.2 },
   bundleBytes: { vinext: 125 * 1024, nextjs: 185 * 1024 },
+  provenance: {
+    compatibility: { source: "fallback" },
+    benchmark: { source: "fallback" },
+  },
 };
 
-async function loadCompatPassRate(): Promise<number | null> {
+type CompatSnapshot = {
+  passRate: number;
+  measuredAt: string;
+  commitSha: string | null;
+};
+
+type BenchmarkRun = {
+  commitSha: string;
+  measuredAt: string;
+  measurements: Array<{ scenarioId: string; implementationId: string; median: number }>;
+};
+
+async function loadCompatPassRate(): Promise<CompatSnapshot | null> {
   const db = getDb();
   const [latest] = await db
-    .select({ total: compatRuns.total, passed: compatRuns.passed })
+    .select({
+      total: compatRuns.total,
+      passed: compatRuns.passed,
+      createdAt: compatRuns.createdAt,
+      commitSha: compatRuns.commitSha,
+    })
     .from(compatRuns)
     .where(eq(compatRuns.kind, "deploy"))
     .orderBy(desc(compatRuns.createdAt))
     .limit(1);
   if (!latest || latest.total <= 0) return null;
-  return Math.round((latest.passed / latest.total) * 100);
+  return {
+    passRate: Math.round((latest.passed / latest.total) * 100),
+    measuredAt: new Date(latest.createdAt).toISOString(),
+    commitSha: latest.commitSha,
+  };
 }
 
 function implementationPair(
-  measurements: Awaited<ReturnType<typeof getPerformanceRuns>>[number]["measurements"],
+  measurements: BenchmarkRun["measurements"],
   scenarioId: string,
 ): { vinext: number; nextjs: number } | null {
   const median = (implementationId: string) =>
@@ -52,26 +84,46 @@ function implementationPair(
   return { vinext, nextjs };
 }
 
-export async function getLandingStats(): Promise<LandingStats> {
-  const [compat, perf] = await Promise.allSettled([loadCompatPassRate(), getPerformanceRuns(1)]);
+export function resolveLandingStats(
+  compat: PromiseSettledResult<CompatSnapshot | null>,
+  perf: PromiseSettledResult<BenchmarkRun[]>,
+): LandingStats {
+  const stats: LandingStats = {
+    ...FALLBACK,
+    provenance: { ...FALLBACK.provenance },
+  };
 
-  const stats = { ...FALLBACK };
-
-  if (compat.status === "fulfilled" && compat.value !== null) {
-    stats.compatPassRate = compat.value;
+  if (compat.status === "fulfilled" && compat.value) {
+    stats.compatPassRate = compat.value.passRate;
+    stats.provenance.compatibility = {
+      source: "live",
+      measuredAt: compat.value.measuredAt,
+      commitSha: compat.value.commitSha,
+    };
   }
 
   if (perf.status === "fulfilled" && perf.value.length > 0) {
-    const measurements = perf.value[0].measurements;
+    const run = perf.value[0];
+    const measurements = run.measurements;
     const build = implementationPair(measurements, "production-build");
-    if (build) {
-      stats.buildSeconds = { vinext: build.vinext / 1000, nextjs: build.nextjs / 1000 };
-    }
     const bundle = implementationPair(measurements, "client-bundle-gzip");
-    if (bundle) stats.bundleBytes = bundle;
+    if (build && bundle) {
+      stats.buildSeconds = { vinext: build.vinext / 1000, nextjs: build.nextjs / 1000 };
+      stats.bundleBytes = bundle;
+      stats.provenance.benchmark = {
+        source: "live",
+        measuredAt: run.measuredAt,
+        commitSha: run.commitSha,
+      };
+    }
   }
 
   return stats;
+}
+
+export async function getLandingStats(): Promise<LandingStats> {
+  const [compat, perf] = await Promise.allSettled([loadCompatPassRate(), getPerformanceRuns(1)]);
+  return resolveLandingStats(compat, perf);
 }
 
 /** "2×" for 2.04, "1.8×" for 1.83 — near-integer multiples read cleaner rounded. */

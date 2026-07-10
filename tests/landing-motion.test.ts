@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { getRaceFrame } from "../apps/web/app/_components/landing-motion";
+import { getRaceFrame } from "../apps/web/app/lib/landing-race";
 
 describe("landing build race", () => {
   it("uses the slower vinext build as the race duration and bar denominator", () => {

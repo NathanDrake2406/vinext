@@ -1,36 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
+import { getRaceFrame, type RaceFrame, type RaceSeconds } from "../lib/landing-race";
 
 type Accent = { r: number; g: number; b: number };
 type CopyStatus = "copied" | "error";
-
-export type RaceSeconds = { vinext: number; nextjs: number };
-
-type RaceFrame = {
-  durationMs: number;
-  vinextTime: number;
-  nextjsTime: number;
-  vinextFill: number;
-  nextjsFill: number;
-  vinextDone: boolean;
-};
-
-export function getRaceFrame(race: RaceSeconds, progress: number): RaceFrame {
-  const longest = Math.max(race.vinext, race.nextjs);
-  const simTime = Math.min(1, Math.max(0, progress)) * longest;
-  const vinextTime = Math.min(race.vinext, simTime);
-  const nextjsTime = Math.min(race.nextjs, simTime);
-
-  return {
-    durationMs: Math.min(longest, 5) * 1000,
-    vinextTime,
-    nextjsTime,
-    vinextFill: vinextTime / longest,
-    nextjsFill: nextjsTime / longest,
-    vinextDone: simTime >= race.vinext,
-  };
-}
 
 class Landing {
   readonly props = { accent: "#f6821f", motion: true };
@@ -131,6 +105,25 @@ class Landing {
       return;
     }
 
+    document.documentElement.classList.add("motion-ready");
+    this.plate?.classList.remove("is-swapped");
+    if (this.plateGhost) this.plateGhost.textContent = "Turbopack";
+    if (this.nextLabel) this.nextLabel.style.opacity = "1";
+    if (this.viteLabel) {
+      this.viteLabel.style.opacity = "0";
+      this.viteLabel.style.transform = "translateY(44px)";
+    }
+    if (this.plateSub) {
+      this.plateSub.textContent = "next build · next.js 16";
+      this.plateSub.style.color = "var(--mute)";
+    }
+    if (this.conn) this.conn.style.opacity = ".3";
+    this.applyRaceFrame(getRaceFrame(this.race, 0));
+    if (this.payoff) {
+      this.payoff.style.opacity = "0";
+      this.payoff.style.transform = "translateY(16px)";
+    }
+
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         this._intro.forEach((element) => {
@@ -167,6 +160,7 @@ class Landing {
 
   destroy() {
     this._dead = true;
+    document.documentElement.classList.remove("motion-ready");
     if (this._raf !== null) cancelAnimationFrame(this._raf);
     if (this._visibilityChange) {
       document.removeEventListener("visibilitychange", this._visibilityChange);
@@ -215,8 +209,6 @@ class Landing {
   }
 
   staticFinish() {
-    const frame = getRaceFrame(this.race, 1);
-
     this._intro.forEach((element) => {
       element.style.opacity = "1";
       element.style.transform = "none";
@@ -237,13 +229,7 @@ class Landing {
       this.plateSub.style.color = "var(--orange-soft)";
     }
     if (this.plateGhost) this.plateGhost.textContent = "Vite";
-    if (this.vFill) {
-      this.vFill.style.transform = `scaleX(${frame.vinextFill.toFixed(4)})`;
-    }
-    if (this.nFill) this.nFill.style.transform = `scaleX(${frame.nextjsFill.toFixed(4)})`;
-    if (this.vTime) this.vTime.textContent = `${frame.vinextTime.toFixed(1)}s`;
-    if (this.nTime) this.nTime.textContent = `${frame.nextjsTime.toFixed(1)}s`;
-    if (this.vDone) this.vDone.style.opacity = frame.vinextDone ? "1" : "0";
+    this.applyRaceFrame(getRaceFrame(this.race, 1));
     if (this.payoff) {
       this.payoff.style.opacity = "1";
       this.payoff.style.transform = "none";
@@ -257,6 +243,14 @@ class Landing {
     setTimeout(() => {
       if (!this._dead && this.ready) this.ready.style.opacity = "1";
     }, 1100);
+  }
+
+  applyRaceFrame(frame: RaceFrame) {
+    if (this.vFill) this.vFill.style.transform = `scaleX(${frame.vinextFill.toFixed(4)})`;
+    if (this.nFill) this.nFill.style.transform = `scaleX(${frame.nextjsFill.toFixed(4)})`;
+    if (this.vTime) this.vTime.textContent = `${frame.vinextTime.toFixed(1)}s`;
+    if (this.nTime) this.nTime.textContent = `${frame.nextjsTime.toFixed(1)}s`;
+    if (this.vDone) this.vDone.style.opacity = frame.vinextDone ? "1" : "0";
   }
 
   setupCopy(root: HTMLElement) {
@@ -424,15 +418,7 @@ class Landing {
       if (this._dead) return;
       const time = Math.min(1, (now - start) / duration);
       const frame = getRaceFrame(this.race, time);
-      if (this.vFill) {
-        this.vFill.style.transform = `scaleX(${frame.vinextFill.toFixed(4)})`;
-      }
-      if (this.nFill) {
-        this.nFill.style.transform = `scaleX(${frame.nextjsFill.toFixed(4)})`;
-      }
-      if (this.vTime) this.vTime.textContent = `${frame.vinextTime.toFixed(1)}s`;
-      if (this.nTime) this.nTime.textContent = `${frame.nextjsTime.toFixed(1)}s`;
-      if (this.vDone) this.vDone.style.opacity = frame.vinextDone ? "1" : "0";
+      this.applyRaceFrame(frame);
       if (time < 1) {
         requestAnimationFrame(step);
       } else if (this.payoff) {
@@ -527,7 +513,7 @@ export function LandingMotion({ race }: { race?: RaceSeconds }) {
   const vinextSeconds = race?.vinext;
   const nextjsSeconds = race?.nextjs;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const landing = new Landing();
     if (vinextSeconds && nextjsSeconds) {
       landing.race = { vinext: vinextSeconds, nextjs: nextjsSeconds };
