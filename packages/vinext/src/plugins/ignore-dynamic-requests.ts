@@ -884,6 +884,11 @@ function transformVeryDynamicRequests(code: string, id: string) {
 export function createIgnoreDynamicRequestsPlugin(
   getTranspiledPackages: () => readonly string[] = () => [],
 ): Plugin {
+  const transformCache = new Map<
+    string,
+    { source: string; result: ReturnType<typeof transformVeryDynamicRequests> }
+  >();
+
   return {
     name: "vinext:ignore-dynamic-requests",
     enforce: "pre",
@@ -914,7 +919,12 @@ export function createIgnoreDynamicRequestsPlugin(
         ) {
           return null;
         }
-        return transformVeryDynamicRequests(code, id);
+        const cached = transformCache.get(id);
+        if (cached?.source === code) return cached.result;
+
+        const result = transformVeryDynamicRequests(code, id);
+        transformCache.set(id, { source: code, result });
+        return result;
       },
     },
   };

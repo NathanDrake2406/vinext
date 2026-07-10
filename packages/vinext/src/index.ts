@@ -1672,6 +1672,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     },
   };
 
+  const typeofWindowTransformCache = new Map<
+    string,
+    {
+      source: string;
+      results: Map<
+        ReturnType<typeof getTypeofWindowReplacement>,
+        ReturnType<typeof replaceTypeofWindow>
+      >;
+    }
+  >();
+
   const plugins: PluginOption[] = [
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos
     // that use @/*, #/*, or baseUrl imports work out of the box.
@@ -5459,7 +5470,23 @@ export const loadServerActionClient = ${
           }
           const cacheDir = `${toSlash(this.environment.config.cacheDir).replace(/\/$/, "")}/`;
           if (toSlash(id).startsWith(cacheDir)) return null;
-          return replaceTypeofWindow(code, getTypeofWindowReplacement(this.environment), id);
+
+          const replacement = getTypeofWindowReplacement(this.environment);
+          const cached = typeofWindowTransformCache.get(id);
+          if (cached?.source === code && cached.results.has(replacement)) {
+            return cached.results.get(replacement) ?? null;
+          }
+
+          const result = replaceTypeofWindow(code, replacement, id);
+          if (cached?.source === code) {
+            cached.results.set(replacement, result);
+          } else {
+            typeofWindowTransformCache.set(id, {
+              source: code,
+              results: new Map([[replacement, result]]),
+            });
+          }
+          return result;
         },
       },
     },
