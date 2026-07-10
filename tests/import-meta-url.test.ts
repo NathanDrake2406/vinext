@@ -595,4 +595,41 @@ describe("vinext:import-meta-url plugin", () => {
       serverResult,
     );
   });
+
+  it("invalidates cached server identities when a junction target changes", async () => {
+    const versionA = path.join(realRoot, "version-a");
+    const versionB = path.join(realRoot, "version-b");
+    const versionAPage = path.join(versionA, "page.tsx");
+    const versionBPage = path.join(versionB, "page.tsx");
+    const current = path.join(realRoot, "current");
+    const currentPage = path.join(current, "page.tsx");
+    const source = `export const identity = [import.meta.url, __filename, __dirname];\n`;
+
+    await Promise.all([
+      fsp.mkdir(versionA, { recursive: true }),
+      fsp.mkdir(versionB, { recursive: true }),
+    ]);
+    await Promise.all([fsp.writeFile(versionAPage, source), fsp.writeFile(versionBPage, source)]);
+    const [canonicalVersionAPage, canonicalVersionBPage] = await Promise.all([
+      fsp.realpath(versionAPage).then(toSlash),
+      fsp.realpath(versionBPage).then(toSlash),
+    ]);
+    await fsp.symlink(versionA, current, "junction");
+
+    const plugin = createImportMetaUrlPlugin({ getRoot: () => realRoot });
+    const configResolved = unwrapHook(plugin.configResolved).bind(plugin);
+    configResolved({ root: realRoot, build: { outDir: "dist" } });
+    const transform = unwrapHook(plugin.transform);
+    const serverContext = { environment: { name: "rsc" } };
+
+    const firstResult = transform.call(serverContext, source, currentPage);
+    expect(firstResult?.code).toContain(canonicalVersionAPage);
+
+    await fsp.unlink(current);
+    await fsp.symlink(versionB, current, "junction");
+
+    const secondResult = transform.call(serverContext, source, currentPage);
+    expect(secondResult?.code).toContain(canonicalVersionBPage);
+    expect(secondResult?.code).not.toContain(canonicalVersionAPage);
+  });
 });

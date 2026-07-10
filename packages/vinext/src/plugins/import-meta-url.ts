@@ -55,11 +55,12 @@ const TRANSFORMABLE_SCRIPT_EXTENSIONS = new Set([
 export function createImportMetaUrlPlugin(options: { getRoot: () => string | undefined }): Plugin {
   let rootPaths: RootPaths | undefined;
   let outputDirs: string[] = [];
-  // The rewrite depends on the environment kind (client vs server replacement)
-  // and, for client, on the root the /ROOT-relative path is computed against —
-  // both go into the variant. Eligibility (node_modules, extension, output-dir
-  // exclusion) stays outside the cache because it reads mutable rootPaths
-  // state; only the pure rewrite of an already-eligible module is memoized.
+  // The rewrite depends on the environment kind (client vs server replacement),
+  // the canonical module path, and, for client, on the root the /ROOT-relative
+  // path is computed against — all go into the variant. Eligibility
+  // (node_modules, extension, output-dir exclusion) stays outside the cache
+  // because it reads mutable rootPaths state; only the pure rewrite of an
+  // already-eligible module is memoized.
   const cached = createTransformCache<string, RewriteResult | null>();
 
   function getRootPaths(): RootPaths | undefined {
@@ -96,7 +97,8 @@ export function createImportMetaUrlPlugin(options: { getRoot: () => string | und
 
         const environment: ImportMetaUrlEnvironment =
           this.environment?.name === "client" ? "client" : "server";
-        return cached(id, code, `${environment}\0${paths.canonicalRoot}`, () =>
+        const variant = `${environment}\0${paths.canonicalRoot}\0${canonicalId}`;
+        return cached(id, code, variant, () =>
           rewriteCanonicalSourceIdentity(code, canonicalId, paths, environment),
         );
       },
