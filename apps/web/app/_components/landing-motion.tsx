@@ -7,6 +7,31 @@ type CopyStatus = "copied" | "error";
 
 export type RaceSeconds = { vinext: number; nextjs: number };
 
+type RaceFrame = {
+  durationMs: number;
+  vinextTime: number;
+  nextjsTime: number;
+  vinextFill: number;
+  nextjsFill: number;
+  vinextDone: boolean;
+};
+
+export function getRaceFrame(race: RaceSeconds, progress: number): RaceFrame {
+  const longest = Math.max(race.vinext, race.nextjs);
+  const simTime = Math.min(1, Math.max(0, progress)) * longest;
+  const vinextTime = Math.min(race.vinext, simTime);
+  const nextjsTime = Math.min(race.nextjs, simTime);
+
+  return {
+    durationMs: Math.min(longest, 5) * 1000,
+    vinextTime,
+    nextjsTime,
+    vinextFill: vinextTime / longest,
+    nextjsFill: nextjsTime / longest,
+    vinextDone: simTime >= race.vinext,
+  };
+}
+
 class Landing {
   readonly props = { accent: "#f6821f", motion: true };
   /** Median production-build times driving the benchmark race; the server
@@ -190,6 +215,8 @@ class Landing {
   }
 
   staticFinish() {
+    const frame = getRaceFrame(this.race, 1);
+
     this._intro.forEach((element) => {
       element.style.opacity = "1";
       element.style.transform = "none";
@@ -211,12 +238,12 @@ class Landing {
     }
     if (this.plateGhost) this.plateGhost.textContent = "Vite";
     if (this.vFill) {
-      this.vFill.style.transform = `scaleX(${(this.race.vinext / this.race.nextjs).toFixed(4)})`;
+      this.vFill.style.transform = `scaleX(${frame.vinextFill.toFixed(4)})`;
     }
-    if (this.nFill) this.nFill.style.transform = "scaleX(1)";
-    if (this.vTime) this.vTime.textContent = `${this.race.vinext.toFixed(1)}s`;
-    if (this.nTime) this.nTime.textContent = `${this.race.nextjs.toFixed(1)}s`;
-    if (this.vDone) this.vDone.style.opacity = "1";
+    if (this.nFill) this.nFill.style.transform = `scaleX(${frame.nextjsFill.toFixed(4)})`;
+    if (this.vTime) this.vTime.textContent = `${frame.vinextTime.toFixed(1)}s`;
+    if (this.nTime) this.nTime.textContent = `${frame.nextjsTime.toFixed(1)}s`;
+    if (this.vDone) this.vDone.style.opacity = frame.vinextDone ? "1" : "0";
     if (this.payoff) {
       this.payoff.style.opacity = "1";
       this.payoff.style.transform = "none";
@@ -387,28 +414,25 @@ class Landing {
     if (this._raceRun) return;
     this._raceRun = true;
     const start = performance.now();
-    const nextDuration = this.race.nextjs;
-    const vinextDuration = this.race.vinext;
     // Play the race in real time so the counters are honest stopwatches
     // (linear, no easing — a second on screen is a build second). Capped so
     // a slow ingest or a heavier benchmark suite can't drag the animation
     // past attention span; beyond the cap it compresses proportionally.
-    const duration = Math.min(nextDuration, 5) * 1000;
+    const duration = getRaceFrame(this.race, 0).durationMs;
 
     const step = (now: number) => {
       if (this._dead) return;
       const time = Math.min(1, (now - start) / duration);
-      const nextTime = time * nextDuration;
-      const vinextTime = Math.min(vinextDuration, nextTime);
+      const frame = getRaceFrame(this.race, time);
       if (this.vFill) {
-        this.vFill.style.transform = `scaleX(${(vinextTime / nextDuration).toFixed(4)})`;
+        this.vFill.style.transform = `scaleX(${frame.vinextFill.toFixed(4)})`;
       }
       if (this.nFill) {
-        this.nFill.style.transform = `scaleX(${(nextTime / nextDuration).toFixed(4)})`;
+        this.nFill.style.transform = `scaleX(${frame.nextjsFill.toFixed(4)})`;
       }
-      if (this.vTime) this.vTime.textContent = `${vinextTime.toFixed(1)}s`;
-      if (this.nTime) this.nTime.textContent = `${nextTime.toFixed(1)}s`;
-      if (this.vDone) this.vDone.style.opacity = nextTime >= vinextDuration ? "1" : "0";
+      if (this.vTime) this.vTime.textContent = `${frame.vinextTime.toFixed(1)}s`;
+      if (this.nTime) this.nTime.textContent = `${frame.nextjsTime.toFixed(1)}s`;
+      if (this.vDone) this.vDone.style.opacity = frame.vinextDone ? "1" : "0";
       if (time < 1) {
         requestAnimationFrame(step);
       } else if (this.payoff) {

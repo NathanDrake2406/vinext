@@ -75,7 +75,7 @@ export async function getLandingStats(): Promise<LandingStats> {
 }
 
 /** "2×" for 2.04, "1.8×" for 1.83 — near-integer multiples read cleaner rounded. */
-export function formatMultiple(ratio: number): string {
+function formatMultiple(ratio: number): string {
   const rounded = Math.round(ratio * 10) / 10;
   return Number.isInteger(rounded) ? `${rounded}×` : `${rounded.toFixed(1)}×`;
 }
@@ -89,7 +89,7 @@ export function formatKb(bytes: number): string {
  * never disagree with the measured ordering. The numbers are live: a
  * regression must read "1.2× slower", not "0.8× faster".
  */
-export type Verdict = "better" | "worse" | "par";
+type Verdict = "better" | "worse" | "par";
 
 export type BuildComparison = {
   verdict: Verdict;
