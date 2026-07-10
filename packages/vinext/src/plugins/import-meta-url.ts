@@ -27,7 +27,6 @@ import {
   type AstRange,
   type AstRecord,
 } from "./ast-utils.js";
-import { createTransformCache } from "./transform-cache.js";
 
 type ImportMetaUrlEnvironment = "client" | "server";
 
@@ -40,6 +39,13 @@ type RootPaths = {
   root: string;
   canonicalRoot: string;
   excludedRelativePrefixes: string[];
+};
+
+type ImportMetaUrlCacheEntry = {
+  source: string;
+  canonicalRoot: string;
+  canonicalId: string;
+  results: Map<ImportMetaUrlEnvironment, { value: RewriteResult | null }>;
 };
 
 const TRANSFORMABLE_SCRIPT_EXTENSIONS = new Set([
@@ -55,13 +61,10 @@ const TRANSFORMABLE_SCRIPT_EXTENSIONS = new Set([
 export function createImportMetaUrlPlugin(options: { getRoot: () => string | undefined }): Plugin {
   let rootPaths: RootPaths | undefined;
   let outputDirs: string[] = [];
-  // The rewrite depends on the environment kind (client vs server replacement),
-  // the canonical module path, and, for client, on the root the /ROOT-relative
-  // path is computed against — all go into the variant. Eligibility
-  // (node_modules, extension, output-dir exclusion) stays outside the cache
-  // because it reads mutable rootPaths state; only the pure rewrite of an
-  // already-eligible module is memoized.
-  const cached = createTransformCache<string, RewriteResult | null>();
+  // Keep path dependencies as separate equality fields so cache hits avoid
+  // allocating and hashing a composite string containing both full paths.
+  // Replacing the entry also bounds each raw id to one source/path combination.
+  const transformCache = new Map<string, ImportMetaUrlCacheEntry>();
 
   function getRootPaths(): RootPaths | undefined {
     const root = options.getRoot();
@@ -97,10 +100,28 @@ export function createImportMetaUrlPlugin(options: { getRoot: () => string | und
 
         const environment: ImportMetaUrlEnvironment =
           this.environment?.name === "client" ? "client" : "server";
-        const variant = `${environment}\0${paths.canonicalRoot}\0${canonicalId}`;
-        return cached(id, code, variant, () =>
-          rewriteCanonicalSourceIdentity(code, canonicalId, paths, environment),
-        );
+        let entry = transformCache.get(id);
+        if (
+          !entry ||
+          entry.source !== code ||
+          entry.canonicalRoot !== paths.canonicalRoot ||
+          entry.canonicalId !== canonicalId
+        ) {
+          entry = {
+            source: code,
+            canonicalRoot: paths.canonicalRoot,
+            canonicalId,
+            results: new Map(),
+          };
+          transformCache.set(id, entry);
+        }
+
+        const cached = entry.results.get(environment);
+        if (cached) return cached.value;
+
+        const value = rewriteCanonicalSourceIdentity(code, canonicalId, paths, environment);
+        entry.results.set(environment, { value });
+        return value;
       },
     },
   };
