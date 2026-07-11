@@ -159,7 +159,8 @@ h2 {
   background: var(--surface-2) !important;
 }
 [data-copy]::after,
-.theme-toggle::after {
+.theme-toggle::after,
+.chrome-link::after {
   content: "";
   position: absolute;
   inset: -8px;
@@ -429,6 +430,7 @@ button:active {
   gap: 6px;
 }
 .chrome-link {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;

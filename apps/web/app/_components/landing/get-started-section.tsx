@@ -129,7 +129,6 @@ export function GetStartedSection() {
             className="text-link"
             data-copy="npx vinext init"
             aria-label="Copy command"
-            aria-live="polite"
             style={
               {
                 flex: "none",
