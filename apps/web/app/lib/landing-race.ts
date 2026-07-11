@@ -17,7 +17,12 @@ export function getRaceFrame(race: RaceSeconds, progress: number): RaceFrame {
   const nextjsTime = Math.min(race.nextjs, simTime);
 
   return {
-    durationMs: Math.min(longest, 5) * 1000,
+    // Real time, not sped up: the fallback build numbers (3.1s / 6.2s) and any
+    // realistic live measurement play at true 1:1 wall-clock speed. The cap is
+    // a defensive ceiling against a bad/outlier data point, not a UX trim —
+    // it sat at 5s before, which clipped the shipped 6.2s fallback and made
+    // the finish line arrive a real second before the number it displayed.
+    durationMs: Math.min(longest, 10) * 1000,
     vinextTime,
     nextjsTime,
     vinextFill: vinextTime / longest,

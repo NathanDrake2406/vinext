@@ -6,7 +6,7 @@ describe("landing build race", () => {
     const halfway = getRaceFrame({ vinext: 6, nextjs: 3 }, 0.5);
 
     expect(halfway).toEqual({
-      durationMs: 5_000,
+      durationMs: 6_000,
       vinextTime: 3,
       nextjsTime: 3,
       vinextFill: 0.5,
@@ -16,7 +16,7 @@ describe("landing build race", () => {
     });
 
     expect(getRaceFrame({ vinext: 6, nextjs: 3 }, 1)).toEqual({
-      durationMs: 5_000,
+      durationMs: 6_000,
       vinextTime: 6,
       nextjsTime: 3,
       vinextFill: 1,
@@ -24,6 +24,16 @@ describe("landing build race", () => {
       vinextDone: true,
       nextjsDone: true,
     });
+  });
+
+  it("plays at true 1:1 wall-clock speed for the shipped fallback times", () => {
+    // Regression guard: 6.2s used to get clipped by the old 5s cap, so the
+    // finish line landed a full second before the "6.2s" it was displaying.
+    expect(getRaceFrame({ vinext: 3.1, nextjs: 6.2 }, 1).durationMs).toBe(6_200);
+  });
+
+  it("only compresses playback once a build time clears the defensive ceiling", () => {
+    expect(getRaceFrame({ vinext: 4, nextjs: 12 }, 1).durationMs).toBe(10_000);
   });
 
   it("finishes equal builds together with equal full-width bars", () => {
