@@ -336,7 +336,7 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
                 } satisfies LandingStyle
               }
             >
-              {bundleStatCaption} · {formatKb(stats.bundleBytes.nextjs)} → 
+              {bundleStatCaption} · {formatKb(stats.bundleBytes.nextjs)} →{"\u00a0"}
               {formatKb(stats.bundleBytes.vinext)} gzipped
             </span>
           </div>

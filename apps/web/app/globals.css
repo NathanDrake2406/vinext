@@ -310,7 +310,12 @@ button:active {
    table at every width — including above 1180px, where the container starts
    centering and the table's right edge outruns any `vw` offset. */
 .deploy-inner {
-  --globe-column: 576px; /* 32px container padding + 520px table + 24px gutter */
+  /* 32px container padding + 520px table + 24px gutter puts the box edge at
+     576px, but globe.svg carries ~96px of transparent left padding at render
+     size, so the box starts 480px in for the *dots* to sit one gutter off the
+     table. Below 940px the globe is display:none, so the tightest live case
+     (940px, uncentered container) still clears the table by ~100px. */
+  --globe-column: 480px;
   display: flex;
   flex-direction: column;
 }
@@ -581,13 +586,37 @@ button:active {
   aspect-ratio: 1140/764;
   opacity: 0.92;
 }
-/* The dot fill (#f8902a) is baked into globe.svg and loads via <img>, so the
-   only recolor lever is a filter. On the warm paper bg the raw orange at low
-   opacity reads as a washed-out stain; darken it toward burnt orange and keep
-   the opacity high enough that the dot texture stays legible. */
+/* Light-mode form shading. A single filter recolors every dot to the same
+   value, which flattens the sphere into a map cutout — on dark ground the
+   baked glow supplied the light-to-shade ramp, on paper there is none. Build
+   the ramp in two layers instead: the base <img> is the lit pass (warm,
+   saturated), and ::after stacks a darkened desaturated copy of the same art,
+   masked so it only shows away from the light source at 63%/108% (the same
+   point the dark theme's glow radiates from). Warm advances, cool recedes:
+   the value+saturation falloff is what makes it read as a lit sphere.
+   The mask is a generated gradient — no image fetch, so the CORS/file://
+   trap documented above for url() masks does not apply. */
 [data-theme="light"] .globe-art {
-  opacity: 0.8;
-  filter: brightness(0.62) saturate(1.25);
+  opacity: 1;
+  filter: brightness(0.85) saturate(1.2);
+}
+[data-theme="light"] [data-el="globe"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  aspect-ratio: 1140/764;
+  background: url("/img/globe.svg") center / 100% 100% no-repeat;
+  filter: brightness(0.45) saturate(0.65);
+  pointer-events: none;
+  -webkit-mask-image: radial-gradient(circle at 63% 108%, transparent 24%, #000 58%);
+  mask-image: radial-gradient(circle at 63% 108%, transparent 24%, #000 58%);
+}
+/* The shade copy is painted after the pin markers in the same stacking
+   context; lift the pins back above it. */
+[data-theme="light"] [data-el="globe"] [data-gpin] {
+  z-index: 1;
 }
 /* Soft atmosphere behind the dots (the raster export's baked rim was the janky
      part, not the glow itself). Bottom mask fades it out before the section's
@@ -610,8 +639,26 @@ button:active {
   mask: linear-gradient(180deg, #000 74%, transparent 98%);
   -webkit-mask: linear-gradient(180deg, #000 74%, transparent 98%);
 }
+/* Additive glow needs a dark ground — on paper it can only wash toward white,
+   so the dark theme's halo read as a peach stain. Multiply instead: a warm
+   apricot wash that *darkens* the paper around the dots (outer layer) with a
+   deeper terracotta core (inner layer), which is how atmosphere reads on a
+   light ground. The box is oversized so the wash halos the whole globe, and
+   the mask must finish before the section's overflow:hidden edge (the box
+   bottom crosses it) or the wash cuts off in a straight seam. */
 [data-theme="light"] [data-el="globe"]::before {
-  opacity: 0.4;
+  mix-blend-mode: multiply;
+  inset: -22% -18%;
+  background:
+    radial-gradient(
+      circle at 63% 92%,
+      rgba(233, 150, 72, 0.34),
+      rgba(236, 168, 100, 0.16) 40%,
+      transparent 66%
+    ),
+    radial-gradient(circle at 63% 92%, rgba(166, 80, 8, 0.22), transparent 46%);
+  mask: linear-gradient(180deg, #000 46%, transparent 72%);
+  -webkit-mask: linear-gradient(180deg, #000 46%, transparent 72%);
 }
 /* Aurora blobs are tuned for dark; on paper they read as stains at full strength */
 [data-theme="light"] [data-el="heroBg"] > div:nth-child(-n + 3) {
