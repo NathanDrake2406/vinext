@@ -87,7 +87,7 @@ export async function deployWithCdnWarmup(
     paths,
     target,
     upload,
-    currentVersions[0].versionId,
+    stagingTraffic[0].versionId,
     stagingTraffic,
     options,
   );
@@ -275,6 +275,10 @@ function getZeroPercentStagingTraffic(
   versionId: string,
 ): WranglerVersionTraffic[] | null {
   if (current.length !== 1 || current[0].percentage !== 100) return null;
+  // If the upload ever returns the same version ID already at 100% traffic,
+  // staging it would produce a duplicate-version split (v@100% v@0%) — fail
+  // closed instead of handing wrangler a nonsensical traffic split.
+  if (current[0].versionId === versionId) return null;
   return [current[0], { versionId, percentage: 0 }];
 }
 
