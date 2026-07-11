@@ -9,6 +9,13 @@ import {
   type RefObject,
 } from "react";
 import { getRaceFrame, type RaceFrame, type RaceSeconds } from "../lib/landing-race";
+import {
+  getLandingPlaybackStorage,
+  hasLandingSequencePlayed,
+  LANDING_RACE_PLAYED_KEY,
+  LANDING_SWAP_PLAYED_KEY,
+  markLandingSequencePlayed,
+} from "../lib/landing-playback";
 
 type RootRef = RefObject<HTMLDivElement | null>;
 type CopyStatus = "copied" | "error";
@@ -313,6 +320,7 @@ function useEngineSwapMotion(rootRef: RootRef, reducedMotion: boolean) {
     const plateGhost = findElement(root, "plateGhost");
     const plateSub = findElement(root, "plateSub");
     const connector = findElement(root, "conn");
+    const playbackStorage = getLandingPlaybackStorage();
 
     const applySwap = (progress: number) => {
       if (nextLabel) nextLabel.style.opacity = String(1 - Math.min(1, progress * 1.25));
@@ -338,7 +346,8 @@ function useEngineSwapMotion(rootRef: RootRef, reducedMotion: boolean) {
       if (plateGhost) plateGhost.textContent = "Vite";
       if (connector) connector.style.opacity = "1";
     };
-    if (reducedMotion) {
+    const played = hasLandingSequencePlayed(playbackStorage, LANDING_SWAP_PLAYED_KEY);
+    if (reducedMotion || played) {
       finish();
       return;
     }
@@ -378,6 +387,7 @@ function useEngineSwapMotion(rootRef: RootRef, reducedMotion: boolean) {
     const run = () => {
       if (started) return;
       started = true;
+      markLandingSequencePlayed(playbackStorage, LANDING_SWAP_PLAYED_KEY);
       plate?.classList.add("is-swapped");
       const start = performance.now();
       const step = (now: number) => {
@@ -418,7 +428,9 @@ function useRaceMotion(rootRef: RootRef, race: RaceSeconds, reducedMotion: boole
     const payoff = findElement(root, "payoff");
     const elements = findRaceElements(root);
     const values = { vinext: vinextSeconds, nextjs: nextjsSeconds };
-    if (reducedMotion) {
+    const playbackStorage = getLandingPlaybackStorage();
+    const played = hasLandingSequencePlayed(playbackStorage, LANDING_RACE_PLAYED_KEY);
+    if (reducedMotion || played) {
       const finalFrame = getRaceFrame(values, 1);
       if (elements.vinextFill)
         elements.vinextFill.style.transform = `scaleX(${finalFrame.vinextFill})`;
@@ -444,6 +456,7 @@ function useRaceMotion(rootRef: RootRef, race: RaceSeconds, reducedMotion: boole
     const run = () => {
       if (started) return;
       started = true;
+      markLandingSequencePlayed(playbackStorage, LANDING_RACE_PLAYED_KEY);
       const start = performance.now();
       const duration = getRaceFrame(values, 0).durationMs;
       const longest = Math.max(values.vinext, values.nextjs);
