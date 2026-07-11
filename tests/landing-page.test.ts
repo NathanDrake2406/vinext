@@ -187,7 +187,7 @@ describe("landing page claims", () => {
 
     expect(html).toContain("88% deploy-suite test pass rate");
     expect(html).toContain("live deploy-suite data unavailable");
-    expect(html).toContain("33-route benchmark snapshot.");
+    expect(html).toContain("33-route dynamic-render benchmark · reference snapshot");
     expect(html).toContain("live benchmark data unavailable");
     expect(html).not.toContain("2× faster in our 33-route benchmark.");
   });
