@@ -14,15 +14,20 @@ const deployTargets = [
 
 function DeployIcon({ icon }: { icon: DeployIcon }) {
   if (icon === "cloudflare" || icon === "netlify" || icon === "node") {
-    const size = icon === "netlify" ? 14 : 15;
+    const em = icon === "netlify" ? "1.3em" : "1.4em";
     return (
       <img
         src={`/img/brand-${icon === "node" ? "nodedotjs" : icon}.svg`}
         alt=""
         aria-hidden="true"
-        width={size}
-        height={size}
-        style={{ marginRight: "11px", verticalAlign: "-2px" } satisfies LandingStyle}
+        style={
+          {
+            width: em,
+            height: em,
+            marginRight: "0.8em",
+            verticalAlign: "-0.3em",
+          } satisfies LandingStyle
+        }
       />
     );
   }
@@ -32,16 +37,19 @@ function DeployIcon({ icon }: { icon: DeployIcon }) {
         aria-hidden="true"
         style={
           {
-            display: "inline-block",
-            width: "15px",
-            marginRight: "11px",
-            fontWeight: "600",
-            textAlign: "center",
-            color: "#ff9900",
+            display: "inline-flex",
+            width: "1.4em",
+            marginRight: "0.8em",
+            justifyContent: "center",
+            alignItems: "baseline",
           } satisfies LandingStyle
         }
       >
-        λ
+        <span
+          style={{ fontSize: "1.3em", fontWeight: "600", color: "#ff9900" } satisfies LandingStyle}
+        >
+          λ
+        </span>
       </span>
     );
   }
@@ -49,13 +57,12 @@ function DeployIcon({ icon }: { icon: DeployIcon }) {
     <svg
       aria-hidden="true"
       viewBox="0 0 24 24"
-      width={icon === "vercel" ? 13 : 14}
-      height={icon === "vercel" ? 13 : 14}
-      fill="currentColor"
       style={
         {
-          marginRight: "11px",
-          verticalAlign: icon === "vercel" ? "-1px" : "-2px",
+          width: icon === "vercel" ? "1.25em" : "1.3em",
+          height: icon === "vercel" ? "1.25em" : "1.3em",
+          marginRight: "0.8em",
+          verticalAlign: icon === "vercel" ? "-0.22em" : "-0.3em",
         } satisfies LandingStyle
       }
     >

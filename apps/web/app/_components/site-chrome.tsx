@@ -62,15 +62,15 @@ export function SiteChrome() {
       </Link>
       <div className="site-actions">
         <Link className="chrome-link subtle-link" href="/benchmarks">
-          <GaugeIcon size={13} aria-hidden="true" />
+          <GaugeIcon size="1.2em" aria-hidden="true" />
           <span className="chrome-label">Benchmarks</span>
         </Link>
         <Link className="chrome-link subtle-link" href="/compatibility">
-          <GraphIcon size={13} aria-hidden="true" />
+          <GraphIcon size="1.2em" aria-hidden="true" />
           <span className="chrome-label">Compatibility</span>
         </Link>
         <a className="chrome-link subtle-link" href="https://github.com/cloudflare/vinext">
-          <GithubLogoIcon size={13} aria-hidden="true" />
+          <GithubLogoIcon size="1.2em" aria-hidden="true" />
           <span className="chrome-label">GitHub</span>
         </a>
         <button
