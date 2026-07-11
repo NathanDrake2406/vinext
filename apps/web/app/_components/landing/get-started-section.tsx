@@ -1,5 +1,19 @@
 import type { LandingStyle } from "./landing-styles";
 
+/* Mirrors the flow the repo itself recommends (README quick start and the
+   bundled migrate-to-vinext Agent Skill), so the prompt never promises
+   behavior the tooling does not have. Update it alongside those docs. */
+const agentPrompt = `Migrate this Next.js app to vinext (Next.js on Vite: vinext.dev).
+
+Preferred path: run \`npx skills add cloudflare/vinext\` to install the official migrate-to-vinext Agent Skill, then follow it. If the skills CLI is unavailable, migrate directly:
+
+1. Run \`npx vinext check\` and read the scored report. Stop and show me anything it flags as blocking before changing the project.
+2. Run \`npx vinext init\`. It is non-destructive: it installs vinext and Vite tooling, adds "type": "module", renames CJS config files to .cjs, adds dev:vinext / build:vinext / start:vinext scripts, and generates vite.config.ts. It leaves next.config.js and source files untouched, and the existing next scripts keep working.
+3. Run the dev:vinext script and fix anything it errors on.
+4. Run build:vinext, then start:vinext. Verify the key routes render, then run the test suite.
+
+Feature status: vinext.dev/compatibility. If something behaves differently than it did under Next.js, treat it as a vinext bug and file it at github.com/cloudflare/vinext/issues.`;
+
 export function GetStartedSection() {
   return (
     <section
@@ -129,6 +143,109 @@ export function GetStartedSection() {
             className="text-link"
             data-copy="npx vinext init"
             aria-label="Copy command"
+            style={
+              {
+                flex: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                minWidth: "80px",
+                fontFamily: "'JetBrains Mono',monospace",
+                color: "var(--mute)",
+                fontSize: "10.5px",
+                letterSpacing: ".1em",
+                textTransform: "uppercase",
+                padding: "8px 12px",
+                borderRadius: "8px",
+                border: "1px solid var(--line-soft)",
+                background: "none",
+                cursor: "pointer",
+                transition: "color .2s,border-color .2s,background .2s",
+              } satisfies LandingStyle
+            }
+          >
+            copy
+          </button>
+        </div>
+
+        {/* Agent path, as a twin of the command box above: same shell, but
+            the sigil is a sparkle and the payload is the migration prompt.
+            The parallel structure is what explains it — command for you,
+            prompt for your agent — so the full text never has to render.
+            Truncation is fine: the copy payload is the data-copy attribute. */}
+        <div
+          data-rv=""
+          style={
+            {
+              opacity: "0",
+              transform: "translateY(24px)",
+              transition: "opacity var(--t),transform var(--t)",
+              transitionDelay: ".18s",
+              margin: "12px 0 0 16px",
+              maxWidth: "460px",
+              fontFamily: "'JetBrains Mono',monospace",
+              fontSize: "11px",
+              color: "var(--mute)",
+            } satisfies LandingStyle
+          }
+        >
+          or
+        </div>
+
+        <div
+          data-rv=""
+          style={
+            {
+              opacity: "0",
+              transform: "translateY(24px)",
+              transition: "opacity var(--t),transform var(--t)",
+              transitionDelay: ".2s",
+              marginTop: "12px",
+              display: "flex",
+              alignItems: "center",
+              gap: "16px",
+              maxWidth: "460px",
+              padding: "16px",
+              border: "1px solid var(--line)",
+              borderRadius: "12px",
+              background: "var(--surface)",
+            } satisfies LandingStyle
+          }
+        >
+          <span
+            aria-hidden="true"
+            style={
+              {
+                flex: "none",
+                fontFamily: "'JetBrains Mono',monospace",
+                fontSize: "14px",
+                color: "var(--orange-soft)",
+              } satisfies LandingStyle
+            }
+          >
+            ✦
+          </span>
+          <span
+            style={
+              {
+                flex: "1",
+                minWidth: "0",
+                fontFamily: "'JetBrains Mono',monospace",
+                fontSize: "14px",
+                letterSpacing: "-.01em",
+                color: "var(--ink)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              } satisfies LandingStyle
+            }
+          >
+            prompt for your coding agent
+          </span>
+          <button
+            className="text-link"
+            data-copy={agentPrompt}
+            aria-label="Copy migration prompt for your coding agent"
             style={
               {
                 flex: "none",

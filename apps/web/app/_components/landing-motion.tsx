@@ -40,8 +40,6 @@ type LandingElementName =
   | "plateGhost"
   | "plateSub"
   | "raceOuter"
-  | "ready"
-  | "scrollHint"
   | "swapOuter"
   | "vinextDone"
   | "vinextFill"
@@ -147,11 +145,9 @@ function useIntroAndRevealMotion(rootRef: RootRef, reducedMotion: boolean) {
 
     const intro = [...root.querySelectorAll<HTMLElement>("[data-intro]")];
     const reveals = [...root.querySelectorAll<HTMLElement>("[data-rv]")];
-    const ready = findElement(root, "ready");
     if (reducedMotion) {
       intro.forEach(reveal);
       reveals.forEach(reveal);
-      if (ready) ready.style.opacity = "1";
       return;
     }
 
@@ -159,9 +155,6 @@ function useIntroAndRevealMotion(rootRef: RootRef, reducedMotion: boolean) {
     const outerFrame = requestAnimationFrame(() => {
       innerFrame = requestAnimationFrame(() => intro.forEach(reveal));
     });
-    const readyTimer = window.setTimeout(() => {
-      if (ready) ready.style.opacity = "1";
-    }, 1100);
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -180,7 +173,6 @@ function useIntroAndRevealMotion(rootRef: RootRef, reducedMotion: boolean) {
     return () => {
       cancelAnimationFrame(outerFrame);
       cancelAnimationFrame(innerFrame);
-      clearTimeout(readyTimer);
       observer.disconnect();
     };
   }, [reducedMotion, rootRef]);
@@ -202,7 +194,6 @@ function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
     const lineTwo = findElement(root, "l2");
     const heroTop = findElement(root, "heroTop");
     const heroBottom = findElement(root, "heroBottom");
-    const scrollHint = findElement(root, "scrollHint");
     const marquee = findElement(root, "mq");
     const globe = findElement(root, "globe");
     const deployGrid = findElement(root, "deployGrid");
@@ -255,7 +246,6 @@ function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
           heroBottom.style.opacity = fadeOpacity;
           heroBottom.style.transform = `translate3d(0,${fade * 70}px,0)`;
         }
-        if (scrollHint) scrollHint.style.opacity = String(1 - clamp(heroProgress * 4));
       }
 
       if (marquee) {
@@ -569,6 +559,19 @@ function useCopyCommand(rootRef: RootRef) {
     if (!root) return;
 
     let resetTimer: number | null = null;
+    // Blur masks the hard textContent swap so the label reads as dissolving
+    // into the next state instead of flickering. WAAPI so the interrupted
+    // case (rapid re-clicks) retargets instead of restarting from keyframe 0.
+    const dissolve = (button: HTMLButtonElement) => {
+      if (window.matchMedia(reducedMotionQuery).matches) return;
+      button.animate(
+        [
+          { filter: "blur(3px)", opacity: 0.3 },
+          { filter: "blur(0px)", opacity: 1 },
+        ],
+        { duration: 260, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
+      );
+    };
     const setStatus = (
       button: HTMLButtonElement,
       message: string,
@@ -576,13 +579,20 @@ function useCopyCommand(rootRef: RootRef) {
       label: string,
     ) => {
       if (resetTimer !== null) clearTimeout(resetTimer);
+      // Buttons carry different idle labels ("copy", "copy prompt"), so
+      // capture whatever this one showed before the first status swap.
+      const idleText = (button.dataset.copyIdleText ??= button.textContent ?? "copy");
+      const idleLabel = (button.dataset.copyIdleLabel ??=
+        button.getAttribute("aria-label") ?? "Copy command");
       button.textContent = message;
       button.setAttribute("data-copy-state", state);
       button.setAttribute("aria-label", label);
+      dissolve(button);
       resetTimer = window.setTimeout(() => {
-        button.textContent = "copy";
+        button.textContent = idleText;
         button.removeAttribute("data-copy-state");
-        button.setAttribute("aria-label", "Copy command");
+        button.setAttribute("aria-label", idleLabel);
+        dissolve(button);
       }, 1500);
     };
     const onClick = (event: MouseEvent) => {
