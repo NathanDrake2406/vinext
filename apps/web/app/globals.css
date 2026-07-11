@@ -472,17 +472,33 @@ button:active {
     transform: translateY(-1px);
   }
 }
+/* Cross-fade + rotate, not a display swap: display isn't animatable, and a
+   hard cut here stood out next to the color/lift transition on the rest of
+   the toggle. transform-box scopes the rotation to each icon's own box
+   instead of the shared 24x24 viewBox origin. */
+.theme-toggle .sun,
+.theme-toggle .moon {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    opacity 0.25s var(--ease-out),
+    transform 0.25s var(--ease-out);
+}
 .theme-toggle .sun {
-  display: none;
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.6);
 }
 .theme-toggle .moon {
-  display: block;
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
 }
 [data-theme="light"] .theme-toggle .sun {
-  display: block;
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
 }
 [data-theme="light"] .theme-toggle .moon {
-  display: none;
+  opacity: 0;
+  transform: rotate(90deg) scale(0.6);
 }
 @media (prefers-reduced-motion: reduce) {
   .theme-toggle {
