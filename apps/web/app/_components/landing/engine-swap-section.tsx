@@ -97,7 +97,40 @@ export function EngineSwapSection() {
             >
               @vitejs/plugin-rsc
             </code>
-            . Run vinext check to flag known behavior gaps before migrating.
+            .
+          </p>
+          <p
+            data-rv=""
+            style={
+              {
+                opacity: "0",
+                transform: "translateY(24px)",
+                transition: "opacity var(--t),transform var(--t)",
+                transitionDelay: ".12s",
+                margin: "12px auto 0",
+                maxWidth: "56ch",
+                fontSize: "16px",
+                lineHeight: "1.65",
+                color: "var(--ink-sub)",
+              } satisfies LandingStyle
+            }
+          >
+            Run{" "}
+            <code
+              style={
+                {
+                  fontFamily: "'JetBrains Mono',monospace",
+                  fontSize: ".85em",
+                  background: "rgba(var(--ink-rgb),.06)",
+                  padding: "1px 6px",
+                  borderRadius: "5px",
+                  color: "var(--orange-soft)",
+                } satisfies LandingStyle
+              }
+            >
+              npx vinext check
+            </code>{" "}
+            to flag known behavior gaps before migrating.
           </p>
 
           <div

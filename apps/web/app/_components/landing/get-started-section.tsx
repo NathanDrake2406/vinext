@@ -162,79 +162,38 @@ export function GetStartedSection() {
               opacity: "0",
               transform: "translateY(24px)",
               transition: "opacity var(--t),transform var(--t)",
-              position: "relative",
-              overflow: "hidden",
-              marginTop: "24px",
-              // Same 460px rail as the command box above so both cards
-              // share edges at every viewport instead of this one
-              // spanning the full container.
+              marginTop: "32px",
               maxWidth: "460px",
-              border: "1px solid var(--line)",
-              borderRadius: "18px",
-              padding: "32px",
-              background:
-                "radial-gradient(130% 200% at 100% 0,rgba(var(--orange-rgb),.1),transparent 55%),var(--surface)",
             } satisfies LandingStyle
           }
         >
-          <div style={{ minWidth: "0" } satisfies LandingStyle}>
-            <p
-              style={
-                {
-                  margin: "0",
-                  fontFamily: "'Geist',system-ui,sans-serif",
-                  fontWeight: "700",
-                  fontSize: "clamp(22px,2.8vw,32px)",
-                  lineHeight: "1.25",
-                  letterSpacing: "-.02em",
-                  maxWidth: "22ch",
-                  color: "var(--ink)",
-                } satisfies LandingStyle
-              }
-            >
-              Try it on a branch. If something breaks, open an issue.
-            </p>
-            <div
-              style={
-                {
-                  marginTop: "24px",
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "24px",
-                  fontFamily: "'JetBrains Mono',monospace",
-                  fontSize: "13px",
-                } satisfies LandingStyle
-              }
-            >
-              <a
-                className="text-link"
-                href="https://github.com/cloudflare/vinext#quick-start"
-                style={{ textDecoration: "none" } satisfies LandingStyle}
-              >
-                Quick start
-              </a>
-              <a
-                className="text-link"
-                href="https://github.com/cloudflare/vinext"
-                style={{ textDecoration: "none" } satisfies LandingStyle}
-              >
-                GitHub
-              </a>
-              <a
-                className="subtle-link"
-                href="https://discord.cloudflare.com/"
-                style={
-                  {
-                    color: "var(--sub)",
-                    textDecoration: "none",
-                    transition: "color .2s",
-                  } satisfies LandingStyle
-                }
-              >
-                Discord
-              </a>
-            </div>
-          </div>
+          <p
+            style={
+              {
+                margin: "0",
+                fontSize: "16.5px",
+                lineHeight: "1.65",
+                color: "var(--ink-sub)",
+              } satisfies LandingStyle
+            }
+          >
+            Try it on a branch. If something breaks, open an issue.
+          </p>
+          <a
+            className="text-link"
+            href="https://github.com/cloudflare/vinext#quick-start"
+            style={
+              {
+                display: "inline-block",
+                marginTop: "16px",
+                fontFamily: "'JetBrains Mono',monospace",
+                fontSize: "13px",
+                textDecoration: "none",
+              } satisfies LandingStyle
+            }
+          >
+            Quick start
+          </a>
         </div>
       </div>
     </section>

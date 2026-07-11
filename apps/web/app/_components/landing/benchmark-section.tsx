@@ -21,7 +21,7 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
   const vinextWins = stats.buildSeconds.vinext < stats.buildSeconds.nextjs;
   const nextjsWins = stats.buildSeconds.nextjs < stats.buildSeconds.vinext;
   const buildHeadline = !isLive
-    ? "33-route benchmark snapshot."
+    ? "Built for speed."
     : build.verdict === "better"
       ? `${build.multiple} faster in our 33-route benchmark.`
       : build.verdict === "worse"
