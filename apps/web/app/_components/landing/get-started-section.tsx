@@ -5,7 +5,7 @@ export function GetStartedSection() {
     <section
       id="start"
       data-screen-label="Get started"
-      style={{ position: "relative", zIndex: "2", padding: "64px 0 96px" } satisfies LandingStyle}
+      style={{ position: "relative", zIndex: "2", padding: "96px 0 120px" } satisfies LandingStyle}
     >
       <div
         style={{ maxWidth: "1180px", margin: "0 auto", padding: "0 32px" } satisfies LandingStyle}

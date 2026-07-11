@@ -50,7 +50,7 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
       id="speed"
       data-el="raceOuter"
       data-screen-label="Speed / benchmark race"
-      style={{ position: "relative", zIndex: "2", padding: "64px 0" } satisfies LandingStyle}
+      style={{ position: "relative", zIndex: "2", padding: "96px 0" } satisfies LandingStyle}
     >
       <div
         style={{ maxWidth: "1180px", margin: "0 auto", padding: "0 32px" } satisfies LandingStyle}

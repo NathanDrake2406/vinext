@@ -116,31 +116,43 @@ function CompatibilityGroupCard({ group, index }: { group: CompatibilityGroup; i
           transform: "translateY(24px)",
           transition: "opacity var(--t),transform var(--t)",
           transitionDelay: index === 0 ? undefined : ".08s",
-          border: "1px solid var(--line)",
-          borderRadius: "16px",
-          background: "var(--surface)",
-          overflow: "hidden",
+          padding: "5px",
+          border: "1px solid var(--line-soft)",
+          borderRadius: "20px",
+          background: "rgba(var(--ink-rgb),.02)",
         } satisfies LandingStyle
       }
     >
       <div
         style={
           {
-            padding: "16px 24px",
-            fontFamily: "'JetBrains Mono',monospace",
-            fontSize: "11px",
-            color: "var(--mute)",
-            letterSpacing: ".06em",
-            textTransform: "uppercase",
-            borderBottom: "1px solid var(--line-soft)",
+            border: "1px solid var(--line)",
+            borderRadius: "15px",
+            background: "var(--surface)",
+            boxShadow: "inset 0 1px 0 rgba(var(--ink-rgb),.05)",
+            overflow: "hidden",
           } satisfies LandingStyle
         }
       >
-        {group.title}
+        <div
+          style={
+            {
+              padding: "16px 24px",
+              fontFamily: "'JetBrains Mono',monospace",
+              fontSize: "11px",
+              color: "var(--mute)",
+              letterSpacing: ".06em",
+              textTransform: "uppercase",
+              borderBottom: "1px solid var(--line-soft)",
+            } satisfies LandingStyle
+          }
+        >
+          {group.title}
+        </div>
+        {group.rows.map((row, rowIndex) => (
+          <CompatibilityRow key={row.label} row={row} isLast={rowIndex === group.rows.length - 1} />
+        ))}
       </div>
-      {group.rows.map((row, rowIndex) => (
-        <CompatibilityRow key={row.label} row={row} isLast={rowIndex === group.rows.length - 1} />
-      ))}
     </div>
   );
 }
@@ -156,7 +168,7 @@ export function CompatibilitySection({ stats }: { stats: LandingStats }) {
     <section
       id="compat"
       data-screen-label="Compatibility"
-      style={{ position: "relative", zIndex: "2", padding: "64px 0" } satisfies LandingStyle}
+      style={{ position: "relative", zIndex: "2", padding: "96px 0" } satisfies LandingStyle}
     >
       <div
         style={{ maxWidth: "1180px", margin: "0 auto", padding: "0 32px" } satisfies LandingStyle}

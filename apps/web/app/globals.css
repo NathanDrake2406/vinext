@@ -328,7 +328,7 @@ button:active {
   --aur2-rgb: 96, 130, 184;
   --next-bar-1: #3a4150;
   --next-bar-2: #4a5261;
-  --pin-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.6);
+  --pin-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.22);
   --orange-glow: rgba(var(--orange-rgb), 0.5);
   --orange-glow-hover: rgba(var(--orange-rgb), 0.6);
   --on-accent: #0a0b0d;

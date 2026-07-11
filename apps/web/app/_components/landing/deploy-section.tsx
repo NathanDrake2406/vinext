@@ -124,7 +124,7 @@ export function DeploySection() {
         {
           position: "relative",
           zIndex: "2",
-          padding: "64px 0",
+          padding: "96px 0",
           overflow: "hidden",
         } satisfies LandingStyle
       }
