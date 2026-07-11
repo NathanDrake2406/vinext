@@ -145,6 +145,16 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+/** Error text for a response that didn't prove it came from the expected Worker version. */
+function describeVersionMismatch(
+  expectedVersionId: string,
+  actualVersionId: string | null,
+): string {
+  return actualVersionId
+    ? `expected Worker version ${expectedVersionId}, received ${actualVersionId}`
+    : `expected Worker version ${expectedVersionId}, but the response did not include ${VINEXT_WORKER_VERSION_HEADER}`;
+}
+
 async function fetchWithTimeout(
   fetchImpl: typeof fetch,
   url: URL,
@@ -201,9 +211,7 @@ async function warmOnePath(
       if (options.expectedVersionId) {
         const actualVersionId = response.headers.get(VINEXT_WORKER_VERSION_HEADER);
         if (actualVersionId !== options.expectedVersionId) {
-          lastError = actualVersionId
-            ? `expected Worker version ${options.expectedVersionId}, received ${actualVersionId}`
-            : `expected Worker version ${options.expectedVersionId}, but the response did not include ${VINEXT_WORKER_VERSION_HEADER}`;
+          lastError = describeVersionMismatch(options.expectedVersionId, actualVersionId);
           if (attempt < options.retries && options.retryDelayMs > 0) {
             await new Promise((resolve) =>
               setTimeout(resolve, options.retryDelayMs * 2 ** attempt),

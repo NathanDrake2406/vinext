@@ -14,13 +14,14 @@
  * promotion whose CLI process fails ambiguously is reported the same way:
  * the operator is told to check `wrangler deployments status`, not silently
  * reconciled. It lives apart from `deploy.ts` so the CLI module stays a thin
- * caller and the sequencing can be tested directly.
+ * caller and the sequencing can be tested directly. Worker-name/host/binding
+ * resolution lives in `wrangler-deployment-target.ts`, not here — this module
+ * only sequences wrangler calls against an already-resolved target.
  */
 
 import { VINEXT_VERSION_METADATA_BINDING } from "vinext/internal/server/worker-version";
-import { warmCdnCache } from "./cdn-warm.js";
+import { warmCdnCache, type CdnWarmResult } from "./cdn-warm.js";
 import { formatUnknownError, type DeployOptions } from "./deploy.js";
-import { parseWranglerConfig } from "./tpr.js";
 import {
   runWranglerDeploymentStatus,
   runWranglerTriggersDeploy,
@@ -30,6 +31,33 @@ import {
   type WranglerVersionDeployResult,
   type WranglerVersionTraffic,
 } from "./version-deploy.js";
+import {
+  getWranglerTargetEnv,
+  resolveWranglerDeploymentTarget,
+  type WranglerDeploymentTarget,
+} from "./wrangler-deployment-target.js";
+
+export type CdnWarmupDeployResult = {
+  url: string;
+  /** False whenever the promoted version's cache was not confirmed pre-warmed. */
+  warmed: boolean;
+};
+
+/** First present URL from a wrangler call chain, in order of specificity. */
+function pickDeployedUrl(...candidates: Array<string | null | undefined>): string {
+  return (
+    candidates.find((url): url is string => Boolean(url)) ?? "(URL not detected in wrangler output)"
+  );
+}
+
+/** A warm-up only counts as confirmed when every path proved the uploaded version served it. */
+function isFullyWarmed(result: Pick<CdnWarmResult, "failed">): boolean {
+  return result.failed === 0;
+}
+
+function promotionPhaseFor(warmed: boolean): "promote-warmed" | "promote-uploaded" {
+  return warmed ? "promote-warmed" : "promote-uploaded";
+}
 
 export async function deployWithCdnWarmup(
   root: string,
@@ -45,8 +73,8 @@ export async function deployWithCdnWarmup(
     | "warmCdnRetries"
     | "warmCdnStrict"
   >,
-): Promise<string> {
-  const wranglerConfig = validateCdnWarmupConfiguration(root, options);
+): Promise<CdnWarmupDeployResult> {
+  const target = validateCdnWarmupConfiguration(root, options);
   const upload = runWranglerVersionUpload(root, options);
   const deployment = readWranglerDeploymentStatus(root, options);
   const currentVersions = deployment?.versions ?? [];
@@ -64,12 +92,10 @@ export async function deployWithCdnWarmup(
       "promote-uploaded",
     );
     const triggers = runWranglerTriggersDeploy(root, options);
-    return (
-      deployed.deployedUrl ??
-      triggers.deployedUrl ??
-      upload.previewUrl ??
-      "(URL not detected in wrangler output)"
-    );
+    return {
+      url: pickDeployedUrl(deployed.deployedUrl, triggers.deployedUrl, upload.previewUrl),
+      warmed: false,
+    };
   }
 
   // Workers Cache includes the invoked Worker version in its key unless
@@ -88,8 +114,7 @@ export async function deployWithCdnWarmup(
   let warmed = false;
   try {
     const targetUrl = resolveCdnWarmupTargetUrl(root, staged.deployedUrl, options);
-    const workerName = resolveCdnWarmupWorkerName(wranglerConfig, options);
-    const headers = buildVersionOverrideHeaders(workerName, upload.versionId);
+    const headers = buildVersionOverrideHeaders(target.workerName, upload.versionId);
     if (!targetUrl || !headers) {
       const message =
         "CDN pre-warm requires a production URL and Worker name for version overrides.";
@@ -106,7 +131,14 @@ export async function deployWithCdnWarmup(
         retries: options.warmCdnRetries,
         strict: options.warmCdnStrict,
       });
-      warmed = result.failed === 0;
+      warmed = isFullyWarmed(result);
+      if (!warmed) {
+        console.warn(
+          `  CDN pre-warm did not confirm all ${result.total} path(s) served the uploaded ` +
+            "version. Promoting anyway (non-strict) — the deployed version's cache is not " +
+            "confirmed pre-warmed.",
+        );
+      }
     }
   } catch (error) {
     throw new Error(
@@ -122,7 +154,7 @@ export async function deployWithCdnWarmup(
       root,
       [{ versionId: upload.versionId, percentage: 100 }],
       options,
-      warmed ? "promote-warmed" : "promote-uploaded",
+      promotionPhaseFor(warmed),
     );
   } catch (error) {
     throw new Error(
@@ -133,13 +165,15 @@ export async function deployWithCdnWarmup(
     );
   }
   const triggers = applyTriggersAfterPromotion(root, options);
-  return (
-    deployed.deployedUrl ??
-    staged.deployedUrl ??
-    triggers.deployedUrl ??
-    upload.previewUrl ??
-    "(URL not detected in wrangler output)"
-  );
+  return {
+    url: pickDeployedUrl(
+      deployed.deployedUrl,
+      staged.deployedUrl,
+      triggers.deployedUrl,
+      upload.previewUrl,
+    ),
+    warmed,
+  };
 }
 
 /**
@@ -167,21 +201,20 @@ function applyTriggersAfterPromotion(
 
 function validateCdnWarmupConfiguration(
   root: string,
-  options: Pick<DeployOptions, "preview" | "env" | "config">,
-): NonNullable<ReturnType<typeof parseWranglerConfig>> {
-  const config = parseWranglerConfig(root, options.config);
+  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
+): WranglerDeploymentTarget {
+  const target = resolveWranglerDeploymentTarget(root, options);
   const envName = getWranglerTargetEnv(options);
-  const selected = envName ? config?.env?.[envName] : config;
   const targetLabel = envName
     ? `Wrangler environment "${envName}"`
     : "the top-level Wrangler config";
-  if (!config || selected?.versionMetadataBinding !== VINEXT_VERSION_METADATA_BINDING) {
+  if (!target || target.versionMetadataBinding !== VINEXT_VERSION_METADATA_BINDING) {
     throw new Error(
       `CDN warmup requires a version_metadata binding named "${VINEXT_VERSION_METADATA_BINDING}" in ${targetLabel}. ` +
         "Re-run vinext init with CDN warmup enabled or configure the binding before deploying.",
     );
   }
-  return config;
+  return target;
 }
 
 function readWranglerDeploymentStatus(
@@ -220,19 +253,6 @@ function buildVersionOverrideHeaders(
   };
 }
 
-function resolveCdnWarmupWorkerName(
-  config: NonNullable<ReturnType<typeof parseWranglerConfig>>,
-  options: Pick<DeployOptions, "preview" | "env" | "name">,
-): string | undefined {
-  if (options.name) return options.name;
-  const envName = getWranglerTargetEnv(options);
-  if (!envName) return config.name;
-  const explicitEnvName = config.env?.[envName]?.name;
-  if (explicitEnvName) return explicitEnvName;
-  if (!config.name) return undefined;
-  return config.legacyEnv === false ? config.name : `${config.name}-${envName}`;
-}
-
 export function resolveCdnWarmupTargetUrl(root: string, deployedUrl: string | null): string | null;
 export function resolveCdnWarmupTargetUrl(
   root: string,
@@ -244,12 +264,6 @@ export function resolveCdnWarmupTargetUrl(
   deployedUrl: string | null,
   options?: Pick<DeployOptions, "preview" | "env" | "config">,
 ): string | null {
-  const config = parseWranglerConfig(root, options?.config);
-  const env = getWranglerTargetEnv(options ?? {});
-  const warmupHost = env ? config?.env?.[env]?.warmupHost : config?.warmupHost;
-  return warmupHost ? `https://${warmupHost}` : deployedUrl;
-}
-
-function getWranglerTargetEnv(options: Pick<DeployOptions, "preview" | "env">): string | undefined {
-  return options.env || (options.preview ? "preview" : undefined);
+  const target = resolveWranglerDeploymentTarget(root, options ?? {});
+  return target?.productionHost ? `https://${target.productionHost}` : deployedUrl;
 }

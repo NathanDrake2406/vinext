@@ -83,7 +83,7 @@ type PrerenderResult = {
   headers: Record<string, string>;
 };
 
-type WranglerConfig = {
+export type WranglerConfig = {
   accountId?: string;
   kvNamespaceId?: string;
   customDomain?: string;

@@ -158,11 +158,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     const { deployWithCdnWarmup } =
       await import("../packages/cloudflare/src/cdn-warm-deployment.js");
 
-    const url = await deployWithCdnWarmup(tmpDir, ["/", "/about"], {
+    const result = await deployWithCdnWarmup(tmpDir, ["/", "/about"], {
       warmCdnConcurrency: 1,
     });
 
-    expect(url).toBe("https://stable.example.workers.dev");
+    expect(result).toEqual({ url: "https://stable.example.workers.dev", warmed: true });
     expect(events).toEqual([
       "upload",
       "status",
@@ -253,9 +253,9 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     const { deployWithCdnWarmup } =
       await import("../packages/cloudflare/src/cdn-warm-deployment.js");
 
-    const url = await deployWithCdnWarmup(tmpDir, ["/cached/intro"], {});
+    const result = await deployWithCdnWarmup(tmpDir, ["/cached/intro"], {});
 
-    expect(url).toBe("https://workers-cache.vinext.workers.dev");
+    expect(result).toEqual({ url: "https://workers-cache.vinext.workers.dev", warmed: true });
     expect(events).toEqual([
       "upload",
       "status",
@@ -315,6 +315,63 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "promote",
       "triggers",
     ]);
+  });
+
+  it("promotes without a confirmed warm-up in non-strict mode, and says so instead of a plain success", async () => {
+    const events: string[] = [];
+    const warnSpy = vi.spyOn(console, "warn");
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    vi.mocked(fetch).mockImplementation(async () => {
+      events.push("fetch:old-version");
+      return versionedResponse(PREVIOUS_VERSION_ID);
+    });
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) {
+        events.push("upload");
+        return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      }
+      if (args.includes("status")) {
+        events.push("status");
+        return currentDeploymentOutput();
+      }
+      if (isStage(args)) {
+        events.push("stage");
+        return "Staged version\nhttps://workers-cache.vinext.workers.dev\n";
+      }
+      if (args.includes("triggers")) {
+        events.push("triggers");
+        return "Triggers deployed\n";
+      }
+      if (isPromotion(args)) {
+        events.push("promote-uploaded");
+        return "Promoted version\n";
+      }
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    const result = await deployWithCdnWarmup(tmpDir, ["/cached/intro"], { warmCdnRetries: 0 });
+
+    // Every override request kept hitting the previous version, so the retries
+    // exhaust without ever confirming the uploaded version served a response —
+    // non-strict mode still promotes, but must report warmed: false rather than
+    // silently treating the deploy as a confirmed warm success.
+    expect(result).toEqual({
+      url: "https://workers-cache.vinext.workers.dev",
+      warmed: false,
+    });
+    expect(events).toEqual([
+      "upload",
+      "status",
+      "stage",
+      "fetch:old-version",
+      "promote-uploaded",
+      "triggers",
+    ]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("did not confirm all 1 path(s) served the uploaded version"),
+    );
   });
 
   it("leaves the new version staged at 0% when strict warmup fails, without a restore mutation", async () => {
@@ -420,12 +477,12 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       }),
     ).rejects.toThrow("is staged at 0% and was not promoted");
 
-    const url = await deployWithCdnWarmup(tmpDir, ["/"], {
+    const result = await deployWithCdnWarmup(tmpDir, ["/"], {
       warmCdnRetries: 0,
       warmCdnStrict: true,
     });
 
-    expect(url).toBe("https://stable.example.workers.dev");
+    expect(result).toEqual({ url: "https://stable.example.workers.dev", warmed: true });
     expect(events).toEqual([
       "upload",
       "status",

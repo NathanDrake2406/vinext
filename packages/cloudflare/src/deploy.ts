@@ -706,6 +706,11 @@ export async function deploy(options: DeployOptions): Promise<void> {
     config: options.config,
   };
   let url: string;
+  // Non-null only on the CDN-warmup path, so the closing summary can say
+  // plainly whether the promoted version's cache is actually pre-warmed —
+  // a bare "Deployed to" line reads as success even when non-strict mode
+  // fell back to promoting an unconfirmed version.
+  let warmupStatus: string | null = null;
 
   if (options.warmCdnCache && !canVerifyCdnWarmup) {
     console.log(
@@ -718,13 +723,17 @@ export async function deploy(options: DeployOptions): Promise<void> {
       strict: options.warmCdnStrict,
     });
     if (warmPaths.length > 0) {
-      url = await deployWithCdnWarmup(root, warmPaths, {
+      const result = await deployWithCdnWarmup(root, warmPaths, {
         ...wranglerOptions,
         warmCdnConcurrency: options.warmCdnConcurrency,
         warmCdnTimeout: options.warmCdnTimeout,
         warmCdnRetries: options.warmCdnRetries,
         warmCdnStrict: options.warmCdnStrict,
       });
+      url = result.url;
+      warmupStatus = result.warmed
+        ? "CDN cache: pre-warmed and confirmed before this version took traffic."
+        : "CDN cache: NOT confirmed pre-warmed — promoted without a verified warm-up.";
     } else {
       console.log("\n  CDN warmup skipped: no build-discovered paths found.");
       url = await runWranglerDeploy(root, wranglerOptions);
@@ -735,5 +744,6 @@ export async function deploy(options: DeployOptions): Promise<void> {
 
   console.log("\n  ─────────────────────────────────────────");
   console.log(`  Deployed to: ${url}`);
+  if (warmupStatus) console.log(`  ${warmupStatus}`);
   console.log("  ─────────────────────────────────────────\n");
 }
