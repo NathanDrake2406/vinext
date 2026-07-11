@@ -46,8 +46,7 @@ export function HeroSection() {
                   display: "block",
                   opacity: "0",
                   transform: "translateY(50px)",
-                  transition:
-                    "opacity 1s cubic-bezier(.2,1,.25,1) .2s,transform 1s cubic-bezier(.2,1,.25,1) .2s",
+                  transition: "opacity 1s var(--ease-out) .2s,transform 1s var(--ease-out) .2s",
                 } satisfies LandingStyle
               }
             >
@@ -62,8 +61,7 @@ export function HeroSection() {
                   display: "block",
                   opacity: "0",
                   transform: "translateY(50px)",
-                  transition:
-                    "opacity 1s cubic-bezier(.2,1,.25,1) .34s,transform 1s cubic-bezier(.2,1,.25,1) .34s",
+                  transition: "opacity 1s var(--ease-out) .34s,transform 1s var(--ease-out) .34s",
                 } satisfies LandingStyle
               }
             >
@@ -98,8 +96,7 @@ export function HeroSection() {
               {
                 opacity: "0",
                 transform: "translateY(26px)",
-                transition:
-                  "opacity .9s cubic-bezier(.2,1,.25,1) .5s,transform .9s cubic-bezier(.2,1,.25,1) .5s",
+                transition: "opacity .9s var(--ease-out) .5s,transform .9s var(--ease-out) .5s",
                 margin: "42px 0 0",
                 maxWidth: "54ch",
                 fontSize: "17.5px",
@@ -118,8 +115,7 @@ export function HeroSection() {
               {
                 opacity: "0",
                 transform: "translateY(26px)",
-                transition:
-                  "opacity .9s cubic-bezier(.2,1,.25,1) .62s,transform .9s cubic-bezier(.2,1,.25,1) .62s",
+                transition: "opacity .9s var(--ease-out) .62s,transform .9s var(--ease-out) .62s",
                 marginTop: "64px",
                 display: "flex",
                 flexDirection: "column",

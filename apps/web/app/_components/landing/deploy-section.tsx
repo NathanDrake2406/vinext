@@ -57,6 +57,7 @@ function DeployIcon({ icon }: { icon: DeployIcon }) {
     <svg
       aria-hidden="true"
       viewBox="0 0 24 24"
+      fill="currentColor"
       style={
         {
           width: icon === "vercel" ? "1.25em" : "1.3em",
@@ -251,8 +252,8 @@ export function DeploySection() {
                 width: "12px",
                 height: "12px",
                 opacity: "0",
-                transform: "translateY(12px) scale(.8)",
-                transition: "opacity .6s ease .15s,transform .7s cubic-bezier(.2,1,.25,1) .15s",
+                transform: "translateY(8px) scale(.94)",
+                transition: "opacity 260ms var(--ease-out),transform 300ms var(--ease-out)",
               } satisfies LandingStyle
             }
           >
@@ -301,8 +302,9 @@ export function DeploySection() {
                 width: "12px",
                 height: "12px",
                 opacity: "0",
-                transform: "translateY(12px) scale(.8)",
-                transition: "opacity .6s ease .3s,transform .7s cubic-bezier(.2,1,.25,1) .3s",
+                transform: "translateY(8px) scale(.94)",
+                transition:
+                  "opacity 260ms var(--ease-out) 40ms,transform 300ms var(--ease-out) 40ms",
               } satisfies LandingStyle
             }
           >
@@ -358,8 +360,9 @@ export function DeploySection() {
                 width: "12px",
                 height: "12px",
                 opacity: "0",
-                transform: "translateY(12px) scale(.8)",
-                transition: "opacity .6s ease .45s,transform .7s cubic-bezier(.2,1,.25,1) .45s",
+                transform: "translateY(8px) scale(.94)",
+                transition:
+                  "opacity 260ms var(--ease-out) 80ms,transform 300ms var(--ease-out) 80ms",
               } satisfies LandingStyle
             }
           >
@@ -409,8 +412,9 @@ export function DeploySection() {
                 width: "12px",
                 height: "12px",
                 opacity: "0",
-                transform: "translateY(12px) scale(.8)",
-                transition: "opacity .6s ease .6s,transform .7s cubic-bezier(.2,1,.25,1) .6s",
+                transform: "translateY(8px) scale(.94)",
+                transition:
+                  "opacity 260ms var(--ease-out) 120ms,transform 300ms var(--ease-out) 120ms",
               } satisfies LandingStyle
             }
           >
@@ -467,8 +471,9 @@ export function DeploySection() {
                 width: "12px",
                 height: "12px",
                 opacity: "0",
-                transform: "translateY(12px) scale(.8)",
-                transition: "opacity .6s ease .75s,transform .7s cubic-bezier(.2,1,.25,1) .75s",
+                transform: "translateY(8px) scale(.94)",
+                transition:
+                  "opacity 260ms var(--ease-out) 160ms,transform 300ms var(--ease-out) 160ms",
               } satisfies LandingStyle
             }
           >
@@ -523,8 +528,9 @@ export function DeploySection() {
                 width: "12px",
                 height: "12px",
                 opacity: "0",
-                transform: "translateY(12px) scale(.8)",
-                transition: "opacity .6s ease .9s,transform .7s cubic-bezier(.2,1,.25,1) .9s",
+                transform: "translateY(8px) scale(.94)",
+                transition:
+                  "opacity 260ms var(--ease-out) 200ms,transform 300ms var(--ease-out) 200ms",
               } satisfies LandingStyle
             }
           >

@@ -258,7 +258,7 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
             {
               opacity: "1",
               transform: "none",
-              transition: "opacity .5s ease,transform .5s ease",
+              transition: "opacity 280ms var(--ease-out),transform 280ms var(--ease-out)",
               marginTop: "32px",
               display: "flex",
               flexWrap: "wrap",

@@ -189,19 +189,20 @@ export function TrendChart({
 
         {/* Rolling median trendlines */}
         {series.map((s) => {
-          if (hiddenSeries.has(s.name)) return null;
+          const hidden = hiddenSeries.has(s.name);
           const pathD = buildPath(rollingMedian(s.values, TREND_WINDOW));
           if (!pathD) return null;
           return (
             <path
               key={`${s.name}-trend`}
+              className="benchmark-series"
               d={pathD}
               fill="none"
               stroke={s.color}
               strokeWidth="2.5"
               strokeDasharray="6 4"
               strokeLinecap="round"
-              opacity="0.45"
+              opacity={hidden ? 0 : 0.45}
               pointerEvents="none"
             />
           );
@@ -209,23 +210,31 @@ export function TrendChart({
 
         {/* Individual run lines + dots */}
         {series.map((s, seriesIndex) => {
-          if (hiddenSeries.has(s.name)) return null;
+          const hidden = hiddenSeries.has(s.name);
+          const individualRunsHidden = hidden || !showIndividualRuns;
           const pathD = buildPath(s.values);
           if (!pathD) return null;
           const visibleMarkers = visibleMarkerMask(s.values, formatY);
 
           return (
-            <g key={s.name}>
+            <g
+              key={s.name}
+              className="benchmark-series"
+              opacity={hidden ? 0 : 1}
+              pointerEvents={individualRunsHidden ? "none" : undefined}
+              aria-hidden={individualRunsHidden || undefined}
+            >
               {/* Line */}
               <path
                 d={pathD}
                 fill="none"
                 stroke={s.color}
                 strokeWidth="2"
+                className="benchmark-series"
                 opacity={showIndividualRuns ? 1 : 0}
                 pointerEvents="none"
               />
-              {/* Every point remains interactive; repeated plateau markers stay hidden. */}
+              {/* Visible points remain interactive; hidden runs expose no activation targets. */}
               {s.values.map((v, i) => {
                 if (v === null) return null;
                 const pointId = `${seriesIndex}-${pointKeys[i]}`;
@@ -238,8 +247,10 @@ export function TrendChart({
                       fill={s.color}
                       stroke="white"
                       strokeWidth="1.5"
+                      className="benchmark-series"
                       opacity={
-                        (showIndividualRuns && visibleMarkers[i]) || tooltip?.pointId === pointId
+                        (!individualRunsHidden && visibleMarkers[i]) ||
+                        (!individualRunsHidden && tooltip?.pointId === pointId)
                           ? 1
                           : 0
                       }
@@ -251,6 +262,8 @@ export function TrendChart({
                       r="8"
                       fill="transparent"
                       className="cursor-pointer"
+                      opacity={individualRunsHidden ? 0 : 1}
+                      pointerEvents={individualRunsHidden ? "none" : "auto"}
                       onMouseEnter={(e) => {
                         const rect = svgRef.current?.getBoundingClientRect();
                         if (!rect) return;
@@ -265,7 +278,7 @@ export function TrendChart({
                     />
                   </g>
                 );
-                const href = pointHrefs?.[i];
+                const href = individualRunsHidden ? undefined : pointHrefs?.[i];
                 if (!href) return point;
                 return (
                   <a

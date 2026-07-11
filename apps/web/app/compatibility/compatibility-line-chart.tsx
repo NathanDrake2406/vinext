@@ -202,6 +202,7 @@ export function CompatibilityLineChart({
         {/* Overall raw rate, including deferred and out-of-scope files. Muted
             so the supported-surface rate reads as the headline series. */}
         <path
+          className="compatibility-line"
           d={overallPath}
           fill="none"
           stroke="var(--mute)"
@@ -212,6 +213,7 @@ export function CompatibilityLineChart({
 
         {/* Supported-surface rate. */}
         <path
+          className="compatibility-line"
           d={supportedPath}
           fill="none"
           stroke="var(--orange)"
@@ -222,6 +224,7 @@ export function CompatibilityLineChart({
         {/* Points */}
         {view.xy.map((p, i) => (
           <circle
+            className="compatibility-point"
             key={series[i].createdAt}
             cx={p.x}
             cy={p.supportedY}

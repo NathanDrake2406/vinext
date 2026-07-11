@@ -1,6 +1,13 @@
 "use client";
 
-import { useLayoutEffect, useRef, type CSSProperties, type ReactNode, type RefObject } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { getRaceFrame, type RaceFrame, type RaceSeconds } from "../lib/landing-race";
 
 type RootRef = RefObject<HTMLDivElement | null>;
@@ -48,8 +55,20 @@ function findElements<T extends HTMLElement = HTMLElement>(
   return [...root.querySelectorAll<T>(`[data-el="${name}"]`)];
 }
 
-function prefersReducedMotion() {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
+
+function subscribeToReducedMotion(onChange: () => void) {
+  const query = window.matchMedia(reducedMotionQuery);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function getReducedMotionSnapshot() {
+  return window.matchMedia(reducedMotionQuery).matches;
+}
+
+function useReducedMotionPreference() {
+  return useSyncExternalStore(subscribeToReducedMotion, getReducedMotionSnapshot, () => false);
 }
 
 function clamp(value: number) {
@@ -66,35 +85,55 @@ function reveal(element: HTMLElement) {
   element.style.transform = "none";
 }
 
-function applyRaceFrame(root: HTMLElement, frame: RaceFrame, race: RaceSeconds) {
-  const vinextFill = findElement(root, "vinextFill");
-  const nextFill = findElement(root, "nextFill");
-  const vinextTime = findElement(root, "vinextTime");
-  const nextTime = findElement(root, "nextTime");
-  const vinextDone = findElement(root, "vinextDone");
-  const nextjsDone = findElement(root, "nextjsDone");
+type RaceElements = {
+  vinextFill: HTMLElement | null;
+  nextFill: HTMLElement | null;
+  vinextTime: HTMLElement | null;
+  nextTime: HTMLElement | null;
+  vinextDone: HTMLElement | null;
+  nextjsDone: HTMLElement | null;
+};
 
-  if (vinextFill) vinextFill.style.transform = `scaleX(${frame.vinextFill.toFixed(4)})`;
-  if (nextFill) nextFill.style.transform = `scaleX(${frame.nextjsFill.toFixed(4)})`;
-  if (vinextTime) vinextTime.textContent = `${frame.vinextTime.toFixed(1)}s`;
-  if (nextTime) nextTime.textContent = `${frame.nextjsTime.toFixed(1)}s`;
-  if (vinextDone) {
-    vinextDone.style.opacity = frame.vinextDone && race.vinext < race.nextjs ? "1" : "0";
+function findRaceElements(root: HTMLElement): RaceElements {
+  return {
+    vinextFill: findElement(root, "vinextFill"),
+    nextFill: findElement(root, "nextFill"),
+    vinextTime: findElement(root, "vinextTime"),
+    nextTime: findElement(root, "nextTime"),
+    vinextDone: findElement(root, "vinextDone"),
+    nextjsDone: findElement(root, "nextjsDone"),
+  };
+}
+
+function applyRaceFrame(elements: RaceElements, frame: RaceFrame, race: RaceSeconds) {
+  const vinextText = `${frame.vinextTime.toFixed(1)}s`;
+  const nextText = `${frame.nextjsTime.toFixed(1)}s`;
+  const vinextTime = elements.vinextTime;
+  const nextTime = elements.nextTime;
+  if (vinextTime && vinextTime.textContent !== vinextText) vinextTime.textContent = vinextText;
+  if (nextTime && nextTime.textContent !== nextText) nextTime.textContent = nextText;
+  if (elements.vinextDone) {
+    const opacity = frame.vinextDone && race.vinext < race.nextjs ? "1" : "0";
+    if (elements.vinextDone.style.opacity !== opacity) elements.vinextDone.style.opacity = opacity;
   }
-  if (nextjsDone) {
-    nextjsDone.style.opacity = frame.nextjsDone && race.nextjs < race.vinext ? "1" : "0";
+  if (elements.nextjsDone) {
+    const opacity = frame.nextjsDone && race.nextjs < race.vinext ? "1" : "0";
+    if (elements.nextjsDone.style.opacity !== opacity) elements.nextjsDone.style.opacity = opacity;
   }
 }
 
-function useMotionFoundation() {
+function useMotionFoundation(reducedMotion: boolean) {
   useLayoutEffect(() => {
-    if (prefersReducedMotion()) return;
+    if (reducedMotion) {
+      document.documentElement.classList.remove("motion-ready");
+      return;
+    }
     document.documentElement.classList.add("motion-ready");
     return () => document.documentElement.classList.remove("motion-ready");
-  }, []);
+  }, [reducedMotion]);
 }
 
-function useIntroAndRevealMotion(rootRef: RootRef) {
+function useIntroAndRevealMotion(rootRef: RootRef, reducedMotion: boolean) {
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -102,7 +141,7 @@ function useIntroAndRevealMotion(rootRef: RootRef) {
     const intro = [...root.querySelectorAll<HTMLElement>("[data-intro]")];
     const reveals = [...root.querySelectorAll<HTMLElement>("[data-rv]")];
     const ready = findElement(root, "ready");
-    if (prefersReducedMotion()) {
+    if (reducedMotion) {
       intro.forEach(reveal);
       reveals.forEach(reveal);
       if (ready) ready.style.opacity = "1";
@@ -137,16 +176,16 @@ function useIntroAndRevealMotion(rootRef: RootRef) {
       clearTimeout(readyTimer);
       observer.disconnect();
     };
-  }, [rootRef]);
+  }, [reducedMotion, rootRef]);
 }
 
-function useHeroMotion(rootRef: RootRef) {
+function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
 
     const heroBg = findElement(root, "heroBg");
-    if (prefersReducedMotion()) {
+    if (reducedMotion) {
       if (heroBg) heroBg.style.opacity = "0";
       return;
     }
@@ -259,10 +298,10 @@ function useHeroMotion(rootRef: RootRef) {
       window.removeEventListener("scroll", wake);
       window.removeEventListener("resize", wake);
     };
-  }, [rootRef]);
+  }, [reducedMotion, rootRef]);
 }
 
-function useEngineSwapMotion(rootRef: RootRef) {
+function useEngineSwapMotion(rootRef: RootRef, reducedMotion: boolean) {
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -299,7 +338,7 @@ function useEngineSwapMotion(rootRef: RootRef) {
       if (plateGhost) plateGhost.textContent = "Vite";
       if (connector) connector.style.opacity = "1";
     };
-    if (prefersReducedMotion()) {
+    if (reducedMotion) {
       finish();
       return;
     }
@@ -364,10 +403,10 @@ function useEngineSwapMotion(rootRef: RootRef) {
       window.removeEventListener("scroll", check);
       window.removeEventListener("resize", check);
     };
-  }, [rootRef]);
+  }, [reducedMotion, rootRef]);
 }
 
-function useRaceMotion(rootRef: RootRef, race: RaceSeconds) {
+function useRaceMotion(rootRef: RootRef, race: RaceSeconds, reducedMotion: boolean) {
   const vinextSeconds = race.vinext;
   const nextjsSeconds = race.nextjs;
 
@@ -377,14 +416,22 @@ function useRaceMotion(rootRef: RootRef, race: RaceSeconds) {
 
     const raceOuter = findElement(root, "raceOuter");
     const payoff = findElement(root, "payoff");
+    const elements = findRaceElements(root);
     const values = { vinext: vinextSeconds, nextjs: nextjsSeconds };
-    if (prefersReducedMotion()) {
-      applyRaceFrame(root, getRaceFrame(values, 1), values);
+    if (reducedMotion) {
+      const finalFrame = getRaceFrame(values, 1);
+      if (elements.vinextFill)
+        elements.vinextFill.style.transform = `scaleX(${finalFrame.vinextFill})`;
+      if (elements.nextFill) elements.nextFill.style.transform = `scaleX(${finalFrame.nextjsFill})`;
+      applyRaceFrame(elements, finalFrame, values);
       if (payoff) reveal(payoff);
       return;
     }
 
-    applyRaceFrame(root, getRaceFrame(values, 0), values);
+    const initialFrame = getRaceFrame(values, 0);
+    if (elements.vinextFill) elements.vinextFill.style.transform = "scaleX(0)";
+    if (elements.nextFill) elements.nextFill.style.transform = "scaleX(0)";
+    applyRaceFrame(elements, initialFrame, values);
     if (payoff) {
       payoff.style.opacity = "0";
       payoff.style.transform = "translateY(16px)";
@@ -393,15 +440,32 @@ function useRaceMotion(rootRef: RootRef, race: RaceSeconds) {
     let frame: number | null = null;
     let started = false;
     let dead = false;
+    const barAnimations: Animation[] = [];
     const run = () => {
       if (started) return;
       started = true;
       const start = performance.now();
       const duration = getRaceFrame(values, 0).durationMs;
+      const longest = Math.max(values.vinext, values.nextjs);
+      const animateBar = (element: HTMLElement | null, seconds: number) => {
+        if (!element) return;
+        barAnimations.push(
+          element.animate(
+            [{ transform: "scaleX(0)" }, { transform: `scaleX(${seconds / longest})` }],
+            {
+              duration: duration * (seconds / longest),
+              easing: "linear",
+              fill: "forwards",
+            },
+          ),
+        );
+      };
+      animateBar(elements.vinextFill, values.vinext);
+      animateBar(elements.nextFill, values.nextjs);
       const step = (now: number) => {
         if (dead) return;
         const time = Math.min(1, (now - start) / duration);
-        applyRaceFrame(root, getRaceFrame(values, time), values);
+        applyRaceFrame(elements, getRaceFrame(values, time), values);
         if (time < 1) frame = requestAnimationFrame(step);
         else if (payoff) reveal(payoff);
       };
@@ -424,8 +488,9 @@ function useRaceMotion(rootRef: RootRef, race: RaceSeconds) {
       dead = true;
       observer.disconnect();
       if (frame !== null) cancelAnimationFrame(frame);
+      barAnimations.forEach((animation) => animation.cancel());
     };
-  }, [nextjsSeconds, rootRef, vinextSeconds]);
+  }, [nextjsSeconds, reducedMotion, rootRef, vinextSeconds]);
 }
 
 function illuminateDeploy(root: HTMLElement, instant: boolean) {
@@ -444,14 +509,14 @@ function illuminateDeploy(root: HTMLElement, instant: boolean) {
   return () => timers.forEach(clearTimeout);
 }
 
-function useDeployMotion(rootRef: RootRef) {
+function useDeployMotion(rootRef: RootRef, reducedMotion: boolean) {
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
 
     const deployGrid = findElement(root, "deployGrid");
     const globe = findElement(root, "globe");
-    if (prefersReducedMotion()) {
+    if (reducedMotion) {
       illuminateDeploy(root, true);
       globe?.classList.add("tether-done");
       return;
@@ -482,7 +547,7 @@ function useDeployMotion(rootRef: RootRef) {
       observer.disconnect();
       stopTimers();
     };
-  }, [rootRef]);
+  }, [reducedMotion, rootRef]);
 }
 
 function useCopyCommand(rootRef: RootRef) {
@@ -545,12 +610,13 @@ type LandingMotionProps = {
 
 export function LandingMotion({ children, race, style }: LandingMotionProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  useMotionFoundation();
-  useIntroAndRevealMotion(rootRef);
-  useHeroMotion(rootRef);
-  useEngineSwapMotion(rootRef);
-  useRaceMotion(rootRef, race);
-  useDeployMotion(rootRef);
+  const reducedMotion = useReducedMotionPreference();
+  useMotionFoundation(reducedMotion);
+  useIntroAndRevealMotion(rootRef, reducedMotion);
+  useHeroMotion(rootRef, reducedMotion);
+  useEngineSwapMotion(rootRef, reducedMotion);
+  useRaceMotion(rootRef, race, reducedMotion);
+  useDeployMotion(rootRef, reducedMotion);
   useCopyCommand(rootRef);
 
   return (
