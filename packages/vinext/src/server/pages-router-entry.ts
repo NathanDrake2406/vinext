@@ -35,6 +35,7 @@ import {
 import { notFoundStaticAssetResponse } from "./http-error-responses.js";
 import { finalizeMissingStaticAssetResponse } from "./worker-utils.js";
 import { assetPrefixPathname, isNextStaticPath } from "../utils/asset-prefix.js";
+import { stampWorkerVersion } from "./worker-version.js";
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 
 // @ts-expect-error -- virtual module resolved by vinext at build time
@@ -94,7 +95,7 @@ export default {
     env?: PagesWorkerEnv,
     ctx?: PagesWorkerExecutionContext,
   ): Promise<Response> {
-    return handleRequest(request, env, ctx);
+    return stampWorkerVersion(await handleRequest(request, env, ctx), env);
   },
 };
 

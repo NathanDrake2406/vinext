@@ -11,15 +11,14 @@ import {
   buildWranglerKVBulkPutArgs,
   buildWranglerInvocation,
   buildWranglerDeployArgs,
-  getZeroPercentStagingTraffic,
   parseDeployArgs,
-  resolveWorkerNameForVersionOverride,
   resolveWranglerBin,
   runWranglerKVBulkPut,
   runWranglerDeploy,
   validateWranglerEnvName,
   withCloudflareEnv,
 } from "../packages/cloudflare/src/deploy.js";
+import { resolveCdnWarmupTargetUrl } from "../packages/cloudflare/src/cdn-warm-deployment.js";
 import {
   detectPackageManager,
   detectPackageManagerName,
@@ -3157,6 +3156,7 @@ describe("parseWranglerConfig — custom domain extraction", () => {
     expect(config?.env?.staging).toEqual({
       name: "my-worker-staging",
       customDomain: "staging.example.com",
+      warmupHost: "staging.example.com",
     });
   });
 
@@ -3209,6 +3209,7 @@ describe("parseWranglerConfig — custom domain extraction", () => {
     expect(config?.env?.staging).toEqual({
       name: "my-worker-staging-custom",
       customDomain: "staging.example.com",
+      warmupHost: "staging.example.com",
     });
   });
 
@@ -3247,75 +3248,148 @@ pattern = "staging.example.com/*"
     expect(config?.env?.staging).toEqual({
       name: "my-worker-staging",
       customDomain: "staging.example.com",
+      warmupHost: "staging.example.com",
     });
   });
-});
 
-// ─── CDN warmup Worker version overrides ───────────────────────────────────
+  it("extracts a top-level TOML version metadata table", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `[version_metadata]
+binding = "TOP_VERSION"
+`,
+    );
 
-describe("resolveWorkerNameForVersionOverride", () => {
-  it("uses the top-level Worker name for production", () => {
-    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ name: "my-worker" }));
-    expect(resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), {})).toBe("my-worker");
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.versionMetadataBinding).toBe("TOP_VERSION");
   });
 
-  it("uses the CLI Worker name exactly when provided", () => {
-    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ name: "config-worker" }));
+  it("extracts an environment-local TOML version metadata table", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `[env.staging]
+name = "my-worker-staging"
+
+[env.staging.version_metadata]
+binding = "STAGING_VERSION"
+`,
+    );
+
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.env?.staging?.versionMetadataBinding).toBe("STAGING_VERSION");
+  });
+});
+
+describe("resolveCdnWarmupTargetUrl", () => {
+  it("skips a disabled custom domain and uses the next active route", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: [
+          { pattern: "disabled.example.com", custom_domain: true, enabled: false },
+          { pattern: "app.example.com", custom_domain: true },
+        ],
+      }),
+    );
+
+    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
+      "https://app.example.com",
+    );
+  });
+
+  it("uses the route pattern host instead of the containing zone", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: [{ pattern: "app.example.com/*", zone_name: "example.com" }],
+      }),
+    );
+
+    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
+      "https://app.example.com",
+    );
+  });
+
+  it("supports the singular JSON route property", () => {
+    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ route: "app.example.com/*" }));
+
+    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
+      "https://app.example.com",
+    );
+  });
+
+  it("does not use a route host when the warmup paths may bypass the Worker", () => {
+    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ route: "app.example.com/api/*" }));
+
+    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
+      "https://worker.example.workers.dev",
+    );
+  });
+
+  it("uses the pattern from a singular TOML route object", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `route = { zone_name = "example.com", pattern = "app.example.com/*" }`,
+    );
+
+    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
+      "https://app.example.com",
+    );
+  });
+
+  it("does not leak an env route past a commented environment header", () => {
+    // A trailing comment on the header must not stop it being recognized as an
+    // env section — otherwise the staging route leaks in as the production host.
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `name = "my-worker"
+
+[env.staging] # staging deployment
+route = "staging.example.com/*"`,
+    );
+
+    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://my-worker.example.workers.dev", {})).toBe(
+      "https://my-worker.example.workers.dev",
+    );
+  });
+
+  it("does not inherit a top-level route into an explicit environment", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: ["app.example.com/*"],
+        env: { staging: { name: "my-worker-staging" } },
+      }),
+    );
+
     expect(
-      resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), {
-        name: "cli-worker",
+      resolveCdnWarmupTargetUrl(tmpDir, "https://my-worker-staging.example.workers.dev", {
         env: "staging",
       }),
-    ).toBe("cli-worker");
+    ).toBe("https://my-worker-staging.example.workers.dev");
   });
 
-  it("appends the target environment for Wrangler legacy environments", () => {
-    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ name: "my-worker" }));
-    expect(
-      resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), { env: "staging" }),
-    ).toBe("my-worker-staging");
-  });
-
-  it("uses env-specific Worker names for Wrangler legacy environments", () => {
+  it("skips a disabled custom domain in an inline TOML routes array", () => {
     writeFile(
       tmpDir,
-      "wrangler.jsonc",
-      JSON.stringify({
-        name: "my-worker",
-        env: { staging: { name: "custom-staging-worker" } },
-      }),
+      "wrangler.toml",
+      `name = "my-worker"
+routes = [
+  { pattern = "disabled.example.com", custom_domain = true, enabled = false },
+  { pattern = "app.example.com", custom_domain = true }
+]
+`,
     );
-    expect(
-      resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), { env: "staging" }),
-    ).toBe("custom-staging-worker");
-  });
 
-  it("keeps the service name for Wrangler service environments", () => {
-    writeFile(
-      tmpDir,
-      "wrangler.jsonc",
-      JSON.stringify({
-        name: "my-worker",
-        legacy_env: false,
-        env: { staging: {} },
-      }),
+    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
+      "https://app.example.com",
     );
-    expect(
-      resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), { env: "staging" }),
-    ).toBe("my-worker");
-  });
-});
-
-describe("getZeroPercentStagingTraffic", () => {
-  it("does not stage the uploaded version when it is already the current deployment", () => {
-    expect(
-      getZeroPercentStagingTraffic(
-        {
-          versions: [{ versionId: "22222222-2222-4222-8222-222222222222", percentage: 100 }],
-          output: "{}",
-        },
-        "22222222-2222-4222-8222-222222222222",
-      ),
-    ).toBeNull();
   });
 });

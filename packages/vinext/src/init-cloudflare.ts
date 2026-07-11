@@ -5,6 +5,8 @@ import MagicString from "magic-string";
 import type { ESTree } from "vite";
 import type { CloudflareInitOptions } from "./init-platform.js";
 import { detectProject } from "./utils/project.js";
+import { isUnknownRecord } from "./utils/record.js";
+import { VINEXT_VERSION_METADATA_BINDING } from "./server/worker-version.js";
 
 const require = createRequire(import.meta.url);
 
@@ -191,6 +193,10 @@ export function generateWranglerConfig(
 
   if (options.cdnCache === "workers-cache") config.cache = { enabled: true };
 
+  if (options.warmCdnCache) {
+    config.version_metadata = { binding: VINEXT_VERSION_METADATA_BINDING };
+  }
+
   if (options.imageOptimization === "cloudflare-images") {
     config.images = { binding: "IMAGES" };
   }
@@ -362,6 +368,54 @@ function appendTopLevelJsonProperty(code: string, property: string): string {
   return `${before}${needsComma ? "," : ""}\n${property}\n${code.slice(closing)}`;
 }
 
+/**
+ * The runtime reads the version metadata binding under a fixed name
+ * (VINEXT_VERSION_METADATA_BINDING), so init must ensure the config declares
+ * exactly that binding rather than preserving a differently named one.
+ */
+function ensureVersionMetadataInJsonObject(code: string): string {
+  const metadataProperty = findTopLevelJsonProperty(code, "version_metadata");
+  if (!metadataProperty) {
+    return appendTopLevelJsonProperty(
+      code,
+      `  "version_metadata": { "binding": "${VINEXT_VERSION_METADATA_BINDING}" }`,
+    );
+  }
+
+  const parsedMetadata: unknown = JSON.parse(
+    stripJsonComments(code.slice(metadataProperty.valueStart, metadataProperty.valueEnd)),
+  );
+  const metadata = isUnknownRecord(parsedMetadata) ? parsedMetadata : null;
+  if (metadata?.binding === VINEXT_VERSION_METADATA_BINDING) return code;
+
+  const replacement = `{ "binding": "${VINEXT_VERSION_METADATA_BINDING}" }`;
+  return `${code.slice(0, metadataProperty.valueStart)}${replacement}${code.slice(metadataProperty.valueEnd)}`;
+}
+
+function ensureNamedEnvironmentVersionMetadata(code: string): string {
+  const envProperty = findTopLevelJsonProperty(code, "env");
+  if (!envProperty) return code;
+
+  const envCode = code.slice(envProperty.valueStart, envProperty.valueEnd);
+  const parsedEnv: unknown = JSON.parse(stripJsonComments(envCode));
+  if (!isUnknownRecord(parsedEnv)) {
+    throw new Error('Wrangler config property "env" must be an object.');
+  }
+  let updatedEnv = envCode;
+  for (const envName of Object.keys(parsedEnv)) {
+    const environmentProperty = findTopLevelJsonProperty(updatedEnv, envName);
+    if (!environmentProperty) continue;
+    const environmentCode = updatedEnv.slice(
+      environmentProperty.valueStart,
+      environmentProperty.valueEnd,
+    );
+    if (!environmentCode.trimStart().startsWith("{")) continue;
+    const updatedEnvironment = ensureVersionMetadataInJsonObject(environmentCode);
+    updatedEnv = `${updatedEnv.slice(0, environmentProperty.valueStart)}${updatedEnvironment}${updatedEnv.slice(environmentProperty.valueEnd)}`;
+  }
+  return `${code.slice(0, envProperty.valueStart)}${updatedEnv}${code.slice(envProperty.valueEnd)}`;
+}
+
 export function updateWranglerConfigForCloudflare(
   code: string,
   options: CloudflareInitOptions,
@@ -385,6 +439,10 @@ export function updateWranglerConfigForCloudflare(
         output = `${output.slice(0, cacheProperty.valueStart)}${updatedCache}${output.slice(cacheProperty.valueEnd)}`;
       }
     }
+  }
+  if (options.warmCdnCache) {
+    output = ensureVersionMetadataInJsonObject(output);
+    output = ensureNamedEnvironmentVersionMetadata(output);
   }
   if (options.imageOptimization === "cloudflare-images") {
     const imagesProperty = findTopLevelJsonProperty(output, "images");

@@ -29,6 +29,13 @@ import { VINEXT_REVALIDATE_HEADER } from "vinext/internal/server/headers";
 import { isrCacheKey } from "vinext/internal/server/isr-cache";
 import { buildAppPageCacheTags } from "vinext/internal/server/app-page-cache";
 import { ENTRY_PREFIX } from "@vinext/cloudflare/cache/kv-data-adapter.runtime";
+import { isUnknownRecord } from "./utils/cache-control-metadata.js";
+import {
+  extractTomlRouteEntries,
+  extractTomlRoutePatterns,
+  getTomlRootBody,
+  getTomlSections,
+} from "./utils/toml.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -80,21 +87,25 @@ type WranglerConfig = {
   accountId?: string;
   kvNamespaceId?: string;
   customDomain?: string;
+  warmupHost?: string;
   name?: string;
   legacyEnv?: boolean;
+  versionMetadataBinding?: string;
   env?: Record<string, WranglerEnvironmentConfig>;
 };
 
 export type WranglerEnvironmentConfig = {
   customDomain?: string;
+  warmupHost?: string;
   name?: string;
+  versionMetadataBinding?: string;
 };
 
 // ─── Wrangler Config Parsing ─────────────────────────────────────────────────
 
 /**
- * Parse wrangler config (JSONC or TOML) to extract the fields TPR needs:
- * account_id, VINEXT_KV_CACHE KV namespace ID, and custom domain.
+ * Parse wrangler config (JSONC or TOML) to extract the fields used by TPR and
+ * CDN warmup target resolution.
  */
 export function parseWranglerConfig(root: string, configPath?: string): WranglerConfig | null {
   if (configPath) {
@@ -274,9 +285,17 @@ function extractFromJSON(config: Record<string, unknown>): WranglerConfig {
     }
   }
 
-  // Custom domain — check routes[] and custom_domains[]
-  const domain = extractDomainFromRoutes(config.routes) ?? extractDomainFromCustomDomains(config);
+  // TPR needs a zone-resolvable domain, while CDN warmup needs the exact route
+  // host. Keep both because zone_name is not the hostname a request should use.
+  const domain =
+    extractDomainFromRoute(config.route) ??
+    extractDomainFromRoutes(config.routes) ??
+    extractDomainFromCustomDomains(config);
   if (domain) result.customDomain = domain;
+  const warmupHost = extractWarmupHost(config);
+  if (warmupHost) result.warmupHost = warmupHost;
+  const versionMetadataBinding = extractVersionMetadataBinding(config);
+  if (versionMetadataBinding) result.versionMetadataBinding = versionMetadataBinding;
 
   const env = extractEnvConfigs(config.env);
   if (env) result.env = env;
@@ -291,7 +310,12 @@ function extractEnvConfigs(envs: unknown): Record<string, WranglerEnvironmentCon
   for (const [envName, rawConfig] of Object.entries(envs)) {
     if (!rawConfig || typeof rawConfig !== "object" || Array.isArray(rawConfig)) continue;
     const envConfig = extractEnvironmentConfig(rawConfig as Record<string, unknown>);
-    if (envConfig.name || envConfig.customDomain) {
+    if (
+      envConfig.name ||
+      envConfig.customDomain ||
+      envConfig.warmupHost ||
+      envConfig.versionMetadataBinding
+    ) {
       result[envName] = envConfig;
     }
   }
@@ -303,33 +327,75 @@ function extractEnvironmentConfig(config: Record<string, unknown>): WranglerEnvi
   if (typeof config.name === "string" && config.name.length > 0) {
     result.name = config.name;
   }
-  const domain = extractDomainFromRoutes(config.routes) ?? extractDomainFromCustomDomains(config);
+  const domain =
+    extractDomainFromRoute(config.route) ??
+    extractDomainFromRoutes(config.routes) ??
+    extractDomainFromCustomDomains(config);
   if (domain) result.customDomain = domain;
+  const warmupHost = extractWarmupHost(config);
+  if (warmupHost) result.warmupHost = warmupHost;
+  const versionMetadataBinding = extractVersionMetadataBinding(config);
+  if (versionMetadataBinding) result.versionMetadataBinding = versionMetadataBinding;
   return result;
+}
+
+function extractVersionMetadataBinding(config: Record<string, unknown>): string | null {
+  const metadata = config.version_metadata;
+  return isUnknownRecord(metadata) &&
+    typeof metadata.binding === "string" &&
+    metadata.binding.length > 0
+    ? metadata.binding
+    : null;
+}
+
+function extractDomainFromRoute(route: unknown): string | null {
+  if (typeof route === "string") {
+    const domain = cleanDomain(route);
+    return domain && !domain.includes("workers.dev") ? domain : null;
+  }
+  if (!isUnknownRecord(route)) return null;
+  const domainSource =
+    typeof route.zone_name === "string"
+      ? route.zone_name
+      : typeof route.pattern === "string"
+        ? route.pattern
+        : null;
+  if (!domainSource) return null;
+  const domain = cleanDomain(domainSource);
+  return domain && !domain.includes("workers.dev") ? domain : null;
 }
 
 function extractDomainFromRoutes(routes: unknown): string | null {
   if (!Array.isArray(routes)) return null;
+  return firstMatch(routes, extractDomainFromRoute);
+}
 
-  for (const route of routes) {
-    if (typeof route === "string") {
-      const domain = cleanDomain(route);
-      if (domain && !domain.includes("workers.dev")) return domain;
-    } else if (route && typeof route === "object") {
-      const r = route as Record<string, unknown>;
-      const pattern =
-        typeof r.zone_name === "string"
-          ? r.zone_name
-          : typeof r.pattern === "string"
-            ? r.pattern
-            : null;
-      if (pattern) {
-        const domain = cleanDomain(pattern);
-        if (domain && !domain.includes("workers.dev")) return domain;
-      }
-    }
+function extractWarmupHost(config: Record<string, unknown>): string | null {
+  const singular = extractWarmupHostFromRoute(config.route);
+  if (singular) return singular;
+  const fromRoutes = Array.isArray(config.routes)
+    ? firstMatch(config.routes, extractWarmupHostFromRoute)
+    : null;
+  return fromRoutes ?? extractDomainFromCustomDomains(config);
+}
+
+/**
+ * A route array can mix host-wide and path-scoped (or workers.dev) entries;
+ * a disqualified earlier entry must not hide a valid later one. Returns the
+ * first non-null result of `fn`, or null if none qualify.
+ */
+function firstMatch<T, R>(items: Iterable<T>, fn: (item: T) => R | null): R | null {
+  for (const item of items) {
+    const result = fn(item);
+    if (result !== null) return result;
   }
   return null;
+}
+
+function extractWarmupHostFromRoute(route: unknown): string | null {
+  if (isUnknownRecord(route) && route.enabled === false) return null;
+  const pattern = typeof route === "string" ? route : isUnknownRecord(route) ? route.pattern : null;
+  return typeof pattern === "string" ? routePatternToWarmupHost(pattern) : null;
 }
 
 function extractDomainFromCustomDomains(config: Record<string, unknown>): string | null {
@@ -360,6 +426,7 @@ function cleanDomain(raw: string): string | null {
  */
 function extractFromTOML(content: string): WranglerConfig {
   const result: WranglerConfig = {};
+  const sections = getTomlSections(content);
 
   const nameMatch = content.match(/^name\s*=\s*"([^"]+)"/m);
   if (nameMatch) result.name = nameMatch[1];
@@ -397,21 +464,32 @@ function extractFromTOML(content: string): WranglerConfig {
     }
   }
 
-  // [[routes]] blocks
+  // [[routes]] is a TOML array-of-tables: each entry produces its own section
+  // with the same header, so an earlier disqualified route must not shadow a
+  // later valid one.
+  const rootRouteSections = sections.filter(
+    (section) => section.header === "route" || section.header === "routes",
+  );
+
+  // Preserves prior behavior: root-level [[routes]] blocks match `pattern`
+  // only (unlike the env-scoped path below, which also accepts `zone_name`).
   if (!result.customDomain) {
-    const routeBlocks = content.split(/\[\[routes\]\]/);
-    for (let i = 1; i < routeBlocks.length; i++) {
-      const block = routeBlocks[i].split(/\[\[/)[0];
-      const patternMatch = block.match(/pattern\s*=\s*"([^"]+)"/);
-      if (patternMatch) {
-        const domain = cleanDomain(patternMatch[1]);
-        if (domain && !domain.includes("workers.dev")) {
-          result.customDomain = domain;
-          break;
-        }
-      }
-    }
+    result.customDomain =
+      firstMatch(rootRouteSections, (section) => extractTomlRoutePatternDomain(section.body)) ??
+      undefined;
   }
+
+  result.warmupHost =
+    extractTomlWarmupHost(getTomlRootBody(content)) ??
+    firstMatch(rootRouteSections, (section) => extractTomlWarmupRouteBlockHost(section.body)) ??
+    undefined;
+
+  const rootBody = getTomlRootBody(content);
+  const rootVersionMetadata = sections.find((section) => section.header === "version_metadata");
+  const versionMetadataBinding =
+    extractTomlVersionMetadataBinding(rootBody) ??
+    (rootVersionMetadata ? extractTomlVersionMetadataTableBinding(rootVersionMetadata.body) : null);
+  if (versionMetadataBinding) result.versionMetadataBinding = versionMetadataBinding;
 
   const env = extractEnvConfigsFromTOML(content);
   if (env) result.env = env;
@@ -433,18 +511,50 @@ function extractEnvConfigsFromTOML(
       const domain =
         extractTomlScalarRouteDomain(section.body) ?? extractTomlRoutesArrayDomain(section.body);
       if (domain) envConfig.customDomain = domain;
-      if (envConfig.name || envConfig.customDomain) {
+      const warmupHost = extractTomlWarmupHost(section.body);
+      if (warmupHost) envConfig.warmupHost = warmupHost;
+      const versionMetadataBinding = extractTomlVersionMetadataBinding(section.body);
+      if (versionMetadataBinding) envConfig.versionMetadataBinding = versionMetadataBinding;
+      if (
+        envConfig.name ||
+        envConfig.customDomain ||
+        envConfig.warmupHost ||
+        envConfig.versionMetadataBinding
+      ) {
         result[envName] = envConfig;
       }
       continue;
     }
 
-    const routesEnvName = section.header.match(/^env\.([^.]+)\.routes$/)?.[1];
+    const metadataEnvName = section.header.match(/^env\.([^.]+)\.version_metadata$/)?.[1];
+    if (metadataEnvName) {
+      const envConfig = result[metadataEnvName] ?? {};
+      const binding = extractTomlVersionMetadataTableBinding(section.body);
+      if (binding) envConfig.versionMetadataBinding = binding;
+      if (
+        envConfig.name ||
+        envConfig.customDomain ||
+        envConfig.warmupHost ||
+        envConfig.versionMetadataBinding
+      ) {
+        result[metadataEnvName] = envConfig;
+      }
+      continue;
+    }
+
+    const routesEnvName = section.header.match(/^env\.([^.]+)\.(?:route|routes)$/)?.[1];
     if (routesEnvName) {
       const envConfig = result[routesEnvName] ?? {};
       const domain = extractTomlRouteBlockDomain(section.body);
       if (domain) envConfig.customDomain = domain;
-      if (envConfig.name || envConfig.customDomain) {
+      const warmupHost = extractTomlWarmupRouteBlockHost(section.body);
+      if (warmupHost) envConfig.warmupHost = warmupHost;
+      if (
+        envConfig.name ||
+        envConfig.customDomain ||
+        envConfig.warmupHost ||
+        envConfig.versionMetadataBinding
+      ) {
         result[routesEnvName] = envConfig;
       }
     }
@@ -453,39 +563,16 @@ function extractEnvConfigsFromTOML(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function getTomlSections(content: string): Array<{ header: string; body: string }> {
-  const sections: Array<{ header: string; body: string }> = [];
-  let currentHeader: string | null = null;
-  let currentBody: string[] = [];
-
-  for (const line of content.split("\n")) {
-    const header = parseTomlSectionHeader(line);
-    if (header) {
-      if (currentHeader) {
-        sections.push({ header: currentHeader, body: currentBody.join("\n") });
-      }
-      currentHeader = header;
-      currentBody = [];
-    } else if (currentHeader) {
-      currentBody.push(line);
-    }
-  }
-
-  if (currentHeader) {
-    sections.push({ header: currentHeader, body: currentBody.join("\n") });
-  }
-
-  return sections;
+function extractTomlVersionMetadataBinding(section: string): string | null {
+  const match = section.match(
+    /^version_metadata\s*=\s*\{[^}]*\bbinding\s*=\s*(?:"([^"]+)"|'([^']+)')[^}]*\}/m,
+  );
+  return match?.slice(1).find((value): value is string => Boolean(value)) ?? null;
 }
 
-function parseTomlSectionHeader(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return null;
-  const isArrayHeader = trimmed.startsWith("[[") && trimmed.endsWith("]]");
-  const start = isArrayHeader ? 2 : 1;
-  const end = isArrayHeader ? trimmed.length - 2 : trimmed.length - 1;
-  const header = trimmed.slice(start, end).trim();
-  return header.length > 0 ? header : null;
+function extractTomlVersionMetadataTableBinding(section: string): string | null {
+  const match = section.match(/^binding\s*=\s*(?:"([^"]+)"|'([^']+)')/m);
+  return match?.slice(1).find((value): value is string => Boolean(value)) ?? null;
 }
 
 function extractTomlScalarRouteDomain(section: string): string | null {
@@ -498,10 +585,35 @@ function extractTomlScalarRouteDomain(section: string): string | null {
 function extractTomlRoutesArrayDomain(section: string): string | null {
   const routesMatch = section.match(/^routes\s*=\s*\[([\s\S]*?)\]/m);
   if (!routesMatch) return null;
-  const patternMatch = (routesMatch[1] ?? "").match(/(?:pattern\s*=\s*)?"([^"]+)"/);
-  if (!patternMatch) return null;
-  const domain = cleanDomain(patternMatch[1]);
-  return domain && !domain.includes("workers.dev") ? domain : null;
+  return firstMatch(extractTomlRoutePatterns(routesMatch[1] ?? ""), (pattern) => {
+    const domain = cleanDomain(pattern);
+    return domain && !domain.includes("workers.dev") ? domain : null;
+  });
+}
+
+function extractTomlWarmupHost(section: string): string | null {
+  const scalarRoute = section.match(/^route\s*=\s*"([^"]+)"/m)?.[1];
+  if (scalarRoute) return routePatternToWarmupHost(scalarRoute);
+
+  const inlineRoute = section.match(/^route\s*=\s*\{([\s\S]*?)\}\s*$/m)?.[1];
+  if (inlineRoute && /\benabled\s*=\s*false\b/.test(inlineRoute)) return null;
+  const inlinePattern = inlineRoute?.match(/\bpattern\s*=\s*"([^"]+)"/)?.[1];
+  if (inlinePattern) return routePatternToWarmupHost(inlinePattern);
+
+  const routesArray = section.match(/^routes\s*=\s*\[([\s\S]*?)\]\s*$/m)?.[1];
+  if (!routesArray) return null;
+  return firstMatch(extractTomlRouteEntries(routesArray), (route) =>
+    route.enabled === false ? null : routePatternToWarmupHost(route.pattern),
+  );
+}
+
+function routePatternToWarmupHost(pattern: string): string | null {
+  const withoutProtocol = pattern.replace(/^https?:\/\//, "");
+  const pathStart = withoutProtocol.indexOf("/");
+  const routePath = pathStart === -1 ? "" : withoutProtocol.slice(pathStart);
+  if (routePath !== "" && routePath !== "/*") return null;
+  const host = cleanDomain(pattern);
+  return host && !host.includes("*") && !host.includes("workers.dev") ? host : null;
 }
 
 function extractTomlRouteBlockDomain(section: string): string | null {
@@ -509,6 +621,19 @@ function extractTomlRouteBlockDomain(section: string): string | null {
   if (!patternMatch) return null;
   const domain = cleanDomain(patternMatch[1]);
   return domain && !domain.includes("workers.dev") ? domain : null;
+}
+
+function extractTomlRoutePatternDomain(section: string): string | null {
+  const patternMatch = section.match(/^pattern\s*=\s*"([^"]+)"/m);
+  if (!patternMatch) return null;
+  const domain = cleanDomain(patternMatch[1]);
+  return domain && !domain.includes("workers.dev") ? domain : null;
+}
+
+function extractTomlWarmupRouteBlockHost(section: string): string | null {
+  if (/^enabled\s*=\s*false\b/m.test(section)) return null;
+  const patternMatch = section.match(/^pattern\s*=\s*"([^"]+)"/m);
+  return patternMatch ? routePatternToWarmupHost(patternMatch[1]) : null;
 }
 
 // ─── Cloudflare API ──────────────────────────────────────────────────────────

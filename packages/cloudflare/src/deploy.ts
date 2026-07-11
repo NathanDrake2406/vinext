@@ -42,8 +42,9 @@ import {
   getMissingDeps,
   type ProjectInfo,
 } from "vinext/internal/utils/project";
-import { parseWranglerConfig, runTPR } from "./tpr.js";
-import { readPrerenderWarmPaths, warmCdnCache } from "./cdn-warm.js";
+import { runTPR } from "./tpr.js";
+import { readPrerenderWarmPaths } from "./cdn-warm.js";
+import { deployWithCdnWarmup } from "./cdn-warm-deployment.js";
 import {
   formatMissingCacheAdapterError,
   formatImageOptimizationHint,
@@ -53,14 +54,6 @@ import {
   viteConfigHasImageAdapter,
   workerEntryHasCacheHandler,
 } from "./deploy-config.js";
-import {
-  runWranglerDeploymentStatus,
-  runWranglerTriggersDeploy,
-  runWranglerVersionDeploy,
-  runWranglerVersionUpload,
-  type WranglerDeploymentStatus,
-  type WranglerVersionTraffic,
-} from "./version-deploy.js";
 import { parseWorkersDevUrl } from "./workers-dev-url.js";
 import { PHASE_PRODUCTION_BUILD } from "vinext/shims/constants";
 import { buildPrerenderKVPairs, type KVBulkPair } from "./prerender-kv-populate.js";
@@ -92,7 +85,7 @@ export type DeployOptions = {
   warmCdnConcurrency?: number;
   /** Per-request CDN warmup timeout in milliseconds */
   warmCdnTimeout?: number;
-  /** Number of CDN warmup retries for transient failures */
+  /** Number of CDN warmup retries */
   warmCdnRetries?: number;
   /** Fail deployment if any CDN warmup request fails */
   warmCdnStrict?: boolean;
@@ -139,7 +132,7 @@ function parseNonNegativeIntegerArg(raw: string, flag: string): number {
   return parsed;
 }
 
-function formatUnknownError(error: unknown): string {
+export function formatUnknownError(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return String(error);
 }
@@ -538,234 +531,6 @@ export async function runWranglerDeploy(
   return deployedUrl ?? "(URL not detected in wrangler output)";
 }
 
-export async function deployWithCdnWarmup(
-  root: string,
-  paths: readonly string[],
-  options: Pick<
-    DeployOptions,
-    | "preview"
-    | "env"
-    | "name"
-    | "config"
-    | "warmCdnConcurrency"
-    | "warmCdnTimeout"
-    | "warmCdnRetries"
-    | "warmCdnStrict"
-  >,
-): Promise<string> {
-  const upload = runWranglerVersionUpload(root, options);
-  const wranglerConfig = parseWranglerConfig(root, options.config);
-  const deploymentStatus = readWranglerDeploymentStatus(root, options);
-  const stagingTraffic = getZeroPercentStagingTraffic(deploymentStatus, upload.versionId);
-  let staged: ReturnType<typeof runWranglerVersionDeploy> | null = null;
-  let triggersDeployedUrl: string | null = null;
-  let warmedBeforePromotion = false;
-  let triggersApplied = false;
-
-  function applyTriggers(): void {
-    if (triggersApplied) return;
-    triggersDeployedUrl = runWranglerTriggersDeploy(root, options).deployedUrl;
-    triggersApplied = true;
-  }
-
-  if (stagingTraffic) {
-    staged = runWranglerVersionDeploy(root, stagingTraffic, options, "stage");
-    try {
-      applyTriggers();
-    } catch (error) {
-      throw withStagedVersionCleanupNote(error);
-    }
-    const targetUrl = resolveCdnWarmupTargetUrl(
-      root,
-      staged.deployedUrl ?? triggersDeployedUrl,
-      options,
-    );
-    const workerName = resolveWorkerNameForVersionOverride(wranglerConfig, options);
-    const headers = buildVersionOverrideHeaders(workerName, upload.versionId);
-    if (targetUrl && headers) {
-      try {
-        await warmCdnCache({
-          targetUrl,
-          paths,
-          headers,
-          concurrency: options.warmCdnConcurrency,
-          timeoutMs: options.warmCdnTimeout,
-          retries: options.warmCdnRetries,
-          strict: options.warmCdnStrict,
-        });
-      } catch (error) {
-        throw withStagedVersionCleanupNote(error);
-      }
-      warmedBeforePromotion = true;
-    } else if (options.warmCdnStrict) {
-      throw new Error(
-        "CDN warmup failed: pre-traffic warmup needs a production URL and Worker name for version overrides. " +
-          "Configure a route/custom domain and Worker name, or rerun without --warm-cdn-strict. " +
-          getStagedVersionCleanupNote(),
-      );
-    }
-  } else {
-    console.warn(
-      "  CDN warmup: pre-traffic version override skipped because the current deployment is not a single 100% version.",
-    );
-  }
-
-  const deployed = runWranglerVersionDeploy(
-    root,
-    [{ versionId: upload.versionId, percentage: 100 }],
-    options,
-    warmedBeforePromotion ? "promote-warmed" : "promote-uploaded",
-  );
-  if (!warmedBeforePromotion) {
-    try {
-      applyTriggers();
-    } catch (error) {
-      throw withPromotedVersionTriggerNote(error);
-    }
-    const targetUrl = resolveCdnWarmupTargetUrl(
-      root,
-      deployed.deployedUrl ?? triggersDeployedUrl,
-      options,
-    );
-    if (targetUrl) {
-      await warmCdnCache({
-        targetUrl,
-        paths,
-        concurrency: options.warmCdnConcurrency,
-        timeoutMs: options.warmCdnTimeout,
-        retries: options.warmCdnRetries,
-        strict: options.warmCdnStrict,
-      });
-    } else if (options.warmCdnStrict) {
-      throw new Error(
-        "CDN warmup failed: no production URL could be inferred from wrangler config or output. " +
-          "Configure a route/custom domain, ensure Wrangler prints a workers.dev URL, or rerun without --warm-cdn-strict.",
-      );
-    } else {
-      console.warn(
-        "  CDN warmup skipped: no production URL could be inferred from wrangler config or output.",
-      );
-    }
-  }
-  return (
-    deployed.deployedUrl ??
-    triggersDeployedUrl ??
-    staged?.deployedUrl ??
-    upload.previewUrl ??
-    "(URL not detected in wrangler output)"
-  );
-}
-
-export function resolveCdnWarmupTargetUrl(root: string, deployedUrl: string | null): string | null;
-export function resolveCdnWarmupTargetUrl(
-  root: string,
-  deployedUrl: string | null,
-  options: Pick<DeployOptions, "preview" | "env" | "config">,
-): string | null;
-export function resolveCdnWarmupTargetUrl(
-  root: string,
-  deployedUrl: string | null,
-  options?: Pick<DeployOptions, "preview" | "env" | "config">,
-): string | null {
-  const config = parseWranglerConfig(root, options?.config);
-  const env = getWranglerTargetEnv(options ?? {});
-  const customDomain = (env ? config?.env?.[env]?.customDomain : undefined) ?? config?.customDomain;
-  if (customDomain) {
-    return `https://${customDomain}`;
-  }
-  return deployedUrl;
-}
-
-function readWranglerDeploymentStatus(
-  root: string,
-  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
-): WranglerDeploymentStatus | null {
-  try {
-    return runWranglerDeploymentStatus(root, options);
-  } catch {
-    return null;
-  }
-}
-
-export function getZeroPercentStagingTraffic(
-  deployment: WranglerDeploymentStatus | null,
-  versionId: string,
-): WranglerVersionTraffic[] | null {
-  const current = deployment?.versions ?? [];
-  if (current.length !== 1 || current[0].percentage !== 100) {
-    return null;
-  }
-  if (current[0].versionId === versionId) {
-    return null;
-  }
-  return [current[0], { versionId, percentage: 0 }];
-}
-
-function getWranglerTargetEnv(options: Pick<DeployOptions, "preview" | "env">): string | undefined {
-  return options.env || (options.preview ? "preview" : undefined);
-}
-
-type ParsedWranglerConfig = NonNullable<ReturnType<typeof parseWranglerConfig>>;
-
-export function resolveWorkerNameForVersionOverride(
-  config: ParsedWranglerConfig | null,
-  options: Pick<DeployOptions, "preview" | "env" | "name">,
-): string | undefined {
-  if (options.name) {
-    return options.name;
-  }
-
-  const env = getWranglerTargetEnv(options);
-  if (!env) {
-    return config?.name;
-  }
-
-  if (config?.legacyEnv === false) {
-    return config.name;
-  }
-
-  return config?.env?.[env]?.name ?? (config?.name ? `${config.name}-${env}` : undefined);
-}
-
-function quoteStructuredHeaderString(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-export function buildVersionOverrideHeaders(
-  workerName: string | undefined,
-  versionId: string,
-): HeadersInit | undefined {
-  if (!workerName) return undefined;
-  return {
-    "Cloudflare-Workers-Version-Overrides": `${workerName}=${quoteStructuredHeaderString(versionId)}`,
-  };
-}
-
-function withStagedVersionCleanupNote(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  return new Error(`${message} ${getStagedVersionCleanupNote()}`, {
-    cause: error,
-  });
-}
-
-function getStagedVersionCleanupNote(): string {
-  return (
-    "The uploaded version may remain staged at 0% with the previous version still serving 100% traffic; " +
-    "rerun deploy to promote it or use `wrangler versions deploy` to choose the desired version split."
-  );
-}
-
-function withPromotedVersionTriggerNote(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  return new Error(
-    `${message} The uploaded version may already be promoted to 100%, but Worker triggers/routes may not be updated; ` +
-      "rerun deploy or `wrangler triggers deploy` after fixing the trigger error.",
-    {
-      cause: error,
-    },
-  );
-}
-
 // ─── Main Entry ──────────────────────────────────────────────────────────────
 
 export async function deploy(options: DeployOptions): Promise<void> {
@@ -866,8 +631,9 @@ export async function deploy(options: DeployOptions): Promise<void> {
     vinextPrerenderConfig,
     nextOutput: nextConfig.output,
   });
+  const canVerifyCdnWarmup = nextConfig.output !== "export";
   const shouldEmitPrerenderPathManifest =
-    options.warmCdnCache || (!options.skipBuild && prerenderDecision);
+    (options.warmCdnCache && canVerifyCdnWarmup) || (!options.skipBuild && prerenderDecision);
 
   // Step 5: Build
   if (!options.skipBuild) {
@@ -941,7 +707,12 @@ export async function deploy(options: DeployOptions): Promise<void> {
   };
   let url: string;
 
-  if (options.warmCdnCache) {
+  if (options.warmCdnCache && !canVerifyCdnWarmup) {
+    console.log(
+      "\n  CDN warmup skipped: static exports are served by Cloudflare Assets without invoking the Worker, so Worker version metadata cannot verify them.",
+    );
+    url = await runWranglerDeploy(root, wranglerOptions);
+  } else if (options.warmCdnCache) {
     const warmPaths = readPrerenderWarmPaths(root, {
       includeFallbackShells: options.warmCdnIncludeFallbacks,
       strict: options.warmCdnStrict,

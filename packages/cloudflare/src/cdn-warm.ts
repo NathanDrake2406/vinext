@@ -10,6 +10,7 @@ import {
   type PrerenderManifest,
   type PrerenderedPathSelectionOptions,
 } from "vinext/internal/server/prerender-manifest";
+import { VINEXT_WORKER_VERSION_HEADER } from "vinext/internal/server/worker-version";
 
 export type CdnWarmOptions = {
   targetUrl: string;
@@ -18,7 +19,9 @@ export type CdnWarmOptions = {
   concurrency?: number;
   timeoutMs?: number;
   retries?: number;
+  retryDelayMs?: number;
   strict?: boolean;
+  expectedVersionId?: string;
   fetchImpl?: typeof fetch;
 };
 
@@ -147,6 +150,7 @@ async function fetchWithTimeout(
   url: URL,
   timeoutMs: number,
   headers: HeadersInit | undefined,
+  redirect: RequestRedirect = "follow",
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -155,7 +159,7 @@ async function fetchWithTimeout(
   try {
     return await fetchImpl(url, {
       method: "GET",
-      redirect: "follow",
+      redirect,
       headers: requestHeaders,
       signal: controller.signal,
     });
@@ -166,9 +170,12 @@ async function fetchWithTimeout(
 
 async function warmOnePath(
   pathname: string,
-  options: Required<Pick<CdnWarmOptions, "targetUrl" | "timeoutMs" | "retries">> & {
+  options: Required<
+    Pick<CdnWarmOptions, "targetUrl" | "timeoutMs" | "retries" | "retryDelayMs">
+  > & {
     fetchImpl: typeof fetch;
     headers?: HeadersInit;
+    expectedVersionId?: string;
   },
 ): Promise<{ path: string; ok: true } | { path: string; ok: false; error: string }> {
   const url = buildWarmupUrl(options.targetUrl, pathname);
@@ -181,8 +188,30 @@ async function warmOnePath(
         url,
         options.timeoutMs,
         options.headers,
+        "manual",
       );
       await response.arrayBuffer();
+
+      // A staged version can take a few seconds to become globally routable, so
+      // before the override propagates, the old Worker answers with its own
+      // status codes (including 404s for newly added routes). Check which
+      // Worker actually produced the response before trusting its status —
+      // otherwise a pre-propagation old-Worker 404 looks like a terminal
+      // failure instead of "not warmed yet".
+      if (options.expectedVersionId) {
+        const actualVersionId = response.headers.get(VINEXT_WORKER_VERSION_HEADER);
+        if (actualVersionId !== options.expectedVersionId) {
+          lastError = actualVersionId
+            ? `expected Worker version ${options.expectedVersionId}, received ${actualVersionId}`
+            : `expected Worker version ${options.expectedVersionId}, but the response did not include ${VINEXT_WORKER_VERSION_HEADER}`;
+          if (attempt < options.retries && options.retryDelayMs > 0) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, options.retryDelayMs * 2 ** attempt),
+            );
+          }
+          continue;
+        }
+      }
 
       if (response.status < 400) {
         return { path: pathname, ok: true };
@@ -227,7 +256,8 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
   const paths = options.paths;
   const concurrency = Math.max(1, options.concurrency ?? 10);
   const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_CDN_WARM_TIMEOUT_MS);
-  const retries = Math.max(0, options.retries ?? 1);
+  const retries = Math.max(0, options.retries ?? (options.expectedVersionId ? 3 : 1));
+  const retryDelayMs = Math.max(0, options.retryDelayMs ?? 500);
   const fetchImpl = options.fetchImpl ?? fetch;
 
   if (paths.length === 0) {
@@ -241,8 +271,10 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
       targetUrl: options.targetUrl,
       timeoutMs,
       retries,
+      retryDelayMs,
       fetchImpl,
       headers: options.headers,
+      expectedVersionId: options.expectedVersionId,
     }),
   );
 

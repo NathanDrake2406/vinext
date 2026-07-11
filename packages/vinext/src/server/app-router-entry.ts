@@ -56,6 +56,7 @@ import {
   notFoundStaticAssetResponse,
 } from "./http-error-responses.js";
 import { assetPrefixPathname, isNextStaticPath } from "../utils/asset-prefix.js";
+import { stampWorkerVersion } from "./worker-version.js";
 
 // Precompute the path components used for `_next/static/*` 404 short-circuit
 // detection. Both `__basePath` and `__assetPrefix` are inlined as
@@ -77,7 +78,7 @@ export default {
     env?: WorkerAssetEnv,
     ctx?: ExecutionContextLike,
   ): Promise<Response> {
-    return handleRequest(request, env, ctx);
+    return stampWorkerVersion(await handleRequest(request, env, ctx), env);
   },
 };
 
