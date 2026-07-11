@@ -20,7 +20,7 @@
  */
 
 import { VINEXT_VERSION_METADATA_BINDING } from "vinext/internal/server/worker-version";
-import { warmCdnCache, type CdnWarmResult } from "./cdn-warm.js";
+import { warmCdnCache } from "./cdn-warm.js";
 import { formatUnknownError, type DeployOptions } from "./deploy.js";
 import {
   runWranglerDeploymentStatus,
@@ -30,6 +30,7 @@ import {
   type WranglerDeploymentStatus,
   type WranglerVersionDeployResult,
   type WranglerVersionTraffic,
+  type WranglerVersionUploadResult,
 } from "./version-deploy.js";
 import {
   getWranglerTargetEnv,
@@ -50,29 +51,26 @@ function pickDeployedUrl(...candidates: Array<string | null | undefined>): strin
   );
 }
 
-/** A warm-up only counts as confirmed when every path proved the uploaded version served it. */
-function isFullyWarmed(result: Pick<CdnWarmResult, "failed">): boolean {
-  return result.failed === 0;
-}
-
 function promotionPhaseFor(warmed: boolean): "promote-warmed" | "promote-uploaded" {
   return warmed ? "promote-warmed" : "promote-uploaded";
 }
 
+type CdnWarmupOptions = Pick<
+  DeployOptions,
+  | "preview"
+  | "env"
+  | "name"
+  | "config"
+  | "warmCdnConcurrency"
+  | "warmCdnTimeout"
+  | "warmCdnRetries"
+  | "warmCdnStrict"
+>;
+
 export async function deployWithCdnWarmup(
   root: string,
   paths: readonly string[],
-  options: Pick<
-    DeployOptions,
-    | "preview"
-    | "env"
-    | "name"
-    | "config"
-    | "warmCdnConcurrency"
-    | "warmCdnTimeout"
-    | "warmCdnRetries"
-    | "warmCdnStrict"
-  >,
+  options: CdnWarmupOptions,
 ): Promise<CdnWarmupDeployResult> {
   const target = validateCdnWarmupConfiguration(root, options);
   const upload = runWranglerVersionUpload(root, options);
@@ -81,39 +79,80 @@ export async function deployWithCdnWarmup(
   const stagingTraffic = getZeroPercentStagingTraffic(currentVersions, upload.versionId);
 
   if (!stagingTraffic) {
-    const message =
-      "CDN pre-warm requires the current deployment to contain exactly one version at 100%.";
-    if (options.warmCdnStrict) throw new Error(message);
-    console.warn(`  ${message} Promoting without pre-warming.`);
-    const deployed = runWranglerVersionDeploy(
-      root,
-      [{ versionId: upload.versionId, percentage: 100 }],
-      options,
-      "promote-uploaded",
-    );
-    const triggers = runWranglerTriggersDeploy(root, options);
-    return {
-      url: pickDeployedUrl(deployed.deployedUrl, triggers.deployedUrl, upload.previewUrl),
-      warmed: false,
-    };
+    return promoteWithoutWarmup(root, upload, options);
   }
 
+  return warmAndPromote(
+    root,
+    paths,
+    target,
+    upload,
+    currentVersions[0].versionId,
+    stagingTraffic,
+    options,
+  );
+}
+
+/**
+ * No safe staging split exists (the deployment isn't a single version at
+ * 100%), so there is no version-isolated cache partition to warm into.
+ * Staging is what makes warming safe to attempt at all — without it, this
+ * mode only promotes directly. Strict mode refuses instead, since it exists
+ * to guarantee a confirmed warm-up happened.
+ */
+function promoteWithoutWarmup(
+  root: string,
+  upload: WranglerVersionUploadResult,
+  options: CdnWarmupOptions,
+): CdnWarmupDeployResult {
+  const message =
+    "CDN pre-warm requires the current deployment to contain exactly one version at 100%.";
+  if (options.warmCdnStrict) throw new Error(message);
+  console.warn(`  ${message} Promoting without pre-warming.`);
+  const deployed = runWranglerVersionDeploy(
+    root,
+    [{ versionId: upload.versionId, percentage: 100 }],
+    options,
+    "promote-uploaded",
+  );
+  const triggers = runWranglerTriggersDeploy(root, options);
+  return {
+    url: pickDeployedUrl(deployed.deployedUrl, triggers.deployedUrl, upload.previewUrl),
+    warmed: false,
+  };
+}
+
+/**
+ * Stage the uploaded version at 0%, attempt a verified warm-up through a
+ * version override, then promote to 100% and apply triggers.
+ *
+ * Triggers (routes/schedules/custom domains) are applied AFTER promotion, not
+ * before warming. `wrangler triggers deploy` PUTs the script's routes and can
+ * detach the current production hostname; running it inside the warm window
+ * means a warm/promote failure leaves production routing pointed at a version
+ * that never got promoted. Warming instead targets the already-attached
+ * production host via the version-override header, so the risky window only
+ * ever leaves the new version staged at 0% — already the safe state.
+ */
+async function warmAndPromote(
+  root: string,
+  paths: readonly string[],
+  target: WranglerDeploymentTarget,
+  upload: WranglerVersionUploadResult,
+  previousVersionId: string,
+  stagingTraffic: readonly WranglerVersionTraffic[],
+  options: CdnWarmupOptions,
+): Promise<CdnWarmupDeployResult> {
   // Workers Cache includes the invoked Worker version in its key unless
   // cross_version_cache is enabled. Staging lets overrides warm the uploaded
   // version's partition while a failed override can only touch the old one.
   const staged = runWranglerVersionDeploy(root, stagingTraffic, options, "stage");
-  const previousVersionId = currentVersions[0].versionId;
 
-  // Triggers (routes/schedules/custom domains) are applied AFTER promotion, not
-  // before warming. `wrangler triggers deploy` PUTs the script's routes and can
-  // detach the current production hostname; running it inside the warm window
-  // means a warm/promote failure leaves production routing pointed at a version
-  // that never got promoted. Warming instead targets the already-attached
-  // production host via the version-override header, so the risky window only
-  // ever leaves the new version staged at 0% — already the safe state.
   let warmed = false;
   try {
-    const targetUrl = resolveCdnWarmupTargetUrl(root, staged.deployedUrl, options);
+    const targetUrl = target.productionHost
+      ? `https://${target.productionHost}`
+      : staged.deployedUrl;
     const headers = buildVersionOverrideHeaders(target.workerName, upload.versionId);
     if (!targetUrl || !headers) {
       const message =
@@ -131,7 +170,7 @@ export async function deployWithCdnWarmup(
         retries: options.warmCdnRetries,
         strict: options.warmCdnStrict,
       });
-      warmed = isFullyWarmed(result);
+      warmed = result.failed === 0;
       if (!warmed) {
         console.warn(
           `  CDN pre-warm did not confirm all ${result.total} path(s) served the uploaded ` +
@@ -251,19 +290,4 @@ function buildVersionOverrideHeaders(
   return {
     "Cloudflare-Workers-Version-Overrides": `${workerName}=${quoteStructuredHeaderString(versionId)}`,
   };
-}
-
-export function resolveCdnWarmupTargetUrl(root: string, deployedUrl: string | null): string | null;
-export function resolveCdnWarmupTargetUrl(
-  root: string,
-  deployedUrl: string | null,
-  options: Pick<DeployOptions, "preview" | "env" | "config">,
-): string | null;
-export function resolveCdnWarmupTargetUrl(
-  root: string,
-  deployedUrl: string | null,
-  options?: Pick<DeployOptions, "preview" | "env" | "config">,
-): string | null {
-  const target = resolveWranglerDeploymentTarget(root, options ?? {});
-  return target?.productionHost ? `https://${target.productionHost}` : deployedUrl;
 }

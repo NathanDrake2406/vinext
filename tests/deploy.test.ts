@@ -18,7 +18,7 @@ import {
   validateWranglerEnvName,
   withCloudflareEnv,
 } from "../packages/cloudflare/src/deploy.js";
-import { resolveCdnWarmupTargetUrl } from "../packages/cloudflare/src/cdn-warm-deployment.js";
+import { resolveWranglerDeploymentTarget } from "../packages/cloudflare/src/wrangler-deployment-target.js";
 import {
   detectPackageManager,
   detectPackageManagerName,
@@ -3282,7 +3282,10 @@ binding = "STAGING_VERSION"
   });
 });
 
-describe("resolveCdnWarmupTargetUrl", () => {
+describe("resolveWranglerDeploymentTarget — production host", () => {
+  // The caller (cdn-warm-deployment.ts) falls back to the wrangler-reported
+  // deployedUrl when productionHost is undefined, so these only assert the
+  // raw host resolveWranglerDeploymentTarget itself decides on.
   it("skips a disabled custom domain and uses the next active route", () => {
     writeFile(
       tmpDir,
@@ -3295,9 +3298,7 @@ describe("resolveCdnWarmupTargetUrl", () => {
       }),
     );
 
-    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
-      "https://app.example.com",
-    );
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
   });
 
   it("uses the route pattern host instead of the containing zone", () => {
@@ -3309,25 +3310,19 @@ describe("resolveCdnWarmupTargetUrl", () => {
       }),
     );
 
-    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
-      "https://app.example.com",
-    );
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
   });
 
   it("supports the singular JSON route property", () => {
     writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ route: "app.example.com/*" }));
 
-    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
-      "https://app.example.com",
-    );
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
   });
 
   it("does not use a route host when the warmup paths may bypass the Worker", () => {
     writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ route: "app.example.com/api/*" }));
 
-    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
-      "https://worker.example.workers.dev",
-    );
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBeUndefined();
   });
 
   it("uses the pattern from a singular TOML route object", () => {
@@ -3337,9 +3332,7 @@ describe("resolveCdnWarmupTargetUrl", () => {
       `route = { zone_name = "example.com", pattern = "app.example.com/*" }`,
     );
 
-    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
-      "https://app.example.com",
-    );
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
   });
 
   it("does not leak an env route past a commented environment header", () => {
@@ -3354,9 +3347,7 @@ describe("resolveCdnWarmupTargetUrl", () => {
 route = "staging.example.com/*"`,
     );
 
-    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://my-worker.example.workers.dev", {})).toBe(
-      "https://my-worker.example.workers.dev",
-    );
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBeUndefined();
   });
 
   it("does not inherit a top-level route into an explicit environment", () => {
@@ -3370,10 +3361,8 @@ route = "staging.example.com/*"`,
     );
 
     expect(
-      resolveCdnWarmupTargetUrl(tmpDir, "https://my-worker-staging.example.workers.dev", {
-        env: "staging",
-      }),
-    ).toBe("https://my-worker-staging.example.workers.dev");
+      resolveWranglerDeploymentTarget(tmpDir, { env: "staging" })?.productionHost,
+    ).toBeUndefined();
   });
 
   it("skips a disabled custom domain in an inline TOML routes array", () => {
@@ -3388,8 +3377,6 @@ routes = [
 `,
     );
 
-    expect(resolveCdnWarmupTargetUrl(tmpDir, "https://worker.example.workers.dev", {})).toBe(
-      "https://app.example.com",
-    );
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
   });
 });
