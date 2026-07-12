@@ -127,6 +127,16 @@ describe("landing build comparison", () => {
 });
 
 describe("landing page claims", () => {
+  it("renders the shared morphing copy control for command and agent payloads", () => {
+    const html = renderToStaticMarkup(createElement(LandingPage, { stats: LIVE_STATS }));
+
+    expect(html.match(/class="copy-button"/g)).toHaveLength(3);
+    expect(html.match(/copy-button-icon--copy/g)).toHaveLength(3);
+    expect(html.match(/copy-button-icon--check/g)).toHaveLength(3);
+    expect(html).toContain('data-copy="npx vinext init"');
+    expect(html).toContain('aria-label="Copy migration prompt for your coding agent"');
+  });
+
   it("qualifies live measurements and server-renders the completed race", () => {
     const html = renderToStaticMarkup(createElement(LandingPage, { stats: LIVE_STATS }));
 

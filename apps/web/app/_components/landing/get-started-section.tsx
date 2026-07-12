@@ -1,4 +1,5 @@
 import type { LandingStyle } from "./landing-styles";
+import { CopyButton } from "./copy-button";
 
 /* Mirrors the flow the repo itself recommends (README quick start and the
    bundled migrate-to-vinext Agent Skill), so the prompt never promises
@@ -139,33 +140,7 @@ export function GetStartedSection() {
           >
             npx vinext init
           </code>
-          <button
-            className="text-link"
-            data-copy="npx vinext init"
-            aria-label="Copy command"
-            style={
-              {
-                flex: "none",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                minWidth: "80px",
-                fontFamily: "'JetBrains Mono',monospace",
-                color: "var(--mute)",
-                fontSize: "10.5px",
-                letterSpacing: ".1em",
-                textTransform: "uppercase",
-                padding: "8px 12px",
-                borderRadius: "8px",
-                border: "1px solid var(--line-soft)",
-                background: "none",
-                cursor: "pointer",
-                transition: "color .2s,border-color .2s,background .2s",
-              } satisfies LandingStyle
-            }
-          >
-            copy
-          </button>
+          <CopyButton value="npx vinext init" ariaLabel="Copy command" />
         </div>
 
         {/* Agent path, as a twin of the command box above: same shell, but
@@ -242,33 +217,7 @@ export function GetStartedSection() {
           >
             prompt for your coding agent
           </span>
-          <button
-            className="text-link"
-            data-copy={agentPrompt}
-            aria-label="Copy migration prompt for your coding agent"
-            style={
-              {
-                flex: "none",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                minWidth: "80px",
-                fontFamily: "'JetBrains Mono',monospace",
-                color: "var(--mute)",
-                fontSize: "10.5px",
-                letterSpacing: ".1em",
-                textTransform: "uppercase",
-                padding: "8px 12px",
-                borderRadius: "8px",
-                border: "1px solid var(--line-soft)",
-                background: "none",
-                cursor: "pointer",
-                transition: "color .2s,border-color .2s,background .2s",
-              } satisfies LandingStyle
-            }
-          >
-            copy
-          </button>
+          <CopyButton value={agentPrompt} ariaLabel="Copy migration prompt for your coding agent" />
         </div>
 
         <div

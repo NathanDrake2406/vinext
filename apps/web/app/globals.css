@@ -190,11 +190,102 @@ h2 {
 [data-copy] {
   position: relative;
 }
-[data-copy]:hover,
-[data-copy]:focus-visible {
-  color: var(--ink) !important;
-  border-color: var(--faint) !important;
-  background: var(--surface-2) !important;
+.copy-button {
+  flex: none;
+  display: grid;
+  grid-template-columns: 14px 42px;
+  align-items: center;
+  justify-content: center;
+  column-gap: 7px;
+  height: 32px;
+  min-width: 80px;
+  padding: 0 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: none;
+  color: var(--mute);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    scale 150ms var(--ease-out),
+    color 150ms ease,
+    border-color 150ms ease,
+    background 150ms ease;
+}
+.copy-button:hover,
+.copy-button:focus-visible {
+  border-color: var(--faint);
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.copy-button:active {
+  scale: 0.96 !important;
+}
+.copy-button-icons {
+  position: relative;
+  width: 14px;
+  height: 14px;
+}
+.copy-button-icon {
+  position: absolute;
+  inset: 0;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+.copy-button-icon--check {
+  opacity: 0;
+  transform: scale(0.75);
+}
+.copy-button-label {
+  grid-column: 2;
+  grid-row: 1;
+  white-space: nowrap;
+  transition:
+    opacity 160ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+.copy-button-label--copied,
+.copy-button-label--error {
+  opacity: 0;
+  transform: scale(0.92);
+}
+.copy-button[data-copy-state="copied"] .copy-button-icon--copy,
+.copy-button[data-copy-state="copied"] .copy-button-label--idle,
+.copy-button[data-copy-state="error"] .copy-button-label--idle {
+  opacity: 0;
+  transform: scale(0.75);
+}
+.copy-button[data-copy-state="copied"] .copy-button-icon--check,
+.copy-button[data-copy-state="copied"] .copy-button-label--copied,
+.copy-button[data-copy-state="error"] .copy-button-label--error {
+  opacity: 1;
+  transform: scale(1);
+}
+@media (hover: hover) and (pointer: fine) {
+  .copy-button:hover {
+    scale: 1.02;
+  }
+  .copy-button:not([data-copy-state="error"]):hover .copy-button-icon--copy {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+  .copy-button:not([data-copy-state="error"]):hover .copy-button-icon--check {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 [data-copy]::after,
 .theme-toggle::after,
@@ -212,6 +303,11 @@ button:active {
   a[href]:active,
   button:active {
     scale: 1 !important;
+  }
+  .copy-button,
+  .copy-button-icon,
+  .copy-button-label {
+    transition-duration: 0ms;
   }
 }
 
@@ -235,7 +331,7 @@ button:active {
     transition-duration: 120ms;
   }
 }
-/* quiet copy feedback: tint text and border only — a filled pill flash reads as an alert */
+/* Copy outcome is carried by the icon, label, and a restrained state tint. */
 [data-copy][data-copy-state="copied"] {
   color: var(--ok) !important;
   border-color: rgba(70, 211, 154, 0.35) !important;

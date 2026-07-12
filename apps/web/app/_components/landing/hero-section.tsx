@@ -1,4 +1,5 @@
 import type { LandingStyle } from "./landing-styles";
+import { CopyButton } from "./copy-button";
 
 export function HeroSection() {
   return (
@@ -156,32 +157,7 @@ export function HeroSection() {
             >
               npx vinext init
             </code>
-            <button
-              className="text-link"
-              data-copy="npx vinext init"
-              aria-label="Copy command"
-              style={
-                {
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  minWidth: "64px",
-                  fontFamily: "'JetBrains Mono',monospace",
-                  color: "var(--mute)",
-                  fontSize: "10.5px",
-                  letterSpacing: ".1em",
-                  textTransform: "uppercase",
-                  padding: "7px 10px",
-                  borderRadius: "8px",
-                  border: "1px solid var(--line-soft)",
-                  background: "none",
-                  cursor: "pointer",
-                  transition: "color .2s,border-color .2s,background .2s",
-                } satisfies LandingStyle
-              }
-            >
-              copy
-            </button>
+            <CopyButton value="npx vinext init" ariaLabel="Copy command" />
           </div>
         </div>
       </div>

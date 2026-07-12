@@ -559,40 +559,15 @@ function useCopyCommand(rootRef: RootRef) {
     if (!root) return;
 
     let resetTimer: number | null = null;
-    // Blur masks the hard textContent swap so the label reads as dissolving
-    // into the next state instead of flickering. WAAPI so the interrupted
-    // case (rapid re-clicks) retargets instead of restarting from keyframe 0.
-    const dissolve = (button: HTMLButtonElement) => {
-      if (window.matchMedia(reducedMotionQuery).matches) return;
-      button.animate(
-        [
-          { filter: "blur(3px)", opacity: 0.3 },
-          { filter: "blur(0px)", opacity: 1 },
-        ],
-        { duration: 260, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
-      );
-    };
-    const setStatus = (
-      button: HTMLButtonElement,
-      message: string,
-      state: CopyStatus,
-      label: string,
-    ) => {
+    const setStatus = (button: HTMLButtonElement, state: CopyStatus, label: string) => {
       if (resetTimer !== null) clearTimeout(resetTimer);
-      // Buttons carry different idle labels ("copy", "copy prompt"), so
-      // capture whatever this one showed before the first status swap.
-      const idleText = (button.dataset.copyIdleText ??= button.textContent ?? "copy");
       const idleLabel = (button.dataset.copyIdleLabel ??=
         button.getAttribute("aria-label") ?? "Copy command");
-      button.textContent = message;
       button.setAttribute("data-copy-state", state);
       button.setAttribute("aria-label", label);
-      dissolve(button);
       resetTimer = window.setTimeout(() => {
-        button.textContent = idleText;
         button.removeAttribute("data-copy-state");
         button.setAttribute("aria-label", idleLabel);
-        dissolve(button);
       }, 1500);
     };
     const onClick = (event: MouseEvent) => {
@@ -603,7 +578,7 @@ function useCopyCommand(rootRef: RootRef) {
       if (!text) return;
 
       if (!navigator.clipboard?.writeText) {
-        setStatus(button, "press ⌘C", "error", "Copy command failed");
+        setStatus(button, "error", "Copy command failed");
         return;
       }
       Promise.race([
@@ -612,8 +587,8 @@ function useCopyCommand(rootRef: RootRef) {
           setTimeout(() => reject(new Error("Clipboard write timed out")), 800);
         }),
       ]).then(
-        () => setStatus(button, "✓ copied", "copied", "Command copied"),
-        () => setStatus(button, "press ⌘C", "error", "Copy command failed"),
+        () => setStatus(button, "copied", "Command copied"),
+        () => setStatus(button, "error", "Copy command failed"),
       );
     };
 
