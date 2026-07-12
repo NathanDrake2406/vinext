@@ -47,6 +47,7 @@ import {
   clearAppNavigationFailureTarget,
   getAppNavigationFailureTarget,
 } from "../client/app-nav-failure-handler.js";
+import type { AppNavigationCommitDebugInput } from "../client/app-navigation-debug.js";
 
 export type HistoryUpdateMode = "push" | "replace";
 
@@ -84,6 +85,7 @@ type SameUrlServerActionLifecycleOptions = {
 type BrowserNavigationControllerDeps = {
   basePath?: string;
   commitClientNavigationState?: typeof commitClientNavigationState;
+  onNavigationCommitDebug?: (input: AppNavigationCommitDebugInput) => void;
   performHardNavigation?: (href: string, mode?: HardNavigationMode) => boolean;
   getRouteManifest?: () => RouteManifest | null;
   syncHistoryStatePreviousNextUrl?: (
@@ -266,6 +268,7 @@ export function createAppBrowserNavigationController(
   const basePath = deps.basePath ?? "";
   const commitClientNavigationStateImpl =
     deps.commitClientNavigationState ?? commitClientNavigationState;
+  const onNavigationCommitDebug = deps.onNavigationCommitDebug;
   const performHardNavigation = deps.performHardNavigation ?? performHardNavigationWithLoopGuard;
   const getRouteManifest = deps.getRouteManifest ?? (() => null);
   const syncHistoryStatePreviousNextUrl = deps.syncHistoryStatePreviousNextUrl ?? (() => {});
@@ -693,11 +696,27 @@ export function createAppBrowserNavigationController(
     });
 
     if (approval.approvedCommit === null) {
+      onNavigationCommitDebug?.({
+        navigationCommitKind: null,
+        navigationId: options.navId,
+        outcome: "no-commit",
+        payloadOrigin: "committed-cache",
+        targetHref: options.targetHref,
+        trace: approval.decision.trace,
+      });
       return false;
     }
 
     options.beforeCommit?.();
     dispatchSynchronousVisibleCommit(approval.approvedCommit);
+    onNavigationCommitDebug?.({
+      navigationCommitKind: null,
+      navigationId: options.navId,
+      outcome: "committed",
+      payloadOrigin: "committed-cache",
+      targetHref: options.targetHref,
+      trace: approval.decision.trace,
+    });
     return true;
   }
 
@@ -751,6 +770,7 @@ export function createAppBrowserNavigationController(
     });
 
     let snapshotActivated = false;
+    let commitDebugInput: Omit<AppNavigationCommitDebugInput, "outcome"> | null = null;
     try {
       const startedState = getBrowserRouterState();
       const pending = await createPendingNavigationCommit({
@@ -778,6 +798,14 @@ export function createAppBrowserNavigationController(
       });
 
       if (approval.decision.disposition === "no-commit") {
+        onNavigationCommitDebug?.({
+          navigationCommitKind: options.navigationCommitKind ?? null,
+          navigationId: options.navId,
+          outcome: "no-commit",
+          payloadOrigin: options.payloadOrigin.origin,
+          targetHref: options.targetHref,
+          trace: approval.decision.trace,
+        });
         settlePendingBrowserRouterState(options.pendingRouterState);
         pendingNavigationFailureTargets.delete(renderId);
         if (failureTarget) {
@@ -795,17 +823,42 @@ export function createAppBrowserNavigationController(
         pendingNavigationCommits.delete(renderId);
         consumeAppRouterScrollIntent(options.scrollIntent ?? null);
         if (performHardNavigation(options.targetHref)) {
+          onNavigationCommitDebug?.({
+            navigationCommitKind: options.navigationCommitKind ?? null,
+            navigationId: options.navId,
+            outcome: "hard-navigate",
+            payloadOrigin: options.payloadOrigin.origin,
+            targetHref: options.targetHref,
+            trace: approval.decision.trace,
+          });
           return "hard-navigate";
         }
         if (failureTarget) {
           clearAppNavigationFailureTarget(failureTarget);
         }
+        onNavigationCommitDebug?.({
+          navigationCommitKind: options.navigationCommitKind ?? null,
+          navigationId: options.navId,
+          outcome: "no-commit",
+          payloadOrigin: options.payloadOrigin.origin,
+          targetHref: options.targetHref,
+          trace: approval.decision.trace,
+        });
         return "no-commit";
       }
 
       const approvedCommit = approval.approvedCommit;
       if (approvedCommit === null) {
         throw new Error("[vinext] Commit decision did not approve a visible commit");
+      }
+      if (onNavigationCommitDebug !== undefined) {
+        commitDebugInput = {
+          navigationCommitKind: options.navigationCommitKind ?? null,
+          navigationId: options.navId,
+          payloadOrigin: options.payloadOrigin.origin,
+          targetHref: options.targetHref,
+          trace: approval.decision.trace,
+        };
       }
 
       queuePrePaintNavigationEffect(
@@ -841,7 +894,11 @@ export function createAppBrowserNavigationController(
       throw error;
     }
 
-    return committed.then((didCommit) => (didCommit ? "committed" : "no-commit"));
+    return committed.then((didCommit) => {
+      const outcome = didCommit ? "committed" : "no-commit";
+      if (commitDebugInput !== null) onNavigationCommitDebug?.({ ...commitDebugInput, outcome });
+      return outcome;
+    });
   }
 
   async function commitSameUrlNavigatePayload(

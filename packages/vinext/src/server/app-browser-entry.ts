@@ -70,6 +70,7 @@ import {
 } from "vinext/shims/app-router-scroll-state";
 import { resolveHybridClientRewriteHref } from "vinext/shims/internal/hybrid-client-route-owner";
 import { installWindowNext, setWindowNextInternalSourcePage } from "../client/window-next.js";
+import { createAppNavigationDebugReporter } from "../client/app-navigation-debug.js";
 import {
   chunksToReadableStream,
   createProgressiveRscStream,
@@ -258,9 +259,14 @@ const historyController = new AppBrowserHistoryController({
   },
 });
 
+const navigationDebug = createAppNavigationDebugReporter({
+  enabled: process.env.__VINEXT_DEBUG_NAVIGATION === "true",
+});
+
 const browserNavigationController = createAppBrowserNavigationController({
   basePath: __basePath,
   getRouteManifest: getBrowserRouteManifest,
+  onNavigationCommitDebug: navigationDebug?.commit,
   syncHistoryStatePreviousNextUrl: (previousNextUrl, bfcacheIds) =>
     historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
 });
@@ -1632,7 +1638,8 @@ function bootstrapHydration(
 
   let activeNavigationAbortController: AbortController | null = null;
 
-  function abortSupersededNavigation(): void {
+  function abortSupersededNavigation(reason: "history-restore" | "superseded"): void {
+    if (activeNavigationAbortController !== null) navigationDebug?.abort(reason);
     activeNavigationAbortController?.abort();
     activeNavigationAbortController = null;
   }
@@ -1648,12 +1655,17 @@ function bootstrapHydration(
     scrollIntent?: AppRouterScrollIntent | null,
     visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
   ): Promise<void> {
-    abortSupersededNavigation();
+    abortSupersededNavigation("superseded");
     const navigationAbortController = new AbortController();
     activeNavigationAbortController = navigationAbortController;
     let pendingRouterState: PendingBrowserRouterState | null = null;
     // Hoist navId above try so the catch and finally blocks can reference it.
     const navId = browserNavigationController.beginNavigation();
+    navigationDebug?.start({
+      navigationId: navId,
+      navigationKind,
+      targetHref: href,
+    });
     const navigationCacheGeneration = clientNavigationCacheGeneration;
     discardedServerActionRefreshScheduler.markNavigationStart();
 
@@ -1714,6 +1726,7 @@ function bootstrapHydration(
       }
 
       while (true) {
+        navigationDebug?.retarget(navId, currentHref);
         const url = new URL(currentHref, window.location.origin);
         const requestState = getRequestState(
           navigationKind,
@@ -1831,6 +1844,15 @@ function bootstrapHydration(
           targetHref: currentHref,
           visitedResponse,
         });
+        navigationDebug?.reuse({
+          additionalPrefetchRscUrls,
+          decision: reuseDecision.kind,
+          navigationId: navId,
+          rscUrl,
+          targetHref: currentHref,
+          trace: reuseDecision.trace,
+          visitedResponseCacheKey: visitedResponseCandidate.cacheKey,
+        });
         if (reuseDecision.kind === "reuseVisitedResponse" && cachedRoute) {
           const cachedFetchDecision = navigationPlanner.classifyRscFetchResult({
             clientCompatibilityId: CLIENT_RSC_COMPATIBILITY_ID,
@@ -1937,6 +1959,13 @@ function bootstrapHydration(
             },
           );
           if (!browserNavigationController.isCurrentNavigation(navId)) return;
+          navigationDebug?.prefetch({
+            navigationId: navId,
+            outcome: prefetchedResponse === null ? "miss" : "hit",
+            responseUrl: prefetchedResponse?.url ?? null,
+            rscUrl,
+            targetHref: currentHref,
+          });
           if (prefetchedResponse) {
             navResponse = restoreRscResponse(prefetchedResponse, false);
             navResponseExpiresAt = prefetchedResponse.expiresAt;
@@ -1988,6 +2017,11 @@ function bootstrapHydration(
             });
 
             if (optimisticPayload !== null) {
+              navigationDebug?.optimisticShell({
+                navigationId: navId,
+                routeId: optimisticPayload.template.routeId,
+                targetHref: currentHref,
+              });
               detachedNavigationCommits = true;
               const optimisticNavigationSnapshot = createClientNavigationRenderSnapshot(
                 currentHref,
@@ -2039,10 +2073,22 @@ function bootstrapHydration(
               requestHeaders.set(VINEXT_CLIENT_REUSE_MANIFEST_HEADER, clientReuseManifestHeader);
             }
           }
+          navigationDebug?.fetchStart({
+            navigationId: navId,
+            rscUrl,
+            targetHref: currentHref,
+          });
           navResponse = await fetch(rscUrl, {
             headers: requestHeaders,
             credentials: "include",
             signal: navigationAbortController.signal,
+          });
+          navigationDebug?.fetchResponse({
+            navigationId: navId,
+            responseUrl: navResponse.url,
+            rscUrl,
+            status: navResponse.status,
+            targetHref: currentHref,
           });
         }
 
@@ -2292,6 +2338,7 @@ function bootstrapHydration(
       if (activeNavigationAbortController === navigationAbortController) {
         activeNavigationAbortController = null;
       }
+      navigationDebug?.settle(navId);
       // Single settlement site: covers normal return, early returns on stale-id
       // checks, and error paths. The finally runs even when the catch returns.
       // settlePendingBrowserRouterState is idempotent via the settled flag.
@@ -2350,7 +2397,7 @@ function bootstrapHydration(
     const snapshotNavigationId = browserNavigationController.beginNavigation();
     if (
       restoreHistoryStateSnapshot(event.state, snapshotNavigationId, () => {
-        abortSupersededNavigation();
+        abortSupersededNavigation("history-restore");
         notifyAppRouterTransitionStart(href, "traverse");
       })
     ) {

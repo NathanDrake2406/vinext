@@ -1282,6 +1282,7 @@ describe("app browser entry navigation scheduling", () => {
   });
 
   it("restores visible history snapshots through an approved traversal commit", () => {
+    const onNavigationCommitDebug = vi.fn();
     const currentState = createState({
       elements: createResolvedElements("route:/scroll-restoration/other", "/"),
       navigationSnapshot: createClientNavigationRenderSnapshot(
@@ -1300,7 +1301,9 @@ describe("app browser entry navigation scheduling", () => {
       routeId: "route:/scroll-restoration",
       visibleCommitVersion: 2,
     });
-    const { controller, stateRef } = createControllerHarness(currentState);
+    const { controller, stateRef } = createControllerHarness(currentState, {
+      onNavigationCommitDebug,
+    });
     const navId = controller.beginNavigation();
 
     const restored = controller.restoreHistorySnapshotVisibleState({
@@ -1318,6 +1321,14 @@ describe("app browser entry navigation scheduling", () => {
       state: "committed",
       visibleCommitVersion: 8,
     });
+    expect(onNavigationCommitDebug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        navigationId: navId,
+        outcome: "committed",
+        payloadOrigin: "committed-cache",
+        targetHref: "https://example.com/scroll-restoration",
+      }),
+    );
   });
 
   it("matches visible history snapshot targets after stripping basePath and canonicalizing search", () => {
@@ -3163,6 +3174,7 @@ describe("app browser navigation controller", () => {
   it("reads RouteManifest lazily after generated browser globals are assigned", async () => {
     let routeManifest: RouteManifest | null = null;
     const performHardNavigation = vi.fn(() => true);
+    const onNavigationCommitDebug = vi.fn();
     const { controller, detach, stateRef } = createControllerHarness(
       createState({
         layoutIds: ["layout:/stale"],
@@ -3172,6 +3184,7 @@ describe("app browser navigation controller", () => {
       }),
       {
         getRouteManifest: () => routeManifest,
+        onNavigationCommitDebug,
         performHardNavigation,
       },
     );
@@ -3219,6 +3232,14 @@ describe("app browser navigation controller", () => {
       await expect(result).resolves.toBe("hard-navigate");
       await expect(pendingRouterState.promise).resolves.toBe(stateRef.current);
       expect(performHardNavigation).toHaveBeenCalledWith("https://example.com/marketing");
+      expect(onNavigationCommitDebug).toHaveBeenCalledWith(
+        expect.objectContaining({
+          navigationId: navId,
+          outcome: "hard-navigate",
+          payloadOrigin: "fresh",
+          targetHref: "https://example.com/marketing",
+        }),
+      );
       expect(stateRef.current.routeId).toBe("route:/app");
     } finally {
       detach();

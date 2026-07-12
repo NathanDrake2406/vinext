@@ -591,6 +591,14 @@ Override behavior:
 
 - To override any `.env*` value, set it in your shell/CI environment before running vinext. Existing `process.env` always wins.
 
+#### App Router navigation diagnostics
+
+Start `vinext dev` or a production build with `VINEXT_DEBUG_NAVIGATION=1` to emit structured
+App Router lifecycle events to the browser console. The events identify navigation reuse,
+prefetch handoff, optimistic shells, RSC fetches, supersession, and visible commit outcomes.
+They include application URLs, so review them before sharing logs. Response bodies, cookies,
+and request headers are never included.
+
 ### Caching
 
 The cache is pluggable. The default `MemoryCacheHandler` works out of the box. Swap in your own backend for production.

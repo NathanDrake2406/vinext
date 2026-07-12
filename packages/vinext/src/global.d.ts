@@ -429,6 +429,13 @@ declare global {
       __VINEXT_PREFETCH_INLINING?: string;
 
       /**
+       * `"true"` when the vinext process starts with
+       * `VINEXT_DEBUG_NAVIGATION=1`. Enables structured browser-side App
+       * Router lifecycle diagnostics.
+       */
+      __VINEXT_DEBUG_NAVIGATION?: string;
+
+      /**
        * JSON-encoded array of `RemotePattern` objects from
        * `next.config.js` → `images.remotePatterns`.
        */

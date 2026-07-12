@@ -2056,6 +2056,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         defines["process.env.__VINEXT_PREFETCH_INLINING"] = JSON.stringify(
           nextConfig.prefetchInlining ? "true" : "false",
         );
+        // Navigation tracing is an explicit build-time diagnostic. Keep the
+        // browser runtime branch statically false unless the build or dev
+        // server starts with VINEXT_DEBUG_NAVIGATION=1.
+        defines["process.env.__VINEXT_DEBUG_NAVIGATION"] = JSON.stringify(
+          process.env.VINEXT_DEBUG_NAVIGATION === "1" ? "true" : "false",
+        );
         // Emit a raw boolean (not the "true"/"false" string form used by the
         // sibling defines above): the consumer guards with
         // `if (process.env.__NEXT_GESTURE_TRANSITION)`, so the literal `false`
