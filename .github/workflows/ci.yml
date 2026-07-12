@@ -472,6 +472,10 @@ jobs:
             label: app-router-bfcache
             shardIndex: 1
             shardTotal: 1
+          - project: app-router-navigation-debug
+            label: app-router-navigation-debug
+            shardIndex: 1
+            shardTotal: 1
           - project: app-router-prefetch-searchparams
             label: app-router-prefetch-searchparams
             shardIndex: 1

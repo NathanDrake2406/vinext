@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 const appRouterBrowserSpecificTests = "**/app-router/**/*.browser.spec.ts";
 const appRouterServer = {
-  command: "VINEXT_DEBUG_NAVIGATION=1 npx vp dev --port 4174",
+  command: "npx vp dev --port 4174",
   cwd: "./tests/fixtures/app-basic",
   port: 4174,
   reuseExistingServer: !process.env.CI,
@@ -85,6 +85,18 @@ const projectServers = {
     testDir: "./tests/e2e/app-router-bfcache",
     use: { baseURL: "http://localhost:4183" },
     server: appRouterBfcacheServer,
+  },
+  "app-router-navigation-debug": {
+    testDir: "./tests/e2e/app-router-navigation-debug",
+    use: { baseURL: "http://localhost:4195" },
+    server: {
+      command: "npx vp dev --port 4195",
+      cwd: "./tests/fixtures/app-basic",
+      env: { VINEXT_DEBUG_NAVIGATION: "1" },
+      port: 4195,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
   },
   "catch-error": {
     testDir: "./tests/e2e/catch-error",
