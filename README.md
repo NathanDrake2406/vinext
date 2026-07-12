@@ -597,7 +597,8 @@ Start `vinext dev` or a production build with `VINEXT_DEBUG_NAVIGATION=1` to emi
 App Router lifecycle events to the browser console. The events identify navigation reuse,
 prefetch handoff, optimistic shells, RSC fetches, supersession, and visible commit outcomes.
 They include application URLs, so review them before sharing logs. Response bodies, cookies,
-and request headers are never included.
+and request headers are never included. The diagnostic event schema is internal; field names,
+values, and lifecycle phase names may change between releases.
 
 ### Caching
 
