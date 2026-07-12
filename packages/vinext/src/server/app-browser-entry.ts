@@ -193,7 +193,7 @@ type DevErrorOverlayModule = typeof import("../client/dev-error-overlay.js");
 
 type ServerActionResult = AppBrowserServerActionResult<AppWireElements>;
 
-type NavigationKind = "navigate" | "traverse" | "refresh";
+type NavigationKind = NavigationReuseFacts["navigationKind"];
 type MpaNavigationState = {
   href: string;
   historyUpdateMode: HistoryUpdateMode;

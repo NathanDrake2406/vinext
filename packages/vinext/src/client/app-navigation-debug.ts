@@ -1,4 +1,8 @@
 import type { AppNavigationPayloadOrigin } from "../server/app-browser-state.js";
+import type {
+  NavigationReuseDecision,
+  NavigationReuseFacts,
+} from "../server/navigation-planner.js";
 import type { NavigationTrace } from "../server/navigation-trace.js";
 
 type AppNavigationDebugBase = Readonly<{
@@ -8,17 +12,13 @@ type AppNavigationDebugBase = Readonly<{
 
 type AppNavigationStartDebugInput = AppNavigationDebugBase &
   Readonly<{
-    navigationKind: "navigate" | "refresh" | "traverse";
+    navigationKind: NavigationReuseFacts["navigationKind"];
   }>;
 
 type AppNavigationReuseDebugInput = AppNavigationDebugBase &
   Readonly<{
     additionalPrefetchRscUrls: readonly string[];
-    decision:
-      | "attemptOptimisticRouteShell"
-      | "consumePrefetch"
-      | "fetchFresh"
-      | "reuseVisitedResponse";
+    decision: NavigationReuseDecision["kind"];
     rscUrl: string;
     trace: NavigationTrace;
     visitedResponseCacheKey: string;

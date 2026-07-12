@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 const appRouterBrowserSpecificTests = "**/app-router/**/*.browser.spec.ts";
 const appRouterServer = {
-  command: "npx vp dev --port 4174",
+  command: "VINEXT_DEBUG_NAVIGATION=1 npx vp dev --port 4174",
   cwd: "./tests/fixtures/app-basic",
   port: 4174,
   reuseExistingServer: !process.env.CI,
