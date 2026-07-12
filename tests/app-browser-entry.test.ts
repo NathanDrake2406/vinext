@@ -1323,10 +1323,11 @@ describe("app browser entry navigation scheduling", () => {
     });
     expect(onNavigationCommitDebug).toHaveBeenCalledWith(
       expect.objectContaining({
+        approval: expect.objectContaining({ disposition: "commit" }),
         navigationId: navId,
-        outcome: "committed",
         payloadOrigin: "committed-cache",
         targetHref: "https://example.com/scroll-restoration",
+        visibleOutcome: "committed",
       }),
     );
   });
@@ -3234,10 +3235,11 @@ describe("app browser navigation controller", () => {
       expect(performHardNavigation).toHaveBeenCalledWith("https://example.com/marketing");
       expect(onNavigationCommitDebug).toHaveBeenCalledWith(
         expect.objectContaining({
+          approval: expect.objectContaining({ disposition: "hard-navigate" }),
           navigationId: navId,
-          outcome: "hard-navigate",
           payloadOrigin: "fresh",
           targetHref: "https://example.com/marketing",
+          visibleOutcome: "hard-navigate",
         }),
       );
       expect(stateRef.current.routeId).toBe("route:/app");

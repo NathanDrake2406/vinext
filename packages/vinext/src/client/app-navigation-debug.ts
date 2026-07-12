@@ -3,7 +3,7 @@ import type {
   NavigationReuseDecision,
   NavigationReuseFacts,
 } from "../server/navigation-planner.js";
-import type { NavigationTrace } from "../server/navigation-trace.js";
+import type { NavigationCommitDecision } from "../server/app-browser-visible-commit.js";
 
 type AppNavigationDebugBase = Readonly<{
   navigationId: number;
@@ -15,14 +15,14 @@ type AppNavigationStartDebugInput = AppNavigationDebugBase &
     navigationKind: NavigationReuseFacts["navigationKind"];
   }>;
 
-type AppNavigationReuseDebugInput = AppNavigationDebugBase &
-  Readonly<{
-    additionalPrefetchRscUrls: readonly string[];
-    decision: NavigationReuseDecision["kind"];
-    rscUrl: string;
-    trace: NavigationTrace;
-    visitedResponseCacheKey: string;
-  }>;
+type AppNavigationReuseDebugInput = Readonly<{
+  additionalPrefetchRscUrls: readonly string[];
+  decision: NavigationReuseDecision;
+  facts: NavigationReuseFacts;
+  navigationId: number;
+  rscUrl: string;
+  visitedResponseCacheKey: string;
+}>;
 
 type AppNavigationPrefetchDebugInput = AppNavigationDebugBase &
   Readonly<{
@@ -45,9 +45,9 @@ type AppNavigationFetchResponseDebugInput = AppNavigationFetchDebugInput &
 export type AppNavigationCommitDebugInput = AppNavigationDebugBase &
   Readonly<{
     navigationCommitKind: "authoritative" | "detached" | null;
-    outcome: "committed" | "hard-navigate" | "no-commit";
+    approval: NavigationCommitDecision;
     payloadOrigin: AppNavigationPayloadOrigin["origin"];
-    trace: NavigationTrace;
+    visibleOutcome: "committed" | "hard-navigate" | "no-commit";
   }>;
 
 type AppNavigationDebugEvent =

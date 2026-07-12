@@ -4,7 +4,7 @@ import { disableDevErrorOverlay, waitForAppRouterHydration } from "../helpers";
 const BASE = "http://localhost:4174";
 
 type NavigationDebugEvent = {
-  decision?: string;
+  decision?: { kind?: string };
   navigationId: number;
   phase: string;
   stage?: string;
@@ -56,7 +56,7 @@ test.describe("App Router navigation flows", () => {
     const correlated = events.filter((event) => event.navigationId === navigationId);
     const sequence = correlated.map((event) =>
       event.phase === "reuse"
-        ? `${event.phase}:${event.decision}`
+        ? `${event.phase}:${event.decision?.kind}`
         : event.phase === "fetch"
           ? `${event.phase}:${event.stage}`
           : event.phase,

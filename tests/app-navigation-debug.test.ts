@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createAppNavigationDebugReporter } from "../packages/vinext/src/client/app-navigation-debug.js";
 import {
+  navigationPlanner,
+  type NavigationReuseFacts,
+} from "../packages/vinext/src/server/navigation-planner.js";
+import {
   NavigationTraceReasonCodes,
   createNavigationTrace,
 } from "../packages/vinext/src/server/navigation-trace.js";
@@ -57,14 +61,22 @@ describe("App Router navigation diagnostics", () => {
       freshFetchReason: "cacheMiss",
       targetHref: "/projects/B",
     });
+    const facts: NavigationReuseFacts = {
+      bypassNavigationCache: false,
+      navigationKind: "navigate",
+      optimisticRouteShell: { reason: "routeManifestMissing", status: "unavailable" },
+      prefetch: { status: "unavailable" },
+      targetHref: "/projects/B",
+      visitedResponse: { status: "unavailable" },
+    };
+    const decision = navigationPlanner.classifyNavigationReuse(facts);
 
     reporter.reuse({
       additionalPrefetchRscUrls: [],
-      decision: "fetchFresh",
+      decision,
+      facts,
       navigationId: 4,
       rscUrl: "/projects/B?_rsc=key",
-      targetHref: "/projects/B",
-      trace,
       visitedResponseCacheKey: "/projects/B?_rsc=key",
     });
     reporter.fetchStart({
@@ -80,12 +92,18 @@ describe("App Router navigation diagnostics", () => {
       targetHref: "/projects/B",
     });
     reporter.commit({
+      approval: {
+        disposition: "commit",
+        preserveAbsentSlots: true,
+        preserveElementIds: [],
+        preservePreviousSlotIds: [],
+        trace,
+      },
       navigationCommitKind: "authoritative",
       navigationId: 4,
-      outcome: "committed",
       payloadOrigin: "fresh",
       targetHref: "/projects/B",
-      trace,
+      visibleOutcome: "committed",
     });
 
     expect(sink.mock.calls.map(([event]) => event.phase)).toEqual([

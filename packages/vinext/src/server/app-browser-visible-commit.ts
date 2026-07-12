@@ -43,7 +43,10 @@ type NoCommitDecision = {
   disposition: "no-commit";
   trace: NavigationTrace;
 };
-type CommitDecision = VisibleCommitDecision | HardNavigateCommitDecision | NoCommitDecision;
+export type NavigationCommitDecision =
+  | VisibleCommitDecision
+  | HardNavigateCommitDecision
+  | NoCommitDecision;
 const approvedVisibleCommitBrand: unique symbol = Symbol("ApprovedVisibleCommit");
 export type ApprovedVisibleCommit = {
   readonly [approvedVisibleCommitBrand]: true;
@@ -66,7 +69,7 @@ type NonVisibleCommitApproval = {
 type CommitApproval = VisibleCommitApproval | NonVisibleCommitApproval;
 type ClassifiedPendingNavigationCommit = {
   approvedCommit: ApprovedVisibleCommit | null;
-  decision: CommitDecision;
+  decision: NavigationCommitDecision;
   pending: PendingNavigationCommit;
   trace: NavigationTrace;
 };
@@ -247,7 +250,7 @@ function resolvePendingNavigationCommitDecision(options: {
   routeManifest?: RouteManifest | null;
   startedNavigationId: number;
   targetHref: string;
-}): CommitDecision {
+}): NavigationCommitDecision {
   const decision = resolvePendingNavigationCommitDispositionDecision(options);
 
   switch (decision.disposition) {
@@ -331,9 +334,9 @@ function prependCommitTransactionTrace(
 }
 
 function addCommitTransactionTrace(
-  decision: CommitDecision,
+  decision: NavigationCommitDecision,
   pending: PendingNavigationCommit,
-): CommitDecision {
+): NavigationCommitDecision {
   switch (decision.disposition) {
     case "commit":
       return {

@@ -1833,7 +1833,7 @@ function bootstrapHydration(
               notifyInvalidation: false,
             },
           );
-        const reuseDecision = navigationPlanner.classifyNavigationReuse({
+        const reuseFacts: NavigationReuseFacts = {
           bypassNavigationCache: shouldBypassNavigationCache,
           navigationKind,
           optimisticRouteShell:
@@ -1843,14 +1843,14 @@ function bootstrapHydration(
           prefetch: hasPrefetchCandidate ? { status: "available" } : { status: "unavailable" },
           targetHref: currentHref,
           visitedResponse,
-        });
+        };
+        const reuseDecision = navigationPlanner.classifyNavigationReuse(reuseFacts);
         navigationDebug?.reuse({
           additionalPrefetchRscUrls,
-          decision: reuseDecision.kind,
+          decision: reuseDecision,
+          facts: reuseFacts,
           navigationId: navId,
           rscUrl,
-          targetHref: currentHref,
-          trace: reuseDecision.trace,
           visitedResponseCacheKey: visitedResponseCandidate.cacheKey,
         });
         if (reuseDecision.kind === "reuseVisitedResponse" && cachedRoute) {

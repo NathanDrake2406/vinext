@@ -697,12 +697,12 @@ export function createAppBrowserNavigationController(
 
     if (approval.approvedCommit === null) {
       onNavigationCommitDebug?.({
+        approval: approval.decision,
         navigationCommitKind: null,
         navigationId: options.navId,
-        outcome: "no-commit",
         payloadOrigin: "committed-cache",
         targetHref: options.targetHref,
-        trace: approval.decision.trace,
+        visibleOutcome: "no-commit",
       });
       return false;
     }
@@ -710,12 +710,12 @@ export function createAppBrowserNavigationController(
     options.beforeCommit?.();
     dispatchSynchronousVisibleCommit(approval.approvedCommit);
     onNavigationCommitDebug?.({
+      approval: approval.decision,
       navigationCommitKind: null,
       navigationId: options.navId,
-      outcome: "committed",
       payloadOrigin: "committed-cache",
       targetHref: options.targetHref,
-      trace: approval.decision.trace,
+      visibleOutcome: "committed",
     });
     return true;
   }
@@ -770,7 +770,7 @@ export function createAppBrowserNavigationController(
     });
 
     let snapshotActivated = false;
-    let commitDebugInput: Omit<AppNavigationCommitDebugInput, "outcome"> | null = null;
+    let commitDebugInput: Omit<AppNavigationCommitDebugInput, "visibleOutcome"> | null = null;
     try {
       const startedState = getBrowserRouterState();
       const pending = await createPendingNavigationCommit({
@@ -799,12 +799,12 @@ export function createAppBrowserNavigationController(
 
       if (approval.decision.disposition === "no-commit") {
         onNavigationCommitDebug?.({
+          approval: approval.decision,
           navigationCommitKind: options.navigationCommitKind ?? null,
           navigationId: options.navId,
-          outcome: "no-commit",
           payloadOrigin: options.payloadOrigin.origin,
           targetHref: options.targetHref,
-          trace: approval.decision.trace,
+          visibleOutcome: "no-commit",
         });
         settlePendingBrowserRouterState(options.pendingRouterState);
         pendingNavigationFailureTargets.delete(renderId);
@@ -824,12 +824,12 @@ export function createAppBrowserNavigationController(
         consumeAppRouterScrollIntent(options.scrollIntent ?? null);
         if (performHardNavigation(options.targetHref)) {
           onNavigationCommitDebug?.({
+            approval: approval.decision,
             navigationCommitKind: options.navigationCommitKind ?? null,
             navigationId: options.navId,
-            outcome: "hard-navigate",
             payloadOrigin: options.payloadOrigin.origin,
             targetHref: options.targetHref,
-            trace: approval.decision.trace,
+            visibleOutcome: "hard-navigate",
           });
           return "hard-navigate";
         }
@@ -837,12 +837,12 @@ export function createAppBrowserNavigationController(
           clearAppNavigationFailureTarget(failureTarget);
         }
         onNavigationCommitDebug?.({
+          approval: approval.decision,
           navigationCommitKind: options.navigationCommitKind ?? null,
           navigationId: options.navId,
-          outcome: "no-commit",
           payloadOrigin: options.payloadOrigin.origin,
           targetHref: options.targetHref,
-          trace: approval.decision.trace,
+          visibleOutcome: "no-commit",
         });
         return "no-commit";
       }
@@ -853,11 +853,11 @@ export function createAppBrowserNavigationController(
       }
       if (onNavigationCommitDebug !== undefined) {
         commitDebugInput = {
+          approval: approval.decision,
           navigationCommitKind: options.navigationCommitKind ?? null,
           navigationId: options.navId,
           payloadOrigin: options.payloadOrigin.origin,
           targetHref: options.targetHref,
-          trace: approval.decision.trace,
         };
       }
 
@@ -895,9 +895,11 @@ export function createAppBrowserNavigationController(
     }
 
     return committed.then((didCommit) => {
-      const outcome = didCommit ? "committed" : "no-commit";
-      if (commitDebugInput !== null) onNavigationCommitDebug?.({ ...commitDebugInput, outcome });
-      return outcome;
+      const visibleOutcome = didCommit ? "committed" : "no-commit";
+      if (commitDebugInput !== null) {
+        onNavigationCommitDebug?.({ ...commitDebugInput, visibleOutcome });
+      }
+      return visibleOutcome;
     });
   }
 
