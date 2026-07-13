@@ -43,10 +43,7 @@ import { deferUntilStreamConsumed } from "./app-page-stream.js";
 import { buildAppPageTags } from "./implicit-tags.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import { getSetCookieName } from "./cookie-utils.js";
-import {
-  APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
-  type AppRscRenderMode,
-} from "./app-rsc-render-mode.js";
+import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
 import {
   getNextErrorDigest,
   parseNextHttpErrorDigest,
@@ -1337,7 +1334,7 @@ export async function handleServerActionRscRequest<
               request: redirectRenderRequest,
               route: targetMatch.route,
               searchParams: redirectSearchParams,
-              renderMode: APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
+              renderMode: APP_RSC_RENDER_MODE_NAVIGATION,
               observeMetadataSearchParamsAccess: redirectDynamicConfig !== "force-static",
               observePageSearchParamsAccess: redirectDynamicConfig !== "force-static",
             });
@@ -1423,6 +1420,7 @@ export async function handleServerActionRscRequest<
     const match = options.matchRoute(options.cleanPathname);
     let element: TElement;
     let errorPattern = match ? match.route.pattern : options.cleanPathname;
+    const actionRerenderIsRscRequest = true;
     if (match) {
       const { route: actionRoute, params: actionParams } = match;
       const actionRerenderTarget = await resolveAppPageActionRerenderTarget({
@@ -1432,7 +1430,7 @@ export async function handleServerActionRscRequest<
         findIntercept: options.findIntercept,
         getRouteParamNames: options.getRouteParamNames,
         getSourceRoute: options.getSourceRoute,
-        isRscRequest: options.isRscRequest,
+        isRscRequest: actionRerenderIsRscRequest,
         toInterceptOpts: options.toInterceptOpts,
       });
 
@@ -1477,13 +1475,13 @@ export async function handleServerActionRscRequest<
         options.buildPageElement({
           cleanPathname: options.cleanPathname,
           interceptOpts: actionRerenderTarget.interceptOpts,
-          isRscRequest: options.isRscRequest,
+          isRscRequest: actionRerenderIsRscRequest,
           mountedSlotsHeader: options.mountedSlotsHeader,
           params: actionRerenderTarget.params,
           request: options.request,
           route: actionRerenderTarget.route,
           searchParams: actionRerenderSearchParams,
-          renderMode: APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
+          renderMode: APP_RSC_RENDER_MODE_NAVIGATION,
           observeMetadataSearchParamsAccess: actionRerenderDynamicConfig !== "force-static",
           observePageSearchParamsAccess: actionRerenderDynamicConfig !== "force-static",
         });

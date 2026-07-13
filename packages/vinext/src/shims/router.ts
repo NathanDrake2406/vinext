@@ -13,6 +13,7 @@ import {
   useLayoutEffect,
   Fragment,
   Component,
+  StrictMode,
   createElement,
   type ReactElement,
   type ReactNode,
@@ -920,6 +921,7 @@ type SSRContext = {
   locales?: string[];
   defaultLocale?: string;
   domainLocales?: VinextNextData["domainLocales"];
+  isPreview?: boolean;
   /**
    * True when rendering a `getStaticPaths` fallback shell for a path that
    * hasn't been pre-rendered yet (`fallback: true` + unlisted path). Mirrors
@@ -1263,10 +1265,11 @@ function getPathnameAndQuery(): {
     return { pathname: "/", query: {}, asPath: "/" };
   }
   const resolvedPath = stripBasePath(window.location.pathname, __basePath);
+  const canonicalResolvedPath = removeNavigationLocalePrefix(resolvedPath);
   // In Next.js, router.pathname is the route pattern (e.g., "/posts/[id]"),
   // not the resolved path ("/posts/42"). __NEXT_DATA__.page holds the route
   // pattern and is updated by navigateClient() on every client-side navigation.
-  const pathname = window.__NEXT_DATA__?.page ?? resolvedPath;
+  const pathname = window.__NEXT_DATA__?.page ?? canonicalResolvedPath;
   const nextData = window.__NEXT_DATA__;
   const routeQuery = getRouteQueryFromNextData(nextData, resolvedPath);
   // URL search params always reflect the current URL
@@ -1278,7 +1281,8 @@ function getPathnameAndQuery(): {
   const query = { ...searchQuery, ...routeQuery };
   // asPath uses the resolved browser path, not the route pattern
   const asPath =
-    getCurrentHistoryAsPath() ?? resolvedPath + window.location.search + window.location.hash;
+    getCurrentHistoryAsPath() ??
+    canonicalResolvedPath + window.location.search + window.location.hash;
   return { pathname, query, asPath };
 }
 
@@ -1288,15 +1292,19 @@ function getCurrentHistoryAsPath(): string | null {
 
   try {
     const browserUrl = new URL(window.location.href);
+    const stateLocale = state.options.locale === false ? undefined : state.options.locale;
+    const localizedStateAs = applyNavigationLocale(state.as, stateLocale);
     const stateUrl = new URL(
-      toBrowserNavigationHref(state.as, window.location.href, __basePath),
+      toBrowserNavigationHref(localizedStateAs, window.location.href, __basePath),
       window.location.href,
     );
     if (stateUrl.pathname !== browserUrl.pathname || stateUrl.search !== browserUrl.search) {
       return null;
     }
-    const stateAs = stripHash(state.as);
-    const visibleAs = `${stripBasePath(window.location.pathname, __basePath)}${window.location.search}`;
+    const stateAs = removeNavigationLocalePrefix(stripHash(state.as));
+    const visibleAs = `${removeNavigationLocalePrefix(
+      stripBasePath(window.location.pathname, __basePath),
+    )}${window.location.search}`;
     return `${stateAs || visibleAs}${window.location.hash}`;
   } catch {
     return null;
@@ -1365,13 +1373,14 @@ function markPagesRouterReady(): boolean {
   return true;
 }
 
-function initializePagesRouterReadyFromNextData(nextData: VinextNextData): void {
+function initializePagesRouterReadyFromNextData(
+  nextData: VinextNextData,
+  forceReady = false,
+): void {
   if (typeof window === "undefined") return;
-  routerRuntimeState.pagesRouterReady = getPagesNavigationIsReadyFromSerializedState(
-    nextData.page,
-    window.location.search,
-    nextData,
-  );
+  routerRuntimeState.pagesRouterReady =
+    forceReady ||
+    getPagesNavigationIsReadyFromSerializedState(nextData.page, window.location.search, nextData);
 }
 
 function markPagesRouterHydrated(): void {
@@ -1451,6 +1460,8 @@ function scheduleHardNavigationAndThrow(url: string, message: string): never {
 
 type NavigateClientOptions = {
   allowNotFoundResponse?: boolean;
+  locale?: string;
+  isHydrationQueryUpdate?: boolean;
   /**
    * The history mode of the originating navigation. Used when a gSSP/gSP data
    * response carries a `__N_REDIRECT` marker so the re-entrant navigation to
@@ -1795,8 +1806,20 @@ async function resolveClientConfigRewrite(
   return matched ? { href: currentHref, kind: "rewrite" } : null;
 }
 
-function getMiddlewarePagesDataFetchUrl(browserUrl: string): string | null {
-  return getPagesMiddlewareDataHref(browserUrl, __basePath);
+function getMiddlewarePagesDataFetchUrl(
+  browserUrl: string,
+  dataTarget?: PagesDataTarget | null,
+): string | null {
+  const middlewareDataHref = getPagesMiddlewareDataHref(browserUrl, __basePath);
+  if (!middlewareDataHref) return null;
+  if (
+    dataTarget?.dataKind === "static" &&
+    dataTarget.middlewareDataHref === middlewareDataHref &&
+    dataTarget.prefetchDataHref
+  ) {
+    return dataTarget.prefetchDataHref;
+  }
+  return middlewareDataHref;
 }
 
 function getPagesDataCacheHref(dataHref: string): string {
@@ -1824,8 +1847,9 @@ function shouldEvictMiddlewareDataCache(
 async function resolveMiddlewareDataEffect(
   browserUrl: string,
   signal: AbortSignal,
+  dataTarget?: PagesDataTarget | null,
 ): Promise<MiddlewareDataEffect | null> {
-  const dataUrl = getMiddlewarePagesDataFetchUrl(browserUrl);
+  const dataUrl = getMiddlewarePagesDataFetchUrl(browserUrl, dataTarget);
   if (!dataUrl) return null;
 
   // Middleware probes use the Pages data cache so a Link prefetch can be reused
@@ -1934,6 +1958,7 @@ function buildPagesNavigationNextData(
     query: mergedQuery,
     buildId: target.buildId,
     isFallback: false,
+    isPreview: props.__N_PREVIEW === true,
     ...(nextLocale !== undefined ? { locale: nextLocale } : {}),
   } as unknown as NonNullable<Window["__NEXT_DATA__"]> & VinextNextData;
 }
@@ -2131,7 +2156,9 @@ async function navigateClientData(
       const deploymentId = getDeploymentId();
       if (deploymentId) headers[NEXT_DEPLOYMENT_ID_HEADER] = deploymentId;
       const dataFetch =
-        initialTarget.dataKind === "static" ? fetchStaticPagesData : dedupedPagesDataFetch;
+        initialTarget.dataKind === "static" && Router.isPreview !== true
+          ? fetchStaticPagesData
+          : dedupedPagesDataFetch;
       res = await dataFetch(initialTarget.dataHref, {
         headers,
         signal: controller.signal,
@@ -2168,6 +2195,9 @@ async function navigateClientData(
   }
 
   if (!res.ok) {
+    if (options.isHydrationQueryUpdate) {
+      return;
+    }
     // 404 here is the deploy-skew signal (server buildId rotated) — hard
     // reload to land on the new build's HTML. Any other non-OK status is
     // treated the same way per the user-configured "always hard reload"
@@ -2177,7 +2207,9 @@ async function navigateClientData(
 
   const rewriteTarget = res.headers.get("x-nextjs-rewrite");
   const target = rewriteTarget
-    ? resolvePagesDataNavigationTarget(rewriteTarget, __basePath)
+    ? resolvePagesDataNavigationTarget(rewriteTarget, __basePath, {
+        locale: initialTarget.prefetchLocale,
+      })
     : initialTarget;
   if (!target) {
     scheduleHardNavigationAndThrow(
@@ -2190,6 +2222,9 @@ async function navigateClientData(
   try {
     body = (await res.json()) as PagesDataResponse;
   } catch {
+    if (options.isHydrationQueryUpdate) {
+      return;
+    }
     scheduleHardNavigationAndThrow(url, "Data navigation failed: invalid JSON response");
   }
   assertStillCurrent();
@@ -2198,6 +2233,9 @@ async function navigateClientData(
   const rawPageProps = props.pageProps;
   const pageProps: Record<string, unknown> = isUnknownRecord(rawPageProps) ? rawPageProps : {};
   if (initialTarget.dataKind === "server") {
+    evictPagesDataCache(initialTarget.dataHref);
+  }
+  if (props.__N_PREVIEW === true || Router.isPreview === true) {
     evictPagesDataCache(initialTarget.dataHref);
   }
 
@@ -2495,11 +2533,16 @@ async function navigateClient(
       // `_next/data/<id>/something-else.json` (the page that actually renders)
       // rather than `_next/data/<id>/hello.json` (the masked address). When
       // routeUrl === url (no mask), behaviour is unchanged.
-      let dataTarget = resolvePagesDataNavigationTarget(routeLookupUrl, __basePath);
+      const pagesDataTargetOptions = { locale: options.locale };
+      let dataTarget = resolvePagesDataNavigationTarget(
+        routeLookupUrl,
+        __basePath,
+        pagesDataTargetOptions,
+      );
       let middlewareDataResponse: Response | undefined;
       let middlewareEffect: MiddlewareDataEffect | null = null;
       let middlewareRewrittenTarget: PagesDataTarget | null | undefined;
-      const middlewareProbeDataHref = getMiddlewarePagesDataFetchUrl(browserUrl);
+      const middlewareProbeDataHref = getMiddlewarePagesDataFetchUrl(browserUrl, dataTarget);
       if (middlewareProbeDataHref !== null) {
         // If this navigation is superseded before middleware responds, we do
         // not yet know whether middleware would redirect/rewrite away from a
@@ -2508,7 +2551,11 @@ async function navigateClient(
         // target is cacheable static data.
         middlewareDataCacheEvictHref = getPagesDataCacheHref(middlewareProbeDataHref);
         try {
-          middlewareEffect = await resolveMiddlewareDataEffect(browserUrl, controller.signal);
+          middlewareEffect = await resolveMiddlewareDataEffect(
+            browserUrl,
+            controller.signal,
+            dataTarget,
+          );
         } catch (err: unknown) {
           if (err instanceof DOMException && err.name === "AbortError") {
             throw new NavigationCancelledError(browserUrl);
@@ -2519,6 +2566,7 @@ async function navigateClient(
           middlewareRewrittenTarget = resolvePagesDataNavigationTarget(
             middlewareEffect.rewriteTarget,
             __basePath,
+            pagesDataTargetOptions,
           );
         }
         if (middlewareEffect) {
@@ -2552,9 +2600,20 @@ async function navigateClient(
           middlewareDataResponse = middlewareEffect.response;
         }
         if (middlewareEffect.rewriteTarget) {
+          const rewrittenOwner = resolveDirectHybridClientRouteOwner(
+            middlewareEffect.rewriteTarget,
+            __basePath,
+          );
+          if (rewrittenOwner === "app" || rewrittenOwner === "document") {
+            scheduleHardNavigationAndThrow(browserUrl, "Navigation rewritten to a non-Pages route");
+          }
           const rewrittenTarget =
             middlewareRewrittenTarget ??
-            resolvePagesDataNavigationTarget(middlewareEffect.rewriteTarget, __basePath);
+            resolvePagesDataNavigationTarget(
+              middlewareEffect.rewriteTarget,
+              __basePath,
+              pagesDataTargetOptions,
+            );
           if (!rewrittenTarget) {
             scheduleHardNavigationAndThrow(browserUrl, "Navigation rewritten to a non-Pages route");
           }
@@ -2689,7 +2748,8 @@ function buildRouterValue(
     defaultLocale,
     domainLocales,
     isReady,
-    isPreview: false,
+    isPreview:
+      typeof window !== "undefined" ? nextData?.isPreview === true : _ssrState?.isPreview === true,
     isFallback:
       typeof window !== "undefined"
         ? nextData?.isFallback === true
@@ -2972,8 +3032,19 @@ async function performNavigation(
   // scroll after completion.
   const scrollTarget = doScroll ? { x: 0, y: 0 } : null;
   const navigateOptions: NavigateClientOptions = errorRouteHtmlFetchUrl
-    ? { allowNotFoundResponse: true, mode, scroll: scrollTarget }
-    : { mode, scroll: scrollTarget };
+    ? {
+        allowNotFoundResponse: true,
+        locale: navigationLocale,
+        mode,
+        scroll: scrollTarget,
+        isHydrationQueryUpdate: options?._h === 1,
+      }
+    : {
+        locale: navigationLocale,
+        mode,
+        scroll: scrollTarget,
+        isHydrationQueryUpdate: options?._h === 1,
+      };
 
   // Next.js push→replace coercion (narrowed): when the display URL (asPath)
   // doesn't change AND the route URL DOES change AND the locale doesn't
@@ -3561,11 +3632,23 @@ export function wrapWithRouterContext(
   onError: (error: Error) => void = noopCommit,
 ): ReactElement {
   const { CommitBoundary, Provider } = getPagesRouterRuntimeComponents();
-  return createElement(
-    CommitBoundary,
-    { onCommit, onError },
-    createElement(Provider, null, element),
-  );
+  // React Strict Mode (Pages Router). When `reactStrictMode: true`, wrap the
+  // router-context subtree in <React.StrictMode> so React runs its dev-only
+  // strict checks. We read a client-only `window` flag rather than wrapping
+  // unconditionally so the server-rendered tree is never wrapped (matching
+  // Next.js, which only wraps client-side in `client/index.tsx`). Because this
+  // wrap lives in `wrapWithRouterContext` — called by the initial hydration
+  // entry AND every navigation `root.render()` — StrictMode survives soft
+  // navigations, mirroring Next.js's `doRender` closure used for both. The
+  // CommitBoundary stays outside StrictMode so its commit `useLayoutEffect`
+  // is not double-invoked (Next.js keeps `<Root>` outside <StrictMode> too).
+  let inner: ReactElement = createElement(Provider, null, element);
+  // Re-read the static page-load flag on each render so hydration and
+  // navigation share this single wrapping path.
+  if (typeof window !== "undefined" && window.__VINEXT_REACT_STRICT_MODE__ === true) {
+    inner = createElement(StrictMode, null, inner);
+  }
+  return createElement(CommitBoundary, { onCommit, onError }, inner);
 }
 
 /**
@@ -3807,7 +3890,13 @@ const Router: typeof RouterMethods & Omit<NextRouter, keyof typeof RouterMethods
         );
       },
     },
-    isPreview: { enumerable: true, value: false, writable: false },
+    isPreview: {
+      enumerable: true,
+      get(): boolean {
+        if (typeof window === "undefined") return _getSSRContext()?.isPreview === true;
+        return (window.__NEXT_DATA__ as VinextNextData | undefined)?.isPreview === true;
+      },
+    },
     isFallback: {
       enumerable: true,
       get(): boolean {

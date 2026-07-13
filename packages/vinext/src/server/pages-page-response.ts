@@ -3,7 +3,11 @@ import type { VinextNextData } from "../client/vinext-next-data.js";
 import type { CachedPagesValue } from "vinext/shims/cache-handler";
 import { withScriptNonce } from "vinext/shims/script-nonce-context";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
-import { applyCdnResponseHeaders } from "./cache-control.js";
+import {
+  applyCdnResponseHeaders,
+  BROWSER_REVALIDATE_CACHE_CONTROL,
+  shouldUseNextDeployCacheControl,
+} from "./cache-control.js";
 import {
   buildMissIsrCacheControl,
   ISR_NEVER_CACHE_CONTROL,
@@ -107,13 +111,20 @@ type PagesFontPreload = {
 /**
  * The `__NEXT_DATA__` fields beyond the always-present core that the Pages
  * renderer serializes: the `__vinext` block plus the readiness flags
- * (gssp/gsp/gip/appGip/autoExport/isExperimentalCompile) the client uses to
+ * (gssp/gsp/gip/appGip/autoExport/nextExport/isExperimentalCompile) the client uses to
  * recompute the initial `router.isReady`. Shared by every render path
  * (initial, ISR regeneration) so they emit identical readiness state.
  */
 export type PagesNextDataExtras = Pick<
   VinextNextData,
-  "__vinext" | "appGip" | "autoExport" | "gip" | "gsp" | "gssp" | "isExperimentalCompile"
+  | "__vinext"
+  | "appGip"
+  | "autoExport"
+  | "gip"
+  | "gsp"
+  | "gssp"
+  | "isExperimentalCompile"
+  | "nextExport"
 >;
 
 export type PagesI18nRenderContext = {
@@ -176,6 +187,7 @@ type RenderPagesPageResponseOptions = {
   isrCacheKey: (router: string, pathname: string) => string;
   expireSeconds?: number;
   isrRevalidateSeconds: number | null;
+  isStaticPropsRoute?: boolean;
   isrSet: (
     key: string,
     data: CachedPagesValue,
@@ -467,7 +479,7 @@ function applyGsspHeaders(
       headers.set(key, String(value));
     }
   }
-  headers.set("Content-Type", "text/html");
+  headers.set("Content-Type", "text/html; charset=utf-8");
   return statusCode ?? gsspRes.statusCode;
 }
 
@@ -600,7 +612,7 @@ export async function renderPagesPageResponse(
   const markerIndex = shellHtml.indexOf(bodyMarker);
   const shellPrefix = shellHtml.slice(0, markerIndex);
   const shellSuffix = shellHtml.slice(markerIndex + bodyMarker.length);
-  const responseHeaders = new Headers({ "Content-Type": "text/html" });
+  const responseHeaders = new Headers({ "Content-Type": "text/html; charset=utf-8" });
   const finalStatus = applyGsspHeaders(
     responseHeaders,
     options.gsspRes ?? options.documentReqRes?.res ?? null,
@@ -663,6 +675,8 @@ export async function renderPagesPageResponse(
       tags: [encodeCacheTag(`_N_T_${stem || "/"}`)],
     });
     setCacheStateHeaders(responseHeaders, "MISS");
+  } else if (options.isStaticPropsRoute && shouldUseNextDeployCacheControl()) {
+    responseHeaders.set("Cache-Control", BROWSER_REVALIDATE_CACHE_CONTROL);
   } else if (options.gsspRes && !userSetCacheControl) {
     // Default for getServerSideProps responses, matching Next.js
     // pages-handler.ts (revalidate: 0 → getCacheControlHeader). Without this,
