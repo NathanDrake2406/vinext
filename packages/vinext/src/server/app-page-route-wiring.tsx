@@ -6,7 +6,6 @@ import {
   normalizeAppElementsSlotBindings,
   type AppElements,
   type AppElementsInterception,
-  type AppElementsSegmentStateKeys,
   type AppElementsSlotBinding,
 } from "./app-elements.js";
 import {
@@ -655,40 +654,7 @@ export function buildAppPageElements<
       options.matchedParams,
     );
   }
-  const elements: Record<
-    string,
-    | ReactNode
-    | string
-    | null
-    | AppElementsInterception
-    | AppElementsSegmentStateKeys
-    | readonly AppElementsSlotBinding[]
-    | readonly string[]
-  > = {
-    ...AppElementsWire.createMetadataEntries({
-      interception: renderIdentity?.interception ?? options.interception ?? null,
-      interceptionContext,
-      layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
-      rootLayoutTreePath,
-      routeId,
-      segmentStateKeys,
-      sourcePage: createAppPageSourcePage(options.sourcePageSegments ?? routeSegments),
-      slotBindings: createAppPageSlotBindings(options.route, layoutEntries, resolveSlotOverride, {
-        interception: renderIdentity?.interception ?? options.interception ?? null,
-        interceptionContext,
-        routePath: options.routePath,
-      }),
-    }),
-  };
-  // Surface static-sibling info on the wire so the client router can decide
-  // whether a cached dynamic-route prefetch can be reused when navigating to a
-  // static sibling URL. Mirrors Next.js's loader-tree `staticSiblings` tuple
-  // element (issue cloudflare/vinext#1525). Only included when the route has
-  // dynamic segments with static siblings — keeps the payload lean for
-  // fully-static routes.
-  if (options.route.staticSiblings && options.route.staticSiblings.length > 0) {
-    elements[APP_STATIC_SIBLINGS_KEY] = options.route.staticSiblings;
-  }
+  const elements: Record<string, ReactNode | string | null> = {};
   const getEffectiveSlotParams = (slotKey: string, slotName: string): AppPageParams =>
     resolveSlotOverride(slotKey, slotName)?.params ?? options.matchedParams;
 
@@ -720,13 +686,6 @@ export function buildAppPageElements<
   const routeLoadingComponent = getDefaultExport(options.route.loading);
   const isPrefetchLoadingShell = renderMode === APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL;
   const shouldRenderPrefetchLoadingShell = isPrefetchLoadingShell && routeLoadingComponent !== null;
-  if (shouldRenderPrefetchLoadingShell) {
-    // Client loading components serialize as module references in Flight. Keep
-    // a durable marker in the shell payload so external router tests and
-    // diagnostics can recognize this as a loading-boundary response without
-    // requiring source text to appear in client component references.
-    elements[APP_PREFETCH_LOADING_SHELL_MARKER_KEY] = "LoadingBoundary";
-  }
 
   elements[pageElementId] = isPrefetchLoadingShell
     ? null
@@ -1218,6 +1177,35 @@ export function buildAppPageElements<
     </>
   );
 
-  registerAppElementRenderDependencies(elements, renderDependenciesByElementId);
-  return elements;
+  const result = {
+    ...elements,
+    ...AppElementsWire.createMetadataEntries({
+      interception: renderIdentity?.interception ?? options.interception ?? null,
+      interceptionContext,
+      layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
+      rootLayoutTreePath,
+      routeId,
+      segmentStateKeys,
+      sourcePage: createAppPageSourcePage(options.sourcePageSegments ?? routeSegments),
+      slotBindings: createAppPageSlotBindings(options.route, layoutEntries, resolveSlotOverride, {
+        interception: renderIdentity?.interception ?? options.interception ?? null,
+        interceptionContext,
+        routePath: options.routePath,
+      }),
+    }),
+    ...(options.route.staticSiblings && options.route.staticSiblings.length > 0
+      ? { [APP_STATIC_SIBLINGS_KEY]: options.route.staticSiblings }
+      : {}),
+    ...(shouldRenderPrefetchLoadingShell
+      ? {
+          // Client loading components serialize as module references in Flight. Keep
+          // a durable marker in the shell payload so external router tests and
+          // diagnostics can recognize this as a loading-boundary response without
+          // requiring source text to appear in client component references.
+          [APP_PREFETCH_LOADING_SHELL_MARKER_KEY]: "LoadingBoundary",
+        }
+      : {}),
+  };
+  registerAppElementRenderDependencies(result, renderDependenciesByElementId);
+  return result;
 }
