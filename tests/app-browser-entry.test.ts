@@ -498,6 +498,21 @@ function createControllerHarness(
   };
 }
 
+type TestBrowserNavigationController = ReturnType<typeof createAppBrowserNavigationController>;
+type TestBrowserNavigationPayloadOptions = Parameters<
+  TestBrowserNavigationController["renderNavigationPayload"]
+>[0];
+
+function renderCurrentStateNavigationPayload(
+  controller: TestBrowserNavigationController,
+  options: Omit<TestBrowserNavigationPayloadOptions, "navigationInitiationState">,
+) {
+  return controller.renderNavigationPayload({
+    ...options,
+    navigationInitiationState: controller.getBrowserRouterState(),
+  });
+}
+
 async function dispatchTestNavigationPayload(options: {
   controller: ReturnType<typeof createAppBrowserNavigationController>;
   navigationCommitKind: "authoritative" | "detached";
@@ -1292,7 +1307,7 @@ describe("app browser entry navigation scheduling", () => {
   it("does not expose a per-navigation transition override at the controller boundary", () => {
     type Controller = ReturnType<typeof createAppBrowserNavigationController>;
     function assertNoTransitionOverride(controller: Controller) {
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
         historyUpdateMode: "push",
@@ -2673,7 +2688,7 @@ describe("app browser entry state helpers", () => {
         createClientNavigationRenderSnapshot("https://example.com/initial", {}),
       );
       const navId = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -2719,7 +2734,7 @@ describe("app browser entry state helpers", () => {
 
     try {
       const navId = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -3163,7 +3178,7 @@ describe("app browser navigation controller", () => {
         }),
       );
 
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -3216,7 +3231,7 @@ describe("app browser navigation controller", () => {
         resolvePayload = resolve;
       });
 
-      const result = controller.renderNavigationPayload({
+      const result = renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -3291,7 +3306,7 @@ describe("app browser navigation controller", () => {
     );
 
     try {
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect,
@@ -3348,7 +3363,7 @@ describe("app browser navigation controller", () => {
     });
 
     try {
-      const result = await controller.renderNavigationPayload({
+      const result = await renderCurrentStateNavigationPayload(controller, {
         actionType: "navigate",
         createNavigationCommitEffect,
         historyUpdateMode: "push",
@@ -3392,7 +3407,7 @@ describe("app browser navigation controller", () => {
     try {
       const navId = controller.beginNavigation();
       stageAppNavigationFailureTarget("/dashboard");
-      const renderPromise = controller.renderNavigationPayload({
+      const renderPromise = renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect,
@@ -3438,7 +3453,7 @@ describe("app browser navigation controller", () => {
       stageAppNavigationFailureTarget("/dashboard");
       const olderTarget = window.next?.__pendingUrl;
       const olderNavId = controller.beginNavigation();
-      const renderPromise = controller.renderNavigationPayload({
+      const renderPromise = renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -3485,7 +3500,7 @@ describe("app browser navigation controller", () => {
 
     try {
       const navId = controller.beginNavigation();
-      const renderPromise = controller.renderNavigationPayload({
+      const renderPromise = renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => commitEffect,
@@ -3536,7 +3551,7 @@ describe("app browser navigation controller", () => {
     try {
       stageAppNavigationFailureTarget("/older");
       const olderNavId = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -3561,7 +3576,7 @@ describe("app browser navigation controller", () => {
       let resolveNewer!: (elements: AppElements) => void;
       stageAppNavigationFailureTarget("/newer");
       const newerNavId = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4326,7 +4341,7 @@ describe("app browser navigation lifecycle settlement", () => {
 
     try {
       const navId = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4356,7 +4371,7 @@ describe("app browser navigation lifecycle settlement", () => {
         props: { children: "optimistic" },
       });
 
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4390,7 +4405,7 @@ describe("app browser navigation lifecycle settlement", () => {
         state: "committed",
       });
 
-      const lateDetachedOutcome = controller.renderNavigationPayload({
+      const lateDetachedOutcome = renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4444,7 +4459,7 @@ describe("app browser navigation lifecycle settlement", () => {
     try {
       // Start three navigations. Only C is the current (winning) one.
       const navA = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => {
@@ -4463,7 +4478,7 @@ describe("app browser navigation lifecycle settlement", () => {
       });
 
       const navB = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => {
@@ -4482,7 +4497,7 @@ describe("app browser navigation lifecycle settlement", () => {
       });
 
       const navC = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => {
@@ -4557,7 +4572,7 @@ describe("app browser navigation lifecycle settlement", () => {
     try {
       // Start cross-root navigation A (deferred, /(marketing) → /(dashboard)).
       const navA = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4574,7 +4589,7 @@ describe("app browser navigation lifecycle settlement", () => {
 
       // Start new navigation B (same root). B advances activeNavigationId past A.
       const navB = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4628,7 +4643,7 @@ describe("app browser navigation lifecycle settlement", () => {
 
     try {
       const refreshNav = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4682,7 +4697,7 @@ describe("app browser navigation lifecycle settlement", () => {
     try {
       const traversePendingState = controller.beginPendingBrowserRouterState();
       const traverseNav = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "traverse",
         createNavigationCommitEffect: () => () => {},
@@ -4859,7 +4874,7 @@ describe("app browser navigation lifecycle settlement", () => {
 
     try {
       const navId = controller.beginNavigation();
-      const renderPromise = controller.renderNavigationPayload({
+      const renderPromise = renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4897,7 +4912,7 @@ describe("app browser root-layout hard navigation", () => {
 
     try {
       const navId = controller.beginNavigation();
-      const renderPromise = controller.renderNavigationPayload({
+      const renderPromise = renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect,
@@ -4941,7 +4956,7 @@ describe("app browser root-layout hard navigation", () => {
 
     try {
       const navId = controller.beginNavigation();
-      void controller.renderNavigationPayload({
+      void renderCurrentStateNavigationPayload(controller, {
         payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
         actionType: "navigate",
         createNavigationCommitEffect: () => () => {},
@@ -4985,7 +5000,7 @@ describe("app browser root-layout hard navigation", () => {
     try {
       const firstNavId = controller.beginNavigation();
       await expect(
-        controller.renderNavigationPayload({
+        renderCurrentStateNavigationPayload(controller, {
           payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: "navigate",
           createNavigationCommitEffect: () => () => {},
@@ -5014,7 +5029,7 @@ describe("app browser root-layout hard navigation", () => {
       window.location.href = "https://example.com/dashboard";
       const secondNavId = controller.beginNavigation();
       await expect(
-        controller.renderNavigationPayload({
+        renderCurrentStateNavigationPayload(controller, {
           payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: "navigate",
           createNavigationCommitEffect: () => () => {},
@@ -5065,7 +5080,7 @@ describe("app browser root-layout hard navigation", () => {
     try {
       const firstNavId = controller.beginNavigation();
       await expect(
-        controller.renderNavigationPayload({
+        renderCurrentStateNavigationPayload(controller, {
           payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: "navigate",
           createNavigationCommitEffect: () => () => {},
@@ -5093,7 +5108,7 @@ describe("app browser root-layout hard navigation", () => {
       window.location.href = "https://example.com/settings";
       const secondNavId = controller.beginNavigation();
       await expect(
-        controller.renderNavigationPayload({
+        renderCurrentStateNavigationPayload(controller, {
           payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
           actionType: "navigate",
           createNavigationCommitEffect: () => () => {},

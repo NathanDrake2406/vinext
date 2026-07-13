@@ -97,7 +97,7 @@ type BrowserNavigationPayloadOptions = {
   createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
   historyUpdateMode: HistoryUpdateMode | undefined;
   navigationCommitKind?: "authoritative" | "detached";
-  navigationInitiationState?: AppRouterState;
+  navigationInitiationState: AppRouterState;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   navId: number;
   nextElements: Promise<AppElements>;
@@ -742,9 +742,8 @@ export function createAppBrowserNavigationController(
       // Preparation is historical: identities and the started commit version
       // come from the initiating state. Approval below intentionally stays live
       // so superseding navigations and unrelated visible commits still reject.
-      const startedState = options.navigationInitiationState ?? getBrowserRouterState();
       const pending = await createPendingNavigationCommit({
-        currentState: startedState,
+        currentState: options.navigationInitiationState,
         navigationCommitKind: options.navigationCommitKind,
         navigationId: options.navId,
         nextElements: options.nextElements,

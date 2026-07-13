@@ -611,7 +611,7 @@ type RenderNavigationPayloadOptions = {
   actionType?: "navigate" | "replace" | "traverse";
   historyUpdateMode: HistoryUpdateMode | undefined;
   navigationCommitKind?: "authoritative" | "detached";
-  navigationInitiationState?: AppRouterState;
+  navigationInitiationState: AppRouterState;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   navId: number;
   onCommittedState?: (state: AppRouterState) => void;
