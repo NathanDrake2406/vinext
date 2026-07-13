@@ -498,6 +498,38 @@ function createControllerHarness(
   };
 }
 
+async function dispatchTestNavigationPayload(options: {
+  controller: ReturnType<typeof createAppBrowserNavigationController>;
+  navigationCommitKind: "authoritative" | "detached";
+  navigationInitiationState: AppRouterState;
+  navigationSnapshot: AppRouterState["navigationSnapshot"];
+  navId: number;
+  nextElements: Promise<AppElements>;
+  params: Record<string, string | string[]>;
+  targetHref: string;
+}): Promise<void> {
+  void options.controller.renderNavigationPayload({
+    actionType: "navigate",
+    createNavigationCommitEffect: () => () => {},
+    historyUpdateMode: "push",
+    navigationCommitKind: options.navigationCommitKind,
+    navigationInitiationState: options.navigationInitiationState,
+    navigationSnapshot: options.navigationSnapshot,
+    navId: options.navId,
+    nextElements: options.nextElements,
+    operationLane: "navigation",
+    params: options.params,
+    payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+    pendingRouterState: null,
+    previousNextUrl: null,
+    targetHref: options.targetHref,
+  });
+
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 type ApprovedTestCommitOptions = {
   activeNavigationId?: number;
   extraEntries?: Record<string, unknown>;
@@ -3982,6 +4014,313 @@ describe("app browser navigation controller", () => {
 });
 
 describe("app browser navigation lifecycle settlement", () => {
+  it("prepares authoritative layout reuse from the state before a detached commit", async () => {
+    const rootLayout = React.createElement("div", null, "root layout");
+    const rootLayoutId = AppElementsWire.encodeLayoutId("/");
+    const projectLayoutId = AppElementsWire.encodeLayoutId("/projects/[projectId]");
+    const navigationInitiationState = createState({
+      bfcacheIds: { [rootLayoutId]: "0" },
+      elements: createResolvedElements(
+        "route:/dashboard",
+        "/",
+        null,
+        {
+          [rootLayoutId]: rootLayout,
+          "page:/dashboard": React.createElement("main", null, "dashboard"),
+        },
+        [rootLayoutId],
+      ),
+      layoutIds: [rootLayoutId],
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/dashboard", {}),
+      routeId: "route:/dashboard",
+    });
+    const routeManifest = createTestRouteManifest([
+      {
+        id: "route:/dashboard",
+        layoutIds: [rootLayoutId],
+        pattern: "/dashboard",
+        rootBoundaryId: "root-boundary:/",
+      },
+      {
+        id: "route:/projects/[projectId]",
+        layoutIds: [rootLayoutId, projectLayoutId],
+        pattern: "/projects/[projectId]",
+        rootBoundaryId: "root-boundary:/",
+      },
+    ]);
+    const { controller, detach, stateRef } = createControllerHarness(navigationInitiationState, {
+      getRouteManifest: () => routeManifest,
+    });
+    const targetHref = "https://example.com/projects/b";
+    const navigationSnapshot = createClientNavigationRenderSnapshot(targetHref, {
+      projectId: "b",
+    });
+
+    try {
+      const navId = controller.beginNavigation();
+      await dispatchTestNavigationPayload({
+        controller,
+        navigationCommitKind: "detached",
+        navigationInitiationState,
+        navigationSnapshot,
+        navId,
+        nextElements: Promise.resolve(
+          createResolvedElements(
+            "route:/projects/[projectId]",
+            "/",
+            null,
+            {
+              [APP_SKIPPED_LAYOUT_IDS_KEY]: [rootLayoutId],
+              [projectLayoutId]: React.createElement("section", null, "stale project a"),
+              "page:/projects/[projectId]": React.createElement("main", null, "project b"),
+            },
+            [rootLayoutId, projectLayoutId],
+          ),
+        ),
+        params: { projectId: "b" },
+        targetHref,
+      });
+
+      const detachedProjectLayoutId = stateRef.current.bfcacheIds[projectLayoutId];
+      expect(stateRef.current.elements[projectLayoutId]).toMatchObject({
+        props: { children: "stale project a" },
+      });
+
+      await dispatchTestNavigationPayload({
+        controller,
+        navigationCommitKind: "authoritative",
+        navigationInitiationState,
+        navigationSnapshot,
+        navId,
+        nextElements: Promise.resolve(
+          createResolvedElements(
+            "route:/projects/[projectId]",
+            "/",
+            null,
+            {
+              [APP_SKIPPED_LAYOUT_IDS_KEY]: [rootLayoutId],
+              [projectLayoutId]: React.createElement("section", null, "project b layout"),
+              "page:/projects/[projectId]": React.createElement("main", null, "project b"),
+            },
+            [rootLayoutId, projectLayoutId],
+          ),
+        ),
+        params: { projectId: "b" },
+        targetHref,
+      });
+
+      expect(stateRef.current.elements[projectLayoutId]).toMatchObject({
+        props: { children: "project b layout" },
+      });
+      expect(stateRef.current.bfcacheIds[projectLayoutId]).not.toBe(detachedProjectLayoutId);
+      expect(stateRef.current.elements[rootLayoutId]).toBe(rootLayout);
+      expect(stateRef.current.bfcacheIds[rootLayoutId]).toBe("0");
+    } finally {
+      detach();
+    }
+  });
+
+  it("preserves a dynamic layout identity across detached same-param sibling payloads", async () => {
+    const rootLayoutId = AppElementsWire.encodeLayoutId("/");
+    const projectLayoutId = AppElementsWire.encodeLayoutId("/projects/[projectId]");
+    const projectLayout = React.createElement("section", null, "project a client state");
+    const navigationInitiationState = createState({
+      bfcacheIds: {
+        [rootLayoutId]: "0",
+        [projectLayoutId]: "_b_2_",
+      },
+      elements: createResolvedElements(
+        "route:/projects/[projectId]/overview",
+        "/",
+        null,
+        {
+          [rootLayoutId]: React.createElement("div", null, "root layout"),
+          [projectLayoutId]: projectLayout,
+          "page:/projects/[projectId]/overview": React.createElement("main", null, "overview"),
+        },
+        [rootLayoutId, projectLayoutId],
+      ),
+      layoutIds: [rootLayoutId, projectLayoutId],
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/projects/a/overview",
+        { projectId: "a" },
+      ),
+      routeId: "route:/projects/[projectId]/overview",
+    });
+    const routeManifest = createTestRouteManifest([
+      {
+        id: "route:/projects/[projectId]/overview",
+        layoutIds: [rootLayoutId, projectLayoutId],
+        pattern: "/projects/[projectId]/overview",
+        rootBoundaryId: "root-boundary:/",
+      },
+      {
+        id: "route:/projects/[projectId]/activity",
+        layoutIds: [rootLayoutId, projectLayoutId],
+        pattern: "/projects/[projectId]/activity",
+        rootBoundaryId: "root-boundary:/",
+      },
+    ]);
+    const { controller, detach, stateRef } = createControllerHarness(navigationInitiationState, {
+      getRouteManifest: () => routeManifest,
+    });
+    const targetHref = "https://example.com/projects/a/activity";
+    const navigationSnapshot = createClientNavigationRenderSnapshot(targetHref, {
+      projectId: "a",
+    });
+    const createPayload = (content: string) =>
+      Promise.resolve(
+        createResolvedElements(
+          "route:/projects/[projectId]/activity",
+          "/",
+          null,
+          {
+            [APP_SKIPPED_LAYOUT_IDS_KEY]: [rootLayoutId, projectLayoutId],
+            "page:/projects/[projectId]/activity": React.createElement("main", null, content),
+          },
+          [rootLayoutId, projectLayoutId],
+        ),
+      );
+
+    try {
+      const navId = controller.beginNavigation();
+      await dispatchTestNavigationPayload({
+        controller,
+        navigationCommitKind: "detached",
+        navigationInitiationState,
+        navigationSnapshot,
+        navId,
+        nextElements: createPayload("optimistic activity"),
+        params: { projectId: "a" },
+        targetHref,
+      });
+
+      await dispatchTestNavigationPayload({
+        controller,
+        navigationCommitKind: "authoritative",
+        navigationInitiationState,
+        navigationSnapshot,
+        navId,
+        nextElements: createPayload("authoritative activity"),
+        params: { projectId: "a" },
+        targetHref,
+      });
+
+      expect(stateRef.current.elements[projectLayoutId]).toBe(projectLayout);
+      expect(stateRef.current.bfcacheIds[projectLayoutId]).toBe("_b_2_");
+      expect(stateRef.current.elements["page:/projects/[projectId]/activity"]).toMatchObject({
+        props: { children: "authoritative activity" },
+      });
+    } finally {
+      detach();
+    }
+  });
+
+  it("replaces a detached slot when its dynamic layout owner was introduced optimistically", async () => {
+    const rootLayout = React.createElement("div", null, "root layout");
+    const rootLayoutId = AppElementsWire.encodeLayoutId("/");
+    const projectLayoutId = AppElementsWire.encodeLayoutId("/projects/[projectId]");
+    const sidebarSlotId = AppElementsWire.encodeSlotId("sidebar", "/projects/[projectId]");
+    const slotBindings: readonly AppElementsSlotBinding[] = [
+      { ownerLayoutId: projectLayoutId, slotId: sidebarSlotId, state: "default" },
+    ];
+    const navigationInitiationState = createState({
+      bfcacheIds: { [rootLayoutId]: "0" },
+      elements: createResolvedElements(
+        "route:/dashboard",
+        "/",
+        null,
+        {
+          [rootLayoutId]: rootLayout,
+          "page:/dashboard": React.createElement("main", null, "dashboard"),
+        },
+        [rootLayoutId],
+      ),
+      layoutIds: [rootLayoutId],
+      navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/dashboard", {}),
+      routeId: "route:/dashboard",
+    });
+    const routeManifest = createTestRouteManifest([
+      {
+        id: "route:/dashboard",
+        layoutIds: [rootLayoutId],
+        pattern: "/dashboard",
+        rootBoundaryId: "root-boundary:/",
+      },
+      {
+        id: "route:/projects/[projectId]",
+        layoutIds: [rootLayoutId, projectLayoutId],
+        pattern: "/projects/[projectId]",
+        rootBoundaryId: "root-boundary:/",
+        slotBindings,
+      },
+    ]);
+    const { controller, detach, stateRef } = createControllerHarness(navigationInitiationState, {
+      getRouteManifest: () => routeManifest,
+    });
+    const targetHref = "https://example.com/projects/b";
+    const navigationSnapshot = createClientNavigationRenderSnapshot(targetHref, {
+      projectId: "b",
+    });
+    const createPayload = (project: string) =>
+      Promise.resolve(
+        createResolvedElements(
+          "route:/projects/[projectId]",
+          "/",
+          null,
+          {
+            [APP_SKIPPED_LAYOUT_IDS_KEY]: [rootLayoutId],
+            [projectLayoutId]: React.createElement("section", null, `${project} layout`),
+            [sidebarSlotId]: React.createElement("aside", null, `${project} sidebar`),
+            "page:/projects/[projectId]": React.createElement("main", null, "project b"),
+          },
+          [rootLayoutId, projectLayoutId],
+          slotBindings,
+        ),
+      );
+
+    try {
+      const navId = controller.beginNavigation();
+      await dispatchTestNavigationPayload({
+        controller,
+        navigationCommitKind: "detached",
+        navigationInitiationState,
+        navigationSnapshot,
+        navId,
+        nextElements: createPayload("stale project a"),
+        params: { projectId: "b" },
+        targetHref,
+      });
+
+      const detachedOwnerId = stateRef.current.bfcacheIds[projectLayoutId];
+      const detachedSlotId = stateRef.current.bfcacheIds[sidebarSlotId];
+      expect(stateRef.current.elements[sidebarSlotId]).toMatchObject({
+        props: { children: "stale project a sidebar" },
+      });
+
+      await dispatchTestNavigationPayload({
+        controller,
+        navigationCommitKind: "authoritative",
+        navigationInitiationState,
+        navigationSnapshot,
+        navId,
+        nextElements: createPayload("project b"),
+        params: { projectId: "b" },
+        targetHref,
+      });
+
+      expect(stateRef.current.elements[sidebarSlotId]).toMatchObject({
+        props: { children: "project b sidebar" },
+      });
+      expect(stateRef.current.bfcacheIds[projectLayoutId]).not.toBe(detachedOwnerId);
+      expect(stateRef.current.bfcacheIds[sidebarSlotId]).not.toBe(detachedSlotId);
+      expect(stateRef.current.elements[rootLayoutId]).toBe(rootLayout);
+      expect(stateRef.current.bfcacheIds[rootLayoutId]).toBe("0");
+    } finally {
+      detach();
+    }
+  });
+
   it("lets an authoritative payload replace a detached commit from the same navigation", async () => {
     const { controller, detach, stateRef } = createControllerHarness();
 
