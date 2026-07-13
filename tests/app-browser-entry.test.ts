@@ -483,18 +483,32 @@ function createControllerHarness(
 ) {
   const controller = createAppBrowserNavigationController(deps);
   const stateRef: { current: AppRouterState } = { current: initialState };
+  let resolveNextVisibleCommitDispatch: (() => void) | null = null;
   const setBrowserRouterState = vi.fn((value: AppRouterState | Promise<AppRouterState>) => {
     if (!(value instanceof Promise)) {
       stateRef.current = value;
+      const resolveDispatch = resolveNextVisibleCommitDispatch;
+      resolveNextVisibleCommitDispatch = null;
+      resolveDispatch?.();
     }
   });
   const detach = controller.attachBrowserRouterState(setBrowserRouterState, stateRef);
+  const waitForNextVisibleCommitDispatch = (): Promise<void> => {
+    if (resolveNextVisibleCommitDispatch !== null) {
+      throw new Error("Already waiting for the next visible commit dispatch");
+    }
+
+    return new Promise((resolve) => {
+      resolveNextVisibleCommitDispatch = resolve;
+    });
+  };
 
   return {
     controller,
     detach,
     setBrowserRouterState,
     stateRef,
+    waitForNextVisibleCommitDispatch,
   };
 }
 
@@ -522,7 +536,9 @@ async function dispatchTestNavigationPayload(options: {
   nextElements: Promise<AppElements>;
   params: Record<string, string | string[]>;
   targetHref: string;
+  waitForNextVisibleCommitDispatch: () => Promise<void>;
 }): Promise<void> {
+  const commitDispatched = options.waitForNextVisibleCommitDispatch();
   void options.controller.renderNavigationPayload({
     actionType: "navigate",
     createNavigationCommitEffect: () => () => {},
@@ -540,9 +556,7 @@ async function dispatchTestNavigationPayload(options: {
     targetHref: options.targetHref,
   });
 
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  await commitDispatched;
 }
 
 type ApprovedTestCommitOptions = {
@@ -4063,9 +4077,10 @@ describe("app browser navigation lifecycle settlement", () => {
         rootBoundaryId: "root-boundary:/",
       },
     ]);
-    const { controller, detach, stateRef } = createControllerHarness(navigationInitiationState, {
-      getRouteManifest: () => routeManifest,
-    });
+    const { controller, detach, stateRef, waitForNextVisibleCommitDispatch } =
+      createControllerHarness(navigationInitiationState, {
+        getRouteManifest: () => routeManifest,
+      });
     const targetHref = "https://example.com/projects/b";
     const navigationSnapshot = createClientNavigationRenderSnapshot(targetHref, {
       projectId: "b",
@@ -4094,6 +4109,7 @@ describe("app browser navigation lifecycle settlement", () => {
         ),
         params: { projectId: "b" },
         targetHref,
+        waitForNextVisibleCommitDispatch,
       });
 
       const detachedProjectLayoutId = stateRef.current.bfcacheIds[projectLayoutId];
@@ -4122,6 +4138,7 @@ describe("app browser navigation lifecycle settlement", () => {
         ),
         params: { projectId: "b" },
         targetHref,
+        waitForNextVisibleCommitDispatch,
       });
 
       expect(stateRef.current.elements[projectLayoutId]).toMatchObject({
@@ -4176,9 +4193,10 @@ describe("app browser navigation lifecycle settlement", () => {
         rootBoundaryId: "root-boundary:/",
       },
     ]);
-    const { controller, detach, stateRef } = createControllerHarness(navigationInitiationState, {
-      getRouteManifest: () => routeManifest,
-    });
+    const { controller, detach, stateRef, waitForNextVisibleCommitDispatch } =
+      createControllerHarness(navigationInitiationState, {
+        getRouteManifest: () => routeManifest,
+      });
     const targetHref = "https://example.com/projects/a/activity";
     const navigationSnapshot = createClientNavigationRenderSnapshot(targetHref, {
       projectId: "a",
@@ -4208,6 +4226,7 @@ describe("app browser navigation lifecycle settlement", () => {
         nextElements: createPayload("optimistic activity"),
         params: { projectId: "a" },
         targetHref,
+        waitForNextVisibleCommitDispatch,
       });
 
       await dispatchTestNavigationPayload({
@@ -4219,6 +4238,7 @@ describe("app browser navigation lifecycle settlement", () => {
         nextElements: createPayload("authoritative activity"),
         params: { projectId: "a" },
         targetHref,
+        waitForNextVisibleCommitDispatch,
       });
 
       expect(stateRef.current.elements[projectLayoutId]).toBe(projectLayout);
@@ -4270,9 +4290,10 @@ describe("app browser navigation lifecycle settlement", () => {
         slotBindings,
       },
     ]);
-    const { controller, detach, stateRef } = createControllerHarness(navigationInitiationState, {
-      getRouteManifest: () => routeManifest,
-    });
+    const { controller, detach, stateRef, waitForNextVisibleCommitDispatch } =
+      createControllerHarness(navigationInitiationState, {
+        getRouteManifest: () => routeManifest,
+      });
     const targetHref = "https://example.com/projects/b";
     const navigationSnapshot = createClientNavigationRenderSnapshot(targetHref, {
       projectId: "b",
@@ -4305,6 +4326,7 @@ describe("app browser navigation lifecycle settlement", () => {
         nextElements: createPayload("stale project a"),
         params: { projectId: "b" },
         targetHref,
+        waitForNextVisibleCommitDispatch,
       });
 
       const detachedOwnerId = stateRef.current.bfcacheIds[projectLayoutId];
@@ -4322,6 +4344,7 @@ describe("app browser navigation lifecycle settlement", () => {
         nextElements: createPayload("project b"),
         params: { projectId: "b" },
         targetHref,
+        waitForNextVisibleCommitDispatch,
       });
 
       expect(stateRef.current.elements[sidebarSlotId]).toMatchObject({
