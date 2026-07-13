@@ -17,12 +17,13 @@
 //
 // The descriptor is a typed, inspectable contract: each variant names exactly
 // which facts participate in identity, so a new participating fact is a type
-// change, not a silent string-format tweak. deriveBfcacheSegmentIdentity is the
-// single pure, deterministic producer of the equality relation; the wire-payload
-// emit and the app-browser-state consumers assemble descriptors and compare its
-// output, never re-deriving identity inline.
+// change, not a silent string-format tweak. The route-building layer is the only
+// producer of these descriptors. The wire carries the resulting opaque strings,
+// and browser consumers compare those strings without reinterpreting route facts.
 
 type ParallelSlotBindingState = "active" | "default" | "unmatched";
+
+export type BfcacheSegmentIdentity = string;
 
 export type BfcacheSegmentDescriptor =
   | {

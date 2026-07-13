@@ -2,14 +2,14 @@
 
 import * as React from "react";
 import {
-  APP_SEGMENT_STATE_KEYS_KEY,
+  APP_BFCACHE_SEGMENT_IDENTITIES_KEY,
   APP_SKIPPED_LAYOUT_IDS_KEY,
   AppElementsWire,
   UNMATCHED_SLOT,
   type AppElementValue,
   type AppElements,
   type AppElementsInterception,
-  type AppElementsSegmentStateKeys,
+  type AppElementsBfcacheSegmentIdentities,
   type AppElementsSlotBinding,
   type LayoutFlags,
 } from "../server/app-elements.js";
@@ -49,7 +49,7 @@ const MAX_BFCACHE_SLOT_ENTRIES_WITH_CACHE_COMPONENTS = 3;
 // branch is a contract bound for the helper, not live render code.
 const MAX_BFCACHE_SLOT_ENTRIES_WITHOUT_CACHE_COMPONENTS = 1;
 
-export const BfcacheStateKeyMapContext =
+export const BfcacheIdentityMapContext =
   React.createContext<Readonly<Record<string, string>>>(EMPTY_BFCACHE_STATE_KEYS);
 
 export type BfcacheSlotEntry = {
@@ -160,11 +160,16 @@ function isSkippedLayoutIdsMetadataValue(id: string, value: unknown): value is r
   );
 }
 
-function isSegmentStateKeysMetadataValue(
+function isBfcacheSegmentIdentitiesMetadataValue(
   id: string,
   value: unknown,
-): value is AppElementsSegmentStateKeys {
-  return id === APP_SEGMENT_STATE_KEYS_KEY && typeof value === "object" && value !== null;
+): value is AppElementsBfcacheSegmentIdentities {
+  return (
+    id === APP_BFCACHE_SEGMENT_IDENTITIES_KEY &&
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }
 
 function isInterceptionMetadataValue(value: unknown): value is AppElementsInterception {
@@ -193,7 +198,7 @@ function isTransportMetadataValue(
   value: AppElementValue | undefined,
 ): value is
   | LayoutFlags
-  | AppElementsSegmentStateKeys
+  | AppElementsBfcacheSegmentIdentities
   | ArtifactCompatibilityEnvelope
   | CacheEntryReuseProof
   | AppElementsInterception
@@ -201,7 +206,7 @@ function isTransportMetadataValue(
   | readonly AppElementsSlotBinding[] {
   return (
     isLayoutFlagsValue(value) ||
-    isSegmentStateKeysMetadataValue(id, value) ||
+    isBfcacheSegmentIdentitiesMetadataValue(id, value) ||
     isArtifactCompatibilityEnvelopeValue(value) ||
     isCacheEntryReuseProofValue(value) ||
     isInterceptionMetadataValue(value) ||
@@ -238,13 +243,13 @@ function BfcacheEntryProviders({
   SegmentContext: React.Context<string | null>;
 }) {
   return (
-    <BfcacheStateKeyMapContext.Provider value={entry.stateKeyMap ?? fallbackStateKeyMap}>
+    <BfcacheIdentityMapContext.Provider value={entry.stateKeyMap ?? fallbackStateKeyMap}>
       <ElementsContext.Provider value={entry.elements ?? fallbackElements}>
         <SegmentContext.Provider value={entry.segmentId ?? fallbackSegmentId}>
           {entry.content}
         </SegmentContext.Provider>
       </ElementsContext.Provider>
-    </BfcacheStateKeyMapContext.Provider>
+    </BfcacheIdentityMapContext.Provider>
   );
 }
 
@@ -335,7 +340,7 @@ function BfcacheActivitySlotBoundary({
 function BfcacheSlotBoundary({ content, id }: { content: React.ReactNode; id: string }) {
   const SegmentContext = BfcacheSegmentIdContext;
   const elements = React.useContext(ElementsContext);
-  const stateKeyMap = React.useContext(BfcacheStateKeyMapContext);
+  const stateKeyMap = React.useContext(BfcacheIdentityMapContext);
   const activeStateKey = stateKeyMap[id];
   if (!SegmentContext) return <>{content}</>;
   // The empty default map intentionally keeps apps without BFCache state keys on
@@ -345,8 +350,8 @@ function BfcacheSlotBoundary({ content, id }: { content: React.ReactNode; id: st
   }
 
   // Without cacheComponents there is no Activity retention, so this boundary must
-  // reconcile in place exactly like the baseline router. The segment stateKey
-  // tracks the carried route-graph binding (see createBfcacheSegmentIdentity), so
+  // reconcile in place exactly like the baseline router. The segment identity is
+  // produced from complete route-graph facts on the server, so
   // keying the active entry by it would remount every slot whose identity moves
   // across navigations — shared layouts and interception source slots included —
   // discarding client state that survives a normal navigation. Reset for genuinely fresh entries is

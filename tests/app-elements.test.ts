@@ -15,7 +15,7 @@ import {
   APP_RENDER_OBSERVATION_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
-  APP_SEGMENT_STATE_KEYS_KEY,
+  APP_BFCACHE_SEGMENT_IDENTITIES_KEY,
   APP_SKIPPED_LAYOUT_IDS_KEY,
   APP_SOURCE_PAGE_KEY,
   APP_SLOT_BINDINGS_KEY,
@@ -41,7 +41,7 @@ import {
 
 describe("AppElementsWire", () => {
   it("exposes stable metadata keys through the codec boundary", () => {
-    expect(AppElementsWire.keys.segmentStateKeys).toBe(APP_SEGMENT_STATE_KEYS_KEY);
+    expect(AppElementsWire.keys.bfcacheSegmentIdentities).toBe(APP_BFCACHE_SEGMENT_IDENTITIES_KEY);
   });
 
   it("encodes outgoing record payloads without mutating caller-owned records", () => {
@@ -88,7 +88,7 @@ describe("AppElementsWire", () => {
       layoutFlags: {},
       rootLayoutTreePath: "/",
       routeId: "route:/photos/42\0/feed",
-      segmentStateKeys: {},
+      bfcacheSegmentIdentities: {},
       skippedLayoutIds: [],
       slotBindings: [],
       sourcePage: null,
@@ -111,7 +111,7 @@ describe("AppElementsWire", () => {
       layoutIds: ["layout:/(dashboard)"],
       rootLayoutTreePath: "/(dashboard)",
       routeId: AppElementsWire.encodeRouteId("/dashboard", null),
-      segmentStateKeys: {
+      bfcacheSegmentIdentities: {
         [AppElementsWire.encodeLayoutId("/(dashboard)")]: "/dashboard",
         [AppElementsWire.encodePageId("/dashboard", null)]: "/dashboard",
       },
@@ -123,7 +123,7 @@ describe("AppElementsWire", () => {
       [APP_LAYOUT_IDS_KEY]: ["layout:/(dashboard)"],
       [APP_ROOT_LAYOUT_KEY]: "/(dashboard)",
       [APP_ROUTE_KEY]: "route:/dashboard",
-      [APP_SEGMENT_STATE_KEYS_KEY]: {
+      [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: {
         "layout:/(dashboard)": "/dashboard",
         "page:/dashboard": "/dashboard",
       },
@@ -328,7 +328,7 @@ describe("AppElementsWire", () => {
       layoutFlags: { [AppElementsWire.encodeLayoutId("/")]: "s" },
       rootLayoutTreePath: "/",
       routeId: "route:/dashboard",
-      segmentStateKeys: {},
+      bfcacheSegmentIdentities: {},
       skippedLayoutIds: [],
       slotBindings: [],
       sourcePage: null,
@@ -463,28 +463,28 @@ describe("app elements payload helpers", () => {
   it.each([
     {
       label: "non-string binding",
-      segmentStateKeys: {
+      bfcacheSegmentIdentities: {
         "page:/dashboard": "/dashboard",
         "layout:/": 123,
       },
     },
     {
       label: "non-segment element id",
-      segmentStateKeys: {
+      bfcacheSegmentIdentities: {
         "page:/dashboard": "/dashboard",
         "route:/dashboard": "/dashboard",
       },
     },
-  ])("rejects the segment state map atomically: $label", ({ segmentStateKeys }) => {
+  ])("rejects the BFCache identity map atomically: $label", ({ bfcacheSegmentIdentities }) => {
     const metadata = readAppElementsMetadata({
       ...normalizeAppElements({
         [APP_ROOT_LAYOUT_KEY]: "/",
         [APP_ROUTE_KEY]: "route:/dashboard",
       }),
-      [APP_SEGMENT_STATE_KEYS_KEY]: segmentStateKeys,
+      [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: bfcacheSegmentIdentities,
     });
 
-    expect(metadata.segmentStateKeys).toEqual({});
+    expect(metadata.bfcacheSegmentIdentities).toEqual({});
   });
 
   it("encodes intercepted route ids and cache keys with a NUL separator", () => {

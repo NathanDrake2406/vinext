@@ -112,7 +112,7 @@ import {
   COMMITTED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
   FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
   VISITED_CACHE_APP_NAVIGATION_PAYLOAD_ORIGIN,
-  createBfcacheSegmentStateKeyMap,
+  createBfcacheSegmentIdentityMap,
   createInitialBfcacheIdMap,
   isCacheRestorableAppPayloadMetadata,
   isCompleteAppPayloadMetadata,
@@ -140,7 +140,7 @@ import {
 } from "vinext/shims/error-boundary";
 import DefaultGlobalError from "vinext/shims/default-global-error";
 import { AppRouterContext } from "vinext/shims/internal/app-router-context";
-import { BfcacheStateKeyMapContext, ElementsContext, Slot } from "vinext/shims/slot";
+import { BfcacheIdentityMapContext, ElementsContext, Slot } from "vinext/shims/slot";
 import type { RouteManifest } from "../routing/app-route-graph.js";
 import {
   createDevOnCaughtError,
@@ -1143,18 +1143,18 @@ function BrowserRoot({
       ),
     ),
   );
-  const bfcacheStateKeys = useMemo(
-    () => createBfcacheSegmentStateKeyMap({ elements: treeState.elements }),
+  const bfcacheSegmentIdentities = useMemo(
+    () => createBfcacheSegmentIdentityMap({ elements: treeState.elements }),
     [treeState.elements],
   );
-  const stateKeyTree = createElement(
-    BfcacheStateKeyMapContext.Provider,
-    { value: bfcacheStateKeys },
+  const identityMapTree = createElement(
+    BfcacheIdentityMapContext.Provider,
+    { value: bfcacheSegmentIdentities },
     routeTree,
   );
   const bfcacheTree = BfcacheIdMapContext
-    ? createElement(BfcacheIdMapContext.Provider, { value: treeState.bfcacheIds }, stateKeyTree)
-    : stateKeyTree;
+    ? createElement(BfcacheIdMapContext.Provider, { value: treeState.bfcacheIds }, identityMapTree)
+    : identityMapTree;
   const redirectedTree = createElement(AppRouterRedirectBridge, null, bfcacheTree);
   const innerTree = AppRouterContext
     ? createElement(AppRouterContext.Provider, { value: appRouterInstance }, redirectedTree)

@@ -1198,15 +1198,146 @@ describe("app page route wiring helpers", () => {
     expect(fooBoundary?.props.resetKey).toBe(JSON.stringify(["username|foo|d", "id|1|d"]));
     expect(barBoundary?.props.resetKey).toBe(JSON.stringify(["username|bar|d", "id|2|d"]));
     expect(barBoundary?.props.resetKey).not.toBe(fooBoundary?.props.resetKey);
-    expect(AppElementsWire.readMetadata(fooElements).segmentStateKeys[modalSlotId]).toBe(
-      fooBoundary?.props.resetKey,
-    );
-    expect(AppElementsWire.readMetadata(barElements).segmentStateKeys[modalSlotId]).toBe(
-      barBoundary?.props.resetKey,
-    );
-    expect(AppElementsWire.readMetadata(barElements).segmentStateKeys[modalSlotId]).not.toBe(
-      AppElementsWire.readMetadata(fooElements).segmentStateKeys[modalSlotId],
-    );
+    const fooIdentity =
+      AppElementsWire.readMetadata(fooElements).bfcacheSegmentIdentities[modalSlotId];
+    const barIdentity =
+      AppElementsWire.readMetadata(barElements).bfcacheSegmentIdentities[modalSlotId];
+    const repeatedFooIdentity = AppElementsWire.readMetadata(
+      buildInterceptedElements({ username: "foo", id: "1" }),
+    ).bfcacheSegmentIdentities[modalSlotId];
+
+    expect(fooIdentity).toBeTypeOf("string");
+    expect(barIdentity).toBeTypeOf("string");
+    expect(fooIdentity).not.toBe(fooBoundary?.props.resetKey);
+    expect(barIdentity).not.toBe(barBoundary?.props.resetKey);
+    expect(barIdentity).not.toBe(fooIdentity);
+    expect(repeatedFooIdentity).toBe(fooIdentity);
+  });
+
+  it("emits opaque slot identities from effective route facts", async () => {
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
+    const buildSlotElements = (options: {
+      defaultModule: AppPageModule | null;
+      pageModule: AppPageModule | null;
+      targetPath?: string;
+    }) =>
+      buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(value) {
+          return Promise.resolve(value);
+        },
+        matchedParams: { id: "42" },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null],
+          layoutTreePositions: [],
+          layouts: [],
+          loading: null,
+          notFound: null,
+          notFounds: [null],
+          routeSegments: ["photos", "[id]"],
+          slots: {
+            modal: {
+              default: options.defaultModule,
+              error: null,
+              layout: null,
+              layoutIndex: -1,
+              loading: null,
+              name: "modal",
+              page: options.pageModule,
+              routeSegments: ["photos", "[id]"],
+            },
+          },
+          templateTreePositions: [],
+          templates: [],
+        },
+        ...(options.targetPath
+          ? {
+              interception: {
+                sourceMatchedUrl: "/feed",
+                sourceRouteId: "route:/feed",
+                slotId: modalSlotId,
+                targetMatchedUrl: options.targetPath,
+                targetRouteId: `route:${options.targetPath}`,
+              },
+              interceptionContext: "/feed",
+            }
+          : {}),
+        routePath: "/photos/42",
+        rootNotFoundModule: null,
+      });
+
+    const activeIdentity = AppElementsWire.readMetadata(
+      buildSlotElements({
+        defaultModule: null,
+        pageModule: { default: SlotPage },
+        targetPath: "/photos/42",
+      }),
+    ).bfcacheSegmentIdentities[modalSlotId];
+    const changedTargetIdentity = AppElementsWire.readMetadata(
+      buildSlotElements({
+        defaultModule: null,
+        pageModule: { default: SlotPage },
+        targetPath: "/photos/43",
+      }),
+    ).bfcacheSegmentIdentities[modalSlotId];
+    const defaultIdentity = AppElementsWire.readMetadata(
+      buildSlotElements({ defaultModule: { default: SlotPage }, pageModule: null }),
+    ).bfcacheSegmentIdentities[modalSlotId];
+    const unmatchedIdentity = AppElementsWire.readMetadata(
+      buildSlotElements({ defaultModule: null, pageModule: null }),
+    ).bfcacheSegmentIdentities[modalSlotId];
+
+    expect(activeIdentity).toBeTypeOf("string");
+    expect(changedTargetIdentity).not.toBe(activeIdentity);
+    expect(defaultIdentity).not.toBe(activeIdentity);
+    expect(unmatchedIdentity).not.toBe(defaultIdentity);
+  });
+
+  it("keys synthetic children-slot page elements with their emitted identity", () => {
+    const childrenSlotId = AppElementsWire.encodeSlotId("children", "/");
+    const buildElements = (id: string) =>
+      buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(value) {
+          return Promise.resolve(value);
+        },
+        matchedParams: { id },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          childrenSlot: {
+            id: childrenSlotId,
+            ownerTreePath: "/",
+            state: "active",
+          },
+          error: null,
+          errors: [null],
+          layoutTreePositions: [0],
+          layouts: [{ default: RootLayout }],
+          loading: null,
+          notFound: null,
+          notFounds: [null],
+          routeSegments: ["photos", "[id]"],
+          templateTreePositions: [],
+          templates: [],
+        },
+        routePath: `/photos/${id}`,
+        rootNotFoundModule: null,
+      });
+
+    const firstIdentity = AppElementsWire.readMetadata(buildElements("42"))
+      .bfcacheSegmentIdentities[childrenSlotId];
+    const repeatedIdentity = AppElementsWire.readMetadata(buildElements("42"))
+      .bfcacheSegmentIdentities[childrenSlotId];
+    const changedIdentity = AppElementsWire.readMetadata(buildElements("43"))
+      .bfcacheSegmentIdentities[childrenSlotId];
+
+    expect(firstIdentity).toBeTypeOf("string");
+    expect(repeatedIdentity).toBe(firstIdentity);
+    expect(changedIdentity).not.toBe(firstIdentity);
   });
 
   it("wraps intercepted slot overrides with intercept layout modules inside the slot layout", async () => {
