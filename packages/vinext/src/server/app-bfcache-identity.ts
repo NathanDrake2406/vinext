@@ -1,13 +1,13 @@
-import { AppElementsWire, type AppElements, type AppElementsSlotBinding } from "./app-elements.js";
+import { AppElementsWire, type AppElements } from "./app-elements.js";
 import { INITIAL_BFCACHE_ID } from "./app-bfcache-id.js";
 import { isBfcacheSegmentId, type BfcacheIdMap } from "./app-history-state.js";
-import { deriveBfcacheSegmentIdentity } from "./bfcache-identity.js";
+import type { BfcacheSegmentIdentity } from "./bfcache-identity.js";
 
-export type BfcacheStateKeyMap = Readonly<Record<string, string>>;
+export type BfcacheSegmentIdentityMap = Readonly<Record<string, BfcacheSegmentIdentity>>;
 
 export type InitialBfcacheMaps = Readonly<{
   bfcacheIds: BfcacheIdMap;
-  stateKeys: BfcacheStateKeyMap;
+  identities: BfcacheSegmentIdentityMap;
 }>;
 
 // Monotonic within a single browser document. Full reloads reset the counter,
@@ -30,108 +30,22 @@ function mintBfcacheId(): string {
 
 type AppElementsMetadata = ReturnType<typeof AppElementsWire.readMetadata>;
 
-/**
- * Metadata parsed once per element map, with an index that keeps per-slot
- * identity lookup O(1) rather than scanning every binding for every slot.
- */
-type ParsedAppElementsMetadata = {
-  metadata: AppElementsMetadata;
-  slotBindingsBySlotId: ReadonlyMap<string, AppElementsSlotBinding>;
-};
-
-function indexAppElementsMetadata(metadata: AppElementsMetadata): ParsedAppElementsMetadata {
-  const slotBindingsBySlotId = new Map<string, AppElementsSlotBinding>();
-  for (const binding of metadata.slotBindings) {
-    slotBindingsBySlotId.set(binding.slotId, binding);
-  }
-  return { metadata, slotBindingsBySlotId };
-}
-
-function readAppElementsMetadata(elements: AppElements): ParsedAppElementsMetadata | null {
-  let metadata: AppElementsMetadata;
+function readAppElementsMetadata(elements: AppElements): AppElementsMetadata | null {
   try {
-    metadata = AppElementsWire.readMetadata(elements);
+    return AppElementsWire.readMetadata(elements);
   } catch {
     // Some low-level tests pass partial element maps without metadata.
     return null;
   }
-  return indexAppElementsMetadata(metadata);
-}
-
-/**
- * Derive a BFCache segment identity from route-graph facts: the segment's
- * semantic wire id, the carried canonical bound-segment key (__segmentStateKeys),
- * and per-kind facts such as slot state. A segment whose key was not carried
- * returns no comparable identity, so it re-mints rather than colliding with a
- * real binding.
- */
-function createBfcacheSegmentIdentity(
-  id: string,
-  options: { metadata: ParsedAppElementsMetadata | null },
-): string | null {
-  const parsed = AppElementsWire.parseElementKey(id);
-  if (!parsed || parsed.kind === "route") return null;
-
-  const metadata = options.metadata?.metadata;
-  const rootBoundaryId = metadata?.rootLayoutTreePath ?? null;
-  const segmentStateKeys = metadata?.segmentStateKeys;
-  if (!segmentStateKeys || !Object.hasOwn(segmentStateKeys, id)) {
-    return null;
-  }
-  const boundSegmentKey = segmentStateKeys[id];
-
-  if (parsed.kind === "page") {
-    return deriveBfcacheSegmentIdentity({
-      kind: "page",
-      graphId: id,
-      rootBoundaryId,
-      boundSegmentKey,
-    });
-  }
-
-  if (parsed.kind === "slot") {
-    const binding = options.metadata?.slotBindingsBySlotId.get(id) ?? null;
-    const interception = metadata?.interception ?? null;
-    return deriveBfcacheSegmentIdentity({
-      kind: "slot",
-      graphId: id,
-      slotId: id,
-      ownerLayoutId: binding?.ownerLayoutId ?? null,
-      state: binding?.state ?? "active",
-      activeRouteId: binding?.activeRouteId ?? null,
-      interceptionTargetRouteId: interception?.slotId === id ? interception.targetRouteId : null,
-      boundSegmentKey,
-    });
-  }
-
-  if (parsed.kind === "layout") {
-    return deriveBfcacheSegmentIdentity({
-      kind: "layout",
-      graphId: id,
-      rootBoundaryId,
-      boundSegmentKey,
-    });
-  }
-
-  if (parsed.kind === "template") {
-    return deriveBfcacheSegmentIdentity({
-      kind: "template",
-      graphId: id,
-      rootBoundaryId,
-      boundSegmentKey,
-    });
-  }
-
-  return null;
 }
 
 function collectBfcacheSegmentIds(
   elements: AppElements,
-  metadata?: ParsedAppElementsMetadata | null,
+  metadata?: AppElementsMetadata | null,
 ): string[] {
   const ids = new Set(Object.keys(elements));
   const parsedMetadata = metadata === undefined ? readAppElementsMetadata(elements) : metadata;
-  for (const layoutId of parsedMetadata?.metadata.layoutIds ?? []) {
+  for (const layoutId of parsedMetadata?.layoutIds ?? []) {
     ids.add(layoutId);
   }
   return Array.from(ids).filter(isBfcacheSegmentId);
@@ -145,36 +59,25 @@ export function createInitialBfcacheIdMap(elements: AppElements): BfcacheIdMap {
   return bfcacheIds;
 }
 
-export function createBfcacheSegmentStateKeyMap(options: {
+export function createBfcacheSegmentIdentityMap(options: {
   elements: AppElements;
-}): BfcacheStateKeyMap {
+}): BfcacheSegmentIdentityMap {
   const metadata = readAppElementsMetadata(options.elements);
-  const stateKeys: Record<string, string> = {};
-  for (const id of collectBfcacheSegmentIds(options.elements, metadata)) {
-    const stateKey = createBfcacheSegmentIdentity(id, { metadata });
-    // A null identity means the segment carried no proven route-graph key.
-    // Omit it so the boundary uses the deliberate remint path instead of
-    // preserving a segment against an unproven binding.
-    if (stateKey !== null) stateKeys[id] = stateKey;
-  }
-  return stateKeys;
+  return metadata?.bfcacheSegmentIdentities ?? {};
 }
 
 export function createInitialBfcacheMaps(options: {
   elements: AppElements;
   metadata: AppElementsMetadata;
 }): InitialBfcacheMaps {
-  const metadata = indexAppElementsMetadata(options.metadata);
+  const metadata = options.metadata;
   const bfcacheIds: Record<string, string> = {};
-  const stateKeys: Record<string, string> = {};
 
   for (const id of collectBfcacheSegmentIds(options.elements, metadata)) {
     bfcacheIds[id] = INITIAL_BFCACHE_ID;
-    const stateKey = createBfcacheSegmentIdentity(id, { metadata });
-    if (stateKey !== null) stateKeys[id] = stateKey;
   }
 
-  return { bfcacheIds, stateKeys };
+  return { bfcacheIds, identities: metadata.bfcacheSegmentIdentities };
 }
 
 export function createNextBfcacheIdMap(options: {
@@ -192,10 +95,10 @@ export function createNextBfcacheIdMap(options: {
   const nextMetadata = readAppElementsMetadata(options.elements);
   const ids: Record<string, string> = {};
   for (const id of collectBfcacheSegmentIds(options.elements, nextMetadata)) {
-    const currentIdentity = createBfcacheSegmentIdentity(id, { metadata: currentMetadata });
-    const nextIdentity = createBfcacheSegmentIdentity(id, { metadata: nextMetadata });
+    const currentIdentity = currentMetadata?.bfcacheSegmentIdentities[id];
+    const nextIdentity = nextMetadata?.bfcacheSegmentIdentities[id];
     const currentValue =
-      currentIdentity !== null && currentIdentity === nextIdentity ? current[id] : undefined;
+      currentIdentity !== undefined && currentIdentity === nextIdentity ? current[id] : undefined;
     // History restoration wins, then identity-compatible reuse, then a fresh
     // id. Redirected traversals must clear stale restored ids before this call.
     const value = options.restored?.[id] ?? currentValue ?? mintBfcacheId();

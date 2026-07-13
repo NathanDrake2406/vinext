@@ -44,7 +44,7 @@ import type { BfcacheIdMap } from "./app-history-state.js";
 import { createNextBfcacheIdMap } from "./app-bfcache-identity.js";
 
 export {
-  createBfcacheSegmentStateKeyMap,
+  createBfcacheSegmentIdentityMap,
   createInitialBfcacheIdMap,
   createNextBfcacheIdMap,
   preserveBfcacheIdsForMergedElements,
