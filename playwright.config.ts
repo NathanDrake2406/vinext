@@ -90,9 +90,8 @@ const projectServers = {
     testDir: "./tests/e2e/app-router-navigation-debug",
     use: { baseURL: "http://localhost:4195" },
     server: {
-      command: "npx vp dev --port 4195",
+      command: "npx vp dev --config vite.navigation-debug.config.ts --force --port 4195",
       cwd: "./tests/fixtures/app-basic",
-      env: { VINEXT_DEBUG_NAVIGATION: "1" },
       port: 4195,
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,

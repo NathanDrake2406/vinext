@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import {
   isRegisterCalled,
   getCapturedErrors,
-  resetInstrumentationState,
+  resetCapturedErrors,
 } from "../../instrumentation-state";
 
 /**
@@ -14,11 +14,11 @@ import {
  *   onRequestError() fired for any unhandled route errors.
  *
  * DELETE /api/instrumentation-test
- *   Resets the captured state so tests can start from a clean slate.
+ *   Clears captured request errors while preserving the one-time startup signal.
  */
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === "DELETE") {
-    resetInstrumentationState();
+    resetCapturedErrors();
     return res.status(200).json({ ok: true });
   }
 

@@ -56,8 +56,7 @@ export function recordRequestError(entry: CapturedRequestError): void {
   _errors().push(entry);
 }
 
-/** Reset all state (used between test runs). */
-export function resetInstrumentationState(): void {
-  (globalThis as any)[REGISTER_KEY] = false;
+/** Clear request-error records without erasing the one-time startup signal. */
+export function resetCapturedErrors(): void {
   (globalThis as any)[ERRORS_KEY] = [];
 }

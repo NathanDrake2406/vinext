@@ -22,10 +22,17 @@ import { test, expect } from "@playwright/test";
 
 test.describe("instrumentation.ts onRequestError (Pages Router)", () => {
   test.beforeEach(async ({ request }) => {
-    // Reset captured state before each test so errors from earlier tests
-    // don't bleed through.
+    // Clear request errors before each test without erasing the one-time
+    // register() startup signal asserted by instrumentation-startup.spec.ts.
     const res = await request.delete("/api/instrumentation-test");
     expect(res.status()).toBe(200);
+  });
+
+  test("clearing captured errors preserves the startup signal", async ({ request }) => {
+    const stateRes = await request.get("/api/instrumentation-test");
+    const data = await stateRes.json();
+    expect(data.registerCalled).toBe(true);
+    expect(data.errors).toEqual([]);
   });
 
   test("successful requests do not trigger onRequestError()", async ({ request }) => {
