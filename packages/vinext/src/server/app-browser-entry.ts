@@ -2395,12 +2395,27 @@ function bootstrapHydration(
       return;
     }
     const snapshotNavigationId = browserNavigationController.beginNavigation();
-    if (
-      restoreHistoryStateSnapshot(event.state, snapshotNavigationId, () => {
-        abortSupersededNavigation("history-restore");
-        notifyAppRouterTransitionStart(href, "traverse");
-      })
-    ) {
+    let snapshotDebugStarted = false;
+    let restoredHistorySnapshot = false;
+    try {
+      restoredHistorySnapshot = restoreHistoryStateSnapshot(
+        event.state,
+        snapshotNavigationId,
+        () => {
+          abortSupersededNavigation("history-restore");
+          notifyAppRouterTransitionStart(href, "traverse");
+          navigationDebug?.start({
+            navigationId: snapshotNavigationId,
+            navigationKind: "traverse",
+            targetHref: href,
+          });
+          snapshotDebugStarted = true;
+        },
+      );
+    } finally {
+      if (snapshotDebugStarted) navigationDebug?.settle(snapshotNavigationId);
+    }
+    if (restoredHistorySnapshot) {
       window.__VINEXT_RSC_PENDING__ = null;
       restoreSynchronousPopstateScrollPosition(
         {
