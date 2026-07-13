@@ -1091,18 +1091,23 @@ describe("app page route wiring helpers", () => {
       });
 
     const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
-    const fooBoundary = findElementByTypeName(
-      buildInterceptedElements({ username: "foo", id: "1" })[modalSlotId],
-      "ErrorBoundary",
-    );
-    const barBoundary = findElementByTypeName(
-      buildInterceptedElements({ username: "bar", id: "2" })[modalSlotId],
-      "ErrorBoundary",
-    );
+    const fooElements = buildInterceptedElements({ username: "foo", id: "1" });
+    const barElements = buildInterceptedElements({ username: "bar", id: "2" });
+    const fooBoundary = findElementByTypeName(fooElements[modalSlotId], "ErrorBoundary");
+    const barBoundary = findElementByTypeName(barElements[modalSlotId], "ErrorBoundary");
 
     expect(fooBoundary?.props.resetKey).toBe(JSON.stringify(["username|foo|d", "id|1|d"]));
     expect(barBoundary?.props.resetKey).toBe(JSON.stringify(["username|bar|d", "id|2|d"]));
     expect(barBoundary?.props.resetKey).not.toBe(fooBoundary?.props.resetKey);
+    expect(AppElementsWire.readMetadata(fooElements).segmentStateKeys[modalSlotId]).toBe(
+      fooBoundary?.props.resetKey,
+    );
+    expect(AppElementsWire.readMetadata(barElements).segmentStateKeys[modalSlotId]).toBe(
+      barBoundary?.props.resetKey,
+    );
+    expect(AppElementsWire.readMetadata(barElements).segmentStateKeys[modalSlotId]).not.toBe(
+      AppElementsWire.readMetadata(fooElements).segmentStateKeys[modalSlotId],
+    );
   });
 
   it("wraps intercepted slot overrides with intercept layout modules inside the slot layout", async () => {

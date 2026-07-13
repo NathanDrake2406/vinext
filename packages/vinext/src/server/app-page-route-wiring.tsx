@@ -641,8 +641,8 @@ export function buildAppPageElements<
   // identity derives from the same route-graph param binding used for React reset
   // keys, instead of from pathname segment counting on the client. Each key uses
   // the segment's own tree path (routeSegments up to its tree position); the page
-  // reuses the full-route reset key. Slot keys mirror the per-slot reset key
-  // computed in the slot loop below from the same (slot.routeSegments, slotParams).
+  // reuses the full-route reset key. Slot keys are populated in the slot loop
+  // below from the effective route segments and params used by its boundaries.
   const segmentStateKeys: Record<string, string> = { [pageId]: routeResetKey };
   for (const layoutEntry of layoutEntries) {
     segmentStateKeys[layoutEntry.id] = resolveAppPageRouteStateKey(
@@ -654,14 +654,6 @@ export function buildAppPageElements<
     segmentStateKeys[templateEntry.id] = resolveAppPageRouteStateKey(
       routeSegments.slice(0, templateEntry.treePosition),
       options.matchedParams,
-    );
-  }
-  for (const [slotKey, slot] of Object.entries(options.route.slots ?? {})) {
-    const targetIndex = slot.layoutIndex >= 0 ? slot.layoutIndex : layoutEntries.length - 1;
-    const slotId = resolveAppPageSlotId(slot, layoutEntries[targetIndex]?.treePath ?? "/");
-    segmentStateKeys[slotId] = resolveAppPageRouteStateKey(
-      slot.routeSegments ?? [],
-      resolveSlotOverride(slotKey, slot.name)?.params ?? options.matchedParams,
     );
   }
   const elements: Record<
@@ -835,6 +827,7 @@ export function buildAppPageElements<
       options.matchedParams,
     );
     const slotResetKey = resolveAppPageRouteStateKey(slotRouteSegments, slotParams);
+    segmentStateKeys[slotId] = slotResetKey;
     const overrideOrPageComponent =
       getDefaultExport(slotOverride?.pageModule) ?? getDefaultExport(slot.page);
     const defaultComponent = getDefaultExport(slot.default);
