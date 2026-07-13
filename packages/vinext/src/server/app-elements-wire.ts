@@ -405,6 +405,11 @@ function parseAppElementsWireElementKey(key: string): AppElementsWireElementKey 
   return null;
 }
 
+function isAppElementsWireSegmentId(key: string): boolean {
+  const kind = parseAppElementsWireElementKey(key)?.kind;
+  return kind === "page" || kind === "layout" || kind === "template" || kind === "slot";
+}
+
 function isAppElementsWireSlotId(key: string): boolean {
   if (!key.startsWith("slot:")) return false;
   const body = key.slice("slot:".length);
@@ -828,13 +833,14 @@ function parseCacheEntryReuseProofMetadata(value: unknown): CacheEntryReuseProof
 }
 
 function parseSegmentStateKeys(value: unknown): AppElementsSegmentStateKeys {
-  // Absent metadata round-trips as {}. A malformed map degrades to {} rather than
-  // throwing: a missing carried key resolves to a fresh-mint identity downstream,
-  // which is safe, so a bad value should not crash render paths that do not read it.
+  // Absent metadata round-trips as {}. Treat the map as one proof-bearing unit:
+  // if any entry is malformed, discard every entry so a valid-looking neighbour
+  // cannot remain authoritative beside untrusted metadata.
   if (!isUnknownRecord(value)) return {};
   const parsed: Record<string, string> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "string") parsed[key] = entry;
+    if (typeof entry !== "string" || !isAppElementsWireSegmentId(key)) return {};
+    parsed[key] = entry;
   }
   return parsed;
 }
