@@ -1237,9 +1237,11 @@ export function buildAppPageElements<
     </>
   );
 
-  const result = {
-    ...elements,
-    ...AppElementsWire.createMetadataEntries({
+  // Merge only after rendering is complete so metadata never participates in
+  // element construction, without copying the rendered element map on return.
+  Object.assign(
+    elements,
+    AppElementsWire.createMetadataEntries({
       bfcacheSegmentIdentities,
       interception,
       interceptionContext,
@@ -1249,10 +1251,10 @@ export function buildAppPageElements<
       sourcePage: createAppPageSourcePage(options.sourcePageSegments ?? routeSegments),
       slotBindings,
     }),
-    ...(options.route.staticSiblings && options.route.staticSiblings.length > 0
+    options.route.staticSiblings && options.route.staticSiblings.length > 0
       ? { [APP_STATIC_SIBLINGS_KEY]: options.route.staticSiblings }
-      : {}),
-    ...(shouldRenderPrefetchLoadingShell
+      : {},
+    shouldRenderPrefetchLoadingShell
       ? {
           // Client loading components serialize as module references in Flight. Keep
           // a durable marker in the shell payload so external router tests and
@@ -1260,8 +1262,8 @@ export function buildAppPageElements<
           // requiring source text to appear in client component references.
           [APP_PREFETCH_LOADING_SHELL_MARKER_KEY]: "LoadingBoundary",
         }
-      : {}),
-  };
-  registerAppElementRenderDependencies(result, renderDependenciesByElementId);
-  return result;
+      : {},
+  );
+  registerAppElementRenderDependencies(elements, renderDependenciesByElementId);
+  return elements;
 }
