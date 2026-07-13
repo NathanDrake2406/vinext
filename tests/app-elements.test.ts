@@ -460,6 +460,33 @@ describe("app elements payload helpers", () => {
     expect(metadata.interceptionContext).toBeNull();
   });
 
+  it.each([
+    {
+      label: "non-string binding",
+      segmentStateKeys: {
+        "page:/dashboard": "/dashboard",
+        "layout:/": 123,
+      },
+    },
+    {
+      label: "non-segment element id",
+      segmentStateKeys: {
+        "page:/dashboard": "/dashboard",
+        "route:/dashboard": "/dashboard",
+      },
+    },
+  ])("rejects the segment state map atomically: $label", ({ segmentStateKeys }) => {
+    const metadata = readAppElementsMetadata({
+      ...normalizeAppElements({
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        [APP_ROUTE_KEY]: "route:/dashboard",
+      }),
+      [APP_SEGMENT_STATE_KEYS_KEY]: segmentStateKeys,
+    });
+
+    expect(metadata.segmentStateKeys).toEqual({});
+  });
+
   it("encodes intercepted route ids and cache keys with a NUL separator", () => {
     expect(AppElementsWire.encodeRouteId("/photos/42", null)).toBe("route:/photos/42");
     expect(AppElementsWire.encodeRouteId("/photos/42", "/feed")).toBe("route:/photos/42\0/feed");
