@@ -1,7 +1,30 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { acquireRouteAnnouncer, type RouteAnnouncer } from "./route-announcer.js";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+
+const ANNOUNCER_TAG = "next-route-announcer";
+const ANNOUNCER_ID = "__next-route-announcer__";
+
+function getOrCreateAnnouncerNode(): HTMLElement {
+  const existingHost = document.querySelector(ANNOUNCER_TAG);
+  const existingNode = existingHost?.shadowRoot?.querySelector<HTMLElement>(`#${ANNOUNCER_ID}`);
+  if (existingNode) return existingNode;
+
+  const host = document.createElement(ANNOUNCER_TAG);
+  host.style.position = "absolute";
+
+  const announcer = document.createElement("div");
+  announcer.id = ANNOUNCER_ID;
+  announcer.setAttribute("aria-live", "assertive");
+  announcer.setAttribute("role", "alert");
+  announcer.style.cssText =
+    "position:absolute;border:0;height:1px;margin:-1px;padding:0;width:1px;clip:rect(0 0 0 0);overflow:hidden;white-space:nowrap;word-wrap:normal";
+
+  host.attachShadow({ mode: "open" }).appendChild(announcer);
+  document.body.appendChild(host);
+  return announcer;
+}
 
 function readRouteAnnouncement(): string {
   if (document.title) return document.title;
@@ -20,16 +43,17 @@ function readRouteAnnouncement(): string {
  * already announces a full document load.
  */
 export function AppRouterAnnouncer({ commitVersion }: { commitVersion: number }) {
-  const announcer = useRef<RouteAnnouncer | null>(null);
+  const [portalNode, setPortalNode] = useState<HTMLElement | null>(null);
+  const [routeAnnouncement, setRouteAnnouncement] = useState("");
   const previousAnnouncement = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    const acquiredAnnouncer = acquireRouteAnnouncer();
-    announcer.current = acquiredAnnouncer;
+    const announcer = getOrCreateAnnouncerNode();
+    setPortalNode(announcer);
 
     return () => {
-      announcer.current = null;
-      acquiredAnnouncer.release();
+      const host = document.querySelector(ANNOUNCER_TAG);
+      if (host?.isConnected) host.remove();
     };
   }, []);
 
@@ -39,10 +63,10 @@ export function AppRouterAnnouncer({ commitVersion }: { commitVersion: number })
       previousAnnouncement.current !== undefined &&
       previousAnnouncement.current !== currentAnnouncement
     ) {
-      announcer.current?.announce(currentAnnouncement);
+      setRouteAnnouncement(currentAnnouncement);
     }
     previousAnnouncement.current = currentAnnouncement;
   }, [commitVersion]);
 
-  return null;
+  return portalNode ? createPortal(routeAnnouncement, portalNode) : null;
 }
