@@ -1322,6 +1322,42 @@ describe("App Router Production server (startProdServer)", () => {
     expect(html.length).toBeGreaterThan(0);
   });
 
+  it("flushes the document shell before slow generated metadata resolves", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.7/test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
+    const response = await fetch(`${baseUrl}/metadata-streaming-timing`, {
+      headers: { "user-agent": "HeadlessChrome" },
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).not.toBeNull();
+
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let html = "";
+    let shellTime: number | null = null;
+    let metadataTime: number | null = null;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+      const now = performance.now();
+      if (shellTime === null && html.includes("metadata-streaming-shell")) {
+        shellTime = now;
+      }
+      if (metadataTime === null && html.includes("Delayed streaming metadata")) {
+        metadataTime = now;
+      }
+    }
+    html += decoder.decode();
+
+    expect(shellTime).not.toBeNull();
+    expect(metadataTime).not.toBeNull();
+    expect(metadataTime! - shellTime!).toBeGreaterThan(600);
+    expect(html).toContain("<title>Delayed streaming metadata</title>");
+    expect(html).toContain('data-testid="metadata-streaming-shell"');
+  });
+
   it("reports server component render errors via instrumentation in production", async () => {
     const resetRes = await fetch(`${baseUrl}/api/instrumentation-test`, {
       method: "DELETE",
