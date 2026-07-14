@@ -15,6 +15,7 @@ import type { AppPageParams } from "../packages/vinext/src/server/app-page-bound
 import { makeThenableParams } from "../packages/vinext/src/shims/thenable-params.js";
 import { readStreamAsText } from "../packages/vinext/src/utils/text-stream.js";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
+import { notFound } from "../packages/vinext/src/shims/navigation-errors.js";
 import { resolveAppPageRouteStateKey } from "../packages/vinext/src/server/app-page-segment-state.js";
 
 // Import the function under test AFTER mocking dependencies.
@@ -1425,6 +1426,151 @@ describe("buildPageElements", () => {
     // the route's matched params ({ id: "alice" }) — leaving the slot
     // page's `name` undefined. With the fix, the slot gets its own params.
     expect(slotParams).toEqual({ name: "alice" });
+  });
+
+  it("resolves ancestor not-found metadata without rerunning a throwing slot page", async () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/parallel-route-not-found/parallel-route-not-found.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/parallel-route-not-found/parallel-route-not-found.test.ts
+    const slotGenerateMetadata = vi.fn(() => notFound());
+    const boundaryGenerateViewport = vi.fn(() => {
+      throw new Error("fallback viewport should not run");
+    });
+    const boundaryProps: Record<string, unknown>[] = [];
+    const boundaryParentDescriptions: unknown[] = [];
+    const notFoundModule = {
+      default: () => React.createElement("div", null, "not found"),
+      async generateMetadata(
+        props: Record<string, unknown>,
+        parent: Promise<{ description?: unknown }>,
+      ) {
+        boundaryProps.push(props);
+        boundaryParentDescriptions.push((await parent).description);
+        return { description: "Not-found description", title: "Ancestor not found" };
+      },
+      generateViewport: boundaryGenerateViewport,
+    } as AppPageModule;
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(() => React.createElement("div", null, "page")),
+      layouts: [
+        createSyntheticPageModule(({ children }: { children: React.ReactNode }) => children),
+        createSyntheticPageModule(({ children }: { children: React.ReactNode }) => children),
+      ],
+      layoutTreePositions: [0, 1],
+      notFound: notFoundModule,
+      notFounds: [null, notFoundModule],
+      notFoundTreePosition: 1,
+      routeSegments: ["[locale]", "posts", "[slug]"],
+      pattern: "/[locale]/posts/[slug]",
+      slots: {
+        "@root": {
+          name: "root",
+          layout: { metadata: { description: "Root slot description" } } as AppPageModule,
+          page: createSyntheticPageModule(() => React.createElement("aside", null, "root slot")),
+          layoutIndex: 0,
+          routeSegments: ["[locale]", "posts", "[slug]"],
+        },
+        "@sidebar": {
+          name: "sidebar",
+          layout: { metadata: { description: "Slot description" } } as AppPageModule,
+          page: {
+            default: () => React.createElement("aside", null, "sidebar"),
+            generateMetadata: slotGenerateMetadata,
+          } as AppPageModule,
+          layoutIndex: 1,
+          routeSegments: ["[locale]", "posts", "[slug]"],
+        },
+      },
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({
+        route,
+        params: { locale: "en", slug: "hello" },
+        routePath: "/en/posts/hello",
+        searchParams: new URLSearchParams("source=query"),
+      }),
+    );
+    const record = result as Record<string, unknown>;
+    const streamingMetadataElement = Object.entries(record).find(([key]) =>
+      key.startsWith("__vinext_streaming_metadata_body:"),
+    )?.[1];
+    expect(React.isValidElement(streamingMetadataElement)).toBe(true);
+    const metadata = await (
+      streamingMetadataElement as React.ReactElement<{
+        metadata: Promise<{ title?: unknown } | null>;
+      }>
+    ).props.metadata;
+
+    expect(metadata).toMatchObject({
+      description: "Not-found description",
+      title: "Ancestor not found",
+    });
+    expect(slotGenerateMetadata).toHaveBeenCalledTimes(1);
+    expect(boundaryGenerateViewport).not.toHaveBeenCalled();
+    expect(boundaryProps).toHaveLength(3);
+    expect(boundaryParentDescriptions).toEqual([
+      undefined,
+      "Slot description",
+      "Root slot description",
+    ]);
+    for (const props of boundaryProps) {
+      expect(props).not.toHaveProperty("searchParams");
+      await expect(props.params).resolves.toEqual({ locale: "en" });
+    }
+  });
+
+  it("treats a sibling intercept as the primary metadata fallback leaf", async () => {
+    const boundaryParents: unknown[] = [];
+    const notFoundModule = {
+      default: () => React.createElement("div", null, "not found"),
+      async generateMetadata(
+        _props: Record<string, unknown>,
+        parent: Promise<{ description?: unknown }>,
+      ) {
+        boundaryParents.push((await parent).description);
+        return { title: "Intercept not found" };
+      },
+    } as AppPageModule;
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(() => React.createElement("div", null, "source")),
+      layouts: [],
+      notFound: notFoundModule,
+      notFoundTreePosition: 0,
+      routeSegments: ["feed"],
+      pattern: "/feed",
+    });
+    const interceptPage = {
+      default: () => React.createElement("div", null, "intercept"),
+      generateMetadata: () => notFound(),
+    } as AppPageModule;
+
+    const result = await buildPageElements(
+      createBaseOptions({
+        route,
+        routePath: "/photo/42",
+        opts: {
+          interceptLayouts: [{ metadata: { description: "Intercept layout" } }],
+          interceptPage,
+          interceptParams: {},
+          interceptSlotKey: SIBLING_PAGE_INTERCEPT_SLOT_KEY,
+          interceptSourcePageSegments: ["feed", "(..)photo", "[id]"],
+        },
+      }),
+    );
+    const record = result as Record<string, unknown>;
+    const streamingMetadataElement = Object.entries(record).find(([key]) =>
+      key.startsWith("__vinext_streaming_metadata_body:"),
+    )?.[1];
+    expect(React.isValidElement(streamingMetadataElement)).toBe(true);
+    const metadata = await (
+      streamingMetadataElement as React.ReactElement<{
+        metadata: Promise<{ title?: unknown } | null>;
+      }>
+    ).props.metadata;
+
+    expect(metadata).toMatchObject({ title: "Intercept not found" });
+    expect(boundaryParents).toEqual(["Intercept layout"]);
   });
 
   it("makeThenableParams wraps params as a proxy supporting both Promise and property access", () => {

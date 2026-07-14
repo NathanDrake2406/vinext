@@ -347,6 +347,7 @@ ${siblingInterceptEntries.join(",\n")}
     __loadError: ${route.errorPath ? imports.getLazyLoaderVar(route.errorPath) : "null"},
     notFound: null,
     __loadNotFound: ${route.notFoundPath ? imports.getLazyLoaderVar(route.notFoundPath) : "null"},
+    notFoundTreePosition: ${route.notFoundTreePosition ?? "null"},
     notFounds: ${moduleArray(notFoundPaths.length)},
     __loadNotFounds: ${notFoundLoaders},
     forbidden: null,

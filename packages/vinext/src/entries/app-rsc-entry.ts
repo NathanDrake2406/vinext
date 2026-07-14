@@ -814,6 +814,7 @@ export default createAppRscHandler({
           observeMetadataSearchParamsAccess: buildOptions?.observeMetadataSearchParamsAccess === true,
           observePageSearchParamsAccess: buildOptions?.observePageSearchParamsAccess === true,
           serveStreamingMetadata: buildOptions?.serveStreamingMetadata,
+          isProduction: process.env.NODE_ENV === "production",
         }, layoutParamAccess, displayPathname);
       },
       clientReuseManifest,

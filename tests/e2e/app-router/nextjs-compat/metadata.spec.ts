@@ -28,12 +28,26 @@ test.describe("Next.js compat: metadata (browser)", () => {
     await expect(page.getByTestId("global-error")).toHaveCount(0);
   });
 
+  test("generateMetadata error activates the local boundary during client navigation", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/`);
+    await waitForAppRouterHydration(page);
+    await page.getByTestId("metadata-error-with-boundary-link").click();
+
+    await expect(page).toHaveURL(`${BASE}/nextjs-compat/metadata-error-with-boundary`);
+    await expect(page.locator("#error")).toHaveText("Local error boundary");
+    await expect(page.getByTestId("global-error")).toHaveCount(0);
+  });
+
   test("generateMetadata error activates global-error after hydration", async ({ page }) => {
     const response = await page.goto(`${BASE}/nextjs-compat/metadata-error-without-boundary`);
 
     expect(response?.status()).toBe(200);
     await expect(page.getByTestId("global-error")).toBeVisible();
-    await expect(page.getByTestId("global-error-message")).toContainText("Metadata error");
+    await expect(page.getByTestId("global-error-message")).toContainText(
+      "Sensitive metadata error detail",
+    );
   });
 
   test("layout generateMetadata error activates the local error boundary after hydration", async ({

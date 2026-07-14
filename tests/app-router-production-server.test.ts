@@ -1358,6 +1358,62 @@ describe("App Router Production server (startProdServer)", () => {
     expect(html).toContain('data-testid="metadata-streaming-shell"');
   });
 
+  it("flushes the RSC navigation shell before slow generated metadata resolves", async () => {
+    // Ported from Next.js: test/e2e/app-dir/instant-validation/instant-validation.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.7/test/e2e/app-dir/instant-validation/instant-validation.test.ts
+    const response = await fetch(`${baseUrl}/metadata-streaming-timing.rsc`, {
+      headers: { Accept: "text/x-component", RSC: "1", "user-agent": "HeadlessChrome" },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/x-component");
+    expect(response.body).not.toBeNull();
+
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let flight = "";
+    let shellTime: number | null = null;
+    let metadataTime: number | null = null;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      flight += decoder.decode(value, { stream: true });
+      const now = performance.now();
+      if (shellTime === null && flight.includes("metadata-streaming-shell")) {
+        shellTime = now;
+      }
+      if (metadataTime === null && flight.includes("Delayed streaming metadata")) {
+        metadataTime = now;
+      }
+    }
+    flight += decoder.decode();
+
+    expect(shellTime).not.toBeNull();
+    expect(metadataTime).not.toBeNull();
+    expect(metadataTime! - shellTime!).toBeGreaterThan(600);
+  });
+
+  it("renders not-found metadata when deferred generateMetadata calls notFound", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.7/test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
+    const response = await fetch(`${baseUrl}/metadata-streaming-not-found`, {
+      headers: { "user-agent": "HeadlessChrome" },
+    });
+    expect(response.status).toBe(200);
+
+    const html = await response.text();
+    expect(html.match(/<title>/g) ?? []).toHaveLength(1);
+    expect(html).toContain("<title>Streamed not-found metadata</title>");
+
+    const rscResponse = await fetch(`${baseUrl}/metadata-streaming-not-found.rsc`, {
+      headers: { Accept: "text/x-component", RSC: "1", "user-agent": "HeadlessChrome" },
+    });
+    expect(rscResponse.status).toBe(200);
+    const flight = await rscResponse.text();
+    expect(flight).toContain("Streamed not-found metadata");
+    expect(flight).toContain("NEXT_HTTP_ERROR_FALLBACK;404");
+  });
+
   it("reports server component render errors via instrumentation in production", async () => {
     const resetRes = await fetch(`${baseUrl}/api/instrumentation-test`, {
       method: "DELETE",

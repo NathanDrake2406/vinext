@@ -466,6 +466,23 @@ describe("appRouter - route discovery", () => {
     expect(homeRoute!.layouts[0]).toContain("layout.tsx");
   });
 
+  it("records the owner position of a not-found boundary without a layout", async () => {
+    await withTempDir("vinext-app-not-found-owner-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "[locale]", "posts", "[slug]"), { recursive: true });
+      await writeFile(path.join(appDir, "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "[locale]", "not-found.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "[locale]", "posts", "[slug]", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const route = routes.find((candidate) => candidate.pattern === "/:locale/posts/:slug");
+
+      expect(route?.notFoundPath).toBe(canonical(appDir, "[locale]/not-found.tsx"));
+      expect(route?.notFoundTreePosition).toBe(1);
+    });
+  });
+
   it("detects dynamic segments", async () => {
     const routes = await appRouter(APP_FIXTURE_DIR);
     const blogRoute = routes.find((r) => r.pattern === "/blog/:slug");

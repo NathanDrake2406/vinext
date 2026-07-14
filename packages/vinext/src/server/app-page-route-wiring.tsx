@@ -129,6 +129,7 @@ export type AppPageRouteWiringRoute<
   loading?: TModule | null;
   notFound?: TModule | null;
   notFounds?: readonly (TModule | null | undefined)[] | null;
+  notFoundTreePosition?: number | null;
   forbidden?: TModule | null;
   forbiddens?: readonly (TModule | null | undefined)[] | null;
   unauthorized?: TModule | null;
@@ -204,6 +205,7 @@ type BuildAppPageRouteElementOptions<
   resolvedMetadataPathname?: string;
   resolvedViewport: Viewport;
   streamingMetadata?: Promise<Metadata | null> | null;
+  streamingMetadataTags?: Promise<Metadata | null> | null;
   trailingSlash?: boolean;
   rootForbiddenModule?: TModule | null;
   rootNotFoundModule?: TModule | null;
@@ -722,7 +724,7 @@ export function buildAppPageElements<
   if (options.streamingMetadata && streamingMetadataBodyId && streamingMetadataOutletId) {
     elements[streamingMetadataBodyId] = (
       <AppPageStreamingMetadata
-        metadata={options.streamingMetadata}
+        metadata={options.streamingMetadataTags ?? options.streamingMetadata}
         pathname={options.resolvedMetadataPathname ?? options.routePath}
         trailingSlash={options.trailingSlash}
       />

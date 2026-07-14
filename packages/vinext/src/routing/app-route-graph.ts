@@ -153,6 +153,8 @@ export type AppRoute = {
   errorTreePositions?: number[];
   /** Not-found component path (nearest, walking up from page dir) */
   notFoundPath: string | null;
+  /** Tree position of the nearest not-found component's owning segment. */
+  notFoundTreePosition?: number | null;
   /**
    * Not-found component paths per layout level (aligned with layouts array).
    * Each entry is the not-found.tsx at that layout's directory, or null.
@@ -1384,6 +1386,7 @@ function discoverSlotSubRoutes(
         errorPath: parentRoute.errorPath,
         layoutErrorPaths: parentRoute.layoutErrorPaths,
         notFoundPath: parentRoute.notFoundPath,
+        notFoundTreePosition: parentRoute.notFoundTreePosition,
         notFoundPaths: parentRoute.notFoundPaths,
         forbiddenPaths: parentRoute.forbiddenPaths,
         forbiddenPath: parentRoute.forbiddenPath,
@@ -1637,7 +1640,8 @@ function directoryToAppRoute(
   const errorPath = findFile(routeDir, "error", matcher);
 
   // Discover not-found/forbidden/unauthorized: walk from route directory up to root (nearest wins).
-  const notFoundPath = discoverBoundaryFile(segments, appDir, "not-found", matcher);
+  const notFoundEntry = discoverBoundaryFileEntry(segments, appDir, "not-found", matcher);
+  const notFoundPath = notFoundEntry?.path ?? null;
   const forbiddenPath = discoverBoundaryFile(segments, appDir, "forbidden", matcher);
   const unauthorizedPath = discoverBoundaryFile(segments, appDir, "unauthorized", matcher);
 
@@ -1681,6 +1685,7 @@ function directoryToAppRoute(
     errorPaths,
     errorTreePositions,
     notFoundPath,
+    notFoundTreePosition: notFoundEntry?.treePosition ?? null,
     notFoundPaths,
     forbiddenPaths,
     forbiddenPath,
@@ -1922,12 +1927,12 @@ function discoverLayoutAlignedErrors(
  * by walking from the route's directory up to the app root.
  * Returns the first (closest) file found, or null.
  */
-function discoverBoundaryFile(
+function discoverBoundaryFileEntry(
   segments: string[],
   appDir: string,
   fileName: string,
   matcher: ValidFileMatcher,
-): string | null {
+): { path: string; treePosition: number } | null {
   // Build all directory paths from leaf to root
   const dirs: string[] = [];
   let dir = appDir;
@@ -1940,9 +1945,18 @@ function discoverBoundaryFile(
   // Walk from leaf (last) to root (first)
   for (let i = dirs.length - 1; i >= 0; i--) {
     const f = findFile(dirs[i], fileName, matcher);
-    if (f) return f;
+    if (f) return { path: f, treePosition: i };
   }
   return null;
+}
+
+function discoverBoundaryFile(
+  segments: string[],
+  appDir: string,
+  fileName: string,
+  matcher: ValidFileMatcher,
+): string | null {
+  return discoverBoundaryFileEntry(segments, appDir, fileName, matcher)?.path ?? null;
 }
 
 /**
