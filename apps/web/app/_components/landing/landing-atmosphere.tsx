@@ -1,8 +1,76 @@
 import type { LandingStyle } from "./landing-styles";
 
+// Soft light sources placed down the whole page. heroBg (below) owns the hero's
+// peak glow and fades on scroll; past it the page used to drop to flat --bg,
+// which is what made the lower sections read as slides in a void. These live in
+// a page-height layer so each section scrolls through its own pool of light and
+// the warm/cool rhythm from the hero keeps going. top is % of the full page.
+const groundGlows: ReadonlyArray<{
+  top: string;
+  left: string;
+  size: string;
+  rgb: string;
+  alpha: number;
+}> = [
+  { top: "30%", left: "72%", size: "82vmax", rgb: "--orange-rgb", alpha: 0.07 },
+  { top: "52%", left: "14%", size: "96vmax", rgb: "--aur2-rgb", alpha: 0.11 },
+  { top: "74%", left: "80%", size: "70vmax", rgb: "--orange-rgb", alpha: 0.06 },
+  { top: "90%", left: "28%", size: "88vmax", rgb: "--aur2-rgb", alpha: 0.09 },
+];
+
 export function LandingAtmosphere() {
   return (
     <>
+      {/* Persistent ground: never fades, sits behind the z-2 content. Gives the
+          whole scroll a continuous, lit, faintly-structured surface instead of
+          flat black between sections. */}
+      <div
+        aria-hidden="true"
+        style={
+          {
+            position: "absolute",
+            inset: "0",
+            zIndex: "0",
+            pointerEvents: "none",
+            overflow: "hidden",
+          } satisfies LandingStyle
+        }
+      >
+        {/* Barely-there dot field — reads as a designed surface, not a grid.
+            --ink-rgb flips with theme (light dots on dark / dark on paper), and
+            the vertical mask keeps it clear of the chrome and the footer edge. */}
+        <div
+          style={
+            {
+              position: "absolute",
+              inset: "0",
+              backgroundImage: "radial-gradient(rgba(var(--ink-rgb),.5) 1px,transparent 1px)",
+              backgroundSize: "38px 38px",
+              opacity: ".045",
+              maskImage: "linear-gradient(180deg,transparent 0,#000 7%,#000 93%,transparent 100%)",
+              WebkitMaskImage:
+                "linear-gradient(180deg,transparent 0,#000 7%,#000 93%,transparent 100%)",
+            } satisfies LandingStyle
+          }
+        />
+        {groundGlows.map((glow) => (
+          <div
+            key={`${glow.rgb}${glow.top}`}
+            style={
+              {
+                position: "absolute",
+                top: glow.top,
+                left: glow.left,
+                width: glow.size,
+                height: glow.size,
+                margin: `calc(${glow.size} / -2) 0 0 calc(${glow.size} / -2)`,
+                background: `radial-gradient(closest-side,rgba(var(${glow.rgb}),${glow.alpha}),rgba(var(${glow.rgb}),${(glow.alpha * 0.36).toFixed(3)}) 45%,transparent 70%)`,
+              } satisfies LandingStyle
+            }
+          />
+        ))}
+      </div>
+
       <div
         aria-hidden="true"
         style={
