@@ -111,7 +111,7 @@ type ResolveAppPageHeadOptions<TModule extends AppPageHeadModule = AppPageHeadMo
   searchParamsObserver?: ThenableParamsObserver;
 };
 
-type ResolveAppPageHeadResult = {
+export type ResolveAppPageHeadResult = {
   hasDynamicMetadata: boolean;
   hasSearchParams: boolean;
   metadata: Metadata | null;
@@ -119,16 +119,19 @@ type ResolveAppPageHeadResult = {
   viewport: Viewport;
 };
 
+export type PreparedAppPageHead = Omit<ResolveAppPageHeadResult, "metadata" | "viewport"> & {
+  metadata: Promise<Metadata | null>;
+  viewport: Promise<Viewport>;
+};
+
 type AppPageSearchParamsCollection = {
   hasSearchParams: boolean;
   pageSearchParams: AppPageSearchParams;
 };
 
-type ResolvedParallelRouteHead = {
-  hasDynamicMetadata: boolean;
+type ResolvedParallelRouteMetadata = {
   metadataResults: (Metadata | null)[];
   metadataSources: AppPageHeadSource[];
-  viewportResults: (Viewport | null)[];
 };
 
 export function resolveActiveParallelRouteHeadInputs<TModule extends AppPageHeadModule>(
@@ -327,46 +330,37 @@ async function resolveLayoutViewport<TModule extends AppPageHeadModule>(
   );
 }
 
-async function resolveParallelRouteHead<TModule extends AppPageHeadModule>(
+function getParallelRouteModules<TModule extends AppPageHeadModule>(
+  parallelRoute: AppPageHeadParallelRoute<TModule>,
+): TModule[] {
+  return [...(parallelRoute.layoutModules ?? []), parallelRoute.layoutModule].filter(isPresent);
+}
+
+function parallelRouteHasDynamicMetadata<TModule extends AppPageHeadModule>(
+  parallelRoute: AppPageHeadParallelRoute<TModule>,
+): boolean {
+  return (
+    getParallelRouteModules(parallelRoute).some(hasGenerateMetadata) ||
+    hasGenerateMetadata(parallelRoute.pageModule)
+  );
+}
+
+async function resolveParallelRouteMetadata<TModule extends AppPageHeadModule>(
   parallelRoute: AppPageHeadParallelRoute<TModule>,
   fallbackParams: AppPageParams,
   fallbackRouteSegments: readonly string[],
   pageSearchParams: AppPageSearchParams,
   parent: Promise<Metadata>,
   searchParamsObserver?: ThenableParamsObserver,
-): Promise<ResolvedParallelRouteHead> {
+): Promise<ResolvedParallelRouteMetadata> {
   const params = parallelRoute.params ?? fallbackParams;
   const routeSegments = parallelRoute.routeSegments ?? fallbackRouteSegments;
   const metadataResults: (Metadata | null)[] = [];
-  const viewportResults: (Viewport | null)[] = [];
   const metadataSources: AppPageHeadSource[] = [];
   let accumulatedMetadata = parent;
-  const layoutModules = [...(parallelRoute.layoutModules ?? []), parallelRoute.layoutModule].filter(
-    isPresent,
-  );
+  const layoutModules = getParallelRouteModules(parallelRoute);
   const layoutTreePositions = parallelRoute.layoutTreePositions ?? [];
   const layoutParams = parallelRoute.layoutParams ?? [];
-  const hasDynamicMetadata =
-    layoutModules.some(hasGenerateMetadata) || hasGenerateMetadata(parallelRoute.pageModule);
-  const layoutViewportPromises = layoutModules.map((layoutModule, index) =>
-    resolveModuleViewport(
-      layoutModule,
-      layoutParams[index] ??
-        resolveParallelLayoutParams(routeSegments, layoutTreePositions[index] ?? 0, params),
-    ),
-  );
-  const pageViewportPromise = parallelRoute.pageModule
-    ? resolveModuleViewport(
-        parallelRoute.pageModule,
-        params,
-        pageSearchParams,
-        searchParamsObserver,
-      )
-    : Promise.resolve(null);
-  for (const layoutViewportPromise of layoutViewportPromises) {
-    void layoutViewportPromise.catch(() => null);
-  }
-  void pageViewportPromise.catch(() => null);
 
   for (const [index, layoutModule] of layoutModules.entries()) {
     const currentLayoutParams =
@@ -404,24 +398,70 @@ async function resolveParallelRouteHead<TModule extends AppPageHeadModule>(
     metadataSources.push({ metadata: pageMetadata, routeSegments });
   }
 
-  viewportResults.push(...(await Promise.all(layoutViewportPromises)));
-  const pageViewport = await pageViewportPromise;
-  if (parallelRoute.pageModule) {
-    viewportResults.push(pageViewport);
-  }
+  return { metadataResults, metadataSources };
+}
 
-  return { hasDynamicMetadata, metadataResults, metadataSources, viewportResults };
+async function resolveParallelRouteViewport<TModule extends AppPageHeadModule>(
+  parallelRoute: AppPageHeadParallelRoute<TModule>,
+  fallbackParams: AppPageParams,
+  fallbackRouteSegments: readonly string[],
+  pageSearchParams: AppPageSearchParams,
+  searchParamsObserver?: ThenableParamsObserver,
+): Promise<(Viewport | null)[]> {
+  const params = parallelRoute.params ?? fallbackParams;
+  const routeSegments = parallelRoute.routeSegments ?? fallbackRouteSegments;
+  const layoutModules = getParallelRouteModules(parallelRoute);
+  const layoutTreePositions = parallelRoute.layoutTreePositions ?? [];
+  const layoutParams = parallelRoute.layoutParams ?? [];
+  const layoutViewportPromise = Promise.all(
+    layoutModules.map((layoutModule, index) =>
+      resolveModuleViewport(
+        layoutModule,
+        layoutParams[index] ??
+          resolveParallelLayoutParams(routeSegments, layoutTreePositions[index] ?? 0, params),
+      ),
+    ),
+  );
+  const pageViewportPromise = parallelRoute.pageModule
+    ? resolveModuleViewport(
+        parallelRoute.pageModule,
+        params,
+        pageSearchParams,
+        searchParamsObserver,
+      )
+    : Promise.resolve(null);
+  const [layoutViewports, pageViewport] = await Promise.all([
+    layoutViewportPromise,
+    pageViewportPromise,
+  ]);
+
+  return parallelRoute.pageModule ? [...layoutViewports, pageViewport] : layoutViewports;
 }
 
 export async function resolveAppPageHead<TModule extends AppPageHeadModule>(
   options: ResolveAppPageHeadOptions<TModule>,
 ): Promise<ResolveAppPageHeadResult> {
-  return await runWithFetchDedupe(() => resolveAppPageHeadInner(options));
+  const prepared = prepareAppPageHead(options);
+  const [metadata, viewport] = await Promise.all([prepared.metadata, prepared.viewport]);
+  return { ...prepared, metadata, viewport };
 }
 
-async function resolveAppPageHeadInner<TModule extends AppPageHeadModule>(
+/**
+ * Start metadata and viewport resolution without coupling their completion.
+ *
+ * Live document renders can place the metadata promise behind Suspense while
+ * still waiting for viewport tags before the shell is emitted. Blocking
+ * callers use {@link resolveAppPageHead} and observe the same result as before.
+ */
+export function prepareAppPageHead<TModule extends AppPageHeadModule>(
   options: ResolveAppPageHeadOptions<TModule>,
-): Promise<ResolveAppPageHeadResult> {
+): PreparedAppPageHead {
+  return runWithFetchDedupe(() => prepareAppPageHeadInner(options));
+}
+
+function prepareAppPageHeadInner<TModule extends AppPageHeadModule>(
+  options: ResolveAppPageHeadOptions<TModule>,
+): PreparedAppPageHead {
   const routeSegments = options.routeSegments ?? [];
   const layoutTreePositions = options.layoutTreePositions ?? [];
   const layoutInputs = createLayoutInputs(options.layoutModules, layoutTreePositions);
@@ -460,9 +500,10 @@ async function resolveAppPageHeadInner<TModule extends AppPageHeadModule>(
         options.searchParamsObserver,
       )
     : Promise.resolve(null);
-  const parallelRouteHeadPromise = Promise.all(
-    (options.parallelRoutes ?? []).map((parallelRoute) =>
-      resolveParallelRouteHead(
+  const parallelRoutes = options.parallelRoutes ?? [];
+  const parallelRouteMetadataPromise = Promise.all(
+    parallelRoutes.map((parallelRoute) =>
+      resolveParallelRouteMetadata(
         parallelRoute,
         options.params,
         routeSegments,
@@ -472,95 +513,108 @@ async function resolveAppPageHeadInner<TModule extends AppPageHeadModule>(
       ),
     ),
   );
-
-  const [
-    layoutMetadataResults,
-    layoutViewportResults,
-    pageMetadata,
-    pageViewport,
-    parallelRouteHeads,
-  ] = await Promise.all([
-    layoutMetadataPromise,
-    layoutViewportPromise,
-    pageMetadataPromise,
-    pageViewportPromise,
-    parallelRouteHeadPromise,
-  ]);
-  const parallelMetadataResults = parallelRouteHeads.flatMap((head) => head.metadataResults);
-  const parallelViewportResults = parallelRouteHeads.flatMap((head) => head.viewportResults);
-  const parallelMetadataSources = parallelRouteHeads.flatMap((head) => head.metadataSources);
-  const hasDynamicMetadata =
-    primaryHasDynamicMetadata || parallelRouteHeads.some((head) => head.hasDynamicMetadata);
-
-  // Active parallel slot metadata is suppressed from contributing the primary
-  // <title> when the matched page already provides one. This preserves Next.js
-  // behavior where slot pages (typically modals/sidebars rendered alongside the
-  // main page) don't clobber the page title. When the route has no children
-  // page providing a title (e.g. a parallel layout that doesn't render
-  // `{children}`, or a parent that only has `default.tsx`), the slot page's
-  // title is the most specific signal and is allowed to contribute — matching
-  // Next.js's loader-tree walk which appends slot metadata items in tree order
-  // with no title suppression.
-  // Reference: https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/metadata/resolve-metadata.ts
-  const primaryPageHasTitle = pageMetadata != null && pageMetadata.title !== undefined;
-  const metadataEntries: MetadataMergeEntry[] = [
-    ...layoutMetadataResults.filter(isPresent).map((metadata) => ({ metadata })),
-    ...(pageMetadata ? [{ isPage: true, metadata: pageMetadata }] : []),
-    ...parallelMetadataResults
-      .filter(isPresent)
-      .map((metadata) => ({ contributesTitle: !primaryPageHasTitle, metadata })),
-  ];
-  const viewportList = [
-    ...layoutViewportResults.filter(isPresent),
-    ...(pageViewport ? [pageViewport] : []),
-    ...parallelViewportResults.filter(isPresent),
-  ];
-
-  const resolvedMetadataBase =
-    metadataEntries.length > 0 ? mergeMetadataEntries(metadataEntries) : null;
-  const metadataSources = createMetadataSources(
-    layoutMetadataResults,
-    routeSegments,
-    layoutSourcePositions,
-    pageMetadata,
-    Boolean(options.pageModule),
-  );
-  metadataSources.push(...parallelMetadataSources);
-  let metadata = resolvedMetadataBase;
-
-  if (options.applyFileBasedMetadata && options.metadataRoutes.length > 0) {
-    try {
-      metadata = await options.applyFileBasedMetadata(
-        resolvedMetadataBase,
-        options.routePath,
+  const parallelRouteViewportPromise = Promise.all(
+    parallelRoutes.map((parallelRoute) =>
+      resolveParallelRouteViewport(
+        parallelRoute,
         options.params,
-        options.metadataRoutes,
-        {
-          routeSegments,
-          metadataSources,
-          basePath: options.basePath ?? "",
-        },
-      );
-    } catch (error) {
-      if (!options.fallbackOnFileMetadataError) {
-        throw error;
-      }
-      console.error(
-        `[vinext] File-based metadata resolution failed while rendering error boundary for ${options.routePath}:`,
-        error,
-      );
-    }
-  }
+        routeSegments,
+        pageSearchParams,
+        options.searchParamsObserver,
+      ),
+    ),
+  );
+  const hasDynamicMetadata =
+    primaryHasDynamicMetadata || parallelRoutes.some(parallelRouteHasDynamicMetadata);
 
-  if (metadata) {
-    metadata = postProcessMetadata(metadata);
-  }
+  const metadata = Promise.all([
+    layoutMetadataPromise,
+    pageMetadataPromise,
+    parallelRouteMetadataPromise,
+  ]).then(async ([layoutMetadataResults, pageMetadata, parallelRouteMetadata]) => {
+    const parallelMetadataResults = parallelRouteMetadata.flatMap((head) => head.metadataResults);
+    const parallelMetadataSources = parallelRouteMetadata.flatMap((head) => head.metadataSources);
+
+    // Active parallel slot metadata is suppressed from contributing the primary
+    // <title> when the matched page already provides one. This preserves Next.js
+    // behavior where slot pages (typically modals/sidebars rendered alongside the
+    // main page) don't clobber the page title. When the route has no children
+    // page providing a title (e.g. a parallel layout that doesn't render
+    // `{children}`, or a parent that only has `default.tsx`), the slot page's
+    // title is the most specific signal and is allowed to contribute — matching
+    // Next.js's loader-tree walk which appends slot metadata items in tree order
+    // with no title suppression.
+    // Reference: https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/metadata/resolve-metadata.ts
+    const primaryPageHasTitle = pageMetadata != null && pageMetadata.title !== undefined;
+    const metadataEntries: MetadataMergeEntry[] = [
+      ...layoutMetadataResults.filter(isPresent).map((entry) => ({ metadata: entry })),
+      ...(pageMetadata ? [{ isPage: true, metadata: pageMetadata }] : []),
+      ...parallelMetadataResults
+        .filter(isPresent)
+        .map((entry) => ({ contributesTitle: !primaryPageHasTitle, metadata: entry })),
+    ];
+
+    const resolvedMetadataBase =
+      metadataEntries.length > 0 ? mergeMetadataEntries(metadataEntries) : null;
+    const metadataSources = createMetadataSources(
+      layoutMetadataResults,
+      routeSegments,
+      layoutSourcePositions,
+      pageMetadata,
+      Boolean(options.pageModule),
+    );
+    metadataSources.push(...parallelMetadataSources);
+    let resolvedMetadata = resolvedMetadataBase;
+
+    if (options.applyFileBasedMetadata && options.metadataRoutes.length > 0) {
+      try {
+        resolvedMetadata = await options.applyFileBasedMetadata(
+          resolvedMetadataBase,
+          options.routePath,
+          options.params,
+          options.metadataRoutes,
+          {
+            routeSegments,
+            metadataSources,
+            basePath: options.basePath ?? "",
+          },
+        );
+      } catch (error) {
+        if (!options.fallbackOnFileMetadataError) {
+          throw error;
+        }
+        console.error(
+          `[vinext] File-based metadata resolution failed while rendering error boundary for ${options.routePath}:`,
+          error,
+        );
+      }
+    }
+
+    return resolvedMetadata ? postProcessMetadata(resolvedMetadata) : null;
+  });
+  const viewport = Promise.all([
+    layoutViewportPromise,
+    pageViewportPromise,
+    parallelRouteViewportPromise,
+  ]).then(([layoutViewportResults, pageViewport, parallelRouteViewports]) =>
+    mergeViewport([
+      ...layoutViewportResults.filter(isPresent),
+      ...(pageViewport ? [pageViewport] : []),
+      ...parallelRouteViewports.flat().filter(isPresent),
+    ]),
+  );
+
+  // Both branches begin eagerly. If a caller observes one rejection first,
+  // keep the sibling branch from becoming an unhandled rejection while the
+  // request switches to its error response.
+  void metadata.catch(() => null);
+  void viewport.catch(() => null);
 
   return {
     hasDynamicMetadata,
     hasSearchParams,
     metadata,
     pageSearchParams,
-    viewport: mergeViewport(viewportList),
+    viewport,
   };
 }

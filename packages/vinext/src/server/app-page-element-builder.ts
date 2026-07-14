@@ -1,8 +1,8 @@
 import { createElement } from "react";
 import { makeThenableParams } from "vinext/shims/thenable-params";
 import {
+  prepareAppPageHead,
   resolveActiveParallelRouteHeadInputs,
-  resolveAppPageHead,
   type ApplyAppPageFileBasedMetadata,
 } from "./app-page-head.js";
 import { SIBLING_PAGE_INTERCEPT_SLOT_KEY } from "./app-rsc-route-matching.js";
@@ -271,12 +271,7 @@ export async function buildPageElements<
     };
   }
 
-  const {
-    hasDynamicMetadata,
-    metadata: resolvedMetadata,
-    pageSearchParams,
-    viewport: resolvedViewport,
-  } = await resolveAppPageHead({
+  const preparedHead = prepareAppPageHead({
     applyFileBasedMetadata: options.applyFileBasedMetadata,
     basePath: options.basePath ?? "",
     layoutModules: route.layouts,
@@ -323,6 +318,26 @@ export async function buildPageElements<
       ? createAppPageSearchParamsObserver()
       : undefined,
   });
+  const { hasDynamicMetadata, pageSearchParams } = preparedHead;
+  const metadataPlacement =
+    hasDynamicMetadata &&
+    (serveStreamingMetadata ??
+      shouldServeStreamingMetadata(
+        pageRequest.request.headers.get("user-agent") ?? "",
+        options.htmlLimitedBots,
+      ))
+      ? "body"
+      : "head";
+  // The RSC navigation response still blocks on metadata because its redirect
+  // transport uses headers that must be decided before the stream begins.
+  // Live HTML documents can instead share the unresolved promise between the
+  // Suspense tag outlet and its in-boundary error outlet.
+  const shouldDeferMetadata = metadataPlacement === "body" && !isRscRequest;
+  const [resolvedMetadata, resolvedViewport] = await Promise.all([
+    shouldDeferMetadata ? Promise.resolve(null) : preparedHead.metadata,
+    preparedHead.viewport,
+  ]);
+  const streamingMetadata = shouldDeferMetadata ? preparedHead.metadata : null;
 
   const pageProps: Record<string, unknown> = { params: makeThenableParams(effectiveParams) };
   const hasRequestSearchParams = Object.keys(pageSearchParams).length > 0;
@@ -361,16 +376,6 @@ export async function buildPageElements<
   const mountedSlotIds = mountedSlotsHeader ? new Set(mountedSlotsHeader.split(" ")) : null;
 
   const slotOverrides = buildSlotOverrides(route, params, routePath, opts);
-  const metadataPlacement =
-    hasDynamicMetadata &&
-    (serveStreamingMetadata ??
-      shouldServeStreamingMetadata(
-        pageRequest.request.headers.get("user-agent") ?? "",
-        options.htmlLimitedBots,
-      ))
-      ? "body"
-      : "head";
-
   // For sibling intercepts, wrap the intercepting page in any layouts that
   // live under the interception marker directory (interceptLayouts). In Next.js
   // the intercepting route's segment layouts wrap the intercepting page; the
@@ -427,6 +432,7 @@ export async function buildPageElements<
     resolvedMetadata,
     resolvedMetadataPathname: routePath,
     resolvedViewport,
+    streamingMetadata,
     renderIdentity,
     routePath,
     sourcePageSegments,

@@ -1,12 +1,51 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   collectAppPageSearchParams,
+  prepareAppPageHead,
   resolveActiveParallelRouteHeadInputs,
   resolveAppPageHead,
 } from "../packages/vinext/src/server/app-page-head.js";
 import type { AppPageParams } from "../packages/vinext/src/server/app-page-boundary.js";
 
 describe("app page head resolution", () => {
+  it("prepares viewport independently while generated metadata is pending", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.7/test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
+    let releaseMetadata: (() => void) | undefined;
+    const metadataGate = new Promise<void>((resolve) => {
+      releaseMetadata = resolve;
+    });
+
+    const prepared = prepareAppPageHead<Record<string, unknown>>({
+      layoutModules: [],
+      metadataRoutes: [],
+      pageModule: {
+        async generateMetadata() {
+          await metadataGate;
+          return { title: "streamed page" };
+        },
+        generateViewport() {
+          return { themeColor: "#123456" };
+        },
+      },
+      params: {},
+      routePath: "/streamed",
+    });
+
+    expect(prepared.hasDynamicMetadata).toBe(true);
+    await expect(prepared.viewport).resolves.toMatchObject({ themeColor: "#123456" });
+
+    let metadataSettled = false;
+    void prepared.metadata.then(() => {
+      metadataSettled = true;
+    });
+    await Promise.resolve();
+    expect(metadataSettled).toBe(false);
+
+    releaseMetadata?.();
+    await expect(prepared.metadata).resolves.toMatchObject({ title: "streamed page" });
+  });
+
   it("reports whether the matched route has generated metadata", async () => {
     // Ported from Next.js: test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
