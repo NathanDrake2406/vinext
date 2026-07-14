@@ -339,7 +339,7 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
                   } satisfies LandingStyle
                 }
               >
-                ~{bundle.pct}%
+                {bundle.pct}%
               </span>
               <span
                 style={
