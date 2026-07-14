@@ -123,7 +123,10 @@ import {
   type HistoryTraversalIntent,
   type OperationLane,
 } from "./app-browser-state.js";
-import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
+import {
+  AppBrowserHistoryController,
+  createLazyAppBrowserHistoryController,
+} from "./app-browser-history-controller.js";
 import {
   createVisitedResponseCacheEntry,
   isVisitedResponseCacheEntryFresh,
@@ -244,25 +247,28 @@ function getBrowserRouteManifest(): RouteManifest | null {
 }
 
 const MAX_HISTORY_STATE_SNAPSHOTS = 50;
-const historyController = new AppBrowserHistoryController({
-  initialHistoryState: window.history.state,
-  maxHistoryStateSnapshots: MAX_HISTORY_STATE_SNAPSHOTS,
-  readHistoryState: () => window.history.state,
-  readCurrentHref: () => window.location.href,
-  pushHistoryState: (state, href) => pushHistoryStateWithoutNotify(state, "", href),
-  replaceHistoryState: (state, href) => replaceHistoryStateWithoutNotify(state, "", href),
-  readVisibleNavigationMetadata: () => {
-    if (!hasBrowserRouterState()) return null;
-    const routerState = getBrowserRouterState();
-    return { bfcacheIds: routerState.bfcacheIds, previousNextUrl: routerState.previousNextUrl };
-  },
-});
+const getHistoryController = createLazyAppBrowserHistoryController(
+  () =>
+    new AppBrowserHistoryController({
+      initialHistoryState: window.history.state,
+      maxHistoryStateSnapshots: MAX_HISTORY_STATE_SNAPSHOTS,
+      readHistoryState: () => window.history.state,
+      readCurrentHref: () => window.location.href,
+      pushHistoryState: (state, href) => pushHistoryStateWithoutNotify(state, "", href),
+      replaceHistoryState: (state, href) => replaceHistoryStateWithoutNotify(state, "", href),
+      readVisibleNavigationMetadata: () => {
+        if (!hasBrowserRouterState()) return null;
+        const routerState = getBrowserRouterState();
+        return { bfcacheIds: routerState.bfcacheIds, previousNextUrl: routerState.previousNextUrl };
+      },
+    }),
+);
 
 const browserNavigationController = createAppBrowserNavigationController({
   basePath: __basePath,
   getRouteManifest: getBrowserRouteManifest,
   syncHistoryStatePreviousNextUrl: (previousNextUrl, bfcacheIds) =>
-    historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
+    getHistoryController().syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
 });
 const discardedServerActionRefreshScheduler = hasServerActions
   ? createDiscardedServerActionRefreshScheduler({
@@ -359,7 +365,7 @@ function restoreHistoryStateSnapshot(
 ): boolean {
   let restored = false;
   flushSync(() => {
-    restored = historyController.restoreHistorySnapshot({
+    restored = getHistoryController().restoreHistorySnapshot({
       historyState,
       stageClientParams,
       approveVisibleRestore: ({ state, beforeCommit }) =>
@@ -425,7 +431,7 @@ function clearClientNavigationCaches(): void {
   clientNavigationCacheGeneration += 1;
   clearVisitedResponseCache();
   clearPrefetchState();
-  historyController.invalidateRestorableClientState();
+  getHistoryController().invalidateRestorableClientState();
 }
 
 function normalizeBrowserRscUrlForReuse(url: string | null | undefined): string | null {
@@ -592,7 +598,7 @@ function createNavigationCommitEffect(options: {
       return;
     }
 
-    historyController.commitNavigationHistory({
+    getHistoryController().commitNavigationHistory({
       bfcacheIds,
       href,
       historyUpdateMode,
@@ -1096,7 +1102,7 @@ function BrowserRoot({
   // snapshot index may not match the traversed history entry, causing
   // resolveRestore to read the wrong index on back.
   useLayoutEffect(() => {
-    historyController.rememberHistoryStateSnapshot(treeState);
+    getHistoryController().rememberHistoryStateSnapshot(treeState);
   }, [treeState]);
 
   useEffect(() => {
@@ -1124,7 +1130,7 @@ function BrowserRoot({
       return;
     }
 
-    historyController.writeHydratedHistoryMetadata({
+    getHistoryController().writeHydratedHistoryMetadata({
       bfcacheIds: treeState.bfcacheIds,
       previousNextUrl: treeState.previousNextUrl,
     });
@@ -1427,7 +1433,7 @@ function applyRuntimeRscBootstrap(rsc: NavigationRuntimeRscBootstrap): void {
 
 function registerServerActionCallback(): void {
   setServerCallback((id, args) => {
-    const releaseCacheInvalidationGuard = historyController.beginCacheInvalidationGuard();
+    const releaseCacheInvalidationGuard = getHistoryController().beginCacheInvalidationGuard();
     const actionInitiation = createActionInitiationSnapshot();
     return loadServerActionClient!()
       .then(({ invokeClientServerAction }) =>
@@ -1466,7 +1472,10 @@ function registerServerActionCallback(): void {
             });
           },
           syncCurrentHistoryState: (previousNextUrl, bfcacheIds) =>
-            historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
+            getHistoryController().syncCurrentHistoryStatePreviousNextUrl(
+              previousNextUrl,
+              bfcacheIds,
+            ),
           syncServerActionHttpFallbackHead,
         }),
       )
@@ -1566,7 +1575,7 @@ function bootstrapHydration(
       });
     })
     .catch(() => {});
-  historyController.writeBootstrapHistoryMetadata();
+  getHistoryController().writeBootstrapHistoryMetadata();
 
   const reportUncaughtError = createOnUncaughtError();
   const onUncaughtError = (...args: Parameters<typeof reportUncaughtError>) => {
@@ -1667,7 +1676,7 @@ function bootstrapHydration(
     let detachedNavigationCommits = false;
     const activeTraversalIntent =
       navigationKind === "traverse"
-        ? (traversalIntent ?? historyController.resolveTraversalIntent(window.history.state))
+        ? (traversalIntent ?? getHistoryController().resolveTraversalIntent(window.history.state))
         : null;
     const performHardNavigationForScrollIntent = (
       targetHref: string,
@@ -1690,14 +1699,14 @@ function bootstrapHydration(
     // pattern, and not a regression.
     let restoredBfcacheIds =
       navigationKind === "traverse"
-        ? historyController.readCurrentBfcacheVersionHistoryIds(
+        ? getHistoryController().readCurrentBfcacheVersionHistoryIds(
             activeTraversalIntent?.historyState ?? window.history.state,
           )
         : null;
     const reuseCurrentBfcacheIds =
       navigationKind !== "traverse" ||
-      (!historyController.isCacheInvalidationGuarded() &&
-        historyController.isCurrentBfcacheVersion(
+      (!getHistoryController().isCacheInvalidationGuarded() &&
+        getHistoryController().isCurrentBfcacheVersion(
           activeTraversalIntent?.historyState ?? window.history.state,
         ));
     try {
@@ -1724,7 +1733,7 @@ function bootstrapHydration(
         const requestInterceptionContext = requestState.interceptionContext;
         const requestPreviousNextUrl = requestState.previousNextUrl;
         if (navigationKind === "refresh") {
-          historyController.syncCurrentHistoryStatePreviousNextUrl(
+          getHistoryController().syncCurrentHistoryStatePreviousNextUrl(
             requestPreviousNextUrl,
             getBrowserRouterState().bfcacheIds,
           );
@@ -2305,7 +2314,7 @@ function bootstrapHydration(
   registerNavigationRuntimeFunctions({
     clearNavigationCaches: clearClientNavigationCaches,
     commitHashNavigation: (href, historyUpdateMode, scroll) =>
-      historyController.commitHashOnlyNavigation(href, historyUpdateMode, scroll),
+      getHistoryController().commitHashOnlyNavigation(href, historyUpdateMode, scroll),
     navigate: navigateRsc,
   });
 
@@ -2343,7 +2352,7 @@ function bootstrapHydration(
     const href = window.location.href;
     if (isSameAppRoutePopstateTarget(href)) {
       notifyAppRouterTransitionStart(href, "traverse");
-      historyController.commitTraversalIndexFromHistoryState(event.state);
+      getHistoryController().commitTraversalIndexFromHistoryState(event.state);
       restorePopstateScrollPosition(event.state);
       return;
     }
