@@ -395,6 +395,13 @@ button:active {
     grid-template-columns: 1fr !important;
   }
 }
+/* Benchmark: claim rail beside the race bars collapses to a single column once
+   the bars would be too narrow to read the speed gap. */
+@media (max-width: 860px) {
+  #benchLayout {
+    grid-template-columns: 1fr !important;
+  }
+}
 /* The globe is the deploy section's right column. It is absolutely positioned
    against this container (not the viewport) so it clears the 520px target
    table at every width — including above 1180px, where the container starts
