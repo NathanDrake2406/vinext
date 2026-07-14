@@ -233,13 +233,20 @@ function createRscOptions(
 > {
   const route: TestRoute = { id: "dashboard", page: {}, params: [], pattern: "/dashboard" };
 
+  const cleanPathname = overrides.cleanPathname ?? "/dashboard";
+  const matchRoute =
+    overrides.matchRoute ??
+    (() => ({
+      params: {},
+      route,
+    }));
+
   return {
     actionId: "action-id",
     allowedOrigins: [],
     buildPageElement({ route: matchedRoute, params, interceptOpts }) {
       return `${matchedRoute.id}:${JSON.stringify(params)}:${interceptOpts?.slot ?? "none"}`;
     },
-    cleanPathname: "/dashboard",
     clearRequestContext() {},
     contentType: "text/plain;charset=UTF-8",
     createNotFoundElement(routeId) {
@@ -277,9 +284,6 @@ function createRscOptions(
     loadServerAction() {
       return Promise.resolve(() => "action-result");
     },
-    matchRoute() {
-      return { params: {}, route };
-    },
     maxActionBodySize: 1024,
     maxActionBodySizeLabel: "1kb",
     middlewareHeaders: null,
@@ -306,6 +310,13 @@ function createRscOptions(
       return { slot: intercept.slotKey };
     },
     ...overrides,
+    cleanPathname,
+    currentRouteMatch:
+      overrides.currentRouteMatch !== undefined
+        ? overrides.currentRouteMatch
+        : matchRoute(cleanPathname),
+    currentRoutePathname: overrides.currentRoutePathname ?? cleanPathname,
+    matchRoute,
   };
 }
 
