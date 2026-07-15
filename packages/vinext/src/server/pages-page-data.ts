@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { VinextNextData } from "../client/vinext-next-data.js";
 import type { Route } from "../routing/pages-router.js";
 import { normalizeStaticPathname } from "../routing/route-pattern.js";
+import { normalizePathnameForRouteMatch } from "../routing/utils.js";
 import type { CachedPagesValue, CacheControlMetadata } from "vinext/shims/cache-handler";
 import { applyCdnResponseHeaders } from "./cache-control.js";
 import { decideIsr } from "./isr-decision.js";
@@ -19,15 +20,18 @@ import {
   type PagesNextDataExtras,
 } from "./pages-page-response.js";
 import {
+  createPagesGetInitialPropsRouter,
   hasPagesGetInitialProps,
   isResponseSent,
   loadPagesGetInitialProps,
+  type PagesGetInitialPropsRouter,
 } from "./pages-get-initial-props.js";
 import { buildNextDataPropsJsonResponse } from "./pages-data-route.js";
 import { NEXTJS_DEPLOYMENT_ID_HEADER } from "./headers.js";
 import { isSerializableProps } from "./pages-serializable-props.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { isUnknownRecord } from "../utils/record.js";
+import { isDangerousScheme } from "vinext/shims/url-safety";
 
 type PagesRedirectResult = {
   destination: string;
@@ -208,6 +212,8 @@ export type ResolvePagesPageDataOptions = {
   htmlLimitedBots?: string;
   pageModule: PagesPageModule;
   AppComponent?: unknown;
+  /** The request-scoped `next/router` server instance when available. */
+  router?: PagesGetInitialPropsRouter;
   params: Record<string, unknown>;
   query: Record<string, unknown>;
   asPath?: string;
@@ -345,6 +351,7 @@ async function loadPagesAppInitialRenderProps(
     | "i18n"
     | "pageModule"
     | "query"
+    | "router"
     | "routePattern"
     | "routeUrl"
     | "asPath"
@@ -362,11 +369,13 @@ async function loadPagesAppInitialRenderProps(
   const initialProps = await loadPagesGetInitialProps(options.AppComponent, {
     AppTree: options.createAppTree ?? options.createPageElement,
     Component: options.pageModule.default,
-    router: {
-      pathname: options.routePattern,
-      query: options.query,
-      asPath: options.asPath ?? options.routeUrl,
-    },
+    router:
+      options.router ??
+      createPagesGetInitialPropsRouter(
+        options.routePattern,
+        options.query,
+        options.asPath ?? options.routeUrl,
+      ),
     ctx: {
       req,
       res,
@@ -422,6 +431,21 @@ function buildPagesRedirectResponse(
   props: PagesRenderProps = { pageProps: {} },
 ): Response {
   const destination = options.sanitizeDestination(redirect.destination);
+
+  // Next.js currently passes these destinations through to both `Location`
+  // and the client-consumed `__N_REDIRECT` field. Vinext deliberately rejects
+  // executable schemes here: a data navigation would otherwise assign a
+  // request-controlled `javascript:` URL to `window.location.href`.
+  if (isDangerousScheme(destination)) {
+    const headers = new Headers({
+      "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate",
+      "Content-Type": "text/plain; charset=utf-8",
+    });
+    if (options.deploymentId) {
+      headers.set(NEXTJS_DEPLOYMENT_ID_HEADER, options.deploymentId);
+    }
+    return new Response("Invalid redirect destination", { status: 500, headers });
+  }
 
   if (options.isDataReq) {
     // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on all
@@ -499,7 +523,16 @@ export function matchesPagesStaticPath(
   routeUrl: string,
 ): boolean {
   if (typeof pathEntry === "string") {
-    return normalizeStaticPathname(pathEntry) === normalizeStaticPathname(routeUrl);
+    // Request routing intentionally preserves the raw encoded pathname until
+    // dynamic captures are decoded. Compare string-form getStaticPaths entries
+    // in the same segment-normalized space so a seeded literal value such as
+    // `[second]` matches a data URL containing `%5Bsecond%5D`. Segment-wise
+    // normalization keeps encoded delimiters such as `%2F` encoded, so they
+    // cannot become path separators during this comparison.
+    return (
+      normalizePathnameForRouteMatch(normalizeStaticPathname(pathEntry)) ===
+      normalizePathnameForRouteMatch(normalizeStaticPathname(routeUrl))
+    );
   }
   const entryParams = pathEntry.params;
   if (entryParams === undefined || entryParams === null) {
