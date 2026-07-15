@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   AppBrowserHistoryController,
   createCanonicalBrowserHistoryHref,
-  createLazyAppBrowserHistoryController,
   type RestorableSnapshotCandidate,
 } from "../packages/vinext/src/server/app-browser-history-controller.js";
 import {
@@ -136,19 +135,6 @@ function createRouterState(overrides: Partial<AppRouterState> = {}): AppRouterSt
     ...overrides,
   };
 }
-
-describe("AppBrowserHistoryController construction", () => {
-  it("defers construction until first use and reuses the controller", () => {
-    const factory = vi.fn(() => createController().controller);
-
-    const getController = createLazyAppBrowserHistoryController(factory);
-
-    expect(factory).not.toHaveBeenCalled();
-    const controller = getController();
-    expect(getController()).toBe(controller);
-    expect(factory).toHaveBeenCalledTimes(1);
-  });
-});
 
 describe("AppBrowserHistoryController traversal index allocation", () => {
   it("allocates per history update mode and anchors to the highest committed index", () => {

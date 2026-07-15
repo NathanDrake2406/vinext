@@ -400,19 +400,6 @@ export class AppBrowserHistoryController {
   }
 }
 
-/**
- * Defers construction until the browser runtime first needs the controller.
- * Production chunking can place this controller and its history-state dependencies
- * in a cycle, so constructing it during module evaluation can observe an imported
- * class before the other chunk has initialized it.
- */
-export function createLazyAppBrowserHistoryController(
-  factory: () => AppBrowserHistoryController,
-): () => AppBrowserHistoryController {
-  let controller: AppBrowserHistoryController | undefined;
-  return () => (controller ??= factory());
-}
-
 function areBfcacheIdMapsEqual(a: BfcacheIdMap | null, b: BfcacheIdMap | null): boolean {
   if (a === b) return true;
   if (a === null || b === null) return false;

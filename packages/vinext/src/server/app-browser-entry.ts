@@ -123,10 +123,8 @@ import {
   type HistoryTraversalIntent,
   type OperationLane,
 } from "./app-browser-state.js";
-import {
-  AppBrowserHistoryController,
-  createLazyAppBrowserHistoryController,
-} from "./app-browser-history-controller.js";
+import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
+import { createAppBrowserRuntimeControllerAccessors } from "./app-browser-runtime-controllers.js";
 import {
   createVisitedResponseCacheEntry,
   isVisitedResponseCacheEntryFresh,
@@ -247,22 +245,27 @@ function getBrowserRouteManifest(): RouteManifest | null {
 }
 
 const MAX_HISTORY_STATE_SNAPSHOTS = 50;
-const getHistoryController = createLazyAppBrowserHistoryController(
-  () =>
-    new AppBrowserHistoryController({
-      initialHistoryState: window.history.state,
-      maxHistoryStateSnapshots: MAX_HISTORY_STATE_SNAPSHOTS,
-      readHistoryState: () => window.history.state,
-      readCurrentHref: () => window.location.href,
-      pushHistoryState: (state, href) => pushHistoryStateWithoutNotify(state, "", href),
-      replaceHistoryState: (state, href) => replaceHistoryStateWithoutNotify(state, "", href),
-      readVisibleNavigationMetadata: () => {
-        if (!hasBrowserRouterState()) return null;
-        const routerState = getBrowserRouterState();
-        return { bfcacheIds: routerState.bfcacheIds, previousNextUrl: routerState.previousNextUrl };
-      },
-    }),
-);
+const { getHistoryController, getMpaNavigationScheduler } =
+  createAppBrowserRuntimeControllerAccessors({
+    createHistoryController: () =>
+      new AppBrowserHistoryController({
+        initialHistoryState: window.history.state,
+        maxHistoryStateSnapshots: MAX_HISTORY_STATE_SNAPSHOTS,
+        readHistoryState: () => window.history.state,
+        readCurrentHref: () => window.location.href,
+        pushHistoryState: (state, href) => pushHistoryStateWithoutNotify(state, "", href),
+        replaceHistoryState: (state, href) => replaceHistoryStateWithoutNotify(state, "", href),
+        readVisibleNavigationMetadata: () => {
+          if (!hasBrowserRouterState()) return null;
+          const routerState = getBrowserRouterState();
+          return {
+            bfcacheIds: routerState.bfcacheIds,
+            previousNextUrl: routerState.previousNextUrl,
+          };
+        },
+      }),
+    createMpaNavigationScheduler: () => new AppBrowserMpaNavigationScheduler(),
+  });
 
 const browserNavigationController = createAppBrowserNavigationController({
   basePath: __basePath,
@@ -333,7 +336,6 @@ let clientNavigationCacheGeneration = 0;
 // the HMR handler to distinguish "still hydrating" (wait) from "was up, then
 // torn down by a render error" (full reload to recover).
 let browserRouterStateHasEverCommitted = false;
-const mpaNavigationScheduler = new AppBrowserMpaNavigationScheduler();
 const unresolvedMpaNavigation = new Promise<never>(() => {});
 const RSC_HMR_SETTLE_DELAY_MS = 150;
 const DEFAULT_GLOBAL_ERROR_COMPONENT = DefaultGlobalError as React.ComponentType<{
@@ -957,7 +959,7 @@ function performMpaNavigation(href: string, historyUpdateMode: HistoryUpdateMode
   // Match Next's MPA path by suspending forever, but delay the actual location
   // mutation just enough for the old tree to commit the pending transition
   // signal before unload.
-  mpaNavigationScheduler.navigate(window, href, historyUpdateMode);
+  getMpaNavigationScheduler().navigate(window, href, historyUpdateMode);
 }
 
 function AppRouterRedirectBridge({ children }: { children?: React.ReactNode }) {
@@ -2495,7 +2497,7 @@ if (typeof document !== "undefined") {
   window.addEventListener("pageshow", (event) => {
     isPageUnloading = false;
     if (event.persisted) {
-      mpaNavigationScheduler.reset();
+      getMpaNavigationScheduler().reset();
     }
   });
   void main();
