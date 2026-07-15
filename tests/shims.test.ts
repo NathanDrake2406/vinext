@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7637,6 +7638,59 @@ describe("middleware/proxy export validation", () => {
 // matchPattern / matchesMiddleware unit tests
 
 describe("middleware matcher patterns", () => {
+  it("matches Next.js 16.2.7 path-to-regexp tokens and compiled regexes", async () => {
+    const { compileMiddlewareMatcherPattern } =
+      await import("../packages/vinext/src/server/middleware-matcher-pattern.js");
+    const { parseMiddlewarePath } =
+      await import("../packages/vinext/src/server/middleware-path-to-regexp.js");
+    type Token = ReturnType<typeof parseMiddlewarePath>[number];
+    const nextPathToRegexp = createRequire(import.meta.url)(
+      "next/dist/compiled/path-to-regexp",
+    ) as {
+      parse(source: string): Token[];
+      tokensToRegexp(tokens: Token[]): RegExp;
+    };
+    const patterns = [
+      "/foo\\:bar",
+      "/(foo.*|bar)/:path*",
+      "/foo/:id(a\\)b)?",
+      "/:id((?:foo|bar)-\\d+)?",
+      "/docs/:lang(en|fr)*",
+      "/cdn/:path*(api|static)",
+      "/foo-:path*",
+      "/foo{/:id}?",
+      "/files/:name{.:ext}?",
+      "/foo{-:bar}+",
+      "/x/:id(a+(?:b)a+)",
+      "/archive/:date(\\d{4}(?:-\\d{2}){2})",
+    ];
+
+    for (const pattern of patterns) {
+      const nextTokens = nextPathToRegexp.parse(pattern);
+      expect(parseMiddlewarePath(pattern), pattern).toEqual(nextTokens);
+
+      let nextRegexp: RegExp;
+      try {
+        nextRegexp = nextPathToRegexp.tokensToRegexp(nextTokens);
+      } catch {
+        nextRegexp = nextPathToRegexp.tokensToRegexp(
+          nextTokens.map((token) =>
+            typeof token === "object" &&
+            (token.modifier === "*" || token.modifier === "+") &&
+            token.prefix === "" &&
+            token.suffix === ""
+              ? { ...token, prefix: "/" }
+              : token,
+          ),
+        );
+      }
+
+      const compiled = compileMiddlewareMatcherPattern(pattern);
+      expect(compiled.regexp?.source, pattern).toBe(nextRegexp.source);
+      expect(compiled.regexp?.flags, pattern).toBe(nextRegexp.flags);
+    }
+  });
+
   it("matchPattern: exact path match", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
     expect(matchPattern("/about", "/about")).toBe(true);
@@ -7673,6 +7727,150 @@ describe("middleware matcher patterns", () => {
     expect(matchPattern("/de/about", "/:locale(en|es|fr)?/about")).toBe(false);
   });
 
+  it("matchPattern: accepts bounded nested repetition", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+    // Mirrors Next.js/path-to-regexp: finite repetition inside a finite group
+    // is not an unbounded backtracking risk.
+    const matcher = "/archive/:date(\\d{4}(?:-\\d{2}){2})";
+    expect(matchPattern("/archive/2024-07-10", matcher)).toBe(true);
+    expect(matchPattern("/archive/2024-7-10", matcher)).toBe(false);
+    expect(matchPattern("/archive/2024-07-10-11", matcher)).toBe(false);
+  });
+
+  it("rejects prefix-ambiguous alternatives under repetition", async () => {
+    const { compileMiddlewareMatcherPattern } =
+      await import("../packages/vinext/src/server/middleware-matcher-pattern.js");
+
+    for (const matcher of [
+      "/:path((?:a|aa)+)",
+      "/:path((?:aa|a)*)",
+      "/:path((?:[a]|aa){1,})",
+      "/:path((?:a|aa){2})",
+      "/:path((?:a|A)+)",
+      "/:path((?:é|É)+)",
+    ]) {
+      expect(compileMiddlewareMatcherPattern(matcher), matcher).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("ambiguous alternatives"),
+      });
+    }
+
+    expect(compileMiddlewareMatcherPattern("/:path((?:foo|bar)+)").regexp).toBeInstanceOf(RegExp);
+    expect(compileMiddlewareMatcherPattern("/:path((?:ab|ac)+)").regexp).toBeInstanceOf(RegExp);
+    expect(compileMiddlewareMatcherPattern("/:path((?:ab|ac){10})").regexp).toBeInstanceOf(RegExp);
+    // Non-Unicode ECMAScript ignore-case canonicalization deliberately does
+    // not fold a non-ASCII character to ASCII.
+    expect(compileMiddlewareMatcherPattern("/:path((?:k|K)+)").regexp).toBeInstanceOf(RegExp);
+  });
+
+  it("handles fixed-width nested repeats and simple class intersections", async () => {
+    const { compileMiddlewareMatcherPattern } =
+      await import("../packages/vinext/src/server/middleware-matcher-pattern.js");
+
+    for (const matcher of ["/codes/:value((?:[A-Z]{2})+)", "/mixed/:value((?:[a-z]|[0-9])+)"]) {
+      expect(compileMiddlewareMatcherPattern(matcher).regexp, matcher).toBeInstanceOf(RegExp);
+    }
+
+    for (const matcher of [
+      "/shorthand/:value((?:\\d|[a-z])+)",
+      "/bracket-shorthand/:value((?:[\\d]|[a-z])+)",
+      "/space-or-word/:value((?:\\s|[a-z])+)",
+      "/digit-or-not/:value((?:\\d|\\D)+)",
+      "/two-repeats/:value((?:a+)(?:a+))",
+      "/wrapped-two-repeats/:value((?:a+(?:))(?:a+(?:)))",
+      "/exact-one-two-repeats/:value((?:a+){1}(?:a+){1,1})",
+      "/disjoint-repeats/:value((?:a+)(?:b+)(?:a+))",
+      "/wrapped-disjoint-repeats/:value((?:a+(?:))(?:b+(?:))(?:a+(?:)))",
+      "/exact-one-disjoint-repeats/:value((?:(?:a+){1}){1,1}(?:b+){1}(?:(?:a+){1,1}){1})",
+    ]) {
+      expect(compileMiddlewareMatcherPattern(matcher).regexp, matcher).toBeInstanceOf(RegExp);
+    }
+
+    for (const matcher of [
+      "/:path((?:[a-z]|[A-Z])+)",
+      "/:path((?:[a-f]|[d-z])+)",
+      "/:path((?:[a-z]|m)+)",
+      "/:path((?:\\w|[a-z])+)",
+      "/:path((?:[\\w]|[A-Z])+)",
+      "/:path((?:\\D|[a-z])+)",
+    ]) {
+      expect(compileMiddlewareMatcherPattern(matcher), matcher).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("ambiguous alternatives"),
+      });
+    }
+  });
+
+  it("rejects bounded sequence-level ambiguity within the analysis budget", async () => {
+    const { compileMiddlewareMatcherPattern } =
+      await import("../packages/vinext/src/server/middleware-matcher-pattern.js");
+    const expandingChoices = `/:path(${"(?:a|aa)".repeat(26)})`;
+
+    for (const count of [3, 6, 7, 8, 9, 10]) {
+      const adjacentRepetitions = `/:path(${"(?:a+)".repeat(count)})`;
+      expect(
+        compileMiddlewareMatcherPattern(adjacentRepetitions),
+        `${count} repeats`,
+      ).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("overlapping sequential repetition"),
+      });
+    }
+    for (const count of [3, 6, 7, 8]) {
+      const wrappedRepetitions = `/:path(${"(?:a+(?:))".repeat(count)})`;
+      expect(
+        compileMiddlewareMatcherPattern(wrappedRepetitions),
+        `${count} wrapped repeats`,
+      ).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("overlapping sequential repetition"),
+      });
+    }
+    for (const wrapper of ["(?:a+){1}", "(?:a+){1,1}", "(?:a+){1}?", "(?:(?:a+){1}){1,1}"]) {
+      const exactOneRepetitions = `/:path(${wrapper.repeat(6)})`;
+      expect(compileMiddlewareMatcherPattern(exactOneRepetitions), wrapper).toMatchObject({
+        kind: "unsafe",
+        error: expect.stringContaining("overlapping sequential repetition"),
+      });
+    }
+    expect(compileMiddlewareMatcherPattern(expandingChoices)).toMatchObject({
+      kind: "unsafe",
+      error: expect.stringContaining("ambiguous sequence expansion"),
+    });
+  });
+
+  // Ported from Next.js path-to-regexp matcher semantics:
+  // packages/next/src/lib/try-to-parse-path.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/try-to-parse-path.ts
+  it("matchPattern: unnamed regex groups compose with named params", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+    const pattern = "/(admin|dashboard)/:path*";
+
+    expect(matchPattern("/admin", pattern)).toBe(true);
+    expect(matchPattern("/admin/secrets", pattern)).toBe(true);
+    expect(matchPattern("/dashboard/users/active", pattern)).toBe(true);
+    expect(matchPattern("/public", pattern)).toBe(false);
+  });
+
+  // path-to-regexp applies a modifier after a constraint to the entire
+  // slash-prefixed param and permits repeated constraint-matching segments.
+  it("matchPattern: constrained params repeat across path segments", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+
+    const zeroOrMore = "/docs/:lang(en|fr)*";
+    expect(matchPattern("/docs", zeroOrMore)).toBe(true);
+    expect(matchPattern("/docs/en", zeroOrMore)).toBe(true);
+    expect(matchPattern("/docs/en/fr", zeroOrMore)).toBe(true);
+    expect(matchPattern("/docs/de", zeroOrMore)).toBe(false);
+    expect(matchPattern("/docs/en/de", zeroOrMore)).toBe(false);
+
+    const oneOrMore = "/docs/:lang(en|fr)+";
+    expect(matchPattern("/docs", oneOrMore)).toBe(false);
+    expect(matchPattern("/docs/en", oneOrMore)).toBe(true);
+    expect(matchPattern("/docs/en/fr", oneOrMore)).toBe(true);
+    expect(matchPattern("/docs/de", oneOrMore)).toBe(false);
+  });
+
   it("matchPattern: wildcard (:path*) matches zero or more segments", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
     expect(matchPattern("/dashboard", "/dashboard/:path*")).toBe(true);
@@ -7681,19 +7879,46 @@ describe("middleware matcher patterns", () => {
     expect(matchPattern("/other", "/dashboard/:path*")).toBe(false);
   });
 
-  it("matchPattern: :param*(constraint) and :param+(constraint)", async () => {
+  it("matchPattern: a group after :param* is a separate suffix token", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
-    // /:path*(api|static) — optional segment constrained to api or static
-    expect(matchPattern("/cdn", "/cdn/:path*(api|static)")).toBe(true);
-    expect(matchPattern("/cdn/api", "/cdn/:path*(api|static)")).toBe(true);
-    expect(matchPattern("/cdn/static", "/cdn/:path*(api|static)")).toBe(true);
+    // path-to-regexp parses this as a repeated `path` param followed by an
+    // unnamed `(api|static)` suffix. A constrained repeat is written with the
+    // modifier after the group: `:path(api|static)*`.
+    expect(matchPattern("/cdn", "/cdn/:path*(api|static)")).toBe(false);
+    expect(matchPattern("/cdnapi", "/cdn/:path*(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/fooapi", "/cdn/:path*(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/api", "/cdn/:path*(api|static)")).toBe(false);
     expect(matchPattern("/cdn/other", "/cdn/:path*(api|static)")).toBe(false);
 
-    // /:path+(api|static) — required segment constrained
+    // `+` requires the path token, so the adjacent zero-segment form differs.
     expect(matchPattern("/cdn", "/cdn/:path+(api|static)")).toBe(false);
-    expect(matchPattern("/cdn/api", "/cdn/:path+(api|static)")).toBe(true);
-    expect(matchPattern("/cdn/static", "/cdn/:path+(api|static)")).toBe(true);
+    expect(matchPattern("/cdnapi", "/cdn/:path+(api|static)")).toBe(false);
+    expect(matchPattern("/cdn/fooapi", "/cdn/:path+(api|static)")).toBe(true);
+    expect(matchPattern("/cdn/api", "/cdn/:path+(api|static)")).toBe(false);
     expect(matchPattern("/cdn/other", "/cdn/:path+(api|static)")).toBe(false);
+  });
+
+  it("matchPattern: preserves escaped and nested path-to-regexp syntax", async () => {
+    const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
+
+    expect(matchPattern("/foo:bar", "/foo\\:bar")).toBe(true);
+    expect(matchPattern("/foo/bar", "/foo\\:bar")).toBe(false);
+
+    const mixed = "/(foo.*|bar)/:path*";
+    expect(matchPattern("/foo-value/child", mixed)).toBe(true);
+    expect(matchPattern("/bar", mixed)).toBe(true);
+    expect(matchPattern("/baz/child", mixed)).toBe(false);
+
+    const escapedClose = "/foo/:id(a\\)b)?";
+    expect(matchPattern("/foo", escapedClose)).toBe(true);
+    expect(matchPattern("/foo/a)b", escapedClose)).toBe(true);
+    expect(matchPattern("/foo/ab", escapedClose)).toBe(false);
+
+    const nested = "/:id((?:foo|bar)-\\d+)?";
+    expect(matchPattern("/", nested)).toBe(true);
+    expect(matchPattern("/foo-123", nested)).toBe(true);
+    expect(matchPattern("/bar-9", nested)).toBe(true);
+    expect(matchPattern("/baz-9", nested)).toBe(false);
   });
 
   it("matchPattern: one-or-more (:path+) requires at least one segment", async () => {
@@ -7881,14 +8106,14 @@ describe("middleware matcher patterns", () => {
     ).toBe(false);
   });
 
-  it("matchesMiddleware: rejects a single object matcher config", async () => {
+  it("matchesMiddleware: fails closed for a single object matcher config", async () => {
     const { matchesMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     const matcher: any = {
       source: "/dashboard",
       has: [{ type: "header", key: "x-user-tier", value: "pro" }],
     };
 
-    expect(matchesMiddleware("/dashboard", matcher)).toBe(false);
+    expect(matchesMiddleware("/dashboard", matcher)).toBe(true);
     expect(
       matchesMiddleware(
         "/dashboard",
@@ -7897,15 +8122,15 @@ describe("middleware matcher patterns", () => {
           headers: { "x-user-tier": "pro" },
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("matchesMiddleware: rejects object matchers with unsupported fields", async () => {
+  it("matchesMiddleware: fails closed for object matchers with unsupported fields", async () => {
     const { matchesMiddleware } = await import("../packages/vinext/src/server/middleware.js");
     const matcher: any = [{ source: "/does-not-match", regexp: "^/dashboard(?:/.*)?$" }];
 
-    expect(matchesMiddleware("/dashboard/settings", matcher)).toBe(false);
-    expect(matchesMiddleware("/about", matcher)).toBe(false);
+    expect(matchesMiddleware("/dashboard/settings", matcher)).toBe(true);
+    expect(matchesMiddleware("/about", matcher)).toBe(true);
   });
 
   it("matchesMiddleware: matches default-locale and locale-prefixed paths unless locale is false", async () => {
@@ -7944,17 +8169,17 @@ describe("middleware matcher patterns", () => {
 
   it("matchPattern: fails closed for pathological ReDoS patterns", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
-    // Pathological pattern: (a+)+ causes catastrophic backtracking
+    // Pathological constraint: (?:a+)+ causes catastrophic backtracking.
     // matchPattern must avoid evaluating it and run middleware instead of
     // silently bypassing a potentially security-sensitive request guard.
     // lgtm[js/redos] — deliberate pathological regex to test safeRegExp guard
-    expect(matchPattern("/aaaaaaaaaaaaaaaaaaaac", "(a+)+b")).toBe(true);
+    expect(matchPattern("/aaaaaaaaaaaaaaaaaaaac", "/:path((?:a+)+)")).toBe(true);
   });
 
-  it("matchPattern: does not run globally for malformed regex syntax", async () => {
+  it("matchPattern: fails closed for malformed matcher syntax", async () => {
     const { matchPattern } = await import("../packages/vinext/src/server/middleware.js");
 
-    expect(matchPattern("/public", "/admin(")).toBe(false);
+    expect(matchPattern("/public", "/admin(")).toBe(true);
     expect(matchPattern("/admin(", "/admin(")).toBe(true);
   });
 });
@@ -10970,6 +11195,14 @@ describe("isSafeRegex", () => {
     expect(isSafeRegex("(\\d{2,4})")).toBe(true);
   });
 
+  it("accepts only fixed-width nested bounded repetition", async () => {
+    const { isSafeRegex } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(isSafeRegex("\\d{4}(?:-\\d{2}){2}")).toBe(true);
+    expect(isSafeRegex("(?:a{2}){3}")).toBe(true);
+    expect(isSafeRegex("(?:a{1,2}){3}")).toBe(false);
+    expect(isSafeRegex("(?:a{1,2}){2,4}")).toBe(false);
+  });
+
   it("rejects nested quantifiers: (a+)+", async () => {
     const { isSafeRegex } = await import("../packages/vinext/src/config/config-matchers.js");
     expect(isSafeRegex("(a+)+")).toBe(false);
@@ -11000,11 +11233,20 @@ describe("isSafeRegex", () => {
     expect(isSafeRegex("(a+){2,}")).toBe(false);
   });
 
+  it("rejects bounded outer repetition around an unbounded inner atom", async () => {
+    const { isSafeRegex } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(isSafeRegex("(a+){2}")).toBe(false);
+    expect(isSafeRegex("(a+){2,4}")).toBe(false);
+    expect(isSafeRegex("(a+){10}")).toBe(false);
+  });
+
   it("accepts quantifier on group without inner quantifier", async () => {
     const { isSafeRegex } = await import("../packages/vinext/src/config/config-matchers.js");
     // (ab)+ is fine — no inner quantifier
     expect(isSafeRegex("(ab)+")).toBe(true);
     expect(isSafeRegex("(foo|bar)*")).toBe(true);
+    expect(isSafeRegex("(?:(?!\\.)[^/])+?")).toBe(true);
+    expect(isSafeRegex("[^/]+.*")).toBe(true);
   });
 
   it("treats escaped characters as safe", async () => {
@@ -11066,6 +11308,12 @@ describe("safeRegExp", () => {
     // lgtm[js/redos] — deliberate pathological regex to test safeRegExp guard
     const re = safeRegExp("(a+)+b");
     expect(re).toBeNull();
+  });
+
+  it("uses the final ignore-case semantics for ambiguous alternatives", async () => {
+    const { safeRegExp } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(safeRegExp("(?:a|A)+", "i")).toBeNull();
+    expect(safeRegExp("(?:ab|ac)+", "i")).toBeInstanceOf(RegExp);
   });
 
   it("returns null for invalid regex syntax", async () => {
@@ -11588,6 +11836,64 @@ describe("checkHasConditions", () => {
     expect(
       checkHasConditions([{ type: "query", key: "page", value: "^settings$" }], undefined, ctx),
     ).toBe(false);
+  });
+
+  // Ported from Next.js matchHas, which uses `value.slice(-1)[0]` when the
+  // parsed query contains duplicate keys.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/utils/prepare-destination.ts
+  it("uses the last duplicate query value for has and missing", async () => {
+    const { checkHasConditions } = await import("../packages/vinext/src/config/config-matchers.js");
+    const ctx = {
+      ...makeCtx(),
+      query: new URLSearchParams("role=guest&role=admin&blocked=1&blocked=0"),
+    };
+
+    expect(
+      checkHasConditions([{ type: "query", key: "role", value: "admin" }], undefined, ctx),
+    ).toBe(true);
+    expect(
+      checkHasConditions([{ type: "query", key: "role", value: "guest" }], undefined, ctx),
+    ).toBe(false);
+    expect(
+      checkHasConditions(undefined, [{ type: "query", key: "blocked", value: "1" }], ctx),
+    ).toBe(true);
+    expect(
+      checkHasConditions(undefined, [{ type: "query", key: "blocked", value: "0" }], ctx),
+    ).toBe(false);
+  });
+
+  it('treats value: "" as presence-only for every condition type', async () => {
+    const { checkHasConditions } = await import("../packages/vinext/src/config/config-matchers.js");
+    const ctx = makeCtx({
+      headers: { "x-present": "yes" },
+      cookies: { session: "active" },
+      query: { preview: "enabled" },
+      host: "example.com",
+    });
+    const present = [
+      { type: "header" as const, key: "x-present", value: "" },
+      { type: "cookie" as const, key: "session", value: "" },
+      { type: "query" as const, key: "preview", value: "" },
+      { type: "host" as const, key: "", value: "" },
+    ];
+
+    expect(checkHasConditions(present, undefined, ctx)).toBe(true);
+    for (const condition of present) {
+      expect(checkHasConditions(undefined, [condition], ctx), condition.type).toBe(false);
+    }
+
+    expect(
+      checkHasConditions([{ type: "query", key: "empty", value: "" }], undefined, {
+        ...ctx,
+        query: new URLSearchParams("empty="),
+      }),
+    ).toBe(false);
+    expect(
+      checkHasConditions([{ type: "query", key: "present", value: "" }], undefined, {
+        ...ctx,
+        query: new URLSearchParams("present=yes&present="),
+      }),
+    ).toBe(true);
   });
 
   // -- host conditions --
