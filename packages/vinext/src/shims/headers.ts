@@ -251,6 +251,13 @@ export async function runWithConnectionProbe<T>(
         .then<ConnectionProbeResult<T>>((result) => ({ completed: true, result }));
       return await Promise.race([completed, interrupted]);
     } finally {
+      // Async resources created inside this ALS scope retain `childState` after
+      // the probe returns. Restore the currently inherited probe so those late
+      // continuations cannot suspend on this completed probe forever. Reading
+      // the parent at cleanup time also preserves the right lifecycle for a
+      // nested probe whose outer scope may have completed independently.
+      childState.connectionProbe = parentState.connectionProbe;
+
       // Dynamic usage discovered by a speculative probe still classifies the
       // request, but the probe itself must remain branch-local. In particular,
       // metadata resolution can already be running in a sibling async branch;
