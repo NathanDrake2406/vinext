@@ -702,6 +702,23 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     ).toBe(false);
   });
 
+  it("fails strict warmup clearly when the uploaded version is already at 100%", async () => {
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${PREVIOUS_VERSION_ID}\n`;
+      if (args.includes("status")) return currentDeploymentOutput();
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], { warmCdnStrict: true })).rejects.toThrow(
+      `Worker version ${PREVIOUS_VERSION_ID} because it is already serving 100% traffic`,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a deployment-status read failure before promoting without warmup", async () => {
     const warnSpy = vi.spyOn(console, "warn");
     writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
