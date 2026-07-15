@@ -51,6 +51,8 @@ export function formatDeployHelp(): string {
 
   CDN warmup requests populate the edge cache only in the Cloudflare data centers
   reached by the warmup run; they do not globally prefill every edge location.
+  Verified warmup exposes x-vinext-worker-version on Worker-served responses so
+  cached representations can identify the Worker version that produced them.
 
   Examples:
     npx @vinext/cloudflare deploy                                      Build and deploy to production

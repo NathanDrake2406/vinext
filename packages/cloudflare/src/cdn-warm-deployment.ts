@@ -92,13 +92,7 @@ export async function deployWithCdnWarmup(
         (version) => version.versionId === upload.versionId && version.percentage === 100,
       )
     ) {
-      return promoteWithoutWarmup(
-        root,
-        upload,
-        options,
-        `CDN pre-warm cannot stage Worker version ${upload.versionId} because it is already serving 100% traffic.`,
-        `Worker version ${upload.versionId} remains at 100% traffic.`,
-      );
+      return finishAlreadyCurrentVersion(root, upload, options);
     }
     const observedTraffic = currentVersions.length
       ? currentVersions.map((version) => `${version.versionId}@${version.percentage}%`).join(", ")
@@ -120,6 +114,27 @@ export async function deployWithCdnWarmup(
     stagingTraffic,
     options,
   );
+}
+
+function finishAlreadyCurrentVersion(
+  root: string,
+  upload: WranglerVersionUploadResult,
+  options: CdnWarmupOptions,
+): CdnWarmupDeployResult {
+  const message = `CDN pre-warm cannot stage Worker version ${upload.versionId} because it is already serving 100% traffic.`;
+  if (options.warmCdnStrict) throw new Error(message);
+  console.warn(`  ${message} Skipping pre-warm and re-promotion.`);
+  const triggers = applyTriggersAfterPromotion(
+    root,
+    options,
+    `Worker version ${upload.versionId} is already serving 100% traffic, but applying triggers ` +
+      "(routes/schedules) failed. Production still serves that version on the previously " +
+      "deployed routes. Re-run `wrangler triggers deploy` to apply the route changes.",
+  );
+  return {
+    url: pickDeployedUrl(triggers.deployedUrl, upload.previewUrl),
+    warmed: false,
+  };
 }
 
 /**
@@ -264,16 +279,14 @@ async function warmAndPromote(
 function applyTriggersAfterPromotion(
   root: string,
   options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
+  failureMessage = "The uploaded Worker version was promoted to 100%, but applying triggers " +
+    "(routes/schedules) failed. Production serves the new version on the previously " +
+    "deployed routes. Re-run `wrangler triggers deploy` to apply the route changes.",
 ): WranglerVersionDeployResult {
   try {
     return runWranglerTriggersDeploy(root, options);
   } catch (error) {
-    throw new Error(
-      `${formatUnknownError(error)}\n\n` +
-        "The uploaded Worker version was promoted to 100%, but applying triggers " +
-        "(routes/schedules) failed. Production serves the new version on the previously " +
-        "deployed routes. Re-run `wrangler triggers deploy` to apply the route changes.",
-    );
+    throw new Error(`${formatUnknownError(error)}\n\n${failureMessage}`);
   }
 }
 

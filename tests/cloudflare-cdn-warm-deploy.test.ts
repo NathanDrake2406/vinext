@@ -683,7 +683,6 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
       if (args.includes("upload")) return `Uploaded version ${PREVIOUS_VERSION_ID}\n`;
       if (args.includes("status")) return currentDeploymentOutput();
-      if (args.includes(`${PREVIOUS_VERSION_ID}@100%`)) return "Promoted version\n";
       if (args.includes("triggers")) return "Triggers deployed\n";
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
@@ -695,7 +694,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("because it is already serving 100% traffic"),
     );
-    expect(execFileSyncMock).toHaveBeenCalledTimes(4);
+    expect(execFileSyncMock).toHaveBeenCalledTimes(3);
     expect(
       execFileSyncMock.mock.calls.some(([, args]) =>
         (args as string[]).some((arg) => arg === `${PREVIOUS_VERSION_ID}@0%`),

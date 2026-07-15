@@ -729,6 +729,9 @@ describe("parseDeployArgs", () => {
     const help = formatDeployHelp();
     expect(help).toContain("static exports skip Worker-version warmup because Assets serve them");
     expect(help).toContain("Increase when Worker version propagation is slow");
+    expect(help).toContain(
+      "Verified warmup exposes x-vinext-worker-version on Worker-served responses",
+    );
   });
 
   it("throws for invalid CDN warmup numeric flags", () => {
