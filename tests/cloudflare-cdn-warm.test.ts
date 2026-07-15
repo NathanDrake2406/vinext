@@ -480,6 +480,27 @@ describe("Cloudflare CDN warmup", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("fails when a build-discovered path returns a 404 from the expected version", async () => {
+    const expectedVersionId = "22222222-2222-4222-8222-222222222222";
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("not found", {
+        status: 404,
+        headers: { "x-vinext-worker-version": expectedVersionId },
+      }),
+    );
+
+    const result = await warmCdnCache({
+      targetUrl: "https://app.example.com",
+      paths: ["/removed"],
+      expectedVersionId,
+      retries: 0,
+      fetchImpl: fetchMock,
+    });
+
+    expect(result).toMatchObject({ total: 1, warmed: 0, failed: 1 });
+    expect(result.failures[0]?.error).toBe("HTTP 404");
+  });
+
   it("reports warmup failures and throws in strict mode", async () => {
     writeFile(
       "dist/server/vinext-prerender.json",

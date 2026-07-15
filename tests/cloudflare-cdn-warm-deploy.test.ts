@@ -677,6 +677,30 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(execFileSyncMock).toHaveBeenCalledTimes(2);
   });
 
+  it("reports a deployment-status read failure before promoting without warmup", async () => {
+    const warnSpy = vi.spyOn(console, "warn");
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) throw new Error("status request timed out");
+      if (isPromotion(args)) return "Promoted version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).resolves.toMatchObject({
+      warmed: false,
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "CDN pre-warm could not read the current deployment (status request timed out)",
+      ),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("reports trigger recovery after a non-strict direct promotion", async () => {
     writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
     execFileSyncMock.mockImplementation((_file: string, args: string[]) => {

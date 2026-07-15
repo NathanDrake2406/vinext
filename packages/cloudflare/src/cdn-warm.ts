@@ -230,6 +230,9 @@ async function warmOnePath(
         return { path: pathname, ok: true };
       }
 
+      // These paths came from this build's prerender manifest, so even a 4xx
+      // from the expected Worker version means the intended cache entry was
+      // not populated and must remain a warmup failure.
       lastError = `HTTP ${response.status}`;
       if (!isRetryableStatus(response.status)) break;
       await waitBeforeRetry(attempt, options.retries, options.retryDelayMs);

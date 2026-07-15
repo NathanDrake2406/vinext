@@ -74,8 +74,16 @@ export async function deployWithCdnWarmup(
 ): Promise<CdnWarmupDeployResult> {
   const target = validateCdnWarmupConfiguration(root, options);
   const upload = runWranglerVersionUpload(root, options);
-  const deployment = readWranglerDeploymentStatus(root, options);
-  const currentVersions = deployment?.versions ?? [];
+  const statusRead = readWranglerDeploymentStatus(root, options);
+  if ("error" in statusRead) {
+    return promoteWithoutWarmup(
+      root,
+      upload,
+      options,
+      `CDN pre-warm could not read the current deployment (${statusRead.error}).`,
+    );
+  }
+  const currentVersions = statusRead.deployment.versions;
   const stagingTraffic = getZeroPercentStagingTraffic(currentVersions, upload.versionId);
 
   if (!stagingTraffic) {
@@ -104,9 +112,8 @@ function promoteWithoutWarmup(
   root: string,
   upload: WranglerVersionUploadResult,
   options: CdnWarmupOptions,
+  message = "CDN pre-warm requires the current deployment to contain exactly one version at 100%.",
 ): CdnWarmupDeployResult {
-  const message =
-    "CDN pre-warm requires the current deployment to contain exactly one version at 100%.";
   if (options.warmCdnStrict) {
     throw new Error(`${message} Uploaded Worker version ${upload.versionId} remains undeployed.`);
   }
@@ -279,14 +286,11 @@ function validateCdnWarmupConfiguration(
 function readWranglerDeploymentStatus(
   root: string,
   options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
-): WranglerDeploymentStatus | null {
+): { deployment: WranglerDeploymentStatus } | { error: string } {
   try {
-    return runWranglerDeploymentStatus(root, options);
+    return { deployment: runWranglerDeploymentStatus(root, options) };
   } catch (error) {
-    console.warn(
-      `  CDN pre-warm could not read the current deployment: ${formatUnknownError(error)}`,
-    );
-    return null;
+    return { error: formatUnknownError(error) };
   }
 }
 
