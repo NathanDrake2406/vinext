@@ -100,7 +100,15 @@ export async function deployWithCdnWarmup(
         `Worker version ${upload.versionId} remains at 100% traffic.`,
       );
     }
-    return promoteWithoutWarmup(root, upload, options);
+    const observedTraffic = currentVersions.length
+      ? currentVersions.map((version) => `${version.versionId}@${version.percentage}%`).join(", ")
+      : "no deployed versions";
+    return promoteWithoutWarmup(
+      root,
+      upload,
+      options,
+      `CDN pre-warm requires the current deployment to contain exactly one version at 100%. Observed traffic: ${observedTraffic}.`,
+    );
   }
 
   return warmAndPromote(

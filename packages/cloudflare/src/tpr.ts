@@ -409,7 +409,7 @@ function extractWarmupHost(config: Record<string, unknown>): string | null {
   const fromRoutes = Array.isArray(config.routes)
     ? firstMatch(config.routes, extractWarmupHostFromRoute)
     : null;
-  return fromRoutes ?? extractDomainFromCustomDomains(config);
+  return fromRoutes ?? extractWarmupHostFromCustomDomains(config);
 }
 
 /**
@@ -441,6 +441,13 @@ function extractDomainFromCustomDomains(config: Record<string, unknown>): string
     }
   }
   return null;
+}
+
+function extractWarmupHostFromCustomDomains(config: Record<string, unknown>): string | null {
+  if (!Array.isArray(config.custom_domains)) return null;
+  return firstMatch(config.custom_domains, (domain) =>
+    typeof domain === "string" ? routePatternToWarmupHost(domain) : null,
+  );
 }
 
 /** Strip protocol and trailing wildcards from a route pattern to get a bare domain. */

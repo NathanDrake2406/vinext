@@ -671,7 +671,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       await import("../packages/cloudflare/src/cdn-warm-deployment.js");
 
     await expect(deployWithCdnWarmup(tmpDir, ["/"], { warmCdnStrict: true })).rejects.toThrow(
-      `requires the current deployment to contain exactly one version at 100%. Uploaded Worker version ${UPLOADED_VERSION_ID} remains undeployed`,
+      `Observed traffic: ${PREVIOUS_VERSION_ID}@50%, 33333333-3333-4333-8333-333333333333@50%. Uploaded Worker version ${UPLOADED_VERSION_ID} remains undeployed`,
     );
     expect(fetch).not.toHaveBeenCalled();
     expect(execFileSyncMock).toHaveBeenCalledTimes(2);
@@ -728,6 +728,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
   });
 
   it("reports trigger recovery after a non-strict direct promotion", async () => {
+    const warnSpy = vi.spyOn(console, "warn");
     writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
     execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
       if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
@@ -748,6 +749,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
 
     await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
       "The uploaded Worker version was promoted to 100%, but applying triggers",
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Observed traffic: ${PREVIOUS_VERSION_ID}@50%, 33333333-3333-4333-8333-333333333333@50%`,
+      ),
     );
     expect(fetch).not.toHaveBeenCalled();
   });

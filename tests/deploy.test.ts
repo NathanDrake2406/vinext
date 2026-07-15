@@ -3414,6 +3414,18 @@ describe("resolveWranglerDeploymentTarget — production host", () => {
     expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBeUndefined();
   });
 
+  it("does not turn a path-scoped custom domain into a host-wide warmup target", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({ custom_domains: ["app.example.com/private"] }),
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, {});
+    expect(target?.hasProductionRoute).toBe(true);
+    expect(target?.productionHost).toBeUndefined();
+  });
+
   it("uses the pattern from a singular TOML route object", () => {
     writeFile(
       tmpDir,
