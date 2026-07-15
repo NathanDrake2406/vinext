@@ -16,9 +16,9 @@ import {
   getDraftModeCookieHeader,
   getHeadersContext,
   isDraftModeRequest,
-  markDynamicUsage,
   peekDynamicUsage,
   peekRenderRequestApiUsage,
+  runWithIsolatedDynamicUsage,
   setHeadersContext,
 } from "vinext/shims/headers";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
@@ -1104,15 +1104,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         );
       },
       async runWithIsolatedDynamicScope(fn) {
-        const priorDynamic = consumeDynamicUsage();
-        try {
-          const result = await fn();
-          const dynamicDetected = consumeDynamicUsage();
-          return { result, dynamicDetected };
-        } finally {
-          consumeDynamicUsage();
-          if (priorDynamic) markDynamicUsage();
-        }
+        return runWithIsolatedDynamicUsage(fn);
       },
     },
     dynamicStaleTimeSeconds: options.dynamicStaleTimeSeconds,

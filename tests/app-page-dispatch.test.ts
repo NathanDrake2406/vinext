@@ -44,6 +44,10 @@ import {
   type ExecutionContextLike,
 } from "../packages/vinext/src/shims/request-context.js";
 import {
+  createRequestContext,
+  runWithRequestContext,
+} from "../packages/vinext/src/shims/unified-request-context.js";
+import {
   consumeDynamicUsage,
   consumeRenderRequestApiUsage,
   draftMode,
@@ -1093,6 +1097,111 @@ describe("app page dispatch", () => {
       expect(withQuery.headers.get("x-vinext-cache")).not.toBe("HIT");
     },
   );
+
+  it("preserves deferred metadata dynamic usage across a concurrent layout probe", async () => {
+    let releaseMetadata!: () => void;
+    const metadataGate = new Promise<void>((resolve) => {
+      releaseMetadata = resolve;
+    });
+    let metadataObserved!: () => void;
+    const metadataObservedPromise = new Promise<void>((resolve) => {
+      metadataObserved = resolve;
+    });
+    const layoutModule = {
+      default: ({ children }: { children?: React.ReactNode }) => children ?? null,
+    };
+    const pageModule = {
+      default: () => React.createElement("h1", null, "metadata body"),
+      async generateMetadata(props: { searchParams: Promise<Record<string, unknown>> }) {
+        await metadataGate;
+        await props.searchParams;
+        metadataObserved();
+        return { title: "deferred metadata" };
+      },
+    };
+    const route = createRoute({
+      layouts: [layoutModule],
+      layoutTreePositions: [0],
+      pattern: "/deferred-metadata-proof",
+      routeSegments: ["deferred-metadata-proof"],
+    });
+    const cache = new Map<string, ISRCacheEntry>();
+    const isrGet = vi.fn(async (key: string) => cache.get(key) ?? null);
+    const isrSet = vi.fn<DispatchOptions["isrSet"]>(async (key, data) => {
+      cache.set(key, {
+        isStale: false,
+        value: { lastModified: Date.now(), value: data },
+      });
+    });
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const executionContext = {
+      waitUntil(promise) {
+        waitUntilPromises.push(promise);
+      },
+    } satisfies ExecutionContextLike;
+    const buildPageElement: DispatchOptions["buildPageElement"] = (
+      _route,
+      params,
+      _opts,
+      searchParams,
+      layoutParamAccess,
+      buildOptions,
+    ) =>
+      buildPageElements({
+        layoutParamAccess,
+        metadataRoutes: [],
+        params,
+        pageRequest: {
+          isRscRequest: true,
+          mountedSlotsHeader: null,
+          observeMetadataSearchParamsAccess:
+            buildOptions?.observeMetadataSearchParamsAccess === true,
+          observePageSearchParamsAccess: buildOptions?.observePageSearchParamsAccess === true,
+          opts: undefined,
+          request: new Request("https://example.test/deferred-metadata-proof"),
+          searchParams,
+          serveStreamingMetadata: buildOptions?.serveStreamingMetadata,
+        },
+        route: {
+          // The lightweight renderer below consumes only the page slot. Keep
+          // the layout on the dispatch route, where it drives the real probe,
+          // without adding an unconsumed layout dependency to the wire payload.
+          layouts: [],
+          page: pageModule,
+          pattern: "/deferred-metadata-proof",
+          routeSegments: ["deferred-metadata-proof"],
+        },
+        routePath: "/deferred-metadata-proof",
+      }).then(toDispatchElementRecord);
+    const { options } = createDispatchOptions({
+      buildPageElement,
+      cleanPathname: "/deferred-metadata-proof",
+      isProduction: true,
+      isRscRequest: true,
+      isrGet,
+      isrSet,
+      async probeLayoutAt() {
+        releaseMetadata();
+        await metadataObservedPromise;
+        return null;
+      },
+      probePage() {
+        return null;
+      },
+      renderToReadableStream: renderPagePayloadToStream,
+      revalidateSeconds: 60,
+      route,
+    });
+
+    const response = await runWithExecutionContext(executionContext, () =>
+      runWithRequestContext(createRequestContext(), () => dispatchAppPage(options)),
+    );
+    await response.text();
+    await Promise.all(waitUntilPromises);
+
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(cache.has("rsc:/deferred-metadata-proof")).toBe(false);
+  });
 
   it("does not reuse loading-boundary RSC when the page reads searchParams", async () => {
     async function Page(props: Record<string, unknown>): Promise<React.ReactNode> {

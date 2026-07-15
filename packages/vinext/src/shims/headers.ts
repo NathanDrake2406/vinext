@@ -210,6 +210,43 @@ export function markDynamicUsage(): void {
   state.dynamicUsageDetected = true;
 }
 
+/**
+ * Measure dynamic usage in a child async scope without clearing the parent.
+ * Concurrent work that already belongs to the request (such as deferred
+ * metadata) keeps writing to the parent state and therefore remains visible
+ * to the final cache policy.
+ */
+export async function runWithIsolatedDynamicUsage<T>(
+  fn: () => T | Promise<T>,
+): Promise<{ result: T; dynamicDetected: boolean }> {
+  const runInChildState = async (childState: VinextHeadersShimState) => {
+    const result = await fn();
+    return { result, dynamicDetected: childState.dynamicUsageDetected };
+  };
+
+  if (isInsideUnifiedScope()) {
+    let childState: VinextHeadersShimState | null = null;
+    return await runWithUnifiedStateMutation(
+      (context) => {
+        context.dynamicUsageDetected = false;
+        childState = context;
+      },
+      () => {
+        if (!childState) {
+          throw new Error("Dynamic usage scope was not initialized");
+        }
+        return runInChildState(childState);
+      },
+    );
+  }
+
+  const childState: VinextHeadersShimState = {
+    ..._getState(),
+    dynamicUsageDetected: false,
+  };
+  return await _als.run(childState, () => runInChildState(childState));
+}
+
 export function markRenderRequestApiUsage(kind: RenderRequestApiKind): void {
   _getState().renderRequestApiUsage.add(kind);
 }
