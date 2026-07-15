@@ -677,6 +677,32 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(execFileSyncMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not stage a duplicate split when the upload is already at 100%", async () => {
+    const warnSpy = vi.spyOn(console, "warn");
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${PREVIOUS_VERSION_ID}\n`;
+      if (args.includes("status")) return currentDeploymentOutput();
+      if (args.includes(`${PREVIOUS_VERSION_ID}@100%`)) return "Promoted version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).resolves.toMatchObject({ warmed: false });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("because it is already serving 100% traffic"),
+    );
+    expect(execFileSyncMock).toHaveBeenCalledTimes(4);
+    expect(
+      execFileSyncMock.mock.calls.some(([, args]) =>
+        (args as string[]).some((arg) => arg === `${PREVIOUS_VERSION_ID}@0%`),
+      ),
+    ).toBe(false);
+  });
+
   it("reports a deployment-status read failure before promoting without warmup", async () => {
     const warnSpy = vi.spyOn(console, "warn");
     writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));

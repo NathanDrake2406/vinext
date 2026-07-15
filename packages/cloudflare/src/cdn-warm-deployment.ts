@@ -87,6 +87,19 @@ export async function deployWithCdnWarmup(
   const stagingTraffic = getZeroPercentStagingTraffic(currentVersions, upload.versionId);
 
   if (!stagingTraffic) {
+    if (
+      currentVersions.some(
+        (version) => version.versionId === upload.versionId && version.percentage === 100,
+      )
+    ) {
+      return promoteWithoutWarmup(
+        root,
+        upload,
+        options,
+        `CDN pre-warm cannot stage Worker version ${upload.versionId} because it is already serving 100% traffic.`,
+        `Worker version ${upload.versionId} remains at 100% traffic.`,
+      );
+    }
     return promoteWithoutWarmup(root, upload, options);
   }
 
@@ -113,9 +126,10 @@ function promoteWithoutWarmup(
   upload: WranglerVersionUploadResult,
   options: CdnWarmupOptions,
   message = "CDN pre-warm requires the current deployment to contain exactly one version at 100%.",
+  strictUploadState = `Uploaded Worker version ${upload.versionId} remains undeployed.`,
 ): CdnWarmupDeployResult {
   if (options.warmCdnStrict) {
-    throw new Error(`${message} Uploaded Worker version ${upload.versionId} remains undeployed.`);
+    throw new Error(`${message} ${strictUploadState}`);
   }
   console.warn(`  ${message} Promoting without pre-warming.`);
   const deployed = runWranglerVersionDeploy(

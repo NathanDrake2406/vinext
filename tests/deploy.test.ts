@@ -3259,6 +3259,26 @@ enabled = true
     });
   });
 
+  it("ignores braces in TOML inline-table comments", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `cache = {
+  enabled = true, # misleading }
+  cross_version_cache = false
+}
+version_metadata = {
+  # another misleading }
+  binding = "VINEXT_VERSION_METADATA"
+}
+`,
+    );
+
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.cache).toEqual({ enabled: true, crossVersionCache: false });
+    expect(config?.versionMetadataBinding).toBe("VINEXT_VERSION_METADATA");
+  });
+
   it("extracts environment Worker names and custom domains", () => {
     writeFile(
       tmpDir,

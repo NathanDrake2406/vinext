@@ -624,7 +624,7 @@ function extractEnvConfigsFromTOML(
 }
 
 function extractTomlCacheConfig(section: string): WranglerCacheConfig | null {
-  const match = section.match(/^cache\s*=\s*\{([\s\S]*?)\}/m);
+  const match = stripTomlLineComments(section).match(/^cache\s*=\s*\{([\s\S]*?)\}/m);
   return match ? extractTomlCacheTableConfig(match[1] ?? "") : null;
 }
 
@@ -639,7 +639,7 @@ function extractTomlCacheTableConfig(section: string): WranglerCacheConfig | nul
 }
 
 function extractTomlVersionMetadataBinding(section: string): string | null {
-  const match = section.match(
+  const match = stripTomlLineComments(section).match(
     /^version_metadata\s*=\s*\{[^}]*\bbinding\s*=\s*(?:"([^"]+)"|'([^']+)')[^}]*\}/m,
   );
   return match?.slice(1).find((value): value is string => Boolean(value)) ?? null;
