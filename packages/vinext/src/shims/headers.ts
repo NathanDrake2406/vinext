@@ -224,8 +224,8 @@ export function throwIfStaticGenerationAccessError(): void {
 export async function runWithConnectionProbe<T>(
   fn: () => T | Promise<T>,
 ): Promise<ConnectionProbeResult<T>> {
-  const state = _getState();
-  const previousProbe = state.connectionProbe;
+  const parentState = _getState();
+  const parentInvalidDynamicUsageError = parentState.invalidDynamicUsageError;
   let interruptProbe: () => void = () => {};
   const interrupted = new Promise<ConnectionProbeResult<T>>((resolve) => {
     interruptProbe = () => resolve({ completed: false });
@@ -244,15 +244,51 @@ export async function runWithConnectionProbe<T>(
     pending: new Promise<never>(() => {}),
   };
 
-  state.connectionProbe = probe;
-  try {
-    const completed = Promise.resolve()
-      .then(fn)
-      .then<ConnectionProbeResult<T>>((result) => ({ completed: true, result }));
-    return await Promise.race([completed, interrupted]);
-  } finally {
-    state.connectionProbe = previousProbe;
+  const runInChildState = async (childState: VinextHeadersShimState) => {
+    try {
+      const completed = Promise.resolve()
+        .then(fn)
+        .then<ConnectionProbeResult<T>>((result) => ({ completed: true, result }));
+      return await Promise.race([completed, interrupted]);
+    } finally {
+      // Dynamic usage discovered by a speculative probe still classifies the
+      // request, but the probe itself must remain branch-local. In particular,
+      // metadata resolution can already be running in a sibling async branch;
+      // sharing `connectionProbe` would make its connection() call suspend on
+      // a probe it does not belong to.
+      if (childState.dynamicUsageDetected) {
+        parentState.dynamicUsageDetected = true;
+      }
+      if (
+        childState.invalidDynamicUsageError !== parentInvalidDynamicUsageError &&
+        parentState.invalidDynamicUsageError === parentInvalidDynamicUsageError
+      ) {
+        parentState.invalidDynamicUsageError = childState.invalidDynamicUsageError;
+      }
+    }
+  };
+
+  if (isInsideUnifiedScope()) {
+    let childState: VinextHeadersShimState | null = null;
+    return await runWithUnifiedStateMutation(
+      (context) => {
+        context.connectionProbe = probe;
+        childState = context;
+      },
+      () => {
+        if (!childState) {
+          throw new Error("Connection probe scope was not initialized");
+        }
+        return runInChildState(childState);
+      },
+    );
   }
+
+  const childState: VinextHeadersShimState = {
+    ...parentState,
+    connectionProbe: probe,
+  };
+  return await _als.run(childState, () => runInChildState(childState));
 }
 
 export function suspendConnectionProbe(): Promise<never> | null {
