@@ -473,13 +473,15 @@ describe("app page head resolution", () => {
       }),
     ).toEqual([
       {
-        layoutModules: [],
-        layoutParams: [],
-        layoutTreePositions: [],
+        head: {
+          layoutModules: [],
+          layoutParams: [],
+          layoutTreePositions: [],
+          pageModule: slotPage,
+          params: { member: "alice" },
+          routeSegments: ["[member]"],
+        },
         ownerTreePosition: 0,
-        pageModule: slotPage,
-        params: { member: "alice" },
-        routeSegments: ["[member]"],
       },
     ]);
   });
@@ -503,13 +505,15 @@ describe("app page head resolution", () => {
       }),
     ).toEqual([
       {
-        layoutModules: [slotLayout, interceptLayout],
-        layoutParams: [{ locale: "en" }, { locale: "en", photo: "42" }],
-        layoutTreePositions: [0, 2],
+        head: {
+          layoutModules: [slotLayout, interceptLayout],
+          layoutParams: [{ locale: "en" }, { locale: "en", photo: "42" }],
+          layoutTreePositions: [0, 2],
+          pageModule: interceptPage,
+          params: { locale: "en", photo: "42", comment: "7" },
+          routeSegments: ["[locale]", "photos"],
+        },
         ownerTreePosition: 1,
-        pageModule: interceptPage,
-        params: { locale: "en", photo: "42", comment: "7" },
-        routeSegments: ["[locale]", "photos"],
       },
     ]);
   });

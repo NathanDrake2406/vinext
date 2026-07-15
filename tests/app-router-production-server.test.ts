@@ -1393,6 +1393,23 @@ describe("App Router Production server (startProdServer)", () => {
     expect(metadataTime! - shellTime!).toBeGreaterThan(600);
   });
 
+  it("carries a delayed generateMetadata redirect in the streamed RSC payload", async () => {
+    // Ported from Next.js: test/e2e/app-dir/metadata-navigation/metadata-navigation.test.ts
+    // https://github.com/vercel/next.js/blob/v16.2.7/test/e2e/app-dir/metadata-navigation/metadata-navigation.test.ts#L76-L87
+    //
+    // RSC navigation starts streaming before generated metadata settles, so a
+    // late redirect remains an HTTP 200 and travels in the Flight error digest.
+    const response = await fetch(`${baseUrl}/metadata-redirect-test.rsc`, {
+      headers: { Accept: "text/x-component", RSC: "1", "user-agent": "HeadlessChrome" },
+      redirect: "manual",
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/x-component");
+
+    const flight = await response.text();
+    expect(flight).toContain("NEXT_REDIRECT;;%2Fabout");
+  });
+
   it("renders not-found metadata when deferred generateMetadata calls notFound", async () => {
     // Ported from Next.js: test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts
     // https://github.com/vercel/next.js/blob/v16.2.7/test/e2e/app-dir/metadata-streaming/metadata-streaming.test.ts

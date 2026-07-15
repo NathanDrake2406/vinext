@@ -5,6 +5,7 @@ import {
   resolveActiveParallelRouteHeadInputs,
   type ApplyAppPageFileBasedMetadata,
 } from "./app-page-head.js";
+import { resolveHttpAccessFallbackMetadata } from "./app-page-http-access-fallback-metadata.js";
 import { SIBLING_PAGE_INTERCEPT_SLOT_KEY } from "./app-rsc-route-matching.js";
 import {
   buildAppPageElements,
@@ -276,39 +277,40 @@ export async function buildPageElements<
     };
   }
 
-  const parallelRoutes = [
-    ...resolveActiveParallelRouteHeadInputs({
-      interceptBranchSegments: opts?.interceptBranchSegments ?? null,
-      interceptLayouts: opts?.interceptLayouts ?? null,
-      interceptLayoutSegments: opts?.interceptLayoutSegments ?? null,
-      interceptPage: opts?.interceptPage ?? null,
-      interceptParams: opts?.interceptParams ?? null,
-      interceptSlotKey: opts?.interceptSlotKey ?? null,
-      layoutTreePositions: route.layoutTreePositions,
-      params,
-      routeSegments: route.routeSegments ?? [],
-      slotParams: slotParamOverrides,
-      slots: route.slots ?? null,
-    }),
-    ...(isSiblingIntercept
-      ? [
-          {
-            isPrimaryLeaf: true,
-            layoutModules: opts?.interceptLayouts ?? [],
-            layoutParams: (opts?.interceptLayoutSegments ?? []).map((segments) =>
-              resolveInterceptLayoutParams(
-                opts?.interceptBranchSegments ?? segments,
-                segments,
-                effectiveParams,
-              ),
+  const activeParallelRouteHeadInputs = resolveActiveParallelRouteHeadInputs({
+    interceptBranchSegments: opts?.interceptBranchSegments ?? null,
+    interceptLayouts: opts?.interceptLayouts ?? null,
+    interceptLayoutSegments: opts?.interceptLayoutSegments ?? null,
+    interceptPage: opts?.interceptPage ?? null,
+    interceptParams: opts?.interceptParams ?? null,
+    interceptSlotKey: opts?.interceptSlotKey ?? null,
+    layoutTreePositions: route.layoutTreePositions,
+    params,
+    routeSegments: route.routeSegments ?? [],
+    slotParams: slotParamOverrides,
+    slots: route.slots ?? null,
+  });
+  const primaryParallelRouteHeadInput = isSiblingIntercept
+    ? {
+        head: {
+          layoutModules: opts?.interceptLayouts ?? [],
+          layoutParams: (opts?.interceptLayoutSegments ?? []).map((segments) =>
+            resolveInterceptLayoutParams(
+              opts?.interceptBranchSegments ?? segments,
+              segments,
+              effectiveParams,
             ),
-            ownerTreePosition: route.routeSegments?.length ?? 0,
-            pageModule: effectivePageModule ?? null,
-            params: effectiveParams,
-            routeSegments: opts?.interceptSourcePageSegments ?? route.routeSegments ?? [],
-          },
-        ]
-      : []),
+          ),
+          pageModule: effectivePageModule ?? null,
+          params: effectiveParams,
+          routeSegments: opts?.interceptSourcePageSegments ?? route.routeSegments ?? [],
+        },
+        ownerTreePosition: route.routeSegments?.length ?? 0,
+      }
+    : null;
+  const parallelRoutes = [
+    ...activeParallelRouteHeadInputs.map((input) => input.head),
+    ...(primaryParallelRouteHeadInput ? [primaryParallelRouteHeadInput.head] : []),
   ];
   const metadataSearchParamsObserver = observeMetadataSearchParamsAccess
     ? createAppPageSearchParamsObserver()
@@ -386,29 +388,20 @@ export async function buildPageElements<
                 effectiveParams,
               )
             : {};
-        const fallbackParallelRoutes = parallelRoutes.map((parallelRoute) => ({
-          ...parallelRoute,
-          pageModule: null,
-        }));
-        const fallbackHead = prepareAppPageHead({
+        return resolveHttpAccessFallbackMetadata({
           applyFileBasedMetadata: options.applyFileBasedMetadata,
           basePath: options.basePath ?? "",
+          boundaryModule,
+          boundaryParams,
           layoutModules: route.layouts,
           layoutTreePositions: route.layoutTreePositions,
-          metadataOnly: true,
           metadataRoutes,
-          pageHasSearchParams: false,
-          pageModule: boundaryModule,
-          pageParams: boundaryParams,
-          parallelRoutes: fallbackParallelRoutes,
+          parallelBranches: activeParallelRouteHeadInputs,
           params: effectiveParams,
-          repeatPageModuleForParallelLeaves: true,
+          primaryParallelBranch: primaryParallelRouteHeadInput,
           routePath: route.pattern,
           routeSegments: route.routeSegments ?? null,
-          searchParams,
-          searchParamsObserver: metadataSearchParamsObserver,
         });
-        return await fallbackHead.metadata;
       })
     : null;
 
