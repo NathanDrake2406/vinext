@@ -31,9 +31,14 @@ export function resolveWranglerDeploymentTarget(
   const config = parseWranglerConfig(root, options.config);
   if (!config) return null;
   const envName = getWranglerTargetEnv(options);
-  const selected = envName ? config.env?.[envName] : config;
+  const flattenedEnvConfig = Boolean(
+    envName && !config.env?.[envName] && config.targetEnvironment === envName,
+  );
+  const selected = envName
+    ? (config.env?.[envName] ?? (flattenedEnvConfig ? config : undefined))
+    : config;
   return {
-    workerName: resolveWorkerName(config, envName, options.name),
+    workerName: resolveWorkerName(config, envName, flattenedEnvConfig, options.name),
     productionHost: selected?.warmupHost,
     versionMetadataBinding: selected?.versionMetadataBinding,
   };
@@ -42,12 +47,14 @@ export function resolveWranglerDeploymentTarget(
 function resolveWorkerName(
   config: WranglerConfig,
   envName: string | undefined,
+  flattenedEnvConfig: boolean,
   explicitName: string | undefined,
 ): string | undefined {
   if (explicitName) return explicitName;
   if (!envName) return config.name;
   const explicitEnvName = config.env?.[envName]?.name;
   if (explicitEnvName) return explicitEnvName;
+  if (flattenedEnvConfig) return config.name;
   if (!config.name) return undefined;
   return config.legacyEnv === false ? config.name : `${config.name}-${envName}`;
 }

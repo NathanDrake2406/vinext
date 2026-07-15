@@ -90,6 +90,7 @@ export type WranglerConfig = {
   warmupHost?: string;
   name?: string;
   legacyEnv?: boolean;
+  targetEnvironment?: string;
   versionMetadataBinding?: string;
   env?: Record<string, WranglerEnvironmentConfig>;
 };
@@ -265,6 +266,14 @@ function extractFromJSON(config: Record<string, unknown>): WranglerConfig {
 
   if (typeof config.legacy_env === "boolean") {
     result.legacyEnv = config.legacy_env;
+  }
+
+  // Cloudflare's generated dist/server/wrangler.json is already flattened to
+  // the environment selected at build time. Wrangler tags that redirected
+  // config so deploy-time readers can distinguish it from a source config
+  // that simply omitted the requested env block.
+  if (typeof config.targetEnvironment === "string" && config.targetEnvironment.length > 0) {
+    result.targetEnvironment = config.targetEnvironment;
   }
 
   // account_id
@@ -600,7 +609,7 @@ function extractTomlWarmupHost(section: string): string | null {
   const inlinePattern = inlineRoute?.match(/\bpattern\s*=\s*"([^"]+)"/)?.[1];
   if (inlinePattern) return routePatternToWarmupHost(inlinePattern);
 
-  const routesArray = section.match(/^routes\s*=\s*\[([\s\S]*?)\]\s*$/m)?.[1];
+  const routesArray = section.match(/^routes\s*=\s*\[([\s\S]*?)\]/m)?.[1];
   if (!routesArray) return null;
   return firstMatch(extractTomlRouteEntries(routesArray), (route) =>
     route.enabled === false ? null : routePatternToWarmupHost(route.pattern),

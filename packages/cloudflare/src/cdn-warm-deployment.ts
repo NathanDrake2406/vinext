@@ -115,7 +115,7 @@ function promoteWithoutWarmup(
     options,
     "promote-uploaded",
   );
-  const triggers = runWranglerTriggersDeploy(root, options);
+  const triggers = applyTriggersAfterPromotion(root, options);
   return {
     url: pickDeployedUrl(deployed.deployedUrl, triggers.deployedUrl, upload.previewUrl),
     warmed: false,
@@ -274,12 +274,22 @@ function getZeroPercentStagingTraffic(
   current: readonly WranglerVersionTraffic[],
   versionId: string,
 ): WranglerVersionTraffic[] | null {
-  if (current.length !== 1 || current[0].percentage !== 100) return null;
+  const productionVersions = current.filter((version) => version.percentage === 100);
+  if (
+    productionVersions.length !== 1 ||
+    current.some((version) => version.percentage !== 0 && version.percentage !== 100)
+  ) {
+    return null;
+  }
+  const productionVersion = productionVersions[0];
   // If the upload ever returns the same version ID already at 100% traffic,
   // staging it would produce a duplicate-version split (v@100% v@0%) — fail
   // closed instead of handing wrangler a nonsensical traffic split.
-  if (current[0].versionId === versionId) return null;
-  return [current[0], { versionId, percentage: 0 }];
+  if (productionVersion.versionId === versionId) return null;
+  // A failed strict warmup intentionally leaves its upload at 0%. Omit stale
+  // 0% versions from the replacement split so a fresh attempt can retry from
+  // the same safe production-at-100% state without manual cleanup.
+  return [productionVersion, { versionId, percentage: 0 }];
 }
 
 function quoteStructuredHeaderString(value: string): string {

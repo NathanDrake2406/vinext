@@ -425,6 +425,10 @@ describe("Cloudflare CDN warmup deploy flow", () => {
 
   it("stages and promotes a fresh attempt after a prior warmup left a version staged", async () => {
     const events: string[] = [];
+    const failedVersionId = "33333333-3333-4333-8333-333333333333";
+    const stagingSplits: string[][] = [];
+    let uploadAttempts = 0;
+    let statusReads = 0;
     writeFile(
       "wrangler.jsonc",
       warmupWranglerConfig({ name: "my-worker", route: "app.example.com/*" }),
@@ -446,15 +450,29 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     });
     execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
       if (args.includes("upload")) {
-        events.push("upload");
-        return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+        uploadAttempts++;
+        const versionId = uploadAttempts === 1 ? failedVersionId : UPLOADED_VERSION_ID;
+        events.push(uploadAttempts === 1 ? "upload:first" : "upload:retry");
+        return `Uploaded version ${versionId}\n`;
       }
       if (args.includes("status")) {
         events.push("status");
-        return currentDeploymentOutput();
+        statusReads++;
+        return statusReads === 1
+          ? currentDeploymentOutput()
+          : JSON.stringify({
+              versions: [
+                { version_id: PREVIOUS_VERSION_ID, percentage: 100 },
+                { version_id: failedVersionId, percentage: 0 },
+              ],
+            });
       }
-      if (isStage(args)) {
+      if (
+        args.includes(`${PREVIOUS_VERSION_ID}@100%`) &&
+        (args.includes(`${failedVersionId}@0%`) || args.includes(`${UPLOADED_VERSION_ID}@0%`))
+      ) {
         events.push("stage");
+        stagingSplits.push(args);
         return "Staged version\nhttps://stable.example.workers.dev\n";
       }
       if (args.includes("triggers")) {
@@ -484,17 +502,18 @@ describe("Cloudflare CDN warmup deploy flow", () => {
 
     expect(result).toEqual({ url: "https://stable.example.workers.dev", warmed: true });
     expect(events).toEqual([
-      "upload",
+      "upload:first",
       "status",
       "stage",
       "fetch:old-version",
-      "upload",
+      "upload:retry",
       "status",
       "stage",
       "fetch:new-version",
       "promote",
       "triggers",
     ]);
+    expect(stagingSplits[1]).not.toContain(`${failedVersionId}@0%`);
   });
 
   it("surfaces an actionable error when the promotion CLI call fails, without re-reading status or applying triggers", async () => {
@@ -554,5 +573,30 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     );
     expect(fetch).not.toHaveBeenCalled();
     expect(execFileSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports trigger recovery after a non-strict direct promotion", async () => {
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) {
+        return JSON.stringify({
+          versions: [
+            { version_id: PREVIOUS_VERSION_ID, percentage: 50 },
+            { version_id: "33333333-3333-4333-8333-333333333333", percentage: 50 },
+          ],
+        });
+      }
+      if (isPromotion(args)) return "Promoted version\n";
+      if (args.includes("triggers")) throw new Error("trigger update failed");
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
+      "The uploaded Worker version was promoted to 100%, but applying triggers",
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

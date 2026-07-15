@@ -3379,6 +3379,30 @@ route = "staging.example.com/*"`,
     ).toBeUndefined();
   });
 
+  it("uses a generated config already flattened to the selected environment", () => {
+    writeFile(
+      tmpDir,
+      "dist/server/wrangler.json",
+      JSON.stringify({
+        name: "my-worker-staging",
+        targetEnvironment: "staging",
+        route: "staging.example.com/*",
+        version_metadata: { binding: "VINEXT_VERSION_METADATA" },
+      }),
+    );
+
+    expect(
+      resolveWranglerDeploymentTarget(tmpDir, {
+        env: "staging",
+        config: "dist/server/wrangler.json",
+      }),
+    ).toEqual({
+      workerName: "my-worker-staging",
+      productionHost: "staging.example.com",
+      versionMetadataBinding: "VINEXT_VERSION_METADATA",
+    });
+  });
+
   it("skips a disabled custom domain in an inline TOML routes array", () => {
     writeFile(
       tmpDir,
@@ -3390,6 +3414,12 @@ routes = [
 ]
 `,
     );
+
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+  });
+
+  it("uses an inline TOML routes array followed by a trailing comment", () => {
+    writeFile(tmpDir, "wrangler.toml", 'routes = ["app.example.com/*"] # production route\n');
 
     expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
   });
