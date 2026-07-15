@@ -70,6 +70,26 @@ test.describe("Next.js compat: metadata (browser)", () => {
     await expect(page.getByTestId("global-error-message")).toContainText("Layout metadata error");
   });
 
+  test("layout generateViewport error activates the local error boundary after hydration", async ({
+    page,
+  }) => {
+    const response = await page.goto(`${BASE}/nextjs-compat/layout-viewport-error-with-boundary`);
+
+    expect(response?.status()).toBe(200);
+    await expect(page.locator("#error")).toHaveText("Local layout viewport error boundary");
+    await expect(page.getByTestId("global-error")).toHaveCount(0);
+  });
+
+  test("layout generateViewport error activates global-error after hydration", async ({ page }) => {
+    const response = await page.goto(
+      `${BASE}/nextjs-compat/layout-viewport-error-without-boundary`,
+    );
+
+    expect(response?.status()).toBe(200);
+    await expect(page.getByTestId("global-error")).toBeVisible();
+    await expect(page.getByTestId("global-error-message")).toContainText("Layout viewport error");
+  });
+
   // Next.js: 'should support title and description'
   // Source: metadata.test.ts#L25-L32
   test("document.title matches metadata export", async ({ page }) => {

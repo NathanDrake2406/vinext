@@ -6,8 +6,8 @@ import {
   type ApplyAppPageFileBasedMetadata,
 } from "./app-page-head.js";
 import {
-  isPageOwnedNotFoundBoundary,
   resolveHttpAccessFallbackMetadata,
+  resolveHttpAccessFallbackViewport,
 } from "./app-page-http-access-fallback-metadata.js";
 import { SIBLING_PAGE_INTERCEPT_SLOT_KEY } from "./app-rsc-route-matching.js";
 import {
@@ -82,6 +82,9 @@ export type AppPageInterceptOptions<TModule extends AppPageModule = AppPageModul
   interceptLayouts?: readonly (TModule | null | undefined)[] | null;
   interceptLayoutSegments?: readonly (readonly string[])[] | null;
   interceptBranchSegments?: readonly string[] | null;
+  interceptNotFoundBranchSegments?: readonly string[] | null;
+  interceptNotFound?: TModule | null;
+  interceptNotFoundTreePosition?: number | null;
   interceptPage?: TModule | null;
   interceptParams?: AppPageParams | null;
   interceptSlotId?: string | null;
@@ -284,9 +287,13 @@ export async function buildPageElements<
     interceptBranchSegments: opts?.interceptBranchSegments ?? null,
     interceptLayouts: opts?.interceptLayouts ?? null,
     interceptLayoutSegments: opts?.interceptLayoutSegments ?? null,
+    interceptNotFoundBranchSegments: opts?.interceptNotFoundBranchSegments ?? null,
+    interceptNotFound: opts?.interceptNotFound ?? null,
+    interceptNotFoundTreePosition: opts?.interceptNotFoundTreePosition ?? null,
     interceptPage: opts?.interceptPage ?? null,
     interceptParams: opts?.interceptParams ?? null,
     interceptSlotKey: opts?.interceptSlotKey ?? null,
+    interceptSourcePageSegments: opts?.interceptSourcePageSegments ?? null,
     layoutTreePositions: route.layoutTreePositions,
     params,
     routeSegments: route.routeSegments ?? [],
@@ -308,6 +315,19 @@ export async function buildPageElements<
           params: effectiveParams,
           routeSegments: opts?.interceptSourcePageSegments ?? route.routeSegments ?? [],
         },
+        ...(opts?.interceptNotFound
+          ? {
+              notFoundModule: opts.interceptNotFound,
+              notFoundParams: resolveAppPageBranchParams(
+                opts.interceptNotFoundBranchSegments ??
+                  opts.interceptBranchSegments ??
+                  route.routeSegments ??
+                  [],
+                opts.interceptNotFoundTreePosition ?? 0,
+                effectiveParams,
+              ),
+            }
+          : {}),
         ownerTreePosition: route.routeSegments?.length ?? 0,
       }
     : null;
@@ -333,24 +353,18 @@ export async function buildPageElements<
     searchParamsObserver: metadataSearchParamsObserver,
   });
   const { hasDynamicMetadata, pageSearchParams } = preparedHead;
-  const metadataPlacement =
-    hasDynamicMetadata &&
-    (serveStreamingMetadata ??
-      shouldServeStreamingMetadata(
-        pageRequest.request.headers.get("user-agent") ?? "",
-        options.htmlLimitedBots,
-      ))
-      ? "body"
-      : "head";
+  const streamGeneratedHead =
+    serveStreamingMetadata ??
+    shouldServeStreamingMetadata(
+      pageRequest.request.headers.get("user-agent") ?? "",
+      options.htmlLimitedBots,
+    );
+  const metadataPlacement = hasDynamicMetadata && streamGeneratedHead ? "body" : "head";
   // Streaming HTML and Flight responses share the unresolved promise between
   // the Suspense tag branch and its in-boundary error outlet. Late navigation
   // signals remain encoded in the Flight digest; response headers are only an
   // early optimization and must not make generated metadata block navigation.
   const shouldDeferMetadata = metadataPlacement === "body";
-  const [resolvedMetadata, resolvedViewport] = await Promise.all([
-    shouldDeferMetadata ? Promise.resolve(null) : preparedHead.metadata,
-    preparedHead.viewport,
-  ]);
   const streamingMetadata = shouldDeferMetadata
     ? isProduction
       ? preparedHead.metadata.catch((error) => {
@@ -358,63 +372,103 @@ export async function buildPageElements<
         })
       : preparedHead.metadata
     : null;
-  const streamingMetadataTags = shouldDeferMetadata
-    ? preparedHead.metadata.catch(async (error) => {
-        const specialError = resolveAppPageSpecialError(error);
-        if (specialError?.kind !== "http-access-fallback") return null;
+  // Viewport resolution can keep us below from wiring the paired outlet for
+  // another event-loop turn. Observe an early metadata rejection immediately;
+  // the original promise remains rejected for the real outlet consumer.
+  void streamingMetadata?.catch(() => null);
 
-        // Next resolves the not-found metadata convention for every HTTP
-        // access fallback. The original digest still selects the 401/403/404
-        // UI boundary in the paired outlet.
-        const routeBoundaryModule = route.notFound;
-        const parentBoundary = resolveAppPageParentHttpAccessBoundary({
-          layoutIndex: route.layouts.length,
-          rootForbiddenModule,
-          rootNotFoundModule,
-          rootUnauthorizedModule,
-          routeForbiddenModules: route.forbiddens,
-          routeNotFoundModules: route.notFounds,
-          routeUnauthorizedModules: route.unauthorizeds,
-          statusCode: 404,
-        });
-        const boundaryModule = routeBoundaryModule ?? parentBoundary.module;
-        const boundaryTreePosition = routeBoundaryModule
-          ? route.notFoundTreePosition
-          : parentBoundary.layoutIndex === null
-            ? null
-            : route.layoutTreePositions?.[parentBoundary.layoutIndex];
-        const boundaryParams =
-          boundaryModule && boundaryTreePosition != null
-            ? resolveAppPageSegmentParams(
-                route.routeSegments ?? [],
-                boundaryTreePosition,
-                effectiveParams,
-              )
-            : {};
-        const boundaryOwnsPage = isPageOwnedNotFoundBoundary(route, boundaryModule);
-        return resolveHttpAccessFallbackMetadata({
-          applyFileBasedMetadata: options.applyFileBasedMetadata,
-          basePath: options.basePath ?? "",
-          boundaryModule,
-          boundaryOwner: boundaryOwnsPage
-            ? {
-                kind: "page",
-                searchParams: pageSearchParams,
-                searchParamsObserver: metadataSearchParamsObserver,
-              }
-            : { kind: "layout" },
-          boundaryParams,
-          layoutModules: route.layouts,
-          layoutTreePositions: route.layoutTreePositions,
-          metadataRoutes,
-          parallelBranches: activeParallelRouteHeadInputs,
-          params: effectiveParams,
-          primaryParallelBranch: primaryParallelRouteHeadInput,
-          routePath: route.pattern,
-          routeSegments: route.routeSegments ?? null,
-        });
-      })
+  const resolveNotFoundFallbackPlanOptions = () => {
+    const routeBoundaryModule = route.notFound;
+    const parentBoundary = resolveAppPageParentHttpAccessBoundary({
+      layoutIndex: route.layouts.length,
+      rootForbiddenModule,
+      rootNotFoundModule,
+      rootUnauthorizedModule,
+      routeForbiddenModules: route.forbiddens,
+      routeNotFoundModules: route.notFounds,
+      routeUnauthorizedModules: route.unauthorizeds,
+      statusCode: 404,
+    });
+    const boundaryModule = routeBoundaryModule ?? parentBoundary.module;
+    const boundaryTreePosition = routeBoundaryModule
+      ? route.notFoundTreePosition
+      : parentBoundary.layoutIndex === null
+        ? null
+        : route.layoutTreePositions?.[parentBoundary.layoutIndex];
+    const boundaryParams =
+      boundaryModule && boundaryTreePosition != null
+        ? resolveAppPageSegmentParams(
+            route.routeSegments ?? [],
+            boundaryTreePosition,
+            effectiveParams,
+          )
+        : {};
+    return {
+      boundaryModule,
+      boundaryParams,
+      layoutModules: route.layouts,
+      layoutTreePositions: route.layoutTreePositions,
+      parallelBranches: activeParallelRouteHeadInputs,
+      params: effectiveParams,
+      primaryParallelBranch: primaryParallelRouteHeadInput,
+      routeSegments: route.routeSegments ?? null,
+    };
+  };
+
+  let viewportErrorOutlet: Promise<never> | null = null;
+  let metadataErrorOutlet: Promise<never> | null = null;
+  const resolveMetadataErrorTags = async (error: unknown) => {
+    const specialError = resolveAppPageSpecialError(error);
+    if (specialError?.kind !== "http-access-fallback") return null;
+
+    // Next resolves the not-found metadata convention for every HTTP access
+    // fallback. Errors from that fallback tag branch are suppressed because
+    // the original digest is still rethrown by the paired outlet.
+    return resolveHttpAccessFallbackMetadata({
+      applyFileBasedMetadata: options.applyFileBasedMetadata,
+      basePath: options.basePath ?? "",
+      ...resolveNotFoundFallbackPlanOptions(),
+      metadataRoutes,
+      routePath: route.pattern,
+    }).catch(() => null);
+  };
+  const [resolvedMetadata, resolvedViewport] = await Promise.all([
+    shouldDeferMetadata
+      ? Promise.resolve(null)
+      : preparedHead.metadata.catch((error) => {
+          metadataErrorOutlet = Promise.reject(
+            isProduction ? sanitizeErrorForClient(error, "production") : error,
+          );
+          void metadataErrorOutlet.catch(() => null);
+          return resolveMetadataErrorTags(error);
+        }),
+    preparedHead.viewport.catch(async (error) => {
+      const specialError = resolveAppPageSpecialError(error);
+
+      viewportErrorOutlet = Promise.reject(
+        isProduction ? sanitizeErrorForClient(error, "production") : error,
+      );
+      void viewportErrorOutlet.catch(() => null);
+      return specialError?.kind === "http-access-fallback"
+        ? resolveHttpAccessFallbackViewport(resolveNotFoundFallbackPlanOptions()).catch(() => ({}))
+        : {};
+    }),
+  ]);
+  const streamingMetadataTags = shouldDeferMetadata
+    ? preparedHead.metadata.catch(resolveMetadataErrorTags)
     : null;
+  const streamingMetadataOutletInputs = [
+    streamingMetadata,
+    metadataErrorOutlet,
+    viewportErrorOutlet,
+  ]
+    .filter((promise) => promise !== null)
+    .map((promise) => Promise.resolve(promise));
+  const streamingMetadataOutlet =
+    streamingMetadataOutletInputs.length > 0
+      ? Promise.all(streamingMetadataOutletInputs).then(() => null)
+      : null;
+  void streamingMetadataOutlet?.catch(() => null);
 
   const pageProps: Record<string, unknown> = { params: makeThenableParams(effectiveParams) };
   const hasRequestSearchParams = Object.keys(pageSearchParams).length > 0;
@@ -510,6 +564,8 @@ export async function buildPageElements<
     resolvedMetadataPathname: routePath,
     resolvedViewport,
     streamingMetadata,
+    streamingMetadataOutlet,
+    streamingMetadataOutletSuspended: streamGeneratedHead,
     streamingMetadataTags,
     renderIdentity,
     routePath,
@@ -653,7 +709,7 @@ export function resolveInterceptedSlotSegments(
   return routeSegments;
 }
 
-function resolveSlotParamOverrides(
+export function resolveSlotParamOverrides(
   route: AppPageNavigationParamRoute,
   routePath: string,
 ): Readonly<Record<string, AppPageParams>> | null {

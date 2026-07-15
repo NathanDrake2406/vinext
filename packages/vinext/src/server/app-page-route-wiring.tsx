@@ -102,6 +102,8 @@ type AppPageRouteWiringSlot<
   layout?: TModule | null;
   layoutIndex: number;
   loading?: TModule | null;
+  notFound?: TModule | null;
+  notFoundTreePosition?: number | null;
   page?: TModule | null;
   routeSegments?: readonly string[] | null;
   /**
@@ -131,8 +133,10 @@ export type AppPageRouteWiringRoute<
   notFounds?: readonly (TModule | null | undefined)[] | null;
   notFoundTreePosition?: number | null;
   forbidden?: TModule | null;
+  forbiddenTreePosition?: number | null;
   forbiddens?: readonly (TModule | null | undefined)[] | null;
   unauthorized?: TModule | null;
+  unauthorizedTreePosition?: number | null;
   unauthorizeds?: readonly (TModule | null | undefined)[] | null;
   routeSegments?: readonly string[];
   childrenRouteSegments?: readonly string[] | null;
@@ -205,6 +209,8 @@ type BuildAppPageRouteElementOptions<
   resolvedMetadataPathname?: string;
   resolvedViewport: Viewport;
   streamingMetadata?: Promise<Metadata | null> | null;
+  streamingMetadataOutlet?: Promise<unknown> | null;
+  streamingMetadataOutletSuspended?: boolean;
   streamingMetadataTags?: Promise<Metadata | null> | null;
   trailingSlash?: boolean;
   rootForbiddenModule?: TModule | null;
@@ -584,19 +590,19 @@ async function AppPageStreamingMetadata(props: {
 }
 AppPageStreamingMetadata.displayName = "Vinext.StreamingMetadata";
 
-async function AppPageMetadataOutlet(props: { metadata: Promise<Metadata | null> }): Promise<null> {
+async function AppPageMetadataOutlet(props: { metadata: Promise<unknown> }): Promise<null> {
   await props.metadata;
   return null;
 }
 AppPageMetadataOutlet.displayName = "Vinext.MetadataOutlet";
 
-function createAppPageStreamingMetadataOutlet(elementId: string | null): ReactNode {
+function createAppPageStreamingMetadataOutlet(
+  elementId: string | null,
+  suspended = true,
+): ReactNode {
   if (!elementId) return null;
-  return (
-    <Suspense fallback={null}>
-      <Slot id={elementId} />
-    </Suspense>
-  );
+  const outlet = <Slot id={elementId} />;
+  return suspended ? <Suspense fallback={null}>{outlet}</Suspense> : outlet;
 }
 
 function createAppPageStreamingMetadataBody(elementId: string | null): ReactNode {
@@ -632,7 +638,7 @@ export function buildAppPageElements<
   const streamingMetadataBodyId = options.streamingMetadata
     ? `__vinext_streaming_metadata_body:${routeId}`
     : null;
-  const streamingMetadataOutletId = options.streamingMetadata
+  const streamingMetadataOutletId = options.streamingMetadataOutlet
     ? `__vinext_streaming_metadata_outlet:${routeId}`
     : null;
   const layoutEntries = createAppPageLayoutEntries(options.route);
@@ -721,7 +727,7 @@ export function buildAppPageElements<
   if (options.route.staticSiblings && options.route.staticSiblings.length > 0) {
     elements[APP_STATIC_SIBLINGS_KEY] = options.route.staticSiblings;
   }
-  if (options.streamingMetadata && streamingMetadataBodyId && streamingMetadataOutletId) {
+  if (options.streamingMetadata && streamingMetadataBodyId) {
     elements[streamingMetadataBodyId] = (
       <AppPageStreamingMetadata
         metadata={options.streamingMetadataTags ?? options.streamingMetadata}
@@ -729,8 +735,10 @@ export function buildAppPageElements<
         trailingSlash={options.trailingSlash}
       />
     );
+  }
+  if (options.streamingMetadataOutlet && streamingMetadataOutletId) {
     elements[streamingMetadataOutletId] = (
-      <AppPageMetadataOutlet metadata={options.streamingMetadata} />
+      <AppPageMetadataOutlet metadata={options.streamingMetadataOutlet} />
     );
   }
   const getEffectiveSlotParams = (slotKey: string, slotName: string): AppPageParams =>
@@ -1000,7 +1008,10 @@ export function buildAppPageElements<
       >
         <Slot id={pageElementId} />
       </LayoutSegmentProvider>
-      {createAppPageStreamingMetadataOutlet(streamingMetadataOutletId)}
+      {createAppPageStreamingMetadataOutlet(
+        streamingMetadataOutletId,
+        options.streamingMetadataOutletSuspended,
+      )}
     </>
   );
 

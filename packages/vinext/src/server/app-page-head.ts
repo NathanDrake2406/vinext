@@ -76,6 +76,8 @@ export type AppPageHeadParallelRoute<TModule extends AppPageHeadModule = AppPage
 
 export type ActiveParallelRouteHeadInput<TModule extends AppPageHeadModule = AppPageHeadModule> = {
   head: AppPageHeadParallelRoute<TModule>;
+  notFoundModule?: TModule | null;
+  notFoundParams?: AppPageParams | null;
   ownerTreePosition: number;
 };
 
@@ -84,6 +86,8 @@ type AppPageHeadSlot<TModule extends AppPageHeadModule = AppPageHeadModule> = {
   configLayoutTreePositions?: readonly number[] | null;
   layout?: TModule | null;
   layoutIndex?: number;
+  notFound?: TModule | null;
+  notFoundTreePosition?: number | null;
   page?: TModule | null;
   routeSegments?: readonly string[] | null;
 };
@@ -95,8 +99,12 @@ type ResolveActiveParallelRouteHeadInputsOptions<
   interceptBranchSegments?: readonly string[] | null;
   interceptLayoutSegments?: readonly (readonly string[])[] | null;
   interceptPage?: TModule | null;
+  interceptNotFoundBranchSegments?: readonly string[] | null;
+  interceptNotFound?: TModule | null;
+  interceptNotFoundTreePosition?: number | null;
   interceptParams?: AppPageParams | null;
   interceptSlotKey?: string | null;
+  interceptSourcePageSegments?: readonly string[] | null;
   layoutTreePositions?: readonly number[] | null;
   params: AppPageParams;
   routeSegments: readonly string[];
@@ -175,8 +183,40 @@ export function resolveActiveParallelRouteHeadInputs<TModule extends AppPageHead
       ownerTreePosition,
       options.params,
     );
+    const slotParams = options.slotParams?.[slotKey] ?? options.params;
+    const notFoundParams = slot.notFound
+      ? {
+          ...ownerParams,
+          ...resolveParallelLayoutParams(
+            slot.routeSegments ?? options.routeSegments,
+            slot.notFoundTreePosition ?? 0,
+            slotParams,
+          ),
+        }
+      : null;
     if (options.interceptSlotKey === slotKey && options.interceptPage) {
       const interceptLayouts = options.interceptLayouts ?? [];
+      // A slot's ordinary active page may have a not-found convention on a
+      // sibling branch that is unrelated to the intercept. Only the slot-root
+      // convention is a common ancestor when intercept discovery did not find
+      // a nearer convention on the actual intercept branch.
+      const inheritedSlotNotFound =
+        slot.notFoundTreePosition === 0 ? (slot.notFound ?? null) : null;
+      const interceptNotFound = options.interceptNotFound ?? inheritedSlotNotFound;
+      const interceptNotFoundParams = interceptNotFound
+        ? {
+            ...ownerParams,
+            ...resolveParallelLayoutParams(
+              options.interceptNotFoundBranchSegments ??
+                options.interceptBranchSegments ??
+                options.routeSegments,
+              options.interceptNotFound
+                ? (options.interceptNotFoundTreePosition ?? 0)
+                : (slot.notFoundTreePosition ?? 0),
+              options.interceptParams ?? options.params,
+            ),
+          }
+        : null;
       return {
         head: {
           layoutModules: [slot.layout, ...interceptLayouts].filter(isPresent),
@@ -200,8 +240,11 @@ export function resolveActiveParallelRouteHeadInputs<TModule extends AppPageHead
           ],
           pageModule: options.interceptPage,
           params: options.interceptParams ?? options.params,
-          routeSegments: options.routeSegments,
+          routeSegments: options.interceptSourcePageSegments ?? options.routeSegments,
         },
+        ...(interceptNotFound
+          ? { notFoundModule: interceptNotFound, notFoundParams: interceptNotFoundParams }
+          : {}),
         ownerTreePosition,
       };
     }
@@ -225,9 +268,10 @@ export function resolveActiveParallelRouteHeadInputs<TModule extends AppPageHead
           ...(slot.configLayoutTreePositions ?? []),
         ],
         pageModule: slot.page,
-        params: options.slotParams?.[slotKey] ?? options.params,
+        params: slotParams,
         routeSegments: slot.routeSegments ?? options.routeSegments,
       },
+      ...(slot.notFound ? { notFoundModule: slot.notFound, notFoundParams } : {}),
       ownerTreePosition,
     };
   });

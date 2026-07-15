@@ -67,6 +67,8 @@ export type VinextHeadersShimState = {
 };
 
 type ConnectionProbeState = {
+  active: boolean;
+  dynamicUsageTarget: VinextHeadersShimState;
   interrupted: boolean;
   interrupt: () => void;
   pending: Promise<never>;
@@ -208,6 +210,30 @@ export function markDynamicUsage(): void {
     return;
   }
   state.dynamicUsageDetected = true;
+  forEachConnectionProbeTarget(state, (target) => {
+    target.dynamicUsageDetected = true;
+  });
+}
+
+function forEachConnectionProbeTarget(
+  state: VinextHeadersShimState,
+  visit: (target: VinextHeadersShimState) => void,
+): void {
+  let target = state.connectionProbe?.dynamicUsageTarget ?? null;
+  const seen = new Set<VinextHeadersShimState>([state]);
+  while (target && !seen.has(target)) {
+    seen.add(target);
+    visit(target);
+    target = target.connectionProbe?.dynamicUsageTarget ?? null;
+  }
+}
+
+function propagateInvalidDynamicUsageError(state: VinextHeadersShimState, error: unknown): void {
+  forEachConnectionProbeTarget(state, (target) => {
+    if (target.invalidDynamicUsageError == null) {
+      target.invalidDynamicUsageError = error;
+    }
+  });
 }
 
 /**
@@ -269,6 +295,8 @@ export async function runWithConnectionProbe<T>(
   });
 
   const probe: ConnectionProbeState = {
+    active: true,
+    dynamicUsageTarget: parentState,
     interrupted: false,
     interrupt() {
       if (probe.interrupted) return;
@@ -288,12 +316,13 @@ export async function runWithConnectionProbe<T>(
         .then<ConnectionProbeResult<T>>((result) => ({ completed: true, result }));
       return await Promise.race([completed, interrupted]);
     } finally {
+      probe.active = false;
       // Async resources created inside this ALS scope retain `childState` after
-      // the probe returns. Restore the currently inherited probe so those late
-      // continuations cannot suspend on this completed probe forever. Reading
-      // the parent at cleanup time also preserves the right lifecycle for a
-      // nested probe whose outer scope may have completed independently.
-      childState.connectionProbe = parentState.connectionProbe;
+      // the probe returns. Restore the inherited probe when nested; otherwise
+      // retain this inactive probe so late dynamic usage can still propagate
+      // to its parent without suspending. Reading the parent at cleanup time
+      // preserves the right lifecycle if an outer probe completed separately.
+      childState.connectionProbe = parentState.connectionProbe ?? probe;
 
       // Dynamic usage discovered by a speculative probe still classifies the
       // request, but the probe itself must remain branch-local. In particular,
@@ -337,7 +366,7 @@ export async function runWithConnectionProbe<T>(
 
 export function suspendConnectionProbe(): Promise<never> | null {
   const probe = _getState().connectionProbe;
-  if (!probe) return null;
+  if (!probe?.active) return null;
 
   probe.interrupt();
   return probe.pending;
@@ -430,6 +459,7 @@ export function throwIfInsideCacheScope(apiName: string): void {
       if (cacheCtx) cacheCtx.invalidDynamicUsageError = error;
       const ctx = getRequestContext();
       if (ctx) ctx.invalidDynamicUsageError = error;
+      propagateInvalidDynamicUsageError(_getState(), error);
     } catch {
       // Ignore — best-effort recording for dev diagnostics
     }
@@ -444,6 +474,7 @@ export function throwIfInsideCacheScope(apiName: string): void {
     try {
       const ctx = getRequestContext();
       if (ctx) ctx.invalidDynamicUsageError = error;
+      propagateInvalidDynamicUsageError(_getState(), error);
     } catch {
       // Ignore
     }

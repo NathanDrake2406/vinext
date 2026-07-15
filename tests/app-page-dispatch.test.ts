@@ -1866,11 +1866,7 @@ describe("app page dispatch", () => {
     expect(buildPageElement).not.toHaveBeenCalled();
     expect(renderHttpAccessFallbackPage).toHaveBeenCalledWith(
       404,
-      {
-        matchedParams: { slug: "hello" },
-        observeMetadataSearchParamsAccess: true,
-        searchParams: expect.any(URLSearchParams),
-      },
+      { matchedParams: { slug: "hello" } },
       null,
     );
   });
@@ -2204,9 +2200,11 @@ describe("app page dispatch", () => {
     const currentRoute = createRoute({ params: ["id"], pattern: "/photos/[id]" });
     const middlewareHeaders = new Headers({ "x-from-middleware": "yes" });
     const setNavigationContext = vi.fn();
+    let capturedInterceptOpts: Parameters<DispatchOptions["buildPageElement"]>[2];
     const { options } = createDispatchOptions({
       cleanPathname: "/photos/123",
       async buildPageElement(route, params, opts) {
+        capturedInterceptOpts = opts;
         return `${route.pattern}:${JSON.stringify(params)}:${opts?.interceptSlotKey ?? "direct"}`;
       },
       isRscRequest: true,
@@ -2229,7 +2227,10 @@ describe("app page dispatch", () => {
       ...options,
       findIntercept() {
         return {
+          interceptBranchSegments: ["(.)photos", "[id]"],
           matchedParams: { id: "123" },
+          notFound: { default: "modal-not-found" },
+          notFoundTreePosition: 2,
           page: { default: "modal-page" },
           slotKey: "modal@app/feed/@modal",
           sourceRouteIndex: 1,
@@ -2244,6 +2245,11 @@ describe("app page dispatch", () => {
     expect(response.headers.get("content-type")).toBe("text/x-component");
     expect(response.headers.get("x-from-middleware")).toBe("yes");
     await expect(response.text()).resolves.toBe("/feed:{}:modal@app/feed/@modal");
+    expect(capturedInterceptOpts).toMatchObject({
+      interceptBranchSegments: ["(.)photos", "[id]"],
+      interceptNotFound: { default: "modal-not-found" },
+      interceptNotFoundTreePosition: 2,
+    });
     expect(setNavigationContext).toHaveBeenLastCalledWith({
       params: { id: "123", catchAll: ["photos", "123"] },
       pathname: "/photos/123",

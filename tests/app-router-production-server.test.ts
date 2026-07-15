@@ -1431,10 +1431,10 @@ describe("App Router Production server (startProdServer)", () => {
     expect(flight).toContain("NEXT_HTTP_ERROR_FALLBACK;404");
   });
 
-  it("passes searchParams to deferred page-local not-found metadata", async () => {
-    // Next creates metadata props with searchParams when the loader-tree node
-    // owns a page, including the not-found convention captured at that node.
-    // https://github.com/vercel/next.js/blob/v16.2.7/packages/next/src/lib/metadata/resolve-metadata.ts#L742-L780
+  it("omits searchParams from deferred not-found convention metadata", async () => {
+    // Next.js puts page.tsx in a synthetic __PAGE__ loader-tree child, so the
+    // containing not-found convention receives layout-style { params } props.
+    // Verified against Next.js 16.2.7 production behavior.
     const response = await fetch(
       `${baseUrl}/metadata-streaming-not-found-search-params?source=search`,
       { headers: { "user-agent": "HeadlessChrome" } },
@@ -1442,7 +1442,20 @@ describe("App Router Production server (startProdServer)", () => {
     expect(response.status).toBe(200);
 
     const html = await response.text();
-    expect(html).toContain("<title>Streamed not-found source: search</title>");
+    expect(html).toContain("<title>Streamed not-found search=false source=missing</title>");
+  });
+
+  it("uses an active slot's local not-found metadata convention", async () => {
+    // Ported from Next.js loader-tree error-convention traversal:
+    // packages/next/src/lib/metadata/resolve-metadata.ts
+    const response = await fetch(`${baseUrl}/metadata-streaming-slot-not-found`, {
+      headers: { "user-agent": "HeadlessChrome" },
+    });
+    expect(response.status).toBe(200);
+
+    const html = await response.text();
+    expect(html).toContain("<title>Slot-local not-found metadata</title>");
+    expect(html).not.toContain("<title>Primary not-found metadata</title>");
   });
 
   it("reports server component render errors via instrumentation in production", async () => {

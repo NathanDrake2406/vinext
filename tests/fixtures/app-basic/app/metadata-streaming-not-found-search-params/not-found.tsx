@@ -1,12 +1,10 @@
-export async function generateMetadata({
-  searchParams,
-}: {
-  searchParams: Promise<{ source?: string }>;
-}) {
-  const query = await searchParams;
-  return { title: `Streamed not-found source: ${query.source ?? "missing"}` };
+export async function generateMetadata(props: Record<string, unknown>) {
+  const searchParams = await (props.searchParams as Promise<{ source?: string }> | undefined);
+  return {
+    title: `Streamed not-found search=${"searchParams" in props} source=${searchParams?.source ?? "missing"}`,
+  };
 }
 
 export default function MetadataStreamingNotFoundSearchParams() {
-  return <main>Streamed metadata not found with search params</main>;
+  return <main>Streamed metadata not found without search params</main>;
 }

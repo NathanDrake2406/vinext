@@ -486,18 +486,48 @@ describe("app page head resolution", () => {
     ]);
   });
 
+  it("carries slot-local not-found metadata with owner-scoped params", () => {
+    const slotNotFound = {};
+
+    expect(
+      resolveActiveParallelRouteHeadInputs({
+        layoutTreePositions: [1],
+        params: { locale: "en", slug: "primary" },
+        routeSegments: ["[locale]", "dashboard"],
+        slotParams: { sidebar: { member: "alice", slug: "slot" } },
+        slots: {
+          sidebar: {
+            layoutIndex: 0,
+            notFound: slotNotFound,
+            notFoundTreePosition: 1,
+            routeSegments: ["[member]", "[slug]"],
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        notFoundModule: slotNotFound,
+        notFoundParams: { locale: "en", member: "alice" },
+      }),
+    ]);
+  });
+
   it("keeps slot-root layout head inputs for intercepted slots", () => {
     const slotLayout = { metadata: { description: "slot root" } };
     const interceptLayout = { metadata: { title: "intercept" } };
+    const interceptNotFound = { metadata: { title: "intercept not found" } };
     const interceptPage = {};
     expect(
       resolveActiveParallelRouteHeadInputs({
         interceptLayouts: [interceptLayout],
         interceptBranchSegments: ["[photo]", "[comment]"],
         interceptLayoutSegments: [["[photo]"]],
+        interceptNotFound,
+        interceptNotFoundTreePosition: 2,
         interceptPage,
         interceptParams: { locale: "en", photo: "42", comment: "7" },
         interceptSlotKey: "modal",
+        interceptSourcePageSegments: ["[locale]", "@modal", "(.)photos", "[photo]", "[comment]"],
         layoutTreePositions: [1],
         params: { locale: "en" },
         routeSegments: ["[locale]", "photos"],
@@ -511,10 +541,57 @@ describe("app page head resolution", () => {
           layoutTreePositions: [0, 2],
           pageModule: interceptPage,
           params: { locale: "en", photo: "42", comment: "7" },
-          routeSegments: ["[locale]", "photos"],
+          routeSegments: ["[locale]", "@modal", "(.)photos", "[photo]", "[comment]"],
         },
+        notFoundModule: interceptNotFound,
+        notFoundParams: { locale: "en", photo: "42", comment: "7" },
         ownerTreePosition: 1,
       },
+    ]);
+  });
+
+  it("scopes a nested intercept not-found before the intercepted child params", () => {
+    const interceptNotFound = {};
+
+    expect(
+      resolveActiveParallelRouteHeadInputs({
+        interceptBranchSegments: ["video", "[id]"],
+        interceptNotFoundBranchSegments: ["[locale]", "feed", "video", "[id]"],
+        interceptNotFound,
+        interceptNotFoundTreePosition: 3,
+        interceptPage: {},
+        interceptParams: { locale: "en", id: "42" },
+        interceptSlotKey: "modal",
+        layoutTreePositions: [0],
+        params: {},
+        routeSegments: ["source"],
+        slots: { modal: { layoutIndex: 0 } },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        notFoundModule: interceptNotFound,
+        notFoundParams: { locale: "en" },
+      }),
+    ]);
+
+    expect(
+      resolveActiveParallelRouteHeadInputs({
+        interceptBranchSegments: ["video", "[id]"],
+        interceptNotFoundBranchSegments: ["[locale]", "feed", "video", "[id]"],
+        interceptNotFound,
+        interceptNotFoundTreePosition: 0,
+        interceptPage: {},
+        interceptParams: { locale: "en", id: "42" },
+        interceptSlotKey: "modal",
+        params: {},
+        routeSegments: ["source"],
+        slots: { modal: {} },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        notFoundModule: interceptNotFound,
+        notFoundParams: {},
+      }),
     ]);
   });
 

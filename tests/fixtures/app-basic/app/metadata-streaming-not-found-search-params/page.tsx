@@ -8,5 +8,5 @@ export async function generateMetadata() {
 }
 
 export default function MetadataStreamingNotFoundSearchParamsPage() {
-  return <main>Metadata streaming not-found search params shell</main>;
+  return <main>Streamed metadata not-found search params shell</main>;
 }

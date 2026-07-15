@@ -128,6 +128,9 @@ type AppPageDispatchIntercept<TPage = unknown> = {
   interceptLayouts?: readonly unknown[] | null;
   interceptLayoutSegments?: readonly (readonly string[])[] | null;
   interceptBranchSegments?: readonly string[] | null;
+  interceptNotFoundBranchSegments?: readonly string[] | null;
+  notFound?: unknown;
+  notFoundTreePosition?: number | null;
   matchedParams: AppPageParams;
   sourceMatchedParams?: AppPageParams;
   page: TPage;
@@ -142,6 +145,9 @@ type AppPageDispatchInterceptOptions<TPage = unknown> = {
   interceptLayouts?: readonly unknown[] | null;
   interceptLayoutSegments?: readonly (readonly string[])[] | null;
   interceptBranchSegments?: readonly string[] | null;
+  interceptNotFoundBranchSegments?: readonly string[] | null;
+  interceptNotFound?: unknown;
+  interceptNotFoundTreePosition?: number | null;
   interceptPage: TPage;
   interceptParams: AppPageParams;
   interceptSlotId?: string | null;
@@ -179,6 +185,7 @@ export type AppPageDispatchRoute = {
   error?: AppPageModule | null;
   errors?: readonly (AppPageModule | null | undefined)[];
   forbidden?: AppPageModule | null;
+  forbiddenTreePosition?: number | null;
   forbiddens?: readonly (AppPageModule | null | undefined)[];
   isDynamic: boolean;
   layouts: readonly AppPageModule[];
@@ -191,6 +198,7 @@ export type AppPageDispatchRoute = {
   routeSegments: readonly string[];
   slots?: Readonly<Record<string, AppPageDispatchSlot>>;
   unauthorized?: AppPageModule | null;
+  unauthorizedTreePosition?: number | null;
   unauthorizeds?: readonly (AppPageModule | null | undefined)[];
 };
 
@@ -328,10 +336,9 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
     opts: {
       boundaryComponent?: unknown;
       boundaryModule?: AppPageModule | null;
+      intercept?: AppPageDispatchInterceptOptions | null;
       layouts?: readonly AppPageModule[];
       matchedParams: AppPageParams;
-      observeMetadataSearchParamsAccess?: boolean;
-      searchParams?: URLSearchParams;
     },
     middlewareContext: AppPageMiddlewareContext | null,
   ) => Promise<Response | null>;
@@ -539,6 +546,9 @@ function toInterceptOptions(
     interceptLayouts: intercept.interceptLayouts,
     interceptLayoutSegments: intercept.interceptLayoutSegments,
     interceptBranchSegments: intercept.interceptBranchSegments,
+    interceptNotFoundBranchSegments: intercept.interceptNotFoundBranchSegments,
+    interceptNotFound: intercept.notFound,
+    interceptNotFoundTreePosition: intercept.notFoundTreePosition,
     interceptPage: intercept.page,
     interceptParams: intercept.matchedParams,
     interceptSlotId: intercept.slotId ?? null,
@@ -963,7 +973,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
           options,
           specialError,
           serveStreamingMetadata,
-          pageSearchParams,
+          interceptResult.interceptOpts,
         );
       },
       resolveSpecialError: resolveAppPageSpecialError,
@@ -1122,7 +1132,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         options,
         specialError,
         serveStreamingMetadata,
-        pageSearchParams,
+        interceptResult.interceptOpts,
       );
     },
     renderToReadableStream: options.renderToReadableStream,
@@ -1188,7 +1198,7 @@ async function renderPageSpecialError<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
   specialError: AppPageSpecialError,
   serveStreamingMetadata: boolean,
-  pageSearchParams: URLSearchParams,
+  intercept: AppPageDispatchInterceptOptions | null | undefined,
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
     basePath: options.basePath,
@@ -1237,9 +1247,8 @@ async function renderPageSpecialError<TRoute extends AppPageDispatchRoute>(
         boundaryLayoutIndex !== null &&
         (routeBoundaryModule === null || routeBoundaryModule === parentBoundaryModule);
       const fallbackOptions: Parameters<typeof options.renderHttpAccessFallbackPage>[1] = {
+        intercept,
         matchedParams: options.params,
-        observeMetadataSearchParamsAccess: options.dynamicConfig !== "force-static",
-        searchParams: pageSearchParams,
       };
       if (useLayoutAlignedBoundary && boundaryLayoutIndex !== null) {
         fallbackOptions.layouts = options.route.layouts.slice(0, boundaryLayoutIndex + 1);

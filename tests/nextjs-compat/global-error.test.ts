@@ -10,7 +10,7 @@
  * - generateMetadata() errors caught by local error.tsx when present
  * - generateMetadata() errors escalating to global-error when no local boundary
  * - layout generateMetadata() errors following the same boundary path
- * - layout generateViewport() errors following the same boundary path
+ * - layout generateViewport() errors streaming through the same recoverable outlet path
  *
  * NOTE: Most Next.js global-error tests are browser-based (click buttons, check
  * rendered error UI after hydration/client error). This file tests the raw HTTP
@@ -173,27 +173,28 @@ describe("Next.js compat: global-error", () => {
     expect(html).not.toContain("Something went wrong!");
   });
 
-  it("layout generateViewport() error caught by local error.tsx boundary", async () => {
-    // Next.js resolves viewport through the same metadata outlet error path:
+  it("layout generateViewport() error streams a recoverable shell for the local boundary", async () => {
+    // Next.js resolves viewport through the same paired outlet path:
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/metadata/metadata.tsx
     const { res, html } = await fetchHtml(
       baseUrl,
       "/nextjs-compat/layout-viewport-error-with-boundary",
     );
     expect(res.status).toBe(200);
-    expect(html).toContain("Local layout viewport error boundary");
-    expect(html).not.toContain("layout viewport page rendered");
+    expect(html).toContain("layout viewport page rendered");
+    expect(html).not.toContain("Local layout viewport error boundary");
   });
 
-  it("layout generateViewport() error without local boundary renders global-error", async () => {
-    // Next.js resolves viewport through the same metadata outlet error path:
+  it("layout generateViewport() error streams a recoverable shell for global-error", async () => {
+    // Next.js resolves viewport through the same paired outlet path:
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/metadata/metadata.tsx
     const { res, html } = await fetchHtml(
       baseUrl,
       "/nextjs-compat/layout-viewport-error-without-boundary",
     );
-    expect(res.status).toBe(500);
-    expect(html).toContain("global-error");
+    expect(res.status).toBe(200);
+    expect(html).toContain("layout viewport page rendered");
+    expect(html).not.toContain('data-testid="global-error"');
     expect(html).toContain("Layout viewport error");
   });
 
@@ -327,7 +328,7 @@ describe("Next.js compat: global-error (production preview)", () => {
     const { res, html } = await fetchHtml(baseUrl, "/error-server-test");
     expect(res.status).toBe(200);
     expect(html).toContain("Server Error Caught");
-    expect(html).not.toContain("global-error");
+    expect(html).not.toContain('data-testid="global-error"');
   });
 
   it("nested server component throw resolves to the nearest error.tsx boundary", async () => {
@@ -378,23 +379,26 @@ describe("Next.js compat: global-error (production preview)", () => {
     expect(html).not.toContain("Something went wrong!");
   });
 
-  it("layout generateViewport() errors render the co-located error.tsx boundary with 200", async () => {
+  it("layout generateViewport() errors stream a recoverable shell for the local boundary", async () => {
     const { res, html } = await fetchHtml(
       baseUrl,
       "/nextjs-compat/layout-viewport-error-with-boundary",
     );
     expect(res.status).toBe(200);
-    expect(html).toContain("Local layout viewport error boundary");
-    expect(html).not.toContain("global-error");
+    expect(html).toContain("layout viewport page rendered");
+    expect(html).not.toContain("Local layout viewport error boundary");
+    expect(html).not.toContain('data-testid="global-error"');
   });
 
-  it("layout generateViewport() errors without a local boundary escalate to global-error with 500", async () => {
+  it("layout generateViewport() errors stream a recoverable shell for global-error", async () => {
     const { res, html } = await fetchHtml(
       baseUrl,
       "/nextjs-compat/layout-viewport-error-without-boundary",
     );
-    expect(res.status).toBe(500);
-    expect(html).toContain("global-error");
+    expect(res.status).toBe(200);
+    expect(html).toContain("layout viewport page rendered");
+    expect(html).not.toContain('data-testid="global-error"');
+    expect(html).not.toContain("Layout viewport error");
   });
 
   it("self-throwing global-error renders the built-in default fallback with 500", async () => {
