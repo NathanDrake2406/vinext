@@ -1757,7 +1757,11 @@ describe("app page dispatch", () => {
     expect(buildPageElement).not.toHaveBeenCalled();
     expect(renderHttpAccessFallbackPage).toHaveBeenCalledWith(
       404,
-      { matchedParams: { slug: "hello" } },
+      {
+        matchedParams: { slug: "hello" },
+        observeMetadataSearchParamsAccess: true,
+        searchParams: expect.any(URLSearchParams),
+      },
       null,
     );
   });

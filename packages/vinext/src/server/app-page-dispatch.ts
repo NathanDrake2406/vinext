@@ -330,6 +330,8 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
       boundaryModule?: AppPageModule | null;
       layouts?: readonly AppPageModule[];
       matchedParams: AppPageParams;
+      observeMetadataSearchParamsAccess?: boolean;
+      searchParams?: URLSearchParams;
     },
     middlewareContext: AppPageMiddlewareContext | null,
   ) => Promise<Response | null>;
@@ -957,7 +959,12 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         return options.renderErrorBoundaryPage(buildError);
       },
       renderSpecialError(specialError) {
-        return renderPageSpecialError(options, specialError, serveStreamingMetadata);
+        return renderPageSpecialError(
+          options,
+          specialError,
+          serveStreamingMetadata,
+          pageSearchParams,
+        );
       },
       resolveSpecialError: resolveAppPageSpecialError,
     });
@@ -1119,7 +1126,12 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       return renderLayoutSpecialError(options, specialError, layoutIndex, serveStreamingMetadata);
     },
     renderPageSpecialError(specialError) {
-      return renderPageSpecialError(options, specialError, serveStreamingMetadata);
+      return renderPageSpecialError(
+        options,
+        specialError,
+        serveStreamingMetadata,
+        pageSearchParams,
+      );
     },
     renderToReadableStream: options.renderToReadableStream,
     hasCustomGlobalError: options.hasCustomGlobalError,
@@ -1184,6 +1196,7 @@ async function renderPageSpecialError<TRoute extends AppPageDispatchRoute>(
   options: DispatchAppPageOptions<TRoute>,
   specialError: AppPageSpecialError,
   serveStreamingMetadata: boolean,
+  pageSearchParams: URLSearchParams,
 ): Promise<Response> {
   return buildAppPageSpecialErrorResponse({
     basePath: options.basePath,
@@ -1233,6 +1246,8 @@ async function renderPageSpecialError<TRoute extends AppPageDispatchRoute>(
         (routeBoundaryModule === null || routeBoundaryModule === parentBoundaryModule);
       const fallbackOptions: Parameters<typeof options.renderHttpAccessFallbackPage>[1] = {
         matchedParams: options.params,
+        observeMetadataSearchParamsAccess: options.dynamicConfig !== "force-static",
+        searchParams: pageSearchParams,
       };
       if (useLayoutAlignedBoundary && boundaryLayoutIndex !== null) {
         fallbackOptions.layouts = options.route.layouts.slice(0, boundaryLayoutIndex + 1);

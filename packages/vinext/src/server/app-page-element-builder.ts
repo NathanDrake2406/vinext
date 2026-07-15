@@ -5,7 +5,10 @@ import {
   resolveActiveParallelRouteHeadInputs,
   type ApplyAppPageFileBasedMetadata,
 } from "./app-page-head.js";
-import { resolveHttpAccessFallbackMetadata } from "./app-page-http-access-fallback-metadata.js";
+import {
+  isPageOwnedNotFoundBoundary,
+  resolveHttpAccessFallbackMetadata,
+} from "./app-page-http-access-fallback-metadata.js";
 import { SIBLING_PAGE_INTERCEPT_SLOT_KEY } from "./app-rsc-route-matching.js";
 import {
   buildAppPageElements,
@@ -388,10 +391,18 @@ export async function buildPageElements<
                 effectiveParams,
               )
             : {};
+        const boundaryOwnsPage = isPageOwnedNotFoundBoundary(route, boundaryModule);
         return resolveHttpAccessFallbackMetadata({
           applyFileBasedMetadata: options.applyFileBasedMetadata,
           basePath: options.basePath ?? "",
           boundaryModule,
+          boundaryOwner: boundaryOwnsPage
+            ? {
+                kind: "page",
+                searchParams: pageSearchParams,
+                searchParamsObserver: metadataSearchParamsObserver,
+              }
+            : { kind: "layout" },
           boundaryParams,
           layoutModules: route.layouts,
           layoutTreePositions: route.layoutTreePositions,

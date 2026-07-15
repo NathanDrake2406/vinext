@@ -1,10 +1,34 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createHttpAccessFallbackMetadataPlan,
+  isPageOwnedNotFoundBoundary,
   resolveHttpAccessFallbackMetadata,
 } from "../packages/vinext/src/server/app-page-http-access-fallback-metadata.js";
 
 describe("HTTP-access fallback metadata planning", () => {
+  it("recognizes only a not-found convention colocated with the page", () => {
+    const boundary = {};
+
+    expect(
+      isPageOwnedNotFoundBoundary(
+        { notFound: boundary, notFoundTreePosition: 2, routeSegments: ["items", "[id]"] },
+        boundary,
+      ),
+    ).toBe(true);
+    expect(
+      isPageOwnedNotFoundBoundary(
+        { notFound: boundary, notFoundTreePosition: 1, routeSegments: ["items", "[id]"] },
+        boundary,
+      ),
+    ).toBe(false);
+    expect(
+      isPageOwnedNotFoundBoundary(
+        { notFound: boundary, notFoundTreePosition: 2, routeSegments: ["items", "[id]"] },
+        {},
+      ),
+    ).toBe(false);
+  });
+
   it("places the fallback convention at every active leaf in owner order", () => {
     const rootLayout = {};
     const nestedLayout = {};
@@ -14,6 +38,7 @@ describe("HTTP-access fallback metadata planning", () => {
 
     const plan = createHttpAccessFallbackMetadataPlan({
       boundaryModule: boundary,
+      boundaryOwner: { kind: "layout" },
       boundaryParams: { locale: "en" },
       layoutModules: [rootLayout, nestedLayout],
       layoutTreePositions: [0, 1],
@@ -61,6 +86,7 @@ describe("HTTP-access fallback metadata planning", () => {
 
     const plan = createHttpAccessFallbackMetadataPlan({
       boundaryModule: boundary,
+      boundaryOwner: { kind: "layout" },
       boundaryParams: {},
       layoutModules: [rootLayout],
       layoutTreePositions: [0],
@@ -93,6 +119,34 @@ describe("HTTP-access fallback metadata planning", () => {
     ]);
   });
 
+  it("attaches page-owned searchParams and its observer to every fallback leaf", () => {
+    const boundary = {};
+    const searchParams = { source: "search" };
+    const searchParamsObserver = { observeParamAccess: vi.fn() };
+
+    const plan = createHttpAccessFallbackMetadataPlan({
+      boundaryModule: boundary,
+      boundaryOwner: { kind: "page", searchParams, searchParamsObserver },
+      boundaryParams: { id: "missing" },
+      layoutModules: [],
+      parallelBranches: [
+        {
+          head: { layoutModules: [{}], routeSegments: ["items", "[id]"] },
+          ownerTreePosition: 0,
+        },
+      ],
+      params: { id: "missing" },
+      routeSegments: ["items", "[id]"],
+    });
+
+    const boundarySources = plan.filter((source) => source.module === boundary);
+    expect(boundarySources).toHaveLength(2);
+    for (const source of boundarySources) {
+      expect(source.searchParams).toBe(searchParams);
+      expect(source.searchParamsObserver).toBe(searchParamsObserver);
+    }
+  });
+
   it("starts generators eagerly while exposing accumulated metadata as parent", async () => {
     const started: string[] = [];
     const boundaryParents: unknown[] = [];
@@ -117,6 +171,7 @@ describe("HTTP-access fallback metadata planning", () => {
 
     const metadataPromise = resolveHttpAccessFallbackMetadata<Record<string, unknown>>({
       boundaryModule: boundary,
+      boundaryOwner: { kind: "layout" },
       boundaryParams: {},
       layoutModules: [rootLayout],
       metadataRoutes: [],

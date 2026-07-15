@@ -36,7 +36,9 @@ import {
   type AppPageSsrHandler,
 } from "./app-page-stream.js";
 import { AppElementsWire, type AppElements } from "./app-elements.js";
+import { isPageOwnedNotFoundBoundary } from "./app-page-http-access-fallback-metadata.js";
 import { createAppPageLayoutEntries, createAppPageSourcePage } from "./app-page-route-wiring.js";
+import { createAppPageSearchParamsObserver } from "./app-page-search-params-observation.js";
 import { NEVER_CACHE_CONTROL } from "./cache-control.js";
 
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -78,6 +80,7 @@ export type AppPageBoundaryRoute<TModule extends AppPageModule = AppPageModule> 
   layoutTreePositions?: readonly number[] | null;
   layouts?: readonly (TModule | null | undefined)[];
   notFound?: TModule | null;
+  notFoundTreePosition?: number | null;
   params?: AppPageParams;
   pattern?: string;
   routeSegments?: readonly string[];
@@ -137,10 +140,12 @@ type RenderAppPageHttpAccessFallbackOptions<TModule extends AppPageModule = AppP
   boundaryModule?: TModule | null;
   layoutModules?: readonly (TModule | null | undefined)[] | null;
   matchedParams: AppPageParams;
+  observeMetadataSearchParamsAccess?: boolean;
   rootForbiddenModule?: TModule | null;
   rootNotFoundModule?: TModule | null;
   rootUnauthorizedModule?: TModule | null;
   route?: AppPageBoundaryRoute<TModule> | null;
+  searchParams?: URLSearchParams;
   /**
    * When true, the resolved boundary is rendered without wrapping it in the
    * route's layouts. Used by `global-not-found.tsx`, which provides its own
@@ -482,6 +487,8 @@ export async function renderAppPageHttpAccessFallback<TModule extends AppPageMod
   const layoutModules = options.layoutModules ?? options.route?.layouts ?? options.rootLayouts;
   const pathname = new URL(options.requestUrl).pathname;
   const routeSegments = resolveHttpAccessFallbackHeadRouteSegments(options.route, layoutModules);
+  const boundaryOwnsPage =
+    options.statusCode === 404 && isPageOwnedNotFoundBoundary(options.route, boundaryModule);
   let head: Awaited<ReturnType<typeof resolveAppPageHead>>;
   try {
     head = await resolveAppPageHead({
@@ -497,6 +504,11 @@ export async function renderAppPageHttpAccessFallback<TModule extends AppPageMod
       params: options.matchedParams,
       routePath: options.route?.pattern ?? pathname,
       routeSegments,
+      searchParams: boundaryOwnsPage ? options.searchParams : undefined,
+      searchParamsObserver:
+        boundaryOwnsPage && options.observeMetadataSearchParamsAccess
+          ? createAppPageSearchParamsObserver()
+          : undefined,
     });
   } catch (error) {
     const specialError = resolveAppPageSpecialError(error);

@@ -1431,6 +1431,20 @@ describe("App Router Production server (startProdServer)", () => {
     expect(flight).toContain("NEXT_HTTP_ERROR_FALLBACK;404");
   });
 
+  it("passes searchParams to deferred page-local not-found metadata", async () => {
+    // Next creates metadata props with searchParams when the loader-tree node
+    // owns a page, including the not-found convention captured at that node.
+    // https://github.com/vercel/next.js/blob/v16.2.7/packages/next/src/lib/metadata/resolve-metadata.ts#L742-L780
+    const response = await fetch(
+      `${baseUrl}/metadata-streaming-not-found-search-params?source=search`,
+      { headers: { "user-agent": "HeadlessChrome" } },
+    );
+    expect(response.status).toBe(200);
+
+    const html = await response.text();
+    expect(html).toContain("<title>Streamed not-found source: search</title>");
+  });
+
   it("reports server component render errors via instrumentation in production", async () => {
     const resetRes = await fetch(`${baseUrl}/api/instrumentation-test`, {
       method: "DELETE",

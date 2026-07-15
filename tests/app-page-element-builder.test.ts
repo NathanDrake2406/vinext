@@ -1520,6 +1520,55 @@ describe("buildPageElements", () => {
     }
   });
 
+  it("passes searchParams to page-owned not-found metadata and observes access", async () => {
+    const notFoundModule = {
+      default: () => React.createElement("div", null, "not found"),
+      async generateMetadata({ searchParams }: { searchParams: Promise<Record<string, string>> }) {
+        const query = await searchParams;
+        return { title: query.source };
+      },
+    } as AppPageModule;
+    const route = createSyntheticRoute({
+      page: {
+        default: () => React.createElement("div", null, "page"),
+        generateMetadata: () => notFound(),
+      } as AppPageModule,
+      layouts: [],
+      notFound: notFoundModule,
+      notFoundTreePosition: 2,
+      routeSegments: ["items", "[id]"],
+      pattern: "/items/[id]",
+    });
+    const baseOptions = createBaseOptions({
+      route,
+      params: { id: "missing" },
+      routePath: "/items/missing",
+      searchParams: new URLSearchParams("source=search"),
+    });
+
+    const result = await buildPageElements({
+      ...baseOptions,
+      pageRequest: {
+        ...baseOptions.pageRequest,
+        observeMetadataSearchParamsAccess: true,
+      },
+    });
+    const record = result as Record<string, unknown>;
+    const streamingMetadataElement = Object.entries(record).find(([key]) =>
+      key.startsWith("__vinext_streaming_metadata_body:"),
+    )?.[1];
+    expect(React.isValidElement(streamingMetadataElement)).toBe(true);
+    const metadata = await (
+      streamingMetadataElement as React.ReactElement<{
+        metadata: Promise<{ title?: unknown } | null>;
+      }>
+    ).props.metadata;
+
+    expect(metadata).toMatchObject({ title: "search" });
+    expect(markDynamicUsageMock).toHaveBeenCalledTimes(1);
+    expect(markRenderRequestApiUsageMock).toHaveBeenCalledWith("searchParams");
+  });
+
   it("treats a sibling intercept as the primary metadata fallback leaf", async () => {
     const boundaryParents: unknown[] = [];
     const notFoundModule = {

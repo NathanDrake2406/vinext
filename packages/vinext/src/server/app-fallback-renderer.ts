@@ -134,6 +134,8 @@ type AppFallbackRenderer<TModule extends AppPageModule = AppPageModule> = {
       boundaryModule?: TModule | null;
       layouts?: readonly (TModule | null | undefined)[] | null;
       matchedParams?: AppPageParams;
+      observeMetadataSearchParamsAccess?: boolean;
+      searchParams?: URLSearchParams;
     },
     scriptNonce: string | undefined,
     middlewareContext: AppPageMiddlewareContext,
@@ -317,6 +319,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         matchedParams: opts?.matchedParams ?? route?.params ?? {},
         middlewareContext: middlewareContext ?? EMPTY_MW_CTX,
         metadataRoutes,
+        observeMetadataSearchParamsAccess: opts?.observeMetadataSearchParamsAccess,
         request,
         requestUrl: request.url,
         resolveChildSegments,
@@ -325,6 +328,7 @@ export function createAppFallbackRenderer<TModule extends AppPageModule>(
         rootNotFoundModule: routeMissRootNotFoundModule,
         rootUnauthorizedModule,
         route: useGlobalNotFound ? null : route,
+        searchParams: opts?.searchParams,
         renderToReadableStream: rscRenderer,
         scriptNonce,
         serveStreamingMetadata,

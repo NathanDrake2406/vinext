@@ -1,18 +1,46 @@
 import type { Metadata } from "vinext/shims/metadata";
+import type { ThenableParamsObserver } from "vinext/shims/thenable-params";
 import type { AppPageParams } from "./app-page-boundary.js";
 import {
   resolveOrderedAppPageMetadata,
   type ActiveParallelRouteHeadInput,
   type AppPageHeadModule,
+  type AppPageSearchParams,
   type ApplyAppPageFileBasedMetadata,
   type OrderedAppPageMetadataSource,
 } from "./app-page-head.js";
 import { resolveAppPageBranchParams, resolveAppPageSegmentParams } from "./app-page-params.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
 
+type HttpAccessFallbackBoundaryOwner =
+  | { kind: "layout" }
+  | {
+      kind: "page";
+      searchParams: AppPageSearchParams;
+      searchParamsObserver?: ThenableParamsObserver;
+    };
+
+type AppPageNotFoundBoundaryRoute<TModule> = {
+  notFound?: TModule | null;
+  notFoundTreePosition?: number | null;
+  routeSegments?: readonly string[] | null;
+};
+
+export function isPageOwnedNotFoundBoundary<TModule>(
+  route: AppPageNotFoundBoundaryRoute<TModule> | null | undefined,
+  boundaryModule: TModule | null | undefined,
+): boolean {
+  return (
+    boundaryModule != null &&
+    boundaryModule === route?.notFound &&
+    route.notFoundTreePosition === (route.routeSegments?.length ?? 0)
+  );
+}
+
 type HttpAccessFallbackMetadataPlanOptions<TModule extends AppPageHeadModule = AppPageHeadModule> =
   {
     boundaryModule?: TModule | null;
+    boundaryOwner: HttpAccessFallbackBoundaryOwner;
     boundaryParams: AppPageParams;
     layoutModules: readonly (TModule | null | undefined)[];
     layoutTreePositions?: readonly number[] | null;
@@ -68,6 +96,12 @@ export function createHttpAccessFallbackMetadataPlan<TModule extends AppPageHead
       module: options.boundaryModule,
       params: options.boundaryParams,
       routeSegments,
+      ...(options.boundaryOwner.kind === "page"
+        ? {
+            searchParams: options.boundaryOwner.searchParams,
+            searchParamsObserver: options.boundaryOwner.searchParamsObserver,
+          }
+        : {}),
     });
   };
 
