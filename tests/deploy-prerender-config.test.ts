@@ -173,6 +173,7 @@ function configureCdnWarmupVersionMetadata(): void {
     JSON.stringify({
       main: "vinext/server/app-router-entry",
       assets: { directory: "dist/client" },
+      cache: { enabled: true },
       version_metadata: { binding: "VINEXT_VERSION_METADATA" },
     }),
   );

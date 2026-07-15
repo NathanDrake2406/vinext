@@ -3204,6 +3204,54 @@ describe("parseWranglerConfig — custom domain extraction", () => {
     expect(config?.kvNamespaceId).toBe("abc123");
   });
 
+  it("extracts top-level and environment-local Worker cache settings", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        cache: { enabled: true, cross_version_cache: true },
+        env: { staging: { cache: { enabled: true } } },
+      }),
+    );
+
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.cache).toEqual({ enabled: true, crossVersionCache: true });
+    expect(config?.env?.staging?.cache).toEqual({
+      enabled: true,
+      crossVersionCache: undefined,
+    });
+  });
+
+  it("extracts top-level and environment-local TOML Worker cache settings", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `[cache]
+enabled = true
+cross_version_cache = true
+
+[env.staging.cache]
+enabled = true
+`,
+    );
+
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.cache).toEqual({ enabled: true, crossVersionCache: true });
+    expect(config?.env?.staging?.cache).toEqual({
+      enabled: true,
+      crossVersionCache: undefined,
+    });
+  });
+
+  it("extracts an inline TOML Worker cache table", () => {
+    writeFile(tmpDir, "wrangler.toml", "cache = { enabled = true, cross_version_cache = false }\n");
+
+    expect(parseWranglerConfig(tmpDir)?.cache).toEqual({
+      enabled: true,
+      crossVersionCache: false,
+    });
+  });
+
   it("extracts environment Worker names and custom domains", () => {
     writeFile(
       tmpDir,
@@ -3397,6 +3445,9 @@ route = "staging.example.com/*"`,
         config: "dist/server/wrangler.json",
       }),
     ).toEqual({
+      cacheEnabled: undefined,
+      crossVersionCache: undefined,
+      hasProductionRoute: true,
       workerName: "my-worker-staging",
       productionHost: "staging.example.com",
       versionMetadataBinding: "VINEXT_VERSION_METADATA",
@@ -3420,6 +3471,16 @@ routes = [
 
   it("uses an inline TOML routes array followed by a trailing comment", () => {
     writeFile(tmpDir, "wrangler.toml", 'routes = ["app.example.com/*"] # production route\n');
+
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+  });
+
+  it("uses an inline TOML route object followed by a trailing comment", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `route = { pattern = 'app.example.com/*', custom_domain = true } # production route\n`,
+    );
 
     expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
   });

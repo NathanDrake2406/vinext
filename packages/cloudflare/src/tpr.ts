@@ -35,6 +35,7 @@ import {
   extractTomlRoutePatterns,
   getTomlRootBody,
   getTomlSections,
+  stripTomlLineComments,
 } from "./utils/toml.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -85,6 +86,7 @@ type PrerenderResult = {
 
 export type WranglerConfig = {
   accountId?: string;
+  cache?: WranglerCacheConfig;
   kvNamespaceId?: string;
   customDomain?: string;
   warmupHost?: string;
@@ -96,10 +98,16 @@ export type WranglerConfig = {
 };
 
 export type WranglerEnvironmentConfig = {
+  cache?: WranglerCacheConfig;
   customDomain?: string;
   warmupHost?: string;
   name?: string;
   versionMetadataBinding?: string;
+};
+
+export type WranglerCacheConfig = {
+  enabled?: boolean;
+  crossVersionCache?: boolean;
 };
 
 // ─── Wrangler Config Parsing ─────────────────────────────────────────────────
@@ -260,6 +268,9 @@ function isJsonTrailingComma(str: string, start: number): boolean {
 function extractFromJSON(config: Record<string, unknown>): WranglerConfig {
   const result: WranglerConfig = {};
 
+  const cache = extractCacheConfig(config.cache);
+  if (cache) result.cache = cache;
+
   if (typeof config.name === "string" && config.name.length > 0) {
     result.name = config.name;
   }
@@ -321,6 +332,7 @@ function extractEnvConfigs(envs: unknown): Record<string, WranglerEnvironmentCon
     const envConfig = extractEnvironmentConfig(rawConfig as Record<string, unknown>);
     if (
       envConfig.name ||
+      envConfig.cache ||
       envConfig.customDomain ||
       envConfig.warmupHost ||
       envConfig.versionMetadataBinding
@@ -333,6 +345,8 @@ function extractEnvConfigs(envs: unknown): Record<string, WranglerEnvironmentCon
 
 function extractEnvironmentConfig(config: Record<string, unknown>): WranglerEnvironmentConfig {
   const result: WranglerEnvironmentConfig = {};
+  const cache = extractCacheConfig(config.cache);
+  if (cache) result.cache = cache;
   if (typeof config.name === "string" && config.name.length > 0) {
     result.name = config.name;
   }
@@ -346,6 +360,16 @@ function extractEnvironmentConfig(config: Record<string, unknown>): WranglerEnvi
   const versionMetadataBinding = extractVersionMetadataBinding(config);
   if (versionMetadataBinding) result.versionMetadataBinding = versionMetadataBinding;
   return result;
+}
+
+function extractCacheConfig(value: unknown): WranglerCacheConfig | null {
+  if (!isUnknownRecord(value)) return null;
+  const enabled = typeof value.enabled === "boolean" ? value.enabled : undefined;
+  const crossVersionCache =
+    typeof value.cross_version_cache === "boolean" ? value.cross_version_cache : undefined;
+  return enabled === undefined && crossVersionCache === undefined
+    ? null
+    : { enabled, crossVersionCache };
 }
 
 function extractVersionMetadataBinding(config: Record<string, unknown>): string | null {
@@ -494,6 +518,11 @@ function extractFromTOML(content: string): WranglerConfig {
     undefined;
 
   const rootBody = getTomlRootBody(content);
+  const rootCache = sections.find((section) => section.header === "cache");
+  const cache =
+    extractTomlCacheConfig(rootBody) ??
+    (rootCache ? extractTomlCacheTableConfig(rootCache.body) : null);
+  if (cache) result.cache = cache;
   const rootVersionMetadata = sections.find((section) => section.header === "version_metadata");
   const versionMetadataBinding =
     extractTomlVersionMetadataBinding(rootBody) ??
@@ -515,6 +544,8 @@ function extractEnvConfigsFromTOML(
     const envName = section.header.match(/^env\.([^.]+)$/)?.[1];
     if (envName) {
       const envConfig = result[envName] ?? {};
+      const cache = extractTomlCacheConfig(section.body);
+      if (cache) envConfig.cache = cache;
       const nameMatch = section.body.match(/^name\s*=\s*"([^"]+)"/m);
       if (nameMatch) envConfig.name = nameMatch[1];
       const domain =
@@ -526,11 +557,29 @@ function extractEnvConfigsFromTOML(
       if (versionMetadataBinding) envConfig.versionMetadataBinding = versionMetadataBinding;
       if (
         envConfig.name ||
+        envConfig.cache ||
         envConfig.customDomain ||
         envConfig.warmupHost ||
         envConfig.versionMetadataBinding
       ) {
         result[envName] = envConfig;
+      }
+      continue;
+    }
+
+    const cacheEnvName = section.header.match(/^env\.([^.]+)\.cache$/)?.[1];
+    if (cacheEnvName) {
+      const envConfig = result[cacheEnvName] ?? {};
+      const cache = extractTomlCacheTableConfig(section.body);
+      if (cache) envConfig.cache = cache;
+      if (
+        envConfig.name ||
+        envConfig.cache ||
+        envConfig.customDomain ||
+        envConfig.warmupHost ||
+        envConfig.versionMetadataBinding
+      ) {
+        result[cacheEnvName] = envConfig;
       }
       continue;
     }
@@ -542,6 +591,7 @@ function extractEnvConfigsFromTOML(
       if (binding) envConfig.versionMetadataBinding = binding;
       if (
         envConfig.name ||
+        envConfig.cache ||
         envConfig.customDomain ||
         envConfig.warmupHost ||
         envConfig.versionMetadataBinding
@@ -560,6 +610,7 @@ function extractEnvConfigsFromTOML(
       if (warmupHost) envConfig.warmupHost = warmupHost;
       if (
         envConfig.name ||
+        envConfig.cache ||
         envConfig.customDomain ||
         envConfig.warmupHost ||
         envConfig.versionMetadataBinding
@@ -570,6 +621,21 @@ function extractEnvConfigsFromTOML(
   }
 
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function extractTomlCacheConfig(section: string): WranglerCacheConfig | null {
+  const match = section.match(/^cache\s*=\s*\{([\s\S]*?)\}/m);
+  return match ? extractTomlCacheTableConfig(match[1] ?? "") : null;
+}
+
+function extractTomlCacheTableConfig(section: string): WranglerCacheConfig | null {
+  const enabledMatch = section.match(/(?:^|[,\n])\s*enabled\s*=\s*(true|false)\b/);
+  const crossVersionMatch = section.match(/(?:^|[,\n])\s*cross_version_cache\s*=\s*(true|false)\b/);
+  if (!enabledMatch && !crossVersionMatch) return null;
+  return {
+    enabled: enabledMatch ? enabledMatch[1] === "true" : undefined,
+    crossVersionCache: crossVersionMatch ? crossVersionMatch[1] === "true" : undefined,
+  };
 }
 
 function extractTomlVersionMetadataBinding(section: string): string | null {
@@ -601,15 +667,22 @@ function extractTomlRoutesArrayDomain(section: string): string | null {
 }
 
 function extractTomlWarmupHost(section: string): string | null {
-  const scalarRoute = section.match(/^route\s*=\s*"([^"]+)"/m)?.[1];
+  const uncommented = stripTomlLineComments(section);
+  const scalarRoute = uncommented
+    .match(/^route\s*=\s*(?:"([^"]+)"|'([^']+)')/m)
+    ?.slice(1)
+    .find((value): value is string => Boolean(value));
   if (scalarRoute) return routePatternToWarmupHost(scalarRoute);
 
-  const inlineRoute = section.match(/^route\s*=\s*\{([\s\S]*?)\}\s*$/m)?.[1];
+  const inlineRoute = uncommented.match(/^route\s*=\s*\{([\s\S]*?)\}\s*$/m)?.[1];
   if (inlineRoute && /\benabled\s*=\s*false\b/.test(inlineRoute)) return null;
-  const inlinePattern = inlineRoute?.match(/\bpattern\s*=\s*"([^"]+)"/)?.[1];
+  const inlinePattern = inlineRoute
+    ?.match(/\bpattern\s*=\s*(?:"([^"]+)"|'([^']+)')/)
+    ?.slice(1)
+    .find((value): value is string => Boolean(value));
   if (inlinePattern) return routePatternToWarmupHost(inlinePattern);
 
-  const routesArray = section.match(/^routes\s*=\s*\[([\s\S]*?)\]/m)?.[1];
+  const routesArray = uncommented.match(/^routes\s*=\s*\[([\s\S]*?)\]/m)?.[1];
   if (!routesArray) return null;
   return firstMatch(extractTomlRouteEntries(routesArray), (route) =>
     route.enabled === false ? null : routePatternToWarmupHost(route.pattern),

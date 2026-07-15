@@ -49,6 +49,7 @@ function warmupWranglerConfig(config: Record<string, unknown>): string {
       : undefined;
   return JSON.stringify({
     ...config,
+    cache: { enabled: true, ...(config.cache as Record<string, unknown> | undefined) },
     version_metadata: { binding: "VINEXT_VERSION_METADATA" },
     ...(configuredEnv ? { env: configuredEnv } : {}),
   });
@@ -115,6 +116,71 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       'requires a version_metadata binding named "VINEXT_VERSION_METADATA" in the top-level Wrangler config',
     );
     expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a deploy whose Worker cache is disabled before upload", async () => {
+    writeFile(
+      "wrangler.jsonc",
+      JSON.stringify({
+        name: "my-worker",
+        cache: { enabled: false },
+        version_metadata: { binding: "VINEXT_VERSION_METADATA" },
+      }),
+    );
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
+      "requires Cloudflare Workers caching to be enabled",
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-version caching before upload", async () => {
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({
+        name: "my-worker",
+        cache: { cross_version_cache: true },
+      }),
+    );
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
+      "requires cache.cross_version_cache to be false",
+    );
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("uses an environment-local cache block instead of the inherited top-level block", async () => {
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({
+        name: "my-worker",
+        cache: { enabled: true, cross_version_cache: true },
+        env: {
+          staging: {
+            name: "my-worker-staging",
+            cache: { enabled: true },
+          },
+        },
+      }),
+    );
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) return currentDeploymentOutput();
+      if (isStage(args)) return "Staged version\nhttps://my-worker-staging.workers.dev\n";
+      if (isPromotion(args)) return "Promoted version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], { env: "staging" })).resolves.toMatchObject({
+      warmed: true,
+    });
   });
 
   it("stages, warms the exact route with a version override, then promotes", async () => {
@@ -264,6 +330,42 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "promote",
       "triggers",
     ]);
+  });
+
+  it("does not claim workers.dev is warm for a path-scoped production route", async () => {
+    const events: string[] = [];
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({ name: "workers-cache", route: "app.example.com/api/*" }),
+    );
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) return currentDeploymentOutput();
+      if (isStage(args)) {
+        events.push("stage");
+        return "Staged version\nhttps://workers-cache.vinext.workers.dev\n";
+      }
+      if (isPromotion(args)) {
+        events.push("promote");
+        return "Promoted version\n";
+      }
+      if (args.includes("triggers")) {
+        events.push("triggers");
+        return "Triggers deployed\n";
+      }
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const warnSpy = vi.spyOn(console, "warn");
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/api/docs"], {})).resolves.toEqual({
+      url: "https://workers-cache.vinext.workers.dev",
+      warmed: false,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(events).toEqual(["stage", "promote", "triggers"]);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("path-scoped Worker routes"));
   });
 
   it("retries a failed override before promoting the uploaded version", async () => {

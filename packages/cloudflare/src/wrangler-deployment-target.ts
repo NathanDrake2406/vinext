@@ -10,9 +10,12 @@
  */
 
 import type { DeployOptions } from "./deploy.js";
-import { parseWranglerConfig, type WranglerConfig } from "./tpr.js";
+import { parseWranglerConfig, type WranglerCacheConfig, type WranglerConfig } from "./tpr.js";
 
 export type WranglerDeploymentTarget = {
+  cacheEnabled?: boolean;
+  crossVersionCache?: boolean;
+  hasProductionRoute: boolean;
   workerName?: string;
   productionHost?: string;
   versionMetadataBinding?: string;
@@ -37,11 +40,25 @@ export function resolveWranglerDeploymentTarget(
   const selected = envName
     ? (config.env?.[envName] ?? (flattenedEnvConfig ? config : undefined))
     : config;
+  const cache = resolveCacheConfig(config, envName, flattenedEnvConfig);
   return {
+    cacheEnabled: cache?.enabled,
+    crossVersionCache: cache?.crossVersionCache,
+    hasProductionRoute: Boolean(selected?.customDomain),
     workerName: resolveWorkerName(config, envName, flattenedEnvConfig, options.name),
     productionHost: selected?.warmupHost,
     versionMetadataBinding: selected?.versionMetadataBinding,
   };
+}
+
+/** Wrangler inherits the whole cache object only when an env omits it. */
+function resolveCacheConfig(
+  config: WranglerConfig,
+  envName: string | undefined,
+  flattenedEnvConfig: boolean,
+): WranglerCacheConfig | undefined {
+  if (!envName || flattenedEnvConfig) return config.cache;
+  return config.env?.[envName]?.cache ?? config.cache;
 }
 
 function resolveWorkerName(

@@ -150,13 +150,21 @@ async function warmAndPromote(
 
   let warmed = false;
   try {
+    // A workers.dev URL is the production cache key only when the deployment
+    // has no custom routes. Falling back to it for a path-scoped route would
+    // verify the right Worker version on the wrong hostname and falsely report
+    // the production cache as warm.
     const targetUrl = target.productionHost
       ? `https://${target.productionHost}`
-      : staged.deployedUrl;
+      : target.hasProductionRoute
+        ? undefined
+        : staged.deployedUrl;
     const headers = buildVersionOverrideHeaders(target.workerName, upload.versionId);
     if (!targetUrl || !headers) {
       const message =
-        "CDN pre-warm requires a production URL and Worker name for version overrides.";
+        target.hasProductionRoute && !target.productionHost
+          ? "CDN pre-warm cannot safely warm path-scoped Worker routes because workers.dev uses a different cache key."
+          : "CDN pre-warm requires a production URL and Worker name for version overrides.";
       if (options.warmCdnStrict) throw new Error(message);
       console.warn(`  ${message} Promoting without pre-warming.`);
     } else {
@@ -251,6 +259,16 @@ function validateCdnWarmupConfiguration(
     throw new Error(
       `CDN warmup requires a version_metadata binding named "${VINEXT_VERSION_METADATA_BINDING}" in ${targetLabel}. ` +
         "Re-run vinext init with CDN warmup enabled or configure the binding before deploying.",
+    );
+  }
+  if (target.crossVersionCache) {
+    throw new Error(
+      "CDN warmup requires cache.cross_version_cache to be false because shared cache entries cannot prove the uploaded version populated an isolated cache partition.",
+    );
+  }
+  if (!target.cacheEnabled) {
+    throw new Error(
+      "CDN warmup requires Cloudflare Workers caching to be enabled with cache.enabled = true.",
     );
   }
   return target;

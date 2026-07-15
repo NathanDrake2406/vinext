@@ -25,7 +25,7 @@ export type TomlRouteEntry = {
  * strings use `'` with no escapes. Callers only pass single-line string values
  * (route patterns), so `"""`/`'''` multiline forms are not handled.
  */
-function stripTomlLineComments(body: string): string {
+export function stripTomlLineComments(body: string): string {
   let result = "";
   let quote: '"' | "'" | null = null;
   let escaped = false;
