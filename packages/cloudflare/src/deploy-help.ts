@@ -29,6 +29,7 @@ export function formatDeployHelp(): string {
                              Maximum number of CDN warmup requests in parallel
     --warm-cdn-timeout <ms>  Per-request CDN warmup timeout (default: 5000)
     --warm-cdn-retries <n>   Retries for warmup failures (default: 3)
+                             Increase when Worker version propagation is slow
     --warm-cdn-strict        Fail when staging or any CDN warmup request fails.
                              The previous version remains at 100% until warming succeeds
                              (static exports skip Worker-version warmup because Assets serve them)

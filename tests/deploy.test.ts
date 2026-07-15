@@ -725,10 +725,10 @@ describe("parseDeployArgs", () => {
     expect(parsed.warmCdnIncludeFallbacks).toBe(true);
   });
 
-  it("documents that static exports skip Worker-version warmup", () => {
-    expect(formatDeployHelp()).toContain(
-      "static exports skip Worker-version warmup because Assets serve them",
-    );
+  it("documents CDN warmup retry tuning and the static-export carve-out", () => {
+    const help = formatDeployHelp();
+    expect(help).toContain("static exports skip Worker-version warmup because Assets serve them");
+    expect(help).toContain("Increase when Worker version propagation is slow");
   });
 
   it("throws for invalid CDN warmup numeric flags", () => {

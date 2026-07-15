@@ -183,7 +183,7 @@ async function warmAndPromote(
       warmed = result.failed === 0;
       if (!warmed) {
         console.warn(
-          `  CDN pre-warm did not confirm all ${result.total} path(s) served the uploaded ` +
+          `  CDN pre-warm confirmed ${result.warmed}/${result.total} path(s) served the uploaded ` +
             "version. Promoting anyway (non-strict) — the deployed version's cache is not " +
             "confirmed pre-warmed.",
         );

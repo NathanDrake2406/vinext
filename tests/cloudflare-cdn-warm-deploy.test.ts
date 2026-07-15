@@ -472,7 +472,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "triggers",
     ]);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("did not confirm all 1 path(s) served the uploaded version"),
+      expect.stringContaining("confirmed 0/1 path(s) served the uploaded version"),
     );
   });
 
