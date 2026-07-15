@@ -375,6 +375,38 @@ describe("Cloudflare CDN warmup", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    [
+      "retryable status",
+      async (): Promise<Response> => new Response("unavailable", { status: 503 }),
+    ],
+    ["network error", async (): Promise<Response> => Promise.reject(new Error("connection reset"))],
+  ])("backs off before retrying a %s", async (_case, firstResult) => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockImplementationOnce(firstResult)
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+      const resultPromise = warmCdnCache({
+        targetUrl: "https://app.example.com",
+        paths: ["/"],
+        retries: 1,
+        retryDelayMs: 250,
+        fetchImpl: fetchMock,
+      });
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(resultPromise).resolves.toMatchObject({ total: 1, warmed: 1, failed: 0 });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not count an unverified 200 cache hit as warmed", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(
       async () =>

@@ -107,7 +107,9 @@ function promoteWithoutWarmup(
 ): CdnWarmupDeployResult {
   const message =
     "CDN pre-warm requires the current deployment to contain exactly one version at 100%.";
-  if (options.warmCdnStrict) throw new Error(message);
+  if (options.warmCdnStrict) {
+    throw new Error(`${message} Uploaded Worker version ${upload.versionId} remains undeployed.`);
+  }
   console.warn(`  ${message} Promoting without pre-warming.`);
   const deployed = runWranglerVersionDeploy(
     root,

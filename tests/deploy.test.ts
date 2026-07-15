@@ -62,6 +62,7 @@ import {
   resolveStaticAssetSignal,
 } from "../packages/vinext/src/server/worker-utils.js";
 import { domainCandidates, parseWranglerConfig, runTPR } from "../packages/cloudflare/src/tpr.js";
+import { formatDeployHelp } from "../packages/cloudflare/src/deploy-help.js";
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -722,6 +723,12 @@ describe("parseDeployArgs", () => {
     expect(parsed.warmCdnRetries).toBe(0);
     expect(parsed.warmCdnStrict).toBe(true);
     expect(parsed.warmCdnIncludeFallbacks).toBe(true);
+  });
+
+  it("documents that static exports skip Worker-version warmup", () => {
+    expect(formatDeployHelp()).toContain(
+      "static exports skip Worker-version warmup because Assets serve them",
+    );
   });
 
   it("throws for invalid CDN warmup numeric flags", () => {

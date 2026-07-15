@@ -671,7 +671,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       await import("../packages/cloudflare/src/cdn-warm-deployment.js");
 
     await expect(deployWithCdnWarmup(tmpDir, ["/"], { warmCdnStrict: true })).rejects.toThrow(
-      "requires the current deployment to contain exactly one version at 100%",
+      `requires the current deployment to contain exactly one version at 100%. Uploaded Worker version ${UPLOADED_VERSION_ID} remains undeployed`,
     );
     expect(fetch).not.toHaveBeenCalled();
     expect(execFileSyncMock).toHaveBeenCalledTimes(2);

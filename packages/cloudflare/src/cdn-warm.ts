@@ -145,6 +145,15 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+async function waitBeforeRetry(
+  attempt: number,
+  retries: number,
+  retryDelayMs: number,
+): Promise<void> {
+  if (attempt >= retries || retryDelayMs === 0) return;
+  await new Promise((resolve) => setTimeout(resolve, retryDelayMs * 2 ** attempt));
+}
+
 /** Error text for a response that didn't prove it came from the expected Worker version. */
 function describeVersionMismatch(
   expectedVersionId: string,
@@ -212,11 +221,7 @@ async function warmOnePath(
         const actualVersionId = response.headers.get(VINEXT_WORKER_VERSION_HEADER);
         if (actualVersionId !== options.expectedVersionId) {
           lastError = describeVersionMismatch(options.expectedVersionId, actualVersionId);
-          if (attempt < options.retries && options.retryDelayMs > 0) {
-            await new Promise((resolve) =>
-              setTimeout(resolve, options.retryDelayMs * 2 ** attempt),
-            );
-          }
+          await waitBeforeRetry(attempt, options.retries, options.retryDelayMs);
           continue;
         }
       }
@@ -227,12 +232,14 @@ async function warmOnePath(
 
       lastError = `HTTP ${response.status}`;
       if (!isRetryableStatus(response.status)) break;
+      await waitBeforeRetry(attempt, options.retries, options.retryDelayMs);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         lastError = `timed out after ${options.timeoutMs}ms`;
       } else {
         lastError = error instanceof Error ? error.message : String(error);
       }
+      await waitBeforeRetry(attempt, options.retries, options.retryDelayMs);
     }
   }
 
