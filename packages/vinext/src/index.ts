@@ -68,7 +68,11 @@ import {
   collectRouteClassificationManifest,
   type RouteClassificationManifest,
 } from "./build/route-classification-manifest.js";
-import { extractMiddlewareMatcherConfig, hasExportedName } from "./build/report.js";
+import {
+  extractMiddlewareMatcherConfig,
+  extractMiddlewareMatcherConfigValue,
+  hasExportedName,
+} from "./build/report.js";
 import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import { hasBasePath, stripBasePath } from "./utils/base-path.js";
@@ -86,6 +90,7 @@ import {
 import { mergeServerExternalPackages } from "./config/server-external-packages.js";
 
 import { findMiddlewareFile, isProxyFile, runMiddleware } from "./server/middleware.js";
+import { validateMiddlewareMatcherPatterns } from "./server/middleware-matcher-pattern.js";
 import {
   encodeUrlParserIgnoredCharacters,
   isNextDataPathname,
@@ -2034,6 +2039,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             ? path.join(root, "src")
             : root;
         middlewarePath = findMiddlewareFile(root, fileMatcher, middlewareConventionDir);
+        if (middlewarePath) {
+          const staticMatcher = extractMiddlewareMatcherConfigValue(middlewarePath);
+          if (staticMatcher !== undefined) {
+            validateMiddlewareMatcherPatterns(staticMatcher);
+          }
+        }
         const instrumentationClientInjects = nextConfig.instrumentationClientInject.map((spec) =>
           spec.startsWith("./") || spec.startsWith("../") ? path.resolve(root, spec) : spec,
         );
@@ -2069,6 +2080,26 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // Let shared client shims compile out Pages-only behavior in pure App
         // Router builds while retaining it for Pages and hybrid applications.
         defines["process.env.__VINEXT_HAS_PAGES_ROUTER"] = JSON.stringify(String(hasPagesDir));
+        defines["process.env.__VINEXT_HAS_CLIENT_REWRITES"] = JSON.stringify(
+          String(
+            nextConfig.rewrites.beforeFiles.length > 0 ||
+              nextConfig.rewrites.afterFiles.length > 0 ||
+              nextConfig.rewrites.fallback.length > 0,
+          ),
+        );
+        defines["process.env.__VINEXT_HAS_CONFIG_HEADERS"] = JSON.stringify(
+          String(nextConfig.headers.length > 0),
+        );
+        defines["process.env.__VINEXT_HAS_CONFIG_REDIRECTS"] = JSON.stringify(
+          String(nextConfig.redirects.length > 0),
+        );
+        defines["process.env.__VINEXT_HAS_CONFIG_REWRITES"] = JSON.stringify(
+          String(
+            nextConfig.rewrites.beforeFiles.length > 0 ||
+              nextConfig.rewrites.afterFiles.length > 0 ||
+              nextConfig.rewrites.fallback.length > 0,
+          ),
+        );
         // Expose experimental.staleTimes to client-side code so full prefetches
         // and committed dynamic navigations use Next.js' distinct freshness
         // windows. Values are in seconds; matches Next.js' define-env plumbing.
