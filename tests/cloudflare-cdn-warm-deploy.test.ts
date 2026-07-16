@@ -518,7 +518,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         warmCdnStrict: true,
       }),
     ).rejects.toThrow(
-      `the uploaded version (${UPLOADED_VERSION_ID}) is staged at 0% and was not promoted`,
+      /CDN warmup failed for 1\/1 path\(s\); verified 0\/1\.[\s\S]*staged at 0% and was not promoted/,
     );
     // No restore/promote/triggers call: staging left the previous version at
     // 100% and the new one at 0%, which is already the safe state.

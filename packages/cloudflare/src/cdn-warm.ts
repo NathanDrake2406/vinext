@@ -320,7 +320,8 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
 
   if (options.strict && failures.length > 0) {
     throw new Error(
-      `CDN warmup failed for ${failures.length}/${paths.length} path(s). ` +
+      `CDN warmup failed for ${failures.length}/${paths.length} path(s); ` +
+        `verified ${warmed}/${paths.length}. ` +
         `First failure: ${failures[0].path}: ${failures[0].error}`,
     );
   }
