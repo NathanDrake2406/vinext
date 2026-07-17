@@ -162,7 +162,7 @@ export function PerformanceResultsTable({
                         </span>
                       )}
                     </div>
-                    <div className="mt-1 text-xs text-[var(--sub)] sm:hidden">
+                    <div className="mt-1 text-xs whitespace-nowrap text-[var(--sub)] sm:hidden">
                       {formatPerformanceValue(measurement.min, measurement.unit)}–
                       {formatPerformanceValue(measurement.max, measurement.unit)} ·{" "}
                       {measurement.rounds} rounds

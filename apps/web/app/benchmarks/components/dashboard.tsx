@@ -43,7 +43,9 @@ export function Dashboard({ runs }: { runs: PerformanceRun[] }) {
           <a href={`/benchmarks/commit/${latest.commitSha}`}>
             <Badge variant="secondary">{latest.shortSha}</Badge>
           </a>
-          <span className="text-xs text-[var(--mute)]">{formatUtcDate(latest.measuredAt)}</span>
+          <span className="text-xs whitespace-nowrap text-[var(--mute)]">
+            {formatUtcDate(latest.measuredAt)}
+          </span>
         </div>
         <div className="space-y-5">
           {otherMeasurements.length > 0 && (

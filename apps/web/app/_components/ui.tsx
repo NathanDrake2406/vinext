@@ -52,7 +52,7 @@ function TableHead({ className, ...props }: ComponentPropsWithoutRef<"th">) {
   return (
     <th
       className={cx(
-        "px-4 py-3 font-mono text-[11px] font-medium tracking-[0.08em] text-[var(--mute)] uppercase",
+        "px-4 py-3 font-mono text-[11px] font-medium tracking-[0.08em] whitespace-nowrap text-[var(--mute)] uppercase",
         className,
       )}
       {...props}
