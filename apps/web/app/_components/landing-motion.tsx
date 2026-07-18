@@ -21,6 +21,7 @@ type RootRef = RefObject<HTMLDivElement | null>;
 type CopyStatus = "copied" | "error";
 type LandingElementName =
   | "conn"
+  | "constellation"
   | "deployGrid"
   | "dcell"
   | "globe"
@@ -177,6 +178,62 @@ function useIntroAndRevealMotion(rootRef: RootRef, reducedMotion: boolean) {
   }, [reducedMotion, rootRef]);
 }
 
+const constellationSources = {
+  dark: "/img/hero-constellation-dark.avif",
+  light: "/img/hero-constellation-light.avif",
+} as const;
+
+// Must mirror the min-width gate on .hero-constellation in globals.css:
+// phones never fetch the artwork, so don't decode or prefetch there either.
+const constellationMedia = "(min-width: 940px)";
+
+// The CSS entrance (opacity/scale transition on [data-ready]) must never play
+// over a half-loaded image, so the attribute flips only after the active
+// theme's AVIF has decoded. Once revealed, the other theme's image is warmed
+// during idle time so a theme toggle swaps instantly instead of popping
+// whenever the network delivers.
+function startConstellationReveal(constellation: HTMLElement): () => void {
+  let dead = false;
+  const media = window.matchMedia(constellationMedia);
+
+  const begin = () => {
+    media.removeEventListener("change", onMediaChange);
+    const light = document.documentElement.getAttribute("data-theme") === "light";
+    const image = new Image();
+    image.src = light ? constellationSources.light : constellationSources.dark;
+    image
+      .decode()
+      // Reveal on failure too: the layer just stays transparent, and keeping
+      // it hidden forever would also suppress the prefetch below.
+      .catch(() => {})
+      .finally(() => {
+        if (dead) return;
+        constellation.setAttribute("data-ready", "");
+        const prefetch = () => {
+          if (!dead)
+            new Image().src = light ? constellationSources.dark : constellationSources.light;
+        };
+        // Safari still lacks requestIdleCallback; a lazy timeout is close enough.
+        if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(prefetch);
+        else window.setTimeout(prefetch, 2500);
+      });
+  };
+  // Widening a narrow window past the breakpoint makes CSS fetch the image;
+  // without this listener the reveal would never fire and the hero would stay
+  // blank until reload.
+  const onMediaChange = () => {
+    if (media.matches) begin();
+  };
+
+  if (media.matches) begin();
+  else media.addEventListener("change", onMediaChange);
+
+  return () => {
+    dead = true;
+    media.removeEventListener("change", onMediaChange);
+  };
+}
+
 function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -196,6 +253,15 @@ function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
     const globe = findElement(root, "globe");
     const deployGrid = findElement(root, "deployGrid");
     if (heroBg) heroBg.style.opacity = "1";
+
+    const constellation = findElement(root, "constellation");
+    const stopConstellation = constellation ? startConstellationReveal(constellation) : null;
+    // The wrapper owns the one-shot entrance transition; scroll drift writes
+    // go to the inner art div so the two transforms never retarget each other.
+    const constellationArt =
+      constellation?.firstElementChild instanceof HTMLElement
+        ? constellation.firstElementChild
+        : null;
 
     let frame: number | null = null;
     let lastNow = 0;
@@ -255,6 +321,13 @@ function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
         const progress = clamp(heroProgress * 1.15);
         heroBg.style.opacity = String(1 - progress * progress * (3 - 2 * progress));
       }
+      if (constellationArt) {
+        // Parallax: the artwork lifts slower than the content scrolling over
+        // it. Lift is 2% of viewport height and the zoom is 4.5%, whose 2.25%
+        // edge slack always covers the lift, so no background edge is exposed.
+        const drift = smooth(heroProgress);
+        constellationArt.style.transform = `translate3d(0,${(-drift * viewportHeight * 0.02).toFixed(1)}px,0) scale(${(1 + drift * 0.045).toFixed(4)})`;
+      }
 
       if (Math.abs(target - scrollY) > 0.05 || Math.abs(velocity) > 0.01) {
         frame = requestAnimationFrame(loop);
@@ -283,6 +356,7 @@ function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
     wake();
     return () => {
       dead = true;
+      stopConstellation?.();
       if (frame !== null) cancelAnimationFrame(frame);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("scroll", wake);

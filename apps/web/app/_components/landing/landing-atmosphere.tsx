@@ -154,6 +154,17 @@ export function LandingAtmosphere() {
             } satisfies LandingStyle
           }
         />
+        {/* Constellation artwork. Styled entirely in globals.css: the image
+            URLs must live in a min-width media query so phones never download
+            them, which inline styles can't express. The wrapper owns the
+            decode-gated entrance (landing-motion flips data-ready once the
+            AVIF has decoded); the inner div carries the image and the
+            per-frame scroll drift. Keep this the last child — the
+            light-theme rule dimming the aurora blobs targets
+            div:nth-child(-n + 3). */}
+        <div data-el="constellation" className="hero-constellation">
+          <div className="hero-constellation-art" />
+        </div>
       </div>
     </>
   );

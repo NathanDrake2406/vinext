@@ -823,6 +823,48 @@ button:active {
 [data-theme="light"] [data-el="heroBg"] > div:nth-child(-n + 3) {
   opacity: 0.45;
 }
+/* Constellation artwork behind the hero. Desktop-only: backgrounds inside a
+   non-matching media query are never fetched, so phones skip the download
+   entirely, and only the active theme's image loads (landing-motion mirrors
+   this 940px gate before decoding/prefetching). z-index -1 keeps it under
+   the aurora blobs and vignette (heroBg's explicit z-index makes it a
+   stacking context, so -1 can't escape behind the page). The parent heroBg
+   layer already owns scroll fade-out and reduced-motion hiding.
+
+   Entrance: landing-motion sets data-ready only after the AVIF has decoded,
+   so the settle never plays over a half-loaded image. Materialize, don't
+   just fade — the backdrop settles down from a 4.5% overscan (clipped by
+   heroBg's overflow:hidden) while the headline rises toward the viewer;
+   opposing directions read as depth, and the fade lands before the drift
+   ends so the tail of the motion is subliminal. First-load-only, so the
+   slow timing is deliberate. The inner -art div carries the image and is
+   transformed per-frame by the hero scroll loop, so the one-shot entrance
+   and the continuous drift each own one element's transform and never
+   retarget each other. */
+@media (min-width: 940px) {
+  .hero-constellation {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    opacity: 0;
+    transform: scale(1.045);
+    transition:
+      opacity 2s var(--ease-out) 0.15s,
+      transform 3.2s var(--ease-out) 0.15s;
+  }
+  .hero-constellation[data-ready] {
+    opacity: 1;
+    transform: scale(1);
+  }
+  .hero-constellation-art {
+    position: absolute;
+    inset: 0;
+    background: url("/img/hero-constellation-dark.avif") center / cover no-repeat;
+  }
+  [data-theme="light"] .hero-constellation-art {
+    background-image: url("/img/hero-constellation-light.avif");
+  }
+}
 /* Light-mode adaptation: this design is dark-native. Glow halos, outlined
      text-stroke, frosted backdrop, and overlay grain all collapse or muddy on
      a light ground, so neutralise them per-theme rather than via token swap. */
