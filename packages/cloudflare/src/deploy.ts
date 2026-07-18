@@ -37,14 +37,20 @@ import {
 } from "vinext/internal/config/prerender";
 import {
   detectProject,
-  findInNodeModules,
   formatMissingCloudflarePluginError,
   getMissingDeps,
   type ProjectInfo,
 } from "vinext/internal/utils/project";
 import { runTPR } from "./tpr.js";
 import { readPrerenderWarmPaths } from "./cdn-warm.js";
-import { deployWithCdnWarmup } from "./cdn-warm-deployment.js";
+import { deployWithCdnWarmup, type CdnWarmupOptions } from "./cdn-warm-deployment.js";
+import { formatUnknownError } from "./utils/format-unknown-error.js";
+import {
+  buildNodeCliInvocation,
+  resolveWranglerBin,
+  validateWranglerEnvName,
+  type WranglerTargetOptions,
+} from "./wrangler-cli.js";
 import {
   formatMissingCacheAdapterError,
   formatImageOptimizationHint,
@@ -60,46 +66,31 @@ import { buildPrerenderKVPairs, type KVBulkPair } from "./prerender-kv-populate.
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type DeployOptions = {
-  /** Project root directory */
-  root: string;
-  /** Deploy to preview environment (default: production) */
-  preview?: boolean;
-  /** Wrangler environment name from wrangler.jsonc env.<name> */
-  env?: string;
-  /** Custom project name for the Worker */
-  name?: string;
-  /** Wrangler config path, relative to root unless absolute */
-  config?: string;
-  /** Skip the build step (assume already built) */
-  skipBuild?: boolean;
-  /** Dry run — validate setup but don't build or deploy */
-  dryRun?: boolean;
-  /** Pre-render all discovered routes into the dist output after building */
-  prerenderAll?: boolean;
-  /** Maximum number of routes to prerender in parallel */
-  prerenderConcurrency?: number;
-  /** Warm Cloudflare's CDN cache by requesting build-discovered paths for the uploaded version */
-  warmCdnCache?: boolean;
-  /** Maximum number of CDN warmup requests to issue in parallel */
-  warmCdnConcurrency?: number;
-  /** Per-request CDN warmup timeout in milliseconds */
-  warmCdnTimeout?: number;
-  /** Number of CDN warmup retries */
-  warmCdnRetries?: number;
-  /** Fail deployment if any CDN warmup request fails */
-  warmCdnStrict?: boolean;
-  /** Include PPR fallback-shell placeholder paths during CDN warmup */
-  warmCdnIncludeFallbacks?: boolean;
-  /** Enable experimental TPR (Traffic-aware Pre-Rendering) */
-  experimentalTPR?: boolean;
-  /** TPR: traffic coverage percentage target (0–100, default: 90) */
-  tprCoverage?: number;
-  /** TPR: hard cap on number of pages to pre-render (default: 1000) */
-  tprLimit?: number;
-  /** TPR: analytics lookback window in hours (default: 24) */
-  tprWindow?: number;
-};
+export type DeployOptions = WranglerTargetOptions &
+  CdnWarmupOptions & {
+    /** Project root directory */
+    root: string;
+    /** Skip the build step (assume already built) */
+    skipBuild?: boolean;
+    /** Dry run — validate setup but don't build or deploy */
+    dryRun?: boolean;
+    /** Pre-render all discovered routes into the dist output after building */
+    prerenderAll?: boolean;
+    /** Maximum number of routes to prerender in parallel */
+    prerenderConcurrency?: number;
+    /** Warm Cloudflare's CDN cache by requesting build-discovered paths for the uploaded version */
+    warmCdnCache?: boolean;
+    /** Include PPR fallback-shell placeholder paths during CDN warmup */
+    warmCdnIncludeFallbacks?: boolean;
+    /** Enable experimental TPR (Traffic-aware Pre-Rendering) */
+    experimentalTPR?: boolean;
+    /** TPR: traffic coverage percentage target (0–100, default: 90) */
+    tprCoverage?: number;
+    /** TPR: hard cap on number of pages to pre-render (default: 1000) */
+    tprLimit?: number;
+    /** TPR: analytics lookback window in hours (default: 24) */
+    tprWindow?: number;
+  };
 
 type ProjectViteApi = Pick<typeof import("vite"), "createBuilder" | "loadConfigFromFile">;
 
@@ -130,11 +121,6 @@ function parseNonNegativeIntegerArg(raw: string, flag: string): number {
     throw new Error(`${flag} expects a non-negative integer, but got "${raw}".`);
   }
   return parsed;
-}
-
-export function formatUnknownError(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return String(error);
 }
 
 // ─── CLI arg parsing (uses Node.js util.parseArgs) ──────────────────────────
@@ -343,13 +329,6 @@ type WranglerKVBulkPutArgs = {
 
 const KV_BULK_PUT_CHUNK_SIZE = 25;
 
-export function validateWranglerEnvName(env: string): string {
-  if (env.includes("\0")) {
-    throw new Error("Wrangler environment names cannot contain null bytes.");
-  }
-  return env;
-}
-
 export function buildWranglerDeployArgs(
   options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
 ): WranglerDeployArgs {
@@ -378,42 +357,6 @@ export function buildWranglerKVBulkPutArgs(options: {
     args.push("--env", validateWranglerEnvName(env));
   }
   return { args, env };
-}
-
-/**
- * Resolve Wrangler's JavaScript CLI entrypoint in node_modules.
- *
- * Invoking the JavaScript file through `process.execPath` avoids the `.cmd`
- * shim and command shell that package managers create on Windows.
- */
-export function resolveWranglerBin(
-  root: string,
-  resolvePackageJson: (root: string) => string | null = (projectRoot) => {
-    try {
-      return createRequire(path.join(projectRoot, "package.json")).resolve("wrangler/package.json");
-    } catch {
-      return findInNodeModules(projectRoot, "wrangler/package.json");
-    }
-  },
-): string {
-  const packageJsonPath = resolvePackageJson(root);
-  if (packageJsonPath) {
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
-      bin?: string | Record<string, string>;
-    };
-    const bin = typeof packageJson.bin === "string" ? packageJson.bin : packageJson.bin?.wrangler;
-    if (bin) return path.resolve(path.dirname(packageJsonPath), bin);
-  }
-
-  return path.join(root, "node_modules", "wrangler", "bin", "wrangler.js");
-}
-
-export function buildNodeCliInvocation(
-  scriptPath: string,
-  args: string[],
-  nodeExecutable: string = process.execPath,
-): { file: string; args: string[] } {
-  return { file: nodeExecutable, args: [scriptPath, ...args] };
 }
 
 export function buildWranglerInvocation(

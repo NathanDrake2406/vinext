@@ -7,17 +7,19 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import {
   deploy,
-  buildNodeCliInvocation,
   buildWranglerKVBulkPutArgs,
   buildWranglerInvocation,
   buildWranglerDeployArgs,
   parseDeployArgs,
-  resolveWranglerBin,
   runWranglerKVBulkPut,
   runWranglerDeploy,
-  validateWranglerEnvName,
   withCloudflareEnv,
 } from "../packages/cloudflare/src/deploy.js";
+import {
+  buildNodeCliInvocation,
+  resolveWranglerBin,
+  validateWranglerEnvName,
+} from "../packages/cloudflare/src/wrangler-cli.js";
 import { resolveWranglerDeploymentTarget } from "../packages/cloudflare/src/wrangler-deployment-target.js";
 import {
   detectPackageManager,

@@ -8,7 +8,7 @@
  * raw projection `wrangler-config.ts` owns.
  */
 
-import type { DeployOptions } from "./deploy.js";
+import type { WranglerTargetOptions } from "./wrangler-cli.js";
 import {
   parseWranglerConfig,
   type WranglerCacheConfig,
@@ -37,14 +37,14 @@ export type WranglerDeploymentTarget = {
 };
 
 export function getWranglerTargetEnv(
-  options: Pick<DeployOptions, "preview" | "env">,
+  options: Pick<WranglerTargetOptions, "preview" | "env">,
 ): string | undefined {
   return options.env || (options.preview ? "preview" : undefined);
 }
 
 export function resolveWranglerDeploymentTarget(
   root: string,
-  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
+  options: WranglerTargetOptions,
 ): WranglerDeploymentTarget | null {
   const config = parseWranglerConfig(root, options.config);
   if (!config) return null;

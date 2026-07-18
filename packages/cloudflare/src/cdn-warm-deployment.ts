@@ -21,7 +21,8 @@
 
 import { VINEXT_VERSION_METADATA_BINDING } from "vinext/internal/server/worker-version";
 import { warmCdnCache } from "./cdn-warm.js";
-import { formatUnknownError, type DeployOptions } from "./deploy.js";
+import { formatUnknownError } from "./utils/format-unknown-error.js";
+import type { WranglerTargetOptions } from "./wrangler-cli.js";
 import {
   runWranglerDeploymentStatus,
   runWranglerTriggersDeploy,
@@ -55,17 +56,16 @@ function promotionPhaseFor(warmed: boolean): "promote-warmed" | "promote-uploade
   return warmed ? "promote-warmed" : "promote-uploaded";
 }
 
-type CdnWarmupOptions = Pick<
-  DeployOptions,
-  | "preview"
-  | "env"
-  | "name"
-  | "config"
-  | "warmCdnConcurrency"
-  | "warmCdnTimeout"
-  | "warmCdnRetries"
-  | "warmCdnStrict"
->;
+export type CdnWarmupOptions = WranglerTargetOptions & {
+  /** Maximum number of CDN warmup requests to issue in parallel */
+  warmCdnConcurrency?: number;
+  /** Per-request CDN warmup timeout in milliseconds */
+  warmCdnTimeout?: number;
+  /** Number of CDN warmup retries */
+  warmCdnRetries?: number;
+  /** Fail deployment if any CDN warmup request fails */
+  warmCdnStrict?: boolean;
+};
 
 export async function deployWithCdnWarmup(
   root: string,
@@ -315,7 +315,7 @@ async function warmAndPromote(
  */
 function applyTriggersAfterPromotion(
   root: string,
-  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
+  options: WranglerTargetOptions,
   failureMessage = "The uploaded Worker version was promoted to 100%, but applying triggers " +
     "(routes/schedules) failed. Production serves the new version on the previously " +
     "deployed routes. Re-run `wrangler triggers deploy` to apply the route changes.",
@@ -329,7 +329,7 @@ function applyTriggersAfterPromotion(
 
 function validateCdnWarmupConfiguration(
   root: string,
-  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
+  options: WranglerTargetOptions,
 ): WranglerDeploymentTarget {
   const target = resolveWranglerDeploymentTarget(root, options);
   const envName = getWranglerTargetEnv(options);
@@ -368,7 +368,7 @@ function validateCdnWarmupConfiguration(
  */
 function verifyStagedSplitBeforePromotion(
   root: string,
-  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
+  options: WranglerTargetOptions,
   previousVersionId: string,
   uploadedVersionId: string,
 ): void {
@@ -405,7 +405,7 @@ function verifyStagedSplitBeforePromotion(
 
 function readWranglerDeploymentStatus(
   root: string,
-  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
+  options: WranglerTargetOptions,
 ): { deployment: WranglerDeploymentStatus } | { error: string } {
   try {
     return { deployment: runWranglerDeploymentStatus(root, options) };
