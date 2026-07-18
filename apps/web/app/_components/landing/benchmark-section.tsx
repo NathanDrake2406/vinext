@@ -316,15 +316,6 @@ export function BenchmarkSection({ stats }: { stats: LandingStats }) {
               </span>
             </div>
             <div
-              style={
-                {
-                  width: "1px",
-                  height: "56px",
-                  background: "var(--line-soft)",
-                } satisfies LandingStyle
-              }
-            />
-            <div
               style={{ display: "flex", alignItems: "center", gap: "16px" } satisfies LandingStyle}
             >
               <span
