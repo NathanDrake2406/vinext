@@ -7,7 +7,7 @@ export function HeroSection() {
       id="hero"
       data-el="hero"
       data-screen-label="Hero"
-      style={{ position: "relative", zIndex: "2", height: "125vh" } satisfies LandingStyle}
+      style={{ position: "relative", zIndex: "2", height: "115vh" } satisfies LandingStyle}
     >
       <div
         className="landing-viewport-height"

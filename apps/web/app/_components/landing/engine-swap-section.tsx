@@ -6,7 +6,19 @@ export function EngineSwapSection() {
       id="swap"
       data-el="swapOuter"
       data-screen-label="The engine swap"
-      style={{ position: "relative", zIndex: "2", height: "115vh" } satisfies LandingStyle}
+      style={
+        {
+          position: "relative",
+          zIndex: "2",
+          height: "115vh",
+          // Overlap the hero's exit runway: its text is fully faded ~10vh into
+          // the runway, after which the reader would scroll dead space before
+          // this heading slid in. Starting the slide-in under that tail keeps
+          // something always arriving. Hero exit progress is offsetHeight-based
+          // in landing-motion, so the overlap doesn't change its timing.
+          marginTop: "-15vh",
+        } satisfies LandingStyle
+      }
     >
       <div
         className="landing-viewport-height"
