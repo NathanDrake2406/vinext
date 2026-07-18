@@ -165,122 +165,134 @@ export function CompatibilityTableDialog({ cells }: { cells: GridCell[] }) {
         <TableIcon size={16} aria-hidden="true" />
         View table
       </Dialog.Trigger>
-      <Dialog className="flex max-h-[90vh] w-[min(96vw,80rem)] max-w-none flex-col overflow-hidden p-0">
-        <div className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
-          <div>
-            <Dialog.Title className="text-xl font-semibold tracking-tight text-[var(--ink)]">
-              Compatibility test files
-            </Dialog.Title>
-            <Dialog.Description className="mt-1 text-sm text-[var(--sub)]">
-              Showing {filteredCells.length} of {cells.length} files for the current router filter.
-              Classifications do not alter the raw test results.
-            </Dialog.Description>
+      {/* Display stays UA-controlled: a display class on the dialog itself
+          overrides dialog:not([open]) { display: none }, leaving the closed
+          dialog as an invisible full-size click shield over the page. The
+          flex column lives on an inner wrapper instead. */}
+      <Dialog className="w-[min(96vw,80rem)] max-w-none p-0">
+        <div className="flex max-h-[90vh] flex-col overflow-hidden">
+          <div className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
+            <div>
+              <Dialog.Title className="text-xl font-semibold tracking-tight text-[var(--ink)]">
+                Compatibility test files
+              </Dialog.Title>
+              <Dialog.Description className="mt-1 text-sm text-[var(--sub)]">
+                Showing {filteredCells.length} of {cells.length} files for the current router
+                filter. Classifications do not alter the raw test results.
+              </Dialog.Description>
+            </div>
+            <Dialog.Close
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--sub)] transition hover:border-[var(--faint)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)]"
+              aria-label="Close compatibility table"
+            >
+              <X size={16} aria-hidden="true" />
+            </Dialog.Close>
           </div>
-          <Dialog.Close
-            className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--sub)] transition hover:border-[var(--faint)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)]"
-            aria-label="Close compatibility table"
-          >
-            <X size={16} aria-hidden="true" />
-          </Dialog.Close>
-        </div>
-        <div className="grid gap-3 border-b border-[var(--line)] bg-[var(--surface)] px-5 py-3 sm:grid-cols-[minmax(16rem,1fr)_14rem_12rem_auto] sm:items-center">
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search test files and features"
-            aria-label="Search compatibility test files"
-            className={`${controlClass} w-full placeholder:text-[var(--mute)]`}
-          />
-          <select
-            value={supportFilter}
-            onChange={(event) => setSupportFilter(event.currentTarget.value as SupportFilter)}
-            aria-label="Filter by classification"
-            className={controlClass}
-          >
-            <option value="all">All classifications</option>
-            <option value="supported">Supported</option>
-            <option value="deferred">Deferred</option>
-            <option value="needs-vite-equivalent">Needs Vite equivalent</option>
-            <option value="unsupported">Unsupported</option>
-          </select>
-          <select
-            value={resultFilter}
-            onChange={(event) => setResultFilter(event.currentTarget.value as ResultFilter)}
-            aria-label="Filter by raw result"
-            className={controlClass}
-          >
-            <option value="all">All raw results</option>
-            <option value="pass">Pass</option>
-            <option value="partial">Partial</option>
-            <option value="fail">Fail</option>
-            <option value="skip">Skipped by Next.js</option>
-          </select>
-          <button
-            type="button"
-            disabled={!hasFilters}
-            onClick={() => {
-              setQuery("");
-              setSupportFilter("all");
-              setResultFilter("all");
-            }}
-            className="rounded-lg px-3 py-2 text-sm text-[var(--sub)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Clear
-          </button>
-        </div>
-        <div className="min-h-0 overflow-auto">
-          <Table aria-label="Compatibility test files">
-            <Table.Header className="sticky top-0 z-10 bg-[var(--surface)]">
-              <Table.Row>
-                <Table.Head>Test file</Table.Head>
-                <Table.Head>Classification</Table.Head>
-                <Table.Head>Feature</Table.Head>
-                <Table.Head>Raw result</Table.Head>
-                <Table.Head className="text-right">Passed</Table.Head>
-                <Table.Head className="text-right">Failed</Table.Head>
-                <Table.Head className="text-right">Skipped</Table.Head>
-              </Table.Row>
-            </Table.Header>
-            <Table.Body>
-              {filteredCells.map((cell) => (
-                <Table.Row key={cell.suite}>
-                  <Table.Cell className="min-w-80 font-mono text-xs break-all">
-                    {cell.suite}
-                  </Table.Cell>
-                  <Table.Cell className="min-w-48">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: SUPPORT_COLORS[cell.supportStatus] }}
-                        aria-hidden="true"
-                      />
-                      <span className="text-sm font-medium">
-                        {SUPPORT_LABELS[cell.supportStatus]}
-                      </span>
-                    </div>
-                    {cell.reason ? (
-                      <div className="mt-1 max-w-72 text-xs text-[var(--sub)]">{cell.reason}</div>
-                    ) : null}
-                  </Table.Cell>
-                  <Table.Cell className="min-w-56 text-sm">{cell.feature ?? "—"}</Table.Cell>
-                  <Table.Cell className="whitespace-nowrap text-sm">
-                    {LABELS[cell.status]}
-                  </Table.Cell>
-                  <Table.Cell className="text-right font-mono text-sm">{cell.passed}</Table.Cell>
-                  <Table.Cell className="text-right font-mono text-sm">{cell.failed}</Table.Cell>
-                  <Table.Cell className="text-right font-mono text-sm">{cell.skipped}</Table.Cell>
-                </Table.Row>
-              ))}
-              {filteredCells.length === 0 ? (
+          <div className="grid gap-3 border-b border-[var(--line)] bg-[var(--surface)] px-5 py-3 sm:grid-cols-[minmax(16rem,1fr)_14rem_12rem_auto] sm:items-center">
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              placeholder="Search test files and features"
+              aria-label="Search compatibility test files"
+              className={`${controlClass} w-full placeholder:text-[var(--mute)]`}
+            />
+            <select
+              value={supportFilter}
+              onChange={(event) => setSupportFilter(event.currentTarget.value as SupportFilter)}
+              aria-label="Filter by classification"
+              className={controlClass}
+            >
+              <option value="all">All classifications</option>
+              <option value="supported">Supported</option>
+              <option value="deferred">Deferred</option>
+              <option value="needs-vite-equivalent">Needs Vite equivalent</option>
+              <option value="unsupported">Unsupported</option>
+            </select>
+            <select
+              value={resultFilter}
+              onChange={(event) => setResultFilter(event.currentTarget.value as ResultFilter)}
+              aria-label="Filter by raw result"
+              className={controlClass}
+            >
+              <option value="all">All raw results</option>
+              <option value="pass">Pass</option>
+              <option value="partial">Partial</option>
+              <option value="fail">Fail</option>
+              <option value="skip">Skipped by Next.js</option>
+            </select>
+            <button
+              type="button"
+              disabled={!hasFilters}
+              onClick={() => {
+                setQuery("");
+                setSupportFilter("all");
+                setResultFilter("all");
+              }}
+              className="rounded-lg px-3 py-2 text-sm text-[var(--sub)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="min-h-0 overflow-auto">
+            <Table aria-label="Compatibility test files">
+              <Table.Header className="sticky top-0 z-10 bg-[var(--surface)]">
                 <Table.Row>
-                  <Table.Cell colSpan={7} className="py-10 text-center text-sm text-[var(--sub)]">
-                    No test files match these filters.
-                  </Table.Cell>
+                  <Table.Head>Test file</Table.Head>
+                  <Table.Head>Classification</Table.Head>
+                  <Table.Head>Feature</Table.Head>
+                  <Table.Head>Raw result</Table.Head>
+                  <Table.Head className="text-right">Passed</Table.Head>
+                  <Table.Head className="text-right">Failed</Table.Head>
+                  <Table.Head className="text-right">Skipped</Table.Head>
                 </Table.Row>
-              ) : null}
-            </Table.Body>
-          </Table>
+              </Table.Header>
+              <Table.Body>
+                {filteredCells.map((cell) => (
+                  <Table.Row key={cell.suite}>
+                    <Table.Cell className="min-w-80 font-mono text-xs break-all">
+                      {cell.suite}
+                    </Table.Cell>
+                    <Table.Cell className="min-w-48">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
+                          style={{
+                            backgroundColor: SUPPORT_COLORS[cell.supportStatus],
+                            border:
+                              cell.supportStatus === "unsupported"
+                                ? "1px solid var(--mute)"
+                                : undefined,
+                          }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-sm font-medium">
+                          {SUPPORT_LABELS[cell.supportStatus]}
+                        </span>
+                      </div>
+                      {cell.reason ? (
+                        <div className="mt-1 max-w-72 text-xs text-[var(--sub)]">{cell.reason}</div>
+                      ) : null}
+                    </Table.Cell>
+                    <Table.Cell className="min-w-56 text-sm">{cell.feature ?? "—"}</Table.Cell>
+                    <Table.Cell className="whitespace-nowrap text-sm">
+                      {LABELS[cell.status]}
+                    </Table.Cell>
+                    <Table.Cell className="text-right font-mono text-sm">{cell.passed}</Table.Cell>
+                    <Table.Cell className="text-right font-mono text-sm">{cell.failed}</Table.Cell>
+                    <Table.Cell className="text-right font-mono text-sm">{cell.skipped}</Table.Cell>
+                  </Table.Row>
+                ))}
+                {filteredCells.length === 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={7} className="py-10 text-center text-sm text-[var(--sub)]">
+                      No test files match these filters.
+                    </Table.Cell>
+                  </Table.Row>
+                ) : null}
+              </Table.Body>
+            </Table>
+          </div>
         </div>
       </Dialog>
     </Dialog.Root>
