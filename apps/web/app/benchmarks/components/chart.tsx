@@ -208,10 +208,10 @@ export function TrendChart({
           );
         })}
 
-        {/* Individual run lines + dots */}
-        {series.map((s, seriesIndex) => {
+        {/* Individual run lines + dots. Decorative only — the per-commit
+            column targets below own hover, click, and keyboard access. */}
+        {series.map((s) => {
           const hidden = hiddenSeries.has(s.name);
-          const individualRunsHidden = hidden || !showIndividualRuns;
           const pathD = buildPath(s.values);
           if (!pathD) return null;
           const visibleMarkers = visibleMarkerMask(s.values, formatY);
@@ -221,8 +221,8 @@ export function TrendChart({
               key={s.name}
               className="benchmark-series"
               opacity={hidden ? 0 : 1}
-              pointerEvents={individualRunsHidden ? "none" : undefined}
-              aria-hidden={individualRunsHidden || undefined}
+              pointerEvents="none"
+              aria-hidden="true"
             >
               {/* Line */}
               <path
@@ -232,67 +232,94 @@ export function TrendChart({
                 strokeWidth="2"
                 className="benchmark-series"
                 opacity={showIndividualRuns ? 1 : 0}
-                pointerEvents="none"
               />
-              {/* Visible points remain interactive; hidden runs expose no activation targets. */}
               {s.values.map((v, i) => {
                 if (v === null) return null;
-                const pointId = `${seriesIndex}-${pointKeys[i]}`;
-                const point = (
-                  <g key={`${pointKeys[i]}-${s.name}`}>
-                    <circle
-                      cx={scaleX(i)}
-                      cy={scaleY(v)}
-                      r="3.5"
-                      fill={s.color}
-                      stroke="white"
-                      strokeWidth="1.5"
-                      className="benchmark-series"
-                      opacity={
-                        (!individualRunsHidden && visibleMarkers[i]) ||
-                        (!individualRunsHidden && tooltip?.pointId === pointId)
-                          ? 1
-                          : 0
-                      }
-                      pointerEvents="none"
-                    />
-                    <circle
-                      cx={scaleX(i)}
-                      cy={scaleY(v)}
-                      r="8"
-                      fill="transparent"
-                      className="cursor-pointer"
-                      opacity={individualRunsHidden ? 0 : 1}
-                      pointerEvents={individualRunsHidden ? "none" : "auto"}
-                      onMouseEnter={(e) => {
-                        const rect = svgRef.current?.getBoundingClientRect();
-                        if (!rect) return;
-                        setTooltip({
-                          x: e.clientX - rect.left,
-                          y: e.clientY - rect.top - 10,
-                          content: `${s.name}: ${formatY(v)} (${labels[i]})`,
-                          pointId,
-                        });
-                      }}
-                      onMouseLeave={() => setTooltip(null)}
-                    />
-                  </g>
-                );
-                const href = individualRunsHidden ? undefined : pointHrefs?.[i];
-                if (!href) return point;
                 return (
-                  <a
+                  <circle
                     key={`${pointKeys[i]}-${s.name}`}
-                    href={href}
-                    aria-label={`View commit ${labels[i]} benchmark results`}
-                  >
-                    {point}
-                  </a>
+                    cx={scaleX(i)}
+                    cy={scaleY(v)}
+                    r="3.5"
+                    fill={s.color}
+                    stroke="white"
+                    strokeWidth="1.5"
+                    className="benchmark-series"
+                    opacity={
+                      showIndividualRuns && (visibleMarkers[i] || tooltip?.pointId === pointKeys[i])
+                        ? 1
+                        : 0
+                    }
+                  />
                 );
               })}
             </g>
           );
         })}
+
+        {/* One interactive target per commit, spanning the full column. A
+            target per point gave N-series duplicate tab stops per commit, all
+            linking to the same URL, with values reachable only by hover. Here
+            each commit is one link whose label carries every visible value. */}
+        {showIndividualRuns &&
+          labels.map((label, i) => {
+            const visibleValues = series.flatMap((s) => {
+              const v = s.values[i];
+              return hiddenSeries.has(s.name) || v === null ? [] : [`${s.name}: ${formatY(v)}`];
+            });
+            if (visibleValues.length === 0) return null;
+            const valueSummary = visibleValues.join(" · ");
+            const columnWidth = numPoints <= 1 ? innerW : innerW / (numPoints - 1);
+            const xStart = Math.max(PADDING.left, scaleX(i) - columnWidth / 2);
+            const xEnd = Math.min(chartWidth - PADDING.right, scaleX(i) + columnWidth / 2);
+            const showColumnTooltip = (clientX: number, clientY: number) => {
+              const rect = svgRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              setTooltip({
+                x: clientX - rect.left,
+                y: clientY - rect.top - 10,
+                content: `${label} — ${valueSummary}`,
+                pointId: pointKeys[i],
+              });
+            };
+            const target = (
+              <rect
+                x={xStart}
+                y={PADDING.top}
+                width={xEnd - xStart}
+                height={innerH}
+                fill="transparent"
+                className="cursor-pointer group-focus-visible:stroke-[var(--orange)]"
+                strokeWidth="2"
+                onMouseEnter={(e) => showColumnTooltip(e.clientX, e.clientY)}
+                onMouseLeave={() => setTooltip(null)}
+              />
+            );
+            const href = pointHrefs?.[i];
+            if (!href) return <g key={pointKeys[i]}>{target}</g>;
+            return (
+              <a
+                key={pointKeys[i]}
+                href={href}
+                className="group focus-visible:outline-none"
+                aria-label={`View commit ${label} benchmark results — ${valueSummary}`}
+                onFocus={() => {
+                  const rect = svgRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  const scale = rect.width / chartWidth;
+                  setTooltip({
+                    x: scaleX(i) * scale,
+                    y: PADDING.top * scale - 10,
+                    content: `${label} — ${valueSummary}`,
+                    pointId: pointKeys[i],
+                  });
+                }}
+                onBlur={() => setTooltip(null)}
+              >
+                {target}
+              </a>
+            );
+          })}
 
         {/* Y-axis label */}
         {yLabel && (
