@@ -145,7 +145,9 @@ describe("landing page claims", () => {
     expect(html).toContain("2× faster in our 33-route benchmark.");
     expect(html).toContain("33-route dynamic-render benchmark");
     expect(html).toContain("commit abcdef1");
-    expect(html).toContain("Jul 10, 2026, 5:00 PM UTC");
+    // formatUtcDateTime joins the date with non-breaking spaces so it never
+    // wraps mid-value; \u00a0 escapes keep that contract visible here.
+    expect(html).toContain("Jul\u00a010,\u00a02026,\u00a05:00\u00a0PM\u00a0UTC");
     expect(html).toContain("smaller client bundle in the same benchmark");
     expect(html).toContain("Keep your app structure.");
     expect(html).toContain("vinext check");
