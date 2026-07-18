@@ -490,6 +490,15 @@ button:active {
      the raw pass/fail set so a dot's classification never reads as a result. */
   --deferred: #6f9bd8;
   --vite-equivalent: #a78bda;
+  /* Grid-dot fills. In dark mode the text tokens double fine as fills; the
+     aliases exist so light mode can swap in dot-specific values (below)
+     without touching text colors. */
+  --dot-pass: var(--ok);
+  --dot-partial: var(--partial);
+  --dot-fail: var(--unsupported);
+  --dot-skip: var(--mute);
+  --dot-deferred: var(--deferred);
+  --dot-vite-equivalent: var(--vite-equivalent);
   --scrollbar-thumb: #262b35;
   --scrollbar-thumb-hover: #323844;
   --aur2-rgb: 96, 130, 184;
@@ -528,6 +537,23 @@ button:active {
   --unsupported: #b42318;
   --deferred: #3d6ca3;
   --vite-equivalent: #6d4fa8;
+  /* Light text tokens are tuned for 4.5:1 text contrast, which makes 12px
+     dot fills read muddy. Dot-only replacements, derived in OKLCH with the
+     dark palette's hue anchors. Each hue sits at its own best depth — near
+     max sRGB chroma at a hue-appropriate lightness (yellow must stay light
+     or it turns olive; red/blue/purple carry depth) — so the rare statuses
+     pop from the dominant green field (small areas earn stronger color).
+     Every fill clears the 3:1 non-text floor on --surface. */
+  /* Pass drifts off the dark anchor hue (162 -> 148): teal-emerald has almost
+     no sRGB chroma at any legal lightness, and since pass is ~95% of dots its
+     dullness muted the whole graph. Leaf-green sits on the gamut ridge —
+     near-max chroma while still clearing 3:1. */
+  --dot-pass: #1fa748; /* oklch(.64 .175 148) 3.1:1 */
+  --dot-partial: #bf8525; /* oklch(.66 .127  75) 3.1:1 */
+  --dot-fail: #db2b33; /* oklch(.58 .210  25) 4.7:1 */
+  --dot-skip: #79818c; /* oklch(.60 .020 259) 3.9:1 */
+  --dot-deferred: #1a71dc; /* oklch(.56 .182 257) 4.7:1 */
+  --dot-vite-equivalent: #8a4ada; /* oklch(.56 .210 300) 5.1:1 */
   --scrollbar-thumb: #d8d2c4;
   --scrollbar-thumb-hover: #aca492;
   --aur2-rgb: 205, 193, 172;

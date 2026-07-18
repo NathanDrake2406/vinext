@@ -52,12 +52,12 @@ type DisplayStatus = FileStatus | Exclude<SuiteSupportStatus, "supported">;
 // own hues (--deferred / --vite-equivalent) so they never read as results.
 // "unsupported" (classification) is --faint: out of scope, visually dead.
 const COLORS: Record<DisplayStatus, string> = {
-  pass: "var(--ok)",
-  partial: "var(--partial)",
-  fail: "var(--unsupported)",
-  skip: "var(--mute)",
-  deferred: "var(--deferred)",
-  "needs-vite-equivalent": "var(--vite-equivalent)",
+  pass: "var(--dot-pass)",
+  partial: "var(--dot-partial)",
+  fail: "var(--dot-fail)",
+  skip: "var(--dot-skip)",
+  deferred: "var(--dot-deferred)",
+  "needs-vite-equivalent": "var(--dot-vite-equivalent)",
   unsupported: "var(--faint)",
 };
 
@@ -79,7 +79,7 @@ const SUPPORT_LABELS: Record<SuiteSupportStatus, string> = {
 };
 
 const SUPPORT_COLORS: Record<SuiteSupportStatus, string> = {
-  supported: "var(--ok)",
+  supported: "var(--dot-pass)",
   deferred: COLORS.deferred,
   "needs-vite-equivalent": COLORS["needs-vite-equivalent"],
   unsupported: COLORS.unsupported,
@@ -458,8 +458,17 @@ export function ContributionGrid({
                 rx={2}
                 ry={2}
                 fill={COLORS[displayStatus]}
-                stroke={selected?.cell.suite === cell.suite ? "var(--ink)" : undefined}
-                strokeWidth={selected?.cell.suite === cell.suite ? 1.5 : undefined}
+                // --faint fill is deliberately dim (out of scope) but alone it
+                // misses the 3:1 non-text contrast floor; a --mute outline
+                // keeps the dot findable without lighting it back up.
+                stroke={
+                  selected?.cell.suite === cell.suite
+                    ? "var(--ink)"
+                    : displayStatus === "unsupported"
+                      ? "var(--mute)"
+                      : undefined
+                }
+                strokeWidth={selected?.cell.suite === cell.suite ? 1.5 : 1}
                 role="button"
                 tabIndex={0}
                 aria-label={`${summarize(cell)}. Select to pin details.`}
@@ -522,7 +531,10 @@ export function ContributionGrid({
           <div key={status} className="flex items-center gap-2">
             <span
               className="inline-block h-3 w-3 rounded-sm"
-              style={{ backgroundColor: COLORS[status] }}
+              style={{
+                backgroundColor: COLORS[status],
+                border: status === "unsupported" ? "1px solid var(--mute)" : undefined,
+              }}
               aria-hidden="true"
             />
             <span>{LABELS[status]}</span>
