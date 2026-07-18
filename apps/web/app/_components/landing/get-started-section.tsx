@@ -4,16 +4,7 @@ import { CopyButton } from "./copy-button";
 /* Mirrors the flow the repo itself recommends (README quick start and the
    bundled migrate-to-vinext Agent Skill), so the prompt never promises
    behavior the tooling does not have. Update it alongside those docs. */
-const agentPrompt = `Migrate this Next.js app to vinext (Next.js on Vite: vinext.dev).
-
-Preferred path: run \`npx skills add cloudflare/vinext\` to install the official migrate-to-vinext Agent Skill, then follow it. If the skills CLI is unavailable, migrate directly:
-
-1. Run \`npx vinext check\` and read the scored report. Stop and show me anything it flags as blocking before changing the project.
-2. Run \`npx vinext init\`. It is non-destructive: it installs vinext and Vite tooling, adds "type": "module", renames CJS config files to .cjs, adds dev:vinext / build:vinext / start:vinext scripts, and generates vite.config.ts. It leaves next.config.js and source files untouched, and the existing next scripts keep working.
-3. Run the dev:vinext script and fix anything it errors on.
-4. Run build:vinext, then start:vinext. Verify the key routes render, then run the test suite.
-
-Feature status: vinext.dev/compatibility. If something behaves differently than it did under Next.js, treat it as a vinext bug and file it at github.com/cloudflare/vinext/issues.`;
+const agentPrompt = `Please migrate this Next.js app to vinext (Next.js on Vite: vinext.dev). Install the official Agent Skill with npx skills add cloudflare/vinext and follow it. If the skills CLI is unavailable, use the vinext CLI directly (npx vinext check, then npx vinext init) and follow its output, consulting the vinext.dev docs or searching the web as needed. Verify the app builds, runs, and passes tests under vinext.`;
 
 export function GetStartedSection() {
   return (
