@@ -898,20 +898,19 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     expect(pkg.scripts["deploy:vinext"]).toContain("--experimental-warm-cdn-cache");
   });
 
-  it("forces the fixed binding name for named environments, overwriting custom bindings", async () => {
+  it("adds the fixed binding to named environments and stays idempotent", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(
       tmpDir,
       "wrangler.jsonc",
       `{
-  "version_metadata": { "binding": "TOP_LEVEL_VERSION" },
+  "version_metadata": { "binding": "VINEXT_VERSION_METADATA" },
   "env": {
     "staging": {
       // environment-local settings stay intact
       "name": "my-worker-staging"
     },
     "preview": {
-      "version_metadata": { "binding": "PREVIEW_VERSION" },
       "vars": { "EXISTING": "value" }
     }
   }
@@ -939,13 +938,66 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     });
     expect(readFile(tmpDir, "wrangler.jsonc")).toBe(wrangler);
     expect(wrangler).toContain("// environment-local settings stay intact");
-    expect(wrangler).not.toContain("TOP_LEVEL_VERSION");
-    expect(wrangler).not.toContain("PREVIEW_VERSION");
-    // The runtime always reads the fixed binding name, so init overwrites any
-    // pre-existing custom binding rather than preserving it — top-level,
-    // staging (newly added), and preview (overwritten) all get it.
+    // Matching top-level binding preserved; staging and preview each get it added.
     expect(wrangler.match(/"binding": "VINEXT_VERSION_METADATA"/g)).toHaveLength(3);
     expect(wrangler).toContain('"EXISTING": "value"');
+  });
+
+  it("rejects a conflicting user-owned version_metadata binding without mutating the project", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      `{
+  "version_metadata": { "binding": "CF_VERSION_METADATA" }
+}
+`,
+    );
+    const before = snapshotProject(tmpDir);
+    const exec = vi.fn();
+
+    await expect(
+      runInit(tmpDir, {
+        _exec: exec,
+        cloudflare: {
+          dataCache: "kv",
+          cdnCache: "workers-cache",
+          imageOptimization: "cloudflare-images",
+          warmCdnCache: true,
+        },
+      }),
+    ).rejects.toThrow('already declares a version_metadata binding named "CF_VERSION_METADATA"');
+    expect(exec).not.toHaveBeenCalled();
+    expect(snapshotProject(tmpDir)).toBe(before);
+  });
+
+  it("rejects a conflicting environment-local version_metadata binding", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      `{
+  "env": {
+    "preview": {
+      "version_metadata": { "binding": "PREVIEW_VERSION" }
+    }
+  }
+}
+`,
+    );
+    const before = snapshotProject(tmpDir);
+
+    await expect(
+      runInit(tmpDir, {
+        cloudflare: {
+          dataCache: "kv",
+          cdnCache: "workers-cache",
+          imageOptimization: "cloudflare-images",
+          warmCdnCache: true,
+        },
+      }),
+    ).rejects.toThrow('environment "preview"');
+    expect(snapshotProject(tmpDir)).toBe(before);
   });
 
   it("skips the warm CDN cache deploy flag when Cloudflare init opts out", async () => {

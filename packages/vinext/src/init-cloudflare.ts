@@ -370,10 +370,12 @@ function appendTopLevelJsonProperty(code: string, property: string): string {
 
 /**
  * The runtime reads the version metadata binding under a fixed name
- * (VINEXT_VERSION_METADATA_BINDING), so init must ensure the config declares
- * exactly that binding rather than preserving a differently named one.
+ * (VINEXT_VERSION_METADATA_BINDING), and Workers allows only one
+ * version_metadata binding per config scope. A differently named existing
+ * binding is user-owned — code may read it off `env` — so init must not
+ * silently rename it. Fail with a migration path instead.
  */
-function ensureVersionMetadataInJsonObject(code: string): string {
+function ensureVersionMetadataInJsonObject(code: string, scopeLabel: string): string {
   const metadataProperty = findTopLevelJsonProperty(code, "version_metadata");
   if (!metadataProperty) {
     return appendTopLevelJsonProperty(
@@ -388,8 +390,17 @@ function ensureVersionMetadataInJsonObject(code: string): string {
   const metadata = isUnknownRecord(parsedMetadata) ? parsedMetadata : null;
   if (metadata?.binding === VINEXT_VERSION_METADATA_BINDING) return code;
 
-  const replacement = `{ "binding": "${VINEXT_VERSION_METADATA_BINDING}" }`;
-  return `${code.slice(0, metadataProperty.valueStart)}${replacement}${code.slice(metadataProperty.valueEnd)}`;
+  const existingBinding =
+    typeof metadata?.binding === "string"
+      ? `a version_metadata binding named "${metadata.binding}"`
+      : "an unrecognized version_metadata entry";
+  throw new Error(
+    `CDN warmup needs the version_metadata binding named "${VINEXT_VERSION_METADATA_BINDING}", ` +
+      `but ${scopeLabel} of the Wrangler config already declares ${existingBinding} and Workers ` +
+      "allows only one version_metadata binding. Rename the existing binding to " +
+      `"${VINEXT_VERSION_METADATA_BINDING}" (updating any code that reads the old name from env), ` +
+      "or re-run vinext init without CDN warmup.",
+  );
 }
 
 function ensureNamedEnvironmentVersionMetadata(code: string): string {
@@ -410,7 +421,10 @@ function ensureNamedEnvironmentVersionMetadata(code: string): string {
       environmentProperty.valueEnd,
     );
     if (!environmentCode.trimStart().startsWith("{")) continue;
-    const updatedEnvironment = ensureVersionMetadataInJsonObject(environmentCode);
+    const updatedEnvironment = ensureVersionMetadataInJsonObject(
+      environmentCode,
+      `environment "${envName}"`,
+    );
     updatedEnv = `${updatedEnv.slice(0, environmentProperty.valueStart)}${updatedEnvironment}${updatedEnv.slice(environmentProperty.valueEnd)}`;
   }
   return `${code.slice(0, envProperty.valueStart)}${updatedEnv}${code.slice(envProperty.valueEnd)}`;
@@ -441,7 +455,7 @@ export function updateWranglerConfigForCloudflare(
     }
   }
   if (options.warmCdnCache) {
-    output = ensureVersionMetadataInJsonObject(output);
+    output = ensureVersionMetadataInJsonObject(output, "the top level");
     output = ensureNamedEnvironmentVersionMetadata(output);
   }
   if (options.imageOptimization === "cloudflare-images") {
