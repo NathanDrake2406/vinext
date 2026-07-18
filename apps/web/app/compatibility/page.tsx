@@ -23,6 +23,7 @@ import type { GridCell } from "./contribution-grid";
 import type { TrendPoint } from "./compatibility-line-chart";
 import { bucketByRouter, bucketPassRate, bucketSupportedPassRate } from "./router-buckets";
 import { getSuiteSupport, NON_SUPPORTED_SUITES } from "./suite-support";
+import { mockCells, mockTrend } from "./mock-data";
 
 // ISR: rebuild this page at most every 5 minutes. Compat data only changes
 // when a nightly deploy-suite run lands, so 5 minutes of staleness is fine
@@ -306,7 +307,19 @@ async function runQueries(
 }
 
 export default async function CompatibilityPage() {
-  const { latestRun, latestFiles, trend, error } = await loadData(KIND);
+  const loaded = await loadData(KIND);
+  // Dev-only fallback: when the local D1 is empty (or only holds the tiny
+  // hand-seeded "demo" run), render a captured snapshot of the production
+  // page's data so the full dashboard can be inspected. Production always
+  // shows real data (or the real empty/error state).
+  const useMock =
+    process.env.NODE_ENV === "development" &&
+    (loaded.latestFiles.length === 0 || loaded.latestRun?.vinextRef === "demo");
+  const { error } = loaded;
+  // Hide the demo run's header line when its data has been swapped out.
+  const latestRun = useMock ? null : loaded.latestRun;
+  const latestFiles = useMock ? mockCells() : loaded.latestFiles;
+  const trend = useMock ? mockTrend() : loaded.trend;
   const byRouter = bucketByRouter(latestFiles);
   const supportedPassRate = bucketSupportedPassRate(byRouter.all);
   const overallPassRate = bucketPassRate(byRouter.all);
@@ -353,7 +366,14 @@ export default async function CompatibilityPage() {
         ) : null}
       </section>
 
-      {error ? (
+      {useMock ? (
+        <section className="mx-auto w-full max-w-6xl px-6 pb-6">
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--surface)] p-4 text-sm text-[var(--ink)]">
+            <strong>Showing snapshot data.</strong> The local database has no runs; this is a
+            dev-only capture of vinext.dev/compatibility so the dashboard can be previewed.
+          </div>
+        </section>
+      ) : error ? (
         <section className="mx-auto w-full max-w-6xl px-6 pb-6">
           <div className="rounded-lg border border-[var(--line)] bg-[var(--surface)] p-4 text-sm text-[var(--ink)]">
             <strong>Compatibility data unavailable.</strong> {error}
