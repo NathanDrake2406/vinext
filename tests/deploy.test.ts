@@ -3181,7 +3181,7 @@ describe("parseWranglerConfig — custom domain extraction", () => {
     expect(config?.env?.staging).toEqual({
       name: "my-worker-staging",
       customDomain: "staging.example.com",
-      warmupHost: "staging.example.com",
+      warmupHosts: ["staging.example.com"],
     });
   });
 
@@ -3302,7 +3302,7 @@ version_metadata = {
     expect(config?.env?.staging).toEqual({
       name: "my-worker-staging-custom",
       customDomain: "staging.example.com",
-      warmupHost: "staging.example.com",
+      warmupHosts: ["staging.example.com"],
     });
   });
 
@@ -3341,7 +3341,7 @@ pattern = "staging.example.com/*"
     expect(config?.env?.staging).toEqual({
       name: "my-worker-staging",
       customDomain: "staging.example.com",
-      warmupHost: "staging.example.com",
+      warmupHosts: ["staging.example.com"],
     });
   });
 
@@ -3375,10 +3375,10 @@ binding = "STAGING_VERSION"
   });
 });
 
-describe("resolveWranglerDeploymentTarget — production host", () => {
+describe("resolveWranglerDeploymentTarget — production hosts", () => {
   // The caller (cdn-warm-deployment.ts) falls back to the wrangler-reported
-  // deployedUrl when productionHost is undefined, so these only assert the
-  // raw host resolveWranglerDeploymentTarget itself decides on.
+  // deployedUrl when productionHosts is empty, so these only assert the
+  // raw hosts resolveWranglerDeploymentTarget itself decides on.
   it("skips a disabled custom domain and uses the next active route", () => {
     writeFile(
       tmpDir,
@@ -3391,7 +3391,9 @@ describe("resolveWranglerDeploymentTarget — production host", () => {
       }),
     );
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+    ]);
   });
 
   it("uses the route pattern host instead of the containing zone", () => {
@@ -3403,19 +3405,23 @@ describe("resolveWranglerDeploymentTarget — production host", () => {
       }),
     );
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+    ]);
   });
 
   it("supports the singular JSON route property", () => {
     writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ route: "app.example.com/*" }));
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+    ]);
   });
 
   it("does not use a route host when the warmup paths may bypass the Worker", () => {
     writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ route: "app.example.com/api/*" }));
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBeUndefined();
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([]);
   });
 
   it("does not turn a path-scoped custom domain into a host-wide warmup target", () => {
@@ -3427,7 +3433,7 @@ describe("resolveWranglerDeploymentTarget — production host", () => {
 
     const target = resolveWranglerDeploymentTarget(tmpDir, {});
     expect(target?.hasProductionRoute).toBe(true);
-    expect(target?.productionHost).toBeUndefined();
+    expect(target?.productionHosts).toEqual([]);
   });
 
   it("uses the pattern from a singular TOML route object", () => {
@@ -3437,7 +3443,9 @@ describe("resolveWranglerDeploymentTarget — production host", () => {
       `route = { zone_name = "example.com", pattern = "app.example.com/*" }`,
     );
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+    ]);
   });
 
   it("does not leak an env route past a commented environment header", () => {
@@ -3452,7 +3460,7 @@ describe("resolveWranglerDeploymentTarget — production host", () => {
 route = "staging.example.com/*"`,
     );
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBeUndefined();
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([]);
   });
 
   it("does not inherit a top-level route into an explicit environment", () => {
@@ -3465,9 +3473,9 @@ route = "staging.example.com/*"`,
       }),
     );
 
-    expect(
-      resolveWranglerDeploymentTarget(tmpDir, { env: "staging" })?.productionHost,
-    ).toBeUndefined();
+    expect(resolveWranglerDeploymentTarget(tmpDir, { env: "staging" })?.productionHosts).toEqual(
+      [],
+    );
   });
 
   it("uses a generated config already flattened to the selected environment", () => {
@@ -3492,7 +3500,7 @@ route = "staging.example.com/*"`,
       crossVersionCache: undefined,
       hasProductionRoute: true,
       workerName: "my-worker-staging",
-      productionHost: "staging.example.com",
+      productionHosts: ["staging.example.com"],
       versionMetadataBinding: "VINEXT_VERSION_METADATA",
     });
   });
@@ -3509,13 +3517,17 @@ routes = [
 `,
     );
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+    ]);
   });
 
   it("uses an inline TOML routes array followed by a trailing comment", () => {
     writeFile(tmpDir, "wrangler.toml", 'routes = ["app.example.com/*"] # production route\n');
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+    ]);
   });
 
   it("uses an inline TOML route object followed by a trailing comment", () => {
@@ -3525,6 +3537,73 @@ routes = [
       `route = { pattern = 'app.example.com/*', custom_domain = true } # production route\n`,
     );
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHost).toBe("app.example.com");
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+    ]);
+  });
+
+  it("collects every host-wide route origin instead of only the first", () => {
+    // Each hostname is its own Cloudflare cache-key partition, so dropping the
+    // second route would let warmup falsely claim the whole deployment warm.
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: [
+          { pattern: "app.example.com/*", zone_name: "example.com" },
+          { pattern: "www.example.com/*", zone_name: "example.com" },
+        ],
+      }),
+    );
+
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+      "www.example.com",
+    ]);
+  });
+
+  it("unions route and custom-domain origins and dedupes shared hosts", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: ["app.example.com/*"],
+        custom_domains: ["app.example.com", "www.example.com"],
+      }),
+    );
+
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+      "www.example.com",
+    ]);
+  });
+
+  it("collects every host-wide origin from an inline TOML routes array", () => {
+    writeFile(tmpDir, "wrangler.toml", 'routes = ["app.example.com/*", "www.example.com/*"]\n');
+
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+      "www.example.com",
+    ]);
+  });
+
+  it("collects every host-wide origin from repeated TOML route blocks", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `name = "my-worker"
+
+[[routes]]
+pattern = "app.example.com/*"
+
+[[routes]]
+pattern = "www.example.com/*"
+`,
+    );
+
+    expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([
+      "app.example.com",
+      "www.example.com",
+    ]);
   });
 });

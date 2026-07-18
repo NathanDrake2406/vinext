@@ -200,40 +200,58 @@ async function warmAndPromote(
     // has no custom routes. Falling back to it for a path-scoped route would
     // verify the right Worker version on the wrong hostname and falsely report
     // the production cache as warm.
-    const targetUrl = target.productionHost
-      ? `https://${target.productionHost}`
-      : target.hasProductionRoute
-        ? undefined
-        : staged.deployedUrl;
+    //
+    // The hostname is part of Cloudflare's cache key, so every attached
+    // host-wide origin is a separate cache partition: warming one route's host
+    // proves nothing about another's, and "warmed" may only be reported when
+    // every origin × path pair is confirmed.
+    const targetUrls = target.productionHosts.length
+      ? target.productionHosts.map((host) => `https://${host}`)
+      : !target.hasProductionRoute && staged.deployedUrl
+        ? [staged.deployedUrl]
+        : [];
     const headers = buildVersionOverrideHeaders(target.workerName, upload.versionId);
-    if (!targetUrl || !headers) {
+    if (targetUrls.length === 0 || !headers) {
       const message =
-        target.hasProductionRoute && !target.productionHost
+        target.hasProductionRoute && target.productionHosts.length === 0
           ? "CDN pre-warm cannot safely warm path-scoped Worker routes because workers.dev uses a different cache key."
           : "CDN pre-warm requires a production URL and Worker name for version overrides.";
       if (options.warmCdnStrict) throw new Error(message);
       console.warn(`  ${message} Promoting without pre-warming.`);
     } else {
-      const result = await warmCdnCache({
-        targetUrl,
-        paths,
-        headers,
-        expectedVersionId: upload.versionId,
-        // The deployment summary claims "pre-warmed and confirmed", so a
-        // producer-only 200 is not enough — require cf-cache-status proof
-        // that the entry was stored and is servable from cache.
-        confirmCache: true,
-        concurrency: options.warmCdnConcurrency,
-        timeoutMs: options.warmCdnTimeout,
-        retries: options.warmCdnRetries,
-        strict: options.warmCdnStrict,
-      });
-      warmed = result.failed === 0;
+      let confirmedPaths = 0;
+      let totalPaths = 0;
+      warmed = true;
+      for (const targetUrl of targetUrls) {
+        if (targetUrls.length > 1) {
+          console.log(`  CDN pre-warm origin: ${targetUrl}`);
+        }
+        // In strict mode warmCdnCache throws on the first unconfirmed origin,
+        // which the surrounding catch reports with the staged-at-0% state.
+        const result = await warmCdnCache({
+          targetUrl,
+          paths,
+          headers,
+          expectedVersionId: upload.versionId,
+          // The deployment summary claims "pre-warmed and confirmed", so a
+          // producer-only 200 is not enough — require cf-cache-status proof
+          // that the entry was stored and is servable from cache.
+          confirmCache: true,
+          concurrency: options.warmCdnConcurrency,
+          timeoutMs: options.warmCdnTimeout,
+          retries: options.warmCdnRetries,
+          strict: options.warmCdnStrict,
+        });
+        confirmedPaths += result.warmed;
+        totalPaths += result.total;
+        if (result.failed !== 0) warmed = false;
+      }
       if (!warmed) {
+        const originSuffix = targetUrls.length > 1 ? ` across ${targetUrls.length} origins` : "";
         console.warn(
-          `  CDN pre-warm confirmed ${result.warmed}/${result.total} path(s) served the uploaded ` +
-            "version. Promoting anyway (non-strict) — the deployed version's cache is not " +
-            "confirmed pre-warmed.",
+          `  CDN pre-warm confirmed ${confirmedPaths}/${totalPaths} path(s)${originSuffix} ` +
+            "served the uploaded version. Promoting anyway (non-strict) — the deployed " +
+            "version's cache is not confirmed pre-warmed.",
         );
       }
     }

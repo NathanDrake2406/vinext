@@ -1,5 +1,5 @@
 /**
- * Resolves the Worker name, production host, and version metadata binding
+ * Resolves the Worker name, production hosts, and version metadata binding
  * that CDN warmup needs to target a deploy, on top of the raw fields
  * `parseWranglerConfig` reads out of wrangler.jsonc/.toml.
  *
@@ -20,7 +20,12 @@ export type WranglerDeploymentTarget = {
   crossVersionCache?: boolean;
   hasProductionRoute: boolean;
   workerName?: string;
-  productionHost?: string;
+  /**
+   * Every host-wide origin (route or Custom Domain) attached to the Worker.
+   * The hostname is part of Cloudflare's cache key, so each entry is its own
+   * cache partition and warmup must cover all of them.
+   */
+  productionHosts: readonly string[];
   versionMetadataBinding?: string;
 };
 
@@ -49,7 +54,7 @@ export function resolveWranglerDeploymentTarget(
     crossVersionCache: cache?.crossVersionCache,
     hasProductionRoute: Boolean(selected?.customDomain),
     workerName: resolveWorkerName(config, envName, flattenedEnvConfig, options.name),
-    productionHost: selected?.warmupHost,
+    productionHosts: selected?.warmupHosts ?? [],
     versionMetadataBinding: selected?.versionMetadataBinding,
   };
 }

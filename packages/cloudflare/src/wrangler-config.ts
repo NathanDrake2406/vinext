@@ -24,7 +24,7 @@ export type WranglerConfig = {
   cache?: WranglerCacheConfig;
   kvNamespaceId?: string;
   customDomain?: string;
-  warmupHost?: string;
+  warmupHosts?: readonly string[];
   name?: string;
   legacyEnv?: boolean;
   targetEnvironment?: string;
@@ -35,7 +35,7 @@ export type WranglerConfig = {
 type WranglerEnvironmentConfig = {
   cache?: WranglerCacheConfig;
   customDomain?: string;
-  warmupHost?: string;
+  warmupHosts?: readonly string[];
   name?: string;
   versionMetadataBinding?: string;
 };
@@ -247,8 +247,8 @@ function extractFromJSON(config: Record<string, unknown>): WranglerConfig {
     extractDomainFromRoutes(config.routes) ??
     extractDomainFromCustomDomains(config);
   if (domain) result.customDomain = domain;
-  const warmupHost = extractWarmupHost(config);
-  if (warmupHost) result.warmupHost = warmupHost;
+  const warmupHosts = extractWarmupHosts(config);
+  if (warmupHosts.length > 0) result.warmupHosts = warmupHosts;
   const versionMetadataBinding = extractVersionMetadataBinding(config);
   if (versionMetadataBinding) result.versionMetadataBinding = versionMetadataBinding;
 
@@ -269,7 +269,7 @@ function extractEnvConfigs(envs: unknown): Record<string, WranglerEnvironmentCon
       envConfig.name ||
       envConfig.cache ||
       envConfig.customDomain ||
-      envConfig.warmupHost ||
+      envConfig.warmupHosts ||
       envConfig.versionMetadataBinding
     ) {
       result[envName] = envConfig;
@@ -290,8 +290,8 @@ function extractEnvironmentConfig(config: Record<string, unknown>): WranglerEnvi
     extractDomainFromRoutes(config.routes) ??
     extractDomainFromCustomDomains(config);
   if (domain) result.customDomain = domain;
-  const warmupHost = extractWarmupHost(config);
-  if (warmupHost) result.warmupHost = warmupHost;
+  const warmupHosts = extractWarmupHosts(config);
+  if (warmupHosts.length > 0) result.warmupHosts = warmupHosts;
   const versionMetadataBinding = extractVersionMetadataBinding(config);
   if (versionMetadataBinding) result.versionMetadataBinding = versionMetadataBinding;
   return result;
@@ -338,13 +338,32 @@ function extractDomainFromRoutes(routes: unknown): string | null {
   return firstMatch(routes, extractDomainFromRoute);
 }
 
-function extractWarmupHost(config: Record<string, unknown>): string | null {
+/**
+ * Every eligible host-wide origin, not only the first. The hostname is part of
+ * Cloudflare's cache key, so each attached host owns its own cache partition:
+ * a deployment with several routes or Custom Domains is only warm once every
+ * one of those origins has been warmed.
+ */
+function extractWarmupHosts(config: Record<string, unknown>): string[] {
+  const hosts: string[] = [];
   const singular = extractWarmupHostFromRoute(config.route);
-  if (singular) return singular;
-  const fromRoutes = Array.isArray(config.routes)
-    ? firstMatch(config.routes, extractWarmupHostFromRoute)
-    : null;
-  return fromRoutes ?? extractWarmupHostFromCustomDomains(config);
+  if (singular) hosts.push(singular);
+  if (Array.isArray(config.routes)) {
+    hosts.push(...collectMatches(config.routes, extractWarmupHostFromRoute));
+  }
+  if (Array.isArray(config.custom_domains)) {
+    hosts.push(
+      ...collectMatches(config.custom_domains, (domain) =>
+        typeof domain === "string" ? routePatternToWarmupHost(domain) : null,
+      ),
+    );
+  }
+  return dedupeHosts(hosts);
+}
+
+/** A host attached both as a route and a Custom Domain is still one cache-key origin. */
+function dedupeHosts(hosts: readonly string[]): string[] {
+  return [...new Set(hosts)];
 }
 
 /**
@@ -358,6 +377,16 @@ function firstMatch<T, R>(items: Iterable<T>, fn: (item: T) => R | null): R | nu
     if (result !== null) return result;
   }
   return null;
+}
+
+/** Every non-null result of `fn`, preserving input order. */
+function collectMatches<T, R>(items: Iterable<T>, fn: (item: T) => R | null): R[] {
+  const results: R[] = [];
+  for (const item of items) {
+    const result = fn(item);
+    if (result !== null) results.push(result);
+  }
+  return results;
 }
 
 function extractWarmupHostFromRoute(route: unknown): string | null {
@@ -376,13 +405,6 @@ function extractDomainFromCustomDomains(config: Record<string, unknown>): string
     }
   }
   return null;
-}
-
-function extractWarmupHostFromCustomDomains(config: Record<string, unknown>): string | null {
-  if (!Array.isArray(config.custom_domains)) return null;
-  return firstMatch(config.custom_domains, (domain) =>
-    typeof domain === "string" ? routePatternToWarmupHost(domain) : null,
-  );
 }
 
 /** Strip protocol and trailing wildcards from a route pattern to get a bare domain. */
@@ -454,10 +476,13 @@ function extractFromTOML(content: string): WranglerConfig {
       undefined;
   }
 
-  result.warmupHost =
-    extractTomlWarmupHost(getTomlRootBody(content)) ??
-    firstMatch(rootRouteSections, (section) => extractTomlWarmupRouteBlockHost(section.body)) ??
-    undefined;
+  const warmupHosts = dedupeHosts([
+    ...extractTomlWarmupHosts(getTomlRootBody(content)),
+    ...collectMatches(rootRouteSections, (section) =>
+      extractTomlWarmupRouteBlockHost(section.body),
+    ),
+  ]);
+  if (warmupHosts.length > 0) result.warmupHosts = warmupHosts;
 
   const rootBody = getTomlRootBody(content);
   const rootCache = sections.find((section) => section.header === "cache");
@@ -493,15 +518,17 @@ function extractEnvConfigsFromTOML(
       const domain =
         extractTomlScalarRouteDomain(section.body) ?? extractTomlRoutesArrayDomain(section.body);
       if (domain) envConfig.customDomain = domain;
-      const warmupHost = extractTomlWarmupHost(section.body);
-      if (warmupHost) envConfig.warmupHost = warmupHost;
+      const warmupHosts = extractTomlWarmupHosts(section.body);
+      if (warmupHosts.length > 0) {
+        envConfig.warmupHosts = dedupeHosts([...(envConfig.warmupHosts ?? []), ...warmupHosts]);
+      }
       const versionMetadataBinding = extractTomlVersionMetadataBinding(section.body);
       if (versionMetadataBinding) envConfig.versionMetadataBinding = versionMetadataBinding;
       if (
         envConfig.name ||
         envConfig.cache ||
         envConfig.customDomain ||
-        envConfig.warmupHost ||
+        envConfig.warmupHosts ||
         envConfig.versionMetadataBinding
       ) {
         result[envName] = envConfig;
@@ -518,7 +545,7 @@ function extractEnvConfigsFromTOML(
         envConfig.name ||
         envConfig.cache ||
         envConfig.customDomain ||
-        envConfig.warmupHost ||
+        envConfig.warmupHosts ||
         envConfig.versionMetadataBinding
       ) {
         result[cacheEnvName] = envConfig;
@@ -535,7 +562,7 @@ function extractEnvConfigsFromTOML(
         envConfig.name ||
         envConfig.cache ||
         envConfig.customDomain ||
-        envConfig.warmupHost ||
+        envConfig.warmupHosts ||
         envConfig.versionMetadataBinding
       ) {
         result[metadataEnvName] = envConfig;
@@ -549,12 +576,14 @@ function extractEnvConfigsFromTOML(
       const domain = extractTomlRouteBlockDomain(section.body);
       if (domain) envConfig.customDomain = domain;
       const warmupHost = extractTomlWarmupRouteBlockHost(section.body);
-      if (warmupHost) envConfig.warmupHost = warmupHost;
+      if (warmupHost) {
+        envConfig.warmupHosts = dedupeHosts([...(envConfig.warmupHosts ?? []), warmupHost]);
+      }
       if (
         envConfig.name ||
         envConfig.cache ||
         envConfig.customDomain ||
-        envConfig.warmupHost ||
+        envConfig.warmupHosts ||
         envConfig.versionMetadataBinding
       ) {
         result[routesEnvName] = envConfig;
@@ -608,25 +637,31 @@ function extractTomlRoutesArrayDomain(section: string): string | null {
   });
 }
 
-function extractTomlWarmupHost(section: string): string | null {
+function extractTomlWarmupHosts(section: string): string[] {
   const uncommented = stripTomlLineComments(section);
   const scalarRoute = uncommented
     .match(/^route\s*=\s*(?:"([^"]+)"|'([^']+)')/m)
     ?.slice(1)
     .find((value): value is string => Boolean(value));
-  if (scalarRoute) return routePatternToWarmupHost(scalarRoute);
+  if (scalarRoute) {
+    const host = routePatternToWarmupHost(scalarRoute);
+    return host ? [host] : [];
+  }
 
   const inlineRoute = uncommented.match(/^route\s*=\s*\{([\s\S]*?)\}\s*$/m)?.[1];
-  if (inlineRoute && /\benabled\s*=\s*false\b/.test(inlineRoute)) return null;
+  if (inlineRoute && /\benabled\s*=\s*false\b/.test(inlineRoute)) return [];
   const inlinePattern = inlineRoute
     ?.match(/\bpattern\s*=\s*(?:"([^"]+)"|'([^']+)')/)
     ?.slice(1)
     .find((value): value is string => Boolean(value));
-  if (inlinePattern) return routePatternToWarmupHost(inlinePattern);
+  if (inlinePattern) {
+    const host = routePatternToWarmupHost(inlinePattern);
+    return host ? [host] : [];
+  }
 
   const routesArray = uncommented.match(/^routes\s*=\s*\[([\s\S]*?)\]/m)?.[1];
-  if (!routesArray) return null;
-  return firstMatch(extractTomlRouteEntries(routesArray), (route) =>
+  if (!routesArray) return [];
+  return collectMatches(extractTomlRouteEntries(routesArray), (route) =>
     route.enabled === false ? null : routePatternToWarmupHost(route.pattern),
   );
 }
