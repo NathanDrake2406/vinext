@@ -369,6 +369,73 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     );
   });
 
+  it("does not report warmed when a path-scoped route coexists with a warmed origin", async () => {
+    // blog.example.com/blog/* has its own cache partition that warming
+    // app.example.com cannot reach, so a fully confirmed app origin must not
+    // produce a "confirmed pre-warmed" deployment.
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({
+        name: "my-worker",
+        routes: [
+          { pattern: "app.example.com/*", zone_name: "example.com" },
+          { pattern: "blog.example.com/blog/*", zone_name: "example.com" },
+        ],
+      }),
+    );
+    const fetchedUrls: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      fetchedUrls.push(formatFetchUrl(url));
+      return versionedResponse();
+    });
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) return deploymentStatusOutput();
+      if (isStage(args)) return "Staged version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
+      if (isPromotion(args)) return "Promoted version\nhttps://stable.example.workers.dev\n";
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    const result = await deployWithCdnWarmup(tmpDir, ["/"], { warmCdnConcurrency: 1 });
+
+    // The reachable origin is still warmed and the promotion still happens,
+    // but the deployment must not claim a confirmed warm-up.
+    expect(result.warmed).toBe(false);
+    expect(fetchedUrls).toEqual(["https://app.example.com/"]);
+    expect(execFileSyncMock.mock.calls.some(([, args]) => isPromotion(args as string[]))).toBe(
+      true,
+    );
+  });
+
+  it("fails a strict deploy before warming when a route cannot be covered", async () => {
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({
+        name: "my-worker",
+        routes: ["app.example.com/*", "blog.example.com/blog/*"],
+      }),
+    );
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) return deploymentStatusOutput();
+      if (isStage(args)) return "Staged version\n";
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(
+      deployWithCdnWarmup(tmpDir, ["/"], { warmCdnConcurrency: 1, warmCdnStrict: true }),
+    ).rejects.toThrow("cannot cover every production route");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(execFileSyncMock.mock.calls.some(([, args]) => isPromotion(args as string[]))).toBe(
+      false,
+    );
+  });
+
   it("uses the selected environment route and Worker name for the override", async () => {
     writeFile(
       "wrangler.jsonc",

@@ -3434,6 +3434,7 @@ describe("resolveWranglerDeploymentTarget — production hosts", () => {
     const target = resolveWranglerDeploymentTarget(tmpDir, {});
     expect(target?.hasProductionRoute).toBe(true);
     expect(target?.productionHosts).toEqual([]);
+    expect(target?.hasUnwarmableProductionRoute).toBe(true);
   });
 
   it("uses the pattern from a singular TOML route object", () => {
@@ -3501,6 +3502,7 @@ route = "staging.example.com/*"`,
       hasProductionRoute: true,
       workerName: "my-worker-staging",
       productionHosts: ["staging.example.com"],
+      hasUnwarmableProductionRoute: false,
       versionMetadataBinding: "VINEXT_VERSION_METADATA",
     });
   });
@@ -3605,5 +3607,102 @@ pattern = "www.example.com/*"
       "app.example.com",
       "www.example.com",
     ]);
+  });
+
+  it("flags a path-scoped route that coexists with a warmable origin", () => {
+    // Warming app.example.com says nothing about the blog route's partition,
+    // so the supported origin must not hide the unsupported route.
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: [
+          { pattern: "app.example.com/*", zone_name: "example.com" },
+          { pattern: "blog.example.com/blog/*", zone_name: "example.com" },
+        ],
+      }),
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, {});
+    expect(target?.productionHosts).toEqual(["app.example.com"]);
+    expect(target?.hasUnwarmableProductionRoute).toBe(true);
+  });
+
+  it("flags a wildcard-host route that coexists with a warmable origin", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({ routes: ["*.example.com/*", "app.example.com/*"] }),
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, {});
+    expect(target?.productionHosts).toEqual(["app.example.com"]);
+    expect(target?.hasUnwarmableProductionRoute).toBe(true);
+  });
+
+  it("does not flag disabled or workers.dev routes as unwarmable", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: [
+          { pattern: "disabled.example.com/api/*", enabled: false },
+          "my-app.workers.dev/*",
+          "app.example.com/*",
+        ],
+      }),
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, {});
+    expect(target?.productionHosts).toEqual(["app.example.com"]);
+    expect(target?.hasUnwarmableProductionRoute).toBe(false);
+  });
+
+  it("flags a path-scoped route in an inline TOML routes array", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      'routes = ["app.example.com/*", "blog.example.com/blog/*"]\n',
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, {});
+    expect(target?.productionHosts).toEqual(["app.example.com"]);
+    expect(target?.hasUnwarmableProductionRoute).toBe(true);
+  });
+
+  it("flags a path-scoped route in repeated TOML route blocks", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `name = "my-worker"
+
+[[routes]]
+pattern = "app.example.com/*"
+
+[[routes]]
+pattern = "blog.example.com/blog/*"
+`,
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, {});
+    expect(target?.productionHosts).toEqual(["app.example.com"]);
+    expect(target?.hasUnwarmableProductionRoute).toBe(true);
+  });
+
+  it("scopes the unwarmable flag to the selected environment", () => {
+    // A path-scoped route at the top level must not veto a warmup that
+    // deploys an environment whose own routes are all host-wide.
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: ["app.example.com/api/*"],
+        env: { staging: { routes: ["staging.example.com/*"] } },
+      }),
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, { env: "staging" });
+    expect(target?.productionHosts).toEqual(["staging.example.com"]);
+    expect(target?.hasUnwarmableProductionRoute).toBe(false);
   });
 });

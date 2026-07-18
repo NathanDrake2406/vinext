@@ -26,6 +26,13 @@ export type WranglerDeploymentTarget = {
    * cache partition and warmup must cover all of them.
    */
   productionHosts: readonly string[];
+  /**
+   * True when some enabled route could not be reduced to a concrete host-wide
+   * origin (path-scoped or wildcard-host patterns). Its cache partition is
+   * unreachable to warmup, so `productionHosts` is an incomplete picture of
+   * the production cache surface and no "confirmed warm" claim may be made.
+   */
+  hasUnwarmableProductionRoute: boolean;
   versionMetadataBinding?: string;
 };
 
@@ -55,6 +62,7 @@ export function resolveWranglerDeploymentTarget(
     hasProductionRoute: Boolean(selected?.customDomain),
     workerName: resolveWorkerName(config, envName, flattenedEnvConfig, options.name),
     productionHosts: selected?.warmupHosts ?? [],
+    hasUnwarmableProductionRoute: Boolean(selected?.hasUnwarmableRoute),
     versionMetadataBinding: selected?.versionMetadataBinding,
   };
 }

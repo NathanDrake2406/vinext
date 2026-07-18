@@ -25,6 +25,7 @@ export type WranglerConfig = {
   kvNamespaceId?: string;
   customDomain?: string;
   warmupHosts?: readonly string[];
+  hasUnwarmableRoute?: boolean;
   name?: string;
   legacyEnv?: boolean;
   targetEnvironment?: string;
@@ -36,6 +37,7 @@ type WranglerEnvironmentConfig = {
   cache?: WranglerCacheConfig;
   customDomain?: string;
   warmupHosts?: readonly string[];
+  hasUnwarmableRoute?: boolean;
   name?: string;
   versionMetadataBinding?: string;
 };
@@ -249,6 +251,7 @@ function extractFromJSON(config: Record<string, unknown>): WranglerConfig {
   if (domain) result.customDomain = domain;
   const warmupHosts = extractWarmupHosts(config);
   if (warmupHosts.length > 0) result.warmupHosts = warmupHosts;
+  if (extractHasUnwarmableRoute(config)) result.hasUnwarmableRoute = true;
   const versionMetadataBinding = extractVersionMetadataBinding(config);
   if (versionMetadataBinding) result.versionMetadataBinding = versionMetadataBinding;
 
@@ -292,6 +295,7 @@ function extractEnvironmentConfig(config: Record<string, unknown>): WranglerEnvi
   if (domain) result.customDomain = domain;
   const warmupHosts = extractWarmupHosts(config);
   if (warmupHosts.length > 0) result.warmupHosts = warmupHosts;
+  if (extractHasUnwarmableRoute(config)) result.hasUnwarmableRoute = true;
   const versionMetadataBinding = extractVersionMetadataBinding(config);
   if (versionMetadataBinding) result.versionMetadataBinding = versionMetadataBinding;
   return result;
@@ -364,6 +368,36 @@ function extractWarmupHosts(config: Record<string, unknown>): string[] {
 /** A host attached both as a route and a Custom Domain is still one cache-key origin. */
 function dedupeHosts(hosts: readonly string[]): string[] {
   return [...new Set(hosts)];
+}
+
+/**
+ * True when any enabled production attachment cannot be reduced to a concrete
+ * host-wide origin (path-scoped or wildcard-host patterns). Such a route's
+ * cache partition is unreachable to warmup, so its presence must veto any
+ * "confirmed warm" claim even when every concrete origin succeeds.
+ */
+function extractHasUnwarmableRoute(config: Record<string, unknown>): boolean {
+  if (isUnwarmableRoute(config.route)) return true;
+  if (Array.isArray(config.routes) && config.routes.some(isUnwarmableRoute)) return true;
+  return (
+    Array.isArray(config.custom_domains) &&
+    config.custom_domains.some(
+      (domain) => typeof domain === "string" && patternIsUnwarmable(domain),
+    )
+  );
+}
+
+function isUnwarmableRoute(route: unknown): boolean {
+  if (isUnknownRecord(route) && route.enabled === false) return false;
+  const pattern = typeof route === "string" ? route : isUnknownRecord(route) ? route.pattern : null;
+  return typeof pattern === "string" && patternIsUnwarmable(pattern);
+}
+
+/** The pattern attaches production traffic but yields no warmable host-wide origin. */
+function patternIsUnwarmable(pattern: string): boolean {
+  const host = cleanDomain(pattern);
+  if (!host || host.includes("workers.dev")) return false;
+  return routePatternToWarmupHost(pattern) === null;
 }
 
 /**
@@ -483,6 +517,12 @@ function extractFromTOML(content: string): WranglerConfig {
     ),
   ]);
   if (warmupHosts.length > 0) result.warmupHosts = warmupHosts;
+  if (
+    extractTomlHasUnwarmableRoute(getTomlRootBody(content)) ||
+    rootRouteSections.some((section) => tomlRouteBlockIsUnwarmable(section.body))
+  ) {
+    result.hasUnwarmableRoute = true;
+  }
 
   const rootBody = getTomlRootBody(content);
   const rootCache = sections.find((section) => section.header === "cache");
@@ -522,6 +562,7 @@ function extractEnvConfigsFromTOML(
       if (warmupHosts.length > 0) {
         envConfig.warmupHosts = dedupeHosts([...(envConfig.warmupHosts ?? []), ...warmupHosts]);
       }
+      if (extractTomlHasUnwarmableRoute(section.body)) envConfig.hasUnwarmableRoute = true;
       const versionMetadataBinding = extractTomlVersionMetadataBinding(section.body);
       if (versionMetadataBinding) envConfig.versionMetadataBinding = versionMetadataBinding;
       if (
@@ -529,6 +570,7 @@ function extractEnvConfigsFromTOML(
         envConfig.cache ||
         envConfig.customDomain ||
         envConfig.warmupHosts ||
+        envConfig.hasUnwarmableRoute ||
         envConfig.versionMetadataBinding
       ) {
         result[envName] = envConfig;
@@ -579,11 +621,13 @@ function extractEnvConfigsFromTOML(
       if (warmupHost) {
         envConfig.warmupHosts = dedupeHosts([...(envConfig.warmupHosts ?? []), warmupHost]);
       }
+      if (tomlRouteBlockIsUnwarmable(section.body)) envConfig.hasUnwarmableRoute = true;
       if (
         envConfig.name ||
         envConfig.cache ||
         envConfig.customDomain ||
         envConfig.warmupHosts ||
+        envConfig.hasUnwarmableRoute ||
         envConfig.versionMetadataBinding
       ) {
         result[routesEnvName] = envConfig;
@@ -664,6 +708,37 @@ function extractTomlWarmupHosts(section: string): string[] {
   return collectMatches(extractTomlRouteEntries(routesArray), (route) =>
     route.enabled === false ? null : routePatternToWarmupHost(route.pattern),
   );
+}
+
+/** TOML counterpart of `extractHasUnwarmableRoute` for the same body-level route forms. */
+function extractTomlHasUnwarmableRoute(section: string): boolean {
+  const uncommented = stripTomlLineComments(section);
+  const scalarRoute = uncommented
+    .match(/^route\s*=\s*(?:"([^"]+)"|'([^']+)')/m)
+    ?.slice(1)
+    .find((value): value is string => Boolean(value));
+  if (scalarRoute && patternIsUnwarmable(scalarRoute)) return true;
+
+  const inlineRoute = uncommented.match(/^route\s*=\s*\{([\s\S]*?)\}\s*$/m)?.[1];
+  if (inlineRoute && !/\benabled\s*=\s*false\b/.test(inlineRoute)) {
+    const inlinePattern = inlineRoute
+      .match(/\bpattern\s*=\s*(?:"([^"]+)"|'([^']+)')/)
+      ?.slice(1)
+      .find((value): value is string => Boolean(value));
+    if (inlinePattern && patternIsUnwarmable(inlinePattern)) return true;
+  }
+
+  const routesArray = uncommented.match(/^routes\s*=\s*\[([\s\S]*?)\]/m)?.[1];
+  if (!routesArray) return false;
+  return extractTomlRouteEntries(routesArray).some(
+    (route) => route.enabled !== false && patternIsUnwarmable(route.pattern),
+  );
+}
+
+function tomlRouteBlockIsUnwarmable(section: string): boolean {
+  if (/^enabled\s*=\s*false\b/m.test(section)) return false;
+  const patternMatch = section.match(/^pattern\s*=\s*"([^"]+)"/m);
+  return patternMatch ? patternIsUnwarmable(patternMatch[1]) : false;
 }
 
 function routePatternToWarmupHost(pattern: string): string | null {

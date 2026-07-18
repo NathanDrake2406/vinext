@@ -219,9 +219,21 @@ async function warmAndPromote(
       if (options.warmCdnStrict) throw new Error(message);
       console.warn(`  ${message} Promoting without pre-warming.`);
     } else {
+      // A path-scoped or wildcard-host route has a cache partition this
+      // transaction cannot reach, so its presence makes `productionHosts` an
+      // incomplete picture of the production cache surface: strict mode must
+      // refuse, and non-strict may warm the reachable origins but must not
+      // report the deployment as confirmed pre-warmed.
+      if (target.hasUnwarmableProductionRoute) {
+        const message =
+          "CDN pre-warm cannot cover every production route: an enabled route is " +
+          "path-scoped or wildcard-hosted, so its cache partition cannot be verified.";
+        if (options.warmCdnStrict) throw new Error(message);
+        console.warn(`  ${message} The deployment will not be reported as confirmed pre-warmed.`);
+      }
       let confirmedPaths = 0;
       let totalPaths = 0;
-      warmed = true;
+      let allPathsConfirmed = true;
       for (const targetUrl of targetUrls) {
         if (targetUrls.length > 1) {
           console.log(`  CDN pre-warm origin: ${targetUrl}`);
@@ -244,9 +256,9 @@ async function warmAndPromote(
         });
         confirmedPaths += result.warmed;
         totalPaths += result.total;
-        if (result.failed !== 0) warmed = false;
+        if (result.failed !== 0) allPathsConfirmed = false;
       }
-      if (!warmed) {
+      if (!allPathsConfirmed) {
         const originSuffix = targetUrls.length > 1 ? ` across ${targetUrls.length} origins` : "";
         console.warn(
           `  CDN pre-warm confirmed ${confirmedPaths}/${totalPaths} path(s)${originSuffix} ` +
@@ -254,6 +266,7 @@ async function warmAndPromote(
             "version's cache is not confirmed pre-warmed.",
         );
       }
+      warmed = allPathsConfirmed && !target.hasUnwarmableProductionRoute;
     }
   } catch (error) {
     throw new Error(
