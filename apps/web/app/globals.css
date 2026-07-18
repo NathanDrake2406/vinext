@@ -81,6 +81,11 @@ body {
 html {
   scroll-behavior: smooth;
 }
+/* Deep links (vinext.dev/#compat, #deploy, …) must not land the section's
+   first line under the fixed site chrome, whose scrim runs ~96px tall. */
+section[id] {
+  scroll-margin-top: 84px;
+}
 body {
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
