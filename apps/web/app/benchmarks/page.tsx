@@ -1,7 +1,14 @@
+import type { Metadata } from "next";
 import { Dashboard } from "./components/dashboard";
 import { getPerformanceRuns } from "@/app/lib/benchmarks/server";
 
 export const revalidate = 300;
+
+export const metadata: Metadata = {
+  title: "Benchmarks",
+  description:
+    "Live performance benchmarks comparing Next.js (Turbopack) and vinext (Vite), run on every merge to main.",
+};
 
 /**
  * Homepage — server component shell.

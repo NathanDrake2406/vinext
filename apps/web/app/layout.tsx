@@ -29,9 +29,18 @@ const themeScript = `
 `;
 
 export const metadata: Metadata = {
-  title: "vinext",
+  metadataBase: new URL("https://vinext.dev"),
+  title: { default: "vinext", template: "%s · vinext" },
   description:
     "Bring a Next.js app to Vite and deploy it anywhere. App Router, Pages Router, RSC, ISR — with compatibility checks for known gaps.",
+  openGraph: {
+    siteName: "vinext",
+    type: "website",
+    images: [{ url: "/img/og.png", width: 1200, height: 630, alt: "vinext — Run Next.js on Vite" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+  },
 };
 
 export default function RootLayout({

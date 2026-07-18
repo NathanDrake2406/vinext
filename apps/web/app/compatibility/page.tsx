@@ -9,6 +9,7 @@
  * Data is read from the `DB` D1 binding via Drizzle. Results are filtered by
  * `kind` (defaults to "deploy"; future suites can be selected via ?kind=...).
  */
+import type { Metadata } from "next";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/ssr";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/app/lib/db/client";
@@ -28,6 +29,12 @@ import { getSuiteSupport, NON_SUPPORTED_SUITES } from "./suite-support";
 // when a nightly deploy-suite run lands, so 5 minutes of staleness is fine
 // and keeps the page snappy without re-querying D1 on every request.
 export const revalidate = 300;
+
+export const metadata: Metadata = {
+  title: "Compatibility",
+  description:
+    "How much of the Next.js test suite passes on vinext today — per-file results and pass-rate trend over time.",
+};
 
 /**
  * The `kind` discriminator on stored runs. The schema is designed to support
