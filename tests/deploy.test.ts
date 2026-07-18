@@ -3265,18 +3265,16 @@ enabled = true
     });
   });
 
-  it("ignores braces in TOML inline-table comments", () => {
+  it("ignores braces in a trailing TOML comment", () => {
+    // TOML inline tables must stay on one line, so a comment can only trail
+    // after the real closing brace — never sit inside it. A misleading `}`
+    // in that trailing comment must not confuse cache/version_metadata
+    // extraction.
     writeFile(
       tmpDir,
       "wrangler.toml",
-      `cache = {
-  enabled = true, # misleading }
-  cross_version_cache = false
-}
-version_metadata = {
-  # another misleading }
-  binding = "VINEXT_VERSION_METADATA"
-}
+      `cache = { enabled = true, cross_version_cache = false } # misleading }
+version_metadata = { binding = "VINEXT_VERSION_METADATA" } # another misleading }
 `,
     );
 
