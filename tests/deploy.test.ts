@@ -61,7 +61,8 @@ import {
   mergeHeaders,
   resolveStaticAssetSignal,
 } from "../packages/vinext/src/server/worker-utils.js";
-import { domainCandidates, parseWranglerConfig, runTPR } from "../packages/cloudflare/src/tpr.js";
+import { domainCandidates, runTPR } from "../packages/cloudflare/src/tpr.js";
+import { parseWranglerConfig } from "../packages/cloudflare/src/wrangler-config.js";
 import { formatDeployHelp } from "../packages/cloudflare/src/deploy-help.js";
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────

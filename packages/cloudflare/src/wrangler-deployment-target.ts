@@ -4,13 +4,16 @@
  * `parseWranglerConfig` reads out of wrangler.jsonc/.toml.
  *
  * The env fallback and legacy_env Worker-name suffixing here are CDN-warmup
- * resolution rules, not generic Wrangler config fields — keeping them out of
- * tpr.ts keeps that module's `WranglerConfig` an honest TPR-input shape
- * instead of a shared deployment-semantics owner.
+ * resolution rules, not generic Wrangler config fields — they layer on the
+ * raw projection `wrangler-config.ts` owns.
  */
 
 import type { DeployOptions } from "./deploy.js";
-import { parseWranglerConfig, type WranglerCacheConfig, type WranglerConfig } from "./tpr.js";
+import {
+  parseWranglerConfig,
+  type WranglerCacheConfig,
+  type WranglerConfig,
+} from "./wrangler-config.js";
 
 export type WranglerDeploymentTarget = {
   cacheEnabled?: boolean;
