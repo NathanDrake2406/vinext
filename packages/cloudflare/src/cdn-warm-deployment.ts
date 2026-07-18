@@ -219,6 +219,10 @@ async function warmAndPromote(
         paths,
         headers,
         expectedVersionId: upload.versionId,
+        // The deployment summary claims "pre-warmed and confirmed", so a
+        // producer-only 200 is not enough — require cf-cache-status proof
+        // that the entry was stored and is servable from cache.
+        confirmCache: true,
         concurrency: options.warmCdnConcurrency,
         timeoutMs: options.warmCdnTimeout,
         retries: options.warmCdnRetries,

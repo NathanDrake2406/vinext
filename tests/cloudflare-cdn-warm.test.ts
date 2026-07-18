@@ -501,6 +501,103 @@ describe("Cloudflare CDN warmup", () => {
     expect(result.failures[0]?.error).toBe("HTTP 404");
   });
 
+  describe("cache-write confirmation (confirmCache)", () => {
+    const expectedVersionId = "22222222-2222-4222-8222-222222222222";
+    const cacheResponse = (cacheStatus: string | null, versionId = expectedVersionId): Response =>
+      new Response("html", {
+        status: 200,
+        headers: {
+          "x-vinext-worker-version": versionId,
+          ...(cacheStatus ? { "cf-cache-status": cacheStatus } : {}),
+        },
+      });
+    const warmOne = (fetchMock: typeof fetch, retries = 0) =>
+      warmCdnCache({
+        targetUrl: "https://app.example.com",
+        paths: ["/"],
+        expectedVersionId,
+        confirmCache: true,
+        retries,
+        retryDelayMs: 0,
+        fetchImpl: fetchMock,
+      });
+
+    it("accepts an immediate cache HIT without a confirm request", async () => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(cacheResponse("HIT"));
+
+      const result = await warmOne(fetchMock);
+
+      expect(result).toMatchObject({ total: 1, warmed: 1, failed: 0 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("confirms a MISS fill with a second cache-served request", async () => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(cacheResponse("MISS"))
+        .mockResolvedValueOnce(cacheResponse("HIT"));
+
+      const result = await warmOne(fetchMock);
+
+      expect(result).toMatchObject({ total: 1, warmed: 1, failed: 0 });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not count a fill that never comes back cache-served as warmed", async () => {
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => cacheResponse("MISS"));
+
+      const result = await warmOne(fetchMock, 1);
+
+      expect(result).toMatchObject({ total: 1, warmed: 0, failed: 1 });
+      expect(result.failures[0]?.error).toBe("cache entry not confirmed (cf-cache-status: MISS)");
+      // Two attempts, each a fill request plus a confirm request.
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+
+    it("treats an uncacheable BYPASS response as terminal without burning retries", async () => {
+      // Cache-Control: no-store / private / Set-Cookie produce BYPASS
+      // deterministically — the same response shape returns on every retry.
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async () => cacheResponse("BYPASS"));
+
+      const result = await warmOne(fetchMock, 3);
+
+      expect(result).toMatchObject({ total: 1, warmed: 0, failed: 1 });
+      expect(result.failures[0]?.error).toBe(
+        "response was not stored by Workers Cache (cf-cache-status: BYPASS)",
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails when the expected version responds without any cache status", async () => {
+      // A per-entrypoint cache override can disable Workers Cache while the
+      // top-level config still says enabled: the Worker answers 200 with the
+      // right version header but the cache never runs.
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(cacheResponse(null));
+
+      const result = await warmOne(fetchMock);
+
+      expect(result).toMatchObject({ total: 1, warmed: 0, failed: 1 });
+      expect(result.failures[0]?.error).toBe(
+        "response was not stored by Workers Cache (cf-cache-status: missing)",
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a confirm response served by a different Worker version", async () => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(cacheResponse("MISS"))
+        .mockResolvedValueOnce(cacheResponse("HIT", "11111111-1111-4111-8111-111111111111"));
+
+      const result = await warmOne(fetchMock);
+
+      expect(result).toMatchObject({ total: 1, warmed: 0, failed: 1 });
+      expect(result.failures[0]?.error).toContain("expected Worker version");
+    });
+  });
+
   it("reports warmup failures and throws in strict mode", async () => {
     writeFile(
       "dist/server/vinext-prerender.json",

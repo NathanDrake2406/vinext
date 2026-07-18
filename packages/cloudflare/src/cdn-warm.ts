@@ -22,6 +22,12 @@ export type CdnWarmOptions = {
   retryDelayMs?: number;
   strict?: boolean;
   expectedVersionId?: string;
+  /**
+   * Require cf-cache-status proof that Workers Cache stored the response, not
+   * just that the expected Worker produced it. A MISS fill is confirmed with a
+   * second identical request that must come back cache-served.
+   */
+  confirmCache?: boolean;
   fetchImpl?: typeof fetch;
 };
 
@@ -154,6 +160,36 @@ async function waitBeforeRetry(
   await new Promise((resolve) => setTimeout(resolve, retryDelayMs * 2 ** attempt));
 }
 
+const CF_CACHE_STATUS_HEADER = "cf-cache-status";
+/** Statuses proving the edge served the response from the cache partition. */
+const CACHE_SERVED_STATUSES = new Set(["HIT", "STALE", "UPDATING", "REVALIDATED"]);
+/** Statuses where the Worker ran and the response may have been written to cache. */
+const CACHE_FILL_STATUSES = new Set(["MISS", "EXPIRED"]);
+
+function getCacheStatus(response: Response): string | null {
+  return response.headers.get(CF_CACHE_STATUS_HEADER)?.toUpperCase() ?? null;
+}
+
+/**
+ * Null when the response proves the cache served it from the expected Worker
+ * version's partition; otherwise the reason it does not.
+ */
+function describeUnconfirmedCacheServe(
+  response: Response,
+  expectedVersionId: string | undefined,
+): string | null {
+  if (expectedVersionId) {
+    const actualVersionId = response.headers.get(VINEXT_WORKER_VERSION_HEADER);
+    if (actualVersionId !== expectedVersionId) {
+      return describeVersionMismatch(expectedVersionId, actualVersionId);
+    }
+  }
+  if (response.status >= 400) return `HTTP ${response.status}`;
+  const cacheStatus = getCacheStatus(response);
+  if (cacheStatus && CACHE_SERVED_STATUSES.has(cacheStatus)) return null;
+  return `cache entry not confirmed (${CF_CACHE_STATUS_HEADER}: ${cacheStatus ?? "missing"})`;
+}
+
 /** Error text for a response that didn't prove it came from the expected Worker version. */
 function describeVersionMismatch(
   expectedVersionId: string,
@@ -195,6 +231,7 @@ async function warmOnePath(
     fetchImpl: typeof fetch;
     headers?: HeadersInit;
     expectedVersionId?: string;
+    confirmCache?: boolean;
   },
 ): Promise<{ path: string; ok: true } | { path: string; ok: false; error: string }> {
   const url = buildWarmupUrl(options.targetUrl, pathname);
@@ -227,7 +264,41 @@ async function warmOnePath(
       }
 
       if (response.status < 400) {
-        return { path: pathname, ok: true };
+        if (!options.confirmCache) return { path: pathname, ok: true };
+
+        // "The expected version produced a 200" and "the edge stored that
+        // response in the version's cache partition" are different facts.
+        // Per-entrypoint cache overrides and response-level bypasses
+        // (Set-Cookie, Cache-Control: no-store/private) return a healthy 200
+        // that Workers Cache never stores — only cf-cache-status can tell
+        // those apart from a real warm.
+        const cacheStatus = getCacheStatus(response);
+        if (cacheStatus && CACHE_SERVED_STATUSES.has(cacheStatus)) {
+          return { path: pathname, ok: true };
+        }
+        if (!cacheStatus || !CACHE_FILL_STATUSES.has(cacheStatus)) {
+          // BYPASS/DYNAMIC or a missing header is deterministic for this
+          // response shape: the cache will never store it, so retrying only
+          // burns the retry budget on the same answer.
+          lastError = `response was not stored by Workers Cache (${CF_CACHE_STATUS_HEADER}: ${cacheStatus ?? "missing"})`;
+          break;
+        }
+
+        // MISS/EXPIRED started a fill. Only a second identical request coming
+        // back cache-served proves the fill became a reusable entry.
+        const confirm = await fetchWithTimeout(
+          options.fetchImpl,
+          url,
+          options.timeoutMs,
+          options.headers,
+          "manual",
+        );
+        await confirm.arrayBuffer();
+        const confirmError = describeUnconfirmedCacheServe(confirm, options.expectedVersionId);
+        if (!confirmError) return { path: pathname, ok: true };
+        lastError = confirmError;
+        await waitBeforeRetry(attempt, options.retries, options.retryDelayMs);
+        continue;
       }
 
       // These paths came from this build's prerender manifest, so even a 4xx
@@ -293,6 +364,7 @@ export async function warmCdnCache(options: CdnWarmOptions): Promise<CdnWarmResu
       fetchImpl,
       headers: options.headers,
       expectedVersionId: options.expectedVersionId,
+      confirmCache: options.confirmCache,
     }),
   );
 

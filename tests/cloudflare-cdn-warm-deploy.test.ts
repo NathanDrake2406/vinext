@@ -26,10 +26,10 @@ function formatFetchUrl(url: Parameters<typeof fetch>[0]): string {
   return url.url;
 }
 
-function versionedResponse(versionId = UPLOADED_VERSION_ID): Response {
+function versionedResponse(versionId = UPLOADED_VERSION_ID, cacheStatus = "HIT"): Response {
   return new Response("ok", {
     status: 200,
-    headers: { "x-vinext-worker-version": versionId },
+    headers: { "x-vinext-worker-version": versionId, "cf-cache-status": cacheStatus },
   });
 }
 
@@ -417,6 +417,62 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "promote",
       "triggers",
     ]);
+  });
+
+  it("does not report warmed when the uploaded version answers 200 but the cache never stores it", async () => {
+    // The uploaded version producing a 200 and Workers Cache storing that
+    // response are different facts — a BYPASS (e.g. Set-Cookie or no-store)
+    // passes the producer check while leaving the cache partition cold.
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    vi.mocked(fetch).mockImplementation(async () =>
+      versionedResponse(UPLOADED_VERSION_ID, "BYPASS"),
+    );
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) return currentDeploymentOutput();
+      if (isStage(args)) return "Staged version\nhttps://workers-cache.vinext.workers.dev\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
+      if (isPromotion(args)) return "Promoted version\n";
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/cached/intro"], {})).resolves.toMatchObject({
+      warmed: false,
+    });
+  });
+
+  it("confirms a MISS fill with a second request before promoting", async () => {
+    const events: string[] = [];
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    vi.mocked(fetch)
+      .mockImplementationOnce(async () => {
+        events.push("fetch:miss");
+        return versionedResponse(UPLOADED_VERSION_ID, "MISS");
+      })
+      .mockImplementationOnce(async () => {
+        events.push("fetch:hit");
+        return versionedResponse(UPLOADED_VERSION_ID, "HIT");
+      });
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) return currentDeploymentOutput();
+      if (isStage(args)) return "Staged version\nhttps://workers-cache.vinext.workers.dev\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
+      if (isPromotion(args)) {
+        events.push("promote");
+        return "Promoted version\n";
+      }
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/cached/intro"], {})).resolves.toMatchObject({
+      warmed: true,
+    });
+    expect(events).toEqual(["fetch:miss", "fetch:hit", "promote"]);
   });
 
   it("promotes without a confirmed warm-up in non-strict mode, and says so instead of a plain success", async () => {
