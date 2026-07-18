@@ -6,7 +6,7 @@
  *
  *   validate → upload → inspect deployment → stage new version at 0% →
  *   warm through a version override → verify the producing version →
- *   promote → apply triggers
+ *   re-verify the staged split is still active → promote → apply triggers
  *
  * If warming fails, the new version stays staged at 0% and the previous
  * version stays at 100% — that split is already the safe state, so failure
@@ -245,6 +245,8 @@ async function warmAndPromote(
     );
   }
 
+  verifyStagedSplitBeforePromotion(root, options, previousVersionId, upload.versionId);
+
   let deployed: WranglerVersionDeployResult;
   try {
     deployed = runWranglerVersionDeploy(
@@ -320,6 +322,54 @@ function validateCdnWarmupConfiguration(
     );
   }
   return target;
+}
+
+/**
+ * Promotion mutates whatever deployment is currently active, so it must first
+ * prove that deployment is still the split this transaction staged. If another
+ * deploy promoted its own version during the warmup window, this upload's
+ * version overrides stopped applying (overrides only resolve inside the
+ * current deployment) and promoting here would silently overwrite the other
+ * actor's deployment — a warmup degradation never grants that permission, in
+ * strict or non-strict mode. Wrangler offers no compare-and-swap, so a race
+ * remains between this read and the promote command; revalidating shrinks the
+ * exposed window from the whole warmup duration to that gap.
+ */
+function verifyStagedSplitBeforePromotion(
+  root: string,
+  options: Pick<DeployOptions, "preview" | "env" | "name" | "config">,
+  previousVersionId: string,
+  uploadedVersionId: string,
+): void {
+  const unpromotedState =
+    `Worker version ${uploadedVersionId} was not promoted; ` +
+    "re-run the deploy once the current deployment state is understood.";
+  const recheck = readWranglerDeploymentStatus(root, options);
+  if ("error" in recheck) {
+    throw new Error(
+      `Could not re-read the current deployment before promotion (${recheck.error}). ` +
+        `Promotion requires confirming the staged traffic split is still active. ${unpromotedState}`,
+    );
+  }
+  const expectedSplit = new Map([
+    [previousVersionId, 100],
+    [uploadedVersionId, 0],
+  ]);
+  const versions = recheck.deployment.versions;
+  const matchesStagedSplit =
+    versions.length === expectedSplit.size &&
+    new Set(versions.map((version) => version.versionId)).size === versions.length &&
+    versions.every((version) => expectedSplit.get(version.versionId) === version.percentage);
+  if (!matchesStagedSplit) {
+    const observedTraffic = versions.length
+      ? versions.map((version) => `${version.versionId}@${version.percentage}%`).join(", ")
+      : "no deployed versions";
+    throw new Error(
+      "The current deployment no longer matches the staged traffic split " +
+        `(expected ${previousVersionId}@100%, ${uploadedVersionId}@0%; observed ${observedTraffic}). ` +
+        `Another deploy likely ran during the warmup window. ${unpromotedState}`,
+    );
+  }
 }
 
 function readWranglerDeploymentStatus(
