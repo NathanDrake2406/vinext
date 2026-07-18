@@ -104,9 +104,10 @@ export function Tabs<const Value extends string>({
             aria-selected={selected}
             tabIndex={selected ? 0 : -1}
             className={cx(
-              "relative shrink-0 px-3 py-2.5 font-mono text-xs text-[var(--mute)] transition-colors hover:text-[var(--ink)]",
-              selected &&
-                "text-[var(--ink)] after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-[var(--orange)]",
+              // Underline lives on every tab (scaled to zero when unselected) so
+              // selection grows it in instead of popping a new pseudo-element.
+              "relative shrink-0 px-3 py-2.5 font-mono text-xs text-[var(--mute)] transition-colors after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:origin-center after:scale-x-0 after:bg-[var(--orange)] after:transition-transform after:duration-200 after:ease-[var(--ease-out)] hover:text-[var(--ink)] motion-reduce:after:transition-none",
+              selected && "text-[var(--ink)] after:scale-x-100",
             )}
             onClick={() => onValueChange(tab.value)}
             onKeyDown={(event) => {

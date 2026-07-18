@@ -323,16 +323,48 @@ button:active {
     cx 260ms var(--ease-in-out),
     cy 260ms var(--ease-in-out);
 }
+/* Grid dots reflow when the router filter changes; sliding them matches the
+   260ms morph the line chart already does for the same filter, so the two
+   visualisations move as one. Entering/leaving dots still pop — only the
+   surviving majority animates. */
+.compat-dot {
+  transition:
+    x 260ms var(--ease-in-out),
+    y 260ms var(--ease-in-out);
+}
 .benchmark-series {
   transition: opacity 180ms var(--ease-out);
 }
 @media (prefers-reduced-motion: reduce) {
   .compatibility-line,
-  .compatibility-point {
+  .compatibility-point,
+  .compat-dot {
     transition: none;
   }
   .benchmark-series {
     transition-duration: 120ms;
+  }
+}
+/* 404 terminal card: output lines print in sequence like a real CLI run.
+   `backwards` holds each line invisible through its stagger delay. */
+.nf-line {
+  animation: nf-line-in 300ms var(--ease-out) backwards;
+}
+@keyframes nf-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nf-line {
+    animation-name: nf-line-fade;
+    animation-duration: 200ms;
+  }
+}
+@keyframes nf-line-fade {
+  from {
+    opacity: 0;
   }
 }
 /* Copy outcome is carried by the icon, label, and a restrained state tint. */

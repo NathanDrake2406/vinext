@@ -451,6 +451,7 @@ export function ContributionGrid({
             return (
               <rect
                 key={cell.suite}
+                className="compat-dot"
                 x={x}
                 y={y}
                 width={CELL_SIZE}
