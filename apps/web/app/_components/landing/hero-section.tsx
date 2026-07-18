@@ -39,7 +39,12 @@ export function HeroSection() {
             } satisfies LandingStyle
           }
         >
-          <div data-el="l1" style={{ willChange: "transform,opacity" } satisfies LandingStyle}>
+          {/* h1 allows phrasing content only, so the motion wrappers are
+              display:block spans rather than divs. */}
+          <span
+            data-el="l1"
+            style={{ display: "block", willChange: "transform,opacity" } satisfies LandingStyle}
+          >
             <span
               data-intro=""
               style={
@@ -53,8 +58,11 @@ export function HeroSection() {
             >
               Run Next.js
             </span>
-          </div>
-          <div data-el="l2" style={{ willChange: "transform,opacity" } satisfies LandingStyle}>
+          </span>
+          <span
+            data-el="l2"
+            style={{ display: "block", willChange: "transform,opacity" } satisfies LandingStyle}
+          >
             <span
               data-intro=""
               style={
@@ -78,7 +86,7 @@ export function HeroSection() {
                 Vite.
               </span>
             </span>
-          </div>
+          </span>
         </h1>
         <div
           data-el="heroBottom"
