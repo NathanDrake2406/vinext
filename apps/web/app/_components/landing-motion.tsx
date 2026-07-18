@@ -30,7 +30,6 @@ type LandingElementName =
   | "heroTop"
   | "l1"
   | "l2"
-  | "mq"
   | "nextFill"
   | "nextjsDone"
   | "nextLabel"
@@ -194,7 +193,6 @@ function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
     const lineTwo = findElement(root, "l2");
     const heroTop = findElement(root, "heroTop");
     const heroBottom = findElement(root, "heroBottom");
-    const marquee = findElement(root, "mq");
     const globe = findElement(root, "globe");
     const deployGrid = findElement(root, "deployGrid");
     if (heroBg) heroBg.style.opacity = "1";
@@ -248,11 +246,6 @@ function useHeroMotion(rootRef: RootRef, reducedMotion: boolean) {
         }
       }
 
-      if (marquee) {
-        const relativeTop = marquee.getBoundingClientRect().top - viewportHeight;
-        const skew = Math.max(-5, Math.min(5, velocity * 0.08));
-        marquee.style.transform = `translate3d(${relativeTop * 0.42}px,0,0) skewX(${skew}deg)`;
-      }
       if (globe && deployGrid) {
         const rect = deployGrid.getBoundingClientRect();
         const progress = clamp((viewportHeight - rect.top) / (viewportHeight + rect.height));

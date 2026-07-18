@@ -131,8 +131,7 @@ body {
   [data-el="l2"],
   [data-el="heroTop"],
   [data-el="heroBottom"],
-  [data-el="globe"],
-  [data-el="mq"] {
+  [data-el="globe"] {
     transform: none !important;
   }
   .token-dialog {
@@ -792,12 +791,8 @@ button:active {
      a light ground, so neutralise them per-theme rather than via token swap. */
 [data-theme="light"] [data-el="l2"] [style*="text-shadow"],
 [data-theme="light"] [data-el="viteLabel"],
-[data-theme="light"] [data-el="mq"] [style*="text-shadow"],
 [data-theme="light"] [data-el="payoff"] [style*="text-shadow"] {
   text-shadow: none !important;
-}
-[data-theme="light"] [data-el="mq"] [style*="text-stroke"] {
-  -webkit-text-stroke-color: rgba(var(--ink-rgb), 0.42) !important;
 }
 [data-theme="light"] [data-el="conn"] {
   background: linear-gradient(180deg, rgba(var(--orange-rgb), 0.5), transparent) !important;

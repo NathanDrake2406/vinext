@@ -4,7 +4,6 @@ import { CompatibilitySection } from "./_components/landing/compatibility-sectio
 import { DeploySection } from "./_components/landing/deploy-section";
 import { EngineSwapSection } from "./_components/landing/engine-swap-section";
 import { GetStartedSection } from "./_components/landing/get-started-section";
-import { HeroMarquee } from "./_components/landing/hero-marquee";
 import { HeroSection } from "./_components/landing/hero-section";
 import { LandingAtmosphere } from "./_components/landing/landing-atmosphere";
 import { landingRootStyle, type LandingStyle } from "./_components/landing/landing-styles";
@@ -20,7 +19,6 @@ export function LandingPage({ stats }: { stats: LandingStats }) {
       <LandingAtmosphere />
       <div style={{ position: "relative", zIndex: "2" } satisfies LandingStyle}>
         <HeroSection />
-        <HeroMarquee />
         <EngineSwapSection />
         <BenchmarkSection stats={stats} />
       </div>
