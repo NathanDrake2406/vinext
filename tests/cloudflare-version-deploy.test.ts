@@ -9,6 +9,7 @@ import {
   parseWranglerDeploymentStatusOutput,
   parseWranglerVersionUploadOutput,
   runWranglerVersionDeploy,
+  runWranglerTriggersDeploy,
   runWranglerVersionUpload,
 } from "../packages/cloudflare/src/version-deploy.js";
 
@@ -171,6 +172,17 @@ describe("Cloudflare Wrangler version deployment helpers", () => {
       args: ["triggers", "deploy", "--env", "preview"],
       env: "preview",
     });
+  });
+
+  it("reports a custom domain from trigger deployment output", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const execute = vi.fn(
+      () => "Deployed app triggers\n  app.example.com (custom domain - zone name: example.com)\n",
+    );
+
+    expect(runWranglerTriggersDeploy("/tmp/app", {}, execute as never).deployedUrl).toBe(
+      "https://app.example.com",
+    );
   });
 
   it("parses version IDs and preview URLs from Wrangler text output", () => {

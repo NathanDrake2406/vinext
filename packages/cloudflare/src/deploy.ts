@@ -60,7 +60,7 @@ import {
   viteConfigHasImageAdapter,
   workerEntryHasCacheHandler,
 } from "./deploy-config.js";
-import { parseWorkersDevUrl } from "./workers-dev-url.js";
+import { parseWorkerDeploymentUrl } from "./worker-deployment-url.js";
 import { PHASE_PRODUCTION_BUILD } from "vinext/shims/constants";
 import { buildPrerenderKVPairs, type KVBulkPair } from "./prerender-kv-populate.js";
 
@@ -467,9 +467,7 @@ export async function runWranglerDeploy(
     });
   });
 
-  // Parse the deployed URL from wrangler output
-  // Wrangler prints: "Published <name> (version_id)\n  https://<name>.<subdomain>.workers.dev"
-  const deployedUrl = parseWorkersDevUrl(output);
+  const deployedUrl = parseWorkerDeploymentUrl(output);
 
   return deployedUrl ?? "(URL not detected in wrangler output)";
 }
