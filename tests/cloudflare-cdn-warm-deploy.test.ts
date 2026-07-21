@@ -171,6 +171,21 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
+  it.each(["123-app", "My-App"])(
+    "rejects Worker name %s when it cannot be encoded as an override dictionary key",
+    async (workerName) => {
+      writeFile("wrangler.jsonc", warmupWranglerConfig({ name: workerName }));
+      const { deployWithCdnWarmup } =
+        await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+      await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
+        `cannot encode Worker name "${workerName}"`,
+      );
+      expect(execFileSyncMock).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses an environment-local cache block instead of the inherited top-level block", async () => {
     writeFile(
       "wrangler.jsonc",
@@ -363,7 +378,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
 
     await expect(
       deployWithCdnWarmup(tmpDir, ["/"], { warmCdnConcurrency: 1, warmCdnStrict: true }),
-    ).rejects.toThrow(`staged at 0% and was not promoted`);
+    ).rejects.toThrow(`This deploy did not promote the uploaded Worker version`);
     expect(execFileSyncMock.mock.calls.some(([, args]) => isPromotion(args as string[]))).toBe(
       false,
     );
@@ -731,7 +746,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     );
   });
 
-  it("leaves the new version staged at 0% when strict warmup fails, without a restore mutation", async () => {
+  it("does not claim the staged split is still active when strict warmup fails", async () => {
     const events: string[] = [];
     writeFile(
       "wrangler.jsonc",
@@ -773,10 +788,10 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         warmCdnStrict: true,
       }),
     ).rejects.toThrow(
-      /CDN warmup failed for 1\/1 path\(s\); verified 0\/1\.[\s\S]*staged at 0% and was not promoted/,
+      /CDN warmup failed for 1\/1 path\(s\); verified 0\/1\.[\s\S]*This deploy did not promote[\s\S]*another deploy may have changed the current traffic split/,
     );
-    // No restore/promote/triggers call: staging left the previous version at
-    // 100% and the new one at 0%, which is already the safe state.
+    // No restore/promote/triggers call: this transaction does not overwrite
+    // whatever active deployment state now exists.
     expect(events).toEqual(["upload", "status", "stage", "fetch:old-version"]);
   });
 
@@ -855,7 +870,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         warmCdnRetries: 0,
         warmCdnStrict: true,
       }),
-    ).rejects.toThrow("is staged at 0% and was not promoted");
+    ).rejects.toThrow("This deploy did not promote the uploaded Worker version");
 
     const result = await deployWithCdnWarmup(tmpDir, ["/"], {
       warmCdnRetries: 0,

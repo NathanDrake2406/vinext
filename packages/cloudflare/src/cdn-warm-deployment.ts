@@ -8,15 +8,15 @@
  *   warm through a version override → verify the producing version →
  *   re-verify the staged split is still active → promote → apply triggers
  *
- * If warming fails, the new version stays staged at 0% and the previous
- * version stays at 100% — that split is already the safe state, so failure
- * just reports it rather than issuing another remote mutation to undo it. A
- * promotion whose CLI process fails ambiguously is reported the same way:
- * the operator is told to check `wrangler deployments status`, not silently
- * reconciled. It lives apart from `deploy.ts` so the CLI module stays a thin
- * caller and the sequencing can be tested directly. Worker-name/host/binding
- * resolution lives in `wrangler-deployment-target.ts`, not here — this module
- * only sequences wrangler calls against an already-resolved target.
+ * If warming fails, this transaction does not promote the new version or
+ * issue another remote mutation to undo the staged split. Another deploy may
+ * have changed that split during warming, so failure directs the operator to
+ * inspect the current deployment rather than asserting stale remote state. A
+ * promotion whose CLI process fails ambiguously is reported the same way. It
+ * lives apart from `deploy.ts` so the CLI module stays a thin caller and the
+ * sequencing can be tested directly. Worker-name/host/binding resolution
+ * lives in `wrangler-deployment-target.ts`, not here — this module only
+ * sequences wrangler calls against an already-resolved target.
  */
 
 import { VINEXT_VERSION_METADATA_BINDING } from "vinext/internal/server/worker-version";
@@ -177,8 +177,8 @@ function promoteWithoutWarmup(
  * detach the current production hostname; running it inside the warm window
  * means a warm/promote failure leaves production routing pointed at a version
  * that never got promoted. Warming instead targets the already-attached
- * production host via the version-override header, so the risky window only
- * ever leaves the new version staged at 0% — already the safe state.
+ * production host via the version-override header, so mutations from this
+ * transaction leave the new version staged at 0% — already the safe state.
  */
 async function warmAndPromote(
   root: string,
@@ -271,8 +271,10 @@ async function warmAndPromote(
   } catch (error) {
     throw new Error(
       `${formatUnknownError(error)}\n\n` +
-        `CDN warmup failed. The previous Worker version (${previousVersionId}) remains at 100% ` +
-        `traffic; the uploaded version (${upload.versionId}) is staged at 0% and was not promoted.`,
+        `CDN warmup failed. This deploy did not promote the uploaded Worker version (${upload.versionId}). ` +
+        `It was staged at 0% alongside the previous version (${previousVersionId}) before warming, ` +
+        "but another deploy may have changed the current traffic split. Run `wrangler deployments status` " +
+        "to inspect the active deployment before retrying.",
     );
   }
 
@@ -340,6 +342,14 @@ function validateCdnWarmupConfiguration(
     throw new Error(
       `CDN warmup requires a version_metadata binding named "${VINEXT_VERSION_METADATA_BINDING}" in ${targetLabel}. ` +
         "Re-run vinext init with CDN warmup enabled or configure the binding before deploying.",
+    );
+  }
+  if (target.workerName && !isStructuredDictionaryKey(target.workerName)) {
+    throw new Error(
+      `CDN warmup cannot encode Worker name "${target.workerName}" in the ` +
+        "Cloudflare-Workers-Version-Overrides header. RFC 8941 dictionary keys must " +
+        "start with a lowercase letter and contain only lowercase letters, digits, `-`, `_`, `.` or `*`. " +
+        "Rename the Worker to a compatible lowercase name before using CDN warmup.",
     );
   }
   if (target.crossVersionCache) {
@@ -438,6 +448,11 @@ function getZeroPercentStagingTraffic(
 
 function quoteStructuredHeaderString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/** RFC 8941 key grammar used by Cloudflare's version-override dictionary. */
+function isStructuredDictionaryKey(value: string): boolean {
+  return /^[a-z*][a-z0-9_.*-]*$/.test(value);
 }
 
 function buildVersionOverrideHeaders(

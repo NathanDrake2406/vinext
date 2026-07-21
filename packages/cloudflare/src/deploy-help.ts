@@ -31,7 +31,8 @@ export function formatDeployHelp(): string {
     --warm-cdn-retries <n>   Retries for warmup failures (default: 3)
                              Increase when Worker version propagation is slow
     --warm-cdn-strict        Fail when staging or any CDN warmup request fails.
-                             The previous version remains at 100% until warming succeeds
+                             This deploy will not promote after a warmup failure;
+                             inspect deployment status if another deploy may have run
                              (static exports skip Worker-version warmup because Assets serve them)
     --warm-cdn-include-fallbacks
                              Also warm PPR fallback-shell placeholder paths
