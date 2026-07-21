@@ -118,6 +118,8 @@ export type NextHeader = {
   headers: Array<{ key: string; value: string }>;
   /** See {@link NextRedirect.basePath}. */
   basePath?: false;
+  /** See {@link NextRedirect.locale}. */
+  locale?: false;
 };
 
 export type NextI18nConfig = {
@@ -137,7 +139,7 @@ export type NextI18nConfig = {
     domain: string;
     defaultLocale: string;
     locales?: string[];
-    http?: boolean;
+    http?: true;
   }>;
 };
 
@@ -174,6 +176,12 @@ export type NextConfig = {
   assetPrefix?: string;
   /** Whether to add trailing slashes */
   trailingSlash?: boolean;
+  /** TypeScript build settings. */
+  typescript?: {
+    /** Project-relative path to the TypeScript configuration file. */
+    tsconfigPath?: string;
+    [key: string]: unknown;
+  };
   /** Internationalization routing config */
   i18n?: NextI18nConfig;
   /** URL redirect rules */
@@ -317,6 +325,8 @@ export type NextConfig = {
      * values are clamped to Number.MAX_SAFE_INTEGER.
      */
     prefetchInlining?: boolean | { maxBundleSize?: number; maxSize?: number };
+    /** Header names forwarded by Pages Router `res.revalidate()` internal requests. */
+    allowedRevalidateHeaderKeys?: string[];
     [key: string]: unknown;
   };
   /**
@@ -388,6 +398,7 @@ export type ResolvedNextConfig = {
    */
   assetPrefix: string;
   trailingSlash: boolean;
+  typescript: { tsconfigPath?: string };
   output: "" | "export" | "standalone";
   pageExtensions: string[];
   resolveExtensions: string[] | null;
@@ -422,6 +433,8 @@ export type ResolvedNextConfig = {
   allowedDevOrigins: string[];
   /** Extra allowed origins for server action CSRF validation (from experimental.serverActions.allowedOrigins). */
   serverActionsAllowedOrigins: string[];
+  /** Header names forwarded by Pages Router `res.revalidate()` internal requests. */
+  allowedRevalidateHeaderKeys: string[];
   /** Packages whose barrel imports should be optimized (from experimental.optimizePackageImports). */
   optimizePackageImports: string[];
   /** Packages explicitly requested for server/client transpilation. */
@@ -1532,6 +1545,7 @@ export async function resolveNextConfig(
       basePath: "",
       assetPrefix: "",
       trailingSlash: false,
+      typescript: {},
       output: "",
       pageExtensions: normalizePageExtensions(),
       resolveExtensions: null,
@@ -1549,6 +1563,7 @@ export async function resolveNextConfig(
       aliases: {},
       allowedDevOrigins: [],
       serverActionsAllowedOrigins: [],
+      allowedRevalidateHeaderKeys: [],
       optimizePackageImports: [],
       transpilePackages: [],
       turbopackTranspilePackages: [...DEFAULT_TRANSPILED_PACKAGES],
@@ -1823,7 +1838,8 @@ export async function resolveNextConfig(
   const cacheMaxMemorySize: number | undefined =
     typeof config.cacheMaxMemorySize === "number" ? config.cacheMaxMemorySize : undefined;
 
-  // Apply Next.js i18n locale-prefix transformation to redirects/rewrites.
+  // Apply Next.js i18n locale-prefix transformation to redirects, rewrites,
+  // and headers.
   // When i18n is configured and a rule does NOT carry `locale: false`, the
   // source is rewritten to match locale-prefixed URLs. Rules with
   // `locale: false` are left untouched so user-supplied `:locale` segments
@@ -1837,6 +1853,7 @@ export async function resolveNextConfig(
       afterFiles: applyLocaleToRoutes(rewrites.afterFiles, i18n, "rewrite", opts),
       fallback: applyLocaleToRoutes(rewrites.fallback, i18n, "rewrite", opts),
     };
+    headers = applyLocaleToRoutes(headers, i18n, "header", opts);
   }
 
   const images = config.images
@@ -1861,6 +1878,10 @@ export async function resolveNextConfig(
     basePath: config.basePath ?? "",
     assetPrefix: normalizeAssetPrefix(config.assetPrefix),
     trailingSlash: config.trailingSlash ?? false,
+    typescript:
+      typeof config.typescript?.tsconfigPath === "string"
+        ? { tsconfigPath: config.typescript.tsconfigPath }
+        : {},
     output: output === "export" || output === "standalone" ? output : "",
     pageExtensions,
     resolveExtensions: resolveExtensions ?? webpackProbe.resolveExtensions,
@@ -1883,6 +1904,11 @@ export async function resolveNextConfig(
     aliases,
     allowedDevOrigins,
     serverActionsAllowedOrigins,
+    allowedRevalidateHeaderKeys: Array.isArray(experimental?.allowedRevalidateHeaderKeys)
+      ? (experimental.allowedRevalidateHeaderKeys as unknown[])
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.toLowerCase())
+      : [],
     optimizePackageImports,
     transpilePackages,
     turbopackTranspilePackages,
