@@ -45,9 +45,16 @@ type AppRscInterceptForMatching = {
   interceptLayouts: readonly unknown[];
   interceptLayoutSegments?: readonly (readonly string[])[];
   interceptBranchSegments?: readonly string[];
+  interceptLoadings?: readonly unknown[];
+  interceptLoadingTreePositions?: readonly number[];
+  interceptNotFoundBranchSegments?: readonly string[];
   __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
+  __loadInterceptLoadings?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   __pageLoader?: (() => Promise<unknown>) | null;
+  notFound?: unknown;
+  __loadNotFound?: (() => Promise<unknown>) | null;
+  notFoundTreePosition?: number | null;
   params: readonly string[];
 };
 
@@ -64,13 +71,20 @@ type AppRscSiblingInterceptForMatching = {
   interceptLayouts: readonly unknown[];
   interceptLayoutSegments?: readonly (readonly string[])[];
   interceptBranchSegments?: readonly string[];
+  interceptLoadings?: readonly unknown[];
+  interceptLoadingTreePositions?: readonly number[];
+  interceptNotFoundBranchSegments?: readonly string[];
   __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
+  __loadInterceptLoadings?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   // Sibling intercept pages are lazy-loaded (manifest emits `page: null` plus a
   // `__pageLoader`) so the intercepting page's CSS chunk stays isolated in
   // production, matching slot intercepts (see #1738). The loader is awaited on
   // demand by resolveAppPageInterceptState / probePage.
   __pageLoader?: (() => Promise<unknown>) | null;
+  notFound?: unknown;
+  __loadNotFound?: (() => Promise<unknown>) | null;
+  notFoundTreePosition?: number | null;
   params: readonly string[];
 };
 
@@ -91,6 +105,8 @@ type AppRscInterceptMatch = AppRscInterceptLookupEntry & {
 type AppRscInterceptLoadState = {
   page: unknown;
   pageLoading: Promise<unknown> | null;
+  notFound: unknown;
+  notFoundLoading: Promise<unknown> | null;
   interceptLayoutsLoading: Promise<readonly unknown[]> | null;
 };
 
@@ -105,9 +121,16 @@ type AppRscInterceptLookupEntry = {
   interceptLayouts: readonly unknown[];
   interceptLayoutSegments?: readonly (readonly string[])[];
   interceptBranchSegments?: readonly string[];
+  interceptLoadings?: readonly unknown[];
+  interceptLoadingTreePositions?: readonly number[];
+  interceptNotFoundBranchSegments?: readonly string[];
   __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
+  __loadInterceptLoadings?: readonly (() => Promise<unknown>)[] | null;
   page: unknown;
   __pageLoader?: (() => Promise<unknown>) | null;
+  notFound: unknown;
+  __loadNotFound?: (() => Promise<unknown>) | null;
+  notFoundTreePosition?: number | null;
   __loadState: AppRscInterceptLoadState;
   params: readonly string[];
   slotId: string | null;
@@ -384,12 +407,21 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
             interceptLayouts: intercept.interceptLayouts,
             interceptLayoutSegments: intercept.interceptLayoutSegments,
             interceptBranchSegments: intercept.interceptBranchSegments,
+            interceptLoadings: intercept.interceptLoadings,
+            interceptLoadingTreePositions: intercept.interceptLoadingTreePositions,
+            interceptNotFoundBranchSegments: intercept.interceptNotFoundBranchSegments,
             __loadInterceptLayouts: intercept.__loadInterceptLayouts,
+            __loadInterceptLoadings: intercept.__loadInterceptLoadings,
             page: intercept.page,
             __pageLoader: intercept.__pageLoader,
+            notFound: intercept.notFound,
+            __loadNotFound: intercept.__loadNotFound,
+            notFoundTreePosition: intercept.notFoundTreePosition,
             __loadState: {
               page: intercept.page,
               pageLoading: null,
+              notFound: intercept.notFound,
+              notFoundLoading: null,
               interceptLayoutsLoading: null,
             },
             params: intercept.params,
@@ -415,12 +447,21 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
           interceptLayouts: intercept.interceptLayouts,
           interceptLayoutSegments: intercept.interceptLayoutSegments,
           interceptBranchSegments: intercept.interceptBranchSegments,
+          interceptLoadings: intercept.interceptLoadings,
+          interceptLoadingTreePositions: intercept.interceptLoadingTreePositions,
+          interceptNotFoundBranchSegments: intercept.interceptNotFoundBranchSegments,
           __loadInterceptLayouts: intercept.__loadInterceptLayouts,
+          __loadInterceptLoadings: intercept.__loadInterceptLoadings,
           page: intercept.page,
           __pageLoader: intercept.__pageLoader,
+          notFound: intercept.notFound,
+          __loadNotFound: intercept.__loadNotFound,
+          notFoundTreePosition: intercept.notFoundTreePosition,
           __loadState: {
             page: intercept.page,
             pageLoading: null,
+            notFound: intercept.notFound,
+            notFoundLoading: null,
             interceptLayoutsLoading: null,
           },
           params: intercept.params,
