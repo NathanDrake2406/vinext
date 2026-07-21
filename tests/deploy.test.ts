@@ -3396,6 +3396,21 @@ describe("resolveWranglerDeploymentTarget — production hosts", () => {
     ]);
   });
 
+  it("does not treat a disabled route as an active production route", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        name: "my-worker",
+        routes: [{ pattern: "disabled.example.com/*", enabled: false }],
+      }),
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, {});
+    expect(target?.hasProductionRoute).toBe(false);
+    expect(target?.productionHosts).toEqual([]);
+  });
+
   it("uses the route pattern host instead of the containing zone", () => {
     writeFile(
       tmpDir,

@@ -11,8 +11,26 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { experimental_readRawConfig } from "wrangler";
+import { createRequire } from "node:module";
 import { isUnknownRecord } from "./utils/cache-control-metadata.js";
+
+const require = createRequire(import.meta.url);
+type ExperimentalReadRawConfig = (
+  args: { config: string },
+  options?: Record<string, never>,
+) => { rawConfig: unknown };
+let experimentalReadRawConfig: ExperimentalReadRawConfig | undefined;
+
+function getExperimentalReadRawConfig(): ExperimentalReadRawConfig {
+  // Loading Wrangler initializes its entire CLI runtime. Keep that cost off
+  // deploy --help, ordinary deploys, and every other path that never reads a
+  // Wrangler config while still delegating actual parsing to Wrangler.
+  return (experimentalReadRawConfig ??= (
+    require("wrangler") as {
+      experimental_readRawConfig: ExperimentalReadRawConfig;
+    }
+  ).experimental_readRawConfig);
+}
 
 export type WranglerConfig = {
   accountId?: string;
@@ -76,7 +94,7 @@ export function parseWranglerConfig(root: string, configPath?: string): Wrangler
  */
 function readRawWranglerConfig(filepath: string): Record<string, unknown> | null {
   try {
-    return experimental_readRawConfig({ config: filepath }, {}).rawConfig as Record<
+    return getExperimentalReadRawConfig()({ config: filepath }, {}).rawConfig as Record<
       string,
       unknown
     >;
@@ -204,6 +222,7 @@ function extractVersionMetadataBinding(config: Record<string, unknown>): string 
 }
 
 function extractDomainFromRoute(route: unknown): string | null {
+  if (isUnknownRecord(route) && route.enabled === false) return null;
   if (typeof route === "string") {
     const domain = cleanDomain(route);
     return domain && !domain.includes("workers.dev") ? domain : null;
