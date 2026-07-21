@@ -401,6 +401,7 @@ import {
   isrGet as __isrGet,
   isrSet as __isrSet,
   isrSetPrerenderedAppPage as __isrSetPrerenderedAppPage,
+  isOnDemandRevalidateRequest as __isOnDemandRevalidateRequest,
   triggerBackgroundRegeneration as __triggerBackgroundRegeneration,
 } from ${JSON.stringify(isrCachePath)};
 // Import server-only state module to register ALS-backed accessors.
@@ -652,6 +653,8 @@ async function buildPageElements(route, params, routePath, pageRequest, layoutPa
 }
 
 const __i18nConfig = ${JSON.stringify(i18nConfig)};
+export { __i18nConfig };
+export const authorizeOnDemandRevalidate = __isOnDemandRevalidateRequest;
 const __configRedirects = ${JSON.stringify(redirects)};
 const __configRewrites = ${JSON.stringify(rewrites)};
 const __configHeaders = ${JSON.stringify(headers)};
@@ -814,6 +817,7 @@ export default createAppRscHandler({
           observeMetadataSearchParamsAccess: buildOptions?.observeMetadataSearchParamsAccess === true,
           observePageSearchParamsAccess: buildOptions?.observePageSearchParamsAccess === true,
           serveStreamingMetadata: buildOptions?.serveStreamingMetadata,
+          isProduction: process.env.NODE_ENV === "production",
         }, layoutParamAccess, displayPathname);
       },
       clientReuseManifest,
@@ -922,6 +926,7 @@ export default createAppRscHandler({
         const __activeIntercept = findIntercept(interceptionPathname, interceptionContext);
         return __fallbackRenderer.renderHttpAccessFallback(route, statusCode, isRscRequest, request, opts, scriptNonce, currentMiddlewareContext, {
           isEdgeRuntime: __isEdgeRuntime(__segmentConfig.runtime),
+          routePathname: cleanPathname,
           sourcePageSegments: __activeIntercept?.slotKey === __SIBLING_PAGE_INTERCEPT_SLOT_KEY
             ? __activeIntercept.sourcePageSegments
             : null,
@@ -1178,6 +1183,9 @@ export default createAppRscHandler({
           interceptLayouts: intercept.interceptLayouts,
           interceptLayoutSegments: intercept.interceptLayoutSegments,
           interceptBranchSegments: intercept.interceptBranchSegments,
+          interceptNotFoundBranchSegments: intercept.interceptNotFoundBranchSegments,
+          interceptNotFound: intercept.notFound,
+          interceptNotFoundTreePosition: intercept.notFoundTreePosition,
           interceptSlotId: intercept.slotId,
           interceptSlotKey: intercept.slotKey,
           interceptSourceMatchedUrl: interceptionContext,

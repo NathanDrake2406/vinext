@@ -76,14 +76,23 @@ type AppPageInterceptMatch<TPage = unknown> = {
   interceptLayouts?: readonly unknown[] | null;
   interceptLayoutSegments?: readonly (readonly string[])[] | null;
   interceptBranchSegments?: readonly string[] | null;
+  interceptLoadings?: readonly unknown[] | null;
+  interceptLoadingTreePositions?: readonly number[] | null;
+  interceptNotFoundBranchSegments?: readonly string[] | null;
   __loadInterceptLayouts?: readonly (() => Promise<unknown>)[] | null;
+  __loadInterceptLoadings?: readonly (() => Promise<unknown>)[] | null;
   matchedParams: AppPageParams;
   sourceMatchedParams?: AppPageParams;
   page: TPage;
   __pageLoader?: (() => Promise<TPage>) | null;
+  notFound?: unknown;
+  __loadNotFound?: (() => Promise<unknown>) | null;
+  notFoundTreePosition?: number | null;
   __loadState?: {
     page: TPage;
     pageLoading: Promise<TPage> | null;
+    notFound?: unknown;
+    notFoundLoading?: Promise<unknown> | null;
     interceptLayoutsLoading: Promise<readonly unknown[]> | null;
   };
   slotId?: string | null;
@@ -681,7 +690,28 @@ async function resolveAppPageInterceptState<TRoute, TPage, TInterceptOpts>(
     if (loadState) loadState.pageLoading = loading;
     await loading;
   }
-  if (intercept.__loadInterceptLayouts) {
+  if (loadState?.notFound != null) intercept.notFound = loadState.notFound;
+  if (intercept.__loadNotFound && intercept.notFound == null) {
+    const loading =
+      loadState?.notFoundLoading ??
+      intercept
+        .__loadNotFound()
+        .then((notFound) => {
+          intercept.notFound = notFound;
+          if (loadState) {
+            loadState.notFound = notFound;
+            loadState.notFoundLoading = null;
+          }
+          return notFound;
+        })
+        .catch((error: unknown) => {
+          if (loadState) loadState.notFoundLoading = null;
+          throw error;
+        });
+    if (loadState) loadState.notFoundLoading = loading;
+    await loading;
+  }
+  if (intercept.__loadInterceptLayouts || intercept.__loadInterceptLoadings) {
     await loadAppInterceptLayouts(intercept);
   }
 

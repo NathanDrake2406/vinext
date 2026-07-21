@@ -58,17 +58,16 @@ import {
   generateImageAdaptersModule,
   type VinextImageConfig,
 } from "./image/image-adapters-virtual.js";
-import {
-  generateBrowserEntry,
-  isLinkPrefetchRoute,
-  toDocumentOnlyAppRoute,
-  toLinkPrefetchRoute,
-} from "./entries/app-browser-entry.js";
+import { generateBrowserEntry, toLinkPrefetchRoutes } from "./entries/app-browser-entry.js";
 import {
   collectRouteClassificationManifest,
   type RouteClassificationManifest,
 } from "./build/route-classification-manifest.js";
-import { extractMiddlewareMatcherConfig, hasExportedName } from "./build/report.js";
+import {
+  extractMiddlewareMatcherConfig,
+  extractMiddlewareMatcherConfigValue,
+  hasExportedName,
+} from "./build/report.js";
 import { planRouteClassificationInjection } from "./build/route-classification-injector.js";
 import { normalizePathnameForRouteMatchStrict } from "./routing/utils.js";
 import { hasBasePath, stripBasePath } from "./utils/base-path.js";
@@ -86,6 +85,7 @@ import {
 import { mergeServerExternalPackages } from "./config/server-external-packages.js";
 
 import { findMiddlewareFile, isProxyFile, runMiddleware } from "./server/middleware.js";
+import { validateMiddlewareMatcherPatterns } from "./server/middleware-matcher-pattern.js";
 import {
   encodeUrlParserIgnoredCharacters,
   isNextDataPathname,
@@ -99,6 +99,7 @@ import {
   MIDDLEWARE_REWRITE_HEADER,
   NEXTJS_DEPLOYMENT_ID_HEADER,
   VINEXT_MW_CTX_HEADER,
+  VINEXT_REVALIDATE_HOST_HEADER,
   VINEXT_TIMING_HEADER,
 } from "./server/headers.js";
 import { logRequest, now } from "./server/request-log.js";
@@ -122,6 +123,7 @@ import { ensureAssetsIgnore } from "./build/assets-ignore.js";
 import { emitNextClientRuntimeManifests } from "./build/next-client-runtime-manifests.js";
 import { collectInlineCssManifest, injectInlineCssManifestGlobal } from "./build/inline-css.js";
 import { validateDevRequest } from "./server/dev-origin-check.js";
+import { readTrustedRevalidationHostname } from "./server/revalidation-host.js";
 import { installDevStackSourcemapMiddleware } from "./server/dev-stack-sourcemap.js";
 
 import { invalidateMetadataFileCache, scanMetadataFiles } from "./server/metadata-routes.js";
@@ -290,6 +292,108 @@ const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 installSocketErrorBackstop();
 
 type ASTNode = ReturnType<typeof parseAst>["body"][number]["parent"];
+
+type UseCacheAstNode = Record<string, unknown> & { type: string };
+
+function isUseCacheAstNode(value: unknown): value is UseCacheAstNode {
+  return (
+    typeof value === "object" && value !== null && typeof Reflect.get(value, "type") === "string"
+  );
+}
+
+function hasInlineUseCacheDirective(node: UseCacheAstNode): boolean {
+  const body =
+    isUseCacheAstNode(node.body) && node.body.type === "BlockStatement" ? node.body : null;
+  if (!body || !Array.isArray(body.body)) return false;
+
+  return body.body.some((statement) => {
+    if (!isUseCacheAstNode(statement) || statement.type !== "ExpressionStatement") return false;
+    const expression = isUseCacheAstNode(statement.expression) ? statement.expression : null;
+    return (
+      expression?.type === "Literal" &&
+      typeof expression.value === "string" &&
+      /^use cache(:\s*\w+)?$/.test(expression.value)
+    );
+  });
+}
+
+function functionAcceptsSecondArgument(node: UseCacheAstNode): boolean {
+  const params = Array.isArray(node.params) ? node.params : [];
+  if (params.length >= 2) return true;
+  return params.some((param) => isUseCacheAstNode(param) && param.type === "RestElement");
+}
+
+function collectInlineUseCacheSecondArgumentUsage(value: unknown): boolean[] {
+  const usage: boolean[] = [];
+
+  function walk(node: unknown): void {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (!isUseCacheAstNode(node)) return;
+
+    if (
+      (node.type === "FunctionDeclaration" ||
+        node.type === "FunctionExpression" ||
+        node.type === "ArrowFunctionExpression") &&
+      hasInlineUseCacheDirective(node)
+    ) {
+      usage.push(functionAcceptsSecondArgument(node));
+    }
+
+    for (const [key, child] of Object.entries(node)) {
+      if (key === "type" || key === "start" || key === "end" || key === "loc" || key === "parent") {
+        continue;
+      }
+      walk(child);
+    }
+  }
+
+  walk(value);
+  return usage;
+}
+
+function collectFileUseCacheSecondArgumentUsage(body: unknown[]): Map<string, boolean> {
+  const localFunctions = new Map<string, boolean>();
+
+  function collectDeclaration(value: unknown): void {
+    if (!isUseCacheAstNode(value)) return;
+    if (value.type === "FunctionDeclaration") {
+      const id = isUseCacheAstNode(value.id) ? value.id : null;
+      if (id?.type === "Identifier" && typeof id.name === "string") {
+        localFunctions.set(id.name, functionAcceptsSecondArgument(value));
+      }
+      return;
+    }
+    if (value.type !== "VariableDeclaration" || !Array.isArray(value.declarations)) return;
+
+    for (const declaration of value.declarations) {
+      if (!isUseCacheAstNode(declaration) || declaration.type !== "VariableDeclarator") continue;
+      const id = isUseCacheAstNode(declaration.id) ? declaration.id : null;
+      const init = isUseCacheAstNode(declaration.init) ? declaration.init : null;
+      if (
+        id?.type === "Identifier" &&
+        typeof id.name === "string" &&
+        init &&
+        (init.type === "FunctionExpression" || init.type === "ArrowFunctionExpression")
+      ) {
+        localFunctions.set(id.name, functionAcceptsSecondArgument(init));
+      }
+    }
+  }
+
+  for (const statement of body) {
+    if (!isUseCacheAstNode(statement)) continue;
+    collectDeclaration(
+      statement.type === "ExportNamedDeclaration" || statement.type === "ExportDefaultDeclaration"
+        ? statement.declaration
+        : statement,
+    );
+  }
+
+  return localFunctions;
+}
 
 function isInsideDirectory(dir: string, filePath: string): boolean {
   const relativePath = path.relative(dir, filePath);
@@ -866,20 +970,26 @@ function sortTsconfigAliasesBySpecificity(aliases: Record<string, string>): Reco
   return Object.fromEntries(Object.entries(aliases).sort((a, b) => b[0].length - a[0].length));
 }
 
-function resolveTsconfigAliases(projectRoot: string): Record<string, string> {
-  if (_tsconfigAliasCache.has(projectRoot)) {
-    return _tsconfigAliasCache.get(projectRoot)!;
+function resolveTsconfigAliases(
+  projectRoot: string,
+  configuredPath?: string,
+): Record<string, string> {
+  const configPath = configuredPath ? path.resolve(projectRoot, configuredPath) : undefined;
+  const cacheKey = configPath ?? projectRoot;
+  if (_tsconfigAliasCache.has(cacheKey)) {
+    return _tsconfigAliasCache.get(cacheKey)!;
   }
 
   let aliases: Record<string, string> = {};
-  for (const name of TSCONFIG_FILES) {
-    const candidate = path.join(projectRoot, name);
+  for (const candidate of configPath
+    ? [configPath]
+    : TSCONFIG_FILES.map((name) => path.join(projectRoot, name))) {
     if (!fs.existsSync(candidate)) continue;
     aliases = sortTsconfigAliasesBySpecificity(loadTsconfigPathAliases(candidate, projectRoot));
     break;
   }
 
-  _tsconfigAliasCache.set(projectRoot, aliases);
+  _tsconfigAliasCache.set(cacheKey, aliases);
   return aliases;
 }
 
@@ -1428,9 +1538,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
     // with `{ __appRouter: true }`. See `pages-client-entry.ts` and issue
     // #1526 for the Next.js parity rationale.
     const appPrefetchRoutes = hasAppDir
-      ? (await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher)).map((route) =>
-          isLinkPrefetchRoute(route) ? toLinkPrefetchRoute(route) : toDocumentOnlyAppRoute(route),
-        )
+      ? toLinkPrefetchRoutes(await appRouter(appDir, nextConfig?.pageExtensions, fileMatcher))
       : [];
     return _generateClientEntry(pagesDir, nextConfig, fileMatcher, {
       appPrefetchRoutes,
@@ -1862,21 +1970,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         isServeCommand = env.command === "serve";
         root = toSlash(config.root ?? process.cwd());
         const userResolve = config.resolve as UserResolveConfigWithTsconfigPaths | undefined;
-        const shouldEnableNativeTsconfigPaths = userResolve?.tsconfigPaths === undefined;
-        const tsconfigPathAliases = resolveTsconfigAliases(root);
+        let tsconfigPathAliases: Record<string, string> = {};
         const swcHelpersAlias = resolveSwcHelpersAlias(root);
-
-        // tsconfig-derived alias entries carry a customResolver, which Vite 8
-        // reports as deprecated during config resolution. Filter that warning
-        // (see suppressAliasCustomResolverDeprecationWarning). Mutating
-        // config.customLogger (rather than returning it) keeps mergeConfig
-        // from deep-cloning the logger and flattening its hasWarned getter.
-        if (Object.keys(tsconfigPathAliases).length > 0) {
-          config.customLogger = suppressAliasCustomResolverDeprecationWarning(
-            config.customLogger ??
-              createLogger(config.logLevel, { allowClearScreen: config.clearScreen }),
-          );
-        }
 
         // Load .env files into process.env before anything else.
         // Next.js loads .env files before evaluating next.config.js, so
@@ -2008,6 +2103,29 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             nextConfig = { ...nextConfig, buildId: sharedBuildId };
           }
         }
+        const configuredTsconfigPath = isRecord(nextConfig.typescript)
+          ? typeof nextConfig.typescript.tsconfigPath === "string"
+            ? nextConfig.typescript.tsconfigPath
+            : undefined
+          : undefined;
+        tsconfigPathAliases = resolveTsconfigAliases(root, configuredTsconfigPath);
+        // Vite's native option discovers tsconfig.json and cannot receive Next's
+        // typescript.tsconfigPath. Only auto-enable it for the default config;
+        // an explicit user resolve.tsconfigPaths value remains untouched.
+        const shouldAutoEnableNativeTsconfigPaths =
+          userResolve?.tsconfigPaths === undefined && configuredTsconfigPath === undefined;
+
+        // tsconfig-derived alias entries carry a customResolver, which Vite 8
+        // reports as deprecated during config resolution. Filter that warning
+        // (see suppressAliasCustomResolverDeprecationWarning). Mutating
+        // config.customLogger (rather than returning it) keeps mergeConfig
+        // from deep-cloning the logger and flattening its hasWarned getter.
+        if (Object.keys(tsconfigPathAliases).length > 0) {
+          config.customLogger = suppressAliasCustomResolverDeprecationWarning(
+            config.customLogger ??
+              createLogger(config.logLevel, { allowClearScreen: config.clearScreen }),
+          );
+        }
         // RSC-compat ID coordination across plugin instances — same rationale as
         // the build ID above. createRscCompatibilityId() falls back to a random
         // UUID per instance when no deploymentId is pinned, so a hybrid app+pages
@@ -2034,6 +2152,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             ? path.join(root, "src")
             : root;
         middlewarePath = findMiddlewareFile(root, fileMatcher, middlewareConventionDir);
+        if (middlewarePath) {
+          const staticMatcher = extractMiddlewareMatcherConfigValue(middlewarePath);
+          if (staticMatcher !== undefined) {
+            validateMiddlewareMatcherPatterns(staticMatcher);
+          }
+        }
         const instrumentationClientInjects = nextConfig.instrumentationClientInject.map((spec) =>
           spec.startsWith("./") || spec.startsWith("../") ? path.resolve(root, spec) : spec,
         );
@@ -2069,6 +2193,26 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // Let shared client shims compile out Pages-only behavior in pure App
         // Router builds while retaining it for Pages and hybrid applications.
         defines["process.env.__VINEXT_HAS_PAGES_ROUTER"] = JSON.stringify(String(hasPagesDir));
+        defines["process.env.__VINEXT_HAS_CLIENT_REWRITES"] = JSON.stringify(
+          String(
+            nextConfig.rewrites.beforeFiles.length > 0 ||
+              nextConfig.rewrites.afterFiles.length > 0 ||
+              nextConfig.rewrites.fallback.length > 0,
+          ),
+        );
+        defines["process.env.__VINEXT_HAS_CONFIG_HEADERS"] = JSON.stringify(
+          String(nextConfig.headers.length > 0),
+        );
+        defines["process.env.__VINEXT_HAS_CONFIG_REDIRECTS"] = JSON.stringify(
+          String(nextConfig.redirects.length > 0),
+        );
+        defines["process.env.__VINEXT_HAS_CONFIG_REWRITES"] = JSON.stringify(
+          String(
+            nextConfig.rewrites.beforeFiles.length > 0 ||
+              nextConfig.rewrites.afterFiles.length > 0 ||
+              nextConfig.rewrites.fallback.length > 0,
+          ),
+        );
         // Expose experimental.staleTimes to client-side code so full prefetches
         // and committed dynamic navigations use Next.js' distinct freshness
         // windows. Values are in seconds; matches Next.js' define-env plumbing.
@@ -2709,7 +2853,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             // causing cryptic "Invalid hook call" errors. This is a no-op
             // when only one copy exists.
             dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
-            ...(shouldEnableNativeTsconfigPaths ? { tsconfigPaths: true } : {}),
+            ...(shouldAutoEnableNativeTsconfigPaths ? { tsconfigPaths: true } : {}),
           },
           // NOTE: top-level optimizeDeps is now set below (after capturing
           // incoming values from earlier plugins) so both Pages Router and
@@ -4132,6 +4276,22 @@ export const loadServerActionClient = ${
         // fully registered before we inspect them. We prefer "ssr", then any
         // non-"rsc" environment, then whatever is available.
         let pagesRunner: import("vite/module-runner").ModuleRunner | null = null;
+        const getTrustedDevRevalidateOrigin = () => {
+          const resolved = server.resolvedUrls?.local[0];
+          if (resolved) {
+            try {
+              return new URL(resolved).origin;
+            } catch {
+              // Fall through to the HTTP server address below.
+            }
+          }
+          const address = server.httpServer?.address();
+          const port =
+            typeof address === "object" && address
+              ? address.port
+              : (server.config.server.port ?? 3000);
+          return `http://localhost:${port}`;
+        };
         // Reuse the Pages SSR handler across requests. Every createSSRHandler
         // input is stable for the dev session (server, runner, config,
         // middlewarePath) except `routes`, which is the cached pagesRouter array
@@ -4709,9 +4869,22 @@ export const loadServerActionClient = ${
                 res.end("Forbidden");
                 return;
               }
+              let revalidationHostname: string | null = null;
+              if (req.headers[VINEXT_REVALIDATE_HOST_HEADER] !== undefined) {
+                const revalidationHeaders = new Headers();
+                for (const [name, value] of Object.entries(req.headers)) {
+                  if (value === undefined || name.startsWith(":")) continue;
+                  revalidationHeaders.set(name, Array.isArray(value) ? value.join(", ") : value);
+                }
+                revalidationHostname = readTrustedRevalidationHostname(
+                  revalidationHeaders,
+                  nextConfig?.i18n,
+                );
+              }
               const requestHost =
-                (Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host) ||
-                "localhost";
+                revalidationHostname ??
+                ((Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host) ||
+                  "localhost");
               const requestOrigin = `http://${requestHost}`;
               const getUrlHostname = (requestUrl: string) => new URL(requestUrl).hostname;
 
@@ -4999,6 +5172,7 @@ export const loadServerActionClient = ${
               // Both the middleware Request (built below) and the SSR handler
               // (which reads req.headers directly) must see clean headers.
               const nodeRequestHeaders = filterInternalHeaders(rawHeaders);
+              if (revalidationHostname) nodeRequestHeaders.set("host", revalidationHostname);
               for (const header of INTERNAL_HEADERS) {
                 delete req.headers[header];
               }
@@ -5274,6 +5448,8 @@ export const loadServerActionClient = ${
                   {
                     basePath: nextConfig?.basePath,
                     i18n: nextConfig?.i18n,
+                    trustedRevalidateOrigin: getTrustedDevRevalidateOrigin(),
+                    allowedRevalidateHeaderKeys: nextConfig?.allowedRevalidateHeaderKeys,
                     trailingSlash: nextConfig?.trailingSlash,
                   },
                 );
@@ -5335,6 +5511,7 @@ export const loadServerActionClient = ${
                       nextConfig?.clientTraceMetadata,
                       nextConfig?.htmlLimitedBots,
                       nextConfig?.reactStrictMode === true,
+                      nextConfig?.expireTime,
                     ),
                   };
                 }
@@ -5926,60 +6103,13 @@ export const loadServerActionClient = ${
               node.expression.value.startsWith("use cache"),
           );
 
-          // Check for function-level "use cache" directives by walking function bodies.
-          // Accepts any function-like node: FunctionDeclaration/Expression, ArrowFunctionExpression,
-          // or MethodDefinition. MethodDefinition stores its FunctionExpression in `.value`, not
-          // `.body`, so we unwrap it here rather than at each call site to keep the callee safe.
-          function nodeHasInlineCacheDirective(node: ASTNode): boolean {
-            if (!node || typeof node !== "object") return false;
-            // MethodDefinition wraps its FunctionExpression in .value; unwrap to reach .body.
-            const fn = node.type === "MethodDefinition" ? node.value : node;
-            // fn.body is a BlockStatement node ({type:"BlockStatement", body:Statement[]}), not
-            // a raw array. Unwrap it. Arrow functions with expression bodies have a non-array
-            // .body — the BlockStatement check handles that case (body.body would be undefined).
-            const stmts: ASTNode[] | null =
-              // oxlint-disable-next-line typescript/no-explicit-any
-              (fn as any)?.body?.type === "BlockStatement" ? (fn as any).body.body : null;
-            if (Array.isArray(stmts)) {
-              for (const stmt of stmts) {
-                if (
-                  stmt?.type === "ExpressionStatement" &&
-                  stmt.expression?.type === "Literal" &&
-                  typeof stmt.expression?.value === "string" &&
-                  /^use cache(:\s*\w+)?$/.test(stmt.expression.value)
-                ) {
-                  return true;
-                }
-              }
-            }
-            return false;
-          }
-          function astHasInlineCache(nodes: ASTNode[]): boolean {
-            for (const node of nodes) {
-              if (!node || typeof node !== "object") continue;
-              if (
-                (node.type === "FunctionDeclaration" ||
-                  node.type === "FunctionExpression" ||
-                  node.type === "ArrowFunctionExpression" ||
-                  node.type === "MethodDefinition") &&
-                nodeHasInlineCacheDirective(node)
-              ) {
-                return true;
-              }
-              // Walk into variable declarations, export declarations, etc.
-              for (const key of Object.keys(node)) {
-                if (key === "type" || key === "start" || key === "end" || key === "loc") continue;
-                const child = node[key as keyof typeof node] as ASTNode;
-                if (Array.isArray(child) && child.some((c) => c && typeof c === "object")) {
-                  if (astHasInlineCache(child)) return true;
-                } else if (child && typeof child === "object" && child.type) {
-                  if (astHasInlineCache([child])) return true;
-                }
-              }
-            }
-            return false;
-          }
-          const hasInlineCache = !cacheDirective && astHasInlineCache(ast.body);
+          // Keep the declaration shape because Function.length drops default and
+          // rest parameters. Next.js's cache transform likewise records declared
+          // arguments so metadata resolution can decide whether to pass `parent`.
+          const inlineCacheSecondArgumentUsage = cacheDirective
+            ? []
+            : collectInlineUseCacheSecondArgumentUsage(ast.body);
+          const hasInlineCache = inlineCacheSecondArgumentUsage.length > 0;
 
           if (!cacheDirective && !hasInlineCache) return null;
 
@@ -6022,11 +6152,22 @@ export const loadServerActionClient = ${
             const runtimeModuleUrl = pathToFileURL(
               resolveShimModulePath(shimsDir, "cache-runtime"),
             ).href;
+            const secondArgumentUsage = collectFileUseCacheSecondArgumentUsage(ast.body);
             const result = transformWrapExport(code, ast, {
               runtime: (value: string, name: string) => {
-                const pageOptions =
-                  name === "default" && isAppPageModule ? `, { appPageDefaultExport: true }` : "";
-                return `(await import(${JSON.stringify(runtimeModuleUrl)})).registerCachedFunction(${value}, ${JSON.stringify(id + ":" + name)}, ${JSON.stringify(variant)}${pageOptions})`;
+                const runtimeOptions: string[] = [];
+                // A local declaration gives us its exact parameter shape. For
+                // opaque exports (for example `export { fn } from "./impl"`),
+                // match Next.js's unknown-signature behavior and conservatively
+                // treat every argument as used.
+                const acceptsSecondArgument = secondArgumentUsage.get(value) ?? true;
+                runtimeOptions.push(`acceptsSecondArgument: ${acceptsSecondArgument}`);
+                if (name === "default" && isAppPageModule) {
+                  runtimeOptions.push("appPageDefaultExport: true");
+                }
+                const optionsArgument =
+                  runtimeOptions.length > 0 ? `, { ${runtimeOptions.join(", ")} }` : "";
+                return `(await import(${JSON.stringify(runtimeModuleUrl)})).registerCachedFunction(${value}, ${JSON.stringify(id + ":" + name)}, ${JSON.stringify(variant)}${optionsArgument})`;
               },
               rejectNonAsyncFunction: false,
               filter: (name: string, meta: { isFunction?: boolean }) => {
@@ -6077,6 +6218,7 @@ export const loadServerActionClient = ${
             ).href;
 
             try {
+              let transformedFunctionIndex = 0;
               const result = transformHoistInlineDirective(code, ast, {
                 directive: /^use cache(:\s*\w+)?$/,
                 runtime: (value: string, name: string, meta: { directiveMatch: string[] }) => {
@@ -6085,7 +6227,13 @@ export const loadServerActionClient = ${
                     directiveMatch === "use cache"
                       ? ""
                       : directiveMatch.replace("use cache:", "").trim();
-                  return `(await import(${JSON.stringify(runtimeModuleUrl2)})).registerCachedFunction(${value}, ${JSON.stringify(id + ":" + name)}, ${JSON.stringify(variant)})`;
+                  const acceptsSecondArgument =
+                    inlineCacheSecondArgumentUsage[transformedFunctionIndex++];
+                  const optionsArgument =
+                    acceptsSecondArgument === undefined
+                      ? ""
+                      : `, { acceptsSecondArgument: ${acceptsSecondArgument} }`;
+                  return `(await import(${JSON.stringify(runtimeModuleUrl2)})).registerCachedFunction(${value}, ${JSON.stringify(id + ":" + name)}, ${JSON.stringify(variant)}${optionsArgument})`;
                 },
                 rejectNonAsyncFunction: false,
               });
