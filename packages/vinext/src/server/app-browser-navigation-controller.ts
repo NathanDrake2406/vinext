@@ -96,7 +96,6 @@ type BrowserNavigationControllerDeps = {
 type BrowserNavigationPayloadOptions = {
   actionType: "navigate" | "replace" | "traverse";
   createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
-  currentStateTiming?: "render-start" | "payload-ready";
   historyUpdateMode: HistoryUpdateMode | undefined;
   navigationCommitKind?: "authoritative" | "detached";
   navigationInitiationState: AppRouterState;
@@ -795,12 +794,8 @@ export function createAppBrowserNavigationController(
       // Preparation is historical: identities and the started commit version
       // come from the initiating state. Approval below intentionally stays live
       // so superseding navigations and unrelated visible commits still reject.
-      // currentStateTiming: "payload-ready" opts a caller back into a live
-      // baseline read once the payload has resolved.
       const pendingOptions = {
         currentState: options.navigationInitiationState,
-        getCurrentStateAfterElementsReady:
-          options.currentStateTiming === "payload-ready" ? getBrowserRouterState : undefined,
         navigationCommitKind: options.navigationCommitKind,
         navigationId: options.navId,
         navigationSnapshot: options.navigationSnapshot,

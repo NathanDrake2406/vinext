@@ -26,11 +26,7 @@ import { sanitizeErrorForClient } from "./app-rsc-errors.js";
 import { DEFAULT_GLOBAL_ERROR_MODULE } from "./default-global-error-module.js";
 import { matchRoutePattern } from "../routing/route-pattern.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
-import {
-  APP_RSC_RENDER_MODE_NAVIGATION,
-  APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
-  type AppRscRenderMode,
-} from "./app-rsc-render-mode.js";
+import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import { createAppPageRenderIdentity } from "./app-page-render-identity.js";
 import {
@@ -220,7 +216,6 @@ export async function buildPageElements<
     serveStreamingMetadata,
     isProduction = process.env.NODE_ENV === "production",
   } = pageRequest;
-  const isPrefetchLoadingShell = renderMode === APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL;
 
   const pageModule: AppPageModule | null | undefined = route.page;
 
@@ -371,10 +366,7 @@ export async function buildPageElements<
   // the Suspense tag branch and its in-boundary error outlet. Late navigation
   // signals remain encoded in the Flight digest; response headers are only an
   // early optimization and must not make generated metadata block navigation.
-  // Loading-shell prefetches never stream metadata: the shell must not carry
-  // the destination's generated tags ahead of the full navigation payload
-  // (payloadMetadata below drops the head-placed copy for the same reason).
-  const shouldDeferMetadata = metadataPlacement === "body" && !isPrefetchLoadingShell;
+  const shouldDeferMetadata = metadataPlacement === "body";
   const streamingMetadata = shouldDeferMetadata
     ? isProduction
       ? preparedHead.metadata.catch((error) => {
@@ -517,8 +509,6 @@ export async function buildPageElements<
   const mountedSlotIds = mountedSlotsHeader ? new Set(mountedSlotsHeader.split(" ")) : null;
 
   const slotOverrides = buildSlotOverrides(route, params, routePath, opts);
-  const payloadMetadata = isPrefetchLoadingShell ? null : resolvedMetadata;
-
   // For sibling intercepts, wrap the intercepting page in any layouts that
   // live under the interception marker directory (interceptLayouts). In Next.js
   // the intercepting route's segment layouts wrap the intercepting page; the
@@ -600,7 +590,7 @@ export async function buildPageElements<
     makeThenableParams,
     matchedParams: params,
     metadataPlacement,
-    resolvedMetadata: payloadMetadata,
+    resolvedMetadata,
     resolvedMetadataPathname: routePath,
     resolvedViewport,
     streamingMetadata,

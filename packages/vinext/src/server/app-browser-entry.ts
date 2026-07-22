@@ -592,7 +592,6 @@ function createNavigationCommitEffect(options: {
 
 type RenderNavigationPayloadOptions = {
   actionType?: "navigate" | "replace" | "traverse";
-  currentStateTiming?: "render-start" | "payload-ready";
   historyUpdateMode: HistoryUpdateMode | undefined;
   navigationCommitKind?: "authoritative" | "detached";
   navigationInitiationState: AppRouterState;
@@ -620,7 +619,6 @@ async function renderNavigationPayload(
   return browserNavigationController.renderNavigationPayload({
     actionType: options.actionType ?? "navigate",
     createNavigationCommitEffect,
-    currentStateTiming: options.currentStateTiming,
     historyUpdateMode: options.historyUpdateMode,
     navigationCommitKind: options.navigationCommitKind,
     navigationInitiationState: options.navigationInitiationState,
@@ -2199,7 +2197,6 @@ function bootstrapHydration(
         let committedState: AppRouterState | null = null;
         const renderOutcome = await renderNavigationPayload({
           actionType: toActionType(navigationKind),
-          currentStateTiming: detachedNavigationCommits ? "payload-ready" : "render-start",
           historyUpdateMode: currentHistoryMode,
           navigationCommitKind: detachedNavigationCommits ? "authoritative" : undefined,
           navigationInitiationState,

@@ -641,7 +641,6 @@ type CreatePendingNavigationCommitOptions = {
   // that legitimately wants the live state, since it has no prior navigation
   // start to anchor to.
   currentState: AppRouterState;
-  getCurrentStateAfterElementsReady?: () => AppRouterState;
   navigationCommitKind?: "authoritative" | "detached";
   navigationId?: number;
   navigationSnapshot: ClientNavigationRenderSnapshot;
@@ -660,7 +659,6 @@ export function createPendingNavigationCommitFromElements(
   options: CreatePendingNavigationCommitOptions & { nextElements: AppElements },
 ): PendingNavigationCommit {
   const elements = options.nextElements;
-  const currentState = options.getCurrentStateAfterElementsReady?.() ?? options.currentState;
   const metadata = AppElementsWire.readMetadata(elements);
   const cacheEntryReuseProof =
     metadata.cacheEntryReuseProof ??
@@ -668,15 +666,17 @@ export function createPendingNavigationCommitFromElements(
       ? createCacheEntryReuseProof(null)
       : undefined);
   const requestedPreviousNextUrl =
-    options.previousNextUrl !== undefined ? options.previousNextUrl : currentState.previousNextUrl;
+    options.previousNextUrl !== undefined
+      ? options.previousNextUrl
+      : options.currentState.previousNextUrl;
   const previousNextUrl = metadata.interception === null ? null : requestedPreviousNextUrl;
 
   return {
     action: {
       bfcacheIds: createNextBfcacheIdMap({
-        current: currentState.bfcacheIds,
-        currentElements: currentState.elements,
-        currentPathname: currentState.navigationSnapshot.pathname,
+        current: options.currentState.bfcacheIds,
+        currentElements: options.currentState.elements,
+        currentPathname: options.currentState.navigationSnapshot.pathname,
         elements,
         nextPathname: options.navigationSnapshot.pathname,
         restored: options.restoredBfcacheIds,
@@ -695,7 +695,7 @@ export function createPendingNavigationCommitFromElements(
         lane: options.operationLane,
         navigationCommitKind: options.navigationCommitKind,
         navigationId: options.navigationId,
-        startedVisibleCommitVersion: currentState.visibleCommitVersion,
+        startedVisibleCommitVersion: options.currentState.visibleCommitVersion,
       }),
       previousNextUrl,
       renderId: options.renderId,
