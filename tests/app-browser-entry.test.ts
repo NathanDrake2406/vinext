@@ -32,6 +32,7 @@ import {
   hydrateRootInTransition,
 } from "../packages/vinext/src/server/app-browser-hydration.js";
 import { createAppBrowserNavigationController } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
+import { resolvePrefetchNavigationResponseUrl } from "../packages/vinext/src/server/app-browser-prefetch-response.js";
 import {
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
@@ -796,6 +797,39 @@ describe("app browser entry inline CSS cleanup", () => {
 });
 
 describe("app browser entry navigation scheduling", () => {
+  it("keeps the visible URL when a settled prefetch was found through a rewrite alias", () => {
+    expect(
+      resolvePrefetchNavigationResponseUrl({
+        additionalRscUrls: ["/source?_rsc=source-digest"],
+        origin: "https://example.com",
+        responseUrl: "https://example.com/source?_rsc=prefetch-digest",
+        visibleRscUrl: "/rewrite?_rsc=visible-digest",
+      }),
+    ).toBe("/rewrite?_rsc=visible-digest");
+  });
+
+  it("preserves the prefetch response digest and canonicalizes same-origin URLs", () => {
+    expect(
+      resolvePrefetchNavigationResponseUrl({
+        additionalRscUrls: ["/source?_rsc=source-digest"],
+        origin: "https://example.com",
+        responseUrl: "https://example.com/rewrite?_rsc=prefetch-digest",
+        visibleRscUrl: "/rewrite?_rsc=visible-digest",
+      }),
+    ).toBe("/rewrite?_rsc=prefetch-digest");
+  });
+
+  it("preserves cross-origin prefetch response URLs for navigation validation", () => {
+    expect(
+      resolvePrefetchNavigationResponseUrl({
+        additionalRscUrls: ["/rewrite?_rsc=source-digest"],
+        origin: "https://example.com",
+        responseUrl: "https://other.example/rewrite?_rsc=prefetch-digest",
+        visibleRscUrl: "/rewrite?_rsc=visible-digest",
+      }),
+    ).toBe("https://other.example/rewrite?_rsc=prefetch-digest");
+  });
+
   it("hard-navigates RSC responses when the response compatibility ID is missing or stale", () => {
     stubWindow("https://example.com/current");
 

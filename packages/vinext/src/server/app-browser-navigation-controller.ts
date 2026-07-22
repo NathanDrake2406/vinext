@@ -23,6 +23,7 @@ import { stripBasePath } from "../utils/base-path.js";
 import {
   FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
   createPendingNavigationCommit,
+  createPendingNavigationCommitFromElements,
   type AppNavigationPayloadOrigin,
   type AppRouterState,
   type OperationLane,
@@ -100,7 +101,7 @@ type BrowserNavigationPayloadOptions = {
   navigationInitiationState: AppRouterState;
   navigationSnapshot: ClientNavigationRenderSnapshot;
   navId: number;
-  nextElements: Promise<AppElements>;
+  nextElements: Promise<AppElements> | AppElements;
   onCommittedState?: (state: AppRouterState) => void;
   operationLane: OperationLane;
   params: Record<string, string | string[]>;
@@ -742,11 +743,10 @@ export function createAppBrowserNavigationController(
       // Preparation is historical: identities and the started commit version
       // come from the initiating state. Approval below intentionally stays live
       // so superseding navigations and unrelated visible commits still reject.
-      const pending = await createPendingNavigationCommit({
+      const pendingOptions = {
         currentState: options.navigationInitiationState,
         navigationCommitKind: options.navigationCommitKind,
         navigationId: options.navId,
-        nextElements: options.nextElements,
         navigationSnapshot: options.navigationSnapshot,
         operationLane: options.operationLane,
         payloadOrigin: options.payloadOrigin,
@@ -755,7 +755,17 @@ export function createAppBrowserNavigationController(
         restoredBfcacheIds: options.restoredBfcacheIds,
         reuseCurrentBfcacheIds: options.reuseCurrentBfcacheIds,
         type: options.actionType,
-      });
+      };
+      const pending =
+        options.nextElements instanceof Promise
+          ? await createPendingNavigationCommit({
+              ...pendingOptions,
+              nextElements: options.nextElements,
+            })
+          : createPendingNavigationCommitFromElements({
+              ...pendingOptions,
+              nextElements: options.nextElements,
+            });
 
       const approval = approvePendingNavigationCommit({
         activeNavigationId,

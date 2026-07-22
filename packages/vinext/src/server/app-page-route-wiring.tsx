@@ -1,7 +1,9 @@
 import { Fragment, Suspense, type ComponentType, type ReactNode } from "react";
 import {
   AppElementsWire,
+  APP_LAYOUT_IDS_KEY,
   APP_PREFETCH_LOADING_SHELL_MARKER_KEY,
+  APP_ROOT_LAYOUT_KEY,
   APP_STATIC_SIBLINGS_KEY,
   normalizeAppElementsSlotBindings,
   type AppElements,
@@ -46,6 +48,7 @@ import {
 import { probeReactServerSubtree } from "./app-page-probe.js";
 import {
   APP_RSC_RENDER_MODE_NAVIGATION,
+  APP_RSC_RENDER_MODE_PREFETCH_EMPTY,
   APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
   type AppRscRenderMode,
 } from "./app-rsc-render-mode.js";
@@ -455,16 +458,23 @@ function getPrefetchLoadingEntry<TModule extends AppPageModule>(
     "loading" | "loadings" | "loadingTreePositions" | "routeSegments"
   >,
 ): AppPageLoadingEntry<TModule> | null {
-  let firstEntry: AppPageLoadingEntry<TModule> | null = null;
+  let rootEntry: AppPageLoadingEntry<TModule> | null = null;
+  let firstNestedEntry: AppPageLoadingEntry<TModule> | null = null;
   for (const [index, loadingModule] of (route.loadings ?? []).entries()) {
     if (!getDefaultExport(loadingModule)) continue;
     const treePosition = route.loadingTreePositions?.[index];
     if (treePosition === undefined) continue;
-    if (firstEntry === null || treePosition < firstEntry.treePosition) {
-      firstEntry = { loadingModule, treePosition };
+    if (treePosition === 0) {
+      rootEntry ??= { loadingModule, treePosition };
+    } else if (firstNestedEntry === null || treePosition < firstNestedEntry.treePosition) {
+      firstNestedEntry = { loadingModule, treePosition };
     }
   }
-  if (firstEntry) return firstEntry;
+  // The root layout is already shared for a client-side prefetch. Prefer the
+  // first loading boundary below it, falling back to the root loading UI only
+  // when no nested boundary exists.
+  if (firstNestedEntry) return firstNestedEntry;
+  if (rootEntry) return rootEntry;
 
   // Legacy/eager route fixtures may only expose the leaf loading field.
   return getDefaultExport(route.loading)
@@ -751,6 +761,7 @@ export function buildAppPageElements<
     }
     return nearest;
   };
+  const isPrefetchEmpty = renderMode === APP_RSC_RENDER_MODE_PREFETCH_EMPTY;
   const isPrefetchLoadingShell = renderMode === APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL;
   const prefetchLoadingEntry = isPrefetchLoadingShell
     ? getPrefetchLoadingEntry(options.route)
@@ -855,6 +866,13 @@ export function buildAppPageElements<
       }),
     }),
   };
+  if (isPrefetchEmpty) {
+    elements[APP_LAYOUT_IDS_KEY] = [];
+    elements[APP_ROOT_LAYOUT_KEY] = null;
+    elements[pageElementId] = null;
+    elements[routeId] = null;
+    return elements;
+  }
   // Surface static-sibling info on the wire so the client router can decide
   // whether a cached dynamic-route prefetch can be reused when navigating to a
   // static sibling URL. Mirrors Next.js's loader-tree `staticSiblings` tuple
