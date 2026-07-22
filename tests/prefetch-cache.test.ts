@@ -15,6 +15,7 @@ import { VINEXT_RSC_COMPATIBILITY_ID_HEADER } from "../packages/vinext/src/serve
 import {
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
+  VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 
 type Navigation = typeof import("../packages/vinext/src/shims/navigation.js");
@@ -31,6 +32,8 @@ let restoreRscResponse: Navigation["restoreRscResponse"];
 let prefetchRscResponse: Navigation["prefetchRscResponse"];
 let invalidatePrefetchCache: Navigation["invalidatePrefetchCache"];
 let hasPrefetchCacheEntryForNavigation: Navigation["hasPrefetchCacheEntryForNavigation"];
+let hasSearchAgnosticPrefetchShellForRoute: Navigation["hasSearchAgnosticPrefetchShellForRoute"];
+let peekPrefetchResponseForNavigation: Navigation["peekPrefetchResponseForNavigation"];
 let appRouterInstance: Navigation["appRouterInstance"];
 let consumePrefetchResponseForNavigation: Navigation["consumePrefetchResponseForNavigation"];
 let seedPrefetchResponseSnapshot: Navigation["seedPrefetchResponseSnapshot"];
@@ -67,6 +70,8 @@ beforeEach(async () => {
   prefetchRscResponse = nav.prefetchRscResponse;
   invalidatePrefetchCache = nav.invalidatePrefetchCache;
   hasPrefetchCacheEntryForNavigation = nav.hasPrefetchCacheEntryForNavigation;
+  hasSearchAgnosticPrefetchShellForRoute = nav.hasSearchAgnosticPrefetchShellForRoute;
+  peekPrefetchResponseForNavigation = nav.peekPrefetchResponseForNavigation;
   appRouterInstance = nav.appRouterInstance;
   consumePrefetchResponseForNavigation = nav.consumePrefetchResponseForNavigation;
   seedPrefetchResponseSnapshot = nav.seedPrefetchResponseSnapshot;
@@ -95,6 +100,7 @@ function fillCache(
         buffer,
         contentType: "text/x-component",
         paramsHeader: null,
+        renderedPathAndSearch: null,
         url: key,
       },
       outcome: "cache-seeded",
@@ -228,6 +234,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: "slot:auth:/",
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: rscUrl,
     };
 
@@ -251,6 +258,7 @@ describe("prefetch cache eviction", () => {
         contentType: "text/x-component",
         mountedSlotsHeader: "slot:auth:/",
         paramsHeader: null,
+        renderedPathAndSearch: null,
         url: rscUrl,
       },
       timestamp: Date.now(),
@@ -300,6 +308,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: originalRscUrl,
     };
 
@@ -334,6 +343,7 @@ describe("prefetch cache eviction", () => {
         contentType: "text/x-component",
         mountedSlotsHeader: null,
         paramsHeader: null,
+        renderedPathAndSearch: null,
         url: rscUrl,
       },
       timestamp: Date.now(),
@@ -355,6 +365,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: shellRscUrl,
     };
 
@@ -463,7 +474,7 @@ describe("prefetch cache eviction", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("settles router.prefetch as a consumable cache-seeded response without visible navigation", async () => {
+  it("settles router.prefetch as a learning-only protocol response without visible navigation", async () => {
     let resolveResponse!: (response: Response) => void;
     const fetchPromise = new Promise<Response>((resolve) => {
       resolveResponse = resolve;
@@ -512,11 +523,13 @@ describe("prefetch cache eviction", () => {
     const entry = getPrefetchCache().get(cacheKey);
     expect(entry?.outcome).toBe("cache-seeded");
     expect(entry?.pending).toBeUndefined();
+    expect(entry?.cacheForNavigation).toBe(false);
+    expect(entry?.optimisticRouteShell).toBe(true);
 
     const consumed = consumePrefetchResponse(rscUrl, null, null);
-    expect(consumed?.mountedSlotsHeader).toBeNull();
-    expect(getPrefetchCache().has(cacheKey)).toBe(false);
-    expect(getPrefetchedUrls().has(cacheKey)).toBe(false);
+    expect(consumed).toBeNull();
+    expect(getPrefetchCache().has(cacheKey)).toBe(true);
+    expect(getPrefetchedUrls().has(cacheKey)).toBe(true);
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -695,6 +708,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: "/new.rsc",
     });
 
@@ -723,6 +737,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: "/new.rsc",
     });
 
@@ -751,6 +766,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: "/new.rsc",
     });
 
@@ -776,6 +792,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: largeRscUrl,
     });
 
@@ -798,6 +815,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: largeRscUrl,
     });
 
@@ -813,6 +831,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: "/small.rsc",
     });
 
@@ -879,6 +898,7 @@ describe("prefetch cache eviction", () => {
         contentType: "text/x-component",
         mountedSlotsHeader: null,
         paramsHeader: null,
+        renderedPathAndSearch: null,
         url: rscUrl,
       };
 
@@ -904,6 +924,7 @@ describe("prefetch cache eviction", () => {
         contentType: "text/x-component",
         mountedSlotsHeader: null,
         paramsHeader: null,
+        renderedPathAndSearch: null,
         url: rscUrl,
       };
 
@@ -916,6 +937,74 @@ describe("prefetch cache eviction", () => {
     });
   });
 
+  it("matches only search-agnostic optimistic shells across page search params", () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/segment-cache/search-params/segment-cache-search-params.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/search-params/segment-cache-search-params.test.ts
+    const cache = getPrefetchCache();
+    const firstRscUrl = "/search-params/target-page?searchParam=a_PPR&_rsc=first";
+    const secondRscUrl = "/search-params/target-page?searchParam=c_PPR&_rsc=second";
+    const ordinaryShellRscUrl = "/search-params/target-page?searchParam=b_full&_rsc=full";
+
+    cache.set(AppElementsWire.encodeCacheKey(ordinaryShellRscUrl, null), {
+      cacheForNavigation: false,
+      mountedSlotsHeader: null,
+      optimisticRouteShell: true,
+      outcome: "pending",
+      pending: Promise.resolve(),
+      timestamp: Date.now(),
+    });
+    expect(hasSearchAgnosticPrefetchShellForRoute(secondRscUrl, null, null)).toBe(false);
+
+    cache.set(AppElementsWire.encodeCacheKey(firstRscUrl, null), {
+      cacheForNavigation: false,
+      mountedSlotsHeader: null,
+      optimisticRouteShell: true,
+      outcome: "pending",
+      pending: Promise.resolve(),
+      searchAgnosticShell: true,
+      timestamp: Date.now(),
+    });
+
+    expect(hasSearchAgnosticPrefetchShellForRoute(secondRscUrl, null, null)).toBe(true);
+    expect(hasPrefetchCacheEntryForNavigation(secondRscUrl, null, null)).toBe(false);
+  });
+
+  it("aliases full prefetch responses by their server-rendered path and search", async () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/segment-cache/search-params/segment-cache-search-params.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/segment-cache/search-params/segment-cache-search-params.test.ts
+    const originalRscUrl =
+      "/search-params/target-page?searchParam=rewritesToANewSearchParam&_rsc=first";
+    const renderedPathAndSearch = "/search-params/target-page?searchParam=rewrittenSearchParam";
+    const renderedRscUrl = `${renderedPathAndSearch}&_rsc=second`;
+
+    prefetchRscResponse(
+      originalRscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_RENDERED_PATH_AND_SEARCH_HEADER]: encodeURIComponent(renderedPathAndSearch),
+          },
+        }),
+      ),
+      null,
+      null,
+    );
+    await getPrefetchCache().get(originalRscUrl)?.pending;
+
+    expect(hasPrefetchCacheEntryForNavigation(renderedRscUrl, null, null)).toBe(true);
+    const peeked = peekPrefetchResponseForNavigation(renderedRscUrl, null, null);
+    expect(peeked?.renderedPathAndSearch).toBe(renderedPathAndSearch);
+    expect(await restoreRscResponse(peeked!).text()).toBe("flight");
+
+    const consumed = consumePrefetchResponse(renderedRscUrl, null, null);
+    expect(consumed?.renderedPathAndSearch).toBe(renderedPathAndSearch);
+    expect(getPrefetchCache().has(originalRscUrl)).toBe(false);
+    expect(getPrefetchCache().has(renderedPathAndSearch)).toBe(false);
+  });
+
   it("seeds a committed navigation snapshot with the dynamic stale window", () => {
     const now = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
@@ -925,6 +1014,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: rscUrl,
     };
 
@@ -951,6 +1041,7 @@ describe("prefetch cache eviction", () => {
       dynamicStaleTimeSeconds: 60,
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: "/dynamic-stale-60.rsc",
     };
     const snapshot10 = {
@@ -959,6 +1050,7 @@ describe("prefetch cache eviction", () => {
       dynamicStaleTimeSeconds: 10,
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: "/dynamic-stale-10.rsc",
     };
 
@@ -986,6 +1078,7 @@ describe("prefetch cache eviction", () => {
         dynamicStaleTimeSeconds: 10,
         mountedSlotsHeader: null,
         paramsHeader: null,
+        renderedPathAndSearch: null,
         url: rscUrl,
       },
       timestamp: now,
@@ -1014,6 +1107,7 @@ describe("prefetch cache eviction", () => {
         dynamicStaleTimeSeconds: 10,
         mountedSlotsHeader: null,
         paramsHeader: null,
+        renderedPathAndSearch: null,
         url: rscUrl,
       },
       timestamp: now,
@@ -1042,6 +1136,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: sourceRscUrl,
     };
 
@@ -1060,15 +1155,40 @@ describe("prefetch cache eviction", () => {
       }),
     ).toBe(true);
 
-    await expect(
-      consumePrefetchResponseForNavigation(rewriteRscUrl, null, null, {
+    expect(
+      consumePrefetchResponse(rewriteRscUrl, null, null, {
         additionalRscUrls: [sourceRscUrl],
       }),
-    ).resolves.toEqual({
+    ).toEqual({
       ...snapshot,
       expiresAt: now + PREFETCH_CACHE_TTL,
     });
     expect(cache.has(sourceCacheKey)).toBe(false);
+  });
+
+  it("carries prepared elements into synchronous prefetch consumption", async () => {
+    const rscUrl = "/prepared?_rsc=prepared";
+    const preparedElements = { "route:/prepared": "prepared" } as never;
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: { "content-type": "text/x-component" },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      {
+        prepareSnapshot: async () => preparedElements,
+      },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(consumePrefetchResponse("/prepared", null, null)?.preparedElements).toBe(
+      preparedElements,
+    );
   });
 
   it("preserves the original expiry when consuming a prefetched response", () => {
@@ -1083,6 +1203,7 @@ describe("prefetch cache eviction", () => {
       dynamicStaleTimeSeconds: 15,
       mountedSlotsHeader: "slot:slotA:/parallel-slots slot:slotB:/parallel-slots",
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: rscUrl,
     };
 
@@ -1121,6 +1242,7 @@ describe("prefetch cache eviction", () => {
       contentType: "text/x-component",
       mountedSlotsHeader: null,
       paramsHeader: null,
+      renderedPathAndSearch: null,
       url: "/new.rsc",
     });
 

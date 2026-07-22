@@ -23,6 +23,7 @@ import { stripBasePath } from "../utils/base-path.js";
 import {
   FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
   createPendingNavigationCommit,
+  createPendingNavigationCommitFromElements,
   type AppNavigationPayloadOrigin,
   type AppRouterState,
   type OperationLane,
@@ -92,6 +93,30 @@ type BrowserNavigationControllerDeps = {
   ) => void;
 };
 
+type BrowserNavigationPayloadOptions = {
+  actionType: "navigate" | "replace" | "traverse";
+  createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
+  currentStateTiming?: "render-start" | "payload-ready";
+  historyUpdateMode: HistoryUpdateMode | undefined;
+  navigationCommitKind?: "authoritative" | "detached";
+  navigationInitiationState: AppRouterState;
+  navigationSnapshot: ClientNavigationRenderSnapshot;
+  navId: number;
+  nextElements: Promise<AppElements> | AppElements;
+  onCommittedState?: (state: AppRouterState) => void;
+  operationLane: OperationLane;
+  params: Record<string, string | string[]>;
+  payloadOrigin: AppNavigationPayloadOrigin;
+  pendingRouterState: PendingBrowserRouterState | null;
+  previousNextUrl: string | null;
+  restoredBfcacheIds?: Readonly<Record<string, string>> | null;
+  reuseCurrentBfcacheIds?: boolean;
+  scrollIntent?: AppRouterScrollIntent | null;
+  targetHistoryIndex?: number | null;
+  targetHref: string;
+  visibleCommitMode?: NavigationRuntimeVisibleCommitMode;
+};
+
 type BrowserNavigationController = {
   beginNavigation(): number;
   getActiveNavigationId(): number;
@@ -112,28 +137,9 @@ type BrowserNavigationController = {
     state: AppRouterState;
     targetHref: string;
   }): boolean;
-  renderNavigationPayload(options: {
-    actionType: "navigate" | "replace" | "traverse";
-    createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
-    currentStateTiming?: "render-start" | "payload-ready";
-    historyUpdateMode: HistoryUpdateMode | undefined;
-    navigationSnapshot: ClientNavigationRenderSnapshot;
-    nextElements: Promise<AppElements>;
-    operationLane: OperationLane;
-    payloadOrigin: AppNavigationPayloadOrigin;
-    params: Record<string, string | string[]>;
-    pendingRouterState: PendingBrowserRouterState | null;
-    previousNextUrl: string | null;
-    scrollIntent?: AppRouterScrollIntent | null;
-    restoredBfcacheIds?: Readonly<Record<string, string>> | null;
-    reuseCurrentBfcacheIds?: boolean;
-    targetHistoryIndex?: number | null;
-    targetHref: string;
-    navId: number;
-    navigationCommitKind?: "authoritative" | "detached";
-    visibleCommitMode?: NavigationRuntimeVisibleCommitMode;
-    onCommittedState?: (state: AppRouterState) => void;
-  }): Promise<NavigationPayloadOutcome>;
+  renderNavigationPayload(
+    options: BrowserNavigationPayloadOptions,
+  ): Promise<NavigationPayloadOutcome>;
   commitSameUrlNavigatePayload(
     nextElements: Promise<AppElements>,
     navigationSnapshot: ClientNavigationRenderSnapshot,
@@ -762,28 +768,9 @@ export function createAppBrowserNavigationController(
     setTimeout(run, 0);
   }
 
-  async function renderNavigationPayload(options: {
-    actionType: "navigate" | "replace" | "traverse";
-    createNavigationCommitEffect: BrowserNavigationCommitEffectFactory;
-    currentStateTiming?: "render-start" | "payload-ready";
-    historyUpdateMode: HistoryUpdateMode | undefined;
-    navigationSnapshot: ClientNavigationRenderSnapshot;
-    nextElements: Promise<AppElements>;
-    operationLane: OperationLane;
-    payloadOrigin: AppNavigationPayloadOrigin;
-    params: Record<string, string | string[]>;
-    pendingRouterState: PendingBrowserRouterState | null;
-    previousNextUrl: string | null;
-    scrollIntent?: AppRouterScrollIntent | null;
-    restoredBfcacheIds?: Readonly<Record<string, string>> | null;
-    reuseCurrentBfcacheIds?: boolean;
-    targetHistoryIndex?: number | null;
-    targetHref: string;
-    navId: number;
-    navigationCommitKind?: "authoritative" | "detached";
-    visibleCommitMode?: NavigationRuntimeVisibleCommitMode;
-    onCommittedState?: (state: AppRouterState) => void;
-  }): Promise<NavigationPayloadOutcome> {
+  async function renderNavigationPayload(
+    options: BrowserNavigationPayloadOptions,
+  ): Promise<NavigationPayloadOutcome> {
     if (options.navId === pendingUserNavigationId) {
       pendingUserNavigationLane = options.operationLane;
     }
@@ -805,14 +792,17 @@ export function createAppBrowserNavigationController(
 
     let snapshotActivated = false;
     try {
-      const startedState = getBrowserRouterState();
-      const pending = await createPendingNavigationCommit({
-        currentState: startedState,
+      // Preparation is historical: identities and the started commit version
+      // come from the initiating state. Approval below intentionally stays live
+      // so superseding navigations and unrelated visible commits still reject.
+      // currentStateTiming: "payload-ready" opts a caller back into a live
+      // baseline read once the payload has resolved.
+      const pendingOptions = {
+        currentState: options.navigationInitiationState,
         getCurrentStateAfterElementsReady:
           options.currentStateTiming === "payload-ready" ? getBrowserRouterState : undefined,
         navigationCommitKind: options.navigationCommitKind,
         navigationId: options.navId,
-        nextElements: options.nextElements,
         navigationSnapshot: options.navigationSnapshot,
         operationLane: options.operationLane,
         payloadOrigin: options.payloadOrigin,
@@ -821,7 +811,17 @@ export function createAppBrowserNavigationController(
         restoredBfcacheIds: options.restoredBfcacheIds,
         reuseCurrentBfcacheIds: options.reuseCurrentBfcacheIds,
         type: options.actionType,
-      });
+      };
+      const pending =
+        options.nextElements instanceof Promise
+          ? await createPendingNavigationCommit({
+              ...pendingOptions,
+              nextElements: options.nextElements,
+            })
+          : createPendingNavigationCommitFromElements({
+              ...pendingOptions,
+              nextElements: options.nextElements,
+            });
 
       const approval = approvePendingNavigationCommit({
         activeNavigationId,
@@ -964,10 +964,13 @@ export function createAppBrowserNavigationController(
       }
 
       if (latestApproval.approvedCommit) {
-        dispatchSynchronousVisibleCommit(latestApproval.approvedCommit);
+        const approvedRevalidationCommit = latestApproval.approvedCommit;
+        startTransition(() => {
+          dispatchSynchronousVisibleCommit(approvedRevalidationCommit);
+        });
         syncHistoryStatePreviousNextUrl(
-          latestApproval.approvedCommit.previousNextUrl,
-          latestApproval.approvedCommit.action.bfcacheIds,
+          approvedRevalidationCommit.previousNextUrl,
+          approvedRevalidationCommit.action.bfcacheIds,
         );
       } else {
         notifyDiscardedServerActionRevalidation(lifecycleOptions);
