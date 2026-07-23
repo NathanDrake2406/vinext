@@ -297,11 +297,14 @@ async function warmAndPromote(
     );
   }
   const triggers = applyTriggersAfterPromotion(root, options);
+  // The staging command predates promotion and typically prints a workers.dev
+  // URL, while `triggers deploy` reports the attached production target — so
+  // the trigger URL outranks the staged one, matching promoteWithoutWarmup.
   return {
     url: pickDeployedUrl(
       deployed.deployedUrl,
-      staged.deployedUrl,
       triggers.deployedUrl,
+      staged.deployedUrl,
       upload.previewUrl,
     ),
     warmed,

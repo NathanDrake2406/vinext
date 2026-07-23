@@ -274,6 +274,35 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     ]);
   });
 
+  it("prefers the post-trigger production URL over the staged workers.dev URL", async () => {
+    // Staging happens before promotion and prints a workers.dev URL; the
+    // post-promotion triggers deploy reports the attached custom domain. The
+    // final "Deployed to:" target must be the live production URL, not the
+    // pre-promotion staging host.
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({
+        name: "my-worker",
+        routes: [{ pattern: "app.example.com/*", zone_name: "example.com" }],
+      }),
+    );
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+      if (args.includes("status")) return deploymentStatusOutput();
+      if (isStage(args)) return "Staged version\nhttps://staged.example.workers.dev\n";
+      if (args.includes("triggers")) return "Triggers deployed\napp.example.com (custom domain)\n";
+      if (isPromotion(args)) return "Promoted version\n";
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).resolves.toEqual({
+      url: "https://app.example.com",
+      warmed: true,
+    });
+  });
+
   it("warms every host-wide origin before reporting the deployment warmed", async () => {
     // The hostname is part of Cloudflare's cache key: each attached route has
     // its own partition, so a two-route deployment is only warm when both
