@@ -101,6 +101,60 @@ describe("Cloudflare CDN warmup", () => {
     expect(readPrerenderWarmPaths(tmpDir)).toEqual(["/", "/cached/intro"]);
   });
 
+  it("canonicalizes build-discovered paths to the manifest's trailingSlash form", () => {
+    // Warmup fetches with redirect: "manual", so requesting the bare path
+    // under trailingSlash: true would stop at the 308 and leave the canonical
+    // HTML entry cold. Paths must be normalized before any request is made.
+    writeFile(
+      "dist/server/vinext-prerender-paths.json",
+      JSON.stringify({
+        buildId: "build-a",
+        trailingSlash: true,
+        paths: ["/", "/about", "/about/", "/docs/intro"],
+      }),
+    );
+    writeFile("dist/server/BUILD_ID", "build-a\n");
+
+    expect(readPrerenderWarmPaths(tmpDir)).toEqual(["/", "/about/", "/docs/intro/"]);
+  });
+
+  it("warms the canonical trailing-slash URL instead of the redirecting bare path", async () => {
+    writeFile(
+      "dist/server/vinext-prerender.json",
+      JSON.stringify({
+        buildId: "build-a",
+        trailingSlash: true,
+        routes: [
+          { route: "/", status: "rendered", router: "app", revalidate: false, fallback: false },
+          {
+            route: "/about",
+            status: "rendered",
+            router: "pages",
+            revalidate: false,
+            fallback: false,
+          },
+        ],
+      }),
+    );
+    writeFile("dist/server/BUILD_ID", "build-a\n");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("ok", { status: 200 }),
+    );
+
+    const result = await warmCdnCacheFromPrerender({
+      root: tmpDir,
+      targetUrl: "https://app.example.com",
+      concurrency: 1,
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ total: 2, warmed: 2, failed: 0 });
+    expect(fetchMock.mock.calls.map(([input]) => (input as URL).href)).toEqual([
+      "https://app.example.com/",
+      "https://app.example.com/about/",
+    ]);
+  });
+
   it("uses the full prerender manifest when fallback shell paths are requested", () => {
     writeFile(
       "dist/server/vinext-prerender-paths.json",

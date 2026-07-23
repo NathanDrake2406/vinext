@@ -11,6 +11,7 @@ import {
   type PrerenderedPathSelectionOptions,
 } from "vinext/internal/server/prerender-manifest";
 import { VINEXT_WORKER_VERSION_HEADER } from "vinext/internal/server/worker-version";
+import { normalizeTrailingSlashPathname } from "vinext/server/request-pipeline";
 
 export type CdnWarmOptions = {
   targetUrl: string;
@@ -71,6 +72,30 @@ function readPrerenderPathManifest(manifestPath: string): PrerenderPathManifest 
   }
 }
 
+/**
+ * Manifests record bare route paths and carry `trailingSlash` separately, but
+ * warmup fetches with `redirect: "manual"` so it can verify each cache key
+ * exactly. Requesting `/about` under `trailingSlash: true` would evaluate (and
+ * possibly cache) the 308 at the pre-redirect key while the canonical HTML
+ * entry stays cold — apply the request pipeline's own normalization so warmup
+ * requests the URL the server serves without a redirect.
+ */
+function canonicalizeWarmPathTrailingSlashes(
+  paths: readonly string[],
+  trailingSlash: boolean | undefined,
+): string[] {
+  if (trailingSlash === undefined) return [...paths];
+  const seen = new Set<string>();
+  const canonical: string[] = [];
+  for (const pathname of paths) {
+    const normalized = normalizeTrailingSlashPathname(pathname, trailingSlash) ?? pathname;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    canonical.push(normalized);
+  }
+  return canonical;
+}
+
 function readPrerenderPathWarmPaths(root: string, options?: { strict?: boolean }): string[] | null {
   const manifest = readPrerenderPathManifest(
     path.join(root, "dist", "server", PRERENDER_PATHS_MANIFEST),
@@ -86,7 +111,10 @@ function readPrerenderPathWarmPaths(root: string, options?: { strict?: boolean }
     return [];
   }
 
-  return manifest.paths.filter((pathname) => pathname.startsWith("/"));
+  return canonicalizeWarmPathTrailingSlashes(
+    manifest.paths.filter((pathname) => pathname.startsWith("/")),
+    manifest.trailingSlash,
+  );
 }
 
 export function readPrerenderWarmPaths(
@@ -126,14 +154,20 @@ export function readPrerenderWarmPaths(
     return [];
   }
 
-  return getPrerenderedConcretePaths(manifest, options);
+  return canonicalizeWarmPathTrailingSlashes(
+    getPrerenderedConcretePaths(manifest, options),
+    manifest.trailingSlash,
+  );
 }
 
 export function getWarmPathsFromPrerenderManifest(
   manifest: PrerenderManifest,
   options?: PrerenderedPathSelectionOptions,
 ): string[] {
-  return getPrerenderedConcretePaths(manifest, options);
+  return canonicalizeWarmPathTrailingSlashes(
+    getPrerenderedConcretePaths(manifest, options),
+    manifest.trailingSlash,
+  );
 }
 
 function normalizeWarmPath(pathname: string): string {
