@@ -22,6 +22,7 @@
 import { VINEXT_VERSION_METADATA_BINDING } from "vinext/internal/server/worker-version";
 import { warmCdnCache } from "./cdn-warm.js";
 import { formatUnknownError } from "./utils/format-unknown-error.js";
+import { parseWorkersDevProductionUrl } from "./worker-deployment-url.js";
 import type { WranglerTargetOptions } from "./wrangler-cli.js";
 import {
   runWranglerDeploymentStatus,
@@ -132,7 +133,11 @@ function finishAlreadyCurrentVersion(
       "deployed routes. Re-run `wrangler triggers deploy` to apply the route changes.",
   );
   return {
-    url: pickDeployedUrl(triggers.deployedUrl, upload.previewUrl),
+    url: pickDeployedUrl(
+      triggers.deployedUrl,
+      parseWorkersDevProductionUrl(upload.previewUrl, upload.versionId),
+      upload.previewUrl,
+    ),
     warmed: false,
   };
 }
@@ -163,7 +168,12 @@ function promoteWithoutWarmup(
   );
   const triggers = applyTriggersAfterPromotion(root, options);
   return {
-    url: pickDeployedUrl(deployed.deployedUrl, triggers.deployedUrl, upload.previewUrl),
+    url: pickDeployedUrl(
+      deployed.deployedUrl,
+      triggers.deployedUrl,
+      parseWorkersDevProductionUrl(upload.previewUrl, upload.versionId),
+      upload.previewUrl,
+    ),
     warmed: false,
   };
 }
@@ -192,7 +202,12 @@ async function warmAndPromote(
   // Workers Cache includes the invoked Worker version in its key unless
   // cross_version_cache is enabled. Staging lets overrides warm the uploaded
   // version's partition while a failed override can only touch the old one.
-  const staged = runWranglerVersionDeploy(root, stagingTraffic, options, "stage");
+  runWranglerVersionDeploy(root, stagingTraffic, options, "stage");
+
+  // `wrangler versions deploy` reports traffic splits, not URLs, so nothing run
+  // before promotion prints the workers.dev origin — it has to be derived from
+  // the upload's version preview URL.
+  const workersDevUrl = parseWorkersDevProductionUrl(upload.previewUrl, upload.versionId);
 
   let warmed = false;
   try {
@@ -207,8 +222,8 @@ async function warmAndPromote(
     // every origin × path pair is confirmed.
     const targetUrls = target.productionHosts.length
       ? target.productionHosts.map((host) => `https://${host}`)
-      : !target.hasProductionRoute && staged.deployedUrl
-        ? [staged.deployedUrl]
+      : !target.hasProductionRoute && workersDevUrl
+        ? [workersDevUrl]
         : [];
     const headers = buildVersionOverrideHeaders(target.workerName, upload.versionId);
     if (targetUrls.length === 0 || !headers) {
@@ -297,14 +312,11 @@ async function warmAndPromote(
     );
   }
   const triggers = applyTriggersAfterPromotion(root, options);
-  // The staging command predates promotion and typically prints a workers.dev
-  // URL, while `triggers deploy` reports the attached production target — so
-  // the trigger URL outranks the staged one, matching promoteWithoutWarmup.
   return {
     url: pickDeployedUrl(
       deployed.deployedUrl,
       triggers.deployedUrl,
-      staged.deployedUrl,
+      workersDevUrl,
       upload.previewUrl,
     ),
     warmed,
