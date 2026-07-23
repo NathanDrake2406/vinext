@@ -6201,7 +6201,7 @@ describe("next/cache shim", () => {
     // pending revalidate and return the stale response immediately.
     // Source: https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/spec-extension/unstable-cache.ts
     const requestContext = createRequestContext({
-      cacheRevalidationMode: "background",
+      functionCacheRevalidationMode: "background",
       executionContext: {
         waitUntil(promise) {
           waitUntilPromises.push(promise);
@@ -6223,6 +6223,100 @@ describe("next/cache shim", () => {
       await Promise.all(waitUntilPromises);
 
       expect(setBodies).toEqual([JSON.stringify({ v: "fresh-value" })]);
+    } finally {
+      setCacheHandler(new MemoryCacheHandler());
+    }
+  });
+
+  it("runs unstable_cache background refreshes as isolated work units with foreground nested reads", async () => {
+    const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const setBodies = new Map<string, string>();
+    const handler: CacheHandler = {
+      async get(key: string): Promise<CacheHandlerValue> {
+        return {
+          lastModified: Date.now() - 2_000,
+          cacheState: "stale",
+          value: {
+            kind: "FETCH",
+            data: {
+              headers: {},
+              body: JSON.stringify({
+                v: key.includes("swr-nested-inner") ? "inner-stale" : "outer-stale",
+              }),
+              url: key,
+            },
+            tags: [],
+            revalidate: 1,
+          },
+        };
+      },
+      async set(key: string, data: IncrementalCacheValue | null) {
+        if (data?.kind === "FETCH") {
+          setBodies.set(key, data.data.body);
+        }
+      },
+      async revalidateTag(_tags: string | string[]) {},
+    };
+    setCacheHandler(handler);
+
+    let innerCalls = 0;
+    const inner = unstable_cache(
+      async () => {
+        innerCalls++;
+        return "inner-fresh";
+      },
+      ["swr-nested-inner"],
+      { tags: ["nested-inner-tag"], revalidate: 1 },
+    );
+    let outerCalls = 0;
+    const outer = unstable_cache(
+      async () => {
+        outerCalls++;
+        return { inner: await inner() };
+      },
+      ["swr-nested-outer"],
+      { revalidate: 1 },
+    );
+
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const requestContext = createRequestContext({
+      functionCacheRevalidationMode: "background",
+      executionContext: {
+        waitUntil(promise) {
+          waitUntilPromises.push(promise);
+        },
+      },
+    });
+
+    try {
+      // The stale outer entry is served without waiting for the refresh.
+      await expect(runWithRequestContext(requestContext, () => outer())).resolves.toBe(
+        "outer-stale",
+      );
+      expect(waitUntilPromises).toHaveLength(1);
+      await Promise.all(waitUntilPromises);
+
+      // The detached refresh is a synthetic cache work unit: the nested stale
+      // inner entry is regenerated in the foreground, so the stored outer
+      // value is assembled from fresh nested data instead of the stale inner
+      // entry a "background"-mode read would have served.
+      expect(outerCalls).toBe(1);
+      expect(innerCalls).toBe(1);
+      expect(setBodies.get("unstable_cache:swr-nested-inner:[]")).toBe(
+        JSON.stringify({ v: "inner-fresh" }),
+      );
+      expect(setBodies.get("unstable_cache:swr-nested-outer:[]")).toBe(
+        JSON.stringify({ v: { inner: "inner-fresh" } }),
+      );
+
+      // Tags and observations recorded inside the refresh belong to its
+      // isolated context, not to the request that happened to trigger it.
+      expect(requestContext.currentRequestTags).toEqual([]);
+      expect(requestContext.unstableCacheObservations.size).toBe(1);
     } finally {
       setCacheHandler(new MemoryCacheHandler());
     }
@@ -6258,7 +6352,7 @@ describe("next/cache shim", () => {
 
     const waitUntilCalls: Promise<unknown>[] = [];
     const requestContext = createRequestContext({
-      cacheRevalidationMode: "background",
+      functionCacheRevalidationMode: "background",
       executionContext: {
         waitUntil(promise) {
           waitUntilCalls.push(promise);
@@ -6330,7 +6424,7 @@ describe("next/cache shim", () => {
     // regenerating a static/ISR page so the regenerated page stores fresh data.
     // Source test: https://github.com/vercel/next.js/blob/canary/test/production/app-dir/unstable-cache-foreground-revalidate/unstable-cache-foreground-revalidate.test.ts
     const requestContext = createRequestContext({
-      cacheRevalidationMode: "foreground",
+      functionCacheRevalidationMode: "foreground",
     });
 
     try {
@@ -6625,7 +6719,7 @@ describe('"use cache" runtime', () => {
     const secondWaitUntilCalls: Promise<unknown>[] = [];
     const staleCalls: Promise<{ version: string }>[] = [];
     const firstRequestContext = createRequestContext({
-      cacheRevalidationMode: "background",
+      functionCacheRevalidationMode: "background",
       currentFetchSoftTags: ["implicit-route-tag"],
       headersContext: {
         headers: new Headers({ "x-request-only": "first" }),
@@ -6641,7 +6735,7 @@ describe('"use cache" runtime', () => {
       },
     });
     const secondRequestContext = createRequestContext({
-      cacheRevalidationMode: "background",
+      functionCacheRevalidationMode: "background",
       currentFetchSoftTags: ["implicit-route-tag"],
       headersContext: {
         headers: new Headers({ "x-request-only": "second" }),
@@ -6772,7 +6866,7 @@ describe('"use cache" runtime', () => {
 
     const waitUntilCalls: Promise<unknown>[] = [];
     const requestContext = createRequestContext({
-      cacheRevalidationMode: "background",
+      functionCacheRevalidationMode: "background",
       executionContext: {
         waitUntil(promise) {
           waitUntilCalls.push(promise);
@@ -6831,7 +6925,7 @@ describe('"use cache" runtime', () => {
 
     const waitUntilCalls: Promise<unknown>[] = [];
     const requestContext = createRequestContext({
-      cacheRevalidationMode: "background",
+      functionCacheRevalidationMode: "background",
       headersContext: headersContextFromRequest(
         new Request("https://example.com/preview", {
           headers: { cookie: "__prerender_bypass=test-secret" },
@@ -6924,7 +7018,7 @@ describe('"use cache" runtime', () => {
       return { version: "fresh" };
     }, "test:stale-write-retry");
     const requestContext = createRequestContext({
-      cacheRevalidationMode: "background",
+      functionCacheRevalidationMode: "background",
       executionContext: null,
     });
 
@@ -6995,7 +7089,7 @@ describe('"use cache" runtime', () => {
     });
     const waitUntilCalls: Promise<unknown>[] = [];
     const requestContext = createRequestContext({
-      cacheRevalidationMode: "foreground",
+      functionCacheRevalidationMode: "foreground",
       executionContext: {
         waitUntil(promise) {
           waitUntilCalls.push(promise);

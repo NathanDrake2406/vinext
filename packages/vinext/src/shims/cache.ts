@@ -33,6 +33,10 @@ import { encodeCacheTag, encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getCdnCacheAdapter } from "./cdn-cache.js";
 import { getDataCacheHandler, type CachedFetchValue } from "./cache-handler.js";
 import { getRequestExecutionContext } from "./request-context.js";
+import {
+  createCacheRevalidationContext,
+  runWithRequestContext,
+} from "./unified-request-context.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
 import {
   ACTION_DID_REVALIDATE_DYNAMIC_ONLY,
@@ -43,7 +47,7 @@ import {
   _setRequestScopedCacheLife,
   cacheLifeProfiles,
   decideCacheRead,
-  getCacheRevalidationMode,
+  getFunctionCacheRevalidationMode,
   getRegisteredCacheContext,
   markActionRevalidation,
   recordUnstableCacheObservation,
@@ -597,14 +601,26 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
             softTags,
           });
       if (existing?.value && existing.value.kind === "FETCH") {
-        const cacheReadAction = decideCacheRead(existing.cacheState, getCacheRevalidationMode());
+        const cacheReadAction = decideCacheRead(
+          existing.cacheState,
+          getFunctionCacheRevalidationMode(),
+        );
         if (cacheReadAction !== "revalidate") {
           const cached = tryDeserializeUnstableCacheResult(existing.value.data.body);
           if (cached.ok) {
             if (cacheReadAction === "serve-and-revalidate") {
+              // The detached refresh is a synthetic cache work unit, not a
+              // continuation of the triggering request: it runs in an isolated
+              // context so cached fetches and observations inside the callback
+              // cannot mutate this request's output containers, and its
+              // foreground mode forces nested stale dependencies to refresh
+              // before the regenerated entry is stored.
               scheduleBackgroundCacheRevalidation(
                 cacheKey,
-                () => refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
+                () =>
+                  runWithRequestContext(createCacheRevalidationContext(softTags), () =>
+                    refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
+                  ),
                 (error) => {
                   console.error(
                     `[vinext] unstable_cache background revalidation failed for ${cacheKey}:`,

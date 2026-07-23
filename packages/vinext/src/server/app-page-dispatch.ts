@@ -565,7 +565,7 @@ async function runAppPageRevalidationContext<
     currentFetchCacheMode: options.currentFetchCacheMode ?? null,
     currentForceDynamicFetchDefault: options.dynamicConfig === "force-dynamic",
     executionContext: getRequestExecutionContext(),
-    cacheRevalidationMode: "foreground",
+    functionCacheRevalidationMode: "foreground",
   });
 
   const revalidation = runWithRequestContext(requestContext, async () => {

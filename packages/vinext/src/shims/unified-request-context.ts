@@ -112,7 +112,7 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     serverInsertedHTMLCallbacks: [],
     requestScopedCacheLife: null,
     unstableCacheObservations: new Map(),
-    cacheRevalidationMode: "foreground",
+    functionCacheRevalidationMode: "foreground",
     _privateCache: null,
     cacheableFetchUrls: new Set<string>(),
     currentRequestTags: [],
@@ -180,7 +180,7 @@ export function createCacheRevalidationContext(
     isFetchDedupeActive: outer?.isFetchDedupeActive ?? false,
     currentFetchDedupeEntries: new Map(),
     rootParams,
-    cacheRevalidationMode: "foreground",
+    functionCacheRevalidationMode: "foreground",
   });
 }
 

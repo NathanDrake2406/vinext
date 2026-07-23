@@ -1428,7 +1428,7 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
     const requestContext = createRequestContext({
       headersContext,
       executionContext,
-      cacheRevalidationMode: "background",
+      functionCacheRevalidationMode: "background",
     });
 
     const responsePromise = runWithRequestContext(requestContext, () =>

@@ -42,10 +42,17 @@ export function getRegisteredCacheContext(): CacheContextLike | null {
 }
 
 /**
- * Controls stale function/data-cache reads. Patched fetch response caching has
- * a separate policy because it owns response streams and refetch timeouts.
+ * Controls stale reads for the function caches ("use cache" and
+ * unstable_cache) only. Patched fetch response caching deliberately keeps its
+ * own `refreshStaleFetchesInForeground` flag (fetch-cache.ts) for now: its
+ * default is fail-open (serve stale, background refetch) across every request
+ * path, while this mode's default is fail-closed, so folding fetch into this
+ * field would need an audit of Pages Router and fallback-scope requests first.
+ * Converging both onto one request-level freshness policy is tracked follow-up
+ * work; until then this field is intentionally named narrowly so it does not
+ * read as the authoritative policy for all persistent caches.
  */
-export type CacheRevalidationMode = "foreground" | "background";
+export type FunctionCacheRevalidationMode = "foreground" | "background";
 export type CacheReadAction = "serve" | "serve-and-revalidate" | "revalidate";
 export type ActionRevalidationKind = 0 | 1 | 2;
 export type UnstableCacheObservation = Readonly<{
@@ -62,7 +69,7 @@ export type CacheState = {
   pendingRevalidations: Set<Promise<void>>;
   requestScopedCacheLife: CacheLifeConfig | null;
   unstableCacheObservations: Map<string, UnstableCacheObservation>;
-  cacheRevalidationMode: CacheRevalidationMode;
+  functionCacheRevalidationMode: FunctionCacheRevalidationMode;
 };
 
 const FALLBACK_KEY = Symbol.for("vinext.cache.fallback");
@@ -79,7 +86,7 @@ const fallbackState = (globalState[FALLBACK_KEY] ??= {
   pendingRevalidations: new Set<Promise<void>>(),
   requestScopedCacheLife: null,
   unstableCacheObservations: new Map<string, UnstableCacheObservation>(),
-  cacheRevalidationMode: "foreground",
+  functionCacheRevalidationMode: "foreground",
 } satisfies CacheState) as CacheState;
 
 function getCacheState(): CacheState {
@@ -97,7 +104,7 @@ export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T> 
       context.actionRevalidationKind = ACTION_DID_NOT_REVALIDATE;
       context.requestScopedCacheLife = null;
       context.unstableCacheObservations = new Map<string, UnstableCacheObservation>();
-      context.cacheRevalidationMode = "foreground";
+      context.functionCacheRevalidationMode = "foreground";
     }, fn);
   }
   const state: CacheState = {
@@ -106,7 +113,7 @@ export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T> 
     pendingRevalidations: new Set<Promise<void>>(),
     requestScopedCacheLife: null,
     unstableCacheObservations: new Map<string, UnstableCacheObservation>(),
-    cacheRevalidationMode: "foreground",
+    functionCacheRevalidationMode: "foreground",
   };
   return cacheAls.run(state, fn);
 }
@@ -250,8 +257,8 @@ export function _peekUnstableCacheObservations(): UnstableCacheObservation[] {
   );
 }
 
-export function getCacheRevalidationMode(): CacheRevalidationMode {
-  return getCacheState().cacheRevalidationMode;
+export function getFunctionCacheRevalidationMode(): FunctionCacheRevalidationMode {
+  return getCacheState().functionCacheRevalidationMode;
 }
 
 /**
@@ -261,7 +268,7 @@ export function getCacheRevalidationMode(): CacheRevalidationMode {
  */
 export function decideCacheRead(
   cacheState: string | undefined,
-  mode: CacheRevalidationMode,
+  mode: FunctionCacheRevalidationMode,
 ): CacheReadAction {
   if (cacheState === undefined) return "serve";
   if (cacheState === "stale") {

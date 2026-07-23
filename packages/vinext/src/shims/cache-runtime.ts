@@ -41,7 +41,7 @@ import {
   _setRequestScopedCacheLife,
   _registerCacheContextAccessor,
   decideCacheRead,
-  getCacheRevalidationMode,
+  getFunctionCacheRevalidationMode,
   type CacheLifeConfig,
 } from "./cache-request-state.js";
 import { VINEXT_RSC_MARKER_HEADER } from "../server/headers.js";
@@ -577,7 +577,10 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           console.error("[vinext] use cache: handler.get failed; treating as a cache miss:", error);
         }
       }
-      const cacheReadAction = decideCacheRead(existing?.cacheState, getCacheRevalidationMode());
+      const cacheReadAction = decideCacheRead(
+        existing?.cacheState,
+        getFunctionCacheRevalidationMode(),
+      );
       if (
         existing?.value &&
         existing.value.kind === "FETCH" &&
