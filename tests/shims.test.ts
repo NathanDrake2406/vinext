@@ -6191,7 +6191,7 @@ describe("next/cache shim", () => {
     // pending revalidate and return the stale response immediately.
     // Source: https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/spec-extension/unstable-cache.ts
     const requestContext = createRequestContext({
-      unstableCacheRevalidation: "background",
+      cacheRevalidationMode: "background",
       executionContext: {
         waitUntil(promise) {
           waitUntilPromises.push(promise);
@@ -6261,7 +6261,7 @@ describe("next/cache shim", () => {
     // regenerating a static/ISR page so the regenerated page stores fresh data.
     // Source test: https://github.com/vercel/next.js/blob/canary/test/production/app-dir/unstable-cache-foreground-revalidate/unstable-cache-foreground-revalidate.test.ts
     const requestContext = createRequestContext({
-      unstableCacheRevalidation: "foreground",
+      cacheRevalidationMode: "foreground",
     });
 
     try {
@@ -6557,6 +6557,7 @@ describe('"use cache" runtime', () => {
     const secondWaitUntilCalls: Promise<unknown>[] = [];
     const staleCalls: Promise<{ version: string }>[] = [];
     const firstRequestContext = createRequestContext({
+      cacheRevalidationMode: "background",
       currentFetchSoftTags: ["implicit-route-tag"],
       headersContext: headersContextFromRequest(
         new Request("https://example.com/first", {
@@ -6573,6 +6574,7 @@ describe('"use cache" runtime', () => {
       },
     });
     const secondRequestContext = createRequestContext({
+      cacheRevalidationMode: "background",
       currentFetchSoftTags: ["implicit-route-tag"],
       headersContext: headersContextFromRequest(
         new Request("https://example.com/second", {
@@ -6659,11 +6661,13 @@ describe('"use cache" runtime', () => {
     }
   });
 
-  it("logs failed background writes and retries stale entries without a request context", async () => {
+  it("logs failed background writes and retries stale entries without waitUntil", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
     const { setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
 
     let resolveFirstWrite = () => {};
     const firstWrite = new Promise<void>((resolve) => {
@@ -6709,9 +6713,15 @@ describe('"use cache" runtime', () => {
       revalidationCalls++;
       return { version: "fresh" };
     }, "test:stale-write-retry");
+    const requestContext = createRequestContext({
+      cacheRevalidationMode: "background",
+      executionContext: null,
+    });
 
     try {
-      await expect(cached()).resolves.toEqual({ version: "stale" });
+      await expect(runWithRequestContext(requestContext, () => cached())).resolves.toEqual({
+        version: "stale",
+      });
       await firstWrite;
       await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -6720,7 +6730,9 @@ describe('"use cache" runtime', () => {
         expect.objectContaining({ message: "cache backend unavailable" }),
       );
 
-      await expect(cached()).resolves.toEqual({ version: "stale" });
+      await expect(runWithRequestContext(requestContext, () => cached())).resolves.toEqual({
+        version: "stale",
+      });
       await secondWrite;
       await new Promise<void>((resolve) => setImmediate(resolve));
     } finally {
@@ -6730,6 +6742,92 @@ describe('"use cache" runtime', () => {
 
     expect(revalidationCalls).toBe(2);
     expect(writeCalls).toBe(2);
+  });
+
+  it("refreshes stale shared entries in foreground runtime revalidation contexts", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const setEntry = vi.fn<CacheHandler["set"]>(async () => {});
+    setCacheHandler({
+      async get() {
+        return {
+          lastModified: Date.now() - 2_000,
+          cacheState: "stale",
+          cacheControl: { revalidate: 1, expire: 60 },
+          value: {
+            kind: "FETCH",
+            data: {
+              headers: {},
+              body: JSON.stringify({ version: "stale" }),
+              url: "use-cache:test:stale-runtime-isr",
+            },
+            tags: [],
+            revalidate: 1,
+          },
+        };
+      },
+      set: setEntry,
+      async revalidateTag() {},
+    });
+
+    let markRefreshStarted = () => {};
+    const refreshStarted = new Promise<void>((resolve) => {
+      markRefreshStarted = resolve;
+    });
+    let releaseRefresh = () => {};
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const waitUntilCalls: Promise<unknown>[] = [];
+    const requestContext = createRequestContext({
+      cacheRevalidationMode: "foreground",
+      executionContext: {
+        waitUntil(promise) {
+          waitUntilCalls.push(promise);
+        },
+      },
+    });
+    const cached = registerCachedFunction(async () => {
+      markRefreshStarted();
+      await refreshGate;
+      return { version: "fresh" };
+    }, "test:stale-runtime-isr");
+    const resultPromise = runWithRequestContext(requestContext, () => cached());
+
+    try {
+      await refreshStarted;
+      const outcome = await Promise.race([
+        resultPromise.then((value) => ({ status: "returned" as const, value })),
+        new Promise<{ status: "blocked" }>((resolve) => {
+          setImmediate(() => resolve({ status: "blocked" }));
+        }),
+      ]);
+
+      expect(outcome).toEqual({ status: "blocked" });
+      expect(waitUntilCalls).toHaveLength(0);
+    } finally {
+      releaseRefresh();
+    }
+
+    try {
+      await expect(resultPromise).resolves.toEqual({ version: "fresh" });
+      expect(setEntry).toHaveBeenCalledOnce();
+      expect(setEntry).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          kind: "FETCH",
+          data: expect.objectContaining({ body: JSON.stringify({ version: "fresh" }) }),
+        }),
+        expect.any(Object),
+      );
+    } finally {
+      setCacheHandler(new MemoryCacheHandler());
+    }
   });
 
   it("refreshes stale shared entries in the foreground during prerendering", async () => {

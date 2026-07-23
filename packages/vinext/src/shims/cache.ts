@@ -25,8 +25,8 @@ import {
   markDynamicUsage as _markDynamic,
 } from "./headers.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
+import { scheduleBackgroundCacheRevalidation } from "./internal/cache-revalidation.js";
 import { fnv1a64 } from "../utils/hash.js";
-import { isInsideUnifiedScope, getRequestContext } from "./unified-request-context.js";
 import { workUnitAsyncStorage } from "./internal/work-unit-async-storage.js";
 import { makeHangingPromise } from "./internal/make-hanging-promise.js";
 import { encodeCacheTag, encodeCacheTags } from "../utils/encode-cache-tag.js";
@@ -45,14 +45,12 @@ import {
   getRegisteredCacheContext,
   markActionRevalidation,
   recordUnstableCacheObservation,
-  shouldServeStaleUnstableCacheEntry,
+  shouldServeStaleCacheEntry,
   type CacheLifeConfig,
 } from "./cache-request-state.js";
 
 export * from "./cache-handler.js";
 export * from "./cache-request-state.js";
-
-const _g = globalThis as unknown as Record<PropertyKey, unknown>;
 
 // ---------------------------------------------------------------------------
 // Request-scoped ExecutionContext ALS
@@ -513,46 +511,6 @@ type UnstableCacheOptions = {
   tags?: string[];
 };
 
-const _UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY = Symbol.for(
-  "vinext.unstableCache.pendingRevalidations",
-);
-
-function getPendingUnstableCacheRevalidations(): Map<string, Promise<void>> {
-  const existing = _g[_UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY];
-  if (existing instanceof Map) return existing;
-
-  const pending = new Map<string, Promise<void>>();
-  _g[_UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY] = pending;
-  return pending;
-}
-
-function waitUntilUnstableCacheRevalidation(promise: Promise<void>): void {
-  if (!isInsideUnifiedScope()) return;
-  getRequestContext().executionContext?.waitUntil(promise);
-}
-
-function scheduleUnstableCacheBackgroundRevalidation(
-  cacheKey: string,
-  refresh: () => Promise<unknown>,
-): void {
-  const pending = getPendingUnstableCacheRevalidations();
-  if (pending.has(cacheKey)) return;
-
-  const revalidation = refresh()
-    .then(() => undefined)
-    .catch((err) => {
-      console.error(`[vinext] unstable_cache background revalidation failed for ${cacheKey}:`, err);
-    });
-  const trackedRevalidation = revalidation.finally(() => {
-    if (pending.get(cacheKey) === trackedRevalidation) {
-      pending.delete(cacheKey);
-    }
-  });
-
-  pending.set(cacheKey, trackedRevalidation);
-  waitUntilUnstableCacheRevalidation(trackedRevalidation);
-}
-
 async function refreshUnstableCacheResult<Args extends unknown[], Result>(
   fn: (...args: Args) => Promise<Result>,
   args: Args,
@@ -641,9 +599,16 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
         const cached = tryDeserializeUnstableCacheResult(existing.value.data.body);
         if (cached.ok) {
           if (existing.cacheState === "stale") {
-            if (shouldServeStaleUnstableCacheEntry()) {
-              scheduleUnstableCacheBackgroundRevalidation(cacheKey, () =>
-                refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
+            if (shouldServeStaleCacheEntry()) {
+              scheduleBackgroundCacheRevalidation(
+                cacheKey,
+                () => refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
+                (error) => {
+                  console.error(
+                    `[vinext] unstable_cache background revalidation failed for ${cacheKey}:`,
+                    error,
+                  );
+                },
               );
               return cached.value;
             }

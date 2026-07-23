@@ -132,7 +132,7 @@ async function runInRouteHandlerRevalidationContext(
   const requestContext = createRequestContext({
     headersContext,
     executionContext: getRequestExecutionContext(),
-    unstableCacheRevalidation: "foreground",
+    cacheRevalidationMode: "foreground",
   });
 
   const revalidation = runWithRequestContext(requestContext, async () => {

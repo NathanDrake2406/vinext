@@ -41,7 +41,7 @@ export function getRegisteredCacheContext(): CacheContextLike | null {
   return getCacheContext?.() ?? null;
 }
 
-export type UnstableCacheRevalidationMode = "foreground" | "background";
+export type CacheRevalidationMode = "foreground" | "background";
 export type ActionRevalidationKind = 0 | 1 | 2;
 export type UnstableCacheObservation = Readonly<{
   kind: "unstable_cache";
@@ -57,7 +57,7 @@ export type CacheState = {
   pendingRevalidations: Set<Promise<void>>;
   requestScopedCacheLife: CacheLifeConfig | null;
   unstableCacheObservations: Map<string, UnstableCacheObservation>;
-  unstableCacheRevalidation: UnstableCacheRevalidationMode;
+  cacheRevalidationMode: CacheRevalidationMode;
 };
 
 const FALLBACK_KEY = Symbol.for("vinext.cache.fallback");
@@ -74,7 +74,7 @@ const fallbackState = (globalState[FALLBACK_KEY] ??= {
   pendingRevalidations: new Set<Promise<void>>(),
   requestScopedCacheLife: null,
   unstableCacheObservations: new Map<string, UnstableCacheObservation>(),
-  unstableCacheRevalidation: "foreground",
+  cacheRevalidationMode: "foreground",
 } satisfies CacheState) as CacheState;
 
 function getCacheState(): CacheState {
@@ -92,7 +92,7 @@ export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T> 
       context.actionRevalidationKind = ACTION_DID_NOT_REVALIDATE;
       context.requestScopedCacheLife = null;
       context.unstableCacheObservations = new Map<string, UnstableCacheObservation>();
-      context.unstableCacheRevalidation = "foreground";
+      context.cacheRevalidationMode = "foreground";
     }, fn);
   }
   const state: CacheState = {
@@ -101,7 +101,7 @@ export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T> 
     pendingRevalidations: new Set<Promise<void>>(),
     requestScopedCacheLife: null,
     unstableCacheObservations: new Map<string, UnstableCacheObservation>(),
-    unstableCacheRevalidation: "foreground",
+    cacheRevalidationMode: "foreground",
   };
   return cacheAls.run(state, fn);
 }
@@ -245,6 +245,6 @@ export function _peekUnstableCacheObservations(): UnstableCacheObservation[] {
   );
 }
 
-export function shouldServeStaleUnstableCacheEntry(): boolean {
-  return getCacheState().unstableCacheRevalidation === "background";
+export function shouldServeStaleCacheEntry(): boolean {
+  return getCacheState().cacheRevalidationMode === "background";
 }

@@ -40,13 +40,15 @@ import {
   _hasPendingRevalidatedTag,
   _setRequestScopedCacheLife,
   _registerCacheContextAccessor,
+  shouldServeStaleCacheEntry,
   type CacheLifeConfig,
 } from "./cache-request-state.js";
 import { VINEXT_RSC_MARKER_HEADER } from "../server/headers.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
+import { scheduleBackgroundCacheRevalidation } from "./internal/cache-revalidation.js";
 import {
-  createRequestContext,
+  createCacheRevalidationContext,
   isInsideUnifiedScope,
   getRequestContext,
   runWithRequestContext,
@@ -55,7 +57,6 @@ import {
 import { markDynamicUsage } from "./headers.js";
 import { trackPprFallbackShellCacheTask } from "./ppr-fallback-shell.js";
 import { isMarkedAppPagePropsObject } from "./internal/app-page-props-cache-key.js";
-import { getRequestExecutionContext } from "./request-context.js";
 
 export { markAppPagePropsForUseCache } from "./internal/app-page-props-cache-key.js";
 
@@ -568,14 +569,11 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           console.error("[vinext] use cache: handler.get failed; treating as a cache miss:", error);
         }
       }
-      const shouldRefreshStaleInForeground =
-        existing?.cacheState === "stale" &&
-        typeof process !== "undefined" &&
-        process.env.VINEXT_PRERENDER === "1";
+      const shouldUseCachedEntry = existing?.cacheState !== "stale" || shouldServeStaleCacheEntry();
       if (
         existing?.value &&
         existing.value.kind === "FETCH" &&
-        !shouldRefreshStaleInForeground &&
+        shouldUseCachedEntry &&
         !_hasPendingRevalidatedTag([...(existing.value.tags ?? []), ...softTags])
       ) {
         try {
@@ -595,11 +593,18 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           propagateCacheTagsToRequest(existing.value.tags);
           recordRequestScopedCacheControl(existing.cacheControl);
           if (existing.cacheState === "stale") {
-            scheduleSharedCacheRevalidation(cacheKey, () =>
-              refreshSharedCacheEntry(fn, args, cacheVariant, cacheKey, handler, rsc, {
-                skipOuterPropagation: true,
-                reportCacheWriteErrors: true,
-              }),
+            scheduleBackgroundCacheRevalidation(
+              cacheKey,
+              () =>
+                runWithRequestContext(createCacheRevalidationContext(softTags), () =>
+                  refreshSharedCacheEntry(fn, args, cacheVariant, cacheKey, handler, rsc, {
+                    skipOuterPropagation: true,
+                    reportCacheWriteErrors: true,
+                  }),
+                ),
+              (error) => {
+                console.error("[vinext] use cache background revalidation failed:", error);
+              },
             );
           }
           return result;
@@ -718,75 +723,6 @@ async function refreshSharedCacheEntry<TArgs extends unknown[], TResult>(
   }
 
   return result;
-}
-
-const _USE_CACHE_PENDING_REVALIDATIONS_KEY = Symbol.for("vinext.useCache.pendingRevalidations");
-
-function getPendingSharedCacheRevalidations(): Map<string, Promise<void>> {
-  const existing = _g[_USE_CACHE_PENDING_REVALIDATIONS_KEY];
-  if (existing instanceof Map) return existing;
-
-  const pending = new Map<string, Promise<void>>();
-  _g[_USE_CACHE_PENDING_REVALIDATIONS_KEY] = pending;
-  return pending;
-}
-
-function scheduleSharedCacheRevalidation(cacheKey: string, refresh: () => Promise<unknown>): void {
-  const pending = getPendingSharedCacheRevalidations();
-  if (pending.has(cacheKey)) return;
-
-  const outerRequestContext = isInsideUnifiedScope() ? getRequestContext() : null;
-  const executionContext = getRequestExecutionContext();
-  // A stale response has already selected its cache metadata. Regeneration
-  // therefore runs in a fresh request-state container so cacheLife(), tags,
-  // and fetch observations produced by the refresh cannot mutate that response.
-  // Preserve only inputs that affect cache reads and runtime lifetime.
-  const revalidationContext = createRequestContext({
-    executionContext,
-    headersContext: outerRequestContext?.headersContext
-      ? {
-          ...outerRequestContext.headersContext,
-          headers: new Headers(outerRequestContext.headersContext.headers),
-          cookies: new Map(outerRequestContext.headersContext.cookies),
-          mutableCookies: undefined,
-          readonlyCookies: undefined,
-          readonlyHeaders: undefined,
-        }
-      : null,
-    pendingRevalidatedTags: new Set(outerRequestContext?.pendingRevalidatedTags ?? []),
-    currentFetchSoftTags: [...getCurrentFetchSoftTags()],
-    currentFetchCacheMode: outerRequestContext?.currentFetchCacheMode ?? null,
-    currentForceDynamicFetchDefault: outerRequestContext?.currentForceDynamicFetchDefault ?? false,
-    isFetchDedupeActive: outerRequestContext?.isFetchDedupeActive ?? false,
-    currentFetchDedupeEntries: new Map(),
-    rootParams: outerRequestContext?.rootParams
-      ? Object.fromEntries(
-          Object.entries(outerRequestContext.rootParams).map(([name, value]) => [
-            name,
-            Array.isArray(value) ? [...value] : value,
-          ]),
-        )
-      : null,
-  });
-
-  const revalidation = Promise.resolve()
-    .then(() => runWithRequestContext(revalidationContext, refresh))
-    .then(() => undefined)
-    .catch((error) => {
-      console.error("[vinext] use cache background revalidation failed:", error);
-    });
-  const trackedRevalidation = revalidation.finally(() => {
-    if (pending.get(cacheKey) === trackedRevalidation) {
-      pending.delete(cacheKey);
-    }
-  });
-
-  pending.set(cacheKey, trackedRevalidation);
-  if (executionContext) {
-    executionContext.waitUntil(trackedRevalidation);
-  } else {
-    void trackedRevalidation;
-  }
 }
 
 /** @internal Symbol used to identify "use cache" wrapper functions. */
