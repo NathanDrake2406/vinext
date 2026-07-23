@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import ReactDOMServer from "react-dom/server";
 import type { ElementType, ReactNode } from "react";
 import {
@@ -204,21 +204,19 @@ function mockReactAnchorCaptureForLinkOnly_DO_NOT_REUSE(
 async function flushPrefetchTasks(until?: () => boolean): Promise<void> {
   // requestIdleCallback is mocked as sync, then prefetchUrl enters an async
   // IIFE that may resolve lazy runtime modules before hashing headers and
-  // writing caches. Low-priority App Router fetches then drain from a
-  // microtask-backed queue. Without an explicit condition, settle dynamic
-  // imports first, then yield one event-loop turn for the queue drain.
-  if (until === undefined) {
+  // writing caches. Track those hashes explicitly so a detached prefetch
+  // cannot outlive the test and call the next test's global fetch mock.
+  for (let attempt = 0; attempt < 1_000; attempt++) {
     await vi.dynamicImportSettled();
+    await Promise.all(pendingRscCacheBustingDigests);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await vi.dynamicImportSettled();
-    return;
+    if (pendingRscCacheBustingDigests.size === 0 && (until === undefined || until())) {
+      return;
+    }
   }
-
-  const deadline = Date.now() + 1_000;
-  do {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    if (until()) return;
-  } while (Date.now() < deadline);
+  throw new Error(
+    `Timed out waiting for prefetch tasks (pending digests: ${pendingRscCacheBustingDigests.size}, condition: ${until?.() ?? "none"})`,
+  );
 }
 
 async function waitForFetchCalls(
@@ -416,13 +414,40 @@ describe("Link prefetch pure decisions", () => {
   });
 });
 
-afterEach(() => {
-  vi.doUnmock("react");
-  vi.doUnmock("react/jsx-runtime");
-  vi.doUnmock("react/jsx-dev-runtime");
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  vi.resetModules();
+const pendingRscCacheBustingDigests = new Set<Promise<ArrayBuffer>>();
+let rscCacheBustingDigestDelayMs = 0;
+
+beforeEach(() => {
+  rscCacheBustingDigestDelayMs = 0;
+  const digest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle);
+  vi.spyOn(globalThis.crypto.subtle, "digest").mockImplementation((algorithm, data) => {
+    const pending = (async () => {
+      if (rscCacheBustingDigestDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, rscCacheBustingDigestDelayMs));
+      }
+      return digest(algorithm, data);
+    })();
+    pendingRscCacheBustingDigests.add(pending);
+    void pending.then(
+      () => pendingRscCacheBustingDigests.delete(pending),
+      () => pendingRscCacheBustingDigests.delete(pending),
+    );
+    return pending;
+  });
+});
+
+afterEach(async () => {
+  try {
+    await flushPrefetchTasks();
+  } finally {
+    pendingRscCacheBustingDigests.clear();
+    vi.doUnmock("react");
+    vi.doUnmock("react/jsx-runtime");
+    vi.doUnmock("react/jsx-dev-runtime");
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  }
 });
 
 describe("Link App Router navigation scheduling", () => {
@@ -1821,9 +1846,10 @@ describe("Link prefetch scheduling", () => {
     try {
       expect(observer.observe).toHaveBeenCalledWith(result.anchor);
       observer.dispatchIntersectingEntry(result.anchor);
-      await waitForFetchCalls(result.fetch, 2);
+      await waitForFetchCalls(result.fetch, 1);
 
       expect(observer.unobserve).not.toHaveBeenCalledWith(result.anchor);
+      expect(result.fetch).toHaveBeenCalledTimes(1);
       expectCanonicalRscFetchCall(
         result.fetch.mock.calls[0],
         "/blog/hello",
@@ -2641,6 +2667,7 @@ describe("Link prefetch scheduling", () => {
   });
 
   it("prefetches on touch intent in production while preserving the user handler", async () => {
+    rscCacheBustingDigestDelayMs = 25;
     const userOnTouchStart = vi.fn();
     const result = await renderIsolatedLink({
       href: "/touch-prefetch-target",
@@ -2651,7 +2678,7 @@ describe("Link prefetch scheduling", () => {
     try {
       expect(result.capturedAnchorProps.onTouchStart).toBeTypeOf("function");
       result.capturedAnchorProps.onTouchStart?.({ currentTarget: result.anchor });
-      await flushPrefetchTasks();
+      await waitForFetchCalls(result.fetch, 1);
 
       expect(userOnTouchStart).toHaveBeenCalledTimes(1);
       expectCanonicalRscFetchCall(
