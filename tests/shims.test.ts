@@ -6515,6 +6515,7 @@ describe('"use cache" runtime', () => {
       await import("../packages/vinext/src/shims/cache.js");
     const { addCollectedRequestTags, getCurrentFetchSoftTags } =
       await import("../packages/vinext/src/shims/fetch-cache.js");
+    const { draftMode } = await import("../packages/vinext/src/shims/headers.js");
     const { getRootParam } = await import("../packages/vinext/src/shims/root-params.js");
     const { createRequestContext, getRequestContext, runWithRequestContext } =
       await import("../packages/vinext/src/shims/unified-request-context.js");
@@ -6560,6 +6561,7 @@ describe('"use cache" runtime', () => {
       headersContext: {
         headers: new Headers({ "x-request-only": "first" }),
         cookies: new Map([["request-only", "first"]]),
+        draftModeSecret: "test-secret",
       },
       isFetchDedupeActive: true,
       rootParams: { lang: "en" },
@@ -6575,6 +6577,7 @@ describe('"use cache" runtime', () => {
       headersContext: {
         headers: new Headers({ "x-request-only": "second" }),
         cookies: new Map([["request-only", "second"]]),
+        draftModeSecret: "test-secret",
       },
       isFetchDedupeActive: true,
       rootParams: { lang: "en" },
@@ -6587,24 +6590,34 @@ describe('"use cache" runtime', () => {
     let revalidationCalls = 0;
     let refreshSoftTags: string[] = [];
     let refreshRootParam: string | string[] | undefined;
-    let refreshHeadersContext: unknown;
+    let refreshDraftModeEnabled: boolean | undefined;
+    let refreshRequestHeader: string | null | undefined;
+    let refreshRequestCookie: string | undefined;
+    let refreshDraftModeSecret: string | undefined;
     let refreshFetchDedupeActive = false;
     let refreshFetchDedupeEntries: unknown;
 
     const cached = registerCachedFunction(async () => {
       revalidationCalls++;
-      refreshSoftTags = getCurrentFetchSoftTags();
-      refreshRootParam = await getRootParam("lang");
-      refreshHeadersContext = getRequestContext().headersContext;
-      refreshFetchDedupeActive = getRequestContext().isFetchDedupeActive;
-      refreshFetchDedupeEntries = getRequestContext().currentFetchDedupeEntries;
-      cacheLife({ stale: 1, revalidate: 1, expire: 60 });
-      addCollectedRequestTags(["refresh-fetch-tag"]);
-      // These are the exact request-state slices updated by cached and
-      // uncached fetch observations during a real refresh.
-      getRequestContext().cacheableFetchUrls.add("https://example.com/refresh-cacheable");
-      getRequestContext().dynamicFetchUrls.add("https://example.com/refresh-dynamic");
-      markRevalidationStarted();
+      try {
+        refreshSoftTags = getCurrentFetchSoftTags();
+        refreshRootParam = await getRootParam("lang");
+        refreshDraftModeEnabled = (await draftMode()).isEnabled;
+        const refreshHeadersContext = getRequestContext().headersContext;
+        refreshRequestHeader = refreshHeadersContext?.headers.get("x-request-only");
+        refreshRequestCookie = refreshHeadersContext?.cookies.get("request-only");
+        refreshDraftModeSecret = refreshHeadersContext?.draftModeSecret;
+        refreshFetchDedupeActive = getRequestContext().isFetchDedupeActive;
+        refreshFetchDedupeEntries = getRequestContext().currentFetchDedupeEntries;
+        cacheLife({ stale: 1, revalidate: 1, expire: 60 });
+        addCollectedRequestTags(["refresh-fetch-tag"]);
+        // These are the exact request-state slices updated by cached and
+        // uncached fetch observations during a real refresh.
+        getRequestContext().cacheableFetchUrls.add("https://example.com/refresh-cacheable");
+        getRequestContext().dynamicFetchUrls.add("https://example.com/refresh-dynamic");
+      } finally {
+        markRevalidationStarted();
+      }
       await revalidationGate;
       return { version: "fresh" };
     }, "test:stale-swr");
@@ -6633,7 +6646,10 @@ describe('"use cache" runtime', () => {
       expect(revalidationCalls).toBe(1);
       expect(refreshSoftTags).toEqual(["implicit-route-tag"]);
       expect(refreshRootParam).toBe("en");
-      expect(refreshHeadersContext).toBeNull();
+      expect(refreshDraftModeEnabled).toBe(false);
+      expect(refreshRequestHeader).toBeNull();
+      expect(refreshRequestCookie).toBeUndefined();
+      expect(refreshDraftModeSecret).toBe("test-secret");
       expect(refreshFetchDedupeActive).toBe(true);
       expect(refreshFetchDedupeEntries).not.toBe(firstRequestContext.currentFetchDedupeEntries);
       expect(refreshFetchDedupeEntries).not.toBe(secondRequestContext.currentFetchDedupeEntries);
