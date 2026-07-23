@@ -6506,6 +6506,283 @@ describe('"use cache" runtime', () => {
     expect(callCount).toBe(1);
   });
 
+  it("serves concurrent stale shared entries while one background revalidation runs", async () => {
+    // Ported from Next.js: test/e2e/app-dir/use-cache-swr/use-cache-swr.test.ts
+    // https://github.com/vercel/next.js/blob/a6223ac95d5e5a2f542d9bb76bd41e7451a21c73/test/e2e/app-dir/use-cache-swr/use-cache-swr.test.ts
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler, cacheLife } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { addCollectedRequestTags, getCurrentFetchSoftTags } =
+      await import("../packages/vinext/src/shims/fetch-cache.js");
+    const { draftMode, headersContextFromRequest } =
+      await import("../packages/vinext/src/shims/headers.js");
+    const { getRootParam } = await import("../packages/vinext/src/shims/root-params.js");
+    const { createRequestContext, getRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const staleEntry = {
+      lastModified: Date.now() - 2_000,
+      cacheState: "stale",
+      cacheControl: { revalidate: 3_600, expire: 7_200 },
+      value: {
+        kind: "FETCH",
+        data: {
+          headers: {},
+          body: JSON.stringify({ version: "stale" }),
+          url: "use-cache:test:stale-swr",
+        },
+        tags: ["stale-entry-tag"],
+        revalidate: 3_600,
+      },
+    } satisfies CacheHandlerValue;
+    const setEntry = vi.fn<CacheHandler["set"]>(async () => {});
+    setCacheHandler({
+      async get() {
+        return staleEntry;
+      },
+      set: setEntry,
+      async revalidateTag() {},
+    });
+
+    let markRevalidationStarted = () => {};
+    const revalidationStarted = new Promise<void>((resolve) => {
+      markRevalidationStarted = resolve;
+    });
+    let releaseRevalidation = () => {};
+    const revalidationGate = new Promise<void>((resolve) => {
+      releaseRevalidation = resolve;
+    });
+    const firstWaitUntilCalls: Promise<unknown>[] = [];
+    const secondWaitUntilCalls: Promise<unknown>[] = [];
+    const staleCalls: Promise<{ version: string }>[] = [];
+    const firstRequestContext = createRequestContext({
+      currentFetchSoftTags: ["implicit-route-tag"],
+      headersContext: headersContextFromRequest(
+        new Request("https://example.com/first", {
+          headers: { cookie: "__prerender_bypass=test-secret" },
+        }),
+        { draftModeSecret: "test-secret" },
+      ),
+      isFetchDedupeActive: true,
+      rootParams: { lang: "en" },
+      executionContext: {
+        waitUntil(promise) {
+          firstWaitUntilCalls.push(promise);
+        },
+      },
+    });
+    const secondRequestContext = createRequestContext({
+      currentFetchSoftTags: ["implicit-route-tag"],
+      headersContext: headersContextFromRequest(
+        new Request("https://example.com/second", {
+          headers: { cookie: "__prerender_bypass=test-secret" },
+        }),
+        { draftModeSecret: "test-secret" },
+      ),
+      isFetchDedupeActive: true,
+      rootParams: { lang: "en" },
+      executionContext: {
+        waitUntil(promise) {
+          secondWaitUntilCalls.push(promise);
+        },
+      },
+    });
+    let revalidationCalls = 0;
+    let refreshSoftTags: string[] = [];
+    let refreshRootParam: string | string[] | undefined;
+    let refreshDraftModeEnabled = false;
+    let refreshFetchDedupeActive = false;
+    let refreshFetchDedupeEntries: unknown;
+
+    const cached = registerCachedFunction(async () => {
+      revalidationCalls++;
+      refreshSoftTags = getCurrentFetchSoftTags();
+      refreshRootParam = await getRootParam("lang");
+      refreshDraftModeEnabled = (await draftMode()).isEnabled;
+      refreshFetchDedupeActive = getRequestContext().isFetchDedupeActive;
+      refreshFetchDedupeEntries = getRequestContext().currentFetchDedupeEntries;
+      cacheLife({ stale: 1, revalidate: 1, expire: 60 });
+      addCollectedRequestTags(["refresh-fetch-tag"]);
+      // These are the exact request-state slices updated by cached and
+      // uncached fetch observations during a real refresh.
+      getRequestContext().cacheableFetchUrls.add("https://example.com/refresh-cacheable");
+      getRequestContext().dynamicFetchUrls.add("https://example.com/refresh-dynamic");
+      markRevalidationStarted();
+      await revalidationGate;
+      return { version: "fresh" };
+    }, "test:stale-swr");
+
+    try {
+      staleCalls.push(
+        runWithRequestContext(firstRequestContext, () => cached()),
+        runWithRequestContext(secondRequestContext, () => cached()),
+      );
+      await revalidationStarted;
+
+      const outcome = await Promise.race([
+        Promise.all(staleCalls).then((values) => ({ status: "returned" as const, values })),
+        new Promise<{ status: "blocked" }>((resolve) => {
+          setImmediate(() => resolve({ status: "blocked" }));
+        }),
+      ]);
+
+      expect(outcome).toEqual({
+        status: "returned",
+        values: [{ version: "stale" }, { version: "stale" }],
+      });
+      expect(
+        [firstWaitUntilCalls.length, secondWaitUntilCalls.length].sort((a, b) => a - b),
+      ).toEqual([0, 1]);
+      expect(revalidationCalls).toBe(1);
+      expect(refreshSoftTags).toEqual(["implicit-route-tag"]);
+      expect(refreshRootParam).toBe("en");
+      expect(refreshDraftModeEnabled).toBe(true);
+      expect(refreshFetchDedupeActive).toBe(true);
+      expect(refreshFetchDedupeEntries).not.toBe(firstRequestContext.currentFetchDedupeEntries);
+      expect(refreshFetchDedupeEntries).not.toBe(secondRequestContext.currentFetchDedupeEntries);
+    } finally {
+      releaseRevalidation();
+      await Promise.allSettled([...staleCalls, ...firstWaitUntilCalls, ...secondWaitUntilCalls]);
+      setCacheHandler(new MemoryCacheHandler());
+    }
+
+    expect(setEntry).toHaveBeenCalledOnce();
+    for (const requestContext of [firstRequestContext, secondRequestContext]) {
+      expect(requestContext.requestScopedCacheLife).toEqual({
+        revalidate: 3_600,
+        expire: 7_200,
+      });
+      expect(requestContext.currentRequestTags).toEqual(["stale-entry-tag"]);
+      expect(requestContext.cacheableFetchUrls).toEqual(new Set());
+      expect(requestContext.dynamicFetchUrls).toEqual(new Set());
+    }
+  });
+
+  it("logs failed background writes and retries stale entries without a request context", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+
+    let resolveFirstWrite = () => {};
+    const firstWrite = new Promise<void>((resolve) => {
+      resolveFirstWrite = resolve;
+    });
+    let resolveSecondWrite = () => {};
+    const secondWrite = new Promise<void>((resolve) => {
+      resolveSecondWrite = resolve;
+    });
+    let writeCalls = 0;
+    setCacheHandler({
+      async get() {
+        return {
+          lastModified: Date.now() - 2_000,
+          cacheState: "stale",
+          cacheControl: { revalidate: 1, expire: 60 },
+          value: {
+            kind: "FETCH",
+            data: {
+              headers: {},
+              body: JSON.stringify({ version: "stale" }),
+              url: "use-cache:test:stale-write-retry",
+            },
+            tags: [],
+            revalidate: 1,
+          },
+        };
+      },
+      async set() {
+        writeCalls++;
+        if (writeCalls === 1) {
+          resolveFirstWrite();
+          throw new Error("cache backend unavailable");
+        }
+        resolveSecondWrite();
+      },
+      async revalidateTag() {},
+    });
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let revalidationCalls = 0;
+    const cached = registerCachedFunction(async () => {
+      revalidationCalls++;
+      return { version: "fresh" };
+    }, "test:stale-write-retry");
+
+    try {
+      await expect(cached()).resolves.toEqual({ version: "stale" });
+      await firstWrite;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(consoleError).toHaveBeenCalledWith(
+        "[vinext] use cache background revalidation cache write failed:",
+        expect.objectContaining({ message: "cache backend unavailable" }),
+      );
+
+      await expect(cached()).resolves.toEqual({ version: "stale" });
+      await secondWrite;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally {
+      consoleError.mockRestore();
+      setCacheHandler(new MemoryCacheHandler());
+    }
+
+    expect(revalidationCalls).toBe(2);
+    expect(writeCalls).toBe(2);
+  });
+
+  it("refreshes stale shared entries in the foreground during prerendering", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+
+    const setEntry = vi.fn<CacheHandler["set"]>(async () => {});
+    setCacheHandler({
+      async get() {
+        return {
+          lastModified: Date.now() - 2_000,
+          cacheState: "stale",
+          cacheControl: { revalidate: 1, expire: 60 },
+          value: {
+            kind: "FETCH",
+            data: {
+              headers: {},
+              body: JSON.stringify({ version: "stale" }),
+              url: "use-cache:test:stale-prerender",
+            },
+            tags: [],
+            revalidate: 1,
+          },
+        };
+      },
+      set: setEntry,
+      async revalidateTag() {},
+    });
+
+    let callCount = 0;
+    const cached = registerCachedFunction(async () => {
+      callCount++;
+      return { version: "fresh" };
+    }, "test:stale-prerender");
+    const previousPrerender = process.env.VINEXT_PRERENDER;
+
+    try {
+      process.env.VINEXT_PRERENDER = "1";
+      await expect(cached()).resolves.toEqual({ version: "fresh" });
+      expect(callCount).toBe(1);
+      expect(setEntry).toHaveBeenCalledOnce();
+    } finally {
+      if (previousPrerender === undefined) {
+        delete process.env.VINEXT_PRERENDER;
+      } else {
+        process.env.VINEXT_PRERENDER = previousPrerender;
+      }
+      setCacheHandler(new MemoryCacheHandler());
+    }
+  });
+
   it("registerCachedFunction collects cacheTag", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
