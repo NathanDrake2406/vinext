@@ -29,6 +29,14 @@ describe("NextScript", () => {
     // Dev-server replaces this HTML comment with __NEXT_DATA__ + module script tags
     expect(html).toContain("<!-- __NEXT_SCRIPTS__ -->");
   });
+
+  it("preserves nonce and crossOrigin for document asset propagation", () => {
+    const html = render(
+      React.createElement(NextScript, { nonce: "test-nonce", crossOrigin: "anonymous" }),
+    );
+    expect(html).toContain('data-vinext-script-nonce="test-nonce"');
+    expect(html).toContain('data-vinext-script-cross-origin="anonymous"');
+  });
 });
 
 describe("Head", () => {
@@ -53,6 +61,14 @@ describe("Head", () => {
     // pipeline as user-supplied tags.
     expect(html).not.toContain("charSet=");
     expect(html).not.toContain('name="viewport"');
+  });
+
+  it("preserves nonce and crossOrigin for document preload propagation", () => {
+    const html = render(
+      React.createElement(Head, { nonce: "test-nonce", crossOrigin: "anonymous" }),
+    );
+    expect(html).toContain('data-vinext-head-nonce="test-nonce"');
+    expect(html).toContain('data-vinext-head-cross-origin="anonymous"');
   });
 });
 
@@ -159,7 +175,7 @@ describe("loadUserDocumentInitialProps", () => {
         return { ...base, docValue: await Promise.resolve("doc value") };
       }
     }
-    const props = await loadUserDocumentInitialProps(MyDocument as React.ComponentType);
+    const props = await loadUserDocumentInitialProps(MyDocument as unknown as React.ComponentType);
     expect(props).not.toBeNull();
     expect(props!.docValue).toBe("doc value");
     expect(props!.html).toBe("");
@@ -174,7 +190,7 @@ describe("loadUserDocumentInitialProps", () => {
         return React.createElement("html");
       }
     }
-    const props = await loadUserDocumentInitialProps(MyDocument as React.ComponentType);
+    const props = await loadUserDocumentInitialProps(MyDocument as unknown as React.ComponentType);
     expect(props).toBeNull();
   });
 
@@ -190,8 +206,8 @@ describe("loadUserDocumentInitialProps", () => {
     // 500 to the caller. vinext matches that contract so user bugs in
     // `_document.tsx`'s getInitialProps are visible instead of silently
     // erasing docProps from every render.
-    await expect(loadUserDocumentInitialProps(BadDocument as React.ComponentType)).rejects.toThrow(
-      "boom",
-    );
+    await expect(
+      loadUserDocumentInitialProps(BadDocument as unknown as React.ComponentType),
+    ).rejects.toThrow("boom");
   });
 });

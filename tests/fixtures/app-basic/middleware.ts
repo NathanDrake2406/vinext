@@ -33,6 +33,16 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
     });
   }
 
+  if (pathname === "/%61dmin") {
+    return NextResponse.rewrite(new URL("/admin", request.url));
+  }
+
+  if (pathname.startsWith("/encoded-parity/middleware/")) {
+    const target = request.nextUrl.clone();
+    target.pathname = pathname.replace("/encoded-parity/middleware/", "/encoded-parity/page/");
+    return NextResponse.rewrite(target);
+  }
+
   // Record this invocation so tests can detect double-execution.
   // In a hybrid app+pages fixture the Vite connect handler runs middleware
   // via ssrLoadModule (SSR env) and then the RSC entry runs it again inline
@@ -153,6 +163,10 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
 
   // Block /middleware-blocked with custom response
   if (pathname === "/middleware-blocked") {
+    return new Response("Blocked by middleware", { status: 403 });
+  }
+
+  if (pathname === "/admin") {
     return new Response("Blocked by middleware", { status: 403 });
   }
 
@@ -340,6 +354,12 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
       "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
     );
   }
+  if (pathname.startsWith("/metadata-icons-stream")) {
+    r.headers.set(
+      "content-security-policy",
+      "script-src 'nonce-vinext-test-nonce' 'strict-dynamic';",
+    );
+  }
   r.headers.set("x-mw-pathname", pathname);
   r.headers.set("x-mw-ran", "true");
   if (sessionToken) {
@@ -370,6 +390,9 @@ export const config = {
     "/middleware-rewrite-keep-original-query",
     "/middleware-rewrite-status",
     "/middleware-blocked",
+    "/admin",
+    "/%61dmin",
+    "/encoded-parity/middleware/:path*",
     "/middleware-throw",
     "/middleware-event",
     "/middleware-fetch-dedupe",
@@ -387,6 +410,7 @@ export const config = {
     "/nextjs-compat/dynamic/:path*",
     "/nextjs-compat/action-forward-loop",
     "/nextjs-compat/action-node-mw",
+    "/metadata-icons-stream/:path*",
     "/use-client-page-pathname/:path*",
     "/rsc-fetch-redirect-src",
     "/rsc-fetch-error-target",
