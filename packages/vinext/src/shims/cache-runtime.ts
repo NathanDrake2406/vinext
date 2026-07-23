@@ -40,7 +40,8 @@ import {
   _hasPendingRevalidatedTag,
   _setRequestScopedCacheLife,
   _registerCacheContextAccessor,
-  shouldServeStaleCacheEntry,
+  decideCacheRead,
+  getCacheRevalidationMode,
   type CacheLifeConfig,
 } from "./cache-request-state.js";
 import { VINEXT_RSC_MARKER_HEADER } from "../server/headers.js";
@@ -576,11 +577,11 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           console.error("[vinext] use cache: handler.get failed; treating as a cache miss:", error);
         }
       }
-      const shouldUseCachedEntry = existing?.cacheState !== "stale" || shouldServeStaleCacheEntry();
+      const cacheReadAction = decideCacheRead(existing?.cacheState, getCacheRevalidationMode());
       if (
         existing?.value &&
         existing.value.kind === "FETCH" &&
-        shouldUseCachedEntry &&
+        cacheReadAction !== "revalidate" &&
         !_hasPendingRevalidatedTag([...(existing.value.tags ?? []), ...softTags])
       ) {
         try {
@@ -599,7 +600,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           // the enclosing page's cache metadata.
           propagateCacheTagsToRequest(existing.value.tags);
           recordRequestScopedCacheControl(existing.cacheControl);
-          if (existing.cacheState === "stale") {
+          if (cacheReadAction === "serve-and-revalidate") {
             scheduleBackgroundCacheRevalidation(
               cacheKey,
               () =>
@@ -620,7 +621,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
         }
       }
 
-      // Cache miss (or stale) — execute with context
+      // Cache miss or unusable entry — execute with context
       return refreshSharedCacheEntry(fn, args, cacheVariant, cacheKey, handler, rsc);
     }, cacheVariant);
 

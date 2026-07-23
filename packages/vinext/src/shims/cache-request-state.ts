@@ -41,7 +41,12 @@ export function getRegisteredCacheContext(): CacheContextLike | null {
   return getCacheContext?.() ?? null;
 }
 
+/**
+ * Controls stale function/data-cache reads. Patched fetch response caching has
+ * a separate policy because it owns response streams and refetch timeouts.
+ */
 export type CacheRevalidationMode = "foreground" | "background";
+export type CacheReadAction = "serve" | "serve-and-revalidate" | "revalidate";
 export type ActionRevalidationKind = 0 | 1 | 2;
 export type UnstableCacheObservation = Readonly<{
   kind: "unstable_cache";
@@ -245,6 +250,22 @@ export function _peekUnstableCacheObservations(): UnstableCacheObservation[] {
   );
 }
 
-export function shouldServeStaleCacheEntry(): boolean {
-  return getCacheState().cacheRevalidationMode === "background";
+export function getCacheRevalidationMode(): CacheRevalidationMode {
+  return getCacheState().cacheRevalidationMode;
+}
+
+/**
+ * Decide whether a function/data-cache value can satisfy the current read.
+ * An absent state is a fresh value. Stale values are policy-dependent, while
+ * expired or unrecognized states must be regenerated before use.
+ */
+export function decideCacheRead(
+  cacheState: string | undefined,
+  mode: CacheRevalidationMode,
+): CacheReadAction {
+  if (cacheState === undefined) return "serve";
+  if (cacheState === "stale") {
+    return mode === "background" ? "serve-and-revalidate" : "revalidate";
+  }
+  return "revalidate";
 }

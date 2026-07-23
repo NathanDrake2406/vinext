@@ -42,10 +42,11 @@ import {
   _queuePendingRevalidation,
   _setRequestScopedCacheLife,
   cacheLifeProfiles,
+  decideCacheRead,
+  getCacheRevalidationMode,
   getRegisteredCacheContext,
   markActionRevalidation,
   recordUnstableCacheObservation,
-  shouldServeStaleCacheEntry,
   type CacheLifeConfig,
 } from "./cache-request-state.js";
 
@@ -585,8 +586,8 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
     const isDraftMode = isDraftModeEnabled();
     if (!isDraftMode) {
       // Try to get from cache. Stale entries are usable in normal App Router
-      // requests, but foreground-refresh inside revalidation scopes so the
-      // regenerated page/route stores fresh data.
+      // requests, but revalidation scopes and unusable states must refresh in
+      // the foreground so the caller receives fresh data.
       const softTags = getCurrentFetchSoftTags();
       const existing = _hasPendingRevalidatedTag([...tags, ...softTags])
         ? null
@@ -596,10 +597,11 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
             softTags,
           });
       if (existing?.value && existing.value.kind === "FETCH") {
-        const cached = tryDeserializeUnstableCacheResult(existing.value.data.body);
-        if (cached.ok) {
-          if (existing.cacheState === "stale") {
-            if (shouldServeStaleCacheEntry()) {
+        const cacheReadAction = decideCacheRead(existing.cacheState, getCacheRevalidationMode());
+        if (cacheReadAction !== "revalidate") {
+          const cached = tryDeserializeUnstableCacheResult(existing.value.data.body);
+          if (cached.ok) {
+            if (cacheReadAction === "serve-and-revalidate") {
               scheduleBackgroundCacheRevalidation(
                 cacheKey,
                 () => refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
@@ -610,13 +612,12 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
                   );
                 },
               );
-              return cached.value;
             }
-          } else {
             return cached.value;
           }
         }
-        // Corrupted entries fall through to a foreground refresh.
+        // Expired, unrecognized, and corrupted entries fall through to a
+        // foreground refresh.
       }
     }
 

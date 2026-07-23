@@ -6140,6 +6140,16 @@ describe("next/cache shim", () => {
     setCacheHandler(new MemoryCacheHandler());
   });
 
+  it("decideCacheRead distinguishes fresh, stale, and unusable cache states", async () => {
+    const { decideCacheRead } = await import("../packages/vinext/src/shims/cache-request-state.js");
+
+    expect(decideCacheRead(undefined, "background")).toBe("serve");
+    expect(decideCacheRead("stale", "background")).toBe("serve-and-revalidate");
+    expect(decideCacheRead("stale", "foreground")).toBe("revalidate");
+    expect(decideCacheRead("expired", "background")).toBe("revalidate");
+    expect(decideCacheRead("unknown", "background")).toBe("revalidate");
+  });
+
   it("unstable_cache serves stale entries and refreshes them in the background during App Router requests", async () => {
     const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
@@ -6213,6 +6223,65 @@ describe("next/cache shim", () => {
       await Promise.all(waitUntilPromises);
 
       expect(setBodies).toEqual([JSON.stringify({ v: "fresh-value" })]);
+    } finally {
+      setCacheHandler(new MemoryCacheHandler());
+    }
+  });
+
+  it("unstable_cache revalidates expired entries in the foreground", async () => {
+    const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const setEntry = vi.fn<CacheHandler["set"]>(async () => {});
+    setCacheHandler({
+      async get() {
+        return {
+          lastModified: Date.now() - 60_000,
+          cacheState: "expired",
+          value: {
+            kind: "FETCH",
+            data: {
+              headers: {},
+              body: JSON.stringify({ v: "expired-value" }),
+              url: "unstable_cache:expired-test:[]",
+            },
+            tags: ["expired"],
+            revalidate: 1,
+          },
+        };
+      },
+      set: setEntry,
+      async revalidateTag() {},
+    });
+
+    const waitUntilCalls: Promise<unknown>[] = [];
+    const requestContext = createRequestContext({
+      cacheRevalidationMode: "background",
+      executionContext: {
+        waitUntil(promise) {
+          waitUntilCalls.push(promise);
+        },
+      },
+    });
+    let callCount = 0;
+    const cached = unstable_cache(
+      async () => {
+        callCount++;
+        return "fresh-value";
+      },
+      ["expired-test"],
+      { tags: ["expired"], revalidate: 1 },
+    );
+
+    try {
+      await expect(runWithRequestContext(requestContext, () => cached())).resolves.toBe(
+        "fresh-value",
+      );
+      expect(callCount).toBe(1);
+      expect(waitUntilCalls).toHaveLength(0);
+      expect(setEntry).toHaveBeenCalledOnce();
     } finally {
       setCacheHandler(new MemoryCacheHandler());
     }
@@ -6668,6 +6737,63 @@ describe('"use cache" runtime', () => {
       expect(requestContext.currentRequestTags).toEqual(["stale-entry-tag"]);
       expect(requestContext.cacheableFetchUrls).toEqual(new Set());
       expect(requestContext.dynamicFetchUrls).toEqual(new Set());
+    }
+  });
+
+  it('"use cache" revalidates expired shared entries in the foreground', async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const setEntry = vi.fn<CacheHandler["set"]>(async () => {});
+    setCacheHandler({
+      async get() {
+        return {
+          lastModified: Date.now() - 60_000,
+          cacheState: "expired",
+          value: {
+            kind: "FETCH",
+            data: {
+              headers: {},
+              body: JSON.stringify({ version: "expired" }),
+              url: "use-cache:test:expired",
+            },
+            tags: [],
+            revalidate: 1,
+          },
+        };
+      },
+      set: setEntry,
+      async revalidateTag() {},
+    });
+
+    const waitUntilCalls: Promise<unknown>[] = [];
+    const requestContext = createRequestContext({
+      cacheRevalidationMode: "background",
+      executionContext: {
+        waitUntil(promise) {
+          waitUntilCalls.push(promise);
+        },
+      },
+    });
+    let callCount = 0;
+    const cached = registerCachedFunction(async () => {
+      callCount++;
+      return { version: "fresh" };
+    }, "test:expired");
+
+    try {
+      await expect(runWithRequestContext(requestContext, () => cached())).resolves.toEqual({
+        version: "fresh",
+      });
+      expect(callCount).toBe(1);
+      expect(waitUntilCalls).toHaveLength(0);
+      expect(setEntry).toHaveBeenCalledOnce();
+    } finally {
+      setCacheHandler(new MemoryCacheHandler());
     }
   });
 
