@@ -54,7 +54,7 @@ import {
   runWithRequestContext,
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
-import { markDynamicUsage } from "./headers.js";
+import { isDraftModeEnabled, markDynamicUsage } from "./headers.js";
 import { trackPprFallbackShellCacheTask } from "./ppr-fallback-shell.js";
 import { isMarkedAppPagePropsObject } from "./internal/app-page-props-cache-key.js";
 
@@ -477,6 +477,13 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
 
   const cachedFn = (...args: TArgs): Promise<TResult> =>
     trackPprFallbackShellCacheTask(async (): Promise<TResult> => {
+      // Preview data may differ from published data. Draft requests still run
+      // inside the normal cache scope so cacheLife() and cache API restrictions
+      // apply, but they must never read or populate shared storage.
+      if (cacheVariant !== "private" && isDraftModeEnabled()) {
+        return executeWithContext(fn, args, cacheVariant);
+      }
+
       const rsc = await getRscModule();
       const keySeed = getUseCacheKeySeed();
 

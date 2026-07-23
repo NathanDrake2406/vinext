@@ -144,25 +144,15 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
  * Create the isolated request state used to regenerate a shared data-cache
  * entry after serving stale data.
  *
- * Cache callbacks retain supported read inputs from the triggering request,
- * while every response-owned output container starts fresh. The refresh runs
- * in foreground mode so nested stale dependencies are resolved before the
- * refreshed entry is stored.
+ * Cache callbacks retain only cache-specific read inputs from the triggering
+ * request, while request APIs and every response-owned output container start
+ * fresh. The refresh runs in foreground mode so nested stale dependencies are
+ * resolved before the refreshed entry is stored.
  */
 export function createCacheRevalidationContext(
   fallbackSoftTags: readonly string[] = [],
 ): UnifiedRequestContext {
   const outer = _als.getStore();
-  const headersContext = outer?.headersContext
-    ? {
-        ...outer.headersContext,
-        headers: new Headers(outer.headersContext.headers),
-        cookies: new Map(outer.headersContext.cookies),
-        mutableCookies: undefined,
-        readonlyCookies: undefined,
-        readonlyHeaders: undefined,
-      }
-    : null;
   const rootParams = outer?.rootParams
     ? Object.fromEntries(
         Object.entries(outer.rootParams).map(([name, value]) => [
@@ -174,7 +164,6 @@ export function createCacheRevalidationContext(
 
   return createRequestContext({
     executionContext: outer ? outer.executionContext : _getInheritedExecutionContext(),
-    headersContext,
     pendingRevalidatedTags: new Set(outer?.pendingRevalidatedTags ?? []),
     currentFetchSoftTags: [...(outer?.currentFetchSoftTags ?? fallbackSoftTags)],
     currentFetchCacheMode: outer?.currentFetchCacheMode ?? null,

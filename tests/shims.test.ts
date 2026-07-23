@@ -6515,8 +6515,6 @@ describe('"use cache" runtime', () => {
       await import("../packages/vinext/src/shims/cache.js");
     const { addCollectedRequestTags, getCurrentFetchSoftTags } =
       await import("../packages/vinext/src/shims/fetch-cache.js");
-    const { draftMode, headersContextFromRequest } =
-      await import("../packages/vinext/src/shims/headers.js");
     const { getRootParam } = await import("../packages/vinext/src/shims/root-params.js");
     const { createRequestContext, getRequestContext, runWithRequestContext } =
       await import("../packages/vinext/src/shims/unified-request-context.js");
@@ -6559,12 +6557,10 @@ describe('"use cache" runtime', () => {
     const firstRequestContext = createRequestContext({
       cacheRevalidationMode: "background",
       currentFetchSoftTags: ["implicit-route-tag"],
-      headersContext: headersContextFromRequest(
-        new Request("https://example.com/first", {
-          headers: { cookie: "__prerender_bypass=test-secret" },
-        }),
-        { draftModeSecret: "test-secret" },
-      ),
+      headersContext: {
+        headers: new Headers({ "x-request-only": "first" }),
+        cookies: new Map([["request-only", "first"]]),
+      },
       isFetchDedupeActive: true,
       rootParams: { lang: "en" },
       executionContext: {
@@ -6576,12 +6572,10 @@ describe('"use cache" runtime', () => {
     const secondRequestContext = createRequestContext({
       cacheRevalidationMode: "background",
       currentFetchSoftTags: ["implicit-route-tag"],
-      headersContext: headersContextFromRequest(
-        new Request("https://example.com/second", {
-          headers: { cookie: "__prerender_bypass=test-secret" },
-        }),
-        { draftModeSecret: "test-secret" },
-      ),
+      headersContext: {
+        headers: new Headers({ "x-request-only": "second" }),
+        cookies: new Map([["request-only", "second"]]),
+      },
       isFetchDedupeActive: true,
       rootParams: { lang: "en" },
       executionContext: {
@@ -6593,7 +6587,7 @@ describe('"use cache" runtime', () => {
     let revalidationCalls = 0;
     let refreshSoftTags: string[] = [];
     let refreshRootParam: string | string[] | undefined;
-    let refreshDraftModeEnabled = false;
+    let refreshHeadersContext: unknown;
     let refreshFetchDedupeActive = false;
     let refreshFetchDedupeEntries: unknown;
 
@@ -6601,7 +6595,7 @@ describe('"use cache" runtime', () => {
       revalidationCalls++;
       refreshSoftTags = getCurrentFetchSoftTags();
       refreshRootParam = await getRootParam("lang");
-      refreshDraftModeEnabled = (await draftMode()).isEnabled;
+      refreshHeadersContext = getRequestContext().headersContext;
       refreshFetchDedupeActive = getRequestContext().isFetchDedupeActive;
       refreshFetchDedupeEntries = getRequestContext().currentFetchDedupeEntries;
       cacheLife({ stale: 1, revalidate: 1, expire: 60 });
@@ -6639,7 +6633,7 @@ describe('"use cache" runtime', () => {
       expect(revalidationCalls).toBe(1);
       expect(refreshSoftTags).toEqual(["implicit-route-tag"]);
       expect(refreshRootParam).toBe("en");
-      expect(refreshDraftModeEnabled).toBe(true);
+      expect(refreshHeadersContext).toBeNull();
       expect(refreshFetchDedupeActive).toBe(true);
       expect(refreshFetchDedupeEntries).not.toBe(firstRequestContext.currentFetchDedupeEntries);
       expect(refreshFetchDedupeEntries).not.toBe(secondRequestContext.currentFetchDedupeEntries);
@@ -6658,6 +6652,80 @@ describe('"use cache" runtime', () => {
       expect(requestContext.currentRequestTags).toEqual(["stale-entry-tag"]);
       expect(requestContext.cacheableFetchUrls).toEqual(new Set());
       expect(requestContext.dynamicFetchUrls).toEqual(new Set());
+    }
+  });
+
+  it("bypasses persistent shared cache while draft mode is enabled", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler, cacheLife } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { draftMode, headersContextFromRequest } =
+      await import("../packages/vinext/src/shims/headers.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const getEntry = vi.fn<CacheHandler["get"]>(async () => ({
+      lastModified: Date.now() - 2_000,
+      cacheState: "stale",
+      cacheControl: { revalidate: 1, expire: 60 },
+      value: {
+        kind: "FETCH",
+        data: {
+          headers: {},
+          body: JSON.stringify({ version: "published-stale" }),
+          url: "use-cache:test:draft-mode-bypass",
+        },
+        tags: [],
+        revalidate: 1,
+      },
+    }));
+    const setEntry = vi.fn<CacheHandler["set"]>(async () => {});
+    setCacheHandler({
+      get: getEntry,
+      set: setEntry,
+      async revalidateTag() {},
+    });
+
+    const waitUntilCalls: Promise<unknown>[] = [];
+    const requestContext = createRequestContext({
+      cacheRevalidationMode: "background",
+      headersContext: headersContextFromRequest(
+        new Request("https://example.com/preview", {
+          headers: { cookie: "__prerender_bypass=test-secret" },
+        }),
+        { draftModeSecret: "test-secret" },
+      ),
+      executionContext: {
+        waitUntil(promise) {
+          waitUntilCalls.push(promise);
+        },
+      },
+    });
+    let calls = 0;
+    let observedDraftMode = false;
+    const cached = registerCachedFunction(async () => {
+      calls++;
+      observedDraftMode = (await draftMode()).isEnabled;
+      cacheLife({ revalidate: 5, expire: 60 });
+      return { version: "preview-fresh" };
+    }, "test:draft-mode-bypass");
+
+    try {
+      await expect(runWithRequestContext(requestContext, () => cached())).resolves.toEqual({
+        version: "preview-fresh",
+      });
+      expect(calls).toBe(1);
+      expect(observedDraftMode).toBe(true);
+      expect(getEntry).not.toHaveBeenCalled();
+      expect(setEntry).not.toHaveBeenCalled();
+      expect(waitUntilCalls).toHaveLength(0);
+      expect(requestContext.requestScopedCacheLife).toEqual({
+        revalidate: 5,
+        expire: 60,
+      });
+    } finally {
+      setCacheHandler(new MemoryCacheHandler());
     }
   });
 
