@@ -3228,6 +3228,7 @@ describe("parseWranglerConfig — custom domain extraction", () => {
       name: "my-worker-staging",
       customDomain: "staging.example.com",
       warmupHosts: ["staging.example.com"],
+      definesRoutes: true,
     });
   });
 
@@ -3347,6 +3348,7 @@ version_metadata = { binding = "VINEXT_VERSION_METADATA" } # another misleading 
       name: "my-worker-staging-custom",
       customDomain: "staging.example.com",
       warmupHosts: ["staging.example.com"],
+      definesRoutes: true,
     });
   });
 
@@ -3386,6 +3388,7 @@ pattern = "staging.example.com/*"
       name: "my-worker-staging",
       customDomain: "staging.example.com",
       warmupHosts: ["staging.example.com"],
+      definesRoutes: true,
     });
   });
 
@@ -3523,19 +3526,58 @@ route = "staging.example.com/*"`,
     expect(resolveWranglerDeploymentTarget(tmpDir, {})?.productionHosts).toEqual([]);
   });
 
-  it("does not inherit a top-level route into an explicit environment", () => {
+  // Wrangler resolves `route`/`routes` as inheritable keys: an env block that
+  // defines no routing key deploys onto the top-level attachments, so warmup
+  // must target those inherited hosts instead of the staged workers.dev URL.
+  it("inherits top-level routes into an environment that defines none", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: ["app.example.com/*", "app.example.com/api/*"],
+        env: { staging: { name: "my-worker-staging" } },
+      }),
+    );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, { env: "staging" });
+    expect(target?.productionHosts).toEqual(["app.example.com"]);
+    expect(target?.hasProductionRoute).toBe(true);
+    expect(target?.hasUnwarmableProductionRoute).toBe(true);
+  });
+
+  it("uses environment-local routes instead of inherited top-level routes", () => {
     writeFile(
       tmpDir,
       "wrangler.jsonc",
       JSON.stringify({
         routes: ["app.example.com/*"],
-        env: { staging: { name: "my-worker-staging" } },
+        env: { staging: { name: "my-worker-staging", routes: ["staging.example.com/*"] } },
       }),
     );
 
-    expect(resolveWranglerDeploymentTarget(tmpDir, { env: "staging" })?.productionHosts).toEqual(
-      [],
+    expect(resolveWranglerDeploymentTarget(tmpDir, { env: "staging" })?.productionHosts).toEqual([
+      "staging.example.com",
+    ]);
+  });
+
+  it("does not inherit top-level routes when the environment defines an unwarmable route", () => {
+    // The env's own `routes` key overrides inheritance entirely, even when it
+    // yields no warmable host — falling back to the top-level hosts here would
+    // warm origins the staging deployment is never attached to.
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        routes: ["app.example.com/*"],
+        env: {
+          staging: { name: "my-worker-staging", routes: ["staging.example.com/api/*"] },
+        },
+      }),
     );
+
+    const target = resolveWranglerDeploymentTarget(tmpDir, { env: "staging" });
+    expect(target?.productionHosts).toEqual([]);
+    expect(target?.hasUnwarmableProductionRoute).toBe(true);
   });
 
   it("uses a generated config already flattened to the selected environment", () => {

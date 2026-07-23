@@ -51,6 +51,14 @@ type WranglerEnvironmentConfig = {
   customDomain?: string;
   warmupHosts?: readonly string[];
   hasUnwarmableRoute?: boolean;
+  /**
+   * True when the env block itself contains any routing key (`route`,
+   * `routes`, `custom_domains`), even one that yields no warmable host.
+   * Wrangler resolves routes as inheritable keys, so an env that defines
+   * none of them deploys with the top-level attachments — target resolution
+   * falls back to the top-level routing fields exactly when this is false.
+   */
+  definesRoutes?: boolean;
   name?: string;
   versionMetadataBinding?: string;
 };
@@ -174,6 +182,7 @@ function extractEnvConfigs(envs: unknown): Record<string, WranglerEnvironmentCon
       envConfig.cache ||
       envConfig.customDomain ||
       envConfig.warmupHosts ||
+      envConfig.definesRoutes ||
       envConfig.versionMetadataBinding
     ) {
       result[envName] = envConfig;
@@ -188,6 +197,9 @@ function extractEnvironmentConfig(config: Record<string, unknown>): WranglerEnvi
   if (cache) result.cache = cache;
   if (typeof config.name === "string" && config.name.length > 0) {
     result.name = config.name;
+  }
+  if ("route" in config || "routes" in config || "custom_domains" in config) {
+    result.definesRoutes = true;
   }
   const domain =
     extractDomainFromRoute(config.route) ??

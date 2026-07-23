@@ -52,17 +52,22 @@ export function resolveWranglerDeploymentTarget(
   const flattenedEnvConfig = Boolean(
     envName && !config.env?.[envName] && config.targetEnvironment === envName,
   );
-  const selected = envName
-    ? (config.env?.[envName] ?? (flattenedEnvConfig ? config : undefined))
-    : config;
+  const envConfig = envName ? config.env?.[envName] : undefined;
+  const selected = envConfig ?? (!envName || flattenedEnvConfig ? config : undefined);
+  // Wrangler resolves `route`/`routes` as inheritable keys: an environment
+  // block that defines no routing key deploys with the top-level attachments.
+  // Warmup must target those inherited hosts — treating the env as route-less
+  // would fall back to the staged workers.dev URL, a different cache key, and
+  // could confirm a warmup for a partition production traffic never reads.
+  const routing = envConfig && !envConfig.definesRoutes ? config : selected;
   const cache = resolveCacheConfig(config, envName, flattenedEnvConfig);
   return {
     cacheEnabled: cache?.enabled,
     crossVersionCache: cache?.crossVersionCache,
-    hasProductionRoute: Boolean(selected?.customDomain),
+    hasProductionRoute: Boolean(routing?.customDomain),
     workerName: resolveWorkerName(config, envName, flattenedEnvConfig, options.name),
-    productionHosts: selected?.warmupHosts ?? [],
-    hasUnwarmableProductionRoute: Boolean(selected?.hasUnwarmableRoute),
+    productionHosts: routing?.warmupHosts ?? [],
+    hasUnwarmableProductionRoute: Boolean(routing?.hasUnwarmableRoute),
     versionMetadataBinding: selected?.versionMetadataBinding,
   };
 }
