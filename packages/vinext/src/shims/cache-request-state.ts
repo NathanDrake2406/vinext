@@ -48,9 +48,10 @@ export function getRegisteredCacheContext(): CacheContextLike | null {
  * default is fail-open (serve stale, background refetch) across every request
  * path, while this mode's default is fail-closed, so folding fetch into this
  * field would need an audit of Pages Router and fallback-scope requests first.
- * Converging both onto one request-level freshness policy is tracked follow-up
- * work; until then this field is intentionally named narrowly so it does not
- * read as the authoritative policy for all persistent caches.
+ * Converging both onto one request-level freshness policy is tracked in
+ * https://github.com/cloudflare/vinext/issues/2685; until then this field is
+ * intentionally named narrowly so it does not read as the authoritative
+ * policy for all persistent caches.
  */
 export type FunctionCacheRevalidationMode = "foreground" | "background";
 export type CacheReadAction = "serve" | "serve-and-revalidate" | "revalidate";
