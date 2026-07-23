@@ -250,7 +250,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
       if (args.includes("upload")) {
         events.push("upload");
-        return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+        return uploadOutput("my-worker");
       }
       if (args.includes("status")) {
         events.push("status");
@@ -266,7 +266,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       }
       if (isPromotion(args)) {
         events.push("promote");
-        return "Promoted version\nhttps://stable.example.workers.dev\n";
+        return "Promoted version\n";
       }
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
@@ -277,7 +277,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       warmCdnConcurrency: 1,
     });
 
-    expect(result).toEqual({ url: "https://stable.example.workers.dev", warmed: true });
+    expect(result).toEqual({ url: "https://my-worker.vinext.workers.dev", warmed: true });
     expect(events).toEqual([
       "upload",
       "status",
@@ -343,7 +343,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("status")) return deploymentStatusOutput();
       if (isStage(args)) return "Staged version\n";
       if (args.includes("triggers")) return "Triggers deployed\n";
-      if (isPromotion(args)) return "Promoted version\nhttps://stable.example.workers.dev\n";
+      if (isPromotion(args)) return "Promoted version\n";
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
     const { deployWithCdnWarmup } =
@@ -383,7 +383,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("status")) return deploymentStatusOutput();
       if (isStage(args)) return "Staged version\n";
       if (args.includes("triggers")) return "Triggers deployed\n";
-      if (isPromotion(args)) return "Promoted version\nhttps://stable.example.workers.dev\n";
+      if (isPromotion(args)) return "Promoted version\n";
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
     const { deployWithCdnWarmup } =
@@ -453,7 +453,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("status")) return deploymentStatusOutput();
       if (isStage(args)) return "Staged version\n";
       if (args.includes("triggers")) return "Triggers deployed\n";
-      if (isPromotion(args)) return "Promoted version\nhttps://stable.example.workers.dev\n";
+      if (isPromotion(args)) return "Promoted version\n";
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
     const { deployWithCdnWarmup } =
@@ -833,7 +833,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
       if (args.includes("upload")) {
         events.push("upload");
-        return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
+        return uploadOutput("my-worker");
       }
       if (args.includes("status")) {
         events.push("status");
@@ -899,7 +899,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         uploadAttempts++;
         const versionId = uploadAttempts === 1 ? failedVersionId : UPLOADED_VERSION_ID;
         events.push(uploadAttempts === 1 ? "upload:first" : "upload:retry");
-        return `Uploaded version ${versionId}\n`;
+        return uploadOutput("my-worker", versionId);
       }
       if (args.includes("status")) {
         events.push("status");
@@ -932,7 +932,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       }
       if (isPromotion(args)) {
         events.push("promote");
-        return "Promoted version\nhttps://stable.example.workers.dev\n";
+        return "Promoted version\n";
       }
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
@@ -951,7 +951,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       warmCdnStrict: true,
     });
 
-    expect(result).toEqual({ url: "https://stable.example.workers.dev", warmed: true });
+    expect(result).toEqual({ url: "https://my-worker.vinext.workers.dev", warmed: true });
     expect(events).toEqual([
       "upload:first",
       "status",

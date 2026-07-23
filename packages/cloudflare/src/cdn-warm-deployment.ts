@@ -30,7 +30,7 @@ import {
   runWranglerVersionDeploy,
   runWranglerVersionUpload,
   type WranglerDeploymentStatus,
-  type WranglerVersionDeployResult,
+  type WranglerTriggersDeployResult,
   type WranglerVersionTraffic,
   type WranglerVersionUploadResult,
 } from "./version-deploy.js";
@@ -160,7 +160,7 @@ function promoteWithoutWarmup(
     throw new Error(`${message} ${strictUploadState}`);
   }
   console.warn(`  ${message} Promoting without pre-warming.`);
-  const deployed = runWranglerVersionDeploy(
+  runWranglerVersionDeploy(
     root,
     [{ versionId: upload.versionId, percentage: 100 }],
     options,
@@ -169,7 +169,6 @@ function promoteWithoutWarmup(
   const triggers = applyTriggersAfterPromotion(root, options);
   return {
     url: pickDeployedUrl(
-      deployed.deployedUrl,
       triggers.deployedUrl,
       parseWorkersDevProductionUrl(upload.previewUrl, upload.versionId),
       upload.previewUrl,
@@ -295,9 +294,8 @@ async function warmAndPromote(
 
   verifyStagedSplitBeforePromotion(root, options, previousVersionId, upload.versionId);
 
-  let deployed: WranglerVersionDeployResult;
   try {
-    deployed = runWranglerVersionDeploy(
+    runWranglerVersionDeploy(
       root,
       [{ versionId: upload.versionId, percentage: 100 }],
       options,
@@ -313,12 +311,7 @@ async function warmAndPromote(
   }
   const triggers = applyTriggersAfterPromotion(root, options);
   return {
-    url: pickDeployedUrl(
-      deployed.deployedUrl,
-      triggers.deployedUrl,
-      workersDevUrl,
-      upload.previewUrl,
-    ),
+    url: pickDeployedUrl(triggers.deployedUrl, workersDevUrl, upload.previewUrl),
     warmed,
   };
 }
@@ -336,7 +329,7 @@ function applyTriggersAfterPromotion(
   failureMessage = "The uploaded Worker version was promoted to 100%, but applying triggers " +
     "(routes/schedules) failed. Production serves the new version on the previously " +
     "deployed routes. Re-run `wrangler triggers deploy` to apply the route changes.",
-): WranglerVersionDeployResult {
+): WranglerTriggersDeployResult {
   try {
     return runWranglerTriggersDeploy(root, options);
   } catch (error) {

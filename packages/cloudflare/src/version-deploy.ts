@@ -16,7 +16,16 @@ export type WranglerVersionUploadResult = {
   output: string;
 };
 
+/**
+ * `wrangler versions deploy` reports the resulting traffic split and never a
+ * URL, so this result carries no deployed URL to read. Only `triggers deploy`
+ * names the attached production target.
+ */
 export type WranglerVersionDeployResult = {
+  output: string;
+};
+
+export type WranglerTriggersDeployResult = {
   deployedUrl: string | null;
   output: string;
 };
@@ -293,8 +302,7 @@ export function runWranglerVersionDeploy(
   } else {
     console.log(`\n  Promoting uploaded Worker version to ${target}...`);
   }
-  const output = runWranglerCommand(root, args, execute);
-  return { deployedUrl: parseWorkerDeploymentUrl(output), output };
+  return { output: runWranglerCommand(root, args, execute) };
 }
 
 export function runWranglerDeploymentStatus(
@@ -315,7 +323,7 @@ export function runWranglerTriggersDeploy(
   root: string,
   options: WranglerTargetOptions,
   execute: typeof execFileSync = execFileSync,
-): WranglerVersionDeployResult {
+): WranglerTriggersDeployResult {
   const { args, env } = buildWranglerTriggersDeployArgs(options);
   if (env) {
     console.log(`\n  Applying Worker triggers for env: ${env}...`);

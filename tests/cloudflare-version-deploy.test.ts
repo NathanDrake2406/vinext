@@ -99,7 +99,7 @@ describe("Cloudflare Wrangler version deployment helpers", () => {
 
   it("logs distinct labels for staged and promoted version deploys", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const execute = vi.fn(() => "Deployed version\nhttps://app.example.workers.dev\n");
+    const execute = vi.fn(() => "Deployed version\n");
 
     runWranglerVersionDeploy(
       "/tmp/app",
