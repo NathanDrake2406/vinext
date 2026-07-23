@@ -420,15 +420,16 @@ function resolvePrefetchedRscResponseExpiresAt(
   timestamp: number,
   cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt">,
   fallbackTtlMs: number,
+  minimumTtlMs: number = MIN_PREFETCH_STALE_TIME_MS,
 ): number {
   if (isCacheExpiresAt(cached.expiresAt)) {
     return cached.expiresAt;
   }
   const seconds = cached.dynamicStaleTimeSeconds;
   if (!isDynamicStaleTimeSeconds(seconds)) {
-    return timestamp + Math.max(fallbackTtlMs, MIN_PREFETCH_STALE_TIME_MS);
+    return timestamp + Math.max(fallbackTtlMs, minimumTtlMs);
   }
-  return timestamp + Math.max(seconds * 1000, MIN_PREFETCH_STALE_TIME_MS);
+  return timestamp + Math.max(seconds * 1000, minimumTtlMs);
 }
 
 function resolvePrefetchCacheEntryExpiresAt(entry: PrefetchCacheEntry): number {
@@ -1029,6 +1030,7 @@ export function prefetchRscResponse(
   behavior: {
     cacheForNavigation?: boolean;
     fallbackTtlMs?: number;
+    minimumTtlMs?: number;
     optimisticRouteShell?: boolean;
     prefetchKind?: PrefetchCacheKind;
     prepareSnapshot?: (snapshot: CachedRscResponse) => Promise<AppElements>;
@@ -1071,6 +1073,7 @@ export function prefetchRscResponse(
           entry.timestamp,
           entry.snapshot,
           behavior.fallbackTtlMs ?? PREFETCH_CACHE_TTL,
+          behavior.minimumTtlMs,
         );
         if (behavior.prepareSnapshot) {
           try {

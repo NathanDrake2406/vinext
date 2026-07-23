@@ -597,6 +597,7 @@ function createAppPageSlotBindings<
   options: {
     interception: AppElementsInterception | null;
     interceptionContext: string | null;
+    routeId: string;
     routePath: string;
   },
 ): readonly AppElementsSlotBinding[] {
@@ -606,6 +607,7 @@ function createAppPageSlotBindings<
       (layoutEntry) => layoutEntry.treePath === route.childrenSlot?.ownerTreePath,
     )?.id;
     bindings.push({
+      ...(route.childrenSlot.state === "active" ? { activeRouteId: options.routeId } : {}),
       ownerLayoutId: ownerLayoutId ?? null,
       slotId: route.childrenSlot.id,
       state: route.childrenSlot.state,
@@ -914,6 +916,7 @@ export function buildAppPageElements<
       slotBindings: createAppPageSlotBindings(options.route, layoutEntries, resolveSlotOverride, {
         interception: renderIdentity?.interception ?? options.interception ?? null,
         interceptionContext,
+        routeId,
         routePath: options.routePath,
       }),
     }),
@@ -1200,6 +1203,13 @@ export function buildAppPageElements<
             const SlotComponent = slotComponent!;
             return <SlotComponent {...slotProps} />;
           })();
+      if (overrideOrPageComponent) {
+        // Named parallel-slot entries flatten the slot page and its layout
+        // chain into one wire element. Key only the page leaf so dynamic
+        // siblings reset page-local client state while the surrounding slot
+        // layouts keep their state, matching Next.js segment ownership.
+        slotElement = <Fragment key={slotResetKey}>{slotElement}</Fragment>;
+      }
     }
     const branchSegments = slotOverride?.branchSegments ?? slotRouteSegments;
     const branchLayouts = new Map<
