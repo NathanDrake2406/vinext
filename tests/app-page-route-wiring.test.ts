@@ -1808,6 +1808,94 @@ describe("app page route wiring helpers", () => {
     expect(unmatchedIdentity).not.toBe(defaultIdentity);
   });
 
+  it("derives BFCache identities from graph semantic ids when available", () => {
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
+    const buildElements = (graph: {
+      pageId: string | null;
+      rootBoundaryId: string;
+      routeId: string;
+    }) =>
+      buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(value) {
+          return Promise.resolve(value);
+        },
+        matchedParams: { id: "42" },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null],
+          ids: {
+            layouts: ["layout:/"],
+            page: graph.pageId,
+            rootBoundary: graph.rootBoundaryId,
+            route: graph.routeId,
+            routeHandler: null,
+            slots: { modal: modalSlotId },
+            templates: [],
+          },
+          layoutTreePositions: [0],
+          layouts: [{ default: RootLayout }],
+          loading: null,
+          notFound: null,
+          notFounds: [null],
+          routeSegments: ["photos", "[id]"],
+          slots: {
+            modal: {
+              default: null,
+              error: null,
+              id: modalSlotId,
+              layout: null,
+              layoutIndex: 0,
+              loading: null,
+              name: "modal",
+              page: { default: SlotPage },
+              routeSegments: ["photos", "[id]"],
+            },
+          },
+          templateTreePositions: [],
+          templates: [],
+        },
+        routePath: "/photos/42",
+        rootNotFoundModule: null,
+      });
+
+    const baseline = AppElementsWire.readMetadata(
+      buildElements({
+        pageId: "page:/photos/[id]",
+        rootBoundaryId: "root-boundary:/",
+        routeId: "route:/photos/[id]",
+      }),
+    ).bfcacheSegmentIdentities;
+    const changedGraphIds = AppElementsWire.readMetadata(
+      buildElements({
+        pageId: "page:/albums/[id]",
+        rootBoundaryId: "root-boundary:/",
+        routeId: "route:/albums/[id]",
+      }),
+    ).bfcacheSegmentIdentities;
+    const changedRootBoundary = AppElementsWire.readMetadata(
+      buildElements({
+        pageId: "page:/photos/[id]",
+        rootBoundaryId: "root-boundary:/(shell)",
+        routeId: "route:/photos/[id]",
+      }),
+    ).bfcacheSegmentIdentities;
+    const layoutOnly = AppElementsWire.readMetadata(
+      buildElements({
+        pageId: null,
+        rootBoundaryId: "root-boundary:/",
+        routeId: "route:/photos/[id]",
+      }),
+    ).bfcacheSegmentIdentities;
+
+    expect(changedGraphIds["page:/photos/42"]).not.toBe(baseline["page:/photos/42"]);
+    expect(changedGraphIds[modalSlotId]).not.toBe(baseline[modalSlotId]);
+    expect(changedRootBoundary["page:/photos/42"]).not.toBe(baseline["page:/photos/42"]);
+    expect(layoutOnly["page:/photos/42"]).toBeDefined();
+  });
+
   it("keys synthetic children-slot page elements with their emitted identity", () => {
     const childrenSlotId = AppElementsWire.encodeSlotId("children", "/");
     const buildElements = (id: string) =>
