@@ -212,7 +212,41 @@ describe("Image SSR rendering", () => {
         loader,
       }),
     );
-    expect(html).toContain('src="https://cdn.example.com/photo.jpg?w=200&amp;q=75"');
+    // Expected widths come from Next.js `getWidths`: with no `sizes` and a
+    // numeric width, candidates are [width, width * 2] each snapped up to the
+    // next configured size — 200 -> 256, 400 -> 640 — with `x` descriptors.
+    // `src` is the *largest* candidate, not the declared width, so browsers
+    // that ignore srcSet still get the highest-fidelity image.
+    expect(html).toContain(
+      'srcSet="https://cdn.example.com/photo.jpg?w=256&amp;q=75 1x, https://cdn.example.com/photo.jpg?w=640&amp;q=75 2x"',
+    );
+    expect(html).toContain('src="https://cdn.example.com/photo.jpg?w=640&amp;q=75"');
+  });
+
+  it("invokes a custom loader per device size for fill images", () => {
+    const widths: number[] = [];
+    const loader = ({ src, width }: { src: string; width: number }) => {
+      widths.push(width);
+      return `https://cdn.example.com${src}?w=${width}`;
+    };
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Image, {
+        alt: "cdn fill",
+        src: "/photo.jpg",
+        fill: true,
+        loader,
+      }),
+    );
+
+    // A `fill` image has no intrinsic width. Regression guard for the shim
+    // previously collapsing that to `width: 0` and calling the loader once.
+    expect(widths).not.toContain(0);
+    expect(new Set(widths)).toEqual(new Set([640, 750, 828, 1080, 1200, 1920, 2048, 3840]));
+    expect(html).toContain("https://cdn.example.com/photo.jpg?w=640 640w");
+    expect(html).toContain("https://cdn.example.com/photo.jpg?w=3840 3840w");
+    // Width descriptors are unusable without `sizes`; Next.js defaults it.
+    expect(html).toContain('sizes="100vw"');
   });
 
   it("renders StaticImageData (import result)", () => {
@@ -429,7 +463,29 @@ describe("getImageProps", () => {
       loader,
     });
 
-    expect(props.src).toBe("https://cdn.example.com/photo.jpg?w=300");
+    // Per Next.js `getWidths`: 300 -> 384, 600 -> 640, `x` descriptors, and
+    // `src` is the largest candidate.
+    expect(props.src).toBe("https://cdn.example.com/photo.jpg?w=640");
+    expect(props.srcSet).toBe(
+      "https://cdn.example.com/photo.jpg?w=384 1x, https://cdn.example.com/photo.jpg?w=640 2x",
+    );
+  });
+
+  it("returns a device-size srcSet for fill images with a custom loader", () => {
+    const widths: number[] = [];
+    const loader = ({ src, width }: { src: string; width: number }) => {
+      widths.push(width);
+      return `https://cdn.example.com${src}?w=${width}`;
+    };
+
+    const { props } = getImageProps({ alt: "cdn fill", src: "/photo.jpg", fill: true, loader });
+
+    // Regression guard: `getImageProps` shares the component's loader path, so
+    // a <picture> built from these props must agree with what <Image> renders.
+    expect(widths).not.toContain(0);
+    expect(props.src).toBe("https://cdn.example.com/photo.jpg?w=3840");
+    expect(props.srcSet).toContain("https://cdn.example.com/photo.jpg?w=640 640w");
+    expect(props.sizes).toBe("100vw");
   });
 
   it("returns blur placeholder styles", () => {

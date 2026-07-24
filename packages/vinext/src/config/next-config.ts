@@ -230,6 +230,20 @@ export type NextConfig = {
     dangerouslyAllowSVG?: boolean;
     /** Allow image optimization for hostnames that resolve to private IP addresses. This is a security risk (SSRF) — only enable for private networks when you understand the risk. */
     dangerouslyAllowLocalIP?: boolean;
+    /**
+     * Which image loader generates image URLs. Only "default" (the built-in
+     * `/_next/image` endpoint) and "custom" (paired with `loaderFile`) are
+     * implemented — the named CDN loaders exist only in `next/legacy/image`
+     * upstream and are rejected here rather than silently ignored.
+     */
+    loader?: "default" | "custom";
+    /**
+     * Path to a file whose default export is an image loader function
+     * `({ src, width, quality }) => string`. Resolved relative to the project
+     * root. When set, it replaces the built-in `/_next/image` loader for every
+     * image that does not pass its own `loader` prop.
+     */
+    loaderFile?: string;
     /** Content-Disposition header for image responses. Defaults to "inline". */
     contentDispositionType?: "inline" | "attachment";
     /** Content-Security-Policy header for image responses. Defaults to "script-src 'none'; frame-src 'none'; sandbox;" */
@@ -1229,6 +1243,42 @@ export function createRscCompatibilityId(
  * @param filePath - Absolute path, relative path, or file:// URL (e.g. from import.meta.resolve)
  * @returns A filesystem path suitable for path operations
  */
+/**
+ * Resolve `images.loaderFile` to an absolute path, mirroring Next.js's checks in
+ * `server/config.ts`.
+ *
+ * Failing at config time is deliberate: a mistyped path that silently fell back
+ * to the built-in loader is indistinguishable from `loaderFile` not being
+ * supported at all, which is the exact failure mode this plumbing exists to fix.
+ *
+ * `loader: "custom"` without a `loaderFile` is intentionally NOT an error —
+ * upstream allows it, and defers to a per-image `loader` prop. The shim reports
+ * that case at render time instead.
+ */
+function resolveImageLoaderFile(
+  images: NonNullable<NextConfig["images"]>,
+  root: string,
+): string | undefined {
+  const { loaderFile } = images;
+  if (typeof loaderFile !== "string" || loaderFile === "") return undefined;
+
+  // Widened deliberately: next.config is user-authored JavaScript, so the
+  // declared union is a hint, not a guarantee. A `loader: "imgix"` left over
+  // from a Next.js project must be reported rather than silently accepted.
+  const loader: string | undefined = images.loader;
+  if (loader !== undefined && loader !== "default" && loader !== "custom") {
+    throw new Error(
+      `Specified images.loader property (${loader}) cannot be used with images.loaderFile property. Please set images.loader to "custom".`,
+    );
+  }
+
+  const absolutePath = toSlash(path.resolve(root, loaderFile));
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error(`Specified images.loaderFile does not exist at "${absolutePath}".`);
+  }
+  return absolutePath;
+}
+
 function resolveCacheHandlerPathToFilesystem(filePath: string): string {
   // toSlash: fileURLToPath and user-supplied require.resolve() results are
   // backslash-separated on Windows; normalize into slash space.
@@ -1876,6 +1926,7 @@ export async function resolveNextConfig(
   const images = config.images
     ? {
         ...config.images,
+        loaderFile: resolveImageLoaderFile(config.images, root),
         remotePatterns: config.images.remotePatterns?.map((pattern) =>
           pattern instanceof URL
             ? {
