@@ -6834,6 +6834,80 @@ describe('"use cache" runtime', () => {
     }
   });
 
+  it("propagates a stale nested-hit entry's cache life into the enclosing cache entry", async () => {
+    // Regression: when a stale child "use cache" hit is served in background
+    // mode inside an outer "use cache" miss, the outer entry must inherit the
+    // child's shorter revalidate/expire. The child function never runs on a
+    // hit, so its served cache-control is the only thing that can constrain the
+    // parent scope. Without propagating it into the parent's lifeConfigs, the
+    // outer entry is stored under the default 900s lifetime and would serve the
+    // embedded stale child data long past the child's own window — even though
+    // the child's background refresh was scheduled separately.
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const childKey = "use-cache:test:swr-nested-child";
+    const outerKey = "use-cache:test:swr-nested-outer";
+
+    const staleChild = {
+      lastModified: Date.now() - 2_000,
+      cacheState: "stale",
+      cacheControl: { revalidate: 5, expire: 50 },
+      value: {
+        kind: "FETCH",
+        data: { headers: {}, body: JSON.stringify({ child: "stale" }), url: childKey },
+        tags: [],
+        revalidate: 5,
+      },
+    } satisfies CacheHandlerValue;
+
+    const setEntry = vi.fn<CacheHandler["set"]>(async () => {});
+    setCacheHandler({
+      // Child key is a stale hit; outer key is a miss so the outer executes and
+      // embeds the served child value.
+      async get(key) {
+        return key === childKey ? staleChild : null;
+      },
+      set: setEntry,
+      async revalidateTag() {},
+    });
+
+    const waitUntilCalls: Promise<unknown>[] = [];
+    const requestContext = createRequestContext({
+      functionCacheRevalidationMode: "background",
+      executionContext: {
+        waitUntil(promise) {
+          waitUntilCalls.push(promise);
+        },
+      },
+    });
+
+    const child = registerCachedFunction(async () => ({ child: "fresh" }), "test:swr-nested-child");
+    // The outer sets no cacheLife of its own, so the nested child is its only
+    // lifetime source; the default would otherwise resolve to 900s.
+    const outer = registerCachedFunction(async () => {
+      const c = await child();
+      return { outer: true, c };
+    }, "test:swr-nested-outer");
+
+    try {
+      await runWithRequestContext(requestContext, () => outer());
+      const outerSet = setEntry.mock.calls.find(([key]) => key === outerKey);
+      expect(outerSet).toBeDefined();
+      expect((outerSet![2] as { cacheControl?: unknown }).cacheControl).toEqual({
+        revalidate: 5,
+        expire: 50,
+      });
+    } finally {
+      await Promise.allSettled(waitUntilCalls);
+      setCacheHandler(new MemoryCacheHandler());
+    }
+  });
+
   it('"use cache" revalidates expired shared entries in the foreground', async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");

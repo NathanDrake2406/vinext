@@ -598,11 +598,11 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
             // JSON-serialized entry (legacy or no RSC available)
             result = JSON.parse(existing.value.data.body);
           }
-          // Surface tags only after deserialization succeeds. A corrupted
-          // entry falls through to foreground execution and must not affect
-          // the enclosing page's cache metadata.
+          // Surface tags and cache-life only after deserialization succeeds. A
+          // corrupted entry falls through to foreground execution and must not
+          // affect the enclosing page's cache metadata.
           propagateCacheTagsToRequest(existing.value.tags);
-          recordRequestScopedCacheControl(existing.cacheControl);
+          propagateHitCacheControl(existing.cacheControl);
           if (cacheReadAction === "serve-and-revalidate") {
             scheduleBackgroundCacheRevalidation(
               cacheKey,
@@ -750,14 +750,36 @@ function throwPrivateUseCacheInsidePublicUseCacheError(): never {
   throw error;
 }
 
-function recordRequestScopedCacheControl(cacheControl: CacheControlMetadata | undefined): void {
+/**
+ * Surface a data-cache HIT entry's stored cache-control into the surrounding
+ * scopes, mirroring the MISS path's dual propagation.
+ *
+ * On a MISS the executed child's `effectiveLife` reaches both the parent cache
+ * context (`runCachedFunctionWithContext` pushes it into `parentCtx.lifeConfigs`
+ * for the outer's minimum-wins `resolveCacheLife`) and the request store
+ * (`recordRequestScopedCacheLife`). On a HIT the child function never runs, so
+ * this is the only place the served entry's lifetime can constrain an enclosing
+ * `"use cache"` scope. Without the parent push, an outer miss that embeds this
+ * HIT would resolve its own (typically longer, e.g. the default 900s) lifetime
+ * and store the outer entry with a `revalidate`/`expire` wider than the child it
+ * contains — serving stale nested data past the child's own window even though a
+ * background refresh for the child was scheduled separately. Minimum-wins on
+ * both the parent `lifeConfigs` and the request store keeps the double record
+ * safe.
+ */
+function propagateHitCacheControl(cacheControl: CacheControlMetadata | undefined): void {
   if (cacheControl === undefined) return;
-  _setRequestScopedCacheLife({
+  const life: CacheLifeConfig = {
     // `false` is an indefinite lifetime and therefore does not constrain an
     // enclosing cache scope's finite revalidation window.
     revalidate: cacheControl.revalidate === false ? undefined : cacheControl.revalidate,
     expire: cacheControl.expire,
-  });
+  };
+  const parentCtx = cacheContextStorage.getStore();
+  if (parentCtx) {
+    parentCtx.lifeConfigs.push(life);
+  }
+  _setRequestScopedCacheLife(life);
 }
 
 function recordRequestScopedCacheLife(cacheLife: CacheLifeConfig): void {
