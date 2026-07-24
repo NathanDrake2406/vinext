@@ -659,9 +659,10 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
       sizes,
       loader: effectiveLoader,
     });
+    const renderedSrc = overrideSrc || attributes.src;
     preloadImageResource({
       shouldPreload,
-      src: attributes.src,
+      src: renderedSrc,
       srcSet: attributes.srcSet,
       sizes: attributes.sizes,
       fetchPriority: priorityFetchPriority,
@@ -669,7 +670,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
     return (
       <img
         ref={mergedRef}
-        src={attributes.src}
+        src={renderedSrc}
         alt={alt}
         width={fill ? undefined : imgWidth}
         height={fill ? undefined : imgHeight}
@@ -927,9 +928,13 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
     return { props: Object.assign(imageProps, { "data-nimg": fill ? "fill" : "1" }) };
   }
 
-  // Validate remote URLs against configured patterns
+  const effectiveLoader = loader ?? configuredImageLoader;
+
+  // A custom loader owns URL generation and bypasses the server-side optimizer,
+  // so remote source restrictions do not apply. This must match the component
+  // path above or getImageProps-built <picture> elements render differently.
   let blockedInProd = false;
-  if (isRemoteUrl(src)) {
+  if (!effectiveLoader && isRemoteUrl(src)) {
     const validation = validateRemoteUrl(src);
     if (!validation.allowed) {
       if (__isDev) {
@@ -946,18 +951,16 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
   // same srcSet `<Image>` would render — callers building <picture> elements
   // depend on the two agreeing.
   const imgQuality = typeof _quality === "string" ? Number(_quality) : (_quality ?? 75);
-  const effectiveLoader = loader ?? configuredImageLoader;
-  const loaderAttributes =
-    effectiveLoader && !blockedInProd
-      ? generateImgAttrs({
-          src,
-          width: fill ? undefined : imgWidth,
-          quality: imgQuality,
-          sizes,
-          loader: effectiveLoader,
-        })
-      : null;
-  const resolvedSrc = blockedInProd ? "" : (loaderAttributes?.src ?? src);
+  const loaderAttributes = effectiveLoader
+    ? generateImgAttrs({
+        src,
+        width: fill ? undefined : imgWidth,
+        quality: imgQuality,
+        sizes,
+        loader: effectiveLoader,
+      })
+    : null;
+  const resolvedSrc = loaderAttributes?.src ?? (blockedInProd ? "" : src);
 
   // For local images (no loader, not remote), route through optimization endpoint.
   // When `unoptimized` is true, bypass the endpoint entirely (Next.js compat).
@@ -996,7 +999,9 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
       : undefined;
 
   const imageProps: ImgProps = {
-    src: optimizedSrc,
+    // Match Next.js: overrideSrc changes the fallback `src` without changing
+    // the loader-generated candidates in `srcSet`.
+    src: overrideSrc || optimizedSrc,
     alt,
     width: fill ? undefined : imgWidth,
     height: fill ? undefined : imgHeight,

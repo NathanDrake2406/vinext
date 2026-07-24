@@ -11,7 +11,11 @@
 import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import React from "react";
 import ReactDOMServer from "react-dom/server";
-import Image, { getImageProps, type StaticImageData } from "../packages/vinext/src/shims/image.js";
+import Image, {
+  getImageProps,
+  type ImageLoader,
+  type StaticImageData,
+} from "../packages/vinext/src/shims/image.js";
 
 /** Helper: expected optimization URL matching what the image shim produces. */
 function optUrl(src: string, w: number, q = 75): string {
@@ -910,6 +914,82 @@ describe("unoptimized remote images", () => {
     vi.unstubAllEnvs();
     delete process.env.__VINEXT_IMAGE_REMOTE_PATTERNS;
     vi.resetModules();
+  });
+});
+
+describe("custom loader URL ownership", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    delete process.env.__VINEXT_IMAGE_REMOTE_PATTERNS;
+    vi.resetModules();
+  });
+
+  it("bypasses remote pattern validation in production for Image and getImageProps", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.__VINEXT_IMAGE_REMOTE_PATTERNS = JSON.stringify([
+      { hostname: "allowed.example.com" },
+    ]);
+
+    vi.resetModules();
+    const { default: CustomLoaderImage, getImageProps: getCustomLoaderImageProps } =
+      await import("../packages/vinext/src/shims/image.js");
+    const src = "https://unconfigured.example.com/photo.jpg";
+    const loader = ({ src: loaderSrc, width: loaderWidth }: Parameters<ImageLoader>[0]) =>
+      `https://cdn.example.com/image?src=${encodeURIComponent(loaderSrc)}&w=${loaderWidth}`;
+    const expectedSrc =
+      "https://cdn.example.com/image?src=https%3A%2F%2Funconfigured.example.com%2Fphoto.jpg&w=640";
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(CustomLoaderImage, {
+        alt: "custom loader",
+        src,
+        width: 300,
+        height: 200,
+        loader,
+      }),
+    );
+    const { props } = getCustomLoaderImageProps({
+      alt: "custom loader",
+      src,
+      width: 300,
+      height: 200,
+      loader,
+    });
+
+    expect(html).toContain(`src="${expectedSrc.replace(/&/g, "&amp;")}"`);
+    expect(props.src).toBe(expectedSrc);
+    expect(props.srcSet).toContain("https://cdn.example.com/image?");
+  });
+
+  it("uses overrideSrc for the fallback src while preserving the loader srcSet", () => {
+    const src = "/photo.jpg";
+    const overrideSrc = "https://cdn.example.com/original.jpg";
+    const loader = ({ width: loaderWidth }: Parameters<ImageLoader>[0]) =>
+      `https://cdn.example.com/optimized.jpg?w=${loaderWidth}`;
+
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Image, {
+        alt: "custom loader override",
+        src,
+        overrideSrc,
+        width: 300,
+        height: 200,
+        loader,
+      }),
+    );
+    const { props } = getImageProps({
+      alt: "custom loader override",
+      src,
+      overrideSrc,
+      width: 300,
+      height: 200,
+      loader,
+    });
+
+    expect(html).toContain(`src="${overrideSrc}"`);
+    expect(html).toContain("srcSet=");
+    expect(props.src).toBe(overrideSrc);
+    expect(props.srcSet).toContain("https://cdn.example.com/optimized.jpg");
   });
 });
 
