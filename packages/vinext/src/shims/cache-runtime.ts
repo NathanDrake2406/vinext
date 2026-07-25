@@ -698,7 +698,7 @@ function throwPrivateUseCacheInsidePublicUseCacheError(): never {
 
 function recordRequestScopedCacheControl(cacheControl: CacheControlMetadata | undefined): void {
   if (cacheControl === undefined) return;
-  _setRequestScopedCacheLife({
+  const life: CacheLifeConfig = {
     // `false` is an indefinite lifetime and therefore does not constrain an
     // enclosing cache scope's finite revalidation window.
     revalidate: cacheControl.revalidate === false ? undefined : cacheControl.revalidate,
@@ -707,7 +707,13 @@ function recordRequestScopedCacheControl(cacheControl: CacheControlMetadata | un
     // execution did, otherwise the enclosing render's minimum silently widens
     // once an entry goes warm.
     stale: cacheControl.stale,
-  });
+  };
+  // A hit inside an outer "use cache" must constrain the outer entry's stored
+  // lifetime exactly like the MISS path does via `parentCtx.lifeConfigs.push`
+  // in runCachedFunctionWithContext — otherwise the outer entry persists its
+  // default lifetime and the inner claim vanishes once the outer goes warm.
+  cacheContextStorage.getStore()?.lifeConfigs.push(life);
+  _setRequestScopedCacheLife(life);
 }
 
 function recordRequestScopedCacheLife(cacheLife: CacheLifeConfig): void {

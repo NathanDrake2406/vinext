@@ -17,6 +17,7 @@ import { buildPagesFixture, buildAppFixture, buildCloudflareAppFixture } from ".
 import {
   extractRscPayloadFromPrerenderedHtml,
   resolveParentParams,
+  writePrerenderIndex,
   type PrerenderRouteResult,
   type StaticParamsMap,
 } from "../packages/vinext/src/build/prerender.js";
@@ -701,6 +702,39 @@ describe("prerenderPages — default mode (pages-basic)", () => {
     // Check a skipped entry
     const ssr = index.routes.find((r: any) => r.route === "/ssr");
     expect(ssr).toMatchObject({ route: "/ssr", status: "skipped", reason: "ssr" });
+  });
+});
+
+describe("writePrerenderIndex", () => {
+  it("carries the resolved cacheLife stale into the written index", () => {
+    // Regression: seedMemoryCacheFromPrerender reads `route.stale` from
+    // vinext-prerender.json — dropping it here silently reverts seeded cache
+    // hits to the configured staleTimes fallback.
+    const dir = tmpDir("vinext-prerender-index-");
+    writePrerenderIndex(
+      [
+        {
+          route: "/cached",
+          status: "rendered",
+          outputFiles: ["cached.html"],
+          revalidate: 60,
+          expire: 300,
+          stale: 30,
+          router: "app",
+        },
+      ],
+      dir,
+      { buildId: "b1" },
+    );
+
+    const index = JSON.parse(fs.readFileSync(path.join(dir, "vinext-prerender.json"), "utf-8"));
+    expect(index.routes[0]).toMatchObject({
+      route: "/cached",
+      revalidate: 60,
+      expire: 300,
+      stale: 30,
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 

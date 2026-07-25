@@ -145,6 +145,8 @@ export type PrerenderRouteResult =
       outputFiles: string[];
       revalidate: number | false;
       expire?: number;
+      /** Client-router reuse bound resolved from the prerender's `cacheLife`. */
+      stale?: number;
       /**
        * The concrete prerendered URL path, e.g. `/blog/hello-world`.
        * Only present when the route is dynamic and `path` differs from `route`.
@@ -1808,6 +1810,7 @@ export function writePrerenderIndex(
         status: r.status,
         revalidate: r.revalidate,
         ...(typeof r.revalidate === "number" ? { expire: r.expire } : {}),
+        ...(typeof r.stale === "number" ? { stale: r.stale } : {}),
         router: r.router,
         ...(r.tags && r.tags.length > 0 ? { tags: r.tags } : {}),
         ...(r.headers ? { headers: r.headers } : {}),

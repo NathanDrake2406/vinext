@@ -6546,6 +6546,49 @@ describe('"use cache" runtime', () => {
     expect(warmStale).toBe(30);
   });
 
+  it("a nested use cache hit constrains the enclosing cache entry's lifetime", async () => {
+    // Mirrors the MISS path's `parentCtx.lifeConfigs.push`: an inner HIT during
+    // an outer MISS must still constrain the outer entry, or the child's stale
+    // claim disappears once the outer itself goes warm.
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const {
+      setCacheHandler,
+      MemoryCacheHandler,
+      cacheLife,
+      _peekRequestScopedCacheLife,
+      _runWithCacheState,
+    } = await import("../packages/vinext/src/shims/cache.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    let innerCalls = 0;
+    let outerCalls = 0;
+    const inner = registerCachedFunction(async () => {
+      cacheLife({ stale: 30, revalidate: 300, expire: 600 });
+      innerCalls++;
+      return "inner";
+    }, "test:nested-inner");
+    const outer = registerCachedFunction(async () => {
+      outerCalls++;
+      return await inner();
+    }, "test:nested-outer");
+
+    // Warm the inner entry alone, then run the outer cold: the inner HITs
+    // inside the outer's execution.
+    await _runWithCacheState(() => inner());
+    await _runWithCacheState(() => outer());
+    expect(innerCalls).toBe(1);
+    expect(outerCalls).toBe(1);
+
+    // Outer warm HIT — its stored entry must carry the inner's stale claim.
+    const warmStale = await _runWithCacheState(async () => {
+      await outer();
+      return _peekRequestScopedCacheLife()?.stale;
+    });
+    expect(outerCalls).toBe(1);
+    expect(warmStale).toBe(30);
+  });
+
   it("registerCachedFunction collects cacheTag", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
