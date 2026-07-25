@@ -72,13 +72,6 @@ type BuildAppPageCachedResponseOptions = {
   expireSeconds?: number;
   isEdgeRuntime?: boolean;
   isRscRequest: boolean;
-  /**
-   * Epoch-ms write time of the entry being replayed
-   * (`CacheHandlerValue.lastModified`). Ages the replayed client stale time
-   * against the entry's expire ceiling; absent means "treat as freshly
-   * written" and is only appropriate when no entry timestamp exists.
-   */
-  lastModifiedAt?: number;
   middlewareHeaders?: Headers | null;
   middlewareStatus?: number | null;
   mountedSlotsHeader?: string | null;
@@ -231,10 +224,7 @@ function resolveRegeneratedAppPageCachePolicy(options: {
     revalidateSeconds,
     // Carry the regenerating render's own claim onto the refreshed entry, so a
     // background regen does not quietly drop it and widen client reuse.
-    staleSeconds: resolveClientStaleTimeSeconds({
-      expire: expireSeconds,
-      stale: options.renderCacheControl?.stale,
-    }),
+    staleSeconds: resolveClientStaleTimeSeconds(options.renderCacheControl),
   };
 }
 
@@ -256,13 +246,12 @@ export function buildAppPageCachedResponse(
   // only the shared-cache string, so this reads the entry's own metadata:
   // without it, a warm hit would serve the same bytes as a fresh render while
   // silently widening client reuse back to the configured staleTimes default.
-  // The claim is aged: reuse is licensed from the entry's write time, so a hit
-  // near the expire boundary advertises only the remaining window.
-  const entryAgeSeconds =
-    options.lastModifiedAt !== undefined && Number.isFinite(options.lastModifiedAt)
-      ? Math.max(0, (Date.now() - options.lastModifiedAt) / 1000)
-      : 0;
-  const staleTimeSeconds = resolveClientStaleTimeSeconds(options.cacheControl, entryAgeSeconds);
+  // Replayed verbatim, not aged: Next.js re-emits the stored header unchanged
+  // on every hit, and the cached HTML body embeds the same original value in
+  // its done-script, so aging only this header would make the two artifacts of
+  // one entry disagree. `expire` stays a serve-side ceiling (expired entries
+  // are blocking misses), never a client clamp.
+  const staleTimeSeconds = resolveClientStaleTimeSeconds(options.cacheControl);
   if (options.isRscRequest) {
     if (!cachedValue.rscData) {
       return null;
@@ -351,7 +340,6 @@ async function serveAppPageCachedHtml(
     expireSeconds: options.expireSeconds,
     isEdgeRuntime: options.isEdgeRuntime,
     isRscRequest: false,
-    lastModifiedAt: options.cached?.value.lastModified,
     middlewareHeaders: options.middlewareHeaders,
     middlewareStatus: options.middlewareStatus,
     revalidateSeconds: options.revalidateSeconds,
@@ -430,7 +418,6 @@ export async function readAppPageCacheResponse(
         expireSeconds: options.expireSeconds,
         isEdgeRuntime: options.isEdgeRuntime,
         isRscRequest: options.isRscRequest,
-        lastModifiedAt: cached?.value.lastModified,
         middlewareHeaders: options.middlewareHeaders,
         middlewareStatus: options.middlewareStatus,
         mountedSlotsHeader: options.mountedSlotsHeader,
@@ -529,7 +516,6 @@ export async function readAppPageCacheResponse(
         expireSeconds: options.expireSeconds,
         isEdgeRuntime: options.isEdgeRuntime,
         isRscRequest: options.isRscRequest,
-        lastModifiedAt: cached.value.lastModified,
         middlewareHeaders: options.middlewareHeaders,
         middlewareStatus: options.middlewareStatus,
         mountedSlotsHeader: options.mountedSlotsHeader,

@@ -44,6 +44,7 @@ import {
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
+  VINEXT_STALE_TIME_PENDING_HEADER,
 } from "../server/headers.js";
 import { toBrowserNavigationHref, toSameOriginAppPath, withBasePath } from "./url-utils.js";
 import { navigationPlanner } from "../server/navigation-planner.js";
@@ -288,6 +289,13 @@ export type CachedRscResponse = {
   preparedElements?: AppElements;
   renderedPathAndSearch: string | null;
   /**
+   * The response was a cacheable render streamed before its `cacheLife`
+   * resolved (`VINEXT_STALE_TIME_PENDING_HEADER`). The unresolved claim,
+   * once floored, can never license less than the 30s minimum, so reuse is
+   * bounded at that floor instead of the fallback TTL.
+   */
+  staleTimePending?: boolean;
+  /**
    * Client reuse bound in seconds resolved from the render's `cacheLife`
    * lattice, from `NEXT_ROUTER_STALE_TIME_HEADER`. Independent of
    * `dynamicStaleTimeSeconds`, which comes from `experimental.staleTimes`
@@ -428,11 +436,20 @@ function parseStaleTimeSecondsHeader(value: string | null): number | undefined {
  * the min, so the floor gives every server claim its Next.js-mandated minimum
  * without ever raising the config-derived bound.
  *
- * Returns undefined when the response carried neither signal, leaving the
+ * A pending claim (`staleTimePending`) is a cacheable render that streamed
+ * before its `cacheLife` resolved. The unknown claim would floor to at least
+ * `MIN_SERVER_STALE_TIME_SECONDS`, so that floor is its conservative
+ * substitute in the min — reuse never exceeds what any resolution of the
+ * claim could have licensed.
+ *
+ * Returns undefined when the response carried no signal at all, leaving the
  * caller's configured fallback TTL in force.
  */
 function resolveRscResponseStaleTimeSeconds(
-  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "staleTimeSeconds">,
+  cached: Pick<
+    CachedRscResponse,
+    "dynamicStaleTimeSeconds" | "staleTimePending" | "staleTimeSeconds"
+  >,
 ): number | undefined {
   const dynamic = cached.dynamicStaleTimeSeconds;
   const resolved = cached.staleTimeSeconds;
@@ -440,13 +457,23 @@ function resolveRscResponseStaleTimeSeconds(
   const floored = isStaleTimeSeconds(resolved)
     ? Math.max(resolved, MIN_SERVER_STALE_TIME_SECONDS)
     : undefined;
-  if (hasDynamic && floored !== undefined) return Math.min(dynamic, floored);
-  if (hasDynamic) return dynamic;
-  return floored;
+  let combined: number | undefined;
+  if (hasDynamic && floored !== undefined) combined = Math.min(dynamic, floored);
+  else if (hasDynamic) combined = dynamic;
+  else combined = floored;
+  if (cached.staleTimePending === true) {
+    return combined === undefined
+      ? MIN_SERVER_STALE_TIME_SECONDS
+      : Math.min(combined, MIN_SERVER_STALE_TIME_SECONDS);
+  }
+  return combined;
 }
 
 export function resolveCachedRscResponseTtlMs(
-  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "staleTimeSeconds">,
+  cached: Pick<
+    CachedRscResponse,
+    "dynamicStaleTimeSeconds" | "staleTimePending" | "staleTimeSeconds"
+  >,
   fallbackTtlMs: number,
 ): number {
   const seconds = resolveRscResponseStaleTimeSeconds(cached);
@@ -458,7 +485,10 @@ export function resolveCachedRscResponseTtlMs(
 
 export function resolveCachedRscResponseExpiresAt(
   timestamp: number,
-  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt" | "staleTimeSeconds">,
+  cached: Pick<
+    CachedRscResponse,
+    "dynamicStaleTimeSeconds" | "expiresAt" | "staleTimePending" | "staleTimeSeconds"
+  >,
   fallbackTtlMs: number,
 ): number {
   if (isCacheExpiresAt(cached.expiresAt)) {
@@ -469,7 +499,10 @@ export function resolveCachedRscResponseExpiresAt(
 
 function resolvePrefetchedRscResponseExpiresAt(
   timestamp: number,
-  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt" | "staleTimeSeconds">,
+  cached: Pick<
+    CachedRscResponse,
+    "dynamicStaleTimeSeconds" | "expiresAt" | "staleTimePending" | "staleTimeSeconds"
+  >,
   fallbackTtlMs: number,
   minimumTtlMs: number = MIN_PREFETCH_STALE_TIME_MS,
 ): number {
@@ -994,6 +1027,7 @@ export function createCachedRscResponseSnapshot(
   const staleTimeSeconds = parseStaleTimeSecondsHeader(
     response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER),
   );
+  const staleTimePending = response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER) === "1";
   return {
     compatibilityIdHeader: response.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
     buffer,
@@ -1004,6 +1038,7 @@ export function createCachedRscResponseSnapshot(
     renderedPathAndSearch: parseRenderedPathAndSearchHeader(
       response.headers.get(VINEXT_RENDERED_PATH_AND_SEARCH_HEADER),
     ),
+    ...(staleTimePending ? { staleTimePending: true } : {}),
     ...(staleTimeSeconds !== undefined ? { staleTimeSeconds } : {}),
     url: responseUrl ?? response.url,
   };
@@ -1059,6 +1094,9 @@ export function restoreRscResponse(cached: CachedRscResponse, copy = true): Resp
   }
   if (isStaleTimeSeconds(cached.staleTimeSeconds)) {
     headers.set(NEXT_ROUTER_STALE_TIME_HEADER, String(cached.staleTimeSeconds));
+  }
+  if (cached.staleTimePending === true) {
+    headers.set(VINEXT_STALE_TIME_PENDING_HEADER, "1");
   }
   if (cached.paramsHeader != null) {
     headers.set(VINEXT_PARAMS_HEADER, cached.paramsHeader);

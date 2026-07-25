@@ -95,6 +95,20 @@ describe("visited response cache freshness", () => {
     ).toBe(false);
   });
 
+  it("bounds a pending-stale cold navigation at the floor instead of the visited TTL", () => {
+    // The response streamed before its cacheLife resolved; its claim, once
+    // floored, cannot license less than 30s, so 30s is the conservative bound
+    // until a warm entry replays the authoritative value.
+    const now = 1_000_000;
+    const entry = createVisitedResponseCacheEntry({
+      now,
+      params: {},
+      response: createCachedResponse({ staleTimePending: true }),
+    });
+
+    expect(entry.expiresAt).toBe(now + 30_000);
+  });
+
   it("floors a shorter-than-minimum cacheLife stale time like the prefetch cache does", () => {
     // One rule for both client caches, mirroring Next.js's getStaleTimeMs
     // (max(stale, 30s) across the whole segment cache): cacheLife({ stale: 5 })

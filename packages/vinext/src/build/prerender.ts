@@ -1572,13 +1572,10 @@ export async function prerenderApp({
               : Math.min(revalidate, renderedCacheControl.revalidate)
             : (renderedCacheControl.revalidate ?? revalidate);
 
-        // Clamp against the entry's effective expire for the same reason the
-        // runtime write path does: reuse past expire would hand back output the
-        // server already considers gone.
-        const renderedStale = resolveClientStaleTimeSeconds({
-          expire: renderedCacheControl.expire,
-          stale: htmlRender.requestCacheLife?.stale,
-        });
+        // Seed the same unclamped claim the runtime write path persists —
+        // `expire` is a serve-side ceiling, never a client-reuse clamp
+        // (see resolveClientStaleTimeSeconds).
+        const renderedStale = resolveClientStaleTimeSeconds(htmlRender.requestCacheLife);
 
         return {
           route: routePattern,

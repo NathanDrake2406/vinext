@@ -113,17 +113,12 @@ function resolveAppPageCacheWritePolicy(options: {
   // Callers reach this only after the render's stream has been drained, so the
   // request-scoped accumulation is the completed render's minimum rather than a
   // partial one. That is what makes persisting it onto the entry sound.
-  // The clamp uses the effective expire: a cacheLife-declared expire replaces
-  // the config `expireTime` fallback (Next.js precedence, base-server.ts
-  // applies expireTime only when no expire was collected) — it is not
-  // min-merged with it.
+  // `expire` never constrains the persisted stale — it is a serve-side ceiling
+  // only (see resolveClientStaleTimeSeconds).
   return {
     expireSeconds,
     revalidateSeconds,
-    staleSeconds: resolveClientStaleTimeSeconds({
-      expire: expireSeconds,
-      stale: requestCacheLife?.stale,
-    }),
+    staleSeconds: resolveClientStaleTimeSeconds(requestCacheLife),
   };
 }
 

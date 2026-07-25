@@ -15,6 +15,7 @@ import { VINEXT_RSC_COMPATIBILITY_ID_HEADER } from "../packages/vinext/src/serve
 import {
   NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
+  VINEXT_STALE_TIME_PENDING_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
@@ -433,6 +434,21 @@ describe("prefetch cache eviction", () => {
     expect(restored.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
   });
 
+  it("carries the pending-stale marker through snapshot and replay", async () => {
+    const response = new Response("flight", {
+      headers: {
+        "content-type": "text/x-component",
+        [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+      },
+    });
+
+    const snapshot = await snapshotRscResponse(response);
+    const restored = restoreRscResponse(snapshot);
+
+    expect(snapshot.staleTimePending).toBe(true);
+    expect(restored.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
+  });
+
   it("releases queued App prefetch fetch slots after consuming the response body", async () => {
     let closeBody!: () => void;
     const body = new ReadableStream<Uint8Array>({
@@ -705,6 +721,36 @@ describe("prefetch cache eviction", () => {
       null,
       undefined,
       { fallbackTtlMs: PREFETCH_CACHE_TTL },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
+  });
+
+  it("bounds a pending-stale cold response at the floor instead of the fallback TTL", async () => {
+    // A cacheable render streamed before its cacheLife resolved (#961 keeps
+    // cold responses non-blocking) advertises no value, but the unresolved
+    // claim — once floored — can never license less than 30s. Holding the
+    // response for the 300s fallback would reproduce the headline bug on the
+    // first prefetch of every entry epoch.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/pending-stale-prefetch.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: 300_000 },
     );
     await getPrefetchCache().get(rscUrl)?.pending;
 

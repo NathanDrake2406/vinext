@@ -159,56 +159,21 @@ describe("app page cache helpers", () => {
     );
   });
 
-  it("clamps a replayed client stale time to the entry's expire ceiling", () => {
-    // Reuse past expire would hand back output the server already considers gone.
+  it("replays the client stale time verbatim, unclamped by expire and entry age", () => {
+    // Deliberate Next.js parity: the stored header is re-emitted unchanged on
+    // every hit (app-page-runtime.ts replays cached headers verbatim), and the
+    // cached HTML body embeds the same original value in its done-script, so
+    // aging or clamping only this header would make one entry's two artifacts
+    // disagree. `expire` is enforced server-side instead — entries past it are
+    // blocking misses, never replayed.
     const response = buildAppPageCachedResponse(buildCachedAppPageValue("<h1>cached</h1>"), {
       cacheControl: { revalidate: 60, expire: 45, stale: 300 },
-      cacheState: "HIT",
+      cacheState: "STALE",
       isRscRequest: false,
       revalidateSeconds: 60,
     });
 
-    expect(response?.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("45");
-  });
-
-  it("ages a replayed client stale time against the entry's expire boundary", () => {
-    // The expire ceiling is measured from the entry's write time, not the hit.
-    // An entry of { stale: 30, expire: 60 } hit at age 59s has 1s of licensed
-    // reuse left; replaying the full 30s window would let the client hold the
-    // output until 29s past expire.
-    const now = 1_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    try {
-      const response = buildAppPageCachedResponse(buildCachedAppPageValue("<h1>cached</h1>"), {
-        cacheControl: { revalidate: 1, expire: 60, stale: 30 },
-        cacheState: "STALE",
-        isRscRequest: false,
-        lastModifiedAt: now - 59_000,
-        revalidateSeconds: 60,
-      });
-
-      expect(response?.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("1");
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  it("leaves a young entry's replayed client stale time unclamped", () => {
-    const now = 1_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    try {
-      const response = buildAppPageCachedResponse(buildCachedAppPageValue("<h1>cached</h1>"), {
-        cacheControl: { revalidate: 1, expire: 60, stale: 30 },
-        cacheState: "HIT",
-        isRscRequest: false,
-        lastModifiedAt: now - 10_000,
-        revalidateSeconds: 60,
-      });
-
-      expect(response?.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
-    } finally {
-      vi.restoreAllMocks();
-    }
+    expect(response?.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("300");
   });
 
   it("advertises no client stale time when the entry carries no claim", () => {

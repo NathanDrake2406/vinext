@@ -840,6 +840,11 @@ export async function renderAppPageLifecycle(
       (dynamicUsedDuringBuild || options.isForceDynamic || !shouldCaptureRscForCacheMetadata);
     const rscResponse = buildAppPageRscResponse(rscForResponse, {
       cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
+      // The captured render will persist its resolved cacheLife onto the ISR
+      // entry, but this response streams before that resolution (#961 keeps
+      // cold responses non-blocking) — mark the claim pending so the client
+      // bounds reuse at the floor instead of its fallback TTL.
+      staleTimePending: options.isPrerender !== true && shouldCaptureRscForCacheMetadata,
       // Only emit on dynamic renders — Next.js gates on !workStore.isStaticGeneration (line 2223).
       // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/app-render.tsx#L2223-L2229
       // shouldCaptureRscForCacheMetadata is the runtime analog of isStaticGeneration: a render
@@ -972,10 +977,7 @@ export async function renderAppPageLifecycle(
           // the cache-write closure owns the consuming read, and it runs after
           // the response body (and therefore this getter) has completed.
           const requestCacheLife = options.peekRequestCacheLife?.();
-          const staleTimeSeconds = resolveClientStaleTimeSeconds({
-            expire: requestCacheLife?.expire,
-            stale: requestCacheLife?.stale,
-          });
+          const staleTimeSeconds = resolveClientStaleTimeSeconds(requestCacheLife);
           return {
             kind,
             ...(kind === "dynamic" &&

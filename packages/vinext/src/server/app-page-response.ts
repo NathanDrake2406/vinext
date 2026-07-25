@@ -11,6 +11,7 @@ import {
   VINEXT_PARAMS_HEADER,
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
+  VINEXT_STALE_TIME_PENDING_HEADER,
   VINEXT_TIMING_HEADER,
 } from "./headers.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
@@ -77,6 +78,8 @@ type AppPageHtmlResponsePolicy = {
 type BuildAppPageRscResponseOptions = {
   cacheTags?: readonly string[];
   dynamicStaleTimeSeconds?: number;
+  /** The render is being captured for a cache write but streams before its cacheLife resolves. */
+  staleTimePending?: boolean;
   isEdgeRuntime?: boolean;
   middlewareContext: AppPageMiddlewareContext;
   mountedSlotsHeader?: string | null;
@@ -350,6 +353,9 @@ export function buildAppPageRscResponse(
     headers.set(VINEXT_MOUNTED_SLOTS_HEADER, options.mountedSlotsHeader);
   }
   applyDynamicStaleTimeHeader(headers, options.dynamicStaleTimeSeconds);
+  if (options.staleTimePending) {
+    headers.set(VINEXT_STALE_TIME_PENDING_HEADER, "1");
+  }
   if (options.policy.cacheControl) {
     headers.set("Cache-Control", options.policy.cacheControl);
   }

@@ -133,6 +133,15 @@ export const NEXTJS_ACTION_NOT_FOUND_HEADER = "x-nextjs-action-not-found";
 export const NEXT_ROUTER_STALE_TIME_HEADER = "x-nextjs-stale-time";
 
 /**
+ * Marks a streamed cacheable RSC response whose `cacheLife` claim had not
+ * resolved when headers were committed (value "1"). The claim, once resolved
+ * and floored client-side, can never license less than 30s of reuse, so the
+ * client bounds such a response at that floor instead of its wide fallback
+ * TTL until a warm cache entry carries the authoritative value.
+ */
+export const VINEXT_STALE_TIME_PENDING_HEADER = "X-Vinext-Stale-Time-Pending";
+
+/**
  * Deployment ID header used by the Pages Router for deployment-skew
  * protection. Set on every `/_next/data/` response so the client can detect
  * when a new deployment has been rolled out and trigger a hard navigation.

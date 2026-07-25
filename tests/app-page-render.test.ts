@@ -32,6 +32,7 @@ import {
   NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
+  VINEXT_STALE_TIME_PENDING_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 import type { AppPageCacheWritePolicy } from "../packages/vinext/src/server/isr-cache.js";
@@ -692,7 +693,10 @@ describe("app page render lifecycle", () => {
     );
   });
 
-  it("clamps the persisted client stale time to the entry's effective expire", async () => {
+  it("persists the declared stale unclamped by the entry's expire", async () => {
+    // Next.js parity: `expire` is a serve-side ceiling (expired entries are
+    // blocking misses), never a client-reuse clamp — see
+    // resolveClientStaleTimeSeconds.
     const common = createCommonOptions();
 
     const response = await renderAppPageLifecycle({
@@ -711,7 +715,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 10, expireSeconds: 45, staleSeconds: 45, tags: ["_N_T_/posts/post"] },
+      { revalidateSeconds: 10, expireSeconds: 45, staleSeconds: 300, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -755,8 +759,10 @@ describe("app page render lifecycle", () => {
     // Streaming before the capture drains also means the response cannot carry
     // the render's cacheLife stale — cold RSC navigations rely on the entry
     // this write produces. Kept deliberately: #961 rejected blocking the cold
-    // response on cache metadata.
+    // response on cache metadata. The pending marker is what keeps the client
+    // from holding this response for its wide fallback TTL in the meantime.
     expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBeNull();
+    expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
 
     releaseRsc.resolve();
     await expect(response.text()).resolves.toBe("flight");
@@ -1383,6 +1389,9 @@ describe("app page render lifecycle", () => {
       revalidateSeconds: null,
     });
     expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("0");
+    // Force-dynamic renders are never captured for a cache write, so there is
+    // no pending cacheLife claim to advertise.
+    expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBeNull();
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
@@ -1423,6 +1432,9 @@ describe("app page render lifecycle", () => {
     expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBeNull();
     // The configured client stale time is a build-time constant and still ships.
     expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("300");
+    // Dev never captures for cache metadata, so there is no pending claim to
+    // advertise — matching Next.js dev, which emits no stale signal at all.
+    expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBeNull();
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
