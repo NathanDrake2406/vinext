@@ -67,8 +67,33 @@ type AppPageHtmlResponsePolicy = {
   shouldWriteToCache: boolean;
 } & AppPageResponsePolicy;
 
+/**
+ * `x-next-cache-tags` is a build-time side channel, not a client-facing header:
+ * `build/prerender.ts` reads it back off the rendered response to attach tags to
+ * the prerendered ISR entry it seeds. Nothing in a browser consumes it, and tags
+ * are plaintext (`encodeCacheTag` canonicalises to ASCII, it does not hash), so
+ * emitting it on a runtime response would ship internal entity names
+ * (`user-42-orders`, …) to every client for no benefit.
+ *
+ * Runtime CDN tag purging does not depend on this header either: CDN adapters
+ * receive tags through `CdnCacheAdapter.buildResponseHeaders({ tags })` and emit
+ * their own header (e.g. Cloudflare's `Cache-Tag`), see `shims/cdn-cache.ts`.
+ * That is why vinext needs no equivalent of Next.js's `isMinimalMode` gate.
+ */
+type AppPagePrerenderCacheTagsOptions = {
+  /**
+   * Resolves the page's canonicalised cache tags. Called only when
+   * `isPrerender` is true, so runtime renders never pay for tag collection.
+   */
+  getCacheTags?: () => readonly string[];
+  /**
+   * True only for build-time prerender renders (`VINEXT_PRERENDER=1`). Absent or
+   * false means the response is client-facing and must carry no tag header.
+   */
+  isPrerender?: boolean;
+};
+
 type BuildAppPageRscResponseOptions = {
-  cacheTags?: readonly string[];
   dynamicStaleTimeSeconds?: number;
   isEdgeRuntime?: boolean;
   middlewareContext: AppPageMiddlewareContext;
@@ -78,10 +103,9 @@ type BuildAppPageRscResponseOptions = {
   renderedPathAndSearch?: string | null;
   requestCacheLife?: AppPagePrerenderCacheLife | null;
   timing?: AppPageResponseTiming;
-};
+} & AppPagePrerenderCacheTagsOptions;
 
 type BuildAppPageHtmlResponseOptions = {
-  cacheTags?: readonly string[];
   draftCookie?: string | null;
   /** Combined preload `Link` header value (React hints + font preloads), already capped. */
   linkHeader?: string;
@@ -90,7 +114,7 @@ type BuildAppPageHtmlResponseOptions = {
   policy: AppPageResponsePolicy;
   requestCacheLife?: AppPagePrerenderCacheLife | null;
   timing?: AppPageResponseTiming;
-};
+} & AppPagePrerenderCacheTagsOptions;
 
 function applyTimingHeader(headers: Headers, timing?: AppPageResponseTiming): void {
   if (!timing) {
@@ -139,10 +163,29 @@ function applyPrerenderCacheLifeHeader(
   headers.set(VINEXT_PRERENDER_CACHE_LIFE_HEADER, JSON.stringify(payload));
 }
 
-function applyPrerenderCacheTagsHeader(headers: Headers, cacheTags: readonly string[] | undefined) {
+/**
+ * Emit the prerender-only `x-next-cache-tags` side channel.
+ *
+ * The `isPrerender` gate lives here rather than at each shaper call site so a
+ * new call site cannot leak tags to a browser by forgetting to gate: omitting
+ * `isPrerender` fails closed. See `AppPagePrerenderCacheTagsOptions` for why the
+ * header must never reach a client.
+ *
+ * Next.js enforces the same invariant on the replay side — it stores the header
+ * inside the cache entry and deletes it unless a CDN is the consumer
+ * (`build/templates/app-page-runtime.ts`: `if (!isMinimalMode || !isSSG) delete
+ * headers[NEXT_CACHE_TAGS_HEADER]`). vinext has no equivalent replay hazard
+ * because cached page artifacts rebuild their headers from scratch in
+ * `buildAppPageCachedHeaders`.
+ */
+function applyPrerenderCacheTagsHeader(
+  headers: Headers,
+  options: AppPagePrerenderCacheTagsOptions,
+): void {
+  if (options.isPrerender !== true) return;
+  // Tags are already canonicalized by buildAppPageTags before response shaping.
+  const cacheTags = options.getCacheTags?.();
   if (cacheTags && cacheTags.length > 0) {
-    // Match Next.js's static-generation side channel. Tags are already
-    // canonicalized by buildAppPageTags before reaching response shaping.
     headers.set(NEXT_CACHE_TAGS_HEADER, cacheTags.join(","));
   }
 }
@@ -327,7 +370,7 @@ export function buildAppPageRscResponse(
   applyRscCompatibilityIdHeader(headers);
   applyRscDeploymentIdHeader(headers);
   applyPrerenderCacheLifeHeader(headers, options.requestCacheLife);
-  applyPrerenderCacheTagsHeader(headers, options.cacheTags);
+  applyPrerenderCacheTagsHeader(headers, options);
 
   applyTimingHeader(headers, options.timing);
 
@@ -363,7 +406,7 @@ export function buildAppPageHtmlResponse(
 
   mergeMiddlewareResponseHeaders(headers, options.middlewareContext.headers);
   applyPrerenderCacheLifeHeader(headers, options.requestCacheLife);
-  applyPrerenderCacheTagsHeader(headers, options.cacheTags);
+  applyPrerenderCacheTagsHeader(headers, options);
 
   applyTimingHeader(headers, options.timing);
 

@@ -839,7 +839,9 @@ export async function renderAppPageLifecycle(
       !options.isForceStatic &&
       (dynamicUsedDuringBuild || options.isForceDynamic || !shouldCaptureRscForCacheMetadata);
     const rscResponse = buildAppPageRscResponse(rscForResponse, {
-      cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
+      // Tag emission is gated inside the shaper: prerender-only, never client-facing.
+      getCacheTags: () => options.getPageTags(),
+      isPrerender: options.isPrerender,
       // Only emit on dynamic renders — Next.js gates on !workStore.isStaticGeneration (line 2223).
       // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/app-render.tsx#L2223-L2229
       // shouldCaptureRscForCacheMetadata is the runtime analog of isStaticGeneration: a render
@@ -1110,7 +1112,9 @@ export async function renderAppPageLifecycle(
 
   if (htmlRender.shellErrorRecovered) {
     const response = buildAppPageHtmlResponse(safeHtmlStream, {
-      cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
+      // Tag emission is gated inside the shaper: prerender-only, never client-facing.
+      getCacheTags: () => options.getPageTags(),
+      isPrerender: options.isPrerender,
       draftCookie,
       linkHeader,
       isEdgeRuntime: options.isEdgeRuntime,
@@ -1139,7 +1143,9 @@ export async function renderAppPageLifecycle(
 
   if (htmlResponsePolicy.shouldWriteToCache || shouldSpeculativelyWriteCache) {
     const isrResponse = buildAppPageHtmlResponse(safeHtmlStream, {
-      cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
+      // Tag emission is gated inside the shaper: prerender-only, never client-facing.
+      getCacheTags: () => options.getPageTags(),
+      isPrerender: options.isPrerender,
       draftCookie,
       linkHeader,
       isEdgeRuntime: options.isEdgeRuntime,
@@ -1211,7 +1217,9 @@ export async function renderAppPageLifecycle(
   }
 
   return buildAppPageHtmlResponse(safeHtmlStream, {
-    cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
+    // Tag emission is gated inside the shaper: prerender-only, never client-facing.
+    getCacheTags: () => options.getPageTags(),
+    isPrerender: options.isPrerender,
     draftCookie,
     linkHeader,
     isEdgeRuntime: options.isEdgeRuntime,

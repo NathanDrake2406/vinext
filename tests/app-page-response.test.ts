@@ -11,6 +11,7 @@ import {
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import {
+  NEXT_CACHE_TAGS_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
@@ -607,6 +608,59 @@ describe("app page response helpers", () => {
     });
 
     expect(response.headers.get("x-edge-runtime")).toBeNull();
+  });
+});
+
+describe("x-next-cache-tags is a prerender-only side channel", () => {
+  // `build/prerender.ts` (readPrerenderCacheTagsHeader) is the only consumer of
+  // this header; browsers have none, and tags are plaintext (`encodeCacheTag`
+  // canonicalises to ASCII, it does not hash), so a client-facing response
+  // carrying them leaks internal entity names. The gate lives inside the shapers
+  // so that a caller which supplies tags without declaring a prerender render
+  // fails closed rather than leaking.
+  const secretTag = "user-42-orders";
+  const getCacheTags = () => ["_N_T_/posts/post", secretTag];
+
+  it("emits the header for the prerender consumer", () => {
+    const html = buildAppPageHtmlResponse(createBody("<h1>page</h1>"), {
+      getCacheTags,
+      isPrerender: true,
+      middlewareContext: { headers: null, status: null },
+      policy: {},
+    });
+    const rsc = buildAppPageRscResponse(createBody("flight"), {
+      getCacheTags,
+      isPrerender: true,
+      middlewareContext: { headers: null, status: null },
+      policy: {},
+    });
+
+    expect(html.headers.get(NEXT_CACHE_TAGS_HEADER)).toBe(`_N_T_/posts/post,${secretTag}`);
+    expect(rsc.headers.get(NEXT_CACHE_TAGS_HEADER)).toBe(`_N_T_/posts/post,${secretTag}`);
+  });
+
+  it("withholds the header — and never resolves the tags — when the render is not a prerender", () => {
+    let resolvedTags = 0;
+    const trackedGetCacheTags = () => {
+      resolvedTags += 1;
+      return getCacheTags();
+    };
+
+    const html = buildAppPageHtmlResponse(createBody("<h1>page</h1>"), {
+      getCacheTags: trackedGetCacheTags,
+      middlewareContext: { headers: null, status: null },
+      policy: {},
+    });
+    const rsc = buildAppPageRscResponse(createBody("flight"), {
+      getCacheTags: trackedGetCacheTags,
+      isPrerender: false,
+      middlewareContext: { headers: null, status: null },
+      policy: {},
+    });
+
+    expect(html.headers.get(NEXT_CACHE_TAGS_HEADER)).toBeNull();
+    expect(rsc.headers.get(NEXT_CACHE_TAGS_HEADER)).toBeNull();
+    expect(resolvedTags).toBe(0);
   });
 });
 

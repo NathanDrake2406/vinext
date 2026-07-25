@@ -1203,6 +1203,37 @@ describe("app page render lifecycle", () => {
     expect(consumeRequestCacheLife()).toEqual({ revalidate: 1, expire: 1 });
   });
 
+  // Companion to the assertion above: the prerender consumer
+  // (build/prerender.ts readPrerenderCacheTagsHeader) needs the tag side channel,
+  // but client-facing renders must not carry it. Tags are plaintext — a page that
+  // calls cacheTag("user-42-orders") would otherwise ship that identifier to
+  // every browser, where nothing reads it. Runtime CDN purging is unaffected: the
+  // Cloudflare adapter receives tags through CdnCacheAdapter.buildResponseHeaders
+  // and emits its own `Cache-Tag`.
+  it.each([
+    { name: "dev HTML", isProduction: false, isRscRequest: false },
+    { name: "production ISR HTML", isProduction: true, isRscRequest: false },
+    { name: "production ISR RSC", isProduction: true, isRscRequest: true },
+  ])(
+    "withholds the cache tag side channel from client-facing responses ($name)",
+    async ({ isProduction, isRscRequest }) => {
+      const common = createCommonOptions();
+
+      const response = await renderAppPageLifecycle({
+        ...common.options,
+        getPageTags() {
+          return ["_N_T_/posts/post", "user-42-orders"];
+        },
+        isProduction,
+        isRscRequest,
+        revalidateSeconds: 60,
+      });
+
+      expect(response.headers.get(NEXT_CACHE_TAGS_HEADER)).toBeNull();
+      await response.text();
+    },
+  );
+
   it("preserves prerender cache metadata headers in production mode without ISR writes", async () => {
     const common = createCommonOptions();
     let requestCacheLife: { revalidate: number; expire: number } | null = null;
