@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import type { ReactFormState } from "react-dom/client";
 import type { NavigationContext } from "vinext/shims/navigation";
-import type { CachedAppPageValue } from "vinext/shims/cache-handler";
+import type { AppPageCacheSetter } from "./isr-cache.js";
 import type { RootParams } from "vinext/shims/root-params";
 import { runWithFetchDedupe } from "vinext/shims/fetch-cache";
+import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.js";
 import { AppElementsWire, isAppElementsRecord, type AppOutgoingElements } from "./app-elements.js";
 import { hasDigest } from "./app-rsc-errors.js";
 import {
@@ -89,14 +90,6 @@ type AppPageBoundaryOnError = (
   errorContext: unknown,
 ) => unknown;
 type AppPageDebugLogger = (event: string, detail: string) => void;
-type AppPageCacheSetter = (
-  key: string,
-  data: CachedAppPageValue,
-  revalidateSeconds: number,
-  tags: string[],
-  expireSeconds?: number,
-  staleSeconds?: number,
-) => Promise<void>;
 
 type AppPageRequestCacheLife = {
   revalidate?: number;
@@ -970,6 +963,19 @@ export async function renderAppPageLifecycle(
                 ? "dynamic"
                 : "static";
           }
+          // The done-script is emitted by `finalize()` after the RSC embed
+          // stream has fully drained, so the peeked request-scoped cacheLife is
+          // the completed render's minimum — the same value the cache-write
+          // path persists onto the ISR entry. This closes the gap a streaming
+          // response's headers cannot: every initial HTML view (dev and prod,
+          // cached or not) advertises the resolved claim. Peek, not consume —
+          // the cache-write closure owns the consuming read, and it runs after
+          // the response body (and therefore this getter) has completed.
+          const requestCacheLife = options.peekRequestCacheLife?.();
+          const staleTimeSeconds = resolveClientStaleTimeSeconds({
+            expire: requestCacheLife?.expire,
+            stale: requestCacheLife?.stale,
+          });
           return {
             kind,
             ...(kind === "dynamic" &&
@@ -978,6 +984,9 @@ export async function renderAppPageLifecycle(
             !shouldCaptureRscForCacheMetadata
               ? { dynamicStaleTimeSeconds }
               : {}),
+            ...(staleTimeSeconds === undefined
+              ? {}
+              : { staleTimeSeconds: Math.floor(staleTimeSeconds) }),
           };
         },
         fontData,

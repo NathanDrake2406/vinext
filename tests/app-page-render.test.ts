@@ -34,6 +34,8 @@ import {
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
+import type { AppPageCacheWritePolicy } from "../packages/vinext/src/server/isr-cache.js";
+import type { InitialNavigationCacheMetadata } from "../packages/vinext/src/server/app-ssr-stream.js";
 import {
   DefaultCdnCacheAdapter,
   setCdnCacheAdapter,
@@ -120,13 +122,7 @@ function createCommonOptions() {
       }),
   );
   const isrSet = vi.fn(
-    async (
-      _key: string,
-      _data: CachedAppPageValue,
-      _revalidateSeconds: number,
-      _tags: string[],
-      _expireSeconds?: number,
-    ) => {},
+    async (_key: string, _data: CachedAppPageValue, _policy: AppPageCacheWritePolicy) => {},
   );
 
   return {
@@ -556,10 +552,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      60,
-      ["_N_T_/posts/post"],
-      undefined,
-      undefined,
+      { revalidateSeconds: 60, tags: ["_N_T_/posts/post"] },
     );
     const cachedValue = common.isrSet.mock.calls[0]?.[1];
     expect(cachedValue?.renderObservation).toMatchObject({
@@ -695,10 +688,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      1,
-      ["_N_T_/posts/post"],
-      60,
-      30,
+      { revalidateSeconds: 1, expireSeconds: 60, staleSeconds: 30, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -721,10 +711,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      10,
-      ["_N_T_/posts/post"],
-      45,
-      45,
+      { revalidateSeconds: 10, expireSeconds: 45, staleSeconds: 45, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -771,10 +758,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      7,
-      ["_N_T_/posts/post"],
-      11,
-      undefined,
+      { revalidateSeconds: 7, expireSeconds: 11, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -861,19 +845,13 @@ describe("app page render lifecycle", () => {
       1,
       "html:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      30,
-      ["_N_T_/posts/post"],
-      undefined,
-      undefined,
+      { revalidateSeconds: 30, tags: ["_N_T_/posts/post"] },
     );
     expect(common.isrSet).toHaveBeenNthCalledWith(
       2,
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      30,
-      ["_N_T_/posts/post"],
-      undefined,
-      undefined,
+      { revalidateSeconds: 30, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -920,19 +898,13 @@ describe("app page render lifecycle", () => {
       1,
       "html:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      5,
-      ["_N_T_/posts/post"],
-      9,
-      undefined,
+      { revalidateSeconds: 5, expireSeconds: 9, tags: ["_N_T_/posts/post"] },
     );
     expect(common.isrSet).toHaveBeenNthCalledWith(
       2,
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      5,
-      ["_N_T_/posts/post"],
-      9,
-      undefined,
+      { revalidateSeconds: 5, expireSeconds: 9, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -1446,6 +1418,78 @@ describe("app page render lifecycle", () => {
     // The configured client stale time is a build-time constant and still ships.
     expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("300");
     await expect(response.text()).resolves.toBe("flight-data");
+  });
+
+  it("advertises the completed render's cacheLife stale in the initial-HTML navigation metadata", async () => {
+    // The channel streaming headers cannot be: the done-script metadata getter
+    // is invoked by the embed transform's finalize(), which runs only after the
+    // RSC stream has fully drained, so the peeked request-scoped cacheLife is
+    // the completed render's minimum. This is what closes the first-visit gap —
+    // dev and prod, cached or not, no ISR entry required.
+    const common = createCommonOptions();
+    let capturedMetadataGetter: (() => InitialNavigationCacheMetadata) | undefined;
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      loadSsrHandler: async () => ({
+        async handleSsr(
+          _rscStream: ReadableStream<Uint8Array>,
+          _navContext: unknown,
+          _fontData: unknown,
+          options?: {
+            getInitialNavigationCacheMetadata?: () => InitialNavigationCacheMetadata;
+          },
+        ) {
+          capturedMetadataGetter = options?.getInitialNavigationCacheMetadata;
+          return createStream(["<html>page</html>"]);
+        },
+      }),
+      peekRequestCacheLife() {
+        return { stale: 30, revalidate: 1, expire: 60 };
+      },
+    });
+
+    await expect(response.text()).resolves.toBe("<html>page</html>");
+    expect(capturedMetadataGetter?.()).toEqual({ kind: "static", staleTimeSeconds: 30 });
+  });
+
+  it("carries both the configured and the cacheLife stale time on a dynamic initial HTML render", async () => {
+    // A page that reads request state at the top level but wraps data in
+    // `use cache` subtrees produces both signals at once: the config-derived
+    // dynamic stale time and the completed render's cacheLife claim. The
+    // client combines them by minimum (see resolveRscResponseStaleTimeSeconds),
+    // and this is the state that makes that combination rule reachable.
+    const common = createCommonOptions();
+    let capturedMetadataGetter: (() => InitialNavigationCacheMetadata) | undefined;
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      dynamicStaleTimeSeconds: 300,
+      isForceDynamic: true,
+      loadSsrHandler: async () => ({
+        async handleSsr(
+          _rscStream: ReadableStream<Uint8Array>,
+          _navContext: unknown,
+          _fontData: unknown,
+          options?: {
+            getInitialNavigationCacheMetadata?: () => InitialNavigationCacheMetadata;
+          },
+        ) {
+          capturedMetadataGetter = options?.getInitialNavigationCacheMetadata;
+          return createStream(["<html>page</html>"]);
+        },
+      }),
+      peekRequestCacheLife() {
+        return { stale: 30, revalidate: 1, expire: 60 };
+      },
+    });
+
+    await expect(response.text()).resolves.toBe("<html>page</html>");
+    expect(capturedMetadataGetter?.()).toEqual({
+      kind: "dynamic",
+      dynamicStaleTimeSeconds: 300,
+      staleTimeSeconds: 30,
+    });
   });
 
   it("streams runtime HTML responses progressively without buffering the body", async () => {

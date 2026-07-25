@@ -11,7 +11,11 @@ import { VINEXT_MOUNTED_SLOTS_HEADER } from "./headers.js";
 import { applyClientStaleTimeHeader, applyEdgeRuntimeHeader } from "./app-page-response.js";
 import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
-import { buildAppPageCacheValue, type ISRCacheEntry } from "./isr-cache.js";
+import {
+  buildAppPageCacheValue,
+  type AppPageCacheSetter,
+  type ISRCacheEntry,
+} from "./isr-cache.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
@@ -25,14 +29,6 @@ export {
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
 type AppPageCacheGetter = (key: string) => Promise<ISRCacheEntry | null>;
-type AppPageCacheSetter = (
-  key: string,
-  data: CachedAppPageValue,
-  revalidateSeconds: number,
-  tags: string[],
-  expireSeconds?: number,
-  staleSeconds?: number,
-) => Promise<void>;
 type AppPageBackgroundRegenerator = (key: string, renderFn: () => Promise<void>) => void;
 type AppPageRscCacheKeyBuilder = (
   pathname: string,
@@ -76,6 +72,13 @@ type BuildAppPageCachedResponseOptions = {
   expireSeconds?: number;
   isEdgeRuntime?: boolean;
   isRscRequest: boolean;
+  /**
+   * Epoch-ms write time of the entry being replayed
+   * (`CacheHandlerValue.lastModified`). Ages the replayed client stale time
+   * against the entry's expire ceiling; absent means "treat as freshly
+   * written" and is only appropriate when no entry timestamp exists.
+   */
+  lastModifiedAt?: number;
   middlewareHeaders?: Headers | null;
   middlewareStatus?: number | null;
   mountedSlotsHeader?: string | null;
@@ -253,7 +256,13 @@ export function buildAppPageCachedResponse(
   // only the shared-cache string, so this reads the entry's own metadata:
   // without it, a warm hit would serve the same bytes as a fresh render while
   // silently widening client reuse back to the configured staleTimes default.
-  const staleTimeSeconds = resolveClientStaleTimeSeconds(options.cacheControl);
+  // The claim is aged: reuse is licensed from the entry's write time, so a hit
+  // near the expire boundary advertises only the remaining window.
+  const entryAgeSeconds =
+    options.lastModifiedAt !== undefined && Number.isFinite(options.lastModifiedAt)
+      ? Math.max(0, (Date.now() - options.lastModifiedAt) / 1000)
+      : 0;
+  const staleTimeSeconds = resolveClientStaleTimeSeconds(options.cacheControl, entryAgeSeconds);
   if (options.isRscRequest) {
     if (!cachedValue.rscData) {
       return null;
@@ -342,6 +351,7 @@ async function serveAppPageCachedHtml(
     expireSeconds: options.expireSeconds,
     isEdgeRuntime: options.isEdgeRuntime,
     isRscRequest: false,
+    lastModifiedAt: options.cached?.value.lastModified,
     middlewareHeaders: options.middlewareHeaders,
     middlewareStatus: options.middlewareStatus,
     revalidateSeconds: options.revalidateSeconds,
@@ -420,6 +430,7 @@ export async function readAppPageCacheResponse(
         expireSeconds: options.expireSeconds,
         isEdgeRuntime: options.isEdgeRuntime,
         isRscRequest: options.isRscRequest,
+        lastModifiedAt: cached?.value.lastModified,
         middlewareHeaders: options.middlewareHeaders,
         middlewareStatus: options.middlewareStatus,
         mountedSlotsHeader: options.mountedSlotsHeader,
@@ -484,10 +495,7 @@ export async function readAppPageCacheResponse(
               200,
               revalidatedPage.rscRenderObservation,
             ),
-            cachePolicy.revalidateSeconds,
-            revalidatedPage.tags,
-            cachePolicy.expireSeconds,
-            cachePolicy.staleSeconds,
+            { ...cachePolicy, tags: revalidatedPage.tags },
           ),
         ];
 
@@ -506,10 +514,7 @@ export async function readAppPageCacheResponse(
                 revalidatedPage.htmlRenderObservation,
                 revalidatedPage.linkHeader ? { link: revalidatedPage.linkHeader } : undefined,
               ),
-              cachePolicy.revalidateSeconds,
-              revalidatedPage.tags,
-              cachePolicy.expireSeconds,
-              cachePolicy.staleSeconds,
+              { ...cachePolicy, tags: revalidatedPage.tags },
             ),
           );
         }
@@ -524,6 +529,7 @@ export async function readAppPageCacheResponse(
         expireSeconds: options.expireSeconds,
         isEdgeRuntime: options.isEdgeRuntime,
         isRscRequest: options.isRscRequest,
+        lastModifiedAt: cached.value.lastModified,
         middlewareHeaders: options.middlewareHeaders,
         middlewareStatus: options.middlewareStatus,
         mountedSlotsHeader: options.mountedSlotsHeader,

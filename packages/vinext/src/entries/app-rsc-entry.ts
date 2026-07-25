@@ -400,6 +400,7 @@ import {
   appIsrRouteKey as __isrRouteKey,
   isrGet as __isrGet,
   isrSet as __isrSet,
+  isrSetAppPage as __isrSetAppPage,
   isrSetPrerenderedAppPage as __isrSetPrerenderedAppPage,
   isOnDemandRevalidateRequest as __isOnDemandRevalidateRequest,
   triggerBackgroundRegeneration as __triggerBackgroundRegeneration,
@@ -869,7 +870,7 @@ export default createAppRscHandler({
       isrGet: __isrGet,
       isrHtmlKey: __isrHtmlKey,
       isrRscKey: __isrRscKey,
-      isrSet: __isrSet,
+      isrSet: __isrSetAppPage,
       loadSsrHandler() {
         return import.meta.viteRsc.loadModule("ssr", "index");
       },

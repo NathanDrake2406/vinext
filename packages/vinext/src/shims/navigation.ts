@@ -265,7 +265,16 @@ export const PREFETCH_CACHE_TTL = resolveClientRouterStaleTime(
   process.env.__NEXT_CLIENT_ROUTER_STATIC_STALETIME,
   30_000,
 );
-const MIN_PREFETCH_STALE_TIME_MS = 30_000;
+/**
+ * Floor for any server-declared `cacheLife` stale time, mirroring Next.js's
+ * `getStaleTimeMs` (`Math.max(staleTimeSeconds, 30) * 1000`), which the segment
+ * cache applies to every consumer of the stale-time header. One rule for both
+ * client caches: a `cacheLife({ stale: 5 })` route is held 30s whether it
+ * arrived via a prefetch or a cold navigation, instead of two behaviors keyed
+ * on whether a prefetch happened to fire first.
+ */
+const MIN_SERVER_STALE_TIME_SECONDS = 30;
+const MIN_PREFETCH_STALE_TIME_MS = MIN_SERVER_STALE_TIME_SECONDS * 1000;
 
 /** A buffered RSC response stored as an ArrayBuffer for replay. */
 export type CachedRscResponse = {
@@ -410,7 +419,14 @@ function parseStaleTimeSecondsHeader(value: string | null): number | undefined {
  * constant, min-reduced across segments by `unstable_dynamicStaleTime`).
  * `staleTimeSeconds` comes from the render's resolved `cacheLife` (min-reduced
  * across `use cache` scopes). Both are min-wins lattices, so the combined bound
- * is their minimum — neither is allowed to override the other.
+ * is their minimum — neither is allowed to override the other. Both signals
+ * ride on one response via the initial-HTML done-script: a dynamic render
+ * carries the configured value while its `use cache` subtrees still resolve a
+ * `cacheLife` claim.
+ *
+ * The `cacheLife` value is floored (`MIN_SERVER_STALE_TIME_SECONDS`) *before*
+ * the min, so the floor gives every server claim its Next.js-mandated minimum
+ * without ever raising the config-derived bound.
  *
  * Returns undefined when the response carried neither signal, leaving the
  * caller's configured fallback TTL in force.
@@ -421,11 +437,12 @@ function resolveRscResponseStaleTimeSeconds(
   const dynamic = cached.dynamicStaleTimeSeconds;
   const resolved = cached.staleTimeSeconds;
   const hasDynamic = isStaleTimeSeconds(dynamic);
-  const hasResolved = isStaleTimeSeconds(resolved);
-  if (hasDynamic && hasResolved) return Math.min(dynamic, resolved);
+  const floored = isStaleTimeSeconds(resolved)
+    ? Math.max(resolved, MIN_SERVER_STALE_TIME_SECONDS)
+    : undefined;
+  if (hasDynamic && floored !== undefined) return Math.min(dynamic, floored);
   if (hasDynamic) return dynamic;
-  if (hasResolved) return resolved;
-  return undefined;
+  return floored;
 }
 
 export function resolveCachedRscResponseTtlMs(
@@ -463,9 +480,10 @@ function resolvePrefetchedRscResponseExpiresAt(
   if (seconds === undefined) {
     return timestamp + Math.max(fallbackTtlMs, minimumTtlMs);
   }
-  // Floor mirrors Next.js's `getStaleTimeMs`: a server-declared stale time
-  // shorter than the prefetch floor would prevent prefetching from ever paying
-  // off, so the floor wins for prefetch entries only.
+  // The cacheLife signal is already floored inside the resolver (uniformly for
+  // both client caches). This outer floor covers the prefetch-only dimensions —
+  // the config-derived dynamic stale time and the fallback TTL — where a value
+  // below the floor would prevent prefetching from ever paying off.
   return timestamp + Math.max(seconds * 1000, minimumTtlMs);
 }
 

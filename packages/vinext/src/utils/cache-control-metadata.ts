@@ -38,7 +38,7 @@ function isFiniteNonNegative(value: number | undefined): value is number {
  * advertise a different client-freshness claim than the render that produced
  * it.
  *
- * Two deliberate rules:
+ * Three deliberate rules:
  *
  * 1. An absent `stale` is *not* synthesized from `revalidate` or `expire`. The
  *    `default` profile has no `stale` and an `expire` of ~136 years, so deriving
@@ -50,12 +50,20 @@ function isFiniteNonNegative(value: number | undefined): value is number {
  *    and that is intentional, so `revalidate` never constrains `stale`. Only the
  *    hard `expire` ceiling does: reuse past `expire` would hand back output the
  *    server considers gone.
+ * 3. The `expire` ceiling is measured from when the output was *produced*, not
+ *    from when it is served. A serve path replaying an entry already
+ *    `ageSeconds` old has only `expire - ageSeconds` of licensed reuse left;
+ *    without the subtraction, an entry hit just before its expire boundary
+ *    would advertise a full reuse window reaching well past it. Write and seed
+ *    paths run at age 0 and may omit the argument.
  */
 export function resolveClientStaleTimeSeconds(
   cacheLife: { expire?: number; stale?: number } | null | undefined,
+  ageSeconds = 0,
 ): number | undefined {
   const stale = cacheLife?.stale;
   if (!isFiniteNonNegative(stale)) return undefined;
   const expire = cacheLife?.expire;
-  return isFiniteNonNegative(expire) ? Math.min(stale, expire) : stale;
+  if (!isFiniteNonNegative(expire)) return stale;
+  return Math.min(stale, Math.max(expire - ageSeconds, 0));
 }

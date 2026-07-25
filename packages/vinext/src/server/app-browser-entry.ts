@@ -1535,6 +1535,11 @@ function bootstrapHydration(
         ...(initialRscBootstrap?.dynamicStaleTimeSeconds !== undefined
           ? { dynamicStaleTimeSeconds: initialRscBootstrap.dynamicStaleTimeSeconds }
           : {}),
+        // The done-script's completed-render cacheLife claim; bounds this
+        // visited-response entry exactly like the header does for RSC replies.
+        ...(initialRscBootstrap?.staleTimeSeconds !== undefined
+          ? { staleTimeSeconds: initialRscBootstrap.staleTimeSeconds }
+          : {}),
         mountedSlotsHeader,
         paramsHeader: encodeURIComponent(JSON.stringify(initialParams)),
         renderedPathAndSearch: null,

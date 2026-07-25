@@ -776,7 +776,7 @@ describe("app page dispatch", () => {
     await expect(response.text()).resolves.toBe("<html>page</html>");
     await Promise.all(waitUntilPromises.splice(0));
     expect(isrSet).toHaveBeenCalledTimes(1);
-    const [cacheKey, cacheValue, revalidateSeconds, tags, expireSeconds] = isrSet.mock.calls[0]!;
+    const [cacheKey, cacheValue, cachePolicy] = isrSet.mock.calls[0]!;
     expect(cacheKey).toBe("html:/posts/hello");
     expect(cacheValue).toMatchObject({
       kind: "APP_PAGE",
@@ -784,9 +784,9 @@ describe("app page dispatch", () => {
         requestApis: expect.arrayContaining([{ kind: "searchParams", status: "notObserved" }]),
       },
     });
-    expect(revalidateSeconds).toBe(60);
-    expect(tags).toEqual(expect.arrayContaining(["_N_T_/posts/hello"]));
-    expect(expireSeconds).toBeUndefined();
+    expect(cachePolicy.revalidateSeconds).toBe(60);
+    expect(cachePolicy.tags).toEqual(expect.arrayContaining(["_N_T_/posts/hello"]));
+    expect(cachePolicy.expireSeconds).toBeUndefined();
   });
 
   it("does not reuse queryless HTML when the page reads searchParams", async () => {

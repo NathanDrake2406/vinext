@@ -204,6 +204,45 @@ export async function isrSet(
   });
 }
 
+/**
+ * Write policy for one App Router page cache entry. `revalidate`/`expire` are
+ * the shared-cache dimensions; `stale` is the client-router reuse bound
+ * resolved from the render's `cacheLife` (see `CacheControlMetadata.stale`).
+ * One object rather than a positional tail so adding a dimension is a single
+ * type edit instead of `undefined` padding at every call site.
+ */
+export type AppPageCacheWritePolicy = {
+  revalidateSeconds: number;
+  expireSeconds?: number;
+  staleSeconds?: number;
+  tags: string[];
+};
+
+export type AppPageCacheSetter = (
+  key: string,
+  data: CachedAppPageValue,
+  policy: AppPageCacheWritePolicy,
+) => Promise<void>;
+
+/**
+ * App Router page variant of {@link isrSet}. The positional form stays for the
+ * Pages Router and route handlers, which never carry `stale`.
+ */
+export async function isrSetAppPage(
+  key: string,
+  data: CachedAppPageValue,
+  policy: AppPageCacheWritePolicy,
+): Promise<void> {
+  await isrSet(
+    key,
+    data,
+    policy.revalidateSeconds,
+    policy.tags,
+    policy.expireSeconds,
+    policy.staleSeconds,
+  );
+}
+
 export async function isrSetPrerenderedAppPage(
   key: string,
   data: CachedAppPageValue,

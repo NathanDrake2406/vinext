@@ -95,6 +95,22 @@ describe("visited response cache freshness", () => {
     ).toBe(false);
   });
 
+  it("floors a shorter-than-minimum cacheLife stale time like the prefetch cache does", () => {
+    // One rule for both client caches, mirroring Next.js's getStaleTimeMs
+    // (max(stale, 30s) across the whole segment cache): cacheLife({ stale: 5 })
+    // is held 30s whether the route arrived via a prefetch snapshot or a cold
+    // navigation. Without the shared floor the same declaration produced two
+    // behaviors keyed on whether a prefetch happened to fire first.
+    const now = 1_000_000;
+    const entry = createVisitedResponseCacheEntry({
+      now,
+      params: {},
+      response: createCachedResponse({ staleTimeSeconds: 5 }),
+    });
+
+    expect(entry.expiresAt).toBe(now + 30_000);
+  });
+
   it("takes the minimum of the staleTimes config and the resolved cacheLife stale time", () => {
     // Two independent min-wins lattices: experimental.staleTimes (reduced across
     // segments by unstable_dynamicStaleTime) and cacheLife (reduced across

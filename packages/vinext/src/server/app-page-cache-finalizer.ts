@@ -1,4 +1,3 @@
-import type { CachedAppPageValue } from "vinext/shims/cache";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
 import { applyCdnResponseHeaders } from "./cache-control.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
@@ -7,20 +6,12 @@ import {
   createEmptyAppPageRenderObservationState,
   type AppPageRenderObservationState,
 } from "./app-page-render-observation.js";
-import { buildAppPageCacheValue } from "./isr-cache.js";
+import { buildAppPageCacheValue, type AppPageCacheSetter } from "./isr-cache.js";
 import type { RenderObservation } from "./cache-proof.js";
 import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
-type AppPageCacheSetter = (
-  key: string,
-  data: CachedAppPageValue,
-  revalidateSeconds: number,
-  tags: string[],
-  expireSeconds?: number,
-  staleSeconds?: number,
-) => Promise<void>;
 type AppPageRscCacheKeyBuilder = (
   pathname: string,
   mountedSlotsHeader?: string | null,
@@ -201,24 +192,17 @@ export function finalizeAppPageHtmlCacheResponse(
             htmlRenderObservation,
             linkHeader ? { link: linkHeader } : undefined,
           ),
-          cachePolicy.revalidateSeconds,
-          pageTags,
-          cachePolicy.expireSeconds,
-          cachePolicy.staleSeconds,
+          { ...cachePolicy, tags: pageTags },
         ),
       ];
 
       if (options.capturedRscDataPromise) {
         writes.push(
           options.capturedRscDataPromise.then((rscData) =>
-            options.isrSet(
-              rscKey,
-              buildAppPageCacheValue("", rscData, 200, rscRenderObservation),
-              cachePolicy.revalidateSeconds,
-              pageTags,
-              cachePolicy.expireSeconds,
-              cachePolicy.staleSeconds,
-            ),
+            options.isrSet(rscKey, buildAppPageCacheValue("", rscData, 200, rscRenderObservation), {
+              ...cachePolicy,
+              tags: pageTags,
+            }),
           ),
         );
       }
@@ -304,14 +288,10 @@ export function scheduleAppPageRscCacheWrite(
         cacheTags: pageTags,
         state: observationState,
       });
-      await options.isrSet(
-        rscKey,
-        buildAppPageCacheValue("", rscData, 200, rscRenderObservation),
-        cachePolicy.revalidateSeconds,
-        pageTags,
-        cachePolicy.expireSeconds,
-        cachePolicy.staleSeconds,
-      );
+      await options.isrSet(rscKey, buildAppPageCacheValue("", rscData, 200, rscRenderObservation), {
+        ...cachePolicy,
+        tags: pageTags,
+      });
       options.isrDebug?.("RSC cache written", rscKey);
     } catch (cacheError) {
       console.error("[vinext] ISR RSC cache write error:", cacheError);
