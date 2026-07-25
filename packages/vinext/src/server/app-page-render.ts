@@ -838,19 +838,21 @@ export async function renderAppPageLifecycle(
       options.isPrerender !== true &&
       !options.isForceStatic &&
       (dynamicUsedDuringBuild || options.isForceDynamic || !shouldCaptureRscForCacheMetadata);
+    // The response streams before the captured render resolves its cacheLife
+    // (#961) — mark the claim pending so the client bounds reuse.
+    const staleTimePending = options.isPrerender !== true && shouldCaptureRscForCacheMetadata;
     const rscResponse = buildAppPageRscResponse(rscForResponse, {
       cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
-      // The captured render will persist its resolved cacheLife onto the ISR
-      // entry, but this response streams before that resolution (#961 keeps
-      // cold responses non-blocking) — mark the claim pending so the client
-      // bounds reuse at the floor instead of its fallback TTL.
-      staleTimePending: options.isPrerender !== true && shouldCaptureRscForCacheMetadata,
-      // Only emit on dynamic renders — Next.js gates on !workStore.isStaticGeneration (line 2223).
-      // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/app-render.tsx#L2223-L2229
-      // shouldCaptureRscForCacheMetadata is the runtime analog of isStaticGeneration: a render
-      // written to the ISR cache (incl. production ISR, where isPrerender is false at runtime)
-      // must not emit the authoritative per-page stale time.
-      dynamicStaleTimeSeconds: shouldEmitDynamicStaleTime ? dynamicStaleTimeSeconds : undefined,
+      staleTimePending,
+      // Dynamic renders per the Next.js !isStaticGeneration gate (app-render.tsx:2223),
+      // plus pending responses: capture eligibility predates the lazy stream, so the
+      // render may still complete dynamic — the marker must travel with the bound
+      // (including 0) that applies in that outcome, and the client takes the min.
+      dynamicStaleTimeSeconds: shouldEmitDynamicStaleTime
+        ? dynamicStaleTimeSeconds
+        : staleTimePending
+          ? (dynamicStaleTimeSeconds ?? resolveConfiguredDynamicStaleTimeSeconds())
+          : undefined,
       isEdgeRuntime: options.isEdgeRuntime,
       middlewareContext: options.middlewareContext,
       mountedSlotsHeader: options.mountedSlotsHeader,

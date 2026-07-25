@@ -134,10 +134,8 @@ export const NEXT_ROUTER_STALE_TIME_HEADER = "x-nextjs-stale-time";
 
 /**
  * Marks a streamed cacheable RSC response whose `cacheLife` claim had not
- * resolved when headers were committed (value "1"). The claim, once resolved
- * and floored client-side, can never license less than 30s of reuse, so the
- * client bounds such a response at that floor instead of its wide fallback
- * TTL until a warm cache entry carries the authoritative value.
+ * resolved at header time (value "1"). The client bounds such a response at
+ * min(30s floor, dynamic bound) instead of its fallback TTL.
  */
 export const VINEXT_STALE_TIME_PENDING_HEADER = "X-Vinext-Stale-Time-Pending";
 

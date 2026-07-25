@@ -96,9 +96,9 @@ describe("visited response cache freshness", () => {
   });
 
   it("bounds a pending-stale cold navigation at the floor instead of the visited TTL", () => {
-    // The response streamed before its cacheLife resolved; its claim, once
-    // floored, cannot license less than 30s, so 30s is the conservative bound
-    // until a warm entry replays the authoritative value.
+    // A pending claim floors to at least 30s, so 30s is the conservative bound.
+    // The server always pairs the marker with a dynamic bound (next test);
+    // marker-only is the defensive fallback.
     const now = 1_000_000;
     const entry = createVisitedResponseCacheEntry({
       now,
@@ -107,6 +107,22 @@ describe("visited response cache freshness", () => {
     });
 
     expect(entry.expiresAt).toBe(now + 30_000);
+  });
+
+  it("never grants a pending-stale response more reuse than the configured dynamic bound", () => {
+    // A capture-eligible render can still complete dynamic, and
+    // staleTimes.dynamic may legally be 0 — the min wins over the 30s cap.
+    const now = 1_000_000;
+    const entry = createVisitedResponseCacheEntry({
+      now,
+      params: {},
+      response: createCachedResponse({ dynamicStaleTimeSeconds: 0, staleTimePending: true }),
+    });
+
+    expect(entry.expiresAt).toBe(now);
+    expect(isVisitedResponseCacheEntryFresh(entry, { navigationKind: "navigate", now })).toBe(
+      false,
+    );
   });
 
   it("floors a shorter-than-minimum cacheLife stale time like the prefetch cache does", () => {

@@ -612,6 +612,10 @@ describe("app page render lifecycle", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
     expect(response.headers.get("x-vinext-cache")).toBeNull();
+    // The pending marker went out before the render turned dynamic; the paired
+    // dynamic bound (0 default) keeps the client from granting the 30s cap.
+    expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
+    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("0");
     expect(common.waitUntilPromises).toHaveLength(1);
 
     streamGate.resolve();
@@ -756,13 +760,11 @@ describe("app page render lifecycle", () => {
     expect(response.headers.get("x-vinext-cache")).toBeNull();
     expect(common.waitUntilPromises).toHaveLength(1);
 
-    // Streaming before the capture drains also means the response cannot carry
-    // the render's cacheLife stale — cold RSC navigations rely on the entry
-    // this write produces. Kept deliberately: #961 rejected blocking the cold
-    // response on cache metadata. The pending marker is what keeps the client
-    // from holding this response for its wide fallback TTL in the meantime.
+    // Cold responses stream before the cacheLife resolves (#961), so no stale
+    // header — the pending marker plus the dynamic bound ride instead.
     expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBeNull();
     expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
+    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("0");
 
     releaseRsc.resolve();
     await expect(response.text()).resolves.toBe("flight");
@@ -1342,11 +1344,9 @@ describe("app page render lifecycle", () => {
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
-  it("omits the dynamic stale time header on production ISR renders captured into the cache", async () => {
-    // Production ISR (revalidate > 0, not force-static, not a build prerender)
-    // satisfies shouldCaptureRscForCacheMetadata, so the render feeds the ISR
-    // cache. Like Next.js's !workStore.isStaticGeneration guard, the
-    // authoritative per-page stale time must not be emitted on such responses.
+  it("carries the dynamic stale time on production ISR renders captured into the cache", async () => {
+    // Captured ISR renders may still complete dynamic, so the pending marker
+    // travels with the dynamic bound; the client mins it against the cap.
     const common = createCommonOptions();
     const response = await renderAppPageLifecycle({
       ...common.options,
@@ -1355,7 +1355,8 @@ describe("app page render lifecycle", () => {
       isRscRequest: true,
       revalidateSeconds: 60,
     });
-    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBeNull();
+    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("60");
+    expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
@@ -1395,7 +1396,10 @@ describe("app page render lifecycle", () => {
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
-  it("omits the dynamic stale time header on static production default-config RSC responses", async () => {
+  it("carries the dynamic stale time as the pending fallback bound on captured RSC responses", async () => {
+    // A captured render may still complete dynamic, so the pending marker
+    // travels with the dynamic bound instead of omitting it (the old
+    // !isStaticGeneration gate).
     const common = createCommonOptions();
     const response = await renderAppPageLifecycle({
       ...common.options,
@@ -1405,7 +1409,8 @@ describe("app page render lifecycle", () => {
       isRscRequest: true,
       revalidateSeconds: null,
     });
-    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBeNull();
+    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("60");
+    expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
