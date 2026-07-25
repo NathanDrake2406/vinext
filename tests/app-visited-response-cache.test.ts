@@ -109,9 +109,8 @@ describe("visited response cache freshness", () => {
     expect(entry.expiresAt).toBe(now + 30_000);
   });
 
-  it("never grants a pending-stale response more reuse than the configured dynamic bound", () => {
-    // A capture-eligible render can still complete dynamic, and
-    // staleTimes.dynamic may legally be 0 — the min wins over the 30s cap.
+  it("applies the dynamic bound over the pending cap when both signals are present", () => {
+    // Resolver contract: the min always wins, including a dynamic bound of 0.
     const now = 1_000_000;
     const entry = createVisitedResponseCacheEntry({
       now,

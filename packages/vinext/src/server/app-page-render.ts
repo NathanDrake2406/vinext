@@ -844,15 +844,14 @@ export async function renderAppPageLifecycle(
     const rscResponse = buildAppPageRscResponse(rscForResponse, {
       cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
       staleTimePending,
-      // Dynamic renders per the Next.js !isStaticGeneration gate (app-render.tsx:2223),
-      // plus pending responses: capture eligibility predates the lazy stream, so the
-      // render may still complete dynamic — the marker must travel with the bound
-      // (including 0) that applies in that outcome, and the client takes the min.
-      dynamicStaleTimeSeconds: shouldEmitDynamicStaleTime
-        ? dynamicStaleTimeSeconds
-        : staleTimePending
-          ? (dynamicStaleTimeSeconds ?? resolveConfiguredDynamicStaleTimeSeconds())
-          : undefined,
+      // Only on dynamic renders — the Next.js !isStaticGeneration gate
+      // (app-render.tsx:2223). Deliberately NOT paired with the pending marker:
+      // bounding every unresolved response by staleTimes.dynamic would kill
+      // prefetch reuse of statically-prefetchable dynamic-param routes (the
+      // segment-cache-client-params compat test), since a cold stream cannot
+      // know its outcome. A late-dynamic response is instead capped at the 30s
+      // pending floor — the bounded price of non-blocking cold renders (#961).
+      dynamicStaleTimeSeconds: shouldEmitDynamicStaleTime ? dynamicStaleTimeSeconds : undefined,
       isEdgeRuntime: options.isEdgeRuntime,
       middlewareContext: options.middlewareContext,
       mountedSlotsHeader: options.mountedSlotsHeader,
