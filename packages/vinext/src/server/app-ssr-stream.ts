@@ -25,10 +25,8 @@ export type InitialNavigationCacheMetadata = {
   kind: "dynamic" | "static";
   dynamicStaleTimeSeconds?: number;
   /**
-   * Client reuse bound in seconds resolved from the completed render's
-   * `cacheLife`. Trustworthy here because the done-script is emitted by
-   * `finalize()`, which runs only after the full RSC stream has drained — the
-   * render-completion channel a streaming response's *headers* cannot be.
+   * Client reuse bound from the completed render's `cacheLife` — trustworthy
+   * because the done-script is emitted only after the full RSC stream drains.
    */
   staleTimeSeconds?: number;
 };

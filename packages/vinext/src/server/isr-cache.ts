@@ -205,11 +205,8 @@ export async function isrSet(
 }
 
 /**
- * Write policy for one App Router page cache entry. `revalidate`/`expire` are
- * the shared-cache dimensions; `stale` is the client-router reuse bound
- * resolved from the render's `cacheLife` (see `CacheControlMetadata.stale`).
- * One object rather than a positional tail so adding a dimension is a single
- * type edit instead of `undefined` padding at every call site.
+ * Write policy for one App Router page cache entry: shared-cache dimensions
+ * plus the client-router `stale` bound (see `CacheControlMetadata.stale`).
  */
 export type AppPageCacheWritePolicy = {
   revalidateSeconds: number;
@@ -249,11 +246,7 @@ export async function isrSetPrerenderedAppPage(
   metadata: {
     expireSeconds?: number;
     revalidateSeconds?: number;
-    /**
-     * Client-router reuse bound resolved from the prerender's `cacheLife`, so a
-     * seeded entry advertises the same client-freshness claim a runtime render
-     * of the same page would.
-     */
+    /** Client reuse bound from the prerender's `cacheLife`. */
     staleSeconds?: number;
     /**
      * Implicit/path tags to attach to the seeded entry. Required so that

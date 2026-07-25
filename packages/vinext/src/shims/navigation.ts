@@ -268,11 +268,8 @@ export const PREFETCH_CACHE_TTL = resolveClientRouterStaleTime(
 );
 /**
  * Floor for any server-declared `cacheLife` stale time, mirroring Next.js's
- * `getStaleTimeMs` (`Math.max(staleTimeSeconds, 30) * 1000`), which the segment
- * cache applies to every consumer of the stale-time header. One rule for both
- * client caches: a `cacheLife({ stale: 5 })` route is held 30s whether it
- * arrived via a prefetch or a cold navigation, instead of two behaviors keyed
- * on whether a prefetch happened to fire first.
+ * `getStaleTimeMs` (`Math.max(staleTimeSeconds, 30) * 1000`). One rule for
+ * both client caches, so behavior does not depend on which cache a route hit.
  */
 const MIN_SERVER_STALE_TIME_SECONDS = 30;
 const MIN_PREFETCH_STALE_TIME_MS = MIN_SERVER_STALE_TIME_SECONDS * 1000;
@@ -289,17 +286,13 @@ export type CachedRscResponse = {
   preparedElements?: AppElements;
   renderedPathAndSearch: string | null;
   /**
-   * The response was a cacheable render streamed before its `cacheLife`
-   * resolved (`VINEXT_STALE_TIME_PENDING_HEADER`). The unresolved claim,
-   * once floored, can never license less than the 30s minimum, so reuse is
-   * bounded at that floor instead of the fallback TTL.
+   * Cacheable render streamed before its `cacheLife` resolved
+   * (`VINEXT_STALE_TIME_PENDING_HEADER`); reuse is bounded at the 30s floor.
    */
   staleTimePending?: boolean;
   /**
-   * Client reuse bound in seconds resolved from the render's `cacheLife`
-   * lattice, from `NEXT_ROUTER_STALE_TIME_HEADER`. Independent of
-   * `dynamicStaleTimeSeconds`, which comes from `experimental.staleTimes`
-   * config; the two are combined by taking the minimum.
+   * Reuse bound from the render's `cacheLife` (`NEXT_ROUTER_STALE_TIME_HEADER`).
+   * Min-combined with the config-derived `dynamicStaleTimeSeconds`.
    */
   staleTimeSeconds?: number;
   url: string;
@@ -420,30 +413,13 @@ function parseStaleTimeSecondsHeader(value: string | null): number | undefined {
 }
 
 /**
- * Combine the two independent staleness signals a response can carry into the
- * single reuse bound this client applies.
- *
- * `dynamicStaleTimeSeconds` comes from `experimental.staleTimes` (a build-time
- * constant, min-reduced across segments by `unstable_dynamicStaleTime`).
- * `staleTimeSeconds` comes from the render's resolved `cacheLife` (min-reduced
- * across `use cache` scopes). Both are min-wins lattices, so the combined bound
- * is their minimum — neither is allowed to override the other. Both signals
- * ride on one response via the initial-HTML done-script: a dynamic render
- * carries the configured value while its `use cache` subtrees still resolve a
- * `cacheLife` claim.
- *
- * The `cacheLife` value is floored (`MIN_SERVER_STALE_TIME_SECONDS`) *before*
- * the min, so the floor gives every server claim its Next.js-mandated minimum
- * without ever raising the config-derived bound.
- *
- * A pending claim (`staleTimePending`) is a cacheable render that streamed
- * before its `cacheLife` resolved. The unknown claim would floor to at least
- * `MIN_SERVER_STALE_TIME_SECONDS`, so that floor is its conservative
- * substitute in the min — reuse never exceeds what any resolution of the
- * claim could have licensed.
- *
- * Returns undefined when the response carried no signal at all, leaving the
- * caller's configured fallback TTL in force.
+ * Min-combine the two independent staleness lattices a response can carry:
+ * `dynamicStaleTimeSeconds` (from `experimental.staleTimes` config) and
+ * `staleTimeSeconds` (from the render's `cacheLife`) — neither may override
+ * the other. The cacheLife value is floored *before* the min so the floor
+ * never raises the config bound. A pending claim substitutes the floor, the
+ * least any resolution of it could have licensed. Undefined = no signal;
+ * the caller's fallback TTL stays in force.
  */
 function resolveRscResponseStaleTimeSeconds(
   cached: Pick<
@@ -513,10 +489,8 @@ function resolvePrefetchedRscResponseExpiresAt(
   if (seconds === undefined) {
     return timestamp + Math.max(fallbackTtlMs, minimumTtlMs);
   }
-  // The cacheLife signal is already floored inside the resolver (uniformly for
-  // both client caches). This outer floor covers the prefetch-only dimensions —
-  // the config-derived dynamic stale time and the fallback TTL — where a value
-  // below the floor would prevent prefetching from ever paying off.
+  // The cacheLife signal is floored inside the resolver; this outer floor
+  // covers the prefetch-only dimensions (config bound and fallback TTL).
   return timestamp + Math.max(seconds * 1000, minimumTtlMs);
 }
 

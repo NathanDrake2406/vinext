@@ -275,11 +275,9 @@ function applyRequestCacheLife(options: {
     expireSeconds = requestCacheLife.expire;
   }
 
-  // `stale` is deliberately absent from this projection: it is the client-router
-  // dimension of `cacheLife` and must not leak into `Cache-Control`, which
-  // governs shared caches. It travels on the cache entry instead — see
-  // resolveAppPageCacheWritePolicy — because only the cache-write path runs late
-  // enough to observe the completed render's minimum.
+  // `stale` is deliberately absent: it is the client-router dimension and must
+  // not leak into `Cache-Control`. It travels on the cache entry instead (see
+  // resolveAppPageCacheWritePolicy).
   return { expireSeconds, revalidateSeconds };
 }
 
@@ -845,12 +843,10 @@ export async function renderAppPageLifecycle(
       cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
       staleTimePending,
       // Only on dynamic renders — the Next.js !isStaticGeneration gate
-      // (app-render.tsx:2223). Deliberately NOT paired with the pending marker:
-      // bounding every unresolved response by staleTimes.dynamic would kill
-      // prefetch reuse of statically-prefetchable dynamic-param routes (the
-      // segment-cache-client-params compat test), since a cold stream cannot
-      // know its outcome. A late-dynamic response is instead capped at the 30s
-      // pending floor — the bounded price of non-blocking cold renders (#961).
+      // (app-render.tsx:2223). NOT paired with the pending marker: that would
+      // kill prefetch reuse of statically-prefetchable dynamic-param routes
+      // (segment-cache-client-params compat test); a late-dynamic response is
+      // capped at the 30s pending floor instead.
       dynamicStaleTimeSeconds: shouldEmitDynamicStaleTime ? dynamicStaleTimeSeconds : undefined,
       isEdgeRuntime: options.isEdgeRuntime,
       middlewareContext: options.middlewareContext,
@@ -969,14 +965,9 @@ export async function renderAppPageLifecycle(
                 ? "dynamic"
                 : "static";
           }
-          // The done-script is emitted by `finalize()` after the RSC embed
-          // stream has fully drained, so the peeked request-scoped cacheLife is
-          // the completed render's minimum — the same value the cache-write
-          // path persists onto the ISR entry. This closes the gap a streaming
-          // response's headers cannot: every initial HTML view (dev and prod,
-          // cached or not) advertises the resolved claim. Peek, not consume —
-          // the cache-write closure owns the consuming read, and it runs after
-          // the response body (and therefore this getter) has completed.
+          // Runs after the RSC embed drains, so this peek observes the
+          // completed render's minimum. Peek, not consume — the cache-write
+          // closure owns the consuming read.
           const requestCacheLife = options.peekRequestCacheLife?.();
           const staleTimeSeconds = resolveClientStaleTimeSeconds(requestCacheLife);
           return {

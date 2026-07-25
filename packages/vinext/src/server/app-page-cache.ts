@@ -242,15 +242,9 @@ export function buildAppPageCachedResponse(
     expireSeconds: options.expireSeconds,
     cacheControlMeta: options.cacheControl,
   });
-  // Replay the producing render's client-freshness claim. `decideIsr` shapes
-  // only the shared-cache string, so this reads the entry's own metadata:
-  // without it, a warm hit would serve the same bytes as a fresh render while
-  // silently widening client reuse back to the configured staleTimes default.
-  // Replayed verbatim, not aged: Next.js re-emits the stored header unchanged
-  // on every hit, and the cached HTML body embeds the same original value in
-  // its done-script, so aging only this header would make the two artifacts of
-  // one entry disagree. `expire` stays a serve-side ceiling (expired entries
-  // are blocking misses), never a client clamp.
+  // Replay the producing render's claim verbatim, not aged — Next.js re-emits
+  // the stored header unchanged on every hit, and the cached HTML body embeds
+  // the same original value in its done-script.
   const staleTimeSeconds = resolveClientStaleTimeSeconds(options.cacheControl);
   if (options.isRscRequest) {
     if (!cachedValue.rscData) {

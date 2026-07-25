@@ -49,11 +49,7 @@ import {
 type PrerenderCacheSeedMetadata = {
   expireSeconds?: number;
   revalidateSeconds?: number;
-  /**
-   * Client-router reuse bound resolved by the prerender, replayed on cache hits
-   * so a seeded entry makes the same client-freshness claim a runtime render of
-   * the same page would persist.
-   */
+  /** Client reuse bound resolved by the prerender, replayed on cache hits. */
   staleSeconds?: number;
   /**
    * Path-derived implicit tags (`/foo`, `_N_T_/foo`, `_N_T_/foo/page`, ...)

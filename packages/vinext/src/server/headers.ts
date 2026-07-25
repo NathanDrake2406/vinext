@@ -119,16 +119,9 @@ export const NEXT_ACTION_HEADER = "next-action";
 export const NEXTJS_ACTION_NOT_FOUND_HEADER = "x-nextjs-action-not-found";
 
 /**
- * How long (in seconds) the client router may reuse this response without
- * asking the server again, resolved from the render's `cacheLife` lattice.
- *
- * Deliberately separate from `Cache-Control`: `stale` is the client-router
- * dimension of a `cacheLife` profile, while `revalidate`/`expire` are
- * server/shared-cache concerns. Mirrors Next.js's
- * `NEXT_ROUTER_STALE_TIME_HEADER` (`client/components/app-router-headers.ts`).
- *
- * Not an internal header: it carries no privileged instruction, and forging it
- * inbound has no effect because nothing reads a request header by this name.
+ * Seconds the client router may reuse this response, resolved from the
+ * render's `cacheLife`. Mirrors Next.js's `NEXT_ROUTER_STALE_TIME_HEADER`;
+ * kept out of `Cache-Control`, which owns the shared-cache dimensions.
  */
 export const NEXT_ROUTER_STALE_TIME_HEADER = "x-nextjs-stale-time";
 

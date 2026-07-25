@@ -1574,9 +1574,7 @@ export async function prerenderApp({
               : Math.min(revalidate, renderedCacheControl.revalidate)
             : (renderedCacheControl.revalidate ?? revalidate);
 
-        // Seed the same unclamped claim the runtime write path persists —
-        // `expire` is a serve-side ceiling, never a client-reuse clamp
-        // (see resolveClientStaleTimeSeconds).
+        // Seed the same unclamped claim the runtime write path persists.
         const renderedStale = resolveClientStaleTimeSeconds(htmlRender.requestCacheLife);
 
         return {
@@ -1695,11 +1693,7 @@ export async function prerenderApp({
   }
 }
 
-/**
- * Cache life recovered from a prerendered response. `stale` is the client-router
- * dimension and is carried through to the seeded ISR entry so a served cache hit
- * advertises the same client-freshness claim the prerender resolved.
- */
+/** Cache life recovered from a prerendered response; `stale` seeds the ISR entry. */
 type PrerenderCacheLife = { expire?: number; revalidate?: number; stale?: number };
 
 function resolveRenderedCacheControl(

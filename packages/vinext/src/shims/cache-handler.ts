@@ -16,16 +16,9 @@ export type CacheControlMetadata = {
   revalidate: number | false;
   expire?: number;
   /**
-   * The client-router dimension of the render's resolved `cacheLife`: how long
-   * a browser may reuse this entry's output before asking the server again.
-   *
-   * Persisted alongside the shared-cache fields so a warm cache hit can
-   * re-advertise the same client-freshness claim the producing render made.
-   * Without it, replaying an entry would silently widen client reuse back to
-   * the configured `experimental.staleTimes` default.
-   *
-   * Independent of `revalidate`/`expire` — never derived from them. Absent
-   * means the render made no client-freshness claim.
+   * Client-router reuse bound from the render's resolved `cacheLife`,
+   * persisted so warm hits replay the producing render's claim. Independent
+   * of `revalidate`/`expire`; absent means no claim was made.
    */
   stale?: number;
 };

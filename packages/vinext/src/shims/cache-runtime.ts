@@ -646,9 +646,8 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           cacheControl: {
             revalidate: revalidateSeconds,
             expire: effectiveLife.expire,
-            // Persisted so a later hit can re-register the same client-freshness
-            // claim this execution contributed. Without it the enclosing render's
-            // minimum would depend on data-cache temperature.
+            // Persisted so a later hit re-registers the same claim; otherwise
+            // the enclosing render's minimum depends on cache temperature.
             stale: effectiveLife.stale,
           },
         });
@@ -698,20 +697,17 @@ function throwPrivateUseCacheInsidePublicUseCacheError(): never {
 
 function recordRequestScopedCacheControl(cacheControl: CacheControlMetadata | undefined): void {
   if (cacheControl === undefined) return;
+  // A hit must contribute the same claim its producing execution did — both to
+  // the request scope and, when nested, to the enclosing cache scope (like the
+  // MISS path's `parentCtx.lifeConfigs.push`); otherwise the inner claim
+  // vanishes once the outer entry goes warm.
   const life: CacheLifeConfig = {
-    // `false` is an indefinite lifetime and therefore does not constrain an
-    // enclosing cache scope's finite revalidation window.
+    // `false` is an indefinite lifetime and does not constrain the enclosing
+    // scope's finite revalidation window.
     revalidate: cacheControl.revalidate === false ? undefined : cacheControl.revalidate,
     expire: cacheControl.expire,
-    // A cache hit must contribute the same client-freshness claim its producing
-    // execution did, otherwise the enclosing render's minimum silently widens
-    // once an entry goes warm.
     stale: cacheControl.stale,
   };
-  // A hit inside an outer "use cache" must constrain the outer entry's stored
-  // lifetime exactly like the MISS path does via `parentCtx.lifeConfigs.push`
-  // in runCachedFunctionWithContext — otherwise the outer entry persists its
-  // default lifetime and the inner claim vanishes once the outer goes warm.
   cacheContextStorage.getStore()?.lifeConfigs.push(life);
   _setRequestScopedCacheLife(life);
 }

@@ -44,10 +44,7 @@ type AppPageResponsePolicy = {
 type AppPagePrerenderCacheLife = {
   expire?: number;
   revalidate?: number;
-  /**
-   * The client-router dimension of the resolved `cacheLife`. Independent of
-   * `revalidate`/`expire` — see `resolveClientStaleTimeSeconds`.
-   */
+  /** Client-router dimension — see `resolveClientStaleTimeSeconds`. */
   stale?: number;
 };
 
@@ -131,14 +128,9 @@ function applyDynamicStaleTimeHeader(headers: Headers, dynamicStaleTimeSeconds?:
 }
 
 /**
- * Advertise the client-router reuse bound resolved from `cacheLife`.
- *
- * Only ever set from a *completed* render's cache life — either replayed off a
- * cache entry, or seeded from a prerender. A streaming response cannot carry it,
- * because `use cache` scopes below the page keep resolving while the RSC stream
- * is consumed, long after headers are committed; a value read at header time
- * would describe the probe, not the output. Absent header leaves the client on
- * its configured `experimental.staleTimes`.
+ * Only ever set from a *completed* render's cacheLife (cache replay or
+ * prerender seed) — `use cache` scopes keep resolving after headers commit,
+ * so a streaming response can never carry it.
  */
 export function applyClientStaleTimeHeader(
   headers: Headers,
@@ -153,10 +145,8 @@ function applyPrerenderCacheLifeHeader(
   requestCacheLife: AppPagePrerenderCacheLife | null | undefined,
 ): void {
   if (!requestCacheLife) return;
-  // A build-internal channel: the sole consumer (build/prerender.ts) turns these
-  // into ISR seed metadata, and these responses never reach a browser. `stale`
-  // rides along so a seeded entry can re-advertise the same client-freshness
-  // claim on serve that a runtime render of the same page would persist.
+  // Build-internal channel: build/prerender.ts turns this into ISR seed
+  // metadata; these responses never reach a browser.
   const payload: AppPagePrerenderCacheLife = {};
   if (
     typeof requestCacheLife.revalidate === "number" &&

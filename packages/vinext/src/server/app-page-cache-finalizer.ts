@@ -110,11 +110,8 @@ function resolveAppPageCacheWritePolicy(options: {
     return null;
   }
 
-  // Callers reach this only after the render's stream has been drained, so the
-  // request-scoped accumulation is the completed render's minimum rather than a
-  // partial one. That is what makes persisting it onto the entry sound.
-  // `expire` never constrains the persisted stale — it is a serve-side ceiling
-  // only (see resolveClientStaleTimeSeconds).
+  // Callers reach this only after the render's stream drained, so the
+  // request-scoped accumulation is the completed render's minimum.
   return {
     expireSeconds,
     revalidateSeconds,
