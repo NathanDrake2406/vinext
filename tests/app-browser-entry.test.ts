@@ -6091,6 +6091,31 @@ describe("app browser entry previousNextUrl helpers", () => {
     const nextState = applyApprovedVisibleCommit(currentState, approval.approvedCommit);
     expect(nextState.elements["layout:/dashboard"]).toBe(dashboardLayout);
     expect(nextState.elements[modalSlotId]).toBe(modalSlot);
+    expect(
+      AppElementsWire.readMetadata(nextState.elements).bfcacheSegmentIdentities[modalSlotId],
+    ).toBe(`test-identity:${modalSlotId}`);
+    expect(nextState.bfcacheIds[modalSlotId]).toBe("_b_5_");
+
+    const followingElements = createResolvedElements(
+      "route:/dashboard/profile",
+      "/",
+      null,
+      {
+        "layout:/": rootLayout,
+        "layout:/dashboard": dashboardLayout,
+        [modalSlotId]: modalSlot,
+        "page:/dashboard/profile": React.createElement("main", null, "profile"),
+      },
+      ["layout:/", "layout:/dashboard"],
+      [currentModalBinding],
+    );
+    const followingBfcacheIds = createNextBfcacheIdMap({
+      current: nextState.bfcacheIds,
+      currentElements: nextState.elements,
+      elements: followingElements,
+    });
+
+    expect(followingBfcacheIds[modalSlotId]).toBe("_b_5_");
   });
 
   it("clears stale parallel slots on approved traverse commits", async () => {

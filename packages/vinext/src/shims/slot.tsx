@@ -164,12 +164,19 @@ function isBfcacheSegmentIdentitiesMetadataValue(
   id: string,
   value: unknown,
 ): value is AppElementsBfcacheSegmentIdentities {
-  return (
-    id === APP_BFCACHE_SEGMENT_IDENTITIES_KEY &&
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value)
-  );
+  if (
+    id !== APP_BFCACHE_SEGMENT_IDENTITIES_KEY ||
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return false;
+  }
+
+  return Object.entries(value).every(([elementId, identity]) => {
+    const parsed = AppElementsWire.parseElementKey(elementId);
+    return parsed !== null && parsed.kind !== "route" && typeof identity === "string";
+  });
 }
 
 function isInterceptionMetadataValue(value: unknown): value is AppElementsInterception {
@@ -400,11 +407,15 @@ export function mergeElements(
   const preservePreviousSlotIds =
     typeof options === "boolean" ? [] : (options.preservePreviousSlotIds ?? []);
   const merged: Record<string, AppElementValue> = { ...next };
+  const preservedIdentityIds = new Set<string>();
 
   for (const id of preserveElementIds) {
     if (Object.hasOwn(prev, id)) {
       const value = prev[id];
-      if (value !== undefined) merged[id] = value;
+      if (value !== undefined) {
+        merged[id] = value;
+        preservedIdentityIds.add(id);
+      }
     }
   }
 
@@ -427,7 +438,10 @@ export function mergeElements(
     for (const key of slotKeys) {
       if (!Object.hasOwn(merged, key) && Object.hasOwn(prev, key)) {
         const value = prev[key];
-        if (value !== undefined) merged[key] = value;
+        if (value !== undefined) {
+          merged[key] = value;
+          preservedIdentityIds.add(key);
+        }
       }
     }
   }
@@ -442,6 +456,42 @@ export function mergeElements(
     const value = prev[id];
     if (value !== undefined && value !== UNMATCHED_SLOT) {
       merged[id] = value;
+      preservedIdentityIds.add(id);
+    }
+  }
+
+  if (preservedIdentityIds.size > 0) {
+    const previousIdentityValue = prev[APP_BFCACHE_SEGMENT_IDENTITIES_KEY];
+    const nextIdentityValue = next[APP_BFCACHE_SEGMENT_IDENTITIES_KEY];
+    const hasPreviousIdentities = isBfcacheSegmentIdentitiesMetadataValue(
+      APP_BFCACHE_SEGMENT_IDENTITIES_KEY,
+      previousIdentityValue,
+    );
+    const hasNextIdentities = isBfcacheSegmentIdentitiesMetadataValue(
+      APP_BFCACHE_SEGMENT_IDENTITIES_KEY,
+      nextIdentityValue,
+    );
+    const previousIdentities: Record<string, string> = hasPreviousIdentities
+      ? { ...previousIdentityValue }
+      : {};
+    const mergedIdentities: Record<string, string> = hasNextIdentities
+      ? { ...nextIdentityValue }
+      : {};
+
+    // An element and its identity are one preservation unit. Keeping previous
+    // content beside the destination's identity would falsely prove that stale
+    // client state belongs to the destination graph. If the previous payload
+    // had no proof, remove any destination proof and let BFCache remint.
+    for (const id of preservedIdentityIds) {
+      const previousIdentity = previousIdentities[id];
+      if (previousIdentity === undefined) {
+        delete mergedIdentities[id];
+      } else {
+        mergedIdentities[id] = previousIdentity;
+      }
+    }
+    if (hasPreviousIdentities || hasNextIdentities) {
+      merged[APP_BFCACHE_SEGMENT_IDENTITIES_KEY] = mergedIdentities;
     }
   }
 

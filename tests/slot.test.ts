@@ -1,7 +1,10 @@
 import React from "react";
 import { renderToReadableStream } from "react-dom/server.edge";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { UNMATCHED_SLOT } from "../packages/vinext/src/server/app-elements.js";
+import {
+  APP_BFCACHE_SEGMENT_IDENTITIES_KEY,
+  UNMATCHED_SLOT,
+} from "../packages/vinext/src/server/app-elements.js";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/",
@@ -379,6 +382,35 @@ describe("slot primitives", () => {
 
     expect(mergedFromUnmatched["slot:modal:/"]).toBe(previousSlotContent);
     expect(mergedFromDefault["slot:modal:/"]).toBe(previousSlotContent);
+  });
+
+  it("mergeElements preserves identity with planner-approved previous slot content", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+    const slotId = "slot:modal:/";
+    const previousSlotContent = React.createElement("div", null, "previous modal");
+    const merged = mergeElements(
+      {
+        [slotId]: previousSlotContent,
+        [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: {
+          [slotId]: "previous-modal-identity",
+        },
+      },
+      {
+        "page:/blog": React.createElement("div", null, "blog page"),
+        [slotId]: UNMATCHED_SLOT,
+        [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: {
+          "page:/blog": "blog-page-identity",
+          [slotId]: "destination-default-identity",
+        },
+      },
+      { preservePreviousSlotIds: [slotId] },
+    );
+
+    expect(merged[slotId]).toBe(previousSlotContent);
+    expect(merged[APP_BFCACHE_SEGMENT_IDENTITIES_KEY]).toEqual({
+      "page:/blog": "blog-page-identity",
+      [slotId]: "previous-modal-identity",
+    });
   });
 
   it("mergeElements preserves a present null default slot when the planner approves it", async () => {
