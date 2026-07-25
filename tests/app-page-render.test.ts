@@ -29,6 +29,7 @@ import {
 } from "../packages/vinext/src/server/client-reuse-manifest.js";
 import {
   NEXT_CACHE_TAGS_HEADER,
+  NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
 } from "../packages/vinext/src/server/headers.js";
@@ -1356,6 +1357,61 @@ describe("app page render lifecycle", () => {
       revalidateSeconds: null,
     });
     expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBeNull();
+    await expect(response.text()).resolves.toBe("flight-data");
+  });
+
+  it("advertises the resolved cacheLife stale time to the client router", async () => {
+    // The `seconds` profile: { stale: 30, revalidate: 1, expire: 60 }. `stale`
+    // exceeds `revalidate`, so the three numbers must be treated as
+    // independent — `stale` is the client-router bound and must survive intact
+    // even though the shared-cache revalidation window is 1s.
+    const common = createCommonOptions();
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      dynamicStaleTimeSeconds: 300,
+      isRscRequest: true,
+      peekRequestCacheLife() {
+        return { stale: 30, revalidate: 1, expire: 60 };
+      },
+    });
+
+    expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
+    // The client-router dimension must not bleed into the shared-cache policy.
+    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("300");
+    await expect(response.text()).resolves.toBe("flight-data");
+  });
+
+  it("clamps the advertised stale time to the cacheLife expire ceiling", async () => {
+    // Custom profiles may declare stale > expire. Reuse past the hard expiry
+    // would hand back output the server already considers gone.
+    const common = createCommonOptions();
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      isRscRequest: true,
+      peekRequestCacheLife() {
+        return { stale: 300, revalidate: 60, expire: 45 };
+      },
+    });
+
+    expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("45");
+    await expect(response.text()).resolves.toBe("flight-data");
+  });
+
+  it("advertises no stale time when the resolved cacheLife declares none", async () => {
+    // The `default` profile is { revalidate: 900, expire: 4294967294 } — no
+    // `stale`. A stale time must never be synthesized from those: doing so
+    // would license ~136 years of client reuse without a refresh. Omitting the
+    // header leaves the client on its configured experimental.staleTimes value.
+    const common = createCommonOptions();
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      isRscRequest: true,
+      peekRequestCacheLife() {
+        return { revalidate: 900, expire: 4294967294 };
+      },
+    });
+
+    expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBeNull();
     await expect(response.text()).resolves.toBe("flight-data");
   });
 

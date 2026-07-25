@@ -75,6 +75,64 @@ describe("visited response cache freshness", () => {
     );
   });
 
+  it("bounds reuse by the resolved cacheLife stale time from the server", () => {
+    // A `use cache` subtree declaring cacheLife("seconds") resolves stale: 30.
+    // Without honoring it the browser would hold this response for the full
+    // 5-minute visited-response TTL — 10x too long.
+    const now = 1_000_000;
+    const entry = createVisitedResponseCacheEntry({
+      now,
+      params: {},
+      response: createCachedResponse({ staleTimeSeconds: 30 }),
+    });
+
+    expect(entry.expiresAt).toBe(now + 30_000);
+    expect(
+      isVisitedResponseCacheEntryFresh(entry, { navigationKind: "navigate", now: now + 29_999 }),
+    ).toBe(true);
+    expect(
+      isVisitedResponseCacheEntryFresh(entry, { navigationKind: "navigate", now: now + 30_000 }),
+    ).toBe(false);
+  });
+
+  it("takes the minimum of the staleTimes config and the resolved cacheLife stale time", () => {
+    // Two independent min-wins lattices: experimental.staleTimes (reduced across
+    // segments by unstable_dynamicStaleTime) and cacheLife (reduced across
+    // `use cache` scopes). Neither may override the other, in either direction.
+    const now = 1_000_000;
+
+    expect(
+      createVisitedResponseCacheEntry({
+        now,
+        params: {},
+        response: createCachedResponse({ dynamicStaleTimeSeconds: 120, staleTimeSeconds: 30 }),
+      }).expiresAt,
+    ).toBe(now + 30_000);
+
+    expect(
+      createVisitedResponseCacheEntry({
+        now,
+        params: {},
+        response: createCachedResponse({ dynamicStaleTimeSeconds: 10, staleTimeSeconds: 300 }),
+      }).expiresAt,
+    ).toBe(now + 10_000);
+  });
+
+  it("keeps the configured fallback when the resolved cacheLife declares no stale time", () => {
+    // The `default` cacheLife profile has no `stale` and an `expire` of
+    // ~136 years. The server advertises nothing in that case, so the entry must
+    // stay on the configured visited-response TTL rather than being extended
+    // toward revalidate/expire.
+    const now = 1_000_000;
+    const entry = createVisitedResponseCacheEntry({
+      now,
+      params: {},
+      response: createCachedResponse(),
+    });
+
+    expect(entry.expiresAt).toBe(now + VISITED_RESPONSE_CACHE_TTL);
+  });
+
   it("inherits the expiry carried by a consumed prefetch snapshot", () => {
     const now = 1_000_000;
     const prefetchedExpiresAt = now + 30_000;

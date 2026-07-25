@@ -39,6 +39,7 @@ import {
 } from "../server/app-rsc-cache-busting.js";
 import { hasPendingAppRouterPageRedirect } from "../server/app-browser-mpa-navigation.js";
 import {
+  NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
@@ -277,6 +278,13 @@ export type CachedRscResponse = {
   paramsHeader: string | null;
   preparedElements?: AppElements;
   renderedPathAndSearch: string | null;
+  /**
+   * Client reuse bound in seconds resolved from the render's `cacheLife`
+   * lattice, from `NEXT_ROUTER_STALE_TIME_HEADER`. Independent of
+   * `dynamicStaleTimeSeconds`, which comes from `experimental.staleTimes`
+   * config; the two are combined by taking the minimum.
+   */
+  staleTimeSeconds?: number;
   url: string;
 };
 
@@ -378,7 +386,7 @@ export function getPrefetchedUrls(): Set<string> {
   return window.__VINEXT_RSC_PREFETCHED_URLS__;
 }
 
-function isDynamicStaleTimeSeconds(value: unknown): value is number {
+function isStaleTimeSeconds(value: unknown): value is number {
   return (
     typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0
   );
@@ -388,18 +396,44 @@ function isCacheExpiresAt(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-function parseDynamicStaleTimeSeconds(value: string | null): number | undefined {
+function parseStaleTimeSecondsHeader(value: string | null): number | undefined {
   if (value === null || value === "") return undefined;
   const seconds = Number(value);
-  return isDynamicStaleTimeSeconds(seconds) ? seconds : undefined;
+  return isStaleTimeSeconds(seconds) ? seconds : undefined;
+}
+
+/**
+ * Combine the two independent staleness signals a response can carry into the
+ * single reuse bound this client applies.
+ *
+ * `dynamicStaleTimeSeconds` comes from `experimental.staleTimes` (a build-time
+ * constant, min-reduced across segments by `unstable_dynamicStaleTime`).
+ * `staleTimeSeconds` comes from the render's resolved `cacheLife` (min-reduced
+ * across `use cache` scopes). Both are min-wins lattices, so the combined bound
+ * is their minimum — neither is allowed to override the other.
+ *
+ * Returns undefined when the response carried neither signal, leaving the
+ * caller's configured fallback TTL in force.
+ */
+function resolveRscResponseStaleTimeSeconds(
+  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "staleTimeSeconds">,
+): number | undefined {
+  const dynamic = cached.dynamicStaleTimeSeconds;
+  const resolved = cached.staleTimeSeconds;
+  const hasDynamic = isStaleTimeSeconds(dynamic);
+  const hasResolved = isStaleTimeSeconds(resolved);
+  if (hasDynamic && hasResolved) return Math.min(dynamic, resolved);
+  if (hasDynamic) return dynamic;
+  if (hasResolved) return resolved;
+  return undefined;
 }
 
 export function resolveCachedRscResponseTtlMs(
-  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds">,
+  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "staleTimeSeconds">,
   fallbackTtlMs: number,
 ): number {
-  const seconds = cached.dynamicStaleTimeSeconds;
-  if (!isDynamicStaleTimeSeconds(seconds)) {
+  const seconds = resolveRscResponseStaleTimeSeconds(cached);
+  if (seconds === undefined) {
     return fallbackTtlMs;
   }
   return seconds * 1000;
@@ -407,7 +441,7 @@ export function resolveCachedRscResponseTtlMs(
 
 export function resolveCachedRscResponseExpiresAt(
   timestamp: number,
-  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt">,
+  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt" | "staleTimeSeconds">,
   fallbackTtlMs: number,
 ): number {
   if (isCacheExpiresAt(cached.expiresAt)) {
@@ -418,17 +452,20 @@ export function resolveCachedRscResponseExpiresAt(
 
 function resolvePrefetchedRscResponseExpiresAt(
   timestamp: number,
-  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt">,
+  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt" | "staleTimeSeconds">,
   fallbackTtlMs: number,
   minimumTtlMs: number = MIN_PREFETCH_STALE_TIME_MS,
 ): number {
   if (isCacheExpiresAt(cached.expiresAt)) {
     return cached.expiresAt;
   }
-  const seconds = cached.dynamicStaleTimeSeconds;
-  if (!isDynamicStaleTimeSeconds(seconds)) {
+  const seconds = resolveRscResponseStaleTimeSeconds(cached);
+  if (seconds === undefined) {
     return timestamp + Math.max(fallbackTtlMs, minimumTtlMs);
   }
+  // Floor mirrors Next.js's `getStaleTimeMs`: a server-declared stale time
+  // shorter than the prefetch floor would prevent prefetching from ever paying
+  // off, so the floor wins for prefetch entries only.
   return timestamp + Math.max(seconds * 1000, minimumTtlMs);
 }
 
@@ -933,8 +970,11 @@ export function createCachedRscResponseSnapshot(
   buffer: ArrayBuffer,
   responseUrl: string | null = null,
 ): CachedRscResponse {
-  const dynamicStaleTimeSeconds = parseDynamicStaleTimeSeconds(
+  const dynamicStaleTimeSeconds = parseStaleTimeSecondsHeader(
     response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER),
+  );
+  const staleTimeSeconds = parseStaleTimeSecondsHeader(
+    response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER),
   );
   return {
     compatibilityIdHeader: response.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
@@ -946,6 +986,7 @@ export function createCachedRscResponseSnapshot(
     renderedPathAndSearch: parseRenderedPathAndSearchHeader(
       response.headers.get(VINEXT_RENDERED_PATH_AND_SEARCH_HEADER),
     ),
+    ...(staleTimeSeconds !== undefined ? { staleTimeSeconds } : {}),
     url: responseUrl ?? response.url,
   };
 }
@@ -995,8 +1036,11 @@ export function restoreRscResponse(cached: CachedRscResponse, copy = true): Resp
   if (cached.compatibilityIdHeader != null) {
     headers.set(VINEXT_RSC_COMPATIBILITY_ID_HEADER, cached.compatibilityIdHeader);
   }
-  if (isDynamicStaleTimeSeconds(cached.dynamicStaleTimeSeconds)) {
+  if (isStaleTimeSeconds(cached.dynamicStaleTimeSeconds)) {
     headers.set(VINEXT_DYNAMIC_STALE_TIME_HEADER, String(cached.dynamicStaleTimeSeconds));
+  }
+  if (isStaleTimeSeconds(cached.staleTimeSeconds)) {
+    headers.set(NEXT_ROUTER_STALE_TIME_HEADER, String(cached.staleTimeSeconds));
   }
   if (cached.paramsHeader != null) {
     headers.set(VINEXT_PARAMS_HEADER, cached.paramsHeader);

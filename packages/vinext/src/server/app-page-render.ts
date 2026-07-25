@@ -25,6 +25,7 @@ import {
   buildAppPageRscResponse,
   resolveAppPageHtmlResponsePolicy,
   resolveAppPageRscResponsePolicy,
+  resolveClientStaleTimeSeconds,
   type AppPageMiddlewareContext,
   type AppPageResponseTiming,
 } from "./app-page-response.js";
@@ -100,6 +101,7 @@ type AppPageCacheSetter = (
 type AppPageRequestCacheLife = {
   revalidate?: number;
   expire?: number;
+  stale?: number;
 };
 
 type RenderAppPageLifecycleOptions = {
@@ -280,7 +282,33 @@ function applyRequestCacheLife(options: {
     expireSeconds = requestCacheLife.expire;
   }
 
+  // `stale` is deliberately absent from this projection: it is the client-router
+  // dimension of `cacheLife` and must not leak into `Cache-Control`, which
+  // governs shared caches. It reaches the client on its own response header —
+  // see readClientStaleTimeSeconds below.
   return { expireSeconds, revalidateSeconds };
+}
+
+/**
+ * The client reuse bound advertised for this render, in seconds.
+ *
+ * On prerender the resolved `cacheLife` has already been read authoritatively
+ * (after the render settled). At runtime we peek the request-scoped
+ * accumulation non-destructively — the ISR cache-write path still owns the
+ * consuming read. The peek is meaningful because vinext awaits the page (and
+ * layout) probes before creating the RSC stream, so a page-level `use cache`
+ * scope has already registered its resolved life by the time the response is
+ * constructed. Routes that skip the probe (a route-level `loading.tsx`, PPR
+ * fallback shells) resolve to `undefined`, and the client keeps using its
+ * configured `experimental.staleTimes` value.
+ */
+function readClientStaleTimeSeconds(
+  options: Pick<RenderAppPageLifecycleOptions, "peekRequestCacheLife">,
+  prerenderCacheLife: AppPageRequestCacheLife | null,
+): number | undefined {
+  return resolveClientStaleTimeSeconds(
+    prerenderCacheLife ?? options.peekRequestCacheLife?.() ?? null,
+  );
 }
 
 function resolveAppPageCacheWriteRevalidateSeconds(options: {
@@ -853,6 +881,7 @@ export async function renderAppPageLifecycle(
       policy: rscResponsePolicy,
       renderedPathAndSearch: options.renderedPathAndSearch,
       requestCacheLife: requestCacheLifeForPrerender,
+      staleTimeSeconds: readClientStaleTimeSeconds(options, requestCacheLifeForPrerender),
       timing: buildResponseTiming({
         compileEnd,
         handlerStart: options.handlerStart,
@@ -1107,6 +1136,7 @@ export async function renderAppPageLifecycle(
     renderEnd,
     responseKind: "html",
   });
+  const htmlStaleTimeSeconds = readClientStaleTimeSeconds(options, requestCacheLifeForPrerender);
 
   if (htmlRender.shellErrorRecovered) {
     const response = buildAppPageHtmlResponse(safeHtmlStream, {
@@ -1120,6 +1150,7 @@ export async function renderAppPageLifecycle(
       },
       policy: { cacheControl: NEVER_CACHE_CONTROL },
       requestCacheLife: requestCacheLifeForPrerender,
+      staleTimeSeconds: htmlStaleTimeSeconds,
       timing: htmlResponseTiming,
     });
     applyCdnResponseHeaders(response.headers, { cacheControl: NEVER_CACHE_CONTROL });
@@ -1146,6 +1177,7 @@ export async function renderAppPageLifecycle(
       middlewareContext: options.middlewareContext,
       policy: htmlResponsePolicy,
       requestCacheLife: requestCacheLifeForPrerender,
+      staleTimeSeconds: htmlStaleTimeSeconds,
       timing: htmlResponseTiming,
     });
 
@@ -1218,6 +1250,7 @@ export async function renderAppPageLifecycle(
     middlewareContext: options.middlewareContext,
     policy: htmlResponsePolicy,
     requestCacheLife: requestCacheLifeForPrerender,
+    staleTimeSeconds: htmlStaleTimeSeconds,
     timing: htmlResponseTiming,
   });
 }

@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test"
 import { AppElementsWire } from "../packages/vinext/src/server/app-elements.js";
 import { VINEXT_RSC_COMPATIBILITY_ID_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import {
+  NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
@@ -417,6 +418,21 @@ describe("prefetch cache eviction", () => {
     await expect(restored.text()).resolves.toBe("flight");
   });
 
+  it("carries the server-resolved cacheLife stale time through snapshot and replay", async () => {
+    const response = new Response("flight", {
+      headers: {
+        "content-type": "text/x-component",
+        [NEXT_ROUTER_STALE_TIME_HEADER]: "30",
+      },
+    });
+
+    const snapshot = await snapshotRscResponse(response);
+    const restored = restoreRscResponse(snapshot);
+
+    expect(snapshot.staleTimeSeconds).toBe(30);
+    expect(restored.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
+  });
+
   it("releases queued App prefetch fetch slots after consuming the response body", async () => {
     let closeBody!: () => void;
     const body = new ReadableStream<Uint8Array>({
@@ -635,6 +651,64 @@ describe("prefetch cache eviction", () => {
 
     const consumed = consumePrefetchResponse(rscUrl, null, null);
     expect(consumed?.expiresAt).toBe(now + 30_000);
+  });
+
+  it("takes the shorter of the staleTimes config and the resolved cacheLife stale time", async () => {
+    // A route whose `use cache` subtree declares cacheLife("seconds")
+    // (stale: 30) alongside a 300s experimental.staleTimes value. Both are
+    // min-wins lattices, so the shorter one bounds prefetch reuse.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/cache-life-prefetch.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "300",
+            [NEXT_ROUTER_STALE_TIME_HEADER]: "30",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: 300_000 },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
+  });
+
+  it("floors a shorter-than-minimum cacheLife stale time for prefetch entries", async () => {
+    // cacheLife({ stale: 1 }) is honored verbatim by the visited-response cache
+    // but floored here: Next.js's getStaleTimeMs clamps prefetch stale times to
+    // 30s so a too-short server value cannot prevent prefetching from ever
+    // paying off.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/tiny-cache-life-prefetch.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [NEXT_ROUTER_STALE_TIME_HEADER]: "1",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: PREFETCH_CACHE_TTL },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
   });
 
   it("leaves a resolved in-flight prefetch for a newer navigation when the old navigation is stale", async () => {

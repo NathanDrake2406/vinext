@@ -5,6 +5,7 @@ import {
 } from "./cache-control.js";
 import {
   NEXT_CACHE_TAGS_HEADER,
+  NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
@@ -41,7 +42,42 @@ type AppPageResponsePolicy = {
 type AppPagePrerenderCacheLife = {
   expire?: number;
   revalidate?: number;
+  /**
+   * The client-router dimension of the resolved `cacheLife`. Independent of
+   * `revalidate`/`expire` — see `resolveClientStaleTimeSeconds`.
+   */
+  stale?: number;
 };
+
+function isFiniteNonNegative(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * Project a resolved `cacheLife` onto the single number the client router needs:
+ * how many seconds it may reuse this response without asking the server again.
+ *
+ * Two deliberate rules:
+ *
+ * 1. An absent `stale` is *not* synthesized from `revalidate` or `expire`. The
+ *    `default` profile has no `stale` and an `expire` of ~136 years, so deriving
+ *    one would license session-long reuse without a refresh. Absent `stale`
+ *    means "this render makes no client-freshness claim", and the client falls
+ *    back to its configured `experimental.staleTimes` value.
+ * 2. The three numbers are *not* assumed to be ordered. `seconds` is
+ *    `{ stale: 30, revalidate: 1, expire: 60 }` — `stale` exceeds `revalidate`,
+ *    and that is intentional, so `revalidate` never constrains `stale`. Only the
+ *    hard `expire` ceiling does: reuse past `expire` would hand back output the
+ *    server considers gone.
+ */
+export function resolveClientStaleTimeSeconds(
+  cacheLife: AppPagePrerenderCacheLife | null | undefined,
+): number | undefined {
+  const stale = cacheLife?.stale;
+  if (!isFiniteNonNegative(stale)) return undefined;
+  const expire = cacheLife?.expire;
+  return isFiniteNonNegative(expire) ? Math.min(stale, expire) : stale;
+}
 
 type ResolveAppPageResponsePolicyBaseOptions = {
   isDraftMode: boolean;
@@ -77,6 +113,7 @@ type BuildAppPageRscResponseOptions = {
   policy: AppPageResponsePolicy;
   renderedPathAndSearch?: string | null;
   requestCacheLife?: AppPagePrerenderCacheLife | null;
+  staleTimeSeconds?: number;
   timing?: AppPageResponseTiming;
 };
 
@@ -89,6 +126,7 @@ type BuildAppPageHtmlResponseOptions = {
   middlewareContext: AppPageMiddlewareContext;
   policy: AppPageResponsePolicy;
   requestCacheLife?: AppPagePrerenderCacheLife | null;
+  staleTimeSeconds?: number;
   timing?: AppPageResponseTiming;
 };
 
@@ -120,11 +158,24 @@ function applyDynamicStaleTimeHeader(headers: Headers, dynamicStaleTimeSeconds?:
   }
 }
 
+/**
+ * Advertise the client-router reuse bound resolved from `cacheLife`. The client
+ * combines this with its own `experimental.staleTimes` value by taking the
+ * minimum, so this header can only ever shorten a cached entry's lifetime.
+ */
+function applyClientStaleTimeHeader(headers: Headers, staleTimeSeconds: number | undefined): void {
+  if (staleTimeSeconds === undefined) return;
+  headers.set(NEXT_ROUTER_STALE_TIME_HEADER, String(Math.floor(staleTimeSeconds)));
+}
+
 function applyPrerenderCacheLifeHeader(
   headers: Headers,
   requestCacheLife: AppPagePrerenderCacheLife | null | undefined,
 ): void {
   if (!requestCacheLife) return;
+  // Only the shared-cache fields belong here: the sole consumer
+  // (build/prerender.ts) turns them into ISR seed metadata. `stale` travels to
+  // the client on NEXT_ROUTER_STALE_TIME_HEADER instead.
   const payload: AppPagePrerenderCacheLife = {};
   if (
     typeof requestCacheLife.revalidate === "number" &&
@@ -311,6 +362,7 @@ export function buildAppPageRscResponse(
     headers.set(VINEXT_MOUNTED_SLOTS_HEADER, options.mountedSlotsHeader);
   }
   applyDynamicStaleTimeHeader(headers, options.dynamicStaleTimeSeconds);
+  applyClientStaleTimeHeader(headers, options.staleTimeSeconds);
   if (options.policy.cacheControl) {
     headers.set("Cache-Control", options.policy.cacheControl);
   }
@@ -347,6 +399,7 @@ export function buildAppPageHtmlResponse(
   });
 
   applyEdgeRuntimeHeader(headers, options.isEdgeRuntime);
+  applyClientStaleTimeHeader(headers, options.staleTimeSeconds);
 
   if (options.policy.cacheControl) {
     headers.set("Cache-Control", options.policy.cacheControl);
