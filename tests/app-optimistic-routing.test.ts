@@ -6,6 +6,9 @@ import {
   type AppElements,
 } from "../packages/vinext/src/server/app-elements.js";
 import {
+  MAX_OPTIMISTIC_ROUTE_TEMPLATES,
+  MAX_OPTIMISTIC_ROUTE_TEMPLATE_SOURCES,
+  OptimisticRouteTemplateStore,
   createOptimisticRouteElements,
   createOptimisticRouteTemplate,
   getOptimisticPrefetchSourceKey,
@@ -640,5 +643,221 @@ describe("App Router optimistic routing", () => {
         templates: new Map(),
       }),
     ).toBeNull();
+  });
+});
+
+function numberedDynamicRouteManifest(count: number): RouteManifest {
+  return manifest(
+    Array.from({ length: count }, (_unused, index) =>
+      route({
+        id: `route:/r${index}/:id`,
+        isDynamic: true,
+        paramNames: ["id"],
+        pattern: `/r${index}/:id`,
+        patternParts: [`r${index}`, ":id"],
+      }),
+    ),
+  );
+}
+
+function createSuspenseShellElements(pathname: string): AppElements {
+  const routeId = AppElementsWire.encodeRouteId(pathname, null);
+  const pageId = AppElementsWire.encodePageId(pathname, null);
+  return {
+    ...AppElementsWire.createMetadataEntries({
+      interceptionContext: null,
+      layoutIds: ["layout:/"],
+      rootLayoutTreePath: "/",
+      routeId,
+    }),
+    [pageId]: createElement("article", null, pathname),
+    [routeId]: createElement(
+      Suspense,
+      { fallback: createElement("p", null, "Loading...") },
+      createElement("main", null, "Page slot"),
+    ),
+  };
+}
+
+/**
+ * Learns route `/r{index}/:id` from a synthetic prefetch source, mirroring what
+ * learnOptimisticRouteTemplateFromPrefetch hands the store in the browser entry.
+ * `sourceVariant` produces distinct source keys for the same route id, which is
+ * the real N:1 shape: many prefetched URLs collapse onto one route.
+ */
+function learnNumberedRoute(
+  store: OptimisticRouteTemplateStore,
+  routeManifest: RouteManifest,
+  index: number,
+  sourceVariant = "",
+): { sourceKey: string; templateKey: string } {
+  const pathname = `/r${index}/a`;
+  const template = createOptimisticRouteTemplate({
+    basePath: "",
+    elements: createSuspenseShellElements(pathname),
+    href: pathname,
+    interceptionContext: null,
+    mountedSlotsHeader: null,
+    routeManifest,
+  });
+  if (template === null) {
+    throw new Error(`Expected optimistic route template for ${pathname}`);
+  }
+
+  const sourceKey = getOptimisticPrefetchSourceKey({
+    cacheKey: `${pathname}${sourceVariant}.rsc?_rsc=abc `,
+    interceptionContext: null,
+    mountedSlotsHeader: null,
+  });
+  store.learn({ interceptionContext: null, mountedSlotsHeader: null, sourceKey, template });
+
+  return {
+    sourceKey,
+    templateKey: getOptimisticRouteTemplateKey({
+      interceptionContext: null,
+      mountedSlotsHeader: null,
+      routeId: template.routeId,
+    }),
+  };
+}
+
+describe("App Router optimistic route template store bounds", () => {
+  it("evicts the least recently used template and the source records that produced it", () => {
+    const overflow = 3;
+    const routeCount = MAX_OPTIMISTIC_ROUTE_TEMPLATES + overflow;
+    const routeManifest = numberedDynamicRouteManifest(routeCount);
+    const store = new OptimisticRouteTemplateStore();
+
+    const learned = Array.from({ length: routeCount }, (_unused, index) =>
+      learnNumberedRoute(store, routeManifest, index),
+    );
+
+    expect(store.templates.size).toBe(MAX_OPTIMISTIC_ROUTE_TEMPLATES);
+    // Insertion order is recency order, so the first `overflow` routes go first.
+    for (const evicted of learned.slice(0, overflow)) {
+      expect(store.templates.has(evicted.templateKey)).toBe(false);
+    }
+    for (const retained of learned.slice(overflow)) {
+      expect(store.templates.has(retained.templateKey)).toBe(true);
+    }
+
+    // Consistency: no source record may outlive the template it produced,
+    // otherwise the learning pass would skip that prefetch source forever and
+    // the route could never regain an optimistic shell.
+    expect(store.sources.size).toBe(MAX_OPTIMISTIC_ROUTE_TEMPLATES);
+    for (const [sourceKey, templateKey] of store.sources) {
+      expect(store.templates.has(templateKey)).toBe(true);
+      expect(store.hasLearnedOrPendingSource(sourceKey)).toBe(true);
+    }
+    for (const evicted of learned.slice(0, overflow)) {
+      expect(store.hasLearnedOrPendingSource(evicted.sourceKey)).toBe(false);
+    }
+  });
+
+  it("degrades an evicted route to no optimistic paint and stays relearnable", () => {
+    const routeCount = MAX_OPTIMISTIC_ROUTE_TEMPLATES + 1;
+    const routeManifest = numberedDynamicRouteManifest(routeCount);
+    const store = new OptimisticRouteTemplateStore();
+    for (let index = 0; index < routeCount; index += 1) {
+      learnNumberedRoute(store, routeManifest, index);
+    }
+
+    // A null payload is exactly what the browser entry reads as "no optimistic
+    // shell available": it leaves detachedNavigationCommits false and falls
+    // through to the authoritative RSC fetch, the same path a never-learned
+    // route takes. Losing a template must therefore not throw.
+    expect(
+      store.resolveNavigationPayload({
+        basePath: "",
+        href: "/r0/b",
+        interceptionContext: null,
+        mountedSlotsHeader: null,
+        routeManifest,
+      }),
+    ).toBeNull();
+
+    // Because the evicted template's source record went with it, the next
+    // learning pass is free to relearn the route from the prefetch cache.
+    const relearned = learnNumberedRoute(store, routeManifest, 0);
+    expect(store.templates.has(relearned.templateKey)).toBe(true);
+    expect(
+      store.resolveNavigationPayload({
+        basePath: "",
+        href: "/r0/b",
+        interceptionContext: null,
+        mountedSlotsHeader: null,
+        routeManifest,
+      })?.params,
+    ).toEqual({ id: "b" });
+  });
+
+  it("keeps a resolved template alive across later learning", () => {
+    const routeManifest = numberedDynamicRouteManifest(MAX_OPTIMISTIC_ROUTE_TEMPLATES + 1);
+    const store = new OptimisticRouteTemplateStore();
+    const learned = Array.from({ length: MAX_OPTIMISTIC_ROUTE_TEMPLATES }, (_unused, index) =>
+      learnNumberedRoute(store, routeManifest, index),
+    );
+
+    // Resolving route 0 makes it the most recent, so learning one more route
+    // must evict route 1 instead. Without recency-on-read a route that is
+    // navigated to repeatedly but never relearned would age out.
+    expect(
+      store.resolveNavigationPayload({
+        basePath: "",
+        href: "/r0/b",
+        interceptionContext: null,
+        mountedSlotsHeader: null,
+        routeManifest,
+      }),
+    ).not.toBeNull();
+
+    learnNumberedRoute(store, routeManifest, MAX_OPTIMISTIC_ROUTE_TEMPLATES);
+
+    expect(store.templates.has(learned[0]!.templateKey)).toBe(true);
+    expect(store.templates.has(learned[1]!.templateKey)).toBe(false);
+  });
+
+  it("bounds source records that collapse onto a single route id", () => {
+    const routeManifest = numberedDynamicRouteManifest(1);
+    const store = new OptimisticRouteTemplateStore();
+
+    const overflow = 2;
+    const total = MAX_OPTIMISTIC_ROUTE_TEMPLATE_SOURCES + overflow;
+    const learned = Array.from({ length: total }, (_unused, index) =>
+      learnNumberedRoute(store, routeManifest, 0, `-${index}`),
+    );
+
+    // One route id, so one template, but one source record per prefetched URL —
+    // this is the collection that actually grows per URL in a long session.
+    expect(store.templates.size).toBe(1);
+    expect(store.sources.size).toBe(MAX_OPTIMISTIC_ROUTE_TEMPLATE_SOURCES);
+    expect(store.hasLearnedOrPendingSource(learned[0]!.sourceKey)).toBe(false);
+    expect(store.hasLearnedOrPendingSource(learned[total - 1]!.sourceKey)).toBe(true);
+    // Dropping a source record must never strand the template it points at; the
+    // worst case is one redundant local re-decode.
+    expect(store.templates.has(learned[0]!.templateKey)).toBe(true);
+  });
+
+  it("never evicts in-flight learning entries", () => {
+    const routeCount = MAX_OPTIMISTIC_ROUTE_TEMPLATES + 1;
+    const routeManifest = numberedDynamicRouteManifest(routeCount);
+    const store = new OptimisticRouteTemplateStore();
+
+    const pending = Promise.resolve();
+    store.trackLearning("in-flight", pending);
+
+    for (let index = 0; index < routeCount; index += 1) {
+      learnNumberedRoute(store, routeManifest, index);
+    }
+
+    // Eviction must not touch the in-flight map: dropping a tracked promise
+    // would let a concurrent pass start a duplicate decode and stop it from
+    // awaiting the one already running.
+    expect(store.pendingLearningCount).toBe(1);
+    expect(store.pendingLearning()).toEqual([pending]);
+    expect(store.hasLearnedOrPendingSource("in-flight")).toBe(true);
+
+    store.settleLearning("in-flight");
+    expect(store.pendingLearningCount).toBe(0);
   });
 });
