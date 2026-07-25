@@ -1192,6 +1192,7 @@ export default createAppRscHandler({
           interceptSlotKey: intercept.slotKey,
           interceptSourceMatchedUrl: interceptionContext,
           interceptSourcePageSegments: intercept.sourcePageSegments,
+          interceptTargetRouteGraphId: intercept.targetRouteGraphId,
           interceptPage: intercept.page,
           interceptParams: intercept.matchedParams,
         };

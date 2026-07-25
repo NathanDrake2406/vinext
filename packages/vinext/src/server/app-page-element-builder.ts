@@ -93,6 +93,7 @@ export type AppPageInterceptOptions<TModule extends AppPageModule = AppPageModul
   interceptSlotKey?: string | null;
   interceptSourceMatchedUrl?: string | null;
   interceptSourcePageSegments?: readonly string[] | null;
+  interceptTargetRouteGraphId?: string | null;
 };
 
 export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = {
@@ -262,13 +263,11 @@ export async function buildPageElements<
   // page missing its default export would silently render the source page.
   if ((hasPageModule || isSiblingIntercept) && !EffectivePageComponent) {
     let noExportRootLayout: string | null = null;
-    const noExportLayoutIds =
-      route.ids?.layouts ??
-      route.layouts.map((_, index) =>
-        AppElementsWire.encodeLayoutId(
-          createAppPageTreePath(route.routeSegments, route.layoutTreePositions?.[index] ?? 0),
-        ),
-      );
+    const noExportLayoutIds = route.layouts.map((_, index) =>
+      AppElementsWire.encodeLayoutId(
+        createAppPageTreePath(route.routeSegments, route.layoutTreePositions?.[index] ?? 0),
+      ),
+    );
     if (route.layouts?.length > 0) {
       const treePosition = route.layoutTreePositions?.[0] ?? 0;
       noExportRootLayout = createAppPageTreePath(route.routeSegments, treePosition);
@@ -601,6 +600,7 @@ export async function buildPageElements<
     streamingMetadataTags,
     renderIdentity,
     routePath,
+    semanticInterceptionTargetRouteId: opts?.interceptTargetRouteGraphId ?? null,
     sourcePageSegments,
     rootNotFoundModule: rootNotFoundModule ?? null,
     rootForbiddenModule: rootForbiddenModule ?? null,

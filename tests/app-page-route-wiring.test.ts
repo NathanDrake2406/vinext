@@ -1832,7 +1832,7 @@ describe("app page route wiring helpers", () => {
             rootBoundary: graph.rootBoundaryId,
             route: graph.routeId,
             routeHandler: null,
-            slots: { modal: modalSlotId },
+            slots: { modal: "graph-slot:modal" },
             templates: [],
           },
           layoutTreePositions: [0],
@@ -1894,6 +1894,98 @@ describe("app page route wiring helpers", () => {
     expect(changedGraphIds[modalSlotId]).not.toBe(baseline[modalSlotId]);
     expect(changedRootBoundary["page:/photos/42"]).not.toBe(baseline["page:/photos/42"]);
     expect(layoutOnly["page:/photos/42"]).toBeDefined();
+    expect(JSON.parse(baseline[modalSlotId])[1]).toBe("graph-slot:modal");
+  });
+
+  it("uses semantic interception route ids instead of wire route ids for slot identity", () => {
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
+    const buildIdentity = (
+      wireTargetRouteId: string,
+      semanticTargetRouteId: string | null,
+    ): string | undefined => {
+      const elements = buildAppPageElements({
+        element: createElement(PageProbe),
+        interception: {
+          sourceMatchedUrl: "/feed",
+          sourceRouteId: "route:/feed",
+          slotId: modalSlotId,
+          targetMatchedUrl: "/photos/42",
+          targetRouteId: wireTargetRouteId,
+        },
+        makeThenableParams(value) {
+          return Promise.resolve(value);
+        },
+        matchedParams: { id: "42" },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null],
+          ids: {
+            layouts: ["graph-layout:root"],
+            page: "graph-page:/feed",
+            rootBoundary: "graph-root:/",
+            route: "graph-route:/feed",
+            routeHandler: null,
+            slots: { modal: "graph-slot:modal" },
+            templates: [],
+          },
+          layoutTreePositions: [0],
+          layouts: [{ default: RootLayout }],
+          loading: null,
+          notFound: null,
+          notFounds: [null],
+          routeSegments: ["feed"],
+          slots: {
+            modal: {
+              default: null,
+              error: null,
+              id: "transport-independent-slot-id",
+              layout: null,
+              layoutIndex: 0,
+              loading: null,
+              name: "modal",
+              page: { default: SlotPage },
+              routeSegments: ["photos", "[id]"],
+            },
+          },
+          templateTreePositions: [],
+          templates: [],
+        },
+        routePath: "/photos/42",
+        rootNotFoundModule: null,
+        semanticInterceptionTargetRouteId: semanticTargetRouteId,
+      });
+      const identities = elements[AppElementsWire.keys.bfcacheSegmentIdentities];
+      if (typeof identities !== "object" || identities === null || Array.isArray(identities)) {
+        throw new Error("Expected BFCache identity metadata");
+      }
+      const identity = (identities as Readonly<Record<string, unknown>>)[modalSlotId];
+      if (identity !== undefined && typeof identity !== "string") {
+        throw new Error("Expected modal BFCache identity");
+      }
+      return identity;
+    };
+
+    const baseline = buildIdentity("route:/photos/42", "graph-route:/photos/[id]");
+    const changedWireId = buildIdentity(
+      "route:/transport-format-changed/photos/42",
+      "graph-route:/photos/[id]",
+    );
+    const changedGraphId = buildIdentity("route:/photos/42", "graph-route:/albums/[id]");
+    const missingGraphId = buildIdentity("route:/photos/42", null);
+
+    expect(changedWireId).toBe(baseline);
+    expect(changedGraphId).not.toBe(baseline);
+    expect(missingGraphId).toBeUndefined();
+    expect(baseline).toBeDefined();
+    if (baseline === undefined) return;
+    expect(JSON.parse(baseline)).toMatchObject({
+      1: "graph-slot:modal",
+      2: "graph-layout:root",
+      4: "graph-route:/photos/[id]",
+      5: "graph-route:/photos/[id]",
+    });
   });
 
   it("keys synthetic children-slot page elements with their emitted identity", () => {
@@ -1909,7 +2001,7 @@ describe("app page route wiring helpers", () => {
         resolvedViewport: {},
         route: {
           childrenSlot: {
-            id: childrenSlotId,
+            id: "graph-slot:children",
             ownerTreePath: "/",
             state: "active",
           },
@@ -1936,6 +2028,7 @@ describe("app page route wiring helpers", () => {
       .bfcacheSegmentIdentities[childrenSlotId];
 
     expect(firstIdentity).toBeTypeOf("string");
+    expect(JSON.parse(firstIdentity)[1]).toBe("graph-slot:children");
     expect(repeatedIdentity).toBe(firstIdentity);
     expect(changedIdentity).not.toBe(firstIdentity);
   });

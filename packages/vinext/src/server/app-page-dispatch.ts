@@ -144,6 +144,7 @@ type AppPageDispatchIntercept<TPage = unknown> = {
   slotKey: string;
   sourceRouteIndex: number;
   sourcePageSegments?: readonly string[] | null;
+  targetRouteGraphId?: string | null;
 };
 
 type AppPageDispatchInterceptOptions<TPage = unknown> = {
@@ -162,6 +163,7 @@ type AppPageDispatchInterceptOptions<TPage = unknown> = {
   interceptSlotKey: string;
   interceptSourceMatchedUrl?: string | null;
   interceptSourcePageSegments?: readonly string[] | null;
+  interceptTargetRouteGraphId?: string | null;
 };
 
 type AppPageModule = {
@@ -606,6 +608,7 @@ function toInterceptOptions(
     interceptSlotKey: intercept.slotKey,
     interceptSourceMatchedUrl: interceptionContext,
     interceptSourcePageSegments: intercept.sourcePageSegments ?? null,
+    interceptTargetRouteGraphId: intercept.targetRouteGraphId ?? null,
   };
 }
 

@@ -159,6 +159,7 @@ export type AppPageRouteWiringRoute<
    */
   slots?: Readonly<Record<string, AppPageRouteWiringSlot<TModule, TErrorModule>>> | null;
   childrenSlot?: {
+    /** Graph-owned semantic identity; the wire address is derived from ownerTreePath. */
     id: string;
     ownerTreePath: string;
     state: AppElementsSlotBinding["state"];
@@ -255,6 +256,7 @@ type BuildAppPageElementsOptions<
   renderIdentity?: AppPageRenderIdentity;
   renderMode?: AppRscRenderMode;
   routePath: string;
+  semanticInterceptionTargetRouteId?: string | null;
   sourcePageSegments?: readonly string[] | null;
 };
 
@@ -569,13 +571,13 @@ function createAppPageParallelSlotEntries<
 }
 
 function resolveAppPageSlotId(slot: AppPageRouteWiringSlot, treePath: string): string {
-  const slotId = AppElementsWire.encodeSlotId(slot.name, treePath);
-  if (slot.id && slot.id !== slotId) {
-    throw new Error(
-      `[vinext] App Router slot id mismatch for @${slot.name}: graph id ${slot.id} does not match wire id ${slotId}`,
-    );
-  }
-  return slotId;
+  return AppElementsWire.encodeSlotId(slot.name, treePath);
+}
+
+function resolveAppPageChildrenSlotId(
+  childrenSlot: NonNullable<AppPageRouteWiringRoute["childrenSlot"]>,
+): string {
+  return AppElementsWire.encodeSlotId("children", childrenSlot.ownerTreePath);
 }
 
 function resolveAppPageSlotBindingState(
@@ -609,10 +611,11 @@ function createAppPageSlotBindings<
     const ownerLayoutId = layoutEntries.find(
       (layoutEntry) => layoutEntry.treePath === route.childrenSlot?.ownerTreePath,
     )?.id;
+    const slotId = resolveAppPageChildrenSlotId(route.childrenSlot);
     bindings.push({
       ...(route.childrenSlot.state === "active" ? { activeRouteId: options.routeId } : {}),
       ownerLayoutId: ownerLayoutId ?? null,
-      slotId: route.childrenSlot.id,
+      slotId,
       state: route.childrenSlot.state,
     });
   }
@@ -689,6 +692,7 @@ function createAppPageSegmentPlan<
   rootLayoutTreePath: string | null;
   route: AppPageRouteWiringRoute<TModule, TErrorModule>;
   routeSegments: readonly string[];
+  semanticInterceptionTargetRouteId: string | null;
   semanticRouteId: string;
   slotBindings: readonly AppElementsSlotBinding[];
   templateEntries: readonly AppPageTemplateEntry<TModule>[];
@@ -739,27 +743,38 @@ function createAppPageSegmentPlan<
     return requireGraphSequenceId(graphIds.layouts, ownerLayoutIndex, "layout");
   };
   const deriveSlotIdentity = (
-    graphId: string,
+    slotGraphId: string,
     slotId: string,
     slotBinding: AppElementsSlotBinding,
     boundSegmentKey: string,
-  ): string =>
-    deriveBfcacheSegmentIdentity({
-      activeRouteId:
+  ): string | null => {
+    const isIntercepted = options.interception?.slotId === slotId;
+    const interceptionTargetRouteGraphId = isIntercepted
+      ? graphIds
+        ? options.semanticInterceptionTargetRouteId
+        : (slotBinding.activeRouteId ?? options.interception?.targetRouteId ?? null)
+      : null;
+    // A graph-owned intercepted identity without a semantic target is
+    // incomplete. Omit its proof so the browser remints conservatively rather
+    // than falling back to the transport route id.
+    if (isIntercepted && graphIds && interceptionTargetRouteGraphId === null) {
+      return null;
+    }
+    return deriveBfcacheSegmentIdentity({
+      activeRouteGraphId:
         slotBinding.state !== "active"
           ? null
-          : options.interception?.slotId === slotId
-            ? (slotBinding.activeRouteId ?? null)
+          : isIntercepted
+            ? interceptionTargetRouteGraphId
             : options.semanticRouteId,
       boundSegmentKey,
-      graphId,
-      interceptionTargetRouteId:
-        options.interception?.slotId === slotId ? options.interception.targetRouteId : null,
+      interceptionTargetRouteGraphId,
       kind: "slot",
-      ownerLayoutId: resolveOwnerLayoutGraphId(slotBinding.ownerLayoutId),
-      slotId,
+      ownerLayoutGraphId: resolveOwnerLayoutGraphId(slotBinding.ownerLayoutId),
+      slotGraphId,
       state: slotBinding.state,
     });
+  };
 
   const pageBinding = options.route.childrenSlot
     ? slotBindingsById.get(options.pageElementId)
@@ -768,12 +783,13 @@ function createAppPageSegmentPlan<
     throw new Error(`[vinext] Missing App Router slot binding for ${options.pageElementId}`);
   }
   if (pageBinding) {
-    identities[options.pageElementId] = deriveSlotIdentity(
+    const identity = deriveSlotIdentity(
       options.route.childrenSlot!.id,
       options.pageElementId,
       pageBinding,
       routeResetKey,
     );
+    if (identity !== null) identities[options.pageElementId] = identity;
   } else {
     // Layout-only routes still emit a page carrier for their parallel-slot
     // content. The route is the graph-owned identity for that synthetic leaf.
@@ -807,7 +823,8 @@ function createAppPageSegmentPlan<
       throw new Error(`[vinext] Missing App Router graph slot id for ${slotKey}`);
     }
     if (includedInPayload) {
-      identities[slotId] = deriveSlotIdentity(graphId, slotId, slotBinding, resetKey);
+      const identity = deriveSlotIdentity(graphId, slotId, slotBinding, resetKey);
+      if (identity !== null) identities[slotId] = identity;
     }
     return Object.freeze({
       branchSegments,
@@ -974,7 +991,9 @@ export function buildAppPageElements<
     AppElementsWire.encodeRouteId(options.routePath, interceptionContext);
   const pageId =
     renderIdentity?.pageId ?? AppElementsWire.encodePageId(options.routePath, interceptionContext);
-  const pageElementId = options.route.childrenSlot?.id ?? pageId;
+  const pageElementId = options.route.childrenSlot
+    ? resolveAppPageChildrenSlotId(options.route.childrenSlot)
+    : pageId;
   const streamingMetadataBodyId = options.streamingMetadata
     ? `__vinext_streaming_metadata_body:${routeId}`
     : null;
@@ -1116,6 +1135,7 @@ export function buildAppPageElements<
     rootLayoutTreePath,
     route: options.route,
     routeSegments,
+    semanticInterceptionTargetRouteId: options.semanticInterceptionTargetRouteId ?? null,
     semanticRouteId:
       options.route.ids?.route ?? AppElementsWire.encodeRouteId(options.routePath, null),
     slotBindings,
@@ -1129,7 +1149,7 @@ export function buildAppPageElements<
     bfcacheSegmentIdentities: segmentPlan.bfcacheSegmentIdentities,
     interception,
     interceptionContext,
-    layoutIds: options.route.ids?.layouts ?? layoutEntries.map((entry) => entry.id),
+    layoutIds: layoutEntries.map((entry) => entry.id),
     rootLayoutTreePath,
     routeId,
     sourcePage: createAppPageSourcePage(options.sourcePageSegments ?? routeSegments),

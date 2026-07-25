@@ -46,12 +46,11 @@ export type BfcacheSegmentDescriptor =
     }
   | {
       kind: "slot";
-      graphId: string;
-      slotId: string;
-      ownerLayoutId: string | null;
+      slotGraphId: string;
+      ownerLayoutGraphId: string | null;
       state: ParallelSlotBindingState;
-      activeRouteId: string | null;
-      interceptionTargetRouteId: string | null;
+      activeRouteGraphId: string | null;
+      interceptionTargetRouteGraphId: string | null;
       boundSegmentKey: string;
     };
 
@@ -85,12 +84,11 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
     case "slot":
       return JSON.stringify([
         "slot",
-        descriptor.graphId,
-        descriptor.slotId,
-        descriptor.ownerLayoutId,
+        descriptor.slotGraphId,
+        descriptor.ownerLayoutGraphId,
         descriptor.state,
-        descriptor.activeRouteId,
-        descriptor.interceptionTargetRouteId,
+        descriptor.activeRouteGraphId,
+        descriptor.interceptionTargetRouteGraphId,
         descriptor.boundSegmentKey,
       ]);
   }

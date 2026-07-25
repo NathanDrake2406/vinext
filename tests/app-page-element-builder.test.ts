@@ -8,6 +8,7 @@ import {
   APP_ROUTE_KEY,
   APP_SOURCE_PAGE_KEY,
   APP_SLOT_BINDINGS_KEY,
+  AppElementsWire,
   type AppElements,
 } from "../packages/vinext/src/server/app-elements.js";
 import type { AppPageModule } from "../packages/vinext/src/server/app-page-route-wiring.js";
@@ -1024,7 +1025,7 @@ describe("buildPageElements", () => {
     });
   });
 
-  it("rejects graph slot ids that diverge from the wire slot id", async () => {
+  it("uses wire slot ids only as payload addresses", async () => {
     function TestPage(): React.ReactNode {
       return React.createElement("div", null, "Hello");
     }
@@ -1049,9 +1050,13 @@ describe("buildPageElements", () => {
       },
     });
 
-    await expect(
-      buildPageElements(createBaseOptions({ route, routePath: "/feed" })),
-    ).rejects.toThrow("App Router slot id mismatch");
+    const elements = await buildPageElements(createBaseOptions({ route, routePath: "/feed" }));
+    const wireSlotId = AppElementsWire.encodeSlotId("modal", "/feed");
+    const identities = AppElementsWire.readMetadata(elements).bfcacheSegmentIdentities;
+
+    expect(elements[wireSlotId]).toBeDefined();
+    expect(Object.hasOwn(elements, "slot:modal:/wrong")).toBe(false);
+    expect(JSON.parse(identities[wireSlotId])).toContain("slot:modal:/wrong");
   });
 
   it("does NOT call markDynamicUsage while wiring searchParams into the render tree", async () => {

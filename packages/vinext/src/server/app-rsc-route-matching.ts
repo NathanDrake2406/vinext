@@ -90,6 +90,9 @@ type AppRscSiblingInterceptForMatching = {
 
 type AppRscRouteForMatching = {
   __loadRouteHandler?: unknown;
+  ids?: {
+    route?: string | null;
+  } | null;
   pattern: string;
   patternParts: string[];
   routeHandler?: unknown;
@@ -134,6 +137,7 @@ type AppRscInterceptLookupEntry = {
   __loadState: AppRscInterceptLoadState;
   params: readonly string[];
   slotId: string | null;
+  targetRouteGraphId: string | null;
 };
 
 function createRouteParams(): AppRscRouteParams {
@@ -377,6 +381,11 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
   // current) rather than kind="current-route" (owner === current), which would
   // render the descendant page instead of the owner's layout+page tree.
   const patternToIndex = new Map<string, number>(routes.map((r, i) => [r.pattern, i]));
+  const patternToRouteGraphId = new Map(
+    routes.flatMap((route) =>
+      typeof route.ids?.route === "string" ? [[route.pattern, route.ids.route] as const] : [],
+    ),
+  );
 
   const interceptLookup: AppRscInterceptLookupEntry[] = [];
   for (let routeIndex = 0; routeIndex < routes.length; routeIndex++) {
@@ -399,6 +408,7 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
             sourceRouteIndex: ownerRouteIndex,
             slotKey,
             slotId: typeof slotModule.id === "string" ? slotModule.id : null,
+            targetRouteGraphId: patternToRouteGraphId.get(intercept.targetPattern) ?? null,
             targetPattern: intercept.targetPattern,
             targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
             sourceMatchPattern,
@@ -439,6 +449,7 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
           sourceRouteIndex: routeIndex,
           slotKey: SIBLING_PAGE_INTERCEPT_SLOT_KEY,
           slotId: typeof intercept.slotId === "string" ? intercept.slotId : null,
+          targetRouteGraphId: patternToRouteGraphId.get(intercept.targetPattern) ?? null,
           targetPattern: intercept.targetPattern,
           targetPatternParts: intercept.targetPattern.split("/").filter(Boolean),
           sourceMatchPattern,

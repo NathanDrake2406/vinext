@@ -680,6 +680,7 @@ describe("App RSC route matching", () => {
     it("findIntercept matches sibling intercept on soft-nav and misses on hard-nav", () => {
       const routes: TestRoute[] = [
         {
+          ids: { route: "graph-route:/foo/bar" },
           pattern: "/foo/bar",
           patternParts: ["foo", "bar"],
           siblingIntercepts: [
@@ -696,7 +697,11 @@ describe("App RSC route matching", () => {
             },
           ],
         },
-        { pattern: "/hoge", patternParts: ["hoge"] },
+        {
+          ids: { route: "graph-route:/hoge" },
+          pattern: "/hoge",
+          patternParts: ["hoge"],
+        },
       ];
       const matcher = createAppRscRouteMatcher(routes as any);
 
@@ -707,6 +712,7 @@ describe("App RSC route matching", () => {
       expect(hit?.sourcePageSegments).toEqual(["foo", "bar", "(..)(..)hoge"]);
       expect(hit?.interceptLayoutSegments).toEqual([["[photo]"]]);
       expect(hit?.interceptBranchSegments).toEqual(["[photo]", "[comment]"]);
+      expect(hit?.targetRouteGraphId).toBe("graph-route:/hoge");
 
       // Hard-nav (no source): must return null
       expect(matcher.findIntercept("/hoge", null)).toBeNull();
@@ -770,6 +776,7 @@ type TestSiblingIntercept = {
 
 type TestRoute = {
   __loadRouteHandler?: unknown;
+  ids?: { route: string };
   pattern: string;
   patternParts: string[];
   routeHandler?: unknown;
