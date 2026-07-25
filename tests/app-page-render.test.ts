@@ -752,6 +752,12 @@ describe("app page render lifecycle", () => {
     expect(response.headers.get("x-vinext-cache")).toBeNull();
     expect(common.waitUntilPromises).toHaveLength(1);
 
+    // Streaming before the capture drains also means the response cannot carry
+    // the render's cacheLife stale — cold RSC navigations rely on the entry
+    // this write produces. Kept deliberately: #961 rejected blocking the cold
+    // response on cache metadata.
+    expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBeNull();
+
     releaseRsc.resolve();
     await expect(response.text()).resolves.toBe("flight");
     await Promise.all(common.waitUntilPromises);
