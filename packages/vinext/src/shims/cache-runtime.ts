@@ -646,6 +646,10 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           cacheControl: {
             revalidate: revalidateSeconds,
             expire: effectiveLife.expire,
+            // Persisted so a later hit can re-register the same client-freshness
+            // claim this execution contributed. Without it the enclosing render's
+            // minimum would depend on data-cache temperature.
+            stale: effectiveLife.stale,
           },
         });
       } catch {
@@ -699,6 +703,10 @@ function recordRequestScopedCacheControl(cacheControl: CacheControlMetadata | un
     // enclosing cache scope's finite revalidation window.
     revalidate: cacheControl.revalidate === false ? undefined : cacheControl.revalidate,
     expire: cacheControl.expire,
+    // A cache hit must contribute the same client-freshness claim its producing
+    // execution did, otherwise the enclosing render's minimum silently widens
+    // once an entry goes warm.
+    stale: cacheControl.stale,
   });
 }
 

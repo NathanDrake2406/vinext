@@ -59,6 +59,7 @@ import {
 } from "./prerender-server-pool.js";
 import { readPrerenderSecret } from "./server-manifest.js";
 import { getOutputPath, getRscOutputPath } from "../utils/prerender-output-paths.js";
+import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
 import {
   createAppPprFallbackShells,
@@ -1571,6 +1572,14 @@ export async function prerenderApp({
               : Math.min(revalidate, renderedCacheControl.revalidate)
             : (renderedCacheControl.revalidate ?? revalidate);
 
+        // Clamp against the entry's effective expire for the same reason the
+        // runtime write path does: reuse past expire would hand back output the
+        // server already considers gone.
+        const renderedStale = resolveClientStaleTimeSeconds({
+          expire: renderedCacheControl.expire,
+          stale: htmlRender.requestCacheLife?.stale,
+        });
+
         return {
           route: routePattern,
           status: "rendered",
@@ -1579,6 +1588,7 @@ export async function prerenderApp({
           ...(typeof renderedRevalidate === "number"
             ? { expire: renderedCacheControl.expire }
             : {}),
+          ...(renderedStale === undefined ? {} : { stale: renderedStale }),
           router: "app",
           ...(htmlRender.tags.length > 0 ? { tags: htmlRender.tags } : {}),
           ...(htmlRender.linkHeader ? { headers: { link: htmlRender.linkHeader } } : {}),
@@ -1686,8 +1696,15 @@ export async function prerenderApp({
   }
 }
 
+/**
+ * Cache life recovered from a prerendered response. `stale` is the client-router
+ * dimension and is carried through to the seeded ISR entry so a served cache hit
+ * advertises the same client-freshness claim the prerender resolved.
+ */
+type PrerenderCacheLife = { expire?: number; revalidate?: number; stale?: number };
+
 function resolveRenderedCacheControl(
-  requestCacheLife: { expire?: number; revalidate?: number },
+  requestCacheLife: PrerenderCacheLife,
   cacheControl: string,
   fallbackExpireSeconds: number,
 ): { expire: number; revalidate?: number } {
@@ -1707,22 +1724,31 @@ function resolveRenderedCacheControl(
   };
 }
 
-function readPrerenderCacheLifeHeader(
-  headers: Headers,
-): { expire?: number; revalidate?: number } | null {
+function readPrerenderCacheLifeHeader(headers: Headers): PrerenderCacheLife | null {
   const value = headers.get(VINEXT_PRERENDER_CACHE_LIFE_HEADER);
   if (!value) return null;
 
   try {
-    const parsed = JSON.parse(value) as { expire?: unknown; revalidate?: unknown };
-    const cacheLife: { expire?: number; revalidate?: number } = {};
+    const parsed = JSON.parse(value) as {
+      expire?: unknown;
+      revalidate?: unknown;
+      stale?: unknown;
+    };
+    const cacheLife: PrerenderCacheLife = {};
     if (typeof parsed.revalidate === "number" && Number.isFinite(parsed.revalidate)) {
       cacheLife.revalidate = parsed.revalidate;
     }
     if (typeof parsed.expire === "number" && Number.isFinite(parsed.expire)) {
       cacheLife.expire = parsed.expire;
     }
-    return cacheLife.revalidate === undefined && cacheLife.expire === undefined ? null : cacheLife;
+    if (typeof parsed.stale === "number" && Number.isFinite(parsed.stale) && parsed.stale >= 0) {
+      cacheLife.stale = parsed.stale;
+    }
+    return cacheLife.revalidate === undefined &&
+      cacheLife.expire === undefined &&
+      cacheLife.stale === undefined
+      ? null
+      : cacheLife;
   } catch {
     return null;
   }

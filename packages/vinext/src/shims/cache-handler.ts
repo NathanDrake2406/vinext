@@ -15,6 +15,19 @@ export type CacheHandlerValue = {
 export type CacheControlMetadata = {
   revalidate: number | false;
   expire?: number;
+  /**
+   * The client-router dimension of the render's resolved `cacheLife`: how long
+   * a browser may reuse this entry's output before asking the server again.
+   *
+   * Persisted alongside the shared-cache fields so a warm cache hit can
+   * re-advertise the same client-freshness claim the producing render made.
+   * Without it, replaying an entry would silently widen client reuse back to
+   * the configured `experimental.staleTimes` default.
+   *
+   * Independent of `revalidate`/`expire` — never derived from them. Absent
+   * means the render made no client-freshness claim.
+   */
+  stale?: number;
 };
 
 export type IncrementalCacheValue =
@@ -297,6 +310,7 @@ export class MemoryCacheHandler implements CacheHandler {
 
     let effectiveRevalidate = readCacheControlRevalidateField(ctx);
     const effectiveExpire = readCacheControlNumberField(ctx, "expire");
+    const effectiveStale = readCacheControlNumberField(ctx, "stale");
     if (data && "revalidate" in data && typeof data.revalidate === "number") {
       effectiveRevalidate = data.revalidate;
     } else if (data && "revalidate" in data && data.revalidate === false) {
@@ -315,11 +329,16 @@ export class MemoryCacheHandler implements CacheHandler {
       typeof effectiveExpire === "number" && effectiveExpire > 0
         ? now + effectiveExpire * 1000
         : null;
-    const cacheControl =
+    // Absent fields stay absent rather than becoming explicit `undefined`, so a
+    // round trip through a serializing cache adapter cannot turn "no claim"
+    // into a key that later reads as present.
+    const cacheControl: CacheControlMetadata | undefined =
       typeof effectiveRevalidate === "number" || effectiveRevalidate === false
-        ? effectiveExpire === undefined
-          ? { revalidate: effectiveRevalidate }
-          : { revalidate: effectiveRevalidate, expire: effectiveExpire }
+        ? {
+            revalidate: effectiveRevalidate,
+            ...(effectiveExpire === undefined ? {} : { expire: effectiveExpire }),
+            ...(effectiveStale === undefined ? {} : { stale: effectiveStale }),
+          }
         : undefined;
 
     if (this.maxMemoryCacheSize === 0) return;

@@ -559,6 +559,7 @@ describe("app page render lifecycle", () => {
       60,
       ["_N_T_/posts/post"],
       undefined,
+      undefined,
     );
     const cachedValue = common.isrSet.mock.calls[0]?.[1];
     expect(cachedValue?.renderObservation).toMatchObject({
@@ -671,6 +672,62 @@ describe("app page render lifecycle", () => {
     );
   });
 
+  it("persists the completed render's client stale time onto the cache entry", async () => {
+    // getRequestCacheLife is the consuming read the cache-write path owns, and
+    // it runs after the captured RSC stream has drained — so unlike a value read
+    // at header time, this one reflects every `use cache` scope the render
+    // touched. That is what makes it safe to advertise on replay.
+    const common = createCommonOptions();
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      getRequestCacheLife() {
+        return { revalidate: 1, expire: 60, stale: 30 };
+      },
+      isProduction: true,
+      isRscRequest: true,
+      revalidateSeconds: null,
+    });
+
+    await expect(response.text()).resolves.toBe("flight-data");
+    await Promise.all(common.waitUntilPromises);
+
+    expect(common.isrSet).toHaveBeenCalledWith(
+      "rsc:/posts/post",
+      expect.objectContaining({ kind: "APP_PAGE" }),
+      1,
+      ["_N_T_/posts/post"],
+      60,
+      30,
+    );
+  });
+
+  it("clamps the persisted client stale time to the entry's effective expire", async () => {
+    const common = createCommonOptions();
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      getRequestCacheLife() {
+        return { revalidate: 10, expire: 45, stale: 300 };
+      },
+      isProduction: true,
+      isRscRequest: true,
+      revalidateSeconds: null,
+    });
+
+    await expect(response.text()).resolves.toBe("flight-data");
+    await Promise.all(common.waitUntilPromises);
+
+    expect(common.isrSet).toHaveBeenCalledWith(
+      "rsc:/posts/post",
+      expect.objectContaining({ kind: "APP_PAGE" }),
+      10,
+      ["_N_T_/posts/post"],
+      45,
+      45,
+    );
+  });
+
   it("does not wait for the full captured RSC payload before returning production RSC responses", async () => {
     const common = createCommonOptions();
     const releaseRsc = createDeferred();
@@ -717,6 +774,7 @@ describe("app page render lifecycle", () => {
       7,
       ["_N_T_/posts/post"],
       11,
+      undefined,
     );
   });
 
@@ -806,6 +864,7 @@ describe("app page render lifecycle", () => {
       30,
       ["_N_T_/posts/post"],
       undefined,
+      undefined,
     );
     expect(common.isrSet).toHaveBeenNthCalledWith(
       2,
@@ -813,6 +872,7 @@ describe("app page render lifecycle", () => {
       expect.objectContaining({ kind: "APP_PAGE" }),
       30,
       ["_N_T_/posts/post"],
+      undefined,
       undefined,
     );
   });
@@ -863,6 +923,7 @@ describe("app page render lifecycle", () => {
       5,
       ["_N_T_/posts/post"],
       9,
+      undefined,
     );
     expect(common.isrSet).toHaveBeenNthCalledWith(
       2,
@@ -871,6 +932,7 @@ describe("app page render lifecycle", () => {
       5,
       ["_N_T_/posts/post"],
       9,
+      undefined,
     );
   });
 
@@ -1360,11 +1422,16 @@ describe("app page render lifecycle", () => {
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
-  it("advertises the resolved cacheLife stale time to the client router", async () => {
-    // The `seconds` profile: { stale: 30, revalidate: 1, expire: 60 }. `stale`
-    // exceeds `revalidate`, so the three numbers must be treated as
-    // independent — `stale` is the client-router bound and must survive intact
-    // even though the shared-cache revalidation window is 1s.
+  it("never advertises a client stale time on a streaming render", async () => {
+    // Regression guard for the shape this feature must not take. `use cache`
+    // scopes below the page keep resolving while the RSC stream is consumed,
+    // long after headers are committed, so any value read here describes the
+    // probe rather than the output. A page-level scope declaring `stale: 30`
+    // does not license advertising 30s: an unobserved nested scope could still
+    // lower the render's minimum, and `cacheLife` aggregation is minimum-wins.
+    //
+    // The claim is instead persisted onto the cache entry by the write path,
+    // which runs after the stream drains, and replayed on cache hits.
     const common = createCommonOptions();
     const response = await renderAppPageLifecycle({
       ...common.options,
@@ -1375,43 +1442,9 @@ describe("app page render lifecycle", () => {
       },
     });
 
-    expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
-    // The client-router dimension must not bleed into the shared-cache policy.
-    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("300");
-    await expect(response.text()).resolves.toBe("flight-data");
-  });
-
-  it("clamps the advertised stale time to the cacheLife expire ceiling", async () => {
-    // Custom profiles may declare stale > expire. Reuse past the hard expiry
-    // would hand back output the server already considers gone.
-    const common = createCommonOptions();
-    const response = await renderAppPageLifecycle({
-      ...common.options,
-      isRscRequest: true,
-      peekRequestCacheLife() {
-        return { stale: 300, revalidate: 60, expire: 45 };
-      },
-    });
-
-    expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("45");
-    await expect(response.text()).resolves.toBe("flight-data");
-  });
-
-  it("advertises no stale time when the resolved cacheLife declares none", async () => {
-    // The `default` profile is { revalidate: 900, expire: 4294967294 } — no
-    // `stale`. A stale time must never be synthesized from those: doing so
-    // would license ~136 years of client reuse without a refresh. Omitting the
-    // header leaves the client on its configured experimental.staleTimes value.
-    const common = createCommonOptions();
-    const response = await renderAppPageLifecycle({
-      ...common.options,
-      isRscRequest: true,
-      peekRequestCacheLife() {
-        return { revalidate: 900, expire: 4294967294 };
-      },
-    });
-
     expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBeNull();
+    // The configured client stale time is a build-time constant and still ships.
+    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("300");
     await expect(response.text()).resolves.toBe("flight-data");
   });
 

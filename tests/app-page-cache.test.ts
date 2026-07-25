@@ -21,12 +21,13 @@ import {
 } from "../packages/vinext/src/server/cache-proof.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 import { markAppPprDynamicFallbackShellHtml } from "../packages/vinext/src/server/app-ppr-fallback-shell.js";
+import { NEXT_ROUTER_STALE_TIME_HEADER } from "../packages/vinext/src/server/headers.js";
 import { withEnvVar } from "./env-test-helpers.js";
 
 function buildISRCacheEntry(
   value: CachedAppPageValue,
   isStale = false,
-  cacheControl?: { revalidate: number; expire?: number },
+  cacheControl?: { revalidate: number; expire?: number; stale?: number },
 ): ISRCacheEntry {
   return {
     isStale,
@@ -124,6 +125,65 @@ describe("app page cache helpers", () => {
     expect(rscResponse?.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER)).toBe("compat-a");
     expect(rscResponse?.headers.get("x-nextjs-cache")).toBe("STALE");
     expect(await rscResponse?.arrayBuffer()).toEqual(rscData);
+  });
+
+  it("replays the entry's client stale time on cache hits", async () => {
+    // The claim was resolved by the render that produced these bytes and
+    // persisted onto the entry. Replaying it is what keeps a warm hit from
+    // serving identical output under a wider client-reuse window than the
+    // fresh render that produced it.
+    const rscData = new TextEncoder().encode("flight").buffer;
+    const cachedValue = buildCachedAppPageValue("<h1>cached</h1>", rscData);
+
+    const htmlResponse = buildAppPageCachedResponse(cachedValue, {
+      cacheControl: { revalidate: 1, expire: 60, stale: 30 },
+      cacheState: "HIT",
+      isRscRequest: false,
+      revalidateSeconds: 60,
+    });
+    // `stale` exceeds `revalidate` in the `seconds` profile by design, so the
+    // shared-cache window must not clamp the client-router bound.
+    expect(htmlResponse?.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
+
+    const rscResponse = buildAppPageCachedResponse(cachedValue, {
+      cacheControl: { revalidate: 1, expire: 60, stale: 30 },
+      cacheState: "HIT",
+      isRscRequest: true,
+      revalidateSeconds: 60,
+    });
+    expect(rscResponse?.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
+    // `stale` governs client-router reuse only; shared caches keep following
+    // revalidate/expire, so it must not appear in Cache-Control.
+    expect(htmlResponse?.headers.get("cache-control")).toBe(
+      "s-maxage=1, stale-while-revalidate=59",
+    );
+  });
+
+  it("clamps a replayed client stale time to the entry's expire ceiling", () => {
+    // Reuse past expire would hand back output the server already considers gone.
+    const response = buildAppPageCachedResponse(buildCachedAppPageValue("<h1>cached</h1>"), {
+      cacheControl: { revalidate: 60, expire: 45, stale: 300 },
+      cacheState: "HIT",
+      isRscRequest: false,
+      revalidateSeconds: 60,
+    });
+
+    expect(response?.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("45");
+  });
+
+  it("advertises no client stale time when the entry carries no claim", () => {
+    // The `default` profile is { revalidate: 900, expire: 4294967294 } with no
+    // `stale`. Synthesizing one from those would license ~136 years of client
+    // reuse without a refresh; omitting the header leaves the client on its
+    // configured experimental.staleTimes value.
+    const response = buildAppPageCachedResponse(buildCachedAppPageValue("<h1>cached</h1>"), {
+      cacheControl: { revalidate: 900, expire: 4294967294 },
+      cacheState: "HIT",
+      isRscRequest: false,
+      revalidateSeconds: 900,
+    });
+
+    expect(response?.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBeNull();
   });
 
   it("merges middleware response headers into cached HTML responses", async () => {

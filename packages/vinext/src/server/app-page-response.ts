@@ -15,6 +15,7 @@ import {
 } from "./headers.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
+import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.js";
 import {
   VINEXT_RSC_CONTENT_TYPE,
   VINEXT_RSC_VARY_HEADER,
@@ -48,36 +49,6 @@ type AppPagePrerenderCacheLife = {
    */
   stale?: number;
 };
-
-function isFiniteNonNegative(value: number | undefined): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-/**
- * Project a resolved `cacheLife` onto the single number the client router needs:
- * how many seconds it may reuse this response without asking the server again.
- *
- * Two deliberate rules:
- *
- * 1. An absent `stale` is *not* synthesized from `revalidate` or `expire`. The
- *    `default` profile has no `stale` and an `expire` of ~136 years, so deriving
- *    one would license session-long reuse without a refresh. Absent `stale`
- *    means "this render makes no client-freshness claim", and the client falls
- *    back to its configured `experimental.staleTimes` value.
- * 2. The three numbers are *not* assumed to be ordered. `seconds` is
- *    `{ stale: 30, revalidate: 1, expire: 60 }` — `stale` exceeds `revalidate`,
- *    and that is intentional, so `revalidate` never constrains `stale`. Only the
- *    hard `expire` ceiling does: reuse past `expire` would hand back output the
- *    server considers gone.
- */
-export function resolveClientStaleTimeSeconds(
-  cacheLife: AppPagePrerenderCacheLife | null | undefined,
-): number | undefined {
-  const stale = cacheLife?.stale;
-  if (!isFiniteNonNegative(stale)) return undefined;
-  const expire = cacheLife?.expire;
-  return isFiniteNonNegative(expire) ? Math.min(stale, expire) : stale;
-}
 
 type ResolveAppPageResponsePolicyBaseOptions = {
   isDraftMode: boolean;
@@ -113,7 +84,6 @@ type BuildAppPageRscResponseOptions = {
   policy: AppPageResponsePolicy;
   renderedPathAndSearch?: string | null;
   requestCacheLife?: AppPagePrerenderCacheLife | null;
-  staleTimeSeconds?: number;
   timing?: AppPageResponseTiming;
 };
 
@@ -126,7 +96,6 @@ type BuildAppPageHtmlResponseOptions = {
   middlewareContext: AppPageMiddlewareContext;
   policy: AppPageResponsePolicy;
   requestCacheLife?: AppPagePrerenderCacheLife | null;
-  staleTimeSeconds?: number;
   timing?: AppPageResponseTiming;
 };
 
@@ -159,11 +128,19 @@ function applyDynamicStaleTimeHeader(headers: Headers, dynamicStaleTimeSeconds?:
 }
 
 /**
- * Advertise the client-router reuse bound resolved from `cacheLife`. The client
- * combines this with its own `experimental.staleTimes` value by taking the
- * minimum, so this header can only ever shorten a cached entry's lifetime.
+ * Advertise the client-router reuse bound resolved from `cacheLife`.
+ *
+ * Only ever set from a *completed* render's cache life — either replayed off a
+ * cache entry, or seeded from a prerender. A streaming response cannot carry it,
+ * because `use cache` scopes below the page keep resolving while the RSC stream
+ * is consumed, long after headers are committed; a value read at header time
+ * would describe the probe, not the output. Absent header leaves the client on
+ * its configured `experimental.staleTimes`.
  */
-function applyClientStaleTimeHeader(headers: Headers, staleTimeSeconds: number | undefined): void {
+export function applyClientStaleTimeHeader(
+  headers: Headers,
+  staleTimeSeconds: number | undefined,
+): void {
   if (staleTimeSeconds === undefined) return;
   headers.set(NEXT_ROUTER_STALE_TIME_HEADER, String(Math.floor(staleTimeSeconds)));
 }
@@ -173,9 +150,10 @@ function applyPrerenderCacheLifeHeader(
   requestCacheLife: AppPagePrerenderCacheLife | null | undefined,
 ): void {
   if (!requestCacheLife) return;
-  // Only the shared-cache fields belong here: the sole consumer
-  // (build/prerender.ts) turns them into ISR seed metadata. `stale` travels to
-  // the client on NEXT_ROUTER_STALE_TIME_HEADER instead.
+  // A build-internal channel: the sole consumer (build/prerender.ts) turns these
+  // into ISR seed metadata, and these responses never reach a browser. `stale`
+  // rides along so a seeded entry can re-advertise the same client-freshness
+  // claim on serve that a runtime render of the same page would persist.
   const payload: AppPagePrerenderCacheLife = {};
   if (
     typeof requestCacheLife.revalidate === "number" &&
@@ -186,7 +164,17 @@ function applyPrerenderCacheLifeHeader(
   if (typeof requestCacheLife.expire === "number" && Number.isFinite(requestCacheLife.expire)) {
     payload.expire = requestCacheLife.expire;
   }
-  if (payload.revalidate === undefined && payload.expire === undefined) return;
+  const stale = resolveClientStaleTimeSeconds(requestCacheLife);
+  if (stale !== undefined) {
+    payload.stale = stale;
+  }
+  if (
+    payload.revalidate === undefined &&
+    payload.expire === undefined &&
+    payload.stale === undefined
+  ) {
+    return;
+  }
   headers.set(VINEXT_PRERENDER_CACHE_LIFE_HEADER, JSON.stringify(payload));
 }
 
@@ -362,7 +350,6 @@ export function buildAppPageRscResponse(
     headers.set(VINEXT_MOUNTED_SLOTS_HEADER, options.mountedSlotsHeader);
   }
   applyDynamicStaleTimeHeader(headers, options.dynamicStaleTimeSeconds);
-  applyClientStaleTimeHeader(headers, options.staleTimeSeconds);
   if (options.policy.cacheControl) {
     headers.set("Cache-Control", options.policy.cacheControl);
   }
@@ -399,7 +386,6 @@ export function buildAppPageHtmlResponse(
   });
 
   applyEdgeRuntimeHeader(headers, options.isEdgeRuntime);
-  applyClientStaleTimeHeader(headers, options.staleTimeSeconds);
 
   if (options.policy.cacheControl) {
     headers.set("Cache-Control", options.policy.cacheControl);

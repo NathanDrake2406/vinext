@@ -6506,6 +6506,46 @@ describe('"use cache" runtime', () => {
     expect(callCount).toBe(1);
   });
 
+  it("a use cache hit re-registers its client stale time on the request scope", async () => {
+    // The enclosing render's minimum is what gets persisted onto the page cache
+    // entry. If a warm `use cache` hit contributed revalidate/expire but dropped
+    // `stale`, the page entry would advertise a wider client-reuse window than
+    // the identical cold render did — the same output under two different
+    // freshness claims depending only on data-cache temperature.
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const {
+      setCacheHandler,
+      MemoryCacheHandler,
+      cacheLife,
+      _peekRequestScopedCacheLife,
+      _runWithCacheState,
+    } = await import("../packages/vinext/src/shims/cache.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    let callCount = 0;
+    const cached = registerCachedFunction(async () => {
+      // `seconds` is { stale: 30, revalidate: 1, expire: 60 }.
+      cacheLife("seconds");
+      callCount++;
+      return { data: "value" };
+    }, "test:stale-replay");
+
+    const coldStale = await _runWithCacheState(async () => {
+      await cached();
+      return _peekRequestScopedCacheLife()?.stale;
+    });
+    expect(callCount).toBe(1);
+    expect(coldStale).toBe(30);
+
+    const warmStale = await _runWithCacheState(async () => {
+      await cached();
+      return _peekRequestScopedCacheLife()?.stale;
+    });
+    expect(callCount).toBe(1);
+    expect(warmStale).toBe(30);
+  });
+
   it("registerCachedFunction collects cacheTag", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");

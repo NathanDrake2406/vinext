@@ -14,6 +14,7 @@
  */
 
 import {
+  type CacheControlMetadata,
   type CacheHandlerValue,
   type IncrementalCacheValue,
   type CachedPagesValue,
@@ -187,14 +188,17 @@ export async function isrSet(
   revalidateSeconds: number | false,
   tags?: string[],
   expireSeconds?: number,
+  staleSeconds?: number,
 ): Promise<void> {
   await getCdnCacheAdapter().set(key, data, {
-    cacheControl:
-      expireSeconds === undefined
-        ? { revalidate: revalidateSeconds }
-        : { revalidate: revalidateSeconds, expire: expireSeconds },
+    cacheControl: {
+      revalidate: revalidateSeconds,
+      ...(expireSeconds === undefined ? {} : { expire: expireSeconds }),
+      ...(staleSeconds === undefined ? {} : { stale: staleSeconds }),
+    } satisfies CacheControlMetadata,
     // `revalidate` is the legacy vinext CacheHandler context field. `expire`
-    // is new metadata and intentionally only lives inside cacheControl.
+    // and `stale` are newer metadata and intentionally only live inside
+    // cacheControl.
     revalidate: revalidateSeconds,
     tags: tags ?? [],
   });
@@ -206,6 +210,12 @@ export async function isrSetPrerenderedAppPage(
   metadata: {
     expireSeconds?: number;
     revalidateSeconds?: number;
+    /**
+     * Client-router reuse bound resolved from the prerender's `cacheLife`, so a
+     * seeded entry advertises the same client-freshness claim a runtime render
+     * of the same page would.
+     */
+    staleSeconds?: number;
     /**
      * Implicit/path tags to attach to the seeded entry. Required so that
      * `revalidatePath()` (and `revalidateTag()`) can invalidate prerender-seeded
@@ -228,10 +238,11 @@ export async function isrSetPrerenderedAppPage(
   const ctx: Record<string, unknown> = {};
   if (revalidateSeconds !== undefined) {
     ctx.revalidate = revalidateSeconds;
-    ctx.cacheControl =
-      metadata.expireSeconds === undefined
-        ? { revalidate: revalidateSeconds }
-        : { revalidate: revalidateSeconds, expire: metadata.expireSeconds };
+    ctx.cacheControl = {
+      revalidate: revalidateSeconds,
+      ...(metadata.expireSeconds === undefined ? {} : { expire: metadata.expireSeconds }),
+      ...(metadata.staleSeconds === undefined ? {} : { stale: metadata.staleSeconds }),
+    } satisfies CacheControlMetadata;
   }
   if (tags && tags.length > 0) {
     ctx.tags = tags;

@@ -111,6 +111,7 @@ type AppPageCacheSetter = (
   revalidateSeconds: number,
   tags: string[],
   expireSeconds?: number,
+  staleSeconds?: number,
 ) => Promise<void>;
 type AppPageCacheGetter = (key: string) => Promise<ISRCacheEntry | null>;
 type AppPageBackgroundRegenerationErrorContext = {

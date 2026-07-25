@@ -9,6 +9,7 @@ import {
 } from "./app-page-render-observation.js";
 import { buildAppPageCacheValue } from "./isr-cache.js";
 import type { RenderObservation } from "./cache-proof.js";
+import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
@@ -18,6 +19,7 @@ type AppPageCacheSetter = (
   revalidateSeconds: number,
   tags: string[],
   expireSeconds?: number,
+  staleSeconds?: number,
 ) => Promise<void>;
 type AppPageRscCacheKeyBuilder = (
   pathname: string,
@@ -28,6 +30,7 @@ type AppPageRscCacheKeyBuilder = (
 type AppPageRequestCacheLife = {
   revalidate?: number;
   expire?: number;
+  stale?: number;
 };
 type BuildAppPageCacheRenderObservation = (input: {
   cacheTags: readonly string[];
@@ -97,7 +100,7 @@ function resolveAppPageCacheWritePolicy(options: {
   expireSeconds?: number;
   requestCacheLife?: AppPageRequestCacheLife | null;
   revalidateSeconds: number | null;
-}): { expireSeconds?: number; revalidateSeconds: number } | null {
+}): { expireSeconds?: number; revalidateSeconds: number; staleSeconds?: number } | null {
   let revalidateSeconds = options.revalidateSeconds;
   let expireSeconds = options.expireSeconds;
   const requestCacheLife = options.requestCacheLife;
@@ -116,7 +119,19 @@ function resolveAppPageCacheWritePolicy(options: {
     return null;
   }
 
-  return { expireSeconds, revalidateSeconds };
+  // Callers reach this only after the render's stream has been drained, so the
+  // request-scoped accumulation is the completed render's minimum rather than a
+  // partial one. That is what makes persisting it onto the entry sound.
+  // Clamp against the *effective* expire, not just the one `cacheLife` supplied,
+  // so a route-config expire also bounds client reuse.
+  return {
+    expireSeconds,
+    revalidateSeconds,
+    staleSeconds: resolveClientStaleTimeSeconds({
+      expire: expireSeconds,
+      stale: requestCacheLife?.stale,
+    }),
+  };
 }
 
 export function finalizeAppPageHtmlCacheResponse(
@@ -189,6 +204,7 @@ export function finalizeAppPageHtmlCacheResponse(
           cachePolicy.revalidateSeconds,
           pageTags,
           cachePolicy.expireSeconds,
+          cachePolicy.staleSeconds,
         ),
       ];
 
@@ -201,6 +217,7 @@ export function finalizeAppPageHtmlCacheResponse(
               cachePolicy.revalidateSeconds,
               pageTags,
               cachePolicy.expireSeconds,
+              cachePolicy.staleSeconds,
             ),
           ),
         );
@@ -293,6 +310,7 @@ export function scheduleAppPageRscCacheWrite(
         cachePolicy.revalidateSeconds,
         pageTags,
         cachePolicy.expireSeconds,
+        cachePolicy.staleSeconds,
       );
       options.isrDebug?.("RSC cache written", rscKey);
     } catch (cacheError) {
