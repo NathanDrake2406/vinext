@@ -1244,8 +1244,8 @@ export function createRscCompatibilityId(
  * @returns A filesystem path suitable for path operations
  */
 /**
- * Resolve `images.loaderFile` to an absolute path, mirroring Next.js's checks in
- * `server/config.ts`.
+ * Validate `images.loader` and resolve `images.loaderFile` to an absolute path,
+ * mirroring Next.js's checks in `server/config.ts`.
  *
  * Failing at config time is deliberate: a mistyped path that silently fell back
  * to the built-in loader is indistinguishable from `loaderFile` not being
@@ -1259,18 +1259,29 @@ function resolveImageLoaderFile(
   images: NonNullable<NextConfig["images"]>,
   root: string,
 ): string | undefined {
-  const { loaderFile } = images;
-  if (typeof loaderFile !== "string" || loaderFile === "") return undefined;
+  const loaderFile =
+    typeof images.loaderFile === "string" && images.loaderFile !== ""
+      ? images.loaderFile
+      : undefined;
 
   // Widened deliberately: next.config is user-authored JavaScript, so the
   // declared union is a hint, not a guarantee. A `loader: "imgix"` left over
   // from a Next.js project must be reported rather than silently accepted.
+  //
+  // Checked before `loaderFile` is required, because a named loader on its own
+  // is the more dangerous case: nothing downstream would reject it, so every
+  // image would quietly be served from `/_next/image` instead of the CDN the
+  // config names.
   const loader: string | undefined = images.loader;
   if (loader !== undefined && loader !== "default" && loader !== "custom") {
     throw new Error(
-      `Specified images.loader property (${loader}) cannot be used with images.loaderFile property. Please set images.loader to "custom".`,
+      loaderFile
+        ? `Specified images.loader property (${loader}) cannot be used with images.loaderFile property. Please set images.loader to "custom".`
+        : `Specified images.loader property (${loader}) is not supported. The named CDN loaders exist only in next/legacy/image; set images.loader to "custom" and point images.loaderFile at a loader module instead.`,
     );
   }
+
+  if (!loaderFile) return undefined;
 
   const absolutePath = toSlash(path.resolve(root, loaderFile));
   if (!fs.existsSync(absolutePath)) {

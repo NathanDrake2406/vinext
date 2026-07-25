@@ -240,6 +240,25 @@ function getFillStyle(
 }
 
 /**
+ * The blur placeholder background shown until the real image loads.
+ *
+ * Upstream builds this style independently of which loader produced the URLs
+ * (`get-img-props.ts` merges `placeholderStyle` last, for every path), so the
+ * caller owns the "should it be showing" decision and this owns only the shape.
+ *
+ * @param sanitizedBlurDataURL Must already have passed `sanitizeBlurDataURL` —
+ *   it is interpolated into a CSS `url()` and would otherwise allow injection.
+ */
+function blurBackgroundStyle(sanitizedBlurDataURL: string): React.CSSProperties {
+  return {
+    backgroundImage: `url(${sanitizedBlurDataURL})`,
+    backgroundSize: "cover",
+    backgroundRepeat: "no-repeat",
+    backgroundPosition: "center",
+  };
+}
+
+/**
  * Resolve src, width, height, blurDataURL from Image props (string or StaticImageData).
  * Shared by the Image component and getImageProps to keep behavior in sync.
  */
@@ -394,7 +413,10 @@ function getWidths(
 function generateImgAttrs(input: {
   src: string;
   width: number | undefined;
-  quality: number;
+  // Deliberately allowed to be `undefined`: upstream applies the quality
+  // default inside the built-in optimizer loader, not at this seam, so a
+  // custom loader can apply its own default or let a CDN pick automatically.
+  quality: number | undefined;
   sizes: string | undefined;
   loader: ImageLoader;
 }): { src: string; srcSet: string; sizes: string | undefined } {
@@ -425,7 +447,7 @@ const builtInImageLoader: ImageLoader = ({ src, width, quality }) =>
 function generateImageAttributes(
   src: string,
   width: number,
-  quality: number = 75,
+  quality?: number,
   sizes?: string,
 ): { src: string; srcSet: string } {
   const { src: resolvedSrc, srcSet } = generateImgAttrs({
@@ -600,7 +622,15 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         }
       : undefined;
 
-  if (_unoptimized === true || __globallyUnoptimized) {
+  // `images.loader: "custom"` with no `images.loaderFile` makes the generated
+  // loader a misconfiguration report rather than a working loader. Upstream
+  // raises that error before it decides whether an image is optimized, so
+  // `unoptimized` must not skip past it — fall through to the loader branch,
+  // where invoking the loader surfaces the error carrying this image's src.
+  const reportsMissingLoaderProp =
+    loader === undefined && configuredImageLoader?.__vinext_img_missing_loader === true;
+
+  if ((_unoptimized === true || __globallyUnoptimized) && !reportsMissingLoaderProp) {
     // Unoptimized images are fetched directly by the browser, so intentionally
     // skip remote URL validation: there is no server-side optimizer fetch and
     // therefore no SSRF surface. This matches Next.js behavior.
@@ -608,12 +638,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
     const sanitizedBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
     const blurStyle =
       !blurComplete && placeholder === "blur" && sanitizedBlur
-        ? {
-            backgroundImage: `url(${sanitizedBlur})`,
-            backgroundSize: "cover",
-            backgroundRepeat: "no-repeat",
-            backgroundPosition: "center",
-          }
+        ? blurBackgroundStyle(sanitizedBlur)
         : undefined;
     preloadImageResource({
       shouldPreload,
@@ -651,7 +676,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   // replaces the default loader for every image, local or remote.
   const effectiveLoader = loader ?? configuredImageLoader;
   if (effectiveLoader) {
-    const resolvedQuality = typeof quality === "string" ? Number(quality) : (quality ?? 75);
+    const resolvedQuality = typeof quality === "string" ? Number(quality) : quality;
     const attributes = generateImgAttrs({
       src,
       width: fill ? undefined : imgWidth,
@@ -660,6 +685,13 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
       loader: effectiveLoader,
     });
     const renderedSrc = overrideSrc || attributes.src;
+    // Omitting the placeholder here is what put this branch out of step with
+    // `getImageProps`, which returns the blur style for loader-generated URLs.
+    const sanitizedBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
+    const blurStyle =
+      !blurComplete && placeholder === "blur" && sanitizedBlur
+        ? blurBackgroundStyle(sanitizedBlur)
+        : undefined;
     preloadImageResource({
       shouldPreload,
       src: renderedSrc,
@@ -683,7 +715,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         data-nimg={fill ? "fill" : "1"}
         onLoad={handleLoad}
         onError={handleError}
-        style={fill ? getFillStyle(style) : style}
+        style={fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style }}
         {...rest}
       />
     );
@@ -707,14 +739,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
 
     const sanitizedBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
     const showBlur = !blurComplete && placeholder === "blur" && sanitizedBlur;
-    const blurStyle = showBlur
-      ? {
-          backgroundImage: `url(${sanitizedBlur})`,
-          backgroundSize: "cover",
-          backgroundRepeat: "no-repeat",
-          backgroundPosition: "center",
-        }
-      : undefined;
+    const blurStyle = showBlur ? blurBackgroundStyle(sanitizedBlur) : undefined;
     const bg = showBlur ? `url(${sanitizedBlur})` : undefined;
 
     if (fill) {
@@ -820,12 +845,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   const sanitizedLocalBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
   const blurStyle =
     !blurComplete && placeholder === "blur" && sanitizedLocalBlur
-      ? {
-          backgroundImage: `url(${sanitizedLocalBlur})`,
-          backgroundSize: "cover",
-          backgroundRepeat: "no-repeat",
-          backgroundPosition: "center",
-        }
+      ? blurBackgroundStyle(sanitizedLocalBlur)
       : undefined;
 
   const imageSizes = sizes ?? (fill ? "100vw" : undefined);
@@ -897,19 +917,19 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
   } = resolveImageSource({ src: srcProp, width, height, blurDataURL: blurDataURLProp });
   const shouldPreload = _preload === true || priority === true;
 
-  if (_unoptimized === true || __globallyUnoptimized) {
+  // Mirrors the component path: a bare `images.loader: "custom"` is reported
+  // before optimization is decided, so `unoptimized` cannot hide it.
+  const reportsMissingLoaderProp =
+    loader === undefined && configuredImageLoader?.__vinext_img_missing_loader === true;
+
+  if ((_unoptimized === true || __globallyUnoptimized) && !reportsMissingLoaderProp) {
     // As in the component path, unoptimized images never reach the server-side
     // optimizer, so remote URL validation is intentionally unnecessary.
     const renderedSrc = overrideSrc || src;
     const sanitizedBlurURL = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
     const blurStyle =
       placeholder === "blur" && sanitizedBlurURL
-        ? {
-            backgroundImage: `url(${sanitizedBlurURL})`,
-            backgroundSize: "cover",
-            backgroundRepeat: "no-repeat" as const,
-            backgroundPosition: "center" as const,
-          }
+        ? blurBackgroundStyle(sanitizedBlurURL)
         : undefined;
     const imageProps: ImgProps = {
       src: renderedSrc,
@@ -950,7 +970,7 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
   // the loader runs once per candidate width so `getImageProps` hands back the
   // same srcSet `<Image>` would render — callers building <picture> elements
   // depend on the two agreeing.
-  const imgQuality = typeof _quality === "string" ? Number(_quality) : (_quality ?? 75);
+  const imgQuality = typeof _quality === "string" ? Number(_quality) : _quality;
   const loaderAttributes = effectiveLoader
     ? generateImgAttrs({
         src,
@@ -989,14 +1009,7 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
   // Blur placeholder styles — sanitize to prevent CSS injection
   const sanitizedBlurURL = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
   const blurStyle =
-    placeholder === "blur" && sanitizedBlurURL
-      ? {
-          backgroundImage: `url(${sanitizedBlurURL})`,
-          backgroundSize: "cover",
-          backgroundRepeat: "no-repeat" as const,
-          backgroundPosition: "center" as const,
-        }
-      : undefined;
+    placeholder === "blur" && sanitizedBlurURL ? blurBackgroundStyle(sanitizedBlurURL) : undefined;
 
   const imageProps: ImgProps = {
     // Match Next.js: overrideSrc changes the fallback `src` without changing

@@ -20,6 +20,17 @@
 export const VIRTUAL_IMAGE_LOADER = "virtual:vinext-image-loader";
 
 /**
+ * Property stamped on the generated loader when `images.loader` is `"custom"`
+ * with no `images.loaderFile`, so the shim can distinguish "the user configured
+ * a loader" from "the user configured that every image must bring its own".
+ *
+ * Mirrors upstream's `__next_img_default` marker on its built-in loader. The
+ * name is duplicated in `shims/image.tsx` and `virtual-vinext-image-loader.d.ts`
+ * because the generated module is a string and cannot import this constant.
+ */
+export const MISSING_CUSTOM_LOADER_MARKER = "__vinext_img_missing_loader";
+
+/**
  * Next.js's error for a `loaderFile` whose module has no default export.
  * Kept verbatim so existing troubleshooting docs and searches still apply.
  */
@@ -52,6 +63,12 @@ export function generateImageLoaderModule(images?: {
       "      'Read more: https://nextjs.org/docs/messages/next-image-missing-loader',",
       "  );",
       "}",
+      "",
+      "// Marks this export as a misconfiguration report rather than a working",
+      "// loader. Upstream raises the missing-prop error before it decides whether",
+      "// an image is optimized, so the shim needs to tell the two apart: an",
+      "// `unoptimized` image bypasses a real loader, but must not bypass this one.",
+      `customImageLoader.${MISSING_CUSTOM_LOADER_MARKER} = true;`,
       "",
     ].join("\n");
   }

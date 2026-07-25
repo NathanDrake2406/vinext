@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { describe, it, expect } from "vite-plus/test";
 import {
   generateImageLoaderModule,
+  MISSING_CUSTOM_LOADER_MARKER,
   VIRTUAL_IMAGE_LOADER,
 } from "../packages/vinext/src/image/image-loader-virtual.js";
 import { resolveNextConfig } from "../packages/vinext/src/config/next-config.js";
@@ -82,6 +83,18 @@ describe("generateImageLoaderModule", () => {
     expect(code).not.toContain("export default undefined;");
   });
 
+  it('marks the bare-"custom" export so the shim can tell it from a real loader', () => {
+    // The shim reads this to report the misconfiguration before it decides
+    // whether an image is optimized — an `unoptimized` image legitimately
+    // bypasses a real loader, but must not bypass this one.
+    const code = generateImageLoaderModule({ loader: "custom" });
+    expect(code).toContain(`customImageLoader.${MISSING_CUSTOM_LOADER_MARKER} = true;`);
+    // Only the bare-"custom" stub carries it; a real loader must not.
+    expect(generateImageLoaderModule({ loaderFile: "/project/l.js" })).not.toContain(
+      MISSING_CUSTOM_LOADER_MARKER,
+    );
+  });
+
   it('prefers the loaderFile when both it and loader:"custom" are set', () => {
     const code = generateImageLoaderModule({ loader: "custom", loaderFile: "/project/l.js" });
     expect(code).toContain('from "/project/l.js"');
@@ -135,6 +148,20 @@ describe("generated virtual:vinext-image-loader module", () => {
         "Read more: https://nextjs.org/docs/messages/next-image-missing-loader",
     );
   });
+
+  it('carries the marker on the executed bare-"custom" export', async () => {
+    // Asserted on the imported module rather than the source string: the
+    // property is assigned after `export default function`, and only running it
+    // proves the assignment lands on the exported binding.
+    const root = makeProjectRoot();
+    const mod = (await importGenerated(
+      root,
+      "generated-custom-marker.mjs",
+      generateImageLoaderModule({ loader: "custom" }),
+    )) as { default: Record<string, unknown> };
+
+    expect(mod.default[MISSING_CUSTOM_LOADER_MARKER]).toBe(true);
+  });
 });
 
 // ─── config resolution ─────────────────────────────────────────────────────
@@ -169,6 +196,15 @@ describe("resolveNextConfig images.loaderFile", () => {
         root,
       ),
     ).rejects.toThrow(/cannot be used with images.loaderFile/);
+  });
+
+  it("rejects an unsupported named loader even without a loaderFile", async () => {
+    // The dangerous permutation: nothing downstream rejects a named loader on
+    // its own, so every image would quietly be served from `/_next/image`
+    // instead of the CDN the config names.
+    await expect(
+      resolveNextConfig({ images: { loader: "cloudinary" as "custom" } }),
+    ).rejects.toThrow(/images.loader property \(cloudinary\) is not supported/);
   });
 
   it('allows loader:"custom" with no loaderFile', async () => {

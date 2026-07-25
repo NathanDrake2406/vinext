@@ -991,6 +991,82 @@ describe("custom loader URL ownership", () => {
     expect(props.src).toBe(overrideSrc);
     expect(props.srcSet).toContain("https://cdn.example.com/optimized.jpg");
   });
+
+  it("leaves an omitted quality undefined instead of defaulting it to 75", () => {
+    // Catches the loader written as `quality ?? 80`, or one picking an
+    // automatic CDN quality: a forced 75 makes it silently generate a
+    // different URL under vinext than under Next.js.
+    const seen: (number | undefined)[] = [];
+    const loader = ({ src, width, quality }: Parameters<ImageLoader>[0]) => {
+      seen.push(quality);
+      return `https://cdn.example.com${src}?w=${width}`;
+    };
+
+    ReactDOMServer.renderToString(
+      React.createElement(Image, {
+        alt: "no quality",
+        src: "/photo.jpg",
+        width: 300,
+        height: 200,
+        loader,
+      }),
+    );
+    getImageProps({ alt: "no quality", src: "/photo.jpg", width: 300, height: 200, loader });
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((quality) => quality === undefined)).toBe(true);
+  });
+
+  it("forwards an explicit quality unchanged", () => {
+    const seen: (number | undefined)[] = [];
+    const loader = ({ src, width, quality }: Parameters<ImageLoader>[0]) => {
+      seen.push(quality);
+      return `https://cdn.example.com${src}?w=${width}`;
+    };
+
+    getImageProps({ alt: "q", src: "/photo.jpg", width: 300, height: 200, quality: 40, loader });
+
+    expect(seen.every((quality) => quality === 40)).toBe(true);
+  });
+
+  it("keeps the blur placeholder, matching getImageProps", () => {
+    const blurDataURL = "data:image/png;base64,abc123";
+    const loader = ({ src, width }: Parameters<ImageLoader>[0]) =>
+      `https://cdn.example.com${src}?w=${width}`;
+    const props = {
+      alt: "blurred",
+      src: "/photo.jpg",
+      width: 300,
+      height: 200,
+      placeholder: "blur" as const,
+      blurDataURL,
+      loader,
+    };
+
+    const html = ReactDOMServer.renderToString(React.createElement(Image, props));
+    expect(html).toContain(`url(${blurDataURL})`);
+    expect(getImageProps(props).props.style).toMatchObject({
+      backgroundImage: `url(${blurDataURL})`,
+    });
+  });
+
+  it("keeps the blur placeholder for fill images without dropping fill styles", () => {
+    const blurDataURL = "data:image/png;base64,abc123";
+    const html = ReactDOMServer.renderToString(
+      React.createElement(Image, {
+        alt: "blurred fill",
+        src: "/photo.jpg",
+        fill: true,
+        placeholder: "blur",
+        blurDataURL,
+        loader: ({ src, width }: Parameters<ImageLoader>[0]) =>
+          `https://cdn.example.com${src}?w=${width}`,
+      }),
+    );
+
+    expect(html).toContain(`url(${blurDataURL})`);
+    expect(html).toContain("position:absolute");
+  });
 });
 
 // ─── Reproduction: priority prop on remote URL paths ────────────────────
