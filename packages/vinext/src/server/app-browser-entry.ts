@@ -128,9 +128,8 @@ import {
 import { AppBrowserHistoryController } from "./app-browser-history-controller.js";
 import {
   createVisitedResponseCacheEntry,
-  deleteVisitedResponseCacheEntry,
-  findVisitedResponseCacheEntry,
   isVisitedResponseCacheEntryFresh,
+  VisitedResponseCache,
   type VisitedResponseCacheEntry,
 } from "./app-visited-response-cache.js";
 import {
@@ -328,7 +327,7 @@ function isRouterStatePromise(
 }
 
 let latestClientParams: Record<string, string | string[]> = {};
-const visitedResponseCache = new Map<string, VisitedResponseCacheEntry>();
+const visitedResponseCache = new VisitedResponseCache();
 let clientNavigationCacheGeneration = 0;
 // Sticky bit: stays true once BrowserRoot has committed at least once. Used by
 // the HMR handler to distinguish "still hydrating" (wait) from "was up, then
@@ -697,7 +696,7 @@ function readVisitedResponseCacheCandidate(
   navigationKind: NavigationKind,
 ): VisitedResponseCacheCandidate {
   const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
-  const match = findVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
+  const match = visitedResponseCache.find(rscUrl, interceptionContext);
   if (!match) {
     return {
       cacheKey,
@@ -750,7 +749,7 @@ function applyVisitedResponseCacheCandidateDecision(
 }
 
 function deleteVisitedResponse(rscUrl: string, interceptionContext: string | null): void {
-  deleteVisitedResponseCacheEntry(visitedResponseCache, rscUrl, interceptionContext);
+  visitedResponseCache.deleteMatch(rscUrl, interceptionContext);
 }
 
 function storeVisitedResponseSnapshot(
