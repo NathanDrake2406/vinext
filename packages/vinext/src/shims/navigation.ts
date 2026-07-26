@@ -46,10 +46,6 @@ import {
   VINEXT_PARAMS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../server/headers.js";
-import {
-  resolveAutoAppRoutePrefetch,
-  resolveFullAppRoutePrefetch,
-} from "./internal/app-route-prefetch-policy.js";
 import { toBrowserNavigationHref, toSameOriginAppPath, withBasePath } from "./url-utils.js";
 import { navigationPlanner } from "../server/navigation-planner.js";
 import { stripBasePath } from "../utils/base-path.js";
@@ -89,6 +85,7 @@ import {
 } from "./internal/app-prefetch-fetch-queue.js";
 
 const HAS_PAGES_ROUTER = process.env.__VINEXT_HAS_PAGES_ROUTER !== "false";
+const HAS_CLIENT_REWRITES = process.env.__VINEXT_HAS_CLIENT_REWRITES !== "false";
 type HybridClientRouteOwnerModule = typeof import("./internal/hybrid-client-route-owner.js");
 let hybridClientRouteOwnerModule: HybridClientRouteOwnerModule | null = null;
 let hybridClientRouteOwnerModulePromise: Promise<HybridClientRouteOwnerModule> | null = null;
@@ -552,7 +549,11 @@ export function hasPrefetchCacheEntryForNavigation(
   rscUrl: string,
   interceptionContext: string | null = null,
   mountedSlotsHeader: string | null = null,
-  options: { additionalRscUrls?: readonly string[]; notifyInvalidation?: boolean } = {},
+  options: {
+    additionalRscUrls?: readonly string[];
+    notifyInvalidation?: boolean;
+    onInvalidate?: () => void;
+  } = {},
 ): boolean {
   const match = findPrefetchCacheEntryForNavigation(
     rscUrl,
@@ -562,12 +563,25 @@ export function hasPrefetchCacheEntryForNavigation(
   );
   if (match === null) return false;
 
+  // Register onInvalidate against the matched entry, not the caller's exact
+  // cache key — the match may be a normalized `_rsc` variant or an alias, so
+  // an exact-key lookup after this call could silently miss it.
+  const attachOnInvalidate = (): void => {
+    if (options.onInvalidate === undefined) return;
+    addPrefetchInvalidationCallback(match.entry, options.onInvalidate);
+    if (match.entry.outcome === "cache-seeded") {
+      schedulePrefetchInvalidation(match.cacheKey, match.entry);
+    }
+  };
+
   if (match.entry.pending !== undefined) {
     touchPrefetchCacheEntry(getPrefetchCache(), match.cacheKey, match.entry);
+    attachOnInvalidate();
     return true;
   }
   if (resolvePrefetchCacheEntryExpiresAt(match.entry) > Date.now()) {
     touchPrefetchCacheEntry(getPrefetchCache(), match.cacheKey, match.entry);
+    attachOnInvalidate();
     return true;
   }
 
@@ -2302,6 +2316,12 @@ const _appRouter: AppRouterInstance = {
       // an unusable cache entry. The matching `push`/`replace` call will
       // hard-navigate via `window.location`, so a no-op here is correct —
       // the document prefetch the link shim emits on hover still runs.
+      // Load the rewrite-aware module first (mirrors Link, which always
+      // resolves ownership and rewrites through the full module) so the
+      // prefetch policy below sees the rewritten destination route.
+      if (HAS_PAGES_ROUTER || HAS_CLIENT_REWRITES) {
+        await preloadHybridClientRouteOwner();
+      }
       const hybridOwner = resolveHybridClientRouteOwner(prefetchHref);
       if (hybridOwner === "pages" || hybridOwner === "document") {
         return;
@@ -2321,9 +2341,21 @@ const _appRouter: AppRouterInstance = {
       // must still fetch, and loading-shell routes keep feeding the
       // optimistic-route-template learner.
       const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
+      // A configured rewrite can map this href onto a different App route;
+      // the policy must describe the destination the request will actually
+      // resolve to, not the source pattern (mirrors Link's prefetchPolicyHref).
+      const rewrittenPrefetchHref = HAS_CLIENT_REWRITES
+        ? resolveLoadedHybridClientRewriteHref(fullHref, __basePath)
+        : null;
       const kind = options?.kind === "full" ? "full" : "auto";
+      // Dynamic import keeps the policy module and its route-trie
+      // dependencies off the startup path of every next/navigation consumer.
+      const { resolveAutoAppRoutePrefetch, resolveFullAppRoutePrefetch } =
+        await import("./internal/app-route-prefetch-policy.js");
       const policy =
-        kind === "full" ? resolveFullAppRoutePrefetch() : resolveAutoAppRoutePrefetch(prefetchHref);
+        kind === "full"
+          ? resolveFullAppRoutePrefetch()
+          : resolveAutoAppRoutePrefetch(rewrittenPrefetchHref ?? prefetchHref);
       const reusable = policy.shouldPrefetch && policy.cacheForNavigation;
       const interceptionContext = getPrefetchInterceptionContext(fullHref);
       const mountedSlotsHeader = getMountedSlotsHeader();
@@ -2340,14 +2372,25 @@ const _appRouter: AppRouterInstance = {
         headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
       }
       const rscUrl = await createRscRequestUrl(fullHref, headers);
+      const additionalRscUrls =
+        rewrittenPrefetchHref !== null && rewrittenPrefetchHref !== fullHref
+          ? [await createRscRequestUrl(rewrittenPrefetchHref, headers)]
+          : [];
       const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
       const prefetched = getPrefetchedUrls();
       if (reusable) {
         // A previous learning-only prefetch for the same URL must not satisfy
         // the freshness gate below; only a navigation-reusable entry counts.
+        // The gate attaches onInvalidate to whichever entry it matches — the
+        // match may live under a normalized `_rsc` variant or rendered-path
+        // alias, not this call's exact cache key.
         discardLearningOnlyPrefetchCacheEntry(rscUrl, interceptionContext);
-        if (hasPrefetchCacheEntryForNavigation(rscUrl, interceptionContext, mountedSlotsHeader)) {
-          attachPrefetchInvalidationCallback(cacheKey, options?.onInvalidate);
+        if (
+          hasPrefetchCacheEntryForNavigation(rscUrl, interceptionContext, mountedSlotsHeader, {
+            additionalRscUrls,
+            onInvalidate: options?.onInvalidate,
+          })
+        ) {
           return;
         }
       } else if (prefetched.has(cacheKey)) {

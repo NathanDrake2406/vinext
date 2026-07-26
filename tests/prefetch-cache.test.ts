@@ -584,6 +584,46 @@ describe("prefetch cache eviction", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("attaches onInvalidate when reuse matches an entry under a different _rsc variant (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+    ];
+    // Seed a reusable entry the way a <Link prefetch={true}> would, under a
+    // different `_rsc` cache-busting variant than router.prefetch computes.
+    const aliasRscUrl = "/dashboard?_rsc=linkvariant";
+    prefetchRscResponse(
+      aliasRscUrl,
+      Promise.resolve(new Response("flight", { headers: { "content-type": "text/x-component" } })),
+      null,
+      null,
+      undefined,
+      { cacheForNavigation: true },
+    );
+    await waitForPrefetchSetup(
+      () => getPrefetchCache().get(aliasRscUrl)?.outcome === "cache-seeded",
+    );
+
+    const fetch = vi.fn();
+    const onInvalidate = vi.fn();
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/dashboard", { onInvalidate });
+    // The prefetch closure awaits module imports before it reaches the
+    // freshness gate; wait for the observable registration instead of a
+    // fixed microtask count.
+    await waitForPrefetchSetup(
+      () => (getPrefetchCache().get(aliasRscUrl)?.onInvalidateCallbacks?.size ?? 0) > 0,
+    );
+
+    // The alias entry satisfied the freshness gate: no new request, and the
+    // callback must be registered on the matched entry, not the absent exact
+    // cache key.
+    expect(fetch).not.toHaveBeenCalled();
+
+    invalidatePrefetchCache();
+    expect(onInvalidate).toHaveBeenCalledTimes(1);
+  });
+
   it('caches kind: "full" router.prefetch for navigation on loading-shell routes (#2707)', async () => {
     (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
       { canPrefetchLoadingShell: true, patternParts: ["reports"], isDynamic: false },
