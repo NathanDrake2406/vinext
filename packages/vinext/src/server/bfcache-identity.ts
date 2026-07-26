@@ -69,6 +69,12 @@ export type BfcacheSegmentDescriptor =
       boundSegmentKey: string;
     }
   | {
+      kind: "slot-shell";
+      slotGraphId: string;
+      ownerLayoutGraphId: string | null;
+      boundOwnerSegmentKey: string;
+    }
+  | {
       kind: "slot";
       slotGraphId: string;
       ownerLayoutGraphId: string | null;
@@ -112,6 +118,13 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
         descriptor.graphId,
         descriptor.rootBoundaryId,
         descriptor.boundSegmentKey,
+      ]);
+    case "slot-shell":
+      return JSON.stringify([
+        "slot-shell",
+        descriptor.slotGraphId,
+        descriptor.ownerLayoutGraphId,
+        descriptor.boundOwnerSegmentKey,
       ]);
     case "slot":
       return JSON.stringify([

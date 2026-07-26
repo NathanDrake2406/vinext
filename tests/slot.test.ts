@@ -57,7 +57,7 @@ describe("slot primitives", () => {
     expect(mod.UNMATCHED_SLOT).toBe(Symbol.for("vinext.unmatchedSlot"));
   });
 
-  it("keys fresh page carriers without remounting shared layouts or named parallel slots", async () => {
+  it("keys active segment carriers without remounting named-slot owner shells", async () => {
     const { getNonCacheComponentsSegmentKey } =
       await import("../packages/vinext/src/shims/slot.js");
 
@@ -65,10 +65,10 @@ describe("slot primitives", () => {
     expect(getNonCacheComponentsSegmentKey("slot:children:/", "slot:children:/@route:/0")).toBe(
       "slot:children:/@route:/0",
     );
-    expect(getNonCacheComponentsSegmentKey("layout:/", "layout:/@/0")).toBeUndefined();
-    expect(
-      getNonCacheComponentsSegmentKey("slot:breadcrumbs:/", "slot:breadcrumbs:/@/0"),
-    ).toBeUndefined();
+    expect(getNonCacheComponentsSegmentKey("layout:/", "layout:/@/0")).toBe("layout:/@/0");
+    expect(getNonCacheComponentsSegmentKey("slot:breadcrumbs:/", "slot:breadcrumbs:/@/0")).toBe(
+      "slot:breadcrumbs:/@/0",
+    );
   });
 
   it("falls back to freshly minted BFCache ids when identity proof is unavailable", async () => {

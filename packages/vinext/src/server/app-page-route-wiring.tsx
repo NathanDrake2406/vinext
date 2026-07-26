@@ -684,8 +684,15 @@ type AppPageSegmentPlan<TModule extends AppPageModule> = Readonly<{
 
 const APP_PAGE_INTERCEPTION_MARKERS = ["(...)", "(..)(..)", "(..)", "(.)"] as const;
 
-function resolveAppPageInterceptionSegmentStateKey(segment: string, params: AppPageParams): string {
-  const marker = APP_PAGE_INTERCEPTION_MARKERS.find((prefix) => segment.startsWith(prefix));
+function resolveAppPageInterceptionSegmentStateKey(
+  segment: string,
+  params: AppPageParams,
+  normalizeInterceptionMarker: boolean,
+): string {
+  if (isAppPageRouteGroupSegment(segment)) return segment;
+  const marker = normalizeInterceptionMarker
+    ? APP_PAGE_INTERCEPTION_MARKERS.find((prefix) => segment.startsWith(prefix))
+    : undefined;
   const normalizedSegment = marker ? segment.slice(marker.length) : segment;
   const stateKey = resolveAppPageSegmentStateKey([normalizedSegment], 0, params);
   return marker ? JSON.stringify([marker, stateKey]) : stateKey;
@@ -783,8 +790,9 @@ function createAppPageSegmentPlan<
     slotId: string,
     slotBinding: AppElementsSlotBinding,
     boundSegmentKey: string,
+    includeInterceptionTarget = true,
   ): string | null => {
-    const isIntercepted = options.interception?.slotId === slotId;
+    const isIntercepted = includeInterceptionTarget && options.interception?.slotId === slotId;
     const interceptionTargetRouteGraphId = isIntercepted
       ? graphIds
         ? options.semanticInterceptionTargetRouteId
@@ -871,7 +879,7 @@ function createAppPageSegmentPlan<
     const bindOwnerState = (segmentKey: string) =>
       ownerStateKey ? JSON.stringify([ownerStateKey, segmentKey]) : segmentKey;
     const branchSegmentPositions = branchSegments.flatMap((segment, treePosition) =>
-      isAppPageRouteGroupSegment(segment) || segment.startsWith("@") ? [] : [treePosition],
+      segment.startsWith("@") ? [] : [treePosition],
     );
     const identitySegments =
       slotOverride?.identitySegments ??
@@ -885,6 +893,7 @@ function createAppPageSegmentPlan<
         interceptionMarkerIndex >= 0 && index < interceptionMarkerIndex
           ? options.matchedParams
           : params,
+        index === interceptionMarkerIndex,
       ),
     );
     const identitySegmentsAlignWithBranch =
@@ -896,40 +905,62 @@ function createAppPageSegmentPlan<
           treePosition: branchSegmentPositions[index]!,
         }))
       : [];
-    const bfcacheStateKey = semanticSegments[0]?.stateKey ?? resetKey;
     const includedInPayload = options.includeSlot(ownerTreePosition, targetTreePosition);
     const graphId = graphIds ? graphIds.slots[slotKey] : (slot.id ?? slotId);
     if (graphId === undefined) {
       throw new Error(`[vinext] Missing App Router graph slot id for ${slotKey}`);
     }
     const nestedBfcacheSegmentCandidates = identitySegmentsAlignWithBranch
-      ? semanticSegments.slice(1)
-      : resetKey
-        ? [{ identityKey: resetKey, stateKey: resetKey, treePosition: null }]
-        : [];
+      ? (semanticSegments.length > 0
+          ? semanticSegments
+          : [
+              {
+                identityKey: "",
+                stateKey: slotBinding.state,
+                treePosition: 0,
+              },
+            ]
+        ).map((segment, index) => ({
+          ...segment,
+          hasIdentityProof: true,
+          includeInterceptionTarget:
+            interceptionMarkerIndex < 0 || index >= interceptionMarkerIndex,
+        }))
+      : [
+          {
+            hasIdentityProof: false,
+            identityKey: resetKey,
+            includeInterceptionTarget: false,
+            stateKey: resetKey || slotBinding.state,
+            treePosition: null,
+          },
+        ];
     const nestedBfcacheSegments: {
       id: string;
       stateKey: string;
       treePosition: number | null;
     }[] = [];
     if (includedInPayload) {
-      const identity = deriveSlotIdentity(
-        graphId,
-        slotId,
-        slotBinding,
-        bindOwnerState(bfcacheStateKey),
-      );
-      if (identity !== null) identities[slotId] = identity;
+      if (identitySegmentsAlignWithBranch) {
+        identities[slotId] = deriveBfcacheSegmentIdentity({
+          boundOwnerSegmentKey: ownerStateKey,
+          kind: "slot-shell",
+          ownerLayoutGraphId: resolveOwnerLayoutGraphId(slotBinding.ownerLayoutId),
+          slotGraphId: graphId,
+        });
+      }
       for (const [level, segment] of nestedBfcacheSegmentCandidates.entries()) {
-        const nestedIdentity = deriveSlotIdentity(
-          graphId,
-          slotId,
-          slotBinding,
-          bindOwnerState(segment.identityKey),
-        );
-        if (nestedIdentity === null) continue;
         const id = createNestedBfcacheSlotSegmentId(slotId, level + 1);
-        identities[id] = nestedIdentity;
+        if (segment.hasIdentityProof) {
+          const nestedIdentity = deriveSlotIdentity(
+            graphId,
+            slotId,
+            slotBinding,
+            bindOwnerState(segment.identityKey),
+            segment.includeInterceptionTarget,
+          );
+          if (nestedIdentity !== null) identities[id] = nestedIdentity;
+        }
         nestedBfcacheSegments.push({
           id,
           stateKey: segment.stateKey,

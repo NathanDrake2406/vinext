@@ -942,10 +942,21 @@ describe("buildPageElements", () => {
         ],
         "modal@(shell)/@outer/sub/@modal",
       ),
-    ).toEqual(["before", "(.)[username]", "[id]"]);
+    ).toEqual(["before", "(group)", "(.)[username]", "(nested)", "[id]"]);
     expect(
       resolveAppPageRouteStateKey(interceptedSegments ?? [], { username: "foo", id: "1" }),
     ).toBe(JSON.stringify(["before", "username|foo|d", "id|1|d"]));
+  });
+
+  it("resolves the interception marker owned by a nested parallel slot", () => {
+    const sourceSegments = ["feed", "@outer", "(.)photo", "@inner", "(.)comments", "[id]"];
+    const slotKey = "inner@feed/@outer/(.)photo/@inner";
+
+    expect(resolveInterceptedSlotIdentitySegments(sourceSegments, slotKey)).toEqual([
+      "(.)comments",
+      "[id]",
+    ]);
+    expect(resolveInterceptedSlotSegments(sourceSegments, slotKey)).toEqual(["comments", "[id]"]);
   });
 
   it.each([

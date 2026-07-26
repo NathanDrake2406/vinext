@@ -399,9 +399,7 @@ export function getNonCacheComponentsSegmentKey(
   activeStateKey: string,
 ): string | undefined {
   const parsed = AppElementsWire.parseElementKey(id);
-  return parsed?.kind === "page" || (parsed?.kind === "slot" && parsed.name === "children")
-    ? activeStateKey
-    : undefined;
+  return parsed !== null && parsed.kind !== "route" ? activeStateKey : undefined;
 }
 
 export function resolveBfcacheSegmentStateKey(
@@ -426,14 +424,10 @@ function BfcacheSlotBoundary({ content, id }: { content: React.ReactNode; id: st
     return <SegmentContext.Provider value={id}>{content}</SegmentContext.Provider>;
   }
 
-  // Without cacheComponents there is no Activity retention. Keep shared layouts
-  // and named parallel-slot owners unkeyed so their client state survives
-  // navigation, but key leaf page carriers by their state identity. Some
-  // parallel-route graphs transport children pages through a synthetic
-  // slot:children element rather than a page element, so that carrier must
-  // follow page remount semantics too. Next.js keys each active segment entry;
-  // this narrower key avoids remounting shared vinext segment owners whose
-  // identities move with the visible URL.
+  // Without cacheComponents there is no Activity retention, but Next.js still
+  // keys every active segment. Carrier identities only change when their owned
+  // segment changes, so stable ancestors and named-slot shells retain state
+  // while dynamic layouts and slot branches remount.
   if (!isCacheComponentsEnabled()) {
     return (
       <SegmentContext.Provider key={getNonCacheComponentsSegmentKey(id, activeStateKey)} value={id}>

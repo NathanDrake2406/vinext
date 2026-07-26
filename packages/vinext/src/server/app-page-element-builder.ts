@@ -20,6 +20,7 @@ import {
   type AppPageSlotOverride,
 } from "./app-page-route-wiring.js";
 import {
+  isAppPageRouteGroupSegment,
   resolveAppPagePatternStateKey,
   resolveAppPageRouteStateKey,
 } from "./app-page-segment-state.js";
@@ -705,11 +706,6 @@ function resolveInterceptedSlotSource(
 }> | null {
   if (!sourcePageSegments) return null;
 
-  const markerIndex = sourcePageSegments.findIndex((segment) =>
-    APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS.some(({ prefix }) => segment.startsWith(prefix)),
-  );
-  if (markerIndex < 0) return null;
-
   const slotPathSeparator = slotKey.indexOf("@");
   const slotPath = slotPathSeparator >= 0 ? slotKey.slice(slotPathSeparator + 1) : "";
   const ownerSegments = slotPath.split("/").filter(Boolean);
@@ -717,7 +713,6 @@ function resolveInterceptedSlotSource(
 
   if (
     segmentStart === 0 ||
-    segmentStart > markerIndex ||
     !ownerSegments.every((segment, index) => sourcePageSegments[index] === segment)
   ) {
     let slotName: string | null = null;
@@ -730,8 +725,15 @@ function resolveInterceptedSlotSource(
 
     let slotIndex = -1;
     if (slotName) {
-      for (let index = markerIndex - 1; index >= 0; index--) {
-        if (sourcePageSegments[index] === slotName) {
+      for (let index = sourcePageSegments.length - 1; index >= 0; index--) {
+        const hasOwnedMarker = sourcePageSegments
+          .slice(index + 1)
+          .some((segment) =>
+            APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS.some(({ prefix }) =>
+              segment.startsWith(prefix),
+            ),
+          );
+        if (sourcePageSegments[index] === slotName && hasOwnedMarker) {
           slotIndex = index;
           break;
         }
@@ -741,6 +743,13 @@ function resolveInterceptedSlotSource(
     segmentStart = slotIndex + 1;
   }
 
+  const markerOffset = sourcePageSegments
+    .slice(segmentStart)
+    .findIndex((segment) =>
+      APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS.some(({ prefix }) => segment.startsWith(prefix)),
+    );
+  if (markerOffset < 0) return null;
+  const markerIndex = segmentStart + markerOffset;
   const markerSegment = sourcePageSegments[markerIndex];
   const marker = APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS.find(({ prefix }) =>
     markerSegment.startsWith(prefix),
@@ -748,8 +757,12 @@ function resolveInterceptedSlotSource(
   return marker ? { marker, markerIndex, segmentStart } : null;
 }
 
+function isInterceptedSlotIdentitySegment(segment: string): boolean {
+  return !segment.startsWith("@");
+}
+
 function isVisibleInterceptedSlotSegment(segment: string): boolean {
-  return !segment.startsWith("@") && !(segment.startsWith("(") && segment.endsWith(")"));
+  return isInterceptedSlotIdentitySegment(segment) && !isAppPageRouteGroupSegment(segment);
 }
 
 export function resolveInterceptedSlotIdentitySegments(
@@ -758,7 +771,7 @@ export function resolveInterceptedSlotIdentitySegments(
 ): readonly string[] | null {
   const source = resolveInterceptedSlotSource(sourcePageSegments, slotKey);
   if (!source || !sourcePageSegments) return null;
-  return sourcePageSegments.slice(source.segmentStart).filter(isVisibleInterceptedSlotSegment);
+  return sourcePageSegments.slice(source.segmentStart).filter(isInterceptedSlotIdentitySegment);
 }
 
 export function resolveInterceptedSlotSegments(
@@ -781,7 +794,6 @@ export function resolveInterceptedSlotSegments(
 
   const targetSegment = markerSegment.slice(marker.prefix.length);
   if (targetSegment) routeSegments.push(targetSegment);
-
   routeSegments.push(
     ...sourcePageSegments.slice(markerIndex + 1).filter(isVisibleInterceptedSlotSegment),
   );

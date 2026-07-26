@@ -2987,7 +2987,9 @@ function computeInterceptTarget(
       return null;
   }
 
-  // Add the intercept segment and any nested path segments
+  // Add the intercept segment and any nested path segments. Next.js resolves
+  // only the first interception marker; later marker-shaped names remain part
+  // of the intercepted route string.
   const nestedParts = path.relative(interceptRoot, currentDir).split(path.sep).filter(Boolean);
   const allSegments = [...baseParts, interceptSegment, ...nestedParts];
 
