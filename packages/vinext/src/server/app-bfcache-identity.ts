@@ -1,7 +1,10 @@
 import { AppElementsWire, type AppElements } from "./app-elements.js";
 import { INITIAL_BFCACHE_ID } from "./app-bfcache-id.js";
 import { isBfcacheSegmentId, type BfcacheIdMap } from "./app-history-state.js";
-import type { BfcacheSegmentIdentity } from "./bfcache-identity.js";
+import {
+  isNestedBfcacheSlotSegmentIdFor,
+  type BfcacheSegmentIdentity,
+} from "./bfcache-identity.js";
 
 export type BfcacheSegmentIdentityMap = Readonly<Record<string, BfcacheSegmentIdentity>>;
 
@@ -47,6 +50,9 @@ function collectBfcacheSegmentIds(
   const parsedMetadata = metadata === undefined ? readAppElementsMetadata(elements) : metadata;
   for (const layoutId of parsedMetadata?.layoutIds ?? []) {
     ids.add(layoutId);
+  }
+  for (const identityId of Object.keys(parsedMetadata?.bfcacheSegmentIdentities ?? {})) {
+    ids.add(identityId);
   }
   return Array.from(ids).filter(isBfcacheSegmentId);
 }
@@ -116,14 +122,24 @@ export function preserveBfcacheIdsForMergedElements(options: {
   elements: AppElements;
   next: BfcacheIdMap;
   previous: BfcacheIdMap;
+  preservedElementIds?: readonly string[];
   preservePreviousIds?: readonly string[];
 }): BfcacheIdMap {
   const ids: Record<string, string> = {};
   const preservePreviousIds = new Set(options.preservePreviousIds ?? []);
+  const preservedElementIds = new Set(options.preservedElementIds ?? []);
+  const preservedParentIds = [...preservedElementIds];
+  const identities = createBfcacheSegmentIdentityMap({ elements: options.elements });
   for (const id of collectBfcacheSegmentIds(options.elements)) {
-    const value = preservePreviousIds.has(id)
-      ? (options.previous[id] ?? options.next[id])
-      : (options.next[id] ?? options.previous[id]);
+    const isPreservedNestedSegment = preservedParentIds.some((parentId) =>
+      isNestedBfcacheSlotSegmentIdFor(id, parentId),
+    );
+    const value =
+      (preservedElementIds.has(id) || isPreservedNestedSegment) && identities[id] === undefined
+        ? mintBfcacheId()
+        : preservePreviousIds.has(id) || isPreservedNestedSegment
+          ? (options.previous[id] ?? options.next[id])
+          : (options.next[id] ?? options.previous[id]);
     if (value === undefined) continue;
     ids[id] = value;
     // Keep future mints ahead of ids restored by reducer-level preservation.

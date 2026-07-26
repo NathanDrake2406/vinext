@@ -50,6 +50,7 @@ describe("slot primitives", () => {
     expect(typeof mod.mergeElements).toBe("function");
     expect(typeof mod.getNonCacheComponentsSegmentKey).toBe("function");
     expect(typeof mod.resolveBfcacheSegmentStateKey).toBe("function");
+    expect(typeof mod.BfcacheSegmentBoundary).toBe("function");
     expect(mod.ElementsContext).toBeDefined();
     expect(mod.ChildrenContext).toBeDefined();
     expect(mod.ParallelSlotsContext).toBeDefined();
@@ -80,6 +81,19 @@ describe("slot primitives", () => {
     expect(resolveBfcacheSegmentStateKey(id, {}, { [id]: "_b_1_" })).toBe("_b_1_");
     expect(resolveBfcacheSegmentStateKey(id, {}, { [id]: "_b_2_" })).toBe("_b_2_");
     expect(resolveBfcacheSegmentStateKey(id, {}, null)).toBeUndefined();
+  });
+
+  it("keeps nested BFCache segment ownership unambiguous across parent prefixes", async () => {
+    const { createNestedBfcacheSlotSegmentId, isNestedBfcacheSlotSegmentIdFor } =
+      await import("../packages/vinext/src/server/bfcache-identity.js");
+    const shortParent = "slot:foo:/";
+    const extendedParent = "slot:foo:/_bar";
+    const nestedId = createNestedBfcacheSlotSegmentId(extendedParent, 1);
+    const collidingUserSlotId = "slot:__vinext_bfcache_segment_slot%3Afoo%3A%2F_bar_1:/";
+
+    expect(isNestedBfcacheSlotSegmentIdFor(nestedId, extendedParent)).toBe(true);
+    expect(isNestedBfcacheSlotSegmentIdFor(nestedId, shortParent)).toBe(false);
+    expect(nestedId).not.toBe(collidingUserSlotId);
   });
 
   it("Children renders null outside a Slot provider", async () => {
@@ -399,13 +413,18 @@ describe("slot primitives", () => {
 
   it("mergeElements preserves identity with planner-approved previous slot content", async () => {
     const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+    const { createNestedBfcacheSlotSegmentId } =
+      await import("../packages/vinext/src/server/bfcache-identity.js");
     const slotId = "slot:modal:/";
+    const nestedId = createNestedBfcacheSlotSegmentId(slotId, 1);
+    const destinationOnlyNestedId = createNestedBfcacheSlotSegmentId(slotId, 2);
     const previousSlotContent = React.createElement("div", null, "previous modal");
     const merged = mergeElements(
       {
         [slotId]: previousSlotContent,
         [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: {
           [slotId]: "previous-modal-identity",
+          [nestedId]: "previous-nested-identity",
         },
       },
       {
@@ -414,6 +433,8 @@ describe("slot primitives", () => {
         [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: {
           "page:/blog": "blog-page-identity",
           [slotId]: "destination-default-identity",
+          [nestedId]: "destination-nested-identity",
+          [destinationOnlyNestedId]: "destination-only-nested-identity",
         },
       },
       { preservePreviousSlotIds: [slotId] },
@@ -423,7 +444,44 @@ describe("slot primitives", () => {
     expect(merged[APP_BFCACHE_SEGMENT_IDENTITIES_KEY]).toEqual({
       "page:/blog": "blog-page-identity",
       [slotId]: "previous-modal-identity",
+      [nestedId]: "previous-nested-identity",
     });
+  });
+
+  it("preserves proof-independent nested membership and remints its id", async () => {
+    const { mergeElements } = await import("../packages/vinext/src/shims/slot.js");
+    const { preserveBfcacheIdsForMergedElements } =
+      await import("../packages/vinext/src/server/app-bfcache-identity.js");
+    const { createNestedBfcacheSlotSegmentId } =
+      await import("../packages/vinext/src/server/bfcache-identity.js");
+    const slotId = "slot:modal:/";
+    const nestedId = createNestedBfcacheSlotSegmentId(slotId, 1);
+    const previousSlotContent = React.createElement("div", null, "previous modal");
+    const merged = mergeElements(
+      {
+        [slotId]: previousSlotContent,
+        [nestedId]: null,
+      },
+      {
+        "page:/blog": React.createElement("div", null, "blog page"),
+        [slotId]: UNMATCHED_SLOT,
+      },
+      { preservePreviousSlotIds: [slotId] },
+    );
+
+    expect(merged[slotId]).toBe(previousSlotContent);
+    expect(merged).toHaveProperty(nestedId, null);
+
+    const ids = preserveBfcacheIdsForMergedElements({
+      elements: merged,
+      next: {},
+      previous: { [slotId]: "_b_4_", [nestedId]: "_b_5_" },
+      preservedElementIds: [slotId],
+    });
+    expect(ids[slotId]).toMatch(/^_b_\d+_$/);
+    expect(ids[slotId]).not.toBe("_b_4_");
+    expect(ids[nestedId]).toMatch(/^_b_\d+_$/);
+    expect(ids[nestedId]).not.toBe("_b_5_");
   });
 
   it("mergeElements preserves a present null default slot when the planner approves it", async () => {

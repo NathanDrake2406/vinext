@@ -2,6 +2,7 @@ import { Fragment, createElement, isValidElement, type ReactElement, type ReactN
 import { describe, expect, it } from "vite-plus/test";
 import { useSelectedLayoutSegments } from "../packages/vinext/src/shims/navigation.js";
 import {
+  APP_BFCACHE_SEGMENT_IDENTITIES_KEY,
   APP_LAYOUT_IDS_KEY,
   APP_PREFETCH_LOADING_SHELL_MARKER_KEY,
   APP_ROOT_LAYOUT_KEY,
@@ -34,6 +35,7 @@ import {
   runWithRequestContext,
 } from "../packages/vinext/src/shims/unified-request-context.js";
 import { buildPageElements as buildResolvedPageElements } from "../packages/vinext/src/server/app-page-element-builder.js";
+import { createNextBfcacheIdMap } from "../packages/vinext/src/server/app-bfcache-identity.js";
 
 function readNode(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -1703,6 +1705,7 @@ describe("app page route wiring helpers", () => {
 
     const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
     const fooElements = buildInterceptedElements({ username: "foo", id: "1" });
+    const fooOtherIdElements = buildInterceptedElements({ username: "foo", id: "2" });
     const barElements = buildInterceptedElements({ username: "bar", id: "2" });
     const fooBoundary = findElementByTypeName(fooElements[modalSlotId], "ErrorBoundary");
     const barBoundary = findElementByTypeName(barElements[modalSlotId], "ErrorBoundary");
@@ -1714,6 +1717,8 @@ describe("app page route wiring helpers", () => {
       AppElementsWire.readMetadata(fooElements).bfcacheSegmentIdentities[modalSlotId];
     const barIdentity =
       AppElementsWire.readMetadata(barElements).bfcacheSegmentIdentities[modalSlotId];
+    const fooOtherIdIdentity =
+      AppElementsWire.readMetadata(fooOtherIdElements).bfcacheSegmentIdentities[modalSlotId];
     const repeatedFooIdentity = AppElementsWire.readMetadata(
       buildInterceptedElements({ username: "foo", id: "1" }),
     ).bfcacheSegmentIdentities[modalSlotId];
@@ -1723,7 +1728,140 @@ describe("app page route wiring helpers", () => {
     expect(fooIdentity).not.toBe(fooBoundary?.props.resetKey);
     expect(barIdentity).not.toBe(barBoundary?.props.resetKey);
     expect(barIdentity).not.toBe(fooIdentity);
+    expect(fooOtherIdIdentity).toBe(fooIdentity);
     expect(repeatedFooIdentity).toBe(fooIdentity);
+
+    const fooIdentities = AppElementsWire.readMetadata(fooElements).bfcacheSegmentIdentities;
+    const fooOtherIdIdentities =
+      AppElementsWire.readMetadata(fooOtherIdElements).bfcacheSegmentIdentities;
+    const nestedSegmentId = Object.keys(fooIdentities).find((id) =>
+      id.startsWith("slot:\0vinext_bfcache_segment_"),
+    );
+    expect(nestedSegmentId).toBeTypeOf("string");
+    if (nestedSegmentId === undefined) return;
+    expect(fooOtherIdIdentities[nestedSegmentId]).not.toBe(fooIdentities[nestedSegmentId]);
+
+    const fooBfcacheIds = createNextBfcacheIdMap({
+      current: {},
+      currentElements: fooElements,
+      elements: fooElements,
+    });
+    const fooOtherIdBfcacheIds = createNextBfcacheIdMap({
+      current: fooBfcacheIds,
+      currentElements: fooElements,
+      elements: fooOtherIdElements,
+    });
+    expect(fooOtherIdBfcacheIds[modalSlotId]).toBe(fooBfcacheIds[modalSlotId]);
+    expect(fooOtherIdBfcacheIds[nestedSegmentId]).not.toBe(fooBfcacheIds[nestedSegmentId]);
+
+    const missingProofElements = { ...fooOtherIdElements };
+    delete missingProofElements[APP_BFCACHE_SEGMENT_IDENTITIES_KEY];
+    const missingProofIds = createNextBfcacheIdMap({
+      current: fooBfcacheIds,
+      currentElements: fooElements,
+      elements: missingProofElements,
+    });
+    expect(missingProofIds[nestedSegmentId]).toMatch(/^_b_\d+_$/);
+    expect(missingProofIds[nestedSegmentId]).not.toBe(fooBfcacheIds[nestedSegmentId]);
+
+    const previousCacheComponents = process.env.__NEXT_CACHE_COMPONENTS;
+    process.env.__NEXT_CACHE_COMPONENTS = "true";
+    try {
+      const cachedElements = buildInterceptedElements({ username: "foo", id: "1" });
+      expect(
+        findElementByTypeName(cachedElements[modalSlotId], "BfcacheSegmentBoundary")?.props
+          .stateKey,
+      ).toBe("id|1|d");
+      expect(
+        findElementByTypeName(cachedElements[modalSlotId], "BfcacheSegmentBoundary")?.props.id,
+      ).toBe(nestedSegmentId);
+    } finally {
+      if (previousCacheComponents === undefined) {
+        delete process.env.__NEXT_CACHE_COMPONENTS;
+      } else {
+        process.env.__NEXT_CACHE_COMPONENTS = previousCacheComponents;
+      }
+    }
+  });
+
+  it("wraps an unaligned intercepted slot branch outside its layouts", () => {
+    function InterceptLayout(props: { children?: ReactNode }) {
+      return createElement("section", { "data-intercept-layout": true }, props.children);
+    }
+
+    const buildElements = (id: string) =>
+      buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(value) {
+          return Promise.resolve(value);
+        },
+        matchedParams: {},
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null],
+          layoutTreePositions: [],
+          layouts: [],
+          loading: null,
+          notFound: null,
+          notFounds: [null],
+          routeSegments: [],
+          slots: {
+            modal: {
+              default: null,
+              error: null,
+              layout: null,
+              layoutIndex: -1,
+              loading: null,
+              name: "modal",
+              page: null,
+              routeSegments: null,
+            },
+          },
+          templateTreePositions: [],
+          templates: [],
+        },
+        routePath: `/photos/${id}`,
+        rootNotFoundModule: null,
+        slotOverrides: {
+          modal: {
+            branchSegments: ["(.)photos", "[id]"],
+            layoutModules: [{ default: InterceptLayout }],
+            layoutSegments: [["(.)photos", "[id]"]],
+            pageModule: { default: SlotPage },
+            params: { id },
+            routeSegments: ["photos", "[id]"],
+          },
+        },
+      });
+
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
+    const firstElements = buildElements("1");
+    const secondElements = buildElements("2");
+    const firstBoundary = firstElements[modalSlotId];
+    const secondBoundary = secondElements[modalSlotId];
+
+    expect(isValidElement(firstBoundary) && getElementTypeName(firstBoundary.type)).toBe(
+      "BfcacheSegmentBoundary",
+    );
+    expect(
+      isValidElement<Record<string, unknown>>(firstBoundary) ? firstBoundary.props.stateKey : null,
+    ).toBe(JSON.stringify(["photos", "id|1|d"]));
+    expect(findElementByTypeName(firstBoundary, "InterceptLayout")).not.toBeNull();
+    expect(
+      isValidElement<Record<string, unknown>>(secondBoundary) ? secondBoundary.props.id : null,
+    ).toBe(isValidElement<Record<string, unknown>>(firstBoundary) ? firstBoundary.props.id : null);
+
+    const nestedId = isValidElement<Record<string, unknown>>(firstBoundary)
+      ? String(firstBoundary.props.id)
+      : "";
+    const firstIdentity =
+      AppElementsWire.readMetadata(firstElements).bfcacheSegmentIdentities[nestedId];
+    const secondIdentity =
+      AppElementsWire.readMetadata(secondElements).bfcacheSegmentIdentities[nestedId];
+    expect(firstIdentity).toBeTypeOf("string");
+    expect(secondIdentity).not.toBe(firstIdentity);
   });
 
   it("emits opaque slot identities from effective route facts", async () => {
@@ -2982,12 +3120,53 @@ describe("app page route wiring helpers", () => {
     const templateSlot = findSlotById(elements["route:/docs/launch"], "template:/docs");
 
     expect(templateSlot).not.toBeNull();
-    expect(templateSlot?.key).toBe("slug|launch|d");
+    expect(templateSlot?.key).toBe(JSON.stringify(["docs", "slug|launch|d"]));
     expect(
       AppElementsWire.readMetadata(buildElements("release")).bfcacheSegmentIdentities[
         "template:/docs"
       ],
     ).not.toBe(AppElementsWire.readMetadata(elements).bfcacheSegmentIdentities["template:/docs"]);
+
+    const buildTenantElements = (tenant: string) =>
+      buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(params) {
+          return Promise.resolve(params);
+        },
+        matchedParams: { tenant },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null, null],
+          ids: {
+            layouts: ["graph-layout:/", "graph-layout:/[tenant]"],
+            page: "graph-page:/[tenant]/settings",
+            rootBoundary: "graph-root:/",
+            route: "graph-route:/[tenant]/settings",
+            routeHandler: null,
+            slots: {},
+            templates: ["graph-template:/[tenant]"],
+          },
+          layoutTreePositions: [0, 1],
+          layouts: [{ default: RootLayout }, { default: GroupLayout }],
+          loading: null,
+          notFound: null,
+          notFounds: [null, null],
+          routeSegments: ["[tenant]", "settings"],
+          slots: {},
+          templateTreePositions: [1],
+          templates: [{ default: LeafTemplate }],
+        },
+        routePath: `/${tenant}/settings`,
+        rootNotFoundModule: null,
+      });
+    const tenantAIdentity = AppElementsWire.readMetadata(buildTenantElements("a"))
+      .bfcacheSegmentIdentities["template:/[tenant]"];
+    const tenantBIdentity = AppElementsWire.readMetadata(buildTenantElements("b"))
+      .bfcacheSegmentIdentities["template:/[tenant]"];
+    expect(tenantAIdentity).toBeTypeOf("string");
+    expect(tenantBIdentity).not.toBe(tenantAIdentity);
 
     const previousCacheComponents = process.env.__NEXT_CACHE_COMPONENTS;
     process.env.__NEXT_CACHE_COMPONENTS = "true";

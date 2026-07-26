@@ -14,6 +14,10 @@ import {
   type LayoutFlags,
 } from "../server/app-elements.js";
 import type { ArtifactCompatibilityEnvelope } from "../server/artifact-compatibility.js";
+import {
+  isNestedBfcacheSlotSegmentId,
+  isNestedBfcacheSlotSegmentIdFor,
+} from "../server/bfcache-identity.js";
 import type { CacheEntryReuseProof } from "../server/cache-proof.js";
 import {
   getBfcacheIdMapContext,
@@ -41,6 +45,9 @@ export const ParallelSlotsContext = React.createContext<Readonly<
 > | null>(null);
 const BfcacheIdMapContext = getBfcacheIdMapContext();
 const BfcacheSegmentIdContext = getBfcacheSegmentIdContext();
+const FallbackBfcacheIdMapContext = React.createContext<Readonly<Record<string, string>> | null>(
+  null,
+);
 const EMPTY_BFCACHE_STATE_KEYS: Readonly<Record<string, string>> = Object.freeze({});
 const MAX_BFCACHE_SLOT_ENTRIES_WITH_CACHE_COMPONENTS = 3;
 // Used by updateBfcacheSlotEntryOrder when invoked directly (unit tests) and
@@ -344,6 +351,49 @@ function BfcacheActivitySlotBoundary({
   );
 }
 
+/**
+ * Adds a nested segment-owned Activity cache inside a flattened AppElements
+ * entry. Named parallel routes are transported as one slot value, but Next.js
+ * retains each descendant segment independently. This boundary recreates that
+ * ownership without requiring a separate wire entry for every nested segment.
+ */
+export function BfcacheSegmentBoundary({
+  children,
+  id,
+  stateKey,
+}: {
+  children: React.ReactNode;
+  id: string;
+  stateKey: string;
+}) {
+  const elements = React.useContext(ElementsContext);
+  const identityMap = React.useContext(BfcacheIdentityMapContext);
+  const bfcacheIdMap = React.useContext(BfcacheIdMapContext ?? FallbackBfcacheIdMapContext);
+  const activeStateKey = resolveBfcacheSegmentStateKey(id, identityMap, bfcacheIdMap);
+
+  if (!BfcacheSegmentIdContext || activeStateKey === undefined) {
+    return <React.Fragment key={stateKey}>{children}</React.Fragment>;
+  }
+  if (!isCacheComponentsEnabled()) {
+    return (
+      <BfcacheSegmentIdContext.Provider key={activeStateKey} value={id}>
+        {children}
+      </BfcacheSegmentIdContext.Provider>
+    );
+  }
+
+  return (
+    <BfcacheActivitySlotBoundary
+      activeStateKey={activeStateKey}
+      content={children}
+      elements={elements}
+      id={id}
+      SegmentContext={BfcacheSegmentIdContext}
+      stateKeyMap={identityMap}
+    />
+  );
+}
+
 export function getNonCacheComponentsSegmentKey(
   id: string,
   activeStateKey: string,
@@ -430,7 +480,9 @@ export function mergeElements(
   }
 
   const slotKeys = new Set(
-    [...Object.keys(prev), ...Object.keys(next)].filter((key) => AppElementsWire.isSlotId(key)),
+    [...Object.keys(prev), ...Object.keys(next)].filter(
+      (key) => AppElementsWire.isSlotId(key) && !isNestedBfcacheSlotSegmentId(key),
+    ),
   );
   // On traversal (browser back/forward), the server renders the full destination
   // route tree. A slot absent from next means the destination route tree does not
@@ -467,6 +519,16 @@ export function mergeElements(
     if (value !== undefined && value !== UNMATCHED_SLOT) {
       merged[id] = value;
       preservedIdentityIds.add(id);
+      // Membership is independent from identity proof. A retained nested
+      // boundary still needs its synthetic address when the previous proof map
+      // was absent or rejected, so the reducer can mint a conservative fresh
+      // id instead of leaking the parent slot's id.
+      for (const nestedId of Object.keys(prev)) {
+        if (!isNestedBfcacheSlotSegmentIdFor(nestedId, id)) continue;
+        const nestedValue = prev[nestedId];
+        if (nestedValue !== undefined) merged[nestedId] = nestedValue;
+        preservedIdentityIds.add(nestedId);
+      }
     }
   }
 
@@ -487,6 +549,18 @@ export function mergeElements(
     const mergedIdentities: Record<string, string> = hasNextIdentities
       ? { ...nextIdentityValue }
       : {};
+    const identityIds = new Set([
+      ...Object.keys(previousIdentities),
+      ...Object.keys(mergedIdentities),
+    ]);
+    const preservedParentIds = new Set(preservedIdentityIds);
+    for (const parentId of preservedParentIds) {
+      for (const identityId of identityIds) {
+        if (isNestedBfcacheSlotSegmentIdFor(identityId, parentId)) {
+          preservedIdentityIds.add(identityId);
+        }
+      }
+    }
 
     // An element and its identity are one preservation unit. Keeping previous
     // content beside the destination's identity would falsely prove that stale

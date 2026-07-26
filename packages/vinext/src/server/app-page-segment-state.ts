@@ -7,7 +7,7 @@ function isDynamicSegment(segment: string): boolean {
   return segment.startsWith("[") && segment.endsWith("]") && !segment.includes(".");
 }
 
-function isRouteGroupSegment(segment: string): boolean {
+export function isAppPageRouteGroupSegment(segment: string): boolean {
   return segment.startsWith("(") && segment.endsWith(")");
 }
 
@@ -123,7 +123,7 @@ export function resolveAppPageSegmentStateKey(
   params: AppPageParams,
 ): string {
   for (const segment of routeSegments.slice(treePosition)) {
-    if (!isRouteGroupSegment(segment)) {
+    if (!isAppPageRouteGroupSegment(segment)) {
       return resolveSingleSegmentStateKey(segment, params);
     }
   }
@@ -137,7 +137,7 @@ export function resolveAppPageRouteStateKey(
   const statePath: string[] = [];
 
   for (const segment of routeSegments) {
-    if (!isRouteGroupSegment(segment)) {
+    if (!isAppPageRouteGroupSegment(segment)) {
       statePath.push(resolveSingleSegmentStateKey(segment, params));
     }
   }
@@ -178,8 +178,10 @@ export function resolveAppPageTemplateStateKey(
   treePosition: number,
   params: AppPageParams,
 ): string {
-  return (
-    resolveAppPageSegmentStateKey(routeSegments, treePosition, params) ||
-    resolveAppPageLeafSegmentStateKey(routeSegments, params)
-  );
+  const ownerStateKey = resolveAppPageRouteStateKey(routeSegments.slice(0, treePosition), params);
+  for (let end = treePosition + 1; end <= routeSegments.length; end++) {
+    const activeStateKey = resolveAppPageRouteStateKey(routeSegments.slice(0, end), params);
+    if (activeStateKey !== ownerStateKey) return activeStateKey;
+  }
+  return ownerStateKey || resolveAppPageLeafSegmentStateKey(routeSegments, params);
 }

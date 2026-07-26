@@ -22,6 +22,30 @@
 // and browser consumers compare those strings without reinterpreting route facts.
 
 type ParallelSlotBindingState = "active" | "default" | "unmatched";
+// NUL cannot occur in a filesystem-backed @slot name, so this internal slot-id
+// namespace cannot alias a user-authored parallel route while remaining valid
+// for the existing AppElements slot parser and history-map validation.
+const NESTED_BFCACHE_SLOT_SEGMENT_PREFIX = "slot:\0vinext_bfcache_segment_";
+
+function createNestedBfcacheSlotParentPrefix(parentSlotId: string): string {
+  const encodedParent = encodeURIComponent(parentSlotId);
+  return `${NESTED_BFCACHE_SLOT_SEGMENT_PREFIX}${encodedParent.length}_${encodedParent}_`;
+}
+
+export function createNestedBfcacheSlotSegmentId(parentSlotId: string, level: number): string {
+  return `${createNestedBfcacheSlotParentPrefix(parentSlotId)}${level}:/`;
+}
+
+export function isNestedBfcacheSlotSegmentId(id: string): boolean {
+  return id.startsWith(NESTED_BFCACHE_SLOT_SEGMENT_PREFIX);
+}
+
+export function isNestedBfcacheSlotSegmentIdFor(id: string, parentSlotId: string): boolean {
+  return (
+    isNestedBfcacheSlotSegmentId(id) &&
+    id.startsWith(createNestedBfcacheSlotParentPrefix(parentSlotId))
+  );
+}
 
 export type BfcacheSegmentIdentity = string;
 

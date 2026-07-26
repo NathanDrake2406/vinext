@@ -31,7 +31,7 @@ import {
   type Metadata,
   type Viewport,
 } from "vinext/shims/metadata";
-import { Children, ParallelSlot, Slot } from "vinext/shims/slot";
+import { BfcacheSegmentBoundary, Children, ParallelSlot, Slot } from "vinext/shims/slot";
 import { StreamedIconsInsertion } from "vinext/shims/streamed-icons";
 import { createInlineScriptTag, escapeHtmlAttr } from "./html.js";
 import type { AppPageParams } from "./app-page-boundary.js";
@@ -58,13 +58,17 @@ import {
 } from "./app-rsc-render-mode.js";
 import {
   APP_PAGE_SEGMENT_KEY,
+  isAppPageRouteGroupSegment,
   resolveAppPageChildSegments,
   resolveAppPageRouteStateKey,
   resolveAppPageSegmentStateKey,
   resolveAppPageTemplateStateKey,
 } from "./app-page-segment-state.js";
 import type { AppPageRenderIdentity } from "./app-page-render-identity.js";
-import { deriveBfcacheSegmentIdentity } from "./bfcache-identity.js";
+import {
+  createNestedBfcacheSlotSegmentId,
+  deriveBfcacheSegmentIdentity,
+} from "./bfcache-identity.js";
 
 export { resolveAppPageChildSegments } from "./app-page-segment-state.js";
 
@@ -655,6 +659,11 @@ type AppPageSlotSegmentPlan<TModule extends AppPageModule> = Readonly<{
   branchSegments: readonly string[];
   includedInPayload: boolean;
   key: string;
+  nestedBfcacheSegments: readonly Readonly<{
+    id: string;
+    stateKey: string;
+    treePosition: number | null;
+  }>[];
   ownerTreePosition: number;
   params: AppPageParams;
   resetKey: string;
@@ -844,19 +853,64 @@ function createAppPageSegmentPlan<
     const routeSegments = slotOverride?.routeSegments ?? slot.routeSegments ?? [];
     const branchSegments = slotOverride?.branchSegments ?? routeSegments;
     const resetKey = resolveAppPageRouteStateKey(routeSegments, params);
+    const semanticSegments = routeSegments.flatMap((segment, treePosition) =>
+      isAppPageRouteGroupSegment(segment)
+        ? []
+        : [
+            {
+              identityKey: resolveAppPageRouteStateKey(
+                routeSegments.slice(0, treePosition + 1),
+                params,
+              ),
+              stateKey: resolveAppPageSegmentStateKey(routeSegments, treePosition, params),
+              treePosition,
+            },
+          ],
+    );
+    const bfcacheStateKey = semanticSegments[0]?.stateKey ?? "";
     const includedInPayload = options.includeSlot(ownerTreePosition, targetTreePosition);
     const graphId = graphIds ? graphIds.slots[slotKey] : (slot.id ?? slotId);
     if (graphId === undefined) {
       throw new Error(`[vinext] Missing App Router graph slot id for ${slotKey}`);
     }
+    const segmentPositionsAlignWithBranch =
+      branchSegments.length === routeSegments.length &&
+      branchSegments.every((segment, index) => segment === routeSegments[index]);
+    const nestedBfcacheSegmentCandidates = segmentPositionsAlignWithBranch
+      ? semanticSegments.slice(1)
+      : resetKey && semanticSegments.length > 1
+        ? [{ identityKey: resetKey, stateKey: resetKey, treePosition: null }]
+        : [];
+    const nestedBfcacheSegments: {
+      id: string;
+      stateKey: string;
+      treePosition: number | null;
+    }[] = [];
     if (includedInPayload) {
-      const identity = deriveSlotIdentity(graphId, slotId, slotBinding, resetKey);
+      const identity = deriveSlotIdentity(graphId, slotId, slotBinding, bfcacheStateKey);
       if (identity !== null) identities[slotId] = identity;
+      for (const [level, segment] of nestedBfcacheSegmentCandidates.entries()) {
+        const nestedIdentity = deriveSlotIdentity(
+          graphId,
+          slotId,
+          slotBinding,
+          segment.identityKey,
+        );
+        if (nestedIdentity === null) continue;
+        const id = createNestedBfcacheSlotSegmentId(slotId, level + 1);
+        identities[id] = nestedIdentity;
+        nestedBfcacheSegments.push({
+          id,
+          stateKey: segment.stateKey,
+          treePosition: segment.treePosition,
+        });
+      }
     }
     return Object.freeze({
       branchSegments,
       includedInPayload,
       key: slotKey,
+      nestedBfcacheSegments: Object.freeze(nestedBfcacheSegments),
       ownerTreePosition,
       params,
       resetKey,
@@ -1191,6 +1245,14 @@ export function buildAppPageElements<
     };
   }
   const elements: Record<string, AppElementValue> = {};
+  // Synthetic nested segment entries carry membership independently of the
+  // proof map. If identity metadata is absent or rejected atomically, the
+  // browser can still discover these ids and mint conservative fresh keys.
+  for (const slotPlan of segmentPlan.slots) {
+    for (const segment of slotPlan.nestedBfcacheSegments) {
+      elements[segment.id] = null;
+    }
+  }
   // Surface static-sibling info on the wire so the client router can decide
   // whether a cached dynamic-route prefetch can be reused when navigating to a
   // static sibling URL. Mirrors Next.js's loader-tree `staticSiblings` tuple
@@ -1373,6 +1435,7 @@ export function buildAppPageElements<
     const {
       branchSegments,
       includedInPayload,
+      nestedBfcacheSegments,
       ownerTreePosition,
       params: slotParams,
       resetKey: slotResetKey,
@@ -1524,6 +1587,9 @@ export function buildAppPageElements<
         ...branchLayouts.keys(),
         ...branchLoadings.keys(),
         ...(slotErrorComponent ? [0] : []),
+        ...nestedBfcacheSegments.flatMap((segment) =>
+          segment.treePosition === null ? [] : [segment.treePosition],
+        ),
       ]),
     )
       .filter(
@@ -1534,6 +1600,19 @@ export function buildAppPageElements<
       .sort((left, right) => left - right);
     for (let index = branchTreePositions.length - 1; index >= 0; index--) {
       const treePosition = branchTreePositions[index];
+      const nestedBfcacheSegment = nestedBfcacheSegments.find(
+        (segment) => segment.treePosition === treePosition,
+      );
+      if (nestedBfcacheSegment) {
+        slotElement = (
+          <BfcacheSegmentBoundary
+            id={nestedBfcacheSegment.id}
+            stateKey={nestedBfcacheSegment.stateKey}
+          >
+            {slotElement}
+          </BfcacheSegmentBoundary>
+        );
+      }
       const loadingComponents = prefetchSlotLoadingEntry
         ? []
         : (branchLoadings.get(treePosition) ?? []);
@@ -1569,6 +1648,24 @@ export function buildAppPageElements<
           </LayoutComponent>
         );
       }
+    }
+
+    const unalignedBfcacheSegment = nestedBfcacheSegments.find(
+      (segment) => segment.treePosition === null,
+    );
+    if (unalignedBfcacheSegment) {
+      // Interception branches can have a marker-bearing filesystem shape that
+      // cannot be aligned safely with the semantic target route. Wrap the
+      // complete flattened branch so no intercept layout can retain stale
+      // state, while still publishing a distinct leaf BFCache id.
+      slotElement = (
+        <BfcacheSegmentBoundary
+          id={unalignedBfcacheSegment.id}
+          stateKey={unalignedBfcacheSegment.stateKey}
+        >
+          {slotElement}
+        </BfcacheSegmentBoundary>
+      );
     }
 
     // A loading convention on the owning segment applies to every parallel

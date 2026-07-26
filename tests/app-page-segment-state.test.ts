@@ -100,10 +100,24 @@ describe("app page segment state keys", () => {
 
   it("uses the owning dynamic segment for leaf templates", () => {
     expect(resolveAppPageTemplateStateKey(["docs", "[slug]"], 1, { slug: "launch" })).toBe(
-      "slug|launch|d",
+      JSON.stringify(["docs", "slug|launch|d"]),
     );
     expect(resolveAppPageTemplateStateKey(["docs", "[slug]"], 2, { slug: "launch" })).toBe(
-      "slug|launch|d",
+      JSON.stringify(["docs", "slug|launch|d"]),
     );
+  });
+
+  it("includes dynamic ancestors in non-leaf template state", () => {
+    expect(resolveAppPageTemplateStateKey(["[tenant]", "settings"], 1, { tenant: "a" })).toBe(
+      JSON.stringify(["tenant|a|d", "settings"]),
+    );
+    expect(resolveAppPageTemplateStateKey(["[tenant]", "settings"], 1, { tenant: "b" })).toBe(
+      JSON.stringify(["tenant|b|d", "settings"]),
+    );
+    expect(
+      resolveAppPageTemplateStateKey(["[tenant]", "(group)", "settings"], 1, {
+        tenant: "a",
+      }),
+    ).toBe(JSON.stringify(["tenant|a|d", "settings"]));
   });
 });

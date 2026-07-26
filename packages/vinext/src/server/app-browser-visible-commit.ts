@@ -219,6 +219,7 @@ function reduceApprovedVisibleCommitState(
             elements: mergedElements,
             next: action.bfcacheIds,
             previous: action.reuseCurrentBfcacheIds ? state.bfcacheIds : {},
+            preservedElementIds: preservePreviousSlotIds,
             preservePreviousIds: preservePreviousBfcacheIdIds,
           }),
           elements: mergedElements,
