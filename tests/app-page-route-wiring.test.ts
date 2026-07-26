@@ -1784,12 +1784,16 @@ describe("app page route wiring helpers", () => {
     }
   });
 
-  it("wraps an unaligned intercepted slot branch outside its layouts", () => {
-    function InterceptLayout(props: { children?: ReactNode }) {
-      return createElement("section", { "data-intercept-layout": true }, props.children);
+  it("retains matching intercepted layouts with marker-bearing branch segments", () => {
+    function PhotosLayout(props: { children?: ReactNode }) {
+      return createElement("section", { "data-photos-layout": true }, props.children);
     }
 
-    const buildElements = (id: string) =>
+    function AlbumLayout(props: { children?: ReactNode }) {
+      return createElement("section", { "data-album-layout": true }, props.children);
+    }
+
+    const buildElements = (album: string, id: string) =>
       buildAppPageElements({
         element: createElement(PageProbe),
         makeThenableParams(value) {
@@ -1822,46 +1826,155 @@ describe("app page route wiring helpers", () => {
           templateTreePositions: [],
           templates: [],
         },
-        routePath: `/photos/${id}`,
+        routePath: `/photos/${album}/${id}`,
         rootNotFoundModule: null,
         slotOverrides: {
           modal: {
-            branchSegments: ["(.)photos", "[id]"],
-            layoutModules: [{ default: InterceptLayout }],
-            layoutSegments: [["(.)photos", "[id]"]],
+            branchSegments: ["photos", "[album]", "[id]"],
+            identitySegments: ["(.)photos", "[album]", "[id]"],
+            layoutModules: [
+              { default: PhotosLayout } as AppPageModule,
+              { default: AlbumLayout } as AppPageModule,
+            ],
+            layoutSegments: [["(.)photos"], ["(.)photos", "[album]"]],
             pageModule: { default: SlotPage },
-            params: { id },
-            routeSegments: ["photos", "[id]"],
+            params: { album, id },
+            routeSegments: ["photos", "[album]", "[id]"],
           },
         },
       });
 
     const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
-    const firstElements = buildElements("1");
-    const secondElements = buildElements("2");
-    const firstBoundary = firstElements[modalSlotId];
-    const secondBoundary = secondElements[modalSlotId];
+    const firstElements = buildElements("a", "1");
+    const changedLeafElements = buildElements("a", "2");
+    const firstIdentities = AppElementsWire.readMetadata(firstElements).bfcacheSegmentIdentities;
+    const changedLeafIdentities =
+      AppElementsWire.readMetadata(changedLeafElements).bfcacheSegmentIdentities;
+    const nestedIds = Object.keys(firstIdentities)
+      .filter((id) => id.startsWith("slot:\0vinext_bfcache_segment_"))
+      .sort();
 
-    expect(isValidElement(firstBoundary) && getElementTypeName(firstBoundary.type)).toBe(
-      "BfcacheSegmentBoundary",
+    expect(nestedIds).toHaveLength(2);
+    const [albumSegmentId, idSegmentId] = nestedIds;
+    const slotElement = firstElements[modalSlotId];
+    expect(isValidElement(slotElement) && getElementTypeName(slotElement.type)).toBe(
+      "PhotosLayout",
     );
+    expect(findElementByTypeName(slotElement, "AlbumLayout")).not.toBeNull();
     expect(
-      isValidElement<Record<string, unknown>>(firstBoundary) ? firstBoundary.props.stateKey : null,
-    ).toBe(JSON.stringify(["photos", "id|1|d"]));
-    expect(findElementByTypeName(firstBoundary, "InterceptLayout")).not.toBeNull();
+      findElement(
+        slotElement,
+        (element) =>
+          getElementTypeName(element.type) === "BfcacheSegmentBoundary" &&
+          element.props.id === albumSegmentId,
+      )?.props.stateKey,
+    ).toBe("album|a|d");
     expect(
-      isValidElement<Record<string, unknown>>(secondBoundary) ? secondBoundary.props.id : null,
-    ).toBe(isValidElement<Record<string, unknown>>(firstBoundary) ? firstBoundary.props.id : null);
+      findElement(
+        slotElement,
+        (element) =>
+          getElementTypeName(element.type) === "BfcacheSegmentBoundary" &&
+          element.props.id === idSegmentId,
+      )?.props.stateKey,
+    ).toBe("id|1|d");
+    expect(changedLeafIdentities[albumSegmentId]).toBe(firstIdentities[albumSegmentId]);
+    expect(changedLeafIdentities[idSegmentId]).not.toBe(firstIdentities[idSegmentId]);
 
-    const nestedId = isValidElement<Record<string, unknown>>(firstBoundary)
-      ? String(firstBoundary.props.id)
-      : "";
-    const firstIdentity =
-      AppElementsWire.readMetadata(firstElements).bfcacheSegmentIdentities[nestedId];
-    const secondIdentity =
-      AppElementsWire.readMetadata(secondElements).bfcacheSegmentIdentities[nestedId];
-    expect(firstIdentity).toBeTypeOf("string");
-    expect(secondIdentity).not.toBe(firstIdentity);
+    const firstBfcacheIds = createNextBfcacheIdMap({
+      current: {},
+      currentElements: firstElements,
+      elements: firstElements,
+    });
+    const changedLeafBfcacheIds = createNextBfcacheIdMap({
+      current: firstBfcacheIds,
+      currentElements: firstElements,
+      elements: changedLeafElements,
+    });
+    expect(changedLeafBfcacheIds[albumSegmentId]).toBe(firstBfcacheIds[albumSegmentId]);
+    expect(changedLeafBfcacheIds[idSegmentId]).not.toBe(firstBfcacheIds[idSegmentId]);
+  });
+
+  it("preserves source-only interception ancestors and distinguishes conventions", () => {
+    function SourceLayout(props: { children?: ReactNode }) {
+      return createElement("section", { "data-source-layout": true }, props.children);
+    }
+
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
+    const buildElements = (sourceId: string, targetId: string, marker = "(..)photo") =>
+      buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(value) {
+          return Promise.resolve(value);
+        },
+        matchedParams: { id: sourceId },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null],
+          layoutTreePositions: [],
+          layouts: [],
+          loading: null,
+          notFound: null,
+          notFounds: [null],
+          routeSegments: ["[id]"],
+          slots: {
+            modal: {
+              default: null,
+              error: null,
+              layout: null,
+              layoutIndex: -1,
+              loading: null,
+              name: "modal",
+              page: null,
+              routeSegments: null,
+            },
+          },
+          templateTreePositions: [],
+          templates: [],
+        },
+        routePath: `/photo/${targetId}`,
+        rootNotFoundModule: null,
+        slotOverrides: {
+          modal: {
+            branchSegments: ["[id]", "photo", "[id]"],
+            identitySegments: ["[id]", marker, "[id]"],
+            layoutModules: [{ default: SourceLayout } as AppPageModule],
+            layoutSegments: [["[id]"]],
+            pageModule: { default: SlotPage },
+            params: { id: targetId },
+            routeSegments: ["photo", "[id]"],
+          },
+        },
+      });
+
+    const firstElements = buildElements("source-a", "target-1");
+    const changedLeafElements = buildElements("source-a", "target-2");
+    const otherSourceElements = buildElements("source-b", "target-1");
+    const otherConventionElements = buildElements("source-a", "target-1", "(.)photo");
+    const firstIdentities = AppElementsWire.readMetadata(firstElements).bfcacheSegmentIdentities;
+    const changedLeafIdentities =
+      AppElementsWire.readMetadata(changedLeafElements).bfcacheSegmentIdentities;
+    const otherConventionIdentities =
+      AppElementsWire.readMetadata(otherConventionElements).bfcacheSegmentIdentities;
+    const otherSourceIdentities =
+      AppElementsWire.readMetadata(otherSourceElements).bfcacheSegmentIdentities;
+    const nestedIds = Object.keys(firstIdentities)
+      .filter((id) => id.startsWith("slot:\0vinext_bfcache_segment_"))
+      .sort();
+
+    expect(nestedIds).toHaveLength(2);
+    const [targetSegmentId, leafSegmentId] = nestedIds;
+    expect(isValidElement(firstElements[modalSlotId])).toBe(true);
+    expect(getElementTypeName((firstElements[modalSlotId] as ReactElement).type)).toBe(
+      "SourceLayout",
+    );
+    expect(changedLeafIdentities[modalSlotId]).toBe(firstIdentities[modalSlotId]);
+    expect(changedLeafIdentities[targetSegmentId]).toBe(firstIdentities[targetSegmentId]);
+    expect(changedLeafIdentities[leafSegmentId]).not.toBe(firstIdentities[leafSegmentId]);
+    expect(otherSourceIdentities[modalSlotId]).not.toBe(firstIdentities[modalSlotId]);
+    expect(otherConventionIdentities[targetSegmentId]).not.toBe(firstIdentities[targetSegmentId]);
+    expect(otherConventionIdentities[leafSegmentId]).not.toBe(firstIdentities[leafSegmentId]);
   });
 
   it("emits opaque slot identities from effective route facts", async () => {
@@ -2036,6 +2149,109 @@ describe("app page route wiring helpers", () => {
     expect(layoutOnly["page:/photos/42"]).toBeDefined();
     expect(JSON.parse(baseline[modalSlotId])[1]).toBe("graph-slot:modal");
   });
+
+  it.each([false, true])(
+    "binds nested slot identities to their dynamic owner with cacheComponents=%s",
+    (cacheComponents) => {
+      const previousCacheComponents = process.env.__NEXT_CACHE_COMPONENTS;
+      if (cacheComponents) {
+        process.env.__NEXT_CACHE_COMPONENTS = "true";
+      } else {
+        delete process.env.__NEXT_CACHE_COMPONENTS;
+      }
+
+      try {
+        const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
+        const buildElements = (teamID: string, catchAll: string) =>
+          buildAppPageElements({
+            element: createElement(PageProbe),
+            makeThenableParams(value) {
+              return Promise.resolve(value);
+            },
+            matchedParams: { catchAll: [catchAll], teamID },
+            resolvedMetadata: null,
+            resolvedViewport: {},
+            route: {
+              error: null,
+              errors: [null],
+              ids: {
+                layouts: ["graph-layout:/"],
+                page: "graph-page:/[teamID]/dashboard",
+                rootBoundary: "graph-root:/",
+                route: "graph-route:/[teamID]/dashboard",
+                routeHandler: null,
+                slots: { modal: "graph-slot:modal" },
+                templates: [],
+              },
+              layoutTreePositions: [0],
+              layouts: [{ default: RootLayout }],
+              loading: null,
+              notFound: null,
+              notFounds: [null],
+              routeSegments: ["[teamID]", "dashboard"],
+              slots: {
+                modal: {
+                  default: null,
+                  error: null,
+                  id: modalSlotId,
+                  layout: null,
+                  layoutIndex: 0,
+                  loading: null,
+                  name: "modal",
+                  ownerTreePosition: 1,
+                  page: { default: SlotPage },
+                  routeSegments: ["projects", "[...catchAll]"],
+                },
+              },
+              templateTreePositions: [],
+              templates: [],
+            },
+            routePath: `/${teamID}/dashboard`,
+            rootNotFoundModule: null,
+          });
+
+        const alphaElements = buildElements("alpha", "same");
+        const betaElements = buildElements("beta", "same");
+        const alphaOtherLeafElements = buildElements("alpha", "other");
+        const alphaIdentities =
+          AppElementsWire.readMetadata(alphaElements).bfcacheSegmentIdentities;
+        const betaIdentities = AppElementsWire.readMetadata(betaElements).bfcacheSegmentIdentities;
+        const alphaOtherLeafIdentities =
+          AppElementsWire.readMetadata(alphaOtherLeafElements).bfcacheSegmentIdentities;
+        const nestedSegmentId = Object.keys(alphaIdentities).find((id) =>
+          id.startsWith("slot:\0vinext_bfcache_segment_"),
+        );
+
+        expect(nestedSegmentId).toBeTypeOf("string");
+        if (nestedSegmentId === undefined) return;
+        expect(betaIdentities[modalSlotId]).not.toBe(alphaIdentities[modalSlotId]);
+        expect(betaIdentities[nestedSegmentId]).not.toBe(alphaIdentities[nestedSegmentId]);
+        expect(alphaOtherLeafIdentities[modalSlotId]).toBe(alphaIdentities[modalSlotId]);
+        expect(alphaOtherLeafIdentities[nestedSegmentId]).not.toBe(
+          alphaIdentities[nestedSegmentId],
+        );
+
+        const alphaBfcacheIds = createNextBfcacheIdMap({
+          current: {},
+          currentElements: alphaElements,
+          elements: alphaElements,
+        });
+        const betaBfcacheIds = createNextBfcacheIdMap({
+          current: alphaBfcacheIds,
+          currentElements: alphaElements,
+          elements: betaElements,
+        });
+        expect(betaBfcacheIds[modalSlotId]).not.toBe(alphaBfcacheIds[modalSlotId]);
+        expect(betaBfcacheIds[nestedSegmentId]).not.toBe(alphaBfcacheIds[nestedSegmentId]);
+      } finally {
+        if (previousCacheComponents === undefined) {
+          delete process.env.__NEXT_CACHE_COMPONENTS;
+        } else {
+          process.env.__NEXT_CACHE_COMPONENTS = previousCacheComponents;
+        }
+      }
+    },
+  );
 
   it("uses semantic interception route ids instead of wire route ids for slot identity", () => {
     const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");

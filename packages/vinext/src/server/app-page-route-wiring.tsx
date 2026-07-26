@@ -188,6 +188,8 @@ export type AppPageRouteWiringRoute<
 
 export type AppPageSlotOverride<TModule extends AppPageModule = AppPageModule> = {
   branchSegments?: readonly string[] | null;
+  /** Marker-preserving semantic segments aligned with the flattened branch. */
+  identitySegments?: readonly string[] | null;
   layoutSegments?: readonly (readonly string[])[] | null;
   layoutModules?: readonly (TModule | null | undefined)[] | null;
   loadingModules?: readonly (TModule | null | undefined)[] | null;
@@ -680,6 +682,15 @@ type AppPageSegmentPlan<TModule extends AppPageModule> = Readonly<{
   slots: readonly AppPageSlotSegmentPlan<TModule>[];
 }>;
 
+const APP_PAGE_INTERCEPTION_MARKERS = ["(...)", "(..)(..)", "(..)", "(.)"] as const;
+
+function resolveAppPageInterceptionSegmentStateKey(segment: string, params: AppPageParams): string {
+  const marker = APP_PAGE_INTERCEPTION_MARKERS.find((prefix) => segment.startsWith(prefix));
+  const normalizedSegment = marker ? segment.slice(marker.length) : segment;
+  const stateKey = resolveAppPageSegmentStateKey([normalizedSegment], 0, params);
+  return marker ? JSON.stringify([marker, stateKey]) : stateKey;
+}
+
 function requireGraphSequenceId(
   ids: readonly string[],
   index: number,
@@ -853,32 +864,47 @@ function createAppPageSegmentPlan<
     const routeSegments = slotOverride?.routeSegments ?? slot.routeSegments ?? [];
     const branchSegments = slotOverride?.branchSegments ?? routeSegments;
     const resetKey = resolveAppPageRouteStateKey(routeSegments, params);
-    const semanticSegments = routeSegments.flatMap((segment, treePosition) =>
-      isAppPageRouteGroupSegment(segment)
-        ? []
-        : [
-            {
-              identityKey: resolveAppPageRouteStateKey(
-                routeSegments.slice(0, treePosition + 1),
-                params,
-              ),
-              stateKey: resolveAppPageSegmentStateKey(routeSegments, treePosition, params),
-              treePosition,
-            },
-          ],
+    const ownerStateKey = resolveAppPageRouteStateKey(
+      options.routeSegments.slice(0, ownerTreePosition),
+      options.matchedParams,
     );
-    const bfcacheStateKey = semanticSegments[0]?.stateKey ?? "";
+    const bindOwnerState = (segmentKey: string) =>
+      ownerStateKey ? JSON.stringify([ownerStateKey, segmentKey]) : segmentKey;
+    const branchSegmentPositions = branchSegments.flatMap((segment, treePosition) =>
+      isAppPageRouteGroupSegment(segment) || segment.startsWith("@") ? [] : [treePosition],
+    );
+    const identitySegments =
+      slotOverride?.identitySegments ??
+      branchSegmentPositions.map((treePosition) => branchSegments[treePosition]!);
+    const interceptionMarkerIndex = identitySegments.findIndex((segment) =>
+      APP_PAGE_INTERCEPTION_MARKERS.some((marker) => segment.startsWith(marker)),
+    );
+    const semanticStateKeys = identitySegments.map((segment, index) =>
+      resolveAppPageInterceptionSegmentStateKey(
+        segment,
+        interceptionMarkerIndex >= 0 && index < interceptionMarkerIndex
+          ? options.matchedParams
+          : params,
+      ),
+    );
+    const identitySegmentsAlignWithBranch =
+      identitySegments.length === branchSegmentPositions.length;
+    const semanticSegments = identitySegmentsAlignWithBranch
+      ? semanticStateKeys.map((stateKey, index) => ({
+          identityKey: JSON.stringify(semanticStateKeys.slice(0, index + 1)),
+          stateKey,
+          treePosition: branchSegmentPositions[index]!,
+        }))
+      : [];
+    const bfcacheStateKey = semanticSegments[0]?.stateKey ?? resetKey;
     const includedInPayload = options.includeSlot(ownerTreePosition, targetTreePosition);
     const graphId = graphIds ? graphIds.slots[slotKey] : (slot.id ?? slotId);
     if (graphId === undefined) {
       throw new Error(`[vinext] Missing App Router graph slot id for ${slotKey}`);
     }
-    const segmentPositionsAlignWithBranch =
-      branchSegments.length === routeSegments.length &&
-      branchSegments.every((segment, index) => segment === routeSegments[index]);
-    const nestedBfcacheSegmentCandidates = segmentPositionsAlignWithBranch
+    const nestedBfcacheSegmentCandidates = identitySegmentsAlignWithBranch
       ? semanticSegments.slice(1)
-      : resetKey && semanticSegments.length > 1
+      : resetKey
         ? [{ identityKey: resetKey, stateKey: resetKey, treePosition: null }]
         : [];
     const nestedBfcacheSegments: {
@@ -887,14 +913,19 @@ function createAppPageSegmentPlan<
       treePosition: number | null;
     }[] = [];
     if (includedInPayload) {
-      const identity = deriveSlotIdentity(graphId, slotId, slotBinding, bfcacheStateKey);
+      const identity = deriveSlotIdentity(
+        graphId,
+        slotId,
+        slotBinding,
+        bindOwnerState(bfcacheStateKey),
+      );
       if (identity !== null) identities[slotId] = identity;
       for (const [level, segment] of nestedBfcacheSegmentCandidates.entries()) {
         const nestedIdentity = deriveSlotIdentity(
           graphId,
           slotId,
           slotBinding,
-          segment.identityKey,
+          bindOwnerState(segment.identityKey),
         );
         if (nestedIdentity === null) continue;
         const id = createNestedBfcacheSlotSegmentId(slotId, level + 1);

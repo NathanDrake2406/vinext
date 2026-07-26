@@ -662,6 +662,10 @@ function buildSlotOverrides<TModule extends AppPageModule, TErrorModule extends 
   ) {
     overrides[opts.interceptSlotKey] = {
       branchSegments: opts.interceptBranchSegments ?? null,
+      identitySegments: resolveInterceptedSlotIdentitySegments(
+        opts.interceptSourcePageSegments,
+        opts.interceptSlotKey,
+      ),
       layoutModules: opts.interceptLayouts || null,
       layoutSegments: opts.interceptLayoutSegments ?? null,
       loadingModules: opts.interceptLoadings || null,
@@ -684,20 +688,25 @@ function buildSlotOverrides<TModule extends AppPageModule, TErrorModule extends 
   return Object.keys(overrides).length > 0 ? overrides : null;
 }
 
-export function resolveInterceptedSlotSegments(
+const APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS = [
+  { prefix: "(...)", levels: Number.POSITIVE_INFINITY },
+  { prefix: "(..)(..)", levels: 2 },
+  { prefix: "(..)", levels: 1 },
+  { prefix: "(.)", levels: 0 },
+] as const;
+
+function resolveInterceptedSlotSource(
   sourcePageSegments: readonly string[] | null | undefined,
   slotKey: string,
-): readonly string[] | null {
+): Readonly<{
+  marker: (typeof APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS)[number];
+  markerIndex: number;
+  segmentStart: number;
+}> | null {
   if (!sourcePageSegments) return null;
 
-  const markerTraversals = [
-    { prefix: "(...)", levels: Number.POSITIVE_INFINITY },
-    { prefix: "(..)(..)", levels: 2 },
-    { prefix: "(..)", levels: 1 },
-    { prefix: "(.)", levels: 0 },
-  ] as const;
   const markerIndex = sourcePageSegments.findIndex((segment) =>
-    markerTraversals.some(({ prefix }) => segment.startsWith(prefix)),
+    APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS.some(({ prefix }) => segment.startsWith(prefix)),
   );
   if (markerIndex < 0) return null;
 
@@ -732,14 +741,37 @@ export function resolveInterceptedSlotSegments(
     segmentStart = slotIndex + 1;
   }
 
+  const markerSegment = sourcePageSegments[markerIndex];
+  const marker = APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS.find(({ prefix }) =>
+    markerSegment.startsWith(prefix),
+  );
+  return marker ? { marker, markerIndex, segmentStart } : null;
+}
+
+function isVisibleInterceptedSlotSegment(segment: string): boolean {
+  return !segment.startsWith("@") && !(segment.startsWith("(") && segment.endsWith(")"));
+}
+
+export function resolveInterceptedSlotIdentitySegments(
+  sourcePageSegments: readonly string[] | null | undefined,
+  slotKey: string,
+): readonly string[] | null {
+  const source = resolveInterceptedSlotSource(sourcePageSegments, slotKey);
+  if (!source || !sourcePageSegments) return null;
+  return sourcePageSegments.slice(source.segmentStart).filter(isVisibleInterceptedSlotSegment);
+}
+
+export function resolveInterceptedSlotSegments(
+  sourcePageSegments: readonly string[] | null | undefined,
+  slotKey: string,
+): readonly string[] | null {
+  const source = resolveInterceptedSlotSource(sourcePageSegments, slotKey);
+  if (!source || !sourcePageSegments) return null;
+  const { marker, markerIndex, segmentStart } = source;
   const routeSegments = sourcePageSegments
     .slice(segmentStart, markerIndex)
-    .filter(
-      (segment) => !segment.startsWith("@") && !(segment.startsWith("(") && segment.endsWith(")")),
-    );
+    .filter(isVisibleInterceptedSlotSegment);
   const markerSegment = sourcePageSegments[markerIndex];
-  const marker = markerTraversals.find(({ prefix }) => markerSegment.startsWith(prefix));
-  if (!marker) return null;
 
   if (Number.isFinite(marker.levels)) {
     routeSegments.splice(Math.max(0, routeSegments.length - marker.levels), marker.levels);
@@ -751,12 +783,7 @@ export function resolveInterceptedSlotSegments(
   if (targetSegment) routeSegments.push(targetSegment);
 
   routeSegments.push(
-    ...sourcePageSegments
-      .slice(markerIndex + 1)
-      .filter(
-        (segment) =>
-          !segment.startsWith("@") && !(segment.startsWith("(") && segment.endsWith(")")),
-      ),
+    ...sourcePageSegments.slice(markerIndex + 1).filter(isVisibleInterceptedSlotSegment),
   );
 
   return routeSegments;

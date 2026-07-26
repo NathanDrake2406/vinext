@@ -23,6 +23,7 @@ import { resolveAppPageRouteStateKey } from "../packages/vinext/src/server/app-p
 // eslint-disable-next-line import/first
 import {
   buildPageElements,
+  resolveInterceptedSlotIdentitySegments,
   resolveInterceptedSlotSegments,
   resolveAppPageNavigationParams,
   type AppPageBuildRoute,
@@ -925,6 +926,23 @@ describe("buildPageElements", () => {
     const html = await renderRouteEntry(result, result[APP_ROUTE_KEY] as string);
     expect(html).toContain('data-modal-segments="before|foo|1"');
     expect(interceptedSegments).toEqual(["before", "[username]", "[id]"]);
+    expect(
+      resolveInterceptedSlotIdentitySegments(
+        [
+          "(shell)",
+          "@outer",
+          "sub",
+          "@modal",
+          "before",
+          "(group)",
+          "(.)[username]",
+          "@nested",
+          "(nested)",
+          "[id]",
+        ],
+        "modal@(shell)/@outer/sub/@modal",
+      ),
+    ).toEqual(["before", "(.)[username]", "[id]"]);
     expect(
       resolveAppPageRouteStateKey(interceptedSegments ?? [], { username: "foo", id: "1" }),
     ).toBe(JSON.stringify(["before", "username|foo|d", "id|1|d"]));
