@@ -100,8 +100,11 @@ export function createNextBfcacheIdMap(options: {
     const currentValue =
       currentIdentity !== undefined && currentIdentity === nextIdentity ? current[id] : undefined;
     // History restoration wins, then identity-compatible reuse, then a fresh
-    // id. Redirected traversals must clear stale restored ids before this call.
-    const value = options.restored?.[id] ?? currentValue ?? mintBfcacheId();
+    // id. A destination without identity proof cannot safely accept a restored
+    // history id. Redirected traversals must clear stale restored ids before
+    // this call.
+    const restoredValue = nextIdentity === undefined ? undefined : options.restored?.[id];
+    const value = restoredValue ?? currentValue ?? mintBfcacheId();
     ids[id] = value;
     rememberBfcacheId(value);
   }
@@ -113,10 +116,14 @@ export function preserveBfcacheIdsForMergedElements(options: {
   elements: AppElements;
   next: BfcacheIdMap;
   previous: BfcacheIdMap;
+  preservePreviousIds?: readonly string[];
 }): BfcacheIdMap {
   const ids: Record<string, string> = {};
+  const preservePreviousIds = new Set(options.preservePreviousIds ?? []);
   for (const id of collectBfcacheSegmentIds(options.elements)) {
-    const value = options.next[id] ?? options.previous[id];
+    const value = preservePreviousIds.has(id)
+      ? (options.previous[id] ?? options.next[id])
+      : (options.next[id] ?? options.previous[id]);
     if (value === undefined) continue;
     ids[id] = value;
     // Keep future mints ahead of ids restored by reducer-level preservation.

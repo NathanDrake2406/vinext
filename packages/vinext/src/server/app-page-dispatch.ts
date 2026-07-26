@@ -144,6 +144,7 @@ type AppPageDispatchIntercept<TPage = unknown> = {
   slotKey: string;
   sourceRouteIndex: number;
   sourcePageSegments?: readonly string[] | null;
+  targetPatternParts?: readonly string[];
   targetRouteGraphId?: string | null;
 };
 
@@ -163,6 +164,7 @@ type AppPageDispatchInterceptOptions<TPage = unknown> = {
   interceptSlotKey: string;
   interceptSourceMatchedUrl?: string | null;
   interceptSourcePageSegments?: readonly string[] | null;
+  interceptTargetPatternParts?: readonly string[] | null;
   interceptTargetRouteGraphId?: string | null;
 };
 
@@ -608,6 +610,7 @@ function toInterceptOptions(
     interceptSlotKey: intercept.slotKey,
     interceptSourceMatchedUrl: interceptionContext,
     interceptSourcePageSegments: intercept.sourcePageSegments ?? null,
+    interceptTargetPatternParts: intercept.targetPatternParts ?? null,
     interceptTargetRouteGraphId: intercept.targetRouteGraphId ?? null,
   };
 }

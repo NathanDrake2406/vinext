@@ -145,6 +145,21 @@ export function resolveAppPageRouteStateKey(
   return statePath.length > 0 ? JSON.stringify(statePath) : "";
 }
 
+export function resolveAppPagePatternStateKey(
+  patternParts: readonly string[],
+  params: AppPageParams,
+): string {
+  return resolveAppPageRouteStateKey(
+    patternParts.map((part) => {
+      if (!part.startsWith(":")) return part;
+      if (part.endsWith("*")) return `[[...${part.slice(1, -1)}]]`;
+      if (part.endsWith("+")) return `[...${part.slice(1, -1)}]`;
+      return `[${part.slice(1)}]`;
+    }),
+    params,
+  );
+}
+
 export function resolveAppPageLeafSegmentStateKey(
   routeSegments: readonly string[],
   params: AppPageParams,
@@ -156,4 +171,15 @@ export function resolveAppPageLeafSegmentStateKey(
     }
   }
   return "";
+}
+
+export function resolveAppPageTemplateStateKey(
+  routeSegments: readonly string[],
+  treePosition: number,
+  params: AppPageParams,
+): string {
+  return (
+    resolveAppPageSegmentStateKey(routeSegments, treePosition, params) ||
+    resolveAppPageLeafSegmentStateKey(routeSegments, params)
+  );
 }

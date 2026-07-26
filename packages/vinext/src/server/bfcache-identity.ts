@@ -52,6 +52,14 @@ export type BfcacheSegmentDescriptor =
       activeRouteGraphId: string | null;
       interceptionTargetRouteGraphId: string | null;
       boundSegmentKey: string;
+    }
+  | {
+      kind: "sibling-interception";
+      sourceRouteGraphId: string;
+      targetRouteGraphId: string;
+      rootBoundaryId: string | null;
+      boundSegmentKey: string;
+      sourceBoundSegmentKey: string;
     };
 
 // Deterministic, collision-resistant encoding. The leading kind tag plus a
@@ -90,6 +98,15 @@ export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescripto
         descriptor.activeRouteGraphId,
         descriptor.interceptionTargetRouteGraphId,
         descriptor.boundSegmentKey,
+      ]);
+    case "sibling-interception":
+      return JSON.stringify([
+        "sibling-interception",
+        descriptor.sourceRouteGraphId,
+        descriptor.targetRouteGraphId,
+        descriptor.rootBoundaryId,
+        descriptor.boundSegmentKey,
+        descriptor.sourceBoundSegmentKey,
       ]);
   }
 }

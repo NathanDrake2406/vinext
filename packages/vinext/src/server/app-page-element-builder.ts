@@ -19,6 +19,10 @@ import {
   type AppPageRouteWiringRoute,
   type AppPageSlotOverride,
 } from "./app-page-route-wiring.js";
+import {
+  resolveAppPagePatternStateKey,
+  resolveAppPageRouteStateKey,
+} from "./app-page-segment-state.js";
 import { AppElementsWire, type AppElements } from "./app-elements.js";
 import { resolveAppPageParentHttpAccessBoundary, type AppPageParams } from "./app-page-boundary.js";
 import { resolveAppPageSpecialError } from "./app-page-execution.js";
@@ -93,6 +97,7 @@ export type AppPageInterceptOptions<TModule extends AppPageModule = AppPageModul
   interceptSlotKey?: string | null;
   interceptSourceMatchedUrl?: string | null;
   interceptSourcePageSegments?: readonly string[] | null;
+  interceptTargetPatternParts?: readonly string[] | null;
   interceptTargetRouteGraphId?: string | null;
 };
 
@@ -241,6 +246,19 @@ export async function buildPageElements<
   const sourcePageSegments = isSiblingIntercept
     ? opts?.interceptSourcePageSegments
     : route.routeSegments;
+  const semanticPageIdentity = isSiblingIntercept
+    ? route.ids?.route && opts?.interceptTargetRouteGraphId && opts.interceptTargetPatternParts
+      ? {
+          boundSegmentKey: resolveAppPagePatternStateKey(
+            opts.interceptTargetPatternParts,
+            effectiveParams,
+          ),
+          sourceBoundSegmentKey: resolveAppPageRouteStateKey(route.routeSegments ?? [], params),
+          sourceRouteGraphId: route.ids.route,
+          targetRouteGraphId: opts.interceptTargetRouteGraphId,
+        }
+      : null
+    : undefined;
 
   const hasPageModule = !!pageModule;
   const renderIdentity = createAppPageRenderIdentity({
@@ -600,6 +618,7 @@ export async function buildPageElements<
     streamingMetadataTags,
     renderIdentity,
     routePath,
+    semanticPageIdentity,
     semanticInterceptionTargetRouteId: opts?.interceptTargetRouteGraphId ?? null,
     sourcePageSegments,
     rootNotFoundModule: rootNotFoundModule ?? null,

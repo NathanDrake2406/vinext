@@ -6438,9 +6438,15 @@ describe("app browser entry previousNextUrl helpers", () => {
 
   it("keeps previous slot binding proof when the target marks a preserved slot unmatched", async () => {
     const mountedSlot = React.createElement("div", null, "modal");
+    const modalSlotId = "slot:modal:/feed";
+    const currentIdentities = {
+      "layout:/": "identity:layout:/",
+      "layout:/feed": "identity:layout:/feed",
+      [modalSlotId]: "identity:modal:active",
+    };
     const modalSlotBinding = {
       ownerLayoutId: "layout:/feed",
-      slotId: "slot:modal:/feed",
+      slotId: modalSlotId,
       state: "active",
     } satisfies AppElementsSlotBinding;
     const state = createState({
@@ -6454,9 +6460,10 @@ describe("app browser entry previousNextUrl helpers", () => {
         "/",
         null,
         {
+          [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: currentIdentities,
           "layout:/": React.createElement("div", null, "root layout"),
           "layout:/feed": React.createElement("div", null, "feed layout"),
-          "slot:modal:/feed": mountedSlot,
+          [modalSlotId]: mountedSlot,
         },
         ["layout:/", "layout:/feed"],
         [modalSlotBinding],
@@ -6467,7 +6474,13 @@ describe("app browser entry previousNextUrl helpers", () => {
 
     const nextState = await applyApprovedTestCommit(state, {
       extraEntries: {
+        [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: {
+          ...currentIdentities,
+          [modalSlotId]: "identity:modal:unmatched",
+          "page:/feed/comments": "identity:page:/feed/comments",
+        },
         "page:/feed/comments": React.createElement("main", null, "comments"),
+        [modalSlotId]: UNMATCHED_SLOT,
       },
       layoutIds: ["layout:/", "layout:/feed", "layout:/feed/comments"],
       rootLayoutTreePath: "/",
@@ -6475,14 +6488,83 @@ describe("app browser entry previousNextUrl helpers", () => {
       slotBindings: [
         {
           ownerLayoutId: "layout:/feed",
-          slotId: "slot:modal:/feed",
+          slotId: modalSlotId,
           state: "unmatched",
         },
       ],
     });
 
-    expect(nextState.elements["slot:modal:/feed"]).toBe(mountedSlot);
+    expect(nextState.elements[modalSlotId]).toBe(mountedSlot);
+    expect(
+      AppElementsWire.readMetadata(nextState.elements).bfcacheSegmentIdentities[modalSlotId],
+    ).toBe("identity:modal:active");
+    expect(nextState.bfcacheIds[modalSlotId]).toBe("_b_5_");
     expect(nextState.slotBindings).toEqual([modalSlotBinding]);
+  });
+
+  it("remints a preserved slot when its previous payload had no identity proof", async () => {
+    const modalSlotId = "slot:modal:/feed";
+    const mountedSlot = React.createElement("div", null, "modal");
+    const layoutIdentities = {
+      "layout:/": "identity:layout:/",
+      "layout:/feed": "identity:layout:/feed",
+    };
+    const modalSlotBinding = {
+      ownerLayoutId: "layout:/feed",
+      slotId: modalSlotId,
+      state: "active",
+    } satisfies AppElementsSlotBinding;
+    const state = createState({
+      bfcacheIds: {
+        "layout:/": "0",
+        "layout:/feed": "_b_4_",
+        [modalSlotId]: "_b_5_",
+      },
+      elements: createResolvedElements(
+        "route:/feed",
+        "/",
+        null,
+        {
+          [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: layoutIdentities,
+          "layout:/": React.createElement("div", null, "root layout"),
+          "layout:/feed": React.createElement("div", null, "feed layout"),
+          [modalSlotId]: mountedSlot,
+        },
+        ["layout:/", "layout:/feed"],
+        [modalSlotBinding],
+      ),
+      layoutIds: ["layout:/", "layout:/feed"],
+      slotBindings: [modalSlotBinding],
+    });
+
+    const nextState = await applyApprovedTestCommit(state, {
+      extraEntries: {
+        [APP_BFCACHE_SEGMENT_IDENTITIES_KEY]: {
+          ...layoutIdentities,
+          [modalSlotId]: "identity:modal:unmatched",
+          "page:/feed/comments": "identity:page:/feed/comments",
+        },
+        "page:/feed/comments": React.createElement("main", null, "comments"),
+        [modalSlotId]: UNMATCHED_SLOT,
+      },
+      layoutIds: ["layout:/", "layout:/feed", "layout:/feed/comments"],
+      rootLayoutTreePath: "/",
+      routeId: "route:/feed/comments",
+      slotBindings: [
+        {
+          ownerLayoutId: "layout:/feed",
+          slotId: modalSlotId,
+          state: "unmatched",
+        },
+      ],
+    });
+
+    expect(nextState.elements[modalSlotId]).toBe(mountedSlot);
+    expect(
+      AppElementsWire.readMetadata(nextState.elements).bfcacheSegmentIdentities[modalSlotId],
+    ).toBeUndefined();
+    expect(nextState.bfcacheIds[modalSlotId]).toMatch(/^_b_\d+_$/);
+    expect(nextState.bfcacheIds[modalSlotId]).not.toBe("_b_5_");
   });
 
   it("does not infer default slot preservation from previous wire entries", async () => {
@@ -6695,6 +6777,19 @@ describe("app browser entry bfcacheId helpers", () => {
     expect(next[groupLayoutId]).not.toBe("_b_4_");
     expect(next[dynamicPageId]).toMatch(/^_b_\d+_$/);
     expect(next[dynamicPageId]).not.toBe("_b_5_");
+  });
+
+  it("does not restore history ids without destination identity proof", () => {
+    const dynamicPageId = AppElementsWire.encodePageId("/page/[n]", null);
+    const next = createNextBfcacheIdMap({
+      current: { [dynamicPageId]: "_b_5_" },
+      currentElements: createBfcacheElements(dynamicPageId),
+      elements: createBfcacheElements(dynamicPageId, { bfcacheSegmentIdentities: null }),
+      restored: { [dynamicPageId]: "_b_9_" },
+    });
+
+    expect(next[dynamicPageId]).toMatch(/^_b_\d+_$/);
+    expect(next[dynamicPageId]).not.toBe("_b_9_");
   });
 
   it("mints a fresh segment id when a carried BFCache identity changes", () => {

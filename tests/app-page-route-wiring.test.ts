@@ -1891,7 +1891,9 @@ describe("app page route wiring helpers", () => {
     ).bfcacheSegmentIdentities;
 
     expect(changedGraphIds["page:/photos/42"]).not.toBe(baseline["page:/photos/42"]);
-    expect(changedGraphIds[modalSlotId]).not.toBe(baseline[modalSlotId]);
+    // An unchanged active parallel slot is independent of an unrelated change
+    // to the aggregate children route.
+    expect(changedGraphIds[modalSlotId]).toBe(baseline[modalSlotId]);
     expect(changedRootBoundary["page:/photos/42"]).not.toBe(baseline["page:/photos/42"]);
     expect(layoutOnly["page:/photos/42"]).toBeDefined();
     expect(JSON.parse(baseline[modalSlotId])[1]).toBe("graph-slot:modal");
@@ -1902,6 +1904,7 @@ describe("app page route wiring helpers", () => {
     const buildIdentity = (
       wireTargetRouteId: string,
       semanticTargetRouteId: string | null,
+      sourceId = "a",
     ): string | undefined => {
       const elements = buildAppPageElements({
         element: createElement(PageProbe),
@@ -1915,7 +1918,7 @@ describe("app page route wiring helpers", () => {
         makeThenableParams(value) {
           return Promise.resolve(value);
         },
-        matchedParams: { id: "42" },
+        matchedParams: { id: "42", sourceId },
         resolvedMetadata: null,
         resolvedViewport: {},
         route: {
@@ -1925,7 +1928,7 @@ describe("app page route wiring helpers", () => {
             layouts: ["graph-layout:root"],
             page: "graph-page:/feed",
             rootBoundary: "graph-root:/",
-            route: "graph-route:/feed",
+            route: "graph-route:/feed/[sourceId]",
             routeHandler: null,
             slots: { modal: "graph-slot:modal" },
             templates: [],
@@ -1935,7 +1938,7 @@ describe("app page route wiring helpers", () => {
           loading: null,
           notFound: null,
           notFounds: [null],
-          routeSegments: ["feed"],
+          routeSegments: ["feed", "[sourceId]"],
           slots: {
             modal: {
               default: null,
@@ -1973,10 +1976,15 @@ describe("app page route wiring helpers", () => {
       "graph-route:/photos/[id]",
     );
     const changedGraphId = buildIdentity("route:/photos/42", "graph-route:/albums/[id]");
+    const changedSourceParams = buildIdentity("route:/photos/42", "graph-route:/photos/[id]", "b");
     const missingGraphId = buildIdentity("route:/photos/42", null);
 
     expect(changedWireId).toBe(baseline);
     expect(changedGraphId).not.toBe(baseline);
+    // Next.js keys named-slot Activity from the slot's active segment. Opening
+    // the same interception target from another source instance must retain
+    // the slot identity; the parent route owns source-state separation.
+    expect(changedSourceParams).toBe(baseline);
     expect(missingGraphId).toBeUndefined();
     expect(baseline).toBeDefined();
     if (baseline === undefined) return;
@@ -2935,35 +2943,64 @@ describe("app page route wiring helpers", () => {
       return createElement("section", { "data-template": "leaf" }, readChildren(props.children));
     }
 
-    const elements = buildAppPageElements({
-      element: createElement(PageProbe),
-      makeThenableParams(params) {
-        return Promise.resolve(params);
-      },
-      matchedParams: { slug: "launch" },
-      resolvedMetadata: null,
-      resolvedViewport: {},
-      route: {
-        error: null,
-        errors: [null, null],
-        layoutTreePositions: [0, 1],
-        layouts: [{ default: RootLayout }, { default: GroupLayout }],
-        loading: null,
-        notFound: null,
-        notFounds: [null, null],
-        routeSegments: ["docs", "[slug]"],
-        slots: {},
-        templateTreePositions: [1],
-        templates: [{ default: LeafTemplate }],
-      },
-      routePath: "/docs/launch",
-      rootNotFoundModule: null,
-    });
+    const buildElements = (slug: string) =>
+      buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(params) {
+          return Promise.resolve(params);
+        },
+        matchedParams: { slug },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null, null],
+          ids: {
+            layouts: ["graph-layout:/", "graph-layout:/docs"],
+            page: "graph-page:/docs/[slug]",
+            rootBoundary: "graph-root:/",
+            route: "graph-route:/docs/[slug]",
+            routeHandler: null,
+            slots: {},
+            templates: ["graph-template:/docs"],
+          },
+          layoutTreePositions: [0, 1],
+          layouts: [{ default: RootLayout }, { default: GroupLayout }],
+          loading: null,
+          notFound: null,
+          notFounds: [null, null],
+          routeSegments: ["docs", "[slug]"],
+          slots: {},
+          templateTreePositions: [1],
+          templates: [{ default: LeafTemplate }],
+        },
+        routePath: `/docs/${slug}`,
+        rootNotFoundModule: null,
+      });
+    const elements = buildElements("launch");
 
     const templateSlot = findSlotById(elements["route:/docs/launch"], "template:/docs");
 
     expect(templateSlot).not.toBeNull();
     expect(templateSlot?.key).toBe("slug|launch|d");
+    expect(
+      AppElementsWire.readMetadata(buildElements("release")).bfcacheSegmentIdentities[
+        "template:/docs"
+      ],
+    ).not.toBe(AppElementsWire.readMetadata(elements).bfcacheSegmentIdentities["template:/docs"]);
+
+    const previousCacheComponents = process.env.__NEXT_CACHE_COMPONENTS;
+    process.env.__NEXT_CACHE_COMPONENTS = "true";
+    try {
+      const cachedElements = buildElements("launch");
+      expect(findSlotById(cachedElements["route:/docs/launch"], "template:/docs")?.key).toBeNull();
+    } finally {
+      if (previousCacheComponents === undefined) {
+        delete process.env.__NEXT_CACHE_COMPONENTS;
+      } else {
+        process.env.__NEXT_CACHE_COMPONENTS = previousCacheComponents;
+      }
+    }
   });
 
   it("nests per-segment loading boundaries around slow child layouts without duplicating the leaf", () => {

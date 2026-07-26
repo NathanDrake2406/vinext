@@ -61,6 +61,7 @@ import {
   resolveAppPageChildSegments,
   resolveAppPageRouteStateKey,
   resolveAppPageSegmentStateKey,
+  resolveAppPageTemplateStateKey,
 } from "./app-page-segment-state.js";
 import type { AppPageRenderIdentity } from "./app-page-render-identity.js";
 import { deriveBfcacheSegmentIdentity } from "./bfcache-identity.js";
@@ -256,6 +257,12 @@ type BuildAppPageElementsOptions<
   renderIdentity?: AppPageRenderIdentity;
   renderMode?: AppRscRenderMode;
   routePath: string;
+  semanticPageIdentity?: Readonly<{
+    boundSegmentKey: string;
+    sourceBoundSegmentKey: string;
+    sourceRouteGraphId: string;
+    targetRouteGraphId: string;
+  }> | null;
   semanticInterceptionTargetRouteId?: string | null;
   sourcePageSegments?: readonly string[] | null;
 };
@@ -692,8 +699,16 @@ function createAppPageSegmentPlan<
   rootLayoutTreePath: string | null;
   route: AppPageRouteWiringRoute<TModule, TErrorModule>;
   routeSegments: readonly string[];
+  semanticPageIdentity:
+    | Readonly<{
+        boundSegmentKey: string;
+        sourceBoundSegmentKey: string;
+        sourceRouteGraphId: string;
+        targetRouteGraphId: string;
+      }>
+    | null
+    | undefined;
   semanticInterceptionTargetRouteId: string | null;
-  semanticRouteId: string;
   slotBindings: readonly AppElementsSlotBinding[];
   templateEntries: readonly AppPageTemplateEntry<TModule>[];
 }): AppPageSegmentPlan<TModule> {
@@ -717,8 +732,9 @@ function createAppPageSegmentPlan<
   }
   for (const [index, templateEntry] of options.templateEntries.entries()) {
     identities[templateEntry.id] = deriveBfcacheSegmentIdentity({
-      boundSegmentKey: resolveAppPageRouteStateKey(
-        options.routeSegments.slice(0, templateEntry.treePosition),
+      boundSegmentKey: resolveAppPageTemplateStateKey(
+        options.routeSegments,
+        templateEntry.treePosition,
         options.matchedParams,
       ),
       graphId: graphIds
@@ -766,7 +782,7 @@ function createAppPageSegmentPlan<
           ? null
           : isIntercepted
             ? interceptionTargetRouteGraphId
-            : options.semanticRouteId,
+            : null,
       boundSegmentKey,
       interceptionTargetRouteGraphId,
       kind: "slot",
@@ -782,7 +798,18 @@ function createAppPageSegmentPlan<
   if (options.route.childrenSlot && !pageBinding) {
     throw new Error(`[vinext] Missing App Router slot binding for ${options.pageElementId}`);
   }
-  if (pageBinding) {
+  if (options.semanticPageIdentity !== undefined) {
+    if (options.semanticPageIdentity !== null) {
+      identities[options.pageElementId] = deriveBfcacheSegmentIdentity({
+        boundSegmentKey: options.semanticPageIdentity.boundSegmentKey,
+        kind: "sibling-interception",
+        rootBoundaryId,
+        sourceBoundSegmentKey: options.semanticPageIdentity.sourceBoundSegmentKey,
+        sourceRouteGraphId: options.semanticPageIdentity.sourceRouteGraphId,
+        targetRouteGraphId: options.semanticPageIdentity.targetRouteGraphId,
+      });
+    }
+  } else if (pageBinding) {
     const identity = deriveSlotIdentity(
       options.route.childrenSlot!.id,
       options.pageElementId,
@@ -1135,9 +1162,8 @@ export function buildAppPageElements<
     rootLayoutTreePath,
     route: options.route,
     routeSegments,
+    semanticPageIdentity: options.semanticPageIdentity,
     semanticInterceptionTargetRouteId: options.semanticInterceptionTargetRouteId ?? null,
-    semanticRouteId:
-      options.route.ids?.route ?? AppElementsWire.encodeRouteId(options.routePath, null),
     slotBindings,
     templateEntries,
   });
@@ -1777,8 +1803,18 @@ export function buildAppPageElements<
     }
 
     if (templateEntry && getDefaultExport(templateEntry.templateModule)) {
+      const templateStateKey = resolveAppPageTemplateStateKey(
+        routeSegments,
+        templateEntry.treePosition,
+        options.matchedParams,
+      );
       segmentChildren = (
-        <Slot id={templateEntry.id} key={segmentResetKey}>
+        <Slot
+          id={templateEntry.id}
+          key={
+            String(process.env.__NEXT_CACHE_COMPONENTS) === "true" ? undefined : templateStateKey
+          }
+        >
           {segmentChildren}
         </Slot>
       );

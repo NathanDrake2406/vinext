@@ -354,14 +354,24 @@ export function getNonCacheComponentsSegmentKey(
     : undefined;
 }
 
+export function resolveBfcacheSegmentStateKey(
+  id: string,
+  identityMap: Readonly<Record<string, string>>,
+  bfcacheIdMap: Readonly<Record<string, string>> | null,
+): string | undefined {
+  return identityMap[id] ?? bfcacheIdMap?.[id];
+}
+
 function BfcacheSlotBoundary({ content, id }: { content: React.ReactNode; id: string }) {
   const SegmentContext = BfcacheSegmentIdContext;
   const elements = React.useContext(ElementsContext);
-  const stateKeyMap = React.useContext(BfcacheIdentityMapContext);
-  const activeStateKey = stateKeyMap[id];
+  const identityMap = React.useContext(BfcacheIdentityMapContext);
+  const bfcacheIdMap = React.useContext(BfcacheIdMapContext!);
+  const activeStateKey = resolveBfcacheSegmentStateKey(id, identityMap, bfcacheIdMap);
   if (!SegmentContext) return <>{content}</>;
-  // The empty default map intentionally keeps apps without BFCache state keys on
-  // the original unkeyed provider path.
+  // Missing or rejected identity metadata must not leave a segment unkeyed:
+  // createNextBfcacheIdMap mints a fresh id for that case, so using the same id
+  // here conservatively remounts React state instead of preserving stale state.
   if (activeStateKey === undefined) {
     return <SegmentContext.Provider value={id}>{content}</SegmentContext.Provider>;
   }
@@ -389,7 +399,7 @@ function BfcacheSlotBoundary({ content, id }: { content: React.ReactNode; id: st
       elements={elements}
       id={id}
       SegmentContext={SegmentContext}
-      stateKeyMap={stateKeyMap}
+      stateKeyMap={identityMap}
     />
   );
 }

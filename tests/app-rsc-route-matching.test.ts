@@ -721,6 +721,56 @@ describe("App RSC route matching", () => {
       expect(matcher.findIntercept("/hoge", "/other")).toBeNull();
     });
 
+    it("resolves intercepted graph identities across different parameter names", () => {
+      // Ported from Next.js: packages/next/src/build/validate-app-paths.test.ts
+      // https://github.com/vercel/next.js/blob/canary/packages/next/src/build/validate-app-paths.test.ts
+      const routes: TestRoute[] = [
+        {
+          ids: { route: "graph-route:/feed" },
+          pattern: "/feed",
+          patternParts: ["feed"],
+          slots: {
+            modal: {
+              intercepts: [
+                {
+                  sourceMatchPattern: "/feed",
+                  targetPattern: "/blog/:slug/post",
+                  interceptLayouts: ["layout"],
+                  page: "modal-post",
+                  params: ["slug"],
+                },
+                {
+                  sourceMatchPattern: "/feed",
+                  targetPattern: "/files/:path+",
+                  interceptLayouts: ["layout"],
+                  page: "modal-file",
+                  params: ["path"],
+                },
+              ],
+            },
+          },
+        },
+        {
+          ids: { route: "graph-route:/blog/:id/post" },
+          pattern: "/blog/:id/post",
+          patternParts: ["blog", ":id", "post"],
+        },
+        {
+          ids: { route: "graph-route:/files/:segments+" },
+          pattern: "/files/:segments+",
+          patternParts: ["files", ":segments+"],
+        },
+      ];
+      const matcher = createAppRscRouteMatcher(routes as any);
+
+      expect(matcher.findIntercept("/blog/value/post", "/feed")?.targetRouteGraphId).toBe(
+        "graph-route:/blog/:id/post",
+      );
+      expect(matcher.findIntercept("/files/a/b", "/feed")?.targetRouteGraphId).toBe(
+        "graph-route:/files/:segments+",
+      );
+    });
+
     it("matches dynamic segments in the intercepting route pattern", () => {
       // /[lang]/foo/(..)photos has interceptingRoute `/[lang]/foo`,
       // header regex `^/(?<lang>[^/]+)/foo(?:/.*)?$`.

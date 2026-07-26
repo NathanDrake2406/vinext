@@ -49,6 +49,7 @@ describe("slot primitives", () => {
     expect(typeof mod.ParallelSlot).toBe("function");
     expect(typeof mod.mergeElements).toBe("function");
     expect(typeof mod.getNonCacheComponentsSegmentKey).toBe("function");
+    expect(typeof mod.resolveBfcacheSegmentStateKey).toBe("function");
     expect(mod.ElementsContext).toBeDefined();
     expect(mod.ChildrenContext).toBeDefined();
     expect(mod.ParallelSlotsContext).toBeDefined();
@@ -67,6 +68,18 @@ describe("slot primitives", () => {
     expect(
       getNonCacheComponentsSegmentKey("slot:breadcrumbs:/", "slot:breadcrumbs:/@/0"),
     ).toBeUndefined();
+  });
+
+  it("falls back to freshly minted BFCache ids when identity proof is unavailable", async () => {
+    const { resolveBfcacheSegmentStateKey } = await import("../packages/vinext/src/shims/slot.js");
+    const id = "page:/dashboard";
+
+    expect(resolveBfcacheSegmentStateKey(id, { [id]: "graph-proof" }, { [id]: "_b_1_" })).toBe(
+      "graph-proof",
+    );
+    expect(resolveBfcacheSegmentStateKey(id, {}, { [id]: "_b_1_" })).toBe("_b_1_");
+    expect(resolveBfcacheSegmentStateKey(id, {}, { [id]: "_b_2_" })).toBe("_b_2_");
+    expect(resolveBfcacheSegmentStateKey(id, {}, null)).toBeUndefined();
   });
 
   it("Children renders null outside a Slot provider", async () => {

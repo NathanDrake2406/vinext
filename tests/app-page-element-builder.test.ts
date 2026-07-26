@@ -445,6 +445,58 @@ describe("buildPageElements", () => {
     );
   });
 
+  it("keys sibling interception pages by target graph and bound params", async () => {
+    function InterceptPage(): React.ReactNode {
+      return React.createElement("div", null, "Intercepted");
+    }
+
+    const buildIdentity = async (
+      source: string,
+      sourceId: string,
+      id: string,
+    ): Promise<string | undefined> => {
+      const route = createSyntheticRoute({
+        ids: {
+          layouts: [],
+          page: `graph-page:/${source}`,
+          rootBoundary: null,
+          route: `graph-route:/${source}`,
+          routeHandler: null,
+          slots: {},
+          templates: [],
+        },
+        page: createSyntheticPageModule(() => React.createElement("div", null, "Source")),
+        layouts: [],
+        routeSegments: [source, "[sourceId]"],
+        pattern: `/${source}/:sourceId`,
+      });
+      const result = await buildPageElements(
+        createBaseOptions({
+          route,
+          params: { sourceId },
+          routePath: `/photo/${id}`,
+          opts: {
+            interceptSlotKey: SIBLING_PAGE_INTERCEPT_SLOT_KEY,
+            interceptPage: createSyntheticPageModule(InterceptPage),
+            interceptParams: { slug: id },
+            interceptSourcePageSegments: [source, "(.)photo", "[slug]"],
+            interceptTargetPatternParts: ["photo", ":slug"],
+            interceptTargetRouteGraphId: "graph-route:/photo/:id",
+          },
+        }),
+      );
+
+      return AppElementsWire.readMetadata(result).bfcacheSegmentIdentities[`page:/photo/${id}`];
+    };
+
+    const first = await buildIdentity("feed", "a", "42");
+    expect(first).toBeDefined();
+    expect(await buildIdentity("feed", "a", "42")).toBe(first);
+    expect(await buildIdentity("feed", "a", "43")).not.toBe(first);
+    expect(await buildIdentity("feed", "b", "42")).not.toBe(first);
+    expect(await buildIdentity("gallery", "a", "42")).not.toBe(first);
+  });
+
   it("keeps interception context out of the error payload route ID", async () => {
     const route = createSyntheticRoute({
       page: createSyntheticPageModuleWithoutDefault(),
