@@ -126,6 +126,29 @@ function haveSameBfcacheSlotEntryOrder(left: readonly string[], right: readonly 
   return true;
 }
 
+export function stageBfcacheSlotEntryForRender(
+  committedSnapshots: ReadonlyMap<string, BfcacheSlotEntry>,
+  committedOrder: readonly string[],
+  activeEntry: BfcacheSlotEntry,
+  maxEntries: number = getBfcacheSlotEntryLimit(),
+): Readonly<{
+  entries: BfcacheSlotEntry[];
+  order: string[];
+  snapshots: Map<string, BfcacheSlotEntry>;
+}> {
+  const snapshots = new Map(committedSnapshots);
+  snapshots.set(activeEntry.stateKey, activeEntry);
+  const order = updateBfcacheSlotEntryOrder(committedOrder, activeEntry.stateKey, maxEntries);
+  pruneBfcacheSlotEntrySnapshots(snapshots, order);
+  return {
+    entries: order
+      .map((stateKey) => snapshots.get(stateKey))
+      .filter((entry): entry is BfcacheSlotEntry => entry !== undefined),
+    order,
+    snapshots,
+  };
+}
+
 function isLayoutFlagsValue(value: unknown): value is LayoutFlags {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const entries = Object.values(value);
@@ -277,21 +300,23 @@ function useBfcacheSlotEntries(activeEntry: BfcacheSlotEntry): BfcacheSlotEntry[
   const snapshotsByStateKey = React.useRef(new Map<string, BfcacheSlotEntry>());
   const [entryOrder, setEntryOrder] = React.useState<string[]>(() => [activeEntry.stateKey]);
 
-  // Render can be restarted or discarded; snapshots are render-tolerant because
-  // the active key is overwritten on every render and pruned to render order.
-  snapshotsByStateKey.current.set(activeEntry.stateKey, activeEntry);
-
-  const nextOrder = updateBfcacheSlotEntryOrder(entryOrder, activeEntry.stateKey);
+  const staged = stageBfcacheSlotEntryForRender(
+    snapshotsByStateKey.current,
+    entryOrder,
+    activeEntry,
+  );
+  const nextOrder = staged.order;
   const orderChanged = !haveSameBfcacheSlotEntryOrder(entryOrder, nextOrder);
-  const renderOrder = orderChanged ? nextOrder : entryOrder;
 
-  pruneBfcacheSlotEntrySnapshots(snapshotsByStateKey.current, renderOrder);
+  // Ref writes survive discarded renders. Publish the cloned snapshot set only
+  // after React commits this render so speculative eviction or replacement
+  // cannot mutate the previous committed entries.
+  React.useLayoutEffect(() => {
+    snapshotsByStateKey.current = staged.snapshots;
+  }, [staged.snapshots]);
 
   // Future retention-policy changes must keep the active key in renderOrder.
-  if (
-    process.env.NODE_ENV !== "production" &&
-    !snapshotsByStateKey.current.has(activeEntry.stateKey)
-  ) {
+  if (process.env.NODE_ENV !== "production" && !staged.snapshots.has(activeEntry.stateKey)) {
     throw new Error("BFCache Activity slot is missing the active entry snapshot");
   }
 
@@ -299,9 +324,7 @@ function useBfcacheSlotEntries(activeEntry: BfcacheSlotEntry): BfcacheSlotEntry[
     setEntryOrder(nextOrder);
   }
 
-  return renderOrder
-    .map((stateKey) => snapshotsByStateKey.current.get(stateKey))
-    .filter((entry): entry is BfcacheSlotEntry => entry !== undefined);
+  return staged.entries;
 }
 
 function BfcacheActivitySlotBoundary({

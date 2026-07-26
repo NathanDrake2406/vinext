@@ -178,10 +178,9 @@ export function resolveAppPageTemplateStateKey(
   treePosition: number,
   params: AppPageParams,
 ): string {
-  const ownerStateKey = resolveAppPageRouteStateKey(routeSegments.slice(0, treePosition), params);
-  for (let end = treePosition + 1; end <= routeSegments.length; end++) {
-    const activeStateKey = resolveAppPageRouteStateKey(routeSegments.slice(0, end), params);
-    if (activeStateKey !== ownerStateKey) return activeStateKey;
-  }
-  return ownerStateKey || resolveAppPageLeafSegmentStateKey(routeSegments, params);
+  const end = treePosition < routeSegments.length ? treePosition + 1 : routeSegments.length;
+  const statePath = routeSegments
+    .slice(0, end)
+    .map((segment) => resolveSingleSegmentStateKey(segment, params));
+  return statePath.length > 0 ? JSON.stringify(statePath) : "";
 }

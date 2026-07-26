@@ -920,11 +920,13 @@ function createAppPageSegmentPlan<
                 treePosition: 0,
               },
             ]
-        ).map((segment, index) => ({
+        ).map((segment) => ({
           ...segment,
           hasIdentityProof: true,
-          includeInterceptionTarget:
-            interceptionMarkerIndex < 0 || index >= interceptionMarkerIndex,
+          // Next keys each Activity level from its physical segment path. A
+          // leaf target graph id would over-key every shared interception
+          // ancestor when the target grows a deeper child.
+          includeInterceptionTarget: false,
         }))
       : [
           {

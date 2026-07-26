@@ -118,6 +118,9 @@ describe("app page segment state keys", () => {
       resolveAppPageTemplateStateKey(["[tenant]", "(group)", "settings"], 1, {
         tenant: "a",
       }),
-    ).toBe(JSON.stringify(["tenant|a|d", "settings"]));
+    ).toBe(JSON.stringify(["tenant|a|d", "(group)"]));
+    expect(resolveAppPageTemplateStateKey(["(stable)", "[id]"], 0, { id: "a" })).toBe(
+      JSON.stringify(["(stable)"]),
+    );
   });
 });

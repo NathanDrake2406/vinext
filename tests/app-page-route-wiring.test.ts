@@ -2161,7 +2161,7 @@ describe("app page route wiring helpers", () => {
     expect(activeIdentities[modalSlotId]).toBe(changedTargetIdentities[modalSlotId]);
     expect(activeIdentities[modalSlotId]).toBe(defaultIdentities[modalSlotId]);
     expect(defaultIdentities[modalSlotId]).toBe(unmatchedIdentities[modalSlotId]);
-    expect(changedTargetIdentities[firstSegmentId]).not.toBe(activeIdentities[firstSegmentId]);
+    expect(changedTargetIdentities[firstSegmentId]).toBe(activeIdentities[firstSegmentId]);
     expect(defaultIdentities[firstSegmentId]).not.toBe(activeIdentities[firstSegmentId]);
     expect(unmatchedIdentities[firstSegmentId]).not.toBe(defaultIdentities[firstSegmentId]);
   });
@@ -2688,7 +2688,7 @@ describe("app page route wiring helpers", () => {
     }
   });
 
-  it("uses semantic interception route ids instead of wire route ids for slot identity", () => {
+  it("does not over-key intercepted segments by leaf route ids", () => {
     const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
     const buildIdentity = (
       wireTargetRouteId: string,
@@ -2774,20 +2774,115 @@ describe("app page route wiring helpers", () => {
     const missingGraphId = buildIdentity("route:/photos/42", null);
 
     expect(changedWireId).toBe(baseline);
-    expect(changedGraphId).not.toBe(baseline);
+    expect(changedGraphId).toBe(baseline);
     // Next.js keys named-slot Activity from the slot's active segment. Opening
     // the same interception target from another source instance must retain
     // the slot identity; the parent route owns source-state separation.
     expect(changedSourceParams).toBe(baseline);
-    expect(missingGraphId).toBeUndefined();
+    expect(missingGraphId).toBeDefined();
     expect(baseline).toBeDefined();
     if (baseline === undefined) return;
     expect(JSON.parse(baseline)).toMatchObject({
       1: "graph-slot:modal",
       2: "graph-layout:root",
-      4: "graph-route:/photos/[id]",
-      5: "graph-route:/photos/[id]",
+      4: null,
+      5: null,
     });
+  });
+
+  it("retains an intercepted target's shared physical segment identities", () => {
+    const modalSlotId = AppElementsWire.encodeSlotId("modal", "/");
+    const buildIdentities = (
+      identitySegments: string[],
+      targetRouteId: string,
+    ): Readonly<Record<string, string>> => {
+      const elements = buildAppPageElements({
+        element: createElement(PageProbe),
+        interception: {
+          sourceMatchedUrl: "/feed",
+          sourceRouteId: "route:/feed",
+          slotId: modalSlotId,
+          targetMatchedUrl: "/photo/42",
+          targetRouteId: "route:/photo/42",
+        },
+        makeThenableParams(value) {
+          return Promise.resolve(value);
+        },
+        matchedParams: {},
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null],
+          ids: {
+            layouts: ["graph-layout:root"],
+            page: "graph-page:/feed",
+            rootBoundary: "graph-root:/",
+            route: "graph-route:/feed",
+            routeHandler: null,
+            slots: { modal: "graph-slot:modal" },
+            templates: [],
+          },
+          layoutTreePositions: [0],
+          layouts: [{ default: RootLayout }],
+          loading: null,
+          notFound: null,
+          notFounds: [null],
+          routeSegments: ["feed"],
+          slots: {
+            modal: {
+              default: null,
+              error: null,
+              id: modalSlotId,
+              layout: null,
+              layoutIndex: 0,
+              loading: null,
+              name: "modal",
+              page: null,
+              routeSegments: null,
+            },
+          },
+          templateTreePositions: [],
+          templates: [],
+        },
+        routePath: "/photo/42",
+        rootNotFoundModule: null,
+        semanticInterceptionTargetRouteId: targetRouteId,
+        slotOverrides: {
+          modal: {
+            branchSegments: identitySegments.map((segment) => segment.replace("(.)", "")),
+            identitySegments,
+            pageModule: { default: SlotPage },
+            params: { id: "42" },
+            routeSegments: identitySegments.map((segment) => segment.replace("(.)", "")),
+          },
+        },
+      });
+      const identities = elements[AppElementsWire.keys.bfcacheSegmentIdentities];
+      if (typeof identities !== "object" || identities === null || Array.isArray(identities)) {
+        throw new Error("Expected BFCache identity metadata");
+      }
+      return identities as Readonly<Record<string, string>>;
+    };
+
+    const base = buildIdentities(["(.)photo", "[id]"], "graph-route:/photo/[id]");
+    const extended = buildIdentities(
+      ["(.)photo", "[id]", "details"],
+      "graph-route:/photo/[id]/details",
+    );
+    const baseSegmentIds = Object.keys(base)
+      .filter((id) => id.startsWith("slot:\0vinext_bfcache_segment_"))
+      .sort();
+    const extendedSegmentIds = Object.keys(extended)
+      .filter((id) => id.startsWith("slot:\0vinext_bfcache_segment_"))
+      .sort();
+
+    expect(baseSegmentIds).toHaveLength(2);
+    expect(extendedSegmentIds).toHaveLength(3);
+    expect(extended[extendedSegmentIds[0]!]).toBe(base[baseSegmentIds[0]!]);
+    expect(extended[extendedSegmentIds[1]!]).toBe(base[baseSegmentIds[1]!]);
+    expect(base[extendedSegmentIds[2]!]).toBeUndefined();
+    expect(extended[extendedSegmentIds[2]!]).toBeTypeOf("string");
   });
 
   it("keys synthetic children-slot page elements with their emitted identity", () => {
@@ -3823,6 +3918,49 @@ describe("app page route wiring helpers", () => {
       .bfcacheSegmentIdentities["template:/[tenant]"];
     expect(tenantAIdentity).toBeTypeOf("string");
     expect(tenantBIdentity).not.toBe(tenantAIdentity);
+
+    const buildGroupedElements = (group: string, id: string) =>
+      buildAppPageElements({
+        element: createElement(PageProbe),
+        makeThenableParams(params) {
+          return Promise.resolve(params);
+        },
+        matchedParams: { id },
+        resolvedMetadata: null,
+        resolvedViewport: {},
+        route: {
+          error: null,
+          errors: [null],
+          ids: {
+            layouts: ["graph-layout:/"],
+            page: `graph-page:/${group}/[id]`,
+            rootBoundary: "graph-root:/",
+            route: `graph-route:/${group}/[id]`,
+            routeHandler: null,
+            slots: {},
+            templates: ["graph-template:/"],
+          },
+          layoutTreePositions: [0],
+          layouts: [{ default: RootLayout }],
+          loading: null,
+          notFound: null,
+          notFounds: [null],
+          routeSegments: [group, "[id]"],
+          slots: {},
+          templateTreePositions: [0],
+          templates: [{ default: LeafTemplate }],
+        },
+        routePath: `/${id}`,
+        rootNotFoundModule: null,
+      });
+    const groupedAIdentity = AppElementsWire.readMetadata(buildGroupedElements("(stable)", "a"))
+      .bfcacheSegmentIdentities["template:/"];
+    const groupedBIdentity = AppElementsWire.readMetadata(buildGroupedElements("(stable)", "b"))
+      .bfcacheSegmentIdentities["template:/"];
+    const otherGroupIdentity = AppElementsWire.readMetadata(buildGroupedElements("(other)", "a"))
+      .bfcacheSegmentIdentities["template:/"];
+    expect(groupedBIdentity).toBe(groupedAIdentity);
+    expect(otherGroupIdentity).not.toBe(groupedAIdentity);
 
     const previousCacheComponents = process.env.__NEXT_CACHE_COMPONENTS;
     process.env.__NEXT_CACHE_COMPONENTS = "true";
