@@ -39,11 +39,17 @@ import {
 } from "../server/app-rsc-cache-busting.js";
 import { hasPendingAppRouterPageRedirect } from "../server/app-browser-mpa-navigation.js";
 import {
+  NEXT_ROUTER_PREFETCH_HEADER,
+  NEXT_ROUTER_SEGMENT_PREFETCH_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../server/headers.js";
+import {
+  resolveAutoAppRoutePrefetch,
+  resolveFullAppRoutePrefetch,
+} from "./internal/app-route-prefetch-policy.js";
 import { toBrowserNavigationHref, toSameOriginAppPath, withBasePath } from "./url-utils.js";
 import { navigationPlanner } from "../server/navigation-planner.js";
 import { stripBasePath } from "../utils/base-path.js";
@@ -226,6 +232,8 @@ const isServer = typeof window === "undefined";
 
 /** basePath from next.config.js, injected by the plugin at build time */
 export const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
+/** prefetch inlining (Segment Cache wire mode), injected by the plugin at build time */
+const __prefetchInlining: boolean = process.env.__VINEXT_PREFETCH_INLINING === "true";
 
 // ---------------------------------------------------------------------------
 // RSC prefetch cache utilities (shared between link.tsx and browser entry)
@@ -2302,20 +2310,47 @@ const _appRouter: AppRouterInstance = {
       // Prefetch the RSC payload for the target route and store in cache.
       // We must add to prefetchedUrls manually for deduplication.
       // prefetchRscResponse only manages the cache Map, not the URL set.
+      //
+      // Resolve the same prefetch policy as <Link> so the cached payload is
+      // reusable by a later navigation (issue #2707). Next.js parity:
+      // router.prefetch() defaults to PrefetchKind.AUTO and accepts
+      // kind: "full"; anything else falls back to auto like Next's `default:`
+      // branch (app-router-instance.ts). When the auto policy declines the
+      // route (no manifest match, loading shell, search params), fall back to
+      // the previous learning-only fetch: an explicit programmatic prefetch
+      // must still fetch, and loading-shell routes keep feeding the
+      // optimistic-route-template learner.
       const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
+      const kind = options?.kind === "full" ? "full" : "auto";
+      const policy =
+        kind === "full" ? resolveFullAppRoutePrefetch() : resolveAutoAppRoutePrefetch(prefetchHref);
+      const reusable = policy.shouldPrefetch && policy.cacheForNavigation;
       const interceptionContext = getPrefetchInterceptionContext(fullHref);
       const mountedSlotsHeader = getMountedSlotsHeader();
       const headers = createAppPrefetchRequestHeaders({
         fetchPriority: "low",
         interceptionContext,
+        prefetchKind: reusable ? kind : undefined,
       });
+      if (reusable && kind === "auto") {
+        headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
+        headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, __prefetchInlining ? "/__PAGE__" : "1");
+      }
       if (mountedSlotsHeader) {
         headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
       }
       const rscUrl = await createRscRequestUrl(fullHref, headers);
       const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
       const prefetched = getPrefetchedUrls();
-      if (prefetched.has(cacheKey)) {
+      if (reusable) {
+        // A previous learning-only prefetch for the same URL must not satisfy
+        // the freshness gate below; only a navigation-reusable entry counts.
+        discardLearningOnlyPrefetchCacheEntry(rscUrl, interceptionContext);
+        if (hasPrefetchCacheEntryForNavigation(rscUrl, interceptionContext, mountedSlotsHeader)) {
+          attachPrefetchInvalidationCallback(cacheKey, options?.onInvalidate);
+          return;
+        }
+      } else if (prefetched.has(cacheKey)) {
         attachPrefetchInvalidationCallback(cacheKey, options?.onInvalidate);
         return;
       }
@@ -2334,11 +2369,30 @@ const _appRouter: AppRouterInstance = {
         interceptionContext,
         mountedSlotsHeader,
         options,
-        {
-          cacheForNavigation: false,
-          optimisticRouteShell: true,
-          prefetchKind: "navigation",
-        },
+        reusable
+          ? {
+              cacheForNavigation: true,
+              fallbackTtlMs:
+                policy.fallbackTtl === "dynamic"
+                  ? DYNAMIC_NAVIGATION_CACHE_TTL
+                  : PREFETCH_CACHE_TTL,
+              minimumTtlMs: policy.minimumTtlMs,
+              optimisticRouteShell: false,
+              prefetchKind: "navigation",
+              prepareSnapshot: async (snapshot) => {
+                const preparePrefetchResponse =
+                  getNavigationRuntime()?.functions.preparePrefetchResponse;
+                if (!preparePrefetchResponse) {
+                  throw new Error("App Router prefetch preparation is unavailable");
+                }
+                return (await preparePrefetchResponse(restoreRscResponse(snapshot))) as AppElements;
+              },
+            }
+          : {
+              cacheForNavigation: false,
+              optimisticRouteShell: true,
+              prefetchKind: "navigation",
+            },
       );
     })().catch((error) => {
       console.error("[vinext] RSC prefetch setup error:", error);

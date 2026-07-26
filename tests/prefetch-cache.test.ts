@@ -123,6 +123,10 @@ function createDeferredResponse(): {
   return { promise, resolve };
 }
 
+function toRscUrlString(input: RequestInfo | URL): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
 async function waitForPrefetchSetup(isReady: () => boolean = () => true): Promise<void> {
   const deadline = Date.now() + 1_000;
 
@@ -444,7 +448,7 @@ describe("prefetch cache eviction", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("settles router.prefetch as a learning-only protocol response without visible navigation", async () => {
+  it("falls back to learning-only when no prefetch route manifest matches", async () => {
     let resolveResponse!: (response: Response) => void;
     const fetchPromise = new Promise<Response>((resolve) => {
       resolveResponse = resolve;
@@ -501,6 +505,139 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchCache().has(cacheKey)).toBe(true);
     expect(getPrefetchedUrls().has(cacheKey)).toBe(true);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("caches router.prefetch for navigation reuse on static-eligible routes (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+    ];
+    let fetchedUrl: string | undefined;
+    let fetchedHeaders: Headers | undefined;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchedUrl = toRscUrlString(input);
+      fetchedHeaders = init?.headers as Headers;
+      return new Response("flight", { headers: { "content-type": "text/x-component" } });
+    });
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/dashboard");
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+
+    if (fetchedUrl === undefined) {
+      throw new Error("Expected router.prefetch to fetch an RSC URL");
+    }
+    expect(fetchedHeaders?.get("Next-Router-Prefetch")).toBe("1");
+    expect(fetchedHeaders?.get("Next-Router-Segment-Prefetch")).toBe("1");
+
+    const cacheKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
+    await waitForPrefetchSetup(() => getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded");
+    const entry = getPrefetchCache().get(cacheKey);
+    expect(entry?.cacheForNavigation).toBe(true);
+    expect(entry?.optimisticRouteShell).toBe(false);
+    expect(entry?.prefetchKind).toBe("navigation");
+
+    // A second programmatic prefetch while the entry is fresh must not issue
+    // another request.
+    appRouterInstance.prefetch("/dashboard");
+    await waitForPrefetchSetup();
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    const consumed = consumePrefetchResponse(fetchedUrl, null, null);
+    expect(consumed).not.toBeNull();
+    if (consumed === null) return;
+    await expect(restoreRscResponse(consumed).text()).resolves.toBe("flight");
+  });
+
+  it("shares an in-flight router.prefetch with navigation instead of refetching (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+    ];
+    const deferred = createDeferredResponse();
+    let fetchedUrl: string | undefined;
+    const fetch = vi.fn((input: RequestInfo | URL) => {
+      fetchedUrl = toRscUrlString(input);
+      return deferred.promise;
+    });
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/dashboard");
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+    if (fetchedUrl === undefined) {
+      throw new Error("Expected router.prefetch to fetch an RSC URL");
+    }
+
+    let settled = false;
+    const consumedPromise = consumePrefetchResponseForNavigation(fetchedUrl, null, null).then(
+      (snapshot) => {
+        settled = true;
+        return snapshot;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    deferred.resolve(new Response("flight", { headers: { "content-type": "text/x-component" } }));
+    const consumed = await consumedPromise;
+    expect(consumed).not.toBeNull();
+    if (consumed === null) return;
+    await expect(restoreRscResponse(consumed).text()).resolves.toBe("flight");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('caches kind: "full" router.prefetch for navigation on loading-shell routes (#2707)', async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: true, patternParts: ["reports"], isDynamic: false },
+    ];
+    let fetchedUrl: string | undefined;
+    let fetchedHeaders: Headers | undefined;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchedUrl = toRscUrlString(input);
+      fetchedHeaders = init?.headers as Headers;
+      return new Response("flight", { headers: { "content-type": "text/x-component" } });
+    });
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/reports", { kind: "full" });
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+    if (fetchedUrl === undefined) {
+      throw new Error("Expected router.prefetch to fetch an RSC URL");
+    }
+    // A full prefetch requests the complete payload: the wire protocol
+    // suppresses Next-Router-Prefetch (matches Link's prefetch={true}).
+    expect(fetchedHeaders?.get("Next-Router-Prefetch")).toBeNull();
+    expect(fetchedHeaders?.get("Next-Router-Segment-Prefetch")).toBeNull();
+
+    const cacheKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
+    await waitForPrefetchSetup(() => getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded");
+    expect(getPrefetchCache().get(cacheKey)?.cacheForNavigation).toBe(true);
+
+    const consumed = consumePrefetchResponse(fetchedUrl, null, null);
+    expect(consumed).not.toBeNull();
+  });
+
+  it("keeps default-kind router.prefetch learning-only on loading-shell routes (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: true, patternParts: ["reports"], isDynamic: false },
+    ];
+    let fetchedUrl: string | undefined;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      fetchedUrl = toRscUrlString(input);
+      return new Response("flight", { headers: { "content-type": "text/x-component" } });
+    });
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/reports");
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+    if (fetchedUrl === undefined) {
+      throw new Error("Expected router.prefetch to fetch an RSC URL");
+    }
+
+    const cacheKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
+    await waitForPrefetchSetup(() => getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded");
+    const entry = getPrefetchCache().get(cacheKey);
+    expect(entry?.cacheForNavigation).toBe(false);
+    expect(entry?.optimisticRouteShell).toBe(true);
+    expect(consumePrefetchResponse(fetchedUrl, null, null)).toBeNull();
   });
 
   it("limits low-priority router.prefetch requests until queued responses are snapshotted", async () => {
