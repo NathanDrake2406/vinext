@@ -449,6 +449,7 @@ function prefetchUrl(
           hasPrefetchCacheEntryForNavigation,
           peekPrefetchResponseForNavigation,
           prefetchRscResponse,
+          prepareNavigationPrefetchSnapshot,
           DYNAMIC_NAVIGATION_CACHE_TTL,
           restoreRscResponse,
           PREFETCH_CACHE_TTL,
@@ -764,16 +765,7 @@ function prefetchUrl(
             optimisticRouteShell: isOptimisticRouteShellPrefetch,
             prefetchKind: isOptimisticRouteShellPrefetch ? "loading-shell" : "navigation",
             prepareSnapshot: autoPrefetch.cacheForNavigation
-              ? async (snapshot) => {
-                  const preparePrefetchResponse =
-                    getNavigationRuntime()?.functions.preparePrefetchResponse;
-                  if (!preparePrefetchResponse) {
-                    throw new Error("App Router prefetch preparation is unavailable");
-                  }
-                  return (await preparePrefetchResponse(
-                    restoreRscResponse(snapshot),
-                  )) as ReturnType<typeof AppElementsWire.decode>;
-                }
+              ? prepareNavigationPrefetchSnapshot
               : undefined,
             searchAgnosticShell: isAutomaticSearchParamShell && !hasSearchAgnosticShell,
           },

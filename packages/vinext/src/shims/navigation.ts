@@ -1083,6 +1083,22 @@ export function restoreRscResponse(cached: CachedRscResponse, copy = true): Resp
 }
 
 /**
+ * `prefetchRscResponse`'s `prepareSnapshot` for navigation-reusable entries:
+ * decode the cached payload through the App Router runtime so a later
+ * navigation can commit it without re-parsing. Shared by `<Link>` and
+ * `router.prefetch()`.
+ */
+export async function prepareNavigationPrefetchSnapshot(
+  snapshot: CachedRscResponse,
+): Promise<AppElements> {
+  const preparePrefetchResponse = getNavigationRuntime()?.functions.preparePrefetchResponse;
+  if (!preparePrefetchResponse) {
+    throw new Error("App Router prefetch preparation is unavailable");
+  }
+  return (await preparePrefetchResponse(restoreRscResponse(snapshot))) as AppElements;
+}
+
+/**
  * Prefetch an RSC response and snapshot it for later consumption.
  * Stores the in-flight promise so immediate clicks can await it instead
  * of firing a duplicate fetch.
@@ -2496,14 +2512,7 @@ const _appRouter: AppRouterInstance = {
               minimumTtlMs: policy.minimumTtlMs,
               optimisticRouteShell: false,
               prefetchKind: "navigation",
-              prepareSnapshot: async (snapshot) => {
-                const preparePrefetchResponse =
-                  getNavigationRuntime()?.functions.preparePrefetchResponse;
-                if (!preparePrefetchResponse) {
-                  throw new Error("App Router prefetch preparation is unavailable");
-                }
-                return (await preparePrefetchResponse(restoreRscResponse(snapshot))) as AppElements;
-              },
+              prepareSnapshot: prepareNavigationPrefetchSnapshot,
             }
           : {
               cacheForNavigation: false,

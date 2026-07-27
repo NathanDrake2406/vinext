@@ -55,104 +55,53 @@ function toSameOriginRouteHref(href: string): string | null {
   return `${stripBasePath(url.pathname, __basePath)}${url.search}`;
 }
 
-function resolveMatchedAutoAppRoutePrefetch(
-  route: VinextLinkPrefetchRoute,
-): AppRoutePrefetchPolicy {
-  const hasLoadingShell = route.canPrefetchLoadingShell;
-  const shouldCacheForNavigation =
-    !hasLoadingShell && route.requiresDynamicNavigationRequest !== true;
+/** Href the manifest does not cover: no request, nothing reusable. */
+const NO_APP_ROUTE_PREFETCH: AppRoutePrefetchPolicy = {
+  cacheForNavigation: false,
+  fallbackTtl: "static",
+  minimumTtlMs: undefined,
+  prefetchShellFirst: false,
+  shouldPrefetch: false,
+};
+
+export function canAutoPrefetchFullAppRoute(href: string): boolean {
+  return resolveAutoAppRoutePrefetch(href).cacheForNavigation;
+}
+
+export function resolveAutoAppRoutePrefetch(href: string): AppRoutePrefetchPolicy {
+  if (typeof window === "undefined") return NO_APP_ROUTE_PREFETCH;
+
+  const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
+  if (!routes) return NO_APP_ROUTE_PREFETCH;
+
+  const routeHref = toSameOriginRouteHref(href);
+  if (routeHref === null) return NO_APP_ROUTE_PREFETCH;
+
+  const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
+  if (!match) return NO_APP_ROUTE_PREFETCH;
+
+  const route = match.route;
+  // A search-param href renders query-specific output, so its payload can only
+  // ever be a shell — never reusable by a navigation to the same route.
+  const hasSearchParams = new URL(routeHref, "http://vinext.local").search !== "";
   return {
     // Vinext does not yet have Next.js's per-segment runtime-prefetch hints.
     // Routes with loading boundaries prefetch a shell first so navigation can
     // commit loading.js immediately. Dynamic routes without loading-shell
     // fallbacks can be cached for navigation unless their active parallel
     // branches must be derived from the click-time target tree.
-    cacheForNavigation: shouldCacheForNavigation,
+    cacheForNavigation:
+      !hasSearchParams &&
+      !route.canPrefetchLoadingShell &&
+      route.requiresDynamicNavigationRequest !== true,
     fallbackTtl: "static",
     minimumTtlMs: route.isDynamic ? 0 : undefined,
-    prefetchShellFirst: !route.isDynamic,
+    prefetchShellFirst: hasSearchParams || !route.isDynamic,
     shouldPrefetch: true,
   };
 }
 
-export function canAutoPrefetchFullAppRoute(href: string): boolean {
-  if (typeof window === "undefined") return false;
-
-  const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
-  if (!routes) return false;
-
-  const routeHref = toSameOriginRouteHref(href);
-  if (routeHref === null) return false;
-
-  const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
-  if (!match) return false;
-
-  return resolveAutoAppRoutePrefetch(href).cacheForNavigation;
-}
-
-export function resolveAutoAppRoutePrefetch(href: string): AppRoutePrefetchPolicy {
-  if (typeof window === "undefined") {
-    return {
-      cacheForNavigation: false,
-      fallbackTtl: "static",
-      minimumTtlMs: undefined,
-      prefetchShellFirst: false,
-      shouldPrefetch: false,
-    };
-  }
-
-  const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
-  if (!routes) {
-    return {
-      cacheForNavigation: false,
-      fallbackTtl: "static",
-      minimumTtlMs: undefined,
-      prefetchShellFirst: false,
-      shouldPrefetch: false,
-    };
-  }
-
-  const routeHref = toSameOriginRouteHref(href);
-  if (routeHref === null) {
-    return {
-      cacheForNavigation: false,
-      fallbackTtl: "static",
-      minimumTtlMs: undefined,
-      prefetchShellFirst: false,
-      shouldPrefetch: false,
-    };
-  }
-
-  const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
-  if (!match) {
-    return {
-      cacheForNavigation: false,
-      fallbackTtl: "static",
-      minimumTtlMs: undefined,
-      prefetchShellFirst: false,
-      shouldPrefetch: false,
-    };
-  }
-
-  const prefetch = resolveMatchedAutoAppRoutePrefetch(match.route);
-  const url = new URL(routeHref, "http://vinext.local");
-  if (url.search !== "") {
-    return {
-      ...prefetch,
-      cacheForNavigation: false,
-      prefetchShellFirst: true,
-    };
-  }
-
-  return prefetch;
-}
-
-export function resolveFullAppRoutePrefetch(): AppRoutePrefetchPolicy & {
-  cacheForNavigation: true;
-  fallbackTtl: "static";
-  minimumTtlMs: undefined;
-  shouldPrefetch: true;
-} {
+export function resolveFullAppRoutePrefetch(): AppRoutePrefetchPolicy {
   return {
     cacheForNavigation: true,
     fallbackTtl: "static",
