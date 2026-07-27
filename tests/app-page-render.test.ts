@@ -1513,6 +1513,51 @@ describe("app page render lifecycle", () => {
     });
   });
 
+  it("keeps the dynamic bound when a captured production render turns out dynamic", async () => {
+    // A production route eligible for speculative ISR capture that reads
+    // request state during the render: the done script reports kind "dynamic",
+    // but the RSC-header rule that suppresses the config bound while capturing
+    // does not transfer here, because the done script emits the *resolved*
+    // cacheLife rather than the pending marker. Without the bound, the only
+    // freshness signal on the hydration-seeded entry would be the cacheLife
+    // claim, and dynamic output would be reused for its full 300s.
+    const common = createCommonOptions();
+    let capturedMetadataGetter: (() => InitialNavigationCacheMetadata) | undefined;
+
+    const response = await renderAppPageLifecycle({
+      ...common.options,
+      dynamicStaleTimeSeconds: 0,
+      isProduction: true,
+      revalidateSeconds: 60,
+      peekRenderObservationState() {
+        return { dynamicFetches: [], requestApis: ["searchParams"] };
+      },
+      loadSsrHandler: async () => ({
+        async handleSsr(
+          _rscStream: ReadableStream<Uint8Array>,
+          _navContext: unknown,
+          _fontData: unknown,
+          options?: {
+            getInitialNavigationCacheMetadata?: () => InitialNavigationCacheMetadata;
+          },
+        ) {
+          capturedMetadataGetter = options?.getInitialNavigationCacheMetadata;
+          return createStream(["<html>page</html>"]);
+        },
+      }),
+      peekRequestCacheLife() {
+        return { stale: 300, revalidate: 1, expire: 60 };
+      },
+    });
+
+    await expect(response.text()).resolves.toBe("<html>page</html>");
+    expect(capturedMetadataGetter?.()).toEqual({
+      kind: "dynamic",
+      dynamicStaleTimeSeconds: 0,
+      staleTimeSeconds: 300,
+    });
+  });
+
   it("streams runtime HTML responses progressively without buffering the body", async () => {
     const common = createCommonOptions();
     const releaseSsr = createDeferred();

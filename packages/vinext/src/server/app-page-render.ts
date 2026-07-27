@@ -972,10 +972,14 @@ export async function renderAppPageLifecycle(
           const staleTimeSeconds = resolveClientStaleTimeSeconds(requestCacheLife);
           return {
             kind,
+            // Unlike the RSC header, the done script never emits the pending
+            // marker, so there is no 30s floor to fall back on: a render that
+            // turned dynamic must carry the config bound even when the
+            // speculative capture was still armed, or the cacheLife claim
+            // becomes the only bound on reusing dynamic output.
             ...(kind === "dynamic" &&
             dynamicStaleTimeSeconds !== undefined &&
-            options.isPrerender !== true &&
-            !shouldCaptureRscForCacheMetadata
+            options.isPrerender !== true
               ? { dynamicStaleTimeSeconds }
               : {}),
             ...(staleTimeSeconds === undefined
