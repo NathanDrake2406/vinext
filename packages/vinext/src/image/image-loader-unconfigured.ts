@@ -9,9 +9,5 @@
  * Tests that need a configured loader should assert on
  * `generateImageLoaderModule()` output rather than trying to swap this module.
  */
-const imageLoader:
-  | ((props: { src: string; width: number; quality?: number }) => string)
-  | undefined = undefined;
-
-export default imageLoader;
+export default undefined;
 export const requiresLoaderProp = false;

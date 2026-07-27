@@ -1237,13 +1237,6 @@ export function createRscCompatibilityId(
 }
 
 /**
- * Converts a cache handler path to a filesystem path.
- * ESM's import.meta.resolve() returns file:// URLs which break when concatenated
- * with path operations like path.join or path.relative.
- * @param filePath - Absolute path, relative path, or file:// URL (e.g. from import.meta.resolve)
- * @returns A filesystem path suitable for path operations
- */
-/**
  * Validate `images.loader` and resolve `images.loaderFile` to an absolute path,
  * mirroring Next.js's checks in `server/config.ts`.
  *
@@ -1290,6 +1283,13 @@ function resolveImageLoaderFile(
   return absolutePath;
 }
 
+/**
+ * Converts a cache handler path to a filesystem path.
+ * ESM's import.meta.resolve() returns file:// URLs which break when concatenated
+ * with path operations like path.join or path.relative.
+ * @param filePath - Absolute path, relative path, or file:// URL (e.g. from import.meta.resolve)
+ * @returns A filesystem path suitable for path operations
+ */
 function resolveCacheHandlerPathToFilesystem(filePath: string): string {
   // toSlash: fileURLToPath and user-supplied require.resolve() results are
   // backslash-separated on Windows; normalize into slash space.

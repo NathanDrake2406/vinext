@@ -55,10 +55,8 @@ export function generateImageLoaderModule(images?: {
       "  );",
       "}",
       "",
-      "// The default export above reports a misconfiguration rather than",
-      "// generating URLs. Upstream raises the missing-prop error before it decides",
-      "// whether an image is optimized, so the shim needs to tell the two apart: an",
-      "// `unoptimized` image bypasses a real loader, but must not bypass this one.",
+      "// Tells the shim the default export reports a misconfiguration rather than",
+      "// generating URLs — see image/image-loader-virtual.ts.",
       "export const requiresLoaderProp = true;",
       "",
     ].join("\n");

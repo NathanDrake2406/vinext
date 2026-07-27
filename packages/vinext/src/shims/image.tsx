@@ -255,27 +255,41 @@ function getFillStyle(
 }
 
 /**
- * The blur placeholder background shown until the real image loads.
+ * The blur placeholder background shown until the real image loads, or
+ * `undefined` when there is nothing to show — either the caller decided it is
+ * not showing, or the URL failed sanitization.
  *
- * Upstream builds this style independently of which loader produced the URLs
- * (`get-img-props.ts` merges `placeholderStyle` last, for every path), so the
- * caller owns the "should it be showing" decision and this owns only the shape.
+ * Upstream builds this independently of which loader produced the URLs
+ * (`get-img-props.ts` merges `placeholderStyle` last, for every path), so
+ * `show` stays the caller's decision: the component gates on client
+ * `blurComplete` state, `getImageProps` has no state to gate on.
  *
- * Callers must spread it *after* the user's `style`. It wins on purpose: a
+ * `style` must be spread *after* the user's `style`. It wins on purpose: a
  * caller that sets `backgroundImage` for its own reasons would otherwise
  * silently suppress the placeholder for the few hundred ms it exists, and the
  * user style takes over again once `blurComplete` drops the placeholder
  * entirely. Upstream merges in the same order (`get-img-props.ts:574-577`).
  *
- * @param sanitizedBlurDataURL Must already have passed `sanitizeBlurDataURL` —
- *   it is interpolated into a CSS `url()` and would otherwise allow injection.
+ * `url` is the sanitized value for callers that need it as a bare CSS `url()`
+ * argument rather than a style object.
  */
-function blurBackgroundStyle(sanitizedBlurDataURL: string): React.CSSProperties {
+function blurPlaceholder(
+  blurDataURL: string | undefined,
+  show: boolean,
+): { style: React.CSSProperties; url: string } | undefined {
+  if (!show || !blurDataURL) return undefined;
+  // Sanitized before interpolation into `url()`, which would otherwise allow
+  // CSS injection.
+  const url = sanitizeBlurDataURL(blurDataURL);
+  if (!url) return undefined;
   return {
-    backgroundImage: `url(${sanitizedBlurDataURL})`,
-    backgroundSize: "cover",
-    backgroundRepeat: "no-repeat",
-    backgroundPosition: "center",
+    style: {
+      backgroundImage: `url(${url})`,
+      backgroundSize: "cover",
+      backgroundRepeat: "no-repeat",
+      backgroundPosition: "center",
+    },
+    url,
   };
 }
 
@@ -388,13 +402,16 @@ function getImageWidths(width: number): number[] {
  * image, it is an image whose width is decided by the viewport, so it gets the
  * full device-size ladder with `w` descriptors rather than a single fixed URL.
  */
+// Module scope so it is not rebuilt per render. `matchAll` clones the regex
+// internally, so the shared `lastIndex` is never mutated.
+const VIEWPORT_WIDTH_PATTERN = /(^|\s)(1?\d?\d)vw/g;
+
 function getWidths(
   width: number | undefined,
   sizes: string | undefined,
 ): { widths: number[]; kind: "w" | "x" } {
   if (sizes) {
-    const viewportWidthPattern = /(^|\s)(1?\d?\d)vw/g;
-    const viewportPercentages = Array.from(sizes.matchAll(viewportWidthPattern), (match) =>
+    const viewportPercentages = Array.from(sizes.matchAll(VIEWPORT_WIDTH_PATTERN), (match) =>
       Number.parseInt(match[2], 10),
     );
     if (viewportPercentages.length > 0) {
@@ -443,21 +460,21 @@ function generateImgAttrs(input: {
 }): { src: string; srcSet: string; sizes: string | undefined } {
   const { src, width, quality, sizes, loader } = input;
   const { widths, kind } = getWidths(width, sizes);
+  // Materialized once: the fallback `src` is the widest candidate, which the
+  // srcSet already generated. Loaders are arbitrary user code — a signed-URL
+  // loader hashes per call — so invoking one N+1 times to rebuild a string we
+  // hold would be a per-render tax on every image.
+  const urls = widths.map((candidateWidth) => loader({ src, width: candidateWidth, quality }));
   return {
     // Width-descriptor srcSets are meaningless to the browser without `sizes`,
     // so upstream supplies `100vw` when the caller omitted it.
     sizes: !sizes && kind === "w" ? "100vw" : sizes,
-    srcSet: widths
-      .map(
-        (candidateWidth, index) =>
-          `${loader({ src, width: candidateWidth, quality })} ${
-            kind === "w" ? candidateWidth : index + 1
-          }${kind}`,
-      )
+    srcSet: urls
+      .map((url, index) => `${url} ${kind === "w" ? widths[index] : index + 1}${kind}`)
       .join(", "),
     // Keep `src` last: React applies attributes in order, and a `src` set
     // before its `srcSet` makes the browser start a throwaway request.
-    src: loader({ src, width: widths[widths.length - 1], quality }),
+    src: urls[urls.length - 1],
   };
 }
 
@@ -465,20 +482,25 @@ function generateImgAttrs(input: {
 const builtInImageLoader: ImageLoader = ({ src, width, quality }) =>
   imageOptimizationUrl(src, width, quality);
 
-function generateImageAttributes(
+/**
+ * Whether an image bypasses every loader and is handed to the browser as-is.
+ *
+ * The `!requiresLoaderProp` term is the ordering upstream enforces: a bare
+ * `images.loader: "custom"` is reported before optimization is decided
+ * (`get-img-props.ts:184`, ahead of the `unoptimized` handling), so an
+ * `unoptimized` image legitimately bypasses a real loader but must not bypass
+ * the misconfiguration error. Shared by both paths so that ordering has one
+ * home rather than one per path.
+ */
+function bypassesLoaders(
   src: string,
-  width: number,
-  quality?: number,
-  sizes?: string,
-): { src: string; srcSet: string } {
-  const { src: resolvedSrc, srcSet } = generateImgAttrs({
-    src,
-    width,
-    quality,
-    sizes,
-    loader: builtInImageLoader,
-  });
-  return { src: resolvedSrc, srcSet };
+  unoptimized: boolean | undefined,
+  loader: ImageLoader | undefined,
+): boolean {
+  const reportsMissingLoaderProp = loader === undefined && requiresLoaderProp;
+  return (
+    (unoptimized === true || __globallyUnoptimized || isInlineSrc(src)) && !reportsMissingLoaderProp
+  );
 }
 
 const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
@@ -560,6 +582,9 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
 
   const [completedBlurSrc, setCompletedBlurSrc] = useState<string | undefined>(undefined);
   const blurComplete = completedBlurSrc === src;
+  // Every render branch below asks the same question, so it is answered once.
+  // `getImageProps` has no equivalent: it cannot observe load completion.
+  const showBlurPlaceholder = !blurComplete && placeholder === "blur";
 
   const markBlurComplete = () => {
     if (placeholder !== "blur") return;
@@ -643,26 +668,15 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         }
       : undefined;
 
-  // `images.loader: "custom"` with no `images.loaderFile` makes the generated
-  // loader a misconfiguration report rather than a working loader. Upstream
-  // raises that error before it decides whether an image is optimized, so
-  // `unoptimized` must not skip past it — fall through to the loader branch,
-  // where invoking the loader surfaces the error carrying this image's src.
-  const reportsMissingLoaderProp = loader === undefined && requiresLoaderProp;
-
-  if (
-    (_unoptimized === true || __globallyUnoptimized || isInlineSrc(src)) &&
-    !reportsMissingLoaderProp
-  ) {
+  // Falls through to the loader branch when a bare `images.loader: "custom"`
+  // must be reported: invoking the loader there surfaces the error carrying
+  // this image's src.
+  if (bypassesLoaders(src, _unoptimized, loader)) {
     // Unoptimized images are fetched directly by the browser, so intentionally
     // skip remote URL validation: there is no server-side optimizer fetch and
     // therefore no SSRF surface. This matches Next.js behavior.
     const renderedSrc = overrideSrc || src;
-    const sanitizedBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
-    const blurStyle =
-      !blurComplete && placeholder === "blur" && sanitizedBlur
-        ? blurBackgroundStyle(sanitizedBlur)
-        : undefined;
+    const blurStyle = blurPlaceholder(imgBlurDataURL, showBlurPlaceholder)?.style;
     preloadImageResource({
       shouldPreload,
       src: renderedSrc,
@@ -710,11 +724,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
     const renderedSrc = overrideSrc || attributes.src;
     // Omitting the placeholder here is what put this branch out of step with
     // `getImageProps`, which returns the blur style for loader-generated URLs.
-    const sanitizedBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
-    const blurStyle =
-      !blurComplete && placeholder === "blur" && sanitizedBlur
-        ? blurBackgroundStyle(sanitizedBlur)
-        : undefined;
+    const blurStyle = blurPlaceholder(imgBlurDataURL, showBlurPlaceholder)?.style;
     preloadImageResource({
       shouldPreload,
       src: renderedSrc,
@@ -764,10 +774,9 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
       }
     }
 
-    const sanitizedBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
-    const showBlur = !blurComplete && placeholder === "blur" && sanitizedBlur;
-    const blurStyle = showBlur ? blurBackgroundStyle(sanitizedBlur) : undefined;
-    const bg = showBlur ? `url(${sanitizedBlur})` : undefined;
+    const blur = blurPlaceholder(imgBlurDataURL, showBlurPlaceholder);
+    const blurStyle = blur?.style;
+    const bg = blur && `url(${blur.url})`;
 
     if (fill) {
       const imageSizes = sizes ?? "100vw";
@@ -849,7 +858,13 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   // Each entry points to /_next/image with the appropriate width.
   const optimizedAttributes =
     imgWidth && !fill && !skipOptimization
-      ? generateImageAttributes(src, imgWidth, imgQuality, sizes)
+      ? generateImgAttrs({
+          src,
+          width: imgWidth,
+          quality: imgQuality,
+          sizes,
+          loader: builtInImageLoader,
+        })
       : undefined;
   const srcSet = optimizedAttributes
     ? optimizedAttributes.srcSet
@@ -868,12 +883,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
       : imageOptimizationUrl(src, RESPONSIVE_WIDTHS[0], imgQuality);
 
   // Blur placeholder: show a low-quality background while the image loads.
-  // Sanitize blurDataURL to prevent CSS injection via crafted data URLs.
-  const sanitizedLocalBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
-  const blurStyle =
-    !blurComplete && placeholder === "blur" && sanitizedLocalBlur
-      ? blurBackgroundStyle(sanitizedLocalBlur)
-      : undefined;
+  const blurStyle = blurPlaceholder(imgBlurDataURL, showBlurPlaceholder)?.style;
 
   const imageSizes = sizes ?? (fill ? "100vw" : undefined);
   preloadImageResource({
@@ -944,22 +954,11 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
   } = resolveImageSource({ src: srcProp, width, height, blurDataURL: blurDataURLProp });
   const shouldPreload = _preload === true || priority === true;
 
-  // Mirrors the component path: a bare `images.loader: "custom"` is reported
-  // before optimization is decided, so `unoptimized` cannot hide it.
-  const reportsMissingLoaderProp = loader === undefined && requiresLoaderProp;
-
-  if (
-    (_unoptimized === true || __globallyUnoptimized || isInlineSrc(src)) &&
-    !reportsMissingLoaderProp
-  ) {
+  if (bypassesLoaders(src, _unoptimized, loader)) {
     // As in the component path, unoptimized images never reach the server-side
     // optimizer, so remote URL validation is intentionally unnecessary.
     const renderedSrc = overrideSrc || src;
-    const sanitizedBlurURL = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
-    const blurStyle =
-      placeholder === "blur" && sanitizedBlurURL
-        ? blurBackgroundStyle(sanitizedBlurURL)
-        : undefined;
+    const blurStyle = blurPlaceholder(imgBlurDataURL, placeholder === "blur")?.style;
     const imageProps: ImgProps = {
       src: renderedSrc,
       alt,
@@ -1014,15 +1013,25 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
   // For local images (no loader, not remote), route through optimization endpoint.
   // When `unoptimized` is true, bypass the endpoint entirely (Next.js compat).
   // SVG sources auto-skip unless dangerouslyAllowSVG is enabled.
-  const isSvg = isSvgUrl(resolvedSrc);
+  //
+  // Ordered so the cheap decisive checks short-circuit `isSvgUrl`, which parses
+  // a URL: with a configured `loaderFile` the loader term is always true, and
+  // parsing every image's src to feed a term that cannot change the result is
+  // the single most expensive thing this function would do.
   const skipOpt =
-    (isSvg && !__dangerouslyAllowSVG) ||
-    blockedInProd ||
     !!effectiveLoader ||
-    isRemoteUrl(resolvedSrc);
+    blockedInProd ||
+    isRemoteUrl(resolvedSrc) ||
+    (!__dangerouslyAllowSVG && isSvgUrl(resolvedSrc));
   const optimizedAttributes =
     imgWidth && !fill && !skipOpt
-      ? generateImageAttributes(resolvedSrc, imgWidth, imgQuality, sizes)
+      ? generateImgAttrs({
+          src: resolvedSrc,
+          width: imgWidth,
+          quality: imgQuality,
+          sizes,
+          loader: builtInImageLoader,
+        })
       : null;
   const optimizedSrc = skipOpt
     ? resolvedSrc
@@ -1035,10 +1044,7 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
   // comes from the loader instead.
   const srcSet = optimizedAttributes?.srcSet ?? loaderAttributes?.srcSet;
 
-  // Blur placeholder styles — sanitize to prevent CSS injection
-  const sanitizedBlurURL = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
-  const blurStyle =
-    placeholder === "blur" && sanitizedBlurURL ? blurBackgroundStyle(sanitizedBlurURL) : undefined;
+  const blurStyle = blurPlaceholder(imgBlurDataURL, placeholder === "blur")?.style;
 
   const imageProps: ImgProps = {
     alt,

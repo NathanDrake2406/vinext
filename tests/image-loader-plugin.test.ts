@@ -18,9 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeAll, afterAll } from "vite-plus/test";
-import { createServer } from "vite";
 import type { ViteDevServer } from "vite-plus";
-import vinext from "../packages/vinext/src/index.js";
 import { startFixtureServer, fetchHtml } from "./helpers.js";
 
 /** Root layout — the app router refuses to render a page without one. */
@@ -126,13 +124,7 @@ function createProject(nextConfigBody: string, extraFiles: Record<string, string
 
 /** Resolve + load `virtual:vinext-image-loader` through the real plugin. */
 async function loadVirtualLoaderModule(root: string): Promise<string> {
-  const server = await createServer({
-    root,
-    configFile: false,
-    plugins: [vinext({ appDir: root })],
-    server: { port: 0 },
-    logLevel: "silent",
-  });
+  const { server } = await startFixtureServer(root, { listen: false });
   try {
     const resolved = await server.pluginContainer.resolveId("virtual:vinext-image-loader");
     expect(resolved).toBeTruthy();
