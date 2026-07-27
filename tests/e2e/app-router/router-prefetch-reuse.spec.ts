@@ -133,7 +133,11 @@ test.describe("router.prefetch navigation reuse", () => {
       router.prefetch(href);
       // Same task, so this lands while prefetch setup is still in flight, and
       // targets the very href being prefetched — the case that would be
-      // cancelled if shallow routing counted as a navigation.
+      // cancelled if shallow routing counted as a navigation. The prefetch must
+      // also retain /top's call-time interception context rather than reading the
+      // target URL after asynchronous policy setup; in production the visible
+      // Link already owns that /top-context entry, so a context drift would make
+      // this call issue a second request.
       window.history.pushState(null, "", href);
     }, FILM_HREF);
 

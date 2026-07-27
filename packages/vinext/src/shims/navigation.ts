@@ -2521,6 +2521,19 @@ const _appRouter: AppRouterInstance = {
     // a navigation in this same task can start.
     const fullHref = toAppPrefetchDestination(prefetchHref);
     if (fullHref === null) return;
+    // Next captures nextUrl and the router tree synchronously when
+    // router.prefetch() is called. Capture the equivalent request context here,
+    // before the policy/ownership imports yield: a same-task shallow URL update
+    // must not make this prefetch look as though it originated from the target
+    // route, and an intervening route change must not change its interception
+    // or mounted-slot key.
+    const interceptionContext = getPrefetchInterceptionContext(fullHref);
+    const mountedSlotsHeader = getMountedSlotsHeader();
+    const headers = createAppPrefetchRequestHeaders({
+      fetchPriority: "low",
+      interceptionContext,
+      mountedSlotsHeader: mountedSlotsHeader || null,
+    });
     const setup = beginPrefetchSetup(fullHref);
     void (async () => {
       // Hybrid ownership: when a Pages route owns the URL, the App Router
@@ -2571,16 +2584,11 @@ const _appRouter: AppRouterInstance = {
           ? resolveFullAppRoutePrefetch()
           : resolveAutoAppRoutePrefetch(rewrittenPrefetchHref ?? prefetchHref);
       const reusable = policy.shouldPrefetch && policy.cacheForNavigation;
-      const interceptionContext = getPrefetchInterceptionContext(fullHref);
-      const mountedSlotsHeader = getMountedSlotsHeader();
-      const headers = createAppPrefetchRequestHeaders({
-        fetchPriority: "low",
-        interceptionContext,
-        // `|| null` keeps the helper's "set unless null/undefined" rule from
-        // emitting an empty slot header where this call site skipped it.
-        mountedSlotsHeader: mountedSlotsHeader || null,
-        prefetchKind: reusable ? kind : undefined,
-      });
+      // The call-time header snapshot defaults to AUTO/learning semantics.
+      // A full reusable prefetch is the one policy that suppresses this header.
+      if (reusable && kind === "full") {
+        headers.delete(NEXT_ROUTER_PREFETCH_HEADER);
+      }
       if (reusable && kind === "auto") {
         headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
         headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, __prefetchInlining ? "/__PAGE__" : "1");
