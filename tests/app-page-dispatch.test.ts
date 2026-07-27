@@ -1313,7 +1313,10 @@ describe("app page dispatch", () => {
       await Promise.all(waitUntilPromises.splice(0));
       expect(response.headers.get("x-vinext-cache")).not.toBe("HIT");
       expect(response.headers.get("x-vinext-rsc-completion-metadata")).toBe("1");
-      expect(completed.metadata).toEqual({ dynamicStaleTimeSeconds: 0 });
+      expect(completed.metadata).toEqual({
+        dynamicStaleTimeSeconds: 0,
+        serverStaleTimeSeconds: null,
+      });
       return new TextDecoder().decode(completed.buffer);
     }
 

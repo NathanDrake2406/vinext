@@ -582,6 +582,7 @@ describe("app page render lifecycle", () => {
     const common = createCommonOptions();
     const streamGate = createDeferred();
     let dynamicUsed = false;
+    let completedCacheLife: { stale: number } | null = null;
 
     const response = await renderAppPageLifecycle({
       ...common.options,
@@ -593,6 +594,10 @@ describe("app page render lifecycle", () => {
       isProduction: true,
       isRscRequest: true,
       omitPendingDynamicCacheState: true,
+      dynamicStaleTimeSeconds: 300,
+      peekRequestCacheLife() {
+        return completedCacheLife;
+      },
       renderToReadableStream() {
         let sent = false;
         return new ReadableStream<Uint8Array>({
@@ -603,6 +608,7 @@ describe("app page render lifecycle", () => {
             }
             sent = true;
             await streamGate.promise;
+            completedCacheLife = { stale: 30 };
             dynamicUsed = true;
             controller.enqueue(new TextEncoder().encode("flight-data"));
           },
@@ -624,7 +630,10 @@ describe("app page render lifecycle", () => {
     expect(response.headers.get(VINEXT_RSC_COMPLETION_METADATA_HEADER)).toBe("1");
     const completed = extractRscCompletionMetadata(await response.arrayBuffer());
     expect(new TextDecoder().decode(completed.buffer)).toBe("flight-data");
-    expect(completed.metadata).toEqual({ dynamicStaleTimeSeconds: 0 });
+    expect(completed.metadata).toEqual({
+      dynamicStaleTimeSeconds: 300,
+      serverStaleTimeSeconds: 30,
+    });
     await Promise.all(common.waitUntilPromises);
     expect(common.isrSet).not.toHaveBeenCalled();
   });

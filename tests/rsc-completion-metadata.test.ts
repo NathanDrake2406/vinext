@@ -125,12 +125,43 @@ describe("RSC completion metadata", () => {
 
   it("round-trips reserved marker bytes when no footer is appended", async () => {
     const payload = Uint8Array.from([0xff, 0x00, 0xff, 0xff, 1]);
-    const encoded = appendRscCompletionMetadata(byteStream([payload]), () => undefined);
+    const encoded = new Uint8Array(
+      await new Response(
+        appendRscCompletionMetadata(byteStream([payload]), () => undefined),
+      ).arrayBuffer(),
+    );
 
     const decoded = new Uint8Array(
-      await new Response(stripRscCompletionMetadata(encoded)).arrayBuffer(),
+      await new Response(stripRscCompletionMetadata(byteStream([encoded]))).arrayBuffer(),
     );
     expect(decoded).toEqual(payload);
+    expect(new Uint8Array(extractRscCompletionMetadata(encoded.buffer).buffer)).toEqual(payload);
+  });
+
+  it("round-trips a short footerless payload containing only a reserved byte", async () => {
+    const payload = Uint8Array.of(0xff);
+    const encoded = new Uint8Array(
+      await new Response(
+        appendRscCompletionMetadata(byteStream([payload]), () => undefined),
+      ).arrayBuffer(),
+    );
+
+    expect(encoded).toEqual(Uint8Array.of(0xff, 0xff));
+    expect(new Uint8Array(extractRscCompletionMetadata(encoded.buffer).buffer)).toEqual(payload);
+    await expect(
+      new Response(stripRscCompletionMetadata(byteStream([encoded]))).arrayBuffer(),
+    ).resolves.toEqual(payload.buffer);
+  });
+
+  it("rejects invalid escape sequences in buffered and streaming decoders", async () => {
+    const invalid = Uint8Array.of(0xff, 0x01);
+
+    expect(() => extractRscCompletionMetadata(invalid.buffer)).toThrow(
+      "Invalid RSC completion metadata escape sequence",
+    );
+    await expect(
+      new Response(stripRscCompletionMetadata(byteStream([invalid]))).arrayBuffer(),
+    ).rejects.toThrow("Invalid RSC completion metadata escape sequence");
   });
 
   it("rejects a truncated footer", async () => {
@@ -143,9 +174,24 @@ describe("RSC completion metadata", () => {
     );
     const truncated = byteStream([encoded.slice(0, -1)]);
 
+    expect(() => extractRscCompletionMetadata(encoded.slice(0, -1).buffer)).toThrow(
+      "Invalid or truncated RSC completion metadata footer",
+    );
     await expect(new Response(stripRscCompletionMetadata(truncated)).arrayBuffer()).rejects.toThrow(
       "Invalid or truncated RSC completion metadata footer",
     );
+  });
+
+  it("rejects oversized footer frames in buffered and streaming decoders", async () => {
+    const oversized = new Uint8Array(257);
+    oversized.set([0xff, 0x00]);
+
+    expect(() => extractRscCompletionMetadata(oversized.buffer)).toThrow(
+      "RSC completion metadata exceeded its framing limit",
+    );
+    await expect(
+      new Response(stripRscCompletionMetadata(byteStream([oversized]))).arrayBuffer(),
+    ).rejects.toThrow("RSC completion metadata exceeded its framing limit");
   });
 
   it("rejects multiple footer frames", async () => {
@@ -163,9 +209,15 @@ describe("RSC completion metadata", () => {
         })),
       ).arrayBuffer(),
     );
+    const combined = new Uint8Array(first.byteLength + second.byteLength);
+    combined.set(first, 0);
+    combined.set(second, first.byteLength);
 
+    expect(() => extractRscCompletionMetadata(combined.buffer)).toThrow(
+      "Invalid or truncated RSC completion metadata footer",
+    );
     await expect(
-      new Response(stripRscCompletionMetadata(byteStream([first, second]))).arrayBuffer(),
+      new Response(stripRscCompletionMetadata(byteStream([combined]))).arrayBuffer(),
     ).rejects.toThrow("Invalid or truncated RSC completion metadata footer");
   });
 

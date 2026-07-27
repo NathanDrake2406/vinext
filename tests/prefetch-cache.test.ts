@@ -462,7 +462,7 @@ describe("prefetch cache eviction", () => {
             controller.close();
           },
         }),
-        () => ({ dynamicStaleTimeSeconds: 60 }),
+        () => ({ dynamicStaleTimeSeconds: 60, serverStaleTimeSeconds: null }),
       ),
       {
         headers: {
@@ -479,6 +479,60 @@ describe("prefetch cache eviction", () => {
     expect(snapshot.serverStaleTime).toBeUndefined();
     expect(resolveCachedRscResponseTtlMs(snapshot, 300_000)).toBe(60_000);
     expect(restoreRscResponse(snapshot).headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBeNull();
+  });
+
+  it("keeps the pending floor when completion metadata lacks a cacheLife result", async () => {
+    const response = new Response(
+      appendRscCompletionMetadata(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("flight"));
+            controller.close();
+          },
+        }),
+        () => ({ dynamicStaleTimeSeconds: 300 }),
+      ),
+      {
+        headers: {
+          "content-type": "text/x-component",
+          [VINEXT_RSC_COMPLETION_METADATA_HEADER]: "1",
+          [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+        },
+      },
+    );
+
+    const snapshot = await snapshotRscResponse(response);
+
+    expect(snapshot.serverStaleTime).toEqual({ kind: "pending" });
+    expect(resolveCachedRscResponseTtlMs(snapshot, 300_000)).toBe(30_000);
+  });
+
+  it("replaces a provisional pending bound with the completed cacheLife minimum", async () => {
+    const response = new Response(
+      appendRscCompletionMetadata(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("flight"));
+            controller.close();
+          },
+        }),
+        () => ({ dynamicStaleTimeSeconds: 300, serverStaleTimeSeconds: 30 }),
+      ),
+      {
+        headers: {
+          "content-type": "text/x-component",
+          [VINEXT_RSC_COMPLETION_METADATA_HEADER]: "1",
+          [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+        },
+      },
+    );
+
+    const snapshot = await snapshotRscResponse(response);
+
+    expect(snapshot.completedDynamicStaleTimeSeconds).toBe(300);
+    expect(snapshot.serverStaleTime).toEqual({ kind: "resolved", seconds: 30 });
+    expect(resolveCachedRscResponseTtlMs(snapshot, 300_000)).toBe(30_000);
+    expect(restoreRscResponse(snapshot).headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
   });
 
   it("releases queued App prefetch fetch slots after consuming the response body", async () => {

@@ -10,6 +10,7 @@ const MAX_FOOTER_BYTES = 256;
 
 export type RscCompletionMetadata = Readonly<{
   dynamicStaleTimeSeconds: number;
+  serverStaleTimeSeconds?: number | null;
 }>;
 
 function isDynamicStaleTimeSeconds(value: unknown): value is number {
@@ -32,6 +33,58 @@ function encodeFooter(metadata: RscCompletionMetadata): Uint8Array {
   return footer;
 }
 
+function invalidFooter(): never {
+  throw new Error("Invalid or truncated RSC completion metadata footer");
+}
+
+function parseFooterCandidate(candidate: Uint8Array): RscCompletionMetadata {
+  if (candidate.byteLength > MAX_FOOTER_BYTES) {
+    throw new Error("RSC completion metadata exceeded its framing limit");
+  }
+  if (
+    candidate.byteLength < FOOTER_PREFIX_BYTES + FOOTER_LENGTH_BYTES ||
+    candidate[0] !== FRAME_ESCAPE_BYTE ||
+    candidate[1] !== FOOTER_TAG_BYTE
+  ) {
+    return invalidFooter();
+  }
+
+  const lengthOffset = candidate.byteLength - FOOTER_LENGTH_BYTES;
+  const payloadLength = new DataView(
+    candidate.buffer,
+    candidate.byteOffset + lengthOffset,
+    FOOTER_LENGTH_BYTES,
+  ).getUint32(0);
+  if (payloadLength !== lengthOffset - FOOTER_PREFIX_BYTES) return invalidFooter();
+
+  try {
+    const parsed: unknown = JSON.parse(
+      decoder.decode(candidate.subarray(FOOTER_PREFIX_BYTES, lengthOffset)),
+    );
+    if (typeof parsed !== "object" || parsed === null) return invalidFooter();
+    const fields = parsed as Record<string, unknown>;
+    if (!isDynamicStaleTimeSeconds(fields.dynamicStaleTimeSeconds)) return invalidFooter();
+
+    const hasServerStaleTime = Object.hasOwn(fields, "serverStaleTimeSeconds");
+    const serverStaleTimeSeconds = fields.serverStaleTimeSeconds;
+    if (
+      hasServerStaleTime &&
+      serverStaleTimeSeconds !== null &&
+      !isDynamicStaleTimeSeconds(serverStaleTimeSeconds)
+    ) {
+      return invalidFooter();
+    }
+    return {
+      dynamicStaleTimeSeconds: fields.dynamicStaleTimeSeconds,
+      ...(hasServerStaleTime
+        ? { serverStaleTimeSeconds: serverStaleTimeSeconds as number | null }
+        : {}),
+    };
+  } catch {
+    return invalidFooter();
+  }
+}
+
 function escapeFlightChunk(chunk: Uint8Array): Uint8Array {
   const firstEscape = chunk.indexOf(FRAME_ESCAPE_BYTE);
   if (firstEscape === -1) return chunk;
@@ -51,56 +104,42 @@ function escapeFlightChunk(chunk: Uint8Array): Uint8Array {
   return escaped;
 }
 
-function unescapeFlightPayload(bytes: Uint8Array, end: number, original: ArrayBuffer): ArrayBuffer {
-  const firstEscape = bytes.subarray(0, end).indexOf(FRAME_ESCAPE_BYTE);
-  if (firstEscape === -1) return end === bytes.byteLength ? original : original.slice(0, end);
-
-  const decoded = new Uint8Array(end);
-  decoded.set(bytes.subarray(0, firstEscape), 0);
-  let output = firstEscape;
-  for (let index = firstEscape; index < end; index++) {
-    const byte = bytes[index]!;
-    decoded[output++] = byte;
-    if (byte === FRAME_ESCAPE_BYTE && bytes[index + 1] === FRAME_ESCAPE_BYTE) index++;
-  }
-  return decoded.buffer.slice(0, output);
-}
-
 export function extractRscCompletionMetadata(buffer: ArrayBuffer): {
   buffer: ArrayBuffer;
   metadata?: RscCompletionMetadata;
 } {
   const bytes = new Uint8Array(buffer);
-  const lengthOffset = bytes.byteLength - FOOTER_LENGTH_BYTES;
-  if (lengthOffset < 0) return { buffer };
-  const payloadLength = new DataView(
-    bytes.buffer,
-    bytes.byteOffset + lengthOffset,
-    FOOTER_LENGTH_BYTES,
-  ).getUint32(0);
-  const footerOffset = lengthOffset - payloadLength - FOOTER_PREFIX_BYTES;
-  const hasFooter =
-    footerOffset >= 0 &&
-    bytes.byteLength - footerOffset <= MAX_FOOTER_BYTES &&
-    bytes[footerOffset] === FRAME_ESCAPE_BYTE &&
-    bytes[footerOffset + 1] === FOOTER_TAG_BYTE;
-  if (!hasFooter) return { buffer: unescapeFlightPayload(bytes, bytes.byteLength, buffer) };
-  const payloadOffset = footerOffset + FOOTER_PREFIX_BYTES;
+  const firstEscape = bytes.indexOf(FRAME_ESCAPE_BYTE);
+  if (firstEscape === -1) return { buffer };
 
-  try {
-    const parsed = JSON.parse(decoder.decode(bytes.subarray(payloadOffset, lengthOffset))) as {
-      dynamicStaleTimeSeconds?: unknown;
-    };
-    if (!isDynamicStaleTimeSeconds(parsed.dynamicStaleTimeSeconds)) {
-      return { buffer: unescapeFlightPayload(bytes, bytes.byteLength, buffer) };
+  const decoded = new Uint8Array(bytes.byteLength);
+  decoded.set(bytes.subarray(0, firstEscape));
+  let output = firstEscape;
+  for (let index = firstEscape; index < bytes.byteLength; index++) {
+    const byte = bytes[index]!;
+    if (byte !== FRAME_ESCAPE_BYTE) {
+      decoded[output++] = byte;
+      continue;
     }
+
+    const escapedByte = bytes[++index];
+    if (escapedByte === undefined) {
+      throw new Error("Truncated RSC completion metadata escape sequence");
+    }
+    if (escapedByte === FRAME_ESCAPE_BYTE) {
+      decoded[output++] = FRAME_ESCAPE_BYTE;
+      continue;
+    }
+    if (escapedByte !== FOOTER_TAG_BYTE) {
+      throw new Error("Invalid RSC completion metadata escape sequence");
+    }
+
     return {
-      buffer: unescapeFlightPayload(bytes, footerOffset, buffer),
-      metadata: { dynamicStaleTimeSeconds: parsed.dynamicStaleTimeSeconds },
+      buffer: decoded.buffer.slice(0, output),
+      metadata: parseFooterCandidate(bytes.subarray(index - 1)),
     };
-  } catch {
-    return { buffer: unescapeFlightPayload(bytes, bytes.byteLength, buffer) };
   }
+  return { buffer: decoded.buffer.slice(0, output) };
 }
 
 export function appendRscCompletionMetadata(
@@ -189,9 +228,10 @@ export function stripRscCompletionMetadata(
         }
         if (footerCandidate) {
           const candidate = Uint8Array.from(footerCandidate);
-          const extracted = extractRscCompletionMetadata(candidate.buffer);
-          if (extracted.metadata === undefined || extracted.buffer.byteLength !== 0) {
-            controller.error(new Error("Invalid or truncated RSC completion metadata footer"));
+          try {
+            parseFooterCandidate(candidate);
+          } catch (error) {
+            controller.error(error);
           }
         }
       },

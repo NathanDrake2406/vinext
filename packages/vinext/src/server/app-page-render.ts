@@ -907,9 +907,19 @@ export async function renderAppPageLifecycle(
       !options.isForceStatic &&
       rscResponse.body
         ? new Response(
-            appendRscCompletionMetadata(rscResponse.body, () =>
-              finalizeRenderDynamicUsage() ? { dynamicStaleTimeSeconds } : undefined,
-            ),
+            appendRscCompletionMetadata(rscResponse.body, () => {
+              if (!finalizeRenderDynamicUsage()) return undefined;
+              const completedServerStaleTimeSeconds = resolveClientStaleTimeSeconds(
+                options.peekRequestCacheLife?.(),
+              );
+              return {
+                dynamicStaleTimeSeconds,
+                serverStaleTimeSeconds:
+                  completedServerStaleTimeSeconds === undefined
+                    ? null
+                    : Math.floor(completedServerStaleTimeSeconds),
+              };
+            }),
             {
               status: rscResponse.status,
               statusText: rscResponse.statusText,

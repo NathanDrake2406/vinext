@@ -999,13 +999,17 @@ export function createCachedRscResponseSnapshot(
       : (extracted.metadata?.dynamicStaleTimeSeconds ?? headerDynamicStaleTimeSeconds);
   const dynamicStaleTimeSeconds = completedDynamicStaleTimeSeconds ?? headerDynamicStaleTimeSeconds;
   const parsedServerStaleTime = parseServerStaleTimeHeaders(response.headers);
-  // Completion metadata is authoritative for a render that became dynamic
-  // after headers committed. Drop only the provisional pending claim so it
-  // cannot keep capping a completed 60s dynamic bound at the 30s floor.
-  const serverStaleTime =
-    completedDynamicStaleTimeSeconds !== undefined && parsedServerStaleTime?.kind === "pending"
+  const hasCompletedServerStaleTime =
+    extracted.metadata !== undefined && Object.hasOwn(extracted.metadata, "serverStaleTimeSeconds");
+  // Completion metadata replaces the provisional pending claim with the
+  // render's completed cacheLife minimum. `null` explicitly proves that the
+  // dynamic render completed without a cacheLife claim; an absent field keeps
+  // the pending floor for compatibility with older/incomplete frames.
+  const serverStaleTime = hasCompletedServerStaleTime
+    ? extracted.metadata?.serverStaleTimeSeconds === null
       ? undefined
-      : parsedServerStaleTime;
+      : { kind: "resolved" as const, seconds: extracted.metadata!.serverStaleTimeSeconds! }
+    : parsedServerStaleTime;
   return {
     compatibilityIdHeader: response.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
     buffer: extracted.buffer,
