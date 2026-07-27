@@ -306,7 +306,11 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
         const matchedSourceParams = concreteSourceRoute
           ? concreteSourceRoute.params
           : sourceRoute
-            ? matchRoutePatternRaw(sourceParts, sourceRoute.patternParts)
+            ? matchSlotOwnerSourceParams(
+                sourceParts,
+                sourceRoute.patternParts,
+                entry.sourceMatchPatternParts !== null,
+              )
             : null;
 
         // Secondary gate (from #1249): when the entry has no
@@ -336,6 +340,28 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
       return null;
     },
   };
+}
+
+/**
+ * Params for the slot owner when interception falls back to it instead of a
+ * concrete descendant source route. The owner is what renders, and
+ * `matchInterceptRoute` reads the promoted route's params solely from these,
+ * so dropping them would render a dynamic owner without its segments.
+ *
+ * An exact match covers a source that names the owner itself. It cannot
+ * succeed when the source names a deeper descendant — a rejected Route
+ * Handler, or a path with no concrete route — so once the descendants-allowed
+ * gate has approved the source, take the owner's params from that prefix.
+ */
+function matchSlotOwnerSourceParams(
+  sourceParts: readonly string[],
+  patternParts: readonly string[],
+  descendantsAllowed: boolean,
+): AppRscRouteParams | null {
+  const exact = matchRoutePatternRaw(sourceParts, patternParts);
+  if (exact !== null) return exact;
+  if (!descendantsAllowed || !matchRoutePatternPrefix(sourceParts, patternParts)) return null;
+  return extractRawParamsForMatchedRoute(patternParts, sourceParts);
 }
 
 /**

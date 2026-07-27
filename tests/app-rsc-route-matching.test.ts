@@ -710,6 +710,46 @@ describe("App RSC route matching", () => {
       });
     });
 
+    it("keeps the slot owner's dynamic params when falling back from a descendant", () => {
+      // The slot owner is what renders once a descendant source is rejected, and
+      // `matchInterceptRoute` reads the promoted route's params solely from
+      // `sourceMatchedParams`. An exact pattern match against the owner cannot
+      // succeed here — the approved source carries extra segments by definition —
+      // so the owner's params come from the prefix the source gate already
+      // approved. Otherwise `/:locale/feed` would render with no `locale`.
+      const matcher = createAppRscRouteMatcher([
+        route("/:locale/feed", [":locale", "feed"], {
+          modal: {
+            intercepts: [
+              {
+                sourceMatchPattern: "/:locale/feed",
+                targetPattern: "/:locale/hidden",
+                interceptLayouts: ["layout"],
+                page: "modal-hidden",
+                params: ["locale"],
+              },
+            ],
+          },
+        }),
+        { ...route("/:locale/feed/admin", [":locale", "feed", "admin"]), routeHandler: {} },
+      ]);
+
+      expect(matcher.findIntercept("/en/hidden", "/en/feed/admin")).toMatchObject({
+        sourceRouteIndex: 0,
+        sourceMatchedParams: { locale: "en" },
+      });
+      // A descendant with no concrete route at all takes the same fallback.
+      expect(matcher.findIntercept("/en/hidden", "/en/feed/unknown/deep")).toMatchObject({
+        sourceRouteIndex: 0,
+        sourceMatchedParams: { locale: "en" },
+      });
+      // An exact source still matches the owner directly.
+      expect(matcher.findIntercept("/en/hidden", "/en/feed")).toMatchObject({
+        sourceRouteIndex: 0,
+        sourceMatchedParams: { locale: "en" },
+      });
+    });
+
     it("treats a sourceMatchPattern of `/` as matching any source", () => {
       // Slot at root (`/@modal/(.)groups/[id]/new`) yields intercepting route `/`,
       // which Next.js implements as `^/.*$` — i.e. any source.
