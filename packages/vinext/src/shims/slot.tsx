@@ -45,9 +45,6 @@ export const ParallelSlotsContext = React.createContext<Readonly<
 > | null>(null);
 const BfcacheIdMapContext = getBfcacheIdMapContext();
 const BfcacheSegmentIdContext = getBfcacheSegmentIdContext();
-const FallbackBfcacheIdMapContext = React.createContext<Readonly<Record<string, string>> | null>(
-  null,
-);
 const EMPTY_BFCACHE_STATE_KEYS: Readonly<Record<string, string>> = Object.freeze({});
 const MAX_BFCACHE_SLOT_ENTRIES_WITH_CACHE_COMPONENTS = 3;
 // Used by updateBfcacheSlotEntryOrder when invoked directly (unit tests) and
@@ -391,7 +388,7 @@ export function BfcacheSegmentBoundary({
 }) {
   const elements = React.useContext(ElementsContext);
   const identityMap = React.useContext(BfcacheIdentityMapContext);
-  const bfcacheIdMap = React.useContext(BfcacheIdMapContext ?? FallbackBfcacheIdMapContext);
+  const bfcacheIdMap = React.useContext(BfcacheIdMapContext!);
   const activeStateKey = resolveBfcacheSegmentStateKey(id, identityMap, bfcacheIdMap);
 
   if (!BfcacheSegmentIdContext || activeStateKey === undefined) {
