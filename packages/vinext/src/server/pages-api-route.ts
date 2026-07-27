@@ -8,6 +8,7 @@ import {
 } from "../utils/query.js";
 import {
   createPagesReqRes,
+  markVinextStreamedApiResponse,
   parsePagesApiBody,
   type PagesRequestQuery,
   type PagesReqResRequest,
@@ -228,7 +229,15 @@ async function _handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promis
     if (!externalResolver && !resWasPiped && !res.headersSent) {
       res.end();
     }
-    return await responsePromise;
+    const response = await responsePromise;
+    // The response resolves on the first write; if `end()` still has not been
+    // called by the time it settles, the body is a live stream (e.g. a piped
+    // proxy upstream). Mark it so buffering adapters forward it as a stream
+    // instead of holding the whole body in memory until the source closes.
+    if (!res.writableEnded) {
+      markVinextStreamedApiResponse(response);
+    }
+    return response;
   } catch (error) {
     if (error instanceof PagesApiBodyParseError) {
       return new Response(error.message, {
