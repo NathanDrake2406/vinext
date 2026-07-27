@@ -31,6 +31,15 @@ function isSharedCacheControl(cacheControl: string): boolean {
  * adapter's own headers are applied via `set()`, which overrides any prior value
  * for the same name, so there's no need to pre-clear adapter-specific headers.
  */
+/**
+ * Whether the active CDN cache adapter must be handed a *final* cache policy
+ * rather than a `pendingDynamicCheck` one. See `requiresProvenCachePolicy` on
+ * {@link CdnCacheAdapter}.
+ */
+export function cdnRequiresProvenCachePolicy(): boolean {
+  return getCdnCacheAdapter().requiresProvenCachePolicy === true;
+}
+
 export function applyCdnResponseHeaders(headers: Headers, input: CdnCacheableHeaderInput): void {
   headers.delete("Cache-Control");
   if (shouldUseNextDeployCacheControl() && isSharedCacheControl(input.cacheControl)) {

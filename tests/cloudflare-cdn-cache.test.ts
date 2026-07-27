@@ -16,6 +16,7 @@ import {
   DefaultCdnCacheAdapter,
 } from "../packages/vinext/src/shims/cdn-cache.js";
 import { runWithExecutionContext } from "../packages/vinext/src/shims/request-context.js";
+import { finalizeAppPageHtmlCacheResponse } from "../packages/vinext/src/server/app-page-cache.js";
 
 const CDN_KEY = Symbol.for("vinext.cdnCacheAdapter");
 
@@ -52,17 +53,6 @@ describe("CloudflareCdnCacheAdapter", () => {
       "Cache-Control": "public, max-age=0, must-revalidate",
       "CDN-Cache-Control": "public, max-age=60, stale-while-revalidate=31536000",
     });
-  });
-
-  it("uses max-age (not s-maxage) and public on the edge directive, even pending-dynamic", () => {
-    const headers = adapter.buildResponseHeaders({
-      cacheControl: "s-maxage=60, stale-while-revalidate=540",
-      pendingDynamicCheck: true,
-    });
-    // Edge caches + SWRs via CDN-Cache-Control; the browser always revalidates.
-    // An already-valued stale-while-revalidate is passed through unchanged.
-    expect(headers["CDN-Cache-Control"]).toBe("public, max-age=60, stale-while-revalidate=540");
-    expect(headers["Cache-Control"]).toBe("public, max-age=0, must-revalidate");
   });
 
   it("adds a Cache-Tag header from the page tags", () => {
@@ -164,5 +154,67 @@ describe("CDN cache adapter selection", () => {
       async () => getCdnCacheAdapter(),
     );
     expect(adapter).toBe(explicit);
+  });
+});
+
+// ─── Shared-cache safety for streamed App Router renders ─────────────────
+
+/**
+ * An App Router page can only be proven non-dynamic after its stream drains: a
+ * Suspended server component may read cookies()/headers() long after the shell
+ * has flushed. The Cloudflare adapter has no origin store, so its response
+ * headers alone decide whether the *shared* edge cache stores the page — and a
+ * header already sent cannot be taken back.
+ *
+ * The behaviour under test is therefore the response contract: a render that
+ * turns out dynamic must never leave the origin advertising itself as
+ * edge-cacheable, because the edge keys on URL and would replay one user's
+ * personalized HTML to the next.
+ */
+describe("streamed App Router responses under the Cloudflare CDN adapter", () => {
+  function finalize(options: { dynamicUsed: boolean }): Response | Promise<Response> {
+    return finalizeAppPageHtmlCacheResponse(
+      new Response("<h1>user=alice</h1>", {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          // The provisional ISR policy, computed before the stream drained.
+          "Cache-Control": "s-maxage=60, stale-while-revalidate=540",
+        },
+      }),
+      {
+        capturedRscDataPromise: null,
+        cleanPathname: "/account",
+        // Resolves only once the stream has been consumed — the late signal.
+        consumeDynamicUsage: () => options.dynamicUsed,
+        getPageTags: () => ["/account"],
+        isrHtmlKey: (pathname) => `html:${pathname}`,
+        isrRscKey: (pathname) => `rsc:${pathname}`,
+        async isrSet() {},
+        revalidateSeconds: 60,
+      },
+    );
+  }
+
+  beforeEach(() => setCdnCacheAdapter(new CloudflareCdnCacheAdapter()));
+
+  it("does not advertise a late-dynamic render as edge-cacheable", async () => {
+    const response = await finalize({ dynamicUsed: true });
+
+    // Nothing shared may store this: it contains one user's session data.
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    // The body is still delivered to the user who requested it.
+    await expect(response.text()).resolves.toBe("<h1>user=alice</h1>");
+  });
+
+  it("still lets a proven-static render be cached by the edge", async () => {
+    const response = await finalize({ dynamicUsed: false });
+
+    expect(response.headers.get("CDN-Cache-Control")).toBe(
+      "public, max-age=60, stale-while-revalidate=540",
+    );
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
+    await expect(response.text()).resolves.toBe("<h1>user=alice</h1>");
   });
 });

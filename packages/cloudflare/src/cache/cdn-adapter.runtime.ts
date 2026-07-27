@@ -125,6 +125,13 @@ export class CloudflareCdnCacheAdapter implements CdnCacheAdapter {
   // so the origin must not also run in-process background regeneration.
   readonly ownsBackgroundRevalidation = false;
 
+  // This adapter keeps no origin store, so its headers are the only thing that
+  // decides whether the edge caches a response — and the edge cache is shared
+  // between users. A preliminary policy emitted before a streaming render has
+  // proven itself non-dynamic cannot be retracted, so the framework must hold
+  // the response until the final policy is known.
+  readonly requiresProvenCachePolicy = true;
+
   /**
    * The origin keeps no page store — return null so the request renders fresh.
    * The edge serves cached HIT/STALE responses without reaching the origin.

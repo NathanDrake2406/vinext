@@ -106,6 +106,21 @@ export type CdnCacheAdapter = {
   readonly ownsBackgroundRevalidation: boolean;
 
   /**
+   * Whether this adapter's response headers *are* the storage decision, so a
+   * provisional policy can never be taken back once the response is sent.
+   *
+   * Adapters that store at the origin can safely be handed a
+   * `pendingDynamicCheck` policy: if the render later turns out to be dynamic,
+   * the origin simply skips the write. A shared CDN cannot be corrected that
+   * way — the moment a cacheable `CDN-Cache-Control` leaves the origin, the
+   * edge may store the response and replay it to *other users* of the same URL.
+   *
+   * Set this to `true` to make the framework withhold the response until the
+   * render's dynamic-ness is proven, so only a final policy is ever emitted.
+   */
+  readonly requiresProvenCachePolicy?: boolean;
+
+  /**
    * Propagate a tag/path invalidation to the CDN edge (purge). Called *in
    * addition to* the data cache's own tag invalidation, so the default
    * implementation is a no-op (the data cache already invalidated its entries).
