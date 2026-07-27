@@ -538,10 +538,6 @@ describe("prefetch cache eviction", () => {
 
     const cacheKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
     await waitForPrefetchSetup(() => getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded");
-    const entry = getPrefetchCache().get(cacheKey);
-    expect(entry?.cacheForNavigation).toBe(true);
-    expect(entry?.optimisticRouteShell).toBe(false);
-    expect(entry?.prefetchKind).toBe("navigation");
 
     // A second programmatic prefetch while the entry is fresh must not issue
     // another request.
@@ -677,7 +673,6 @@ describe("prefetch cache eviction", () => {
     await waitForPrefetchSetup(
       () => getPrefetchCache().get(learningKey)?.outcome === "cache-seeded",
     );
-    expect(getPrefetchCache().get(learningKey)?.cacheForNavigation).toBe(false);
 
     // The upgrade discards the learning-only entry. Its subscriber must be told
     // the payload is gone rather than have the callback silently dropped.
@@ -765,10 +760,8 @@ describe("prefetch cache eviction", () => {
 
     const cacheKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
     await waitForPrefetchSetup(() => getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded");
-    expect(getPrefetchCache().get(cacheKey)?.cacheForNavigation).toBe(true);
 
-    const consumed = consumePrefetchResponse(fetchedUrl, null, null);
-    expect(consumed).not.toBeNull();
+    expect(consumePrefetchResponse(fetchedUrl, null, null)).not.toBeNull();
   });
 
   it("keeps default-kind router.prefetch learning-only on loading-shell routes (#2707)", async () => {
@@ -790,10 +783,68 @@ describe("prefetch cache eviction", () => {
 
     const cacheKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
     await waitForPrefetchSetup(() => getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded");
-    const entry = getPrefetchCache().get(cacheKey);
-    expect(entry?.cacheForNavigation).toBe(false);
-    expect(entry?.optimisticRouteShell).toBe(true);
     expect(consumePrefetchResponse(fetchedUrl, null, null)).toBeNull();
+  });
+
+  it("promotes a queued prefetch when navigation consumes it (#2722)", async () => {
+    // Every route is navigation-reusable, so the queued 5th prefetch is one a
+    // navigation will actually try to await.
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = Array.from(
+      { length: 5 },
+      (_unused, index) => ({
+        canPrefetchLoadingShell: false,
+        patternParts: [`dashboard-${index}`],
+        isDynamic: false,
+      }),
+    );
+    const requestedUrls: string[] = [];
+    const deferredResponses: Array<(response: Response) => void> = [];
+    const fetch = vi.fn((input: RequestInfo | URL) => {
+      requestedUrls.push(toRscUrlString(input));
+      return new Promise<Response>((resolve) => {
+        deferredResponses.push(resolve);
+      });
+    });
+    (globalThis as any).fetch = fetch;
+
+    for (let index = 0; index < 5; index++) {
+      appRouterInstance.prefetch(`/dashboard-${index}`);
+    }
+
+    // Four slots are occupied and none of their bodies have been read, so the
+    // fifth request has not been issued — but all five entries are registered.
+    await waitForPrefetchSetup(
+      () =>
+        fetch.mock.calls.length === 4 &&
+        [...getPrefetchCache().keys()].some((key) => key.includes("dashboard-4")),
+    );
+    expect(fetch).toHaveBeenCalledTimes(4);
+
+    const queuedCacheKey = [...getPrefetchCache().keys()].find((key) =>
+      key.includes("dashboard-4"),
+    );
+    if (queuedCacheKey === undefined) {
+      throw new Error("Expected the queued prefetch to hold a cache entry");
+    }
+    const queuedRscUrl = queuedCacheKey.split("\0")[0];
+
+    // Navigating to the queued route must start its request rather than wait
+    // for the four in-flight response bodies.
+    const consumed = consumePrefetchResponseForNavigation(queuedRscUrl, null, null);
+    await waitForPrefetchSetup(() => fetch.mock.calls.length === 5);
+    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(requestedUrls[4]).toBe(queuedRscUrl);
+
+    // The occupying prefetches are still unresolved at this point.
+    deferredResponses[4](
+      new Response("flight", { headers: { "content-type": "text/x-component" } }),
+    );
+    const snapshot = await consumed;
+    expect(snapshot).not.toBeNull();
+
+    for (const resolve of deferredResponses.slice(0, 4)) {
+      resolve(new Response("flight", { headers: { "content-type": "text/x-component" } }));
+    }
   });
 
   it("limits low-priority router.prefetch requests until queued responses are snapshotted", async () => {

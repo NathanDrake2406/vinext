@@ -4,6 +4,8 @@ const APP_PREFETCH_FETCH_SLOT_RELEASE_KEY = Symbol.for("vinext.appPrefetchFetchS
 
 const MAX_DEFAULT_APP_PREFETCH_REQUESTS = 4;
 const defaultAppPrefetchQueue: Array<() => void> = [];
+/** Lets a consumer find the queued runner behind a promise it already holds. */
+const queuedAppPrefetchRunners = new WeakMap<Promise<Response>, () => void>();
 let activeDefaultAppPrefetchRequests = 0;
 let defaultAppPrefetchDrainScheduled = false;
 
@@ -48,8 +50,9 @@ export function scheduleAppPrefetchFetch(
     return fetcher();
   }
 
-  return new Promise<Response>((resolve, reject) => {
-    defaultAppPrefetchQueue.push(() => {
+  let runner!: () => void;
+  const promise = new Promise<Response>((resolve, reject) => {
+    runner = () => {
       let didRelease = false;
       const release = () => {
         if (didRelease) return;
@@ -75,7 +78,37 @@ export function scheduleAppPrefetchFetch(
         release();
         reject(error);
       }
-    });
-    scheduleDefaultAppPrefetchDrain();
+    };
   });
+
+  defaultAppPrefetchQueue.push(runner);
+  queuedAppPrefetchRunners.set(promise, runner);
+  scheduleDefaultAppPrefetchDrain();
+  return promise;
+}
+
+/**
+ * Start a still-queued prefetch request immediately.
+ *
+ * A navigation that reuses an in-flight prefetch awaits that prefetch's
+ * promise. When the request is only queued, the navigation would otherwise wait
+ * for unrelated prefetch response bodies to finish before its own request even
+ * starts — indefinitely if one of those streams stalls. A promoted request is
+ * no longer a prefetch, it is the navigation, so it bypasses the concurrency
+ * cap instead of waiting for a slot.
+ *
+ * No-op when the request has already started or was never queued.
+ */
+export function promoteAppPrefetchFetch(promise: Promise<Response> | undefined): void {
+  if (promise === undefined) return;
+  const runner = queuedAppPrefetchRunners.get(promise);
+  if (runner === undefined) return;
+
+  const index = defaultAppPrefetchQueue.indexOf(runner);
+  if (index === -1) return;
+  defaultAppPrefetchQueue.splice(index, 1);
+  queuedAppPrefetchRunners.delete(promise);
+
+  activeDefaultAppPrefetchRequests += 1;
+  runner();
 }

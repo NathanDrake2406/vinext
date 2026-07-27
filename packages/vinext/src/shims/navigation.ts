@@ -80,6 +80,7 @@ import {
   type NavigationContext,
 } from "./navigation-context-state.js";
 import {
+  promoteAppPrefetchFetch,
   releaseAppPrefetchFetchSlot,
   scheduleAppPrefetchFetch,
 } from "./internal/app-prefetch-fetch-queue.js";
@@ -302,6 +303,8 @@ export type PrefetchCacheEntry = {
   outcome: "pending" | "cache-seeded";
   snapshot?: CachedRscResponse;
   cacheKeys?: Set<string>;
+  /** The queue-scheduled request, so a consuming navigation can promote it. */
+  fetchPromise?: Promise<Response>;
   pending?: Promise<void>;
   preparedElements?: AppElements;
   prefetchKind?: PrefetchCacheKind;
@@ -1178,6 +1181,7 @@ export function prefetchRscResponse(
     timestamp: now,
   };
   addPrefetchInvalidationCallback(entry, options?.onInvalidate);
+  entry.fetchPromise = fetchPromise;
 
   entry.pending = fetchPromise
     .then(async (response) => {
@@ -1217,6 +1221,8 @@ export function prefetchRscResponse(
     .finally(() => {
       if (cache.get(cacheKey) !== entry) return;
       entry.pending = undefined;
+      // Nothing left to promote, and holding it would pin the settled Response.
+      entry.fetchPromise = undefined;
       if (entry.snapshot) {
         entry.outcome = "cache-seeded";
         schedulePrefetchInvalidation(cacheKey, entry);
@@ -1396,6 +1402,11 @@ export async function consumePrefetchResponseForNavigation(
   const { cacheKey, entry } = match;
 
   if (entry.pending !== undefined) {
+    // This navigation is about to wait on the prefetch's request. If that
+    // request is still queued behind the low-priority concurrency cap, waiting
+    // would block the navigation on unrelated prefetch response bodies, so
+    // start it now instead. No-op once the request is already in flight.
+    promoteAppPrefetchFetch(entry.fetchPromise);
     await entry.pending.catch(() => {});
     if (cache.get(cacheKey) !== entry) return null;
   }
