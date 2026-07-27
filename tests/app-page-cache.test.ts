@@ -1316,6 +1316,50 @@ describe("app page cache helpers", () => {
     expect(isrSet).not.toHaveBeenCalled();
   });
 
+  it("marks mounted-slot RSC cache MISS responses no-store without persisting them", async () => {
+    const pendingCacheWrites: Promise<void>[] = [];
+    const isrRscKey = vi.fn();
+    const isrSet = vi.fn();
+
+    const response = finalizeAppPageRscCacheResponse(
+      new Response("flight", {
+        headers: {
+          "Content-Type": "text/x-component",
+          "Cache-Control": "s-maxage=60, stale-while-revalidate",
+          "X-Vinext-Cache": "MISS",
+        },
+      }),
+      {
+        capturedRscDataPromise: Promise.resolve(new TextEncoder().encode("flight").buffer),
+        cleanPathname: "/fresh-rsc",
+        consumeDynamicUsage() {
+          return false;
+        },
+        dynamicUsedDuringBuild: false,
+        getPageTags() {
+          return ["/fresh-rsc"];
+        },
+        isrRscKey,
+        isrSet,
+        mountedSlotsHeader: "slot:auth:/",
+        preserveClientResponseHeaders: false,
+        revalidateSeconds: 60,
+        waitUntil(promise) {
+          pendingCacheWrites.push(promise);
+        },
+      },
+    );
+
+    // The slot variant is never written to the ISR store, but the fresh MISS
+    // still has to leave the origin uncacheable by shared caches.
+    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("X-Vinext-Cache")).toBe("MISS");
+    await expect(response.text()).resolves.toBe("flight");
+    expect(pendingCacheWrites).toEqual([]);
+    expect(isrRscKey).not.toHaveBeenCalled();
+    expect(isrSet).not.toHaveBeenCalled();
+  });
+
   it("marks client-facing RSC cache MISS responses no-store until the stream dynamic check finishes", async () => {
     const pendingCacheWrites: Promise<void>[] = [];
     const isrSetCalls: string[] = [];

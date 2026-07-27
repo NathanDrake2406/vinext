@@ -226,10 +226,13 @@ export function finalizeAppPageRscCacheResponse(
   response: Response,
   options: ScheduleAppPageRscCacheWriteOptions,
 ): Response {
-  const didSchedule = scheduleAppPageRscCacheWrite(options);
-  if (!didSchedule) {
-    return response;
-  }
+  // Persisting to the ISR store and finalizing the client-facing headers are
+  // independent decisions. Mounted-slot variants are deliberately never stored
+  // (their RSC key is slot-blind), but a fresh MISS stream can still reach a
+  // dynamic API after the cache policy was chosen, so shared caches must not
+  // keep it either way. Gate on preserveClientResponseHeaders alone, matching
+  // finalizeAppPageHtmlCacheResponse.
+  scheduleAppPageRscCacheWrite(options);
 
   if (options.preserveClientResponseHeaders === true) {
     return response;
