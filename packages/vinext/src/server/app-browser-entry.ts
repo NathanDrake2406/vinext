@@ -181,11 +181,10 @@ import {
 import {
   VINEXT_CLIENT_REUSE_MANIFEST_HEADER,
   VINEXT_PARAMS_HEADER,
-  VINEXT_RSC_COMPLETION_METADATA_HEADER,
   VINEXT_RSC_REDIRECT_HEADER,
   VINEXT_RSC_REDIRECT_TYPE_HEADER,
 } from "./headers.js";
-import { stripRscCompletionMetadata } from "./rsc-completion-metadata.js";
+import { stripRscCompletionMetadataResponse } from "./rsc-completion-metadata.js";
 import { removeStylesheetLinksCoveredByInlineCss } from "./app-inline-css-client.js";
 import {
   navigationPlanner,
@@ -2186,22 +2185,20 @@ function bootstrapHydration(
           // narrowing only.
           return;
         }
-        const [rawReactBranch, cacheBranch] = navBody.tee();
-        const reactBranch =
-          navResponse.headers.get(VINEXT_RSC_COMPLETION_METADATA_HEADER) === "1"
-            ? stripRscCompletionMetadata(rawReactBranch)
-            : rawReactBranch;
-        const reactResponse = new Response(reactBranch, {
-          status: navResponse.status,
-          headers: navResponse.headers,
-        });
+        const [reactBranch, cacheBranch] = navBody.tee();
+        const reactResponse = stripRscCompletionMetadataResponse(
+          new Response(reactBranch, {
+            status: navResponse.status,
+            headers: navResponse.headers,
+          }),
+        );
         const cacheBufferPromise = new Response(cacheBranch).arrayBuffer();
         void cacheBufferPromise.catch(() => {});
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
         if (prefetchedElements) {
-          void reactBranch.cancel().catch(() => {});
+          void reactResponse.body?.cancel().catch(() => {});
         }
         const rscPayload = prefetchedElements
           ? prefetchedElements
@@ -2546,7 +2543,7 @@ function bootstrapHydration(
                 hmrHeaders,
               ),
               { headers: hmrHeaders },
-            ),
+            ).then(stripRscCompletionMetadataResponse),
           ),
         ),
         navigationSnapshot,

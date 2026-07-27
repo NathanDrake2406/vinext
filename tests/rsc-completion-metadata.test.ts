@@ -3,6 +3,7 @@ import {
   appendRscCompletionMetadata,
   extractRscCompletionMetadata,
   stripRscCompletionMetadata,
+  stripRscCompletionMetadataResponse,
 } from "../packages/vinext/src/server/rsc-completion-metadata.js";
 
 const encoder = new TextEncoder();
@@ -45,5 +46,34 @@ describe("RSC completion metadata", () => {
 
     expect(decoder.decode(extracted.buffer)).toBe("static-flight");
     expect(extracted.metadata).toBeUndefined();
+  });
+
+  it("normalizes an advertised completion response before a Flight consumer reads it", async () => {
+    const response = new Response(
+      appendRscCompletionMetadata(stream(["hmr-flight"]), () => ({
+        dynamicStaleTimeSeconds: 0,
+      })),
+      {
+        headers: {
+          "X-Test": "preserved",
+          "X-Vinext-Rsc-Completion-Metadata": "1",
+        },
+        status: 206,
+        statusText: "Partial Content",
+      },
+    );
+
+    const normalized = stripRscCompletionMetadataResponse(response);
+
+    await expect(normalized.text()).resolves.toBe("hmr-flight");
+    expect(normalized.status).toBe(206);
+    expect(normalized.statusText).toBe("Partial Content");
+    expect(normalized.headers.get("X-Test")).toBe("preserved");
+  });
+
+  it("does not disturb responses without the completion protocol marker", () => {
+    const response = new Response("plain-flight");
+
+    expect(stripRscCompletionMetadataResponse(response)).toBe(response);
   });
 });

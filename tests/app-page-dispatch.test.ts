@@ -58,6 +58,7 @@ import {
 } from "../packages/vinext/src/shims/headers.js";
 import { isPromiseLike } from "../packages/vinext/src/utils/promise.js";
 import { isUnknownRecord } from "../packages/vinext/src/utils/record.js";
+import { extractRscCompletionMetadata } from "../packages/vinext/src/server/rsc-completion-metadata.js";
 
 type TestRoute = {
   __buildTimeClassifications?: ReadonlyMap<number, "static" | "dynamic"> | null;
@@ -1308,10 +1309,12 @@ describe("app page dispatch", () => {
       const response = await runWithExecutionContext(executionContext, () =>
         dispatchAppPage(options),
       );
-      const text = await response.text();
+      const completed = extractRscCompletionMetadata(await response.arrayBuffer());
       await Promise.all(waitUntilPromises.splice(0));
       expect(response.headers.get("x-vinext-cache")).not.toBe("HIT");
-      return text;
+      expect(response.headers.get("x-vinext-rsc-completion-metadata")).toBe("1");
+      expect(completed.metadata).toEqual({ dynamicStaleTimeSeconds: 0 });
+      return new TextDecoder().decode(completed.buffer);
     }
 
     await expect(request("first")).resolves.toBe("first");

@@ -1,3 +1,5 @@
+import { VINEXT_RSC_COMPLETION_METADATA_HEADER } from "./headers.js";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const FOOTER_MAGIC = encoder.encode("VINEXT_RSC_COMPLETION_V1");
@@ -110,4 +112,16 @@ export function stripRscCompletionMetadata(
       },
     }),
   );
+}
+
+/** Remove vinext's internal completion footer before React reads a Flight response. */
+export function stripRscCompletionMetadataResponse(response: Response): Response {
+  if (response.headers.get(VINEXT_RSC_COMPLETION_METADATA_HEADER) !== "1" || !response.body) {
+    return response;
+  }
+  return new Response(stripRscCompletionMetadata(response.body), {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }
