@@ -150,7 +150,7 @@ export function resolveAppPageSemanticSegmentStateKey(
 ): string {
   const { marker, segment } = semanticSegment;
   if (isAppPageRouteGroupSegment(segment)) return segment;
-  const stateKey = resolveAppPageSegmentStateKey([segment], 0, params);
+  const stateKey = resolveSingleSegmentStateKey(segment, params);
   return marker ? JSON.stringify([marker, stateKey]) : stateKey;
 }
 

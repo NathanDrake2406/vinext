@@ -43,7 +43,7 @@ type AppPageSlotSegmentPlan<TModule extends AppPageModule> = Readonly<{
   targetIndex: number;
 }>;
 
-export type AppPageSegmentPlan<TModule extends AppPageModule> = Readonly<{
+type AppPageSegmentPlan<TModule extends AppPageModule> = Readonly<{
   bfcacheSegmentIdentities: Readonly<Record<string, string>>;
   routeResetKey: string;
   slots: readonly AppPageSlotSegmentPlan<TModule>[];
@@ -100,13 +100,24 @@ export function createAppPageSegmentPlan<
   const graphIds = options.route.ids;
   const rootBoundaryId = graphIds ? graphIds.rootBoundary : options.rootLayoutTreePath;
   const routeResetKey = resolveAppPageRouteStateKey(options.routeSegments, options.matchedParams);
+  // Layouts and slot owners key off route prefixes, and owners repeat across
+  // slots sharing a layout, so walking the route once per prefix beats
+  // re-walking it per entry.
+  const routePrefixStateKeys = new Map<number, string>();
+  const resolveRoutePrefixStateKey = (treePosition: number): string => {
+    const cached = routePrefixStateKeys.get(treePosition);
+    if (cached !== undefined) return cached;
+    const stateKey = resolveAppPageRouteStateKey(
+      options.routeSegments.slice(0, treePosition),
+      options.matchedParams,
+    );
+    routePrefixStateKeys.set(treePosition, stateKey);
+    return stateKey;
+  };
 
   for (const [index, layoutEntry] of options.layoutEntries.entries()) {
     identities[layoutEntry.id] = deriveBfcacheSegmentIdentity({
-      boundSegmentKey: resolveAppPageRouteStateKey(
-        options.routeSegments.slice(0, layoutEntry.treePosition),
-        options.matchedParams,
-      ),
+      boundSegmentKey: resolveRoutePrefixStateKey(layoutEntry.treePosition),
       graphId: graphIds
         ? requireGraphSequenceId(graphIds.layouts, index, "layout")
         : layoutEntry.id,
@@ -132,12 +143,13 @@ export function createAppPageSegmentPlan<
   const slotBindingsById = new Map(
     options.slotBindings.map((binding) => [binding.slotId, binding]),
   );
+  const layoutIndicesById = new Map(
+    options.layoutEntries.map((layoutEntry, index) => [layoutEntry.id, index]),
+  );
   const resolveOwnerLayoutGraphId = (ownerLayoutId: string | null): string | null => {
     if (ownerLayoutId === null || !graphIds) return ownerLayoutId;
-    const ownerLayoutIndex = options.layoutEntries.findIndex(
-      (layoutEntry) => layoutEntry.id === ownerLayoutId,
-    );
-    if (ownerLayoutIndex < 0) {
+    const ownerLayoutIndex = layoutIndicesById.get(ownerLayoutId);
+    if (ownerLayoutIndex === undefined) {
       throw new Error(`[vinext] Missing App Router owner layout for ${ownerLayoutId}`);
     }
     return requireGraphSequenceId(graphIds.layouts, ownerLayoutIndex, "layout");
@@ -229,71 +241,61 @@ export function createAppPageSegmentPlan<
     const routeSegments = slotOverride?.routeSegments ?? slot.routeSegments ?? [];
     const branchSegments = slotOverride?.branchSegments ?? routeSegments;
     const resetKey = resolveAppPageRouteStateKey(routeSegments, params);
-    const ownerStateKey = resolveAppPageRouteStateKey(
-      options.routeSegments.slice(0, ownerTreePosition),
-      options.matchedParams,
-    );
+    const ownerStateKey = resolveRoutePrefixStateKey(ownerTreePosition);
     const bindOwnerState = (segmentKey: string) =>
       ownerStateKey ? JSON.stringify([ownerStateKey, segmentKey]) : segmentKey;
     const branchSegmentPositions = branchSegments.flatMap((segment, treePosition) =>
       segment.startsWith("@") ? [] : [treePosition],
     );
-    const identitySegments: readonly AppPageSemanticSegment[] =
-      slotOverride?.identitySegments ??
-      branchSegmentPositions.map(
-        (treePosition): AppPageSemanticSegment => ({
+    // The override's semantic branch and the slot's branch segments come from
+    // different producers (route matching vs the build manifest), so their
+    // lengths are a real consistency check. A mismatch means the branch cannot
+    // be addressed segment by segment, and the slot falls back to a single
+    // unproven level below.
+    const overrideIdentitySegments = slotOverride?.identitySegments ?? null;
+    const identitySegmentsAlignWithBranch =
+      overrideIdentitySegments === null ||
+      overrideIdentitySegments.length === branchSegmentPositions.length;
+    const semanticSegments: {
+      identityKey: string;
+      stateKey: string;
+      treePosition: number;
+    }[] = [];
+    if (identitySegmentsAlignWithBranch) {
+      const boundSegmentKeys: string[] = [];
+      for (const [index, treePosition] of branchSegmentPositions.entries()) {
+        const semanticSegment: AppPageSemanticSegment = overrideIdentitySegments?.[index] ?? {
           marker: null,
           paramSource: "slot",
           segment: branchSegments[treePosition]!,
-        }),
-      );
-    const semanticStateKeys = identitySegments.map((semanticSegment) =>
-      resolveAppPageSemanticSegmentStateKey(
-        semanticSegment,
-        semanticSegment.paramSource === "route" ? options.matchedParams : params,
-      ),
-    );
-    const identitySegmentsAlignWithBranch =
-      identitySegments.length === branchSegmentPositions.length;
-    const semanticSegments = identitySegmentsAlignWithBranch
-      ? semanticStateKeys.map((stateKey, index) => ({
-          identityKey: JSON.stringify(semanticStateKeys.slice(0, index + 1)),
-          stateKey,
-          treePosition: branchSegmentPositions[index]!,
-        }))
-      : [];
+        };
+        boundSegmentKeys.push(
+          resolveAppPageSemanticSegmentStateKey(
+            semanticSegment,
+            semanticSegment.paramSource === "route" ? options.matchedParams : params,
+          ),
+        );
+        semanticSegments.push({
+          identityKey: JSON.stringify(boundSegmentKeys),
+          stateKey: boundSegmentKeys[index]!,
+          treePosition,
+        });
+      }
+    }
     const includedInPayload = options.includeSlot(ownerTreePosition, targetTreePosition);
     const graphId = graphIds ? graphIds.slots[slotKey] : (slot.id ?? slotId);
     if (graphId === undefined) {
       throw new Error(`[vinext] Missing App Router graph slot id for ${slotKey}`);
     }
-    const nestedBfcacheSegmentCandidates = identitySegmentsAlignWithBranch
-      ? (semanticSegments.length > 0
-          ? semanticSegments
-          : [
-              {
-                identityKey: "",
-                stateKey: slotBinding.state,
-                treePosition: 0,
-              },
-            ]
-        ).map((segment) => ({
-          ...segment,
-          hasIdentityProof: true,
-          // Next keys each Activity level from its physical segment path. A
-          // leaf target graph id would over-key every shared interception
-          // ancestor when the target grows a deeper child.
-          includeInterceptionTarget: false,
-        }))
-      : [
-          {
-            hasIdentityProof: false,
-            identityKey: resetKey,
-            includeInterceptionTarget: false,
-            stateKey: resetKey || slotBinding.state,
-            treePosition: null,
-          },
-        ];
+    const nestedBfcacheSegmentCandidates: readonly Readonly<{
+      identityKey: string;
+      stateKey: string;
+      treePosition: number | null;
+    }>[] = !identitySegmentsAlignWithBranch
+      ? [{ identityKey: resetKey, stateKey: resetKey || slotBinding.state, treePosition: null }]
+      : semanticSegments.length > 0
+        ? semanticSegments
+        : [{ identityKey: "", stateKey: slotBinding.state, treePosition: 0 }];
     const nestedBfcacheSegments: {
       id: string;
       stateKey: string;
@@ -310,13 +312,16 @@ export function createAppPageSegmentPlan<
       }
       for (const [level, segment] of nestedBfcacheSegmentCandidates.entries()) {
         const id = createNestedBfcacheSlotSegmentId(slotId, level + 1);
-        if (segment.hasIdentityProof) {
+        if (identitySegmentsAlignWithBranch) {
           const nestedIdentity = deriveSlotIdentity(
             graphId,
             slotId,
             slotBinding,
             bindOwnerState(segment.identityKey),
-            segment.includeInterceptionTarget,
+            // Next keys each Activity level from its physical segment path. A
+            // leaf target graph id would over-key every shared interception
+            // ancestor when the target grows a deeper child.
+            false,
           );
           if (nestedIdentity !== null) identities[id] = nestedIdentity;
         }

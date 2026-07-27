@@ -691,7 +691,7 @@ function buildSlotOverrides<TModule extends AppPageModule, TErrorModule extends 
   return Object.keys(overrides).length > 0 ? overrides : null;
 }
 
-const APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS = [
+export const APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS = [
   { prefix: "(...)", levels: Number.POSITIVE_INFINITY },
   { prefix: "(..)(..)", levels: 2 },
   { prefix: "(..)", levels: 1 },

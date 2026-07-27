@@ -34,11 +34,12 @@ import {
   getRequestContext,
   runWithRequestContext,
 } from "../packages/vinext/src/shims/unified-request-context.js";
-import { buildPageElements as buildResolvedPageElements } from "../packages/vinext/src/server/app-page-element-builder.js";
+import {
+  APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS,
+  buildPageElements as buildResolvedPageElements,
+} from "../packages/vinext/src/server/app-page-element-builder.js";
 import { createNextBfcacheIdMap } from "../packages/vinext/src/server/app-bfcache-identity.js";
 import type { AppPageSemanticSegment } from "../packages/vinext/src/server/app-page-segment-state.js";
-
-const INTERCEPTION_MARKERS = ["(...)", "(..)(..)", "(..)", "(.)"] as const;
 
 /**
  * Build the resolved semantic branch the route matcher hands to slot overrides.
@@ -49,7 +50,9 @@ const INTERCEPTION_MARKERS = ["(...)", "(..)(..)", "(..)", "(.)"] as const;
 function toSemanticSegments(segments: readonly string[]): AppPageSemanticSegment[] {
   let beforeMarker = true;
   return segments.map((segment) => {
-    const marker = INTERCEPTION_MARKERS.find((prefix) => segment.startsWith(prefix)) ?? null;
+    const marker =
+      APP_PAGE_INTERCEPTION_MARKER_TRAVERSALS.find(({ prefix }) => segment.startsWith(prefix))
+        ?.prefix ?? null;
     const paramSource = beforeMarker && marker === null ? "route" : "slot";
     if (marker !== null) beforeMarker = false;
     return {
