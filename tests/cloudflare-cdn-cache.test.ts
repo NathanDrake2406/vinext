@@ -172,26 +172,34 @@ describe("CDN cache adapter selection", () => {
  * personalized HTML to the next.
  */
 describe("streamed App Router responses under the Cloudflare CDN adapter", () => {
-  function finalize(options: { dynamicUsed: boolean }): Response | Promise<Response> {
-    return finalizeAppPageHtmlCacheResponse(
-      new Response("<h1>user=alice</h1>", {
-        headers: {
-          "Content-Type": "text/html; charset=utf-8",
-          // The provisional ISR policy, computed before the stream drained.
-          "Cache-Control": "s-maxage=60, stale-while-revalidate=540",
+  function finalize(options: {
+    dynamicUsed: boolean;
+    /** A `cacheLife()` resolved while the stream was still draining. */
+    lateCacheLife?: { revalidate?: number; expire?: number };
+  }): Promise<Response> {
+    return Promise.resolve(
+      finalizeAppPageHtmlCacheResponse(
+        new Response("<h1>user=alice</h1>", {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            // The provisional ISR policy, computed before the stream drained.
+            "Cache-Control": "s-maxage=60, stale-while-revalidate=540",
+          },
+        }),
+        {
+          capturedRscDataPromise: null,
+          cleanPathname: "/account",
+          // Both resolve only once the stream has been consumed.
+          consumeDynamicUsage: () => options.dynamicUsed,
+          getRequestCacheLife: () => options.lateCacheLife ?? null,
+          getPageTags: () => ["/account"],
+          isrHtmlKey: (pathname) => `html:${pathname}`,
+          isrRscKey: (pathname) => `rsc:${pathname}`,
+          async isrSet() {},
+          revalidateSeconds: 60,
+          expireSeconds: 600,
         },
-      }),
-      {
-        capturedRscDataPromise: null,
-        cleanPathname: "/account",
-        // Resolves only once the stream has been consumed — the late signal.
-        consumeDynamicUsage: () => options.dynamicUsed,
-        getPageTags: () => ["/account"],
-        isrHtmlKey: (pathname) => `html:${pathname}`,
-        isrRscKey: (pathname) => `rsc:${pathname}`,
-        async isrSet() {},
-        revalidateSeconds: 60,
-      },
+      ),
     );
   }
 
@@ -216,5 +224,28 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
     );
     expect(response.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
     await expect(response.text()).resolves.toBe("<h1>user=alice</h1>");
+  });
+
+  it("advertises the lifetime the render resolved to, not the one it started with", async () => {
+    // The route declared 60s, but a cacheLife() during the stream tightened it
+    // to 10s. Advertising 60s would let the edge serve stale bytes 50s longer
+    // than the page asked for.
+    const response = await finalize({
+      dynamicUsed: false,
+      lateCacheLife: { revalidate: 10, expire: 100 },
+    });
+
+    expect(response.headers.get("CDN-Cache-Control")).toBe(
+      "public, max-age=10, stale-while-revalidate=90",
+    );
+  });
+
+  it("does not advertise a policy the render dropped mid-stream", async () => {
+    // revalidate = 0 means "never cache". The origin already skips its write;
+    // the edge must not be told to store the page either.
+    const response = await finalize({ dynamicUsed: false, lateCacheLife: { revalidate: 0 } });
+
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
   });
 });

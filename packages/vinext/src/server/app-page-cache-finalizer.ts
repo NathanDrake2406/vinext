@@ -2,8 +2,10 @@ import type { CachedAppPageValue } from "vinext/shims/cache";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
 import {
   applyCdnResponseHeaders,
+  buildRevalidateCacheControl,
   cdnRequiresProvenCachePolicy,
   NO_STORE_CACHE_CONTROL,
+  STATIC_CACHE_CONTROL,
 } from "./cache-control.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
 import { NEXTJS_CACHE_HEADER, VINEXT_CACHE_HEADER } from "./headers.js";
@@ -82,8 +84,34 @@ type ScheduleAppPageRscCacheWriteOptions = {
   waitUntil?: (promise: Promise<void>) => void;
 };
 
-/** Whether a streamed render ended up touching a request API after all. */
-type AppPageCacheWriteOutcome = { dynamicUsed: boolean };
+type ResolvedAppPageCachePolicy = { expireSeconds?: number; revalidateSeconds: number };
+
+/**
+ * What a streamed render turned out to be, once its stream drained: whether it
+ * touched a request API, and the cache lifetime that actually applied. The
+ * lifetime can differ from the one computed before the stream — a late
+ * `cacheLife()` or cacheable fetch can shorten it, or drop it entirely.
+ */
+type AppPageCacheWriteOutcome = {
+  dynamicUsed: boolean;
+  cachePolicy: ResolvedAppPageCachePolicy | null;
+};
+
+/** Fail closed: a render we could not resolve must not reach a shared cache. */
+const UNPROVEN_OUTCOME: AppPageCacheWriteOutcome = { dynamicUsed: true, cachePolicy: null };
+
+/**
+ * The `Cache-Control` implied by the lifetime the render actually resolved to.
+ * A render with no cache policy left is not cacheable by anyone.
+ */
+function buildProvenCacheControl(outcome: AppPageCacheWriteOutcome): string {
+  if (outcome.dynamicUsed || !outcome.cachePolicy) return NO_STORE_CACHE_CONTROL;
+  const { revalidateSeconds, expireSeconds } = outcome.cachePolicy;
+  // `revalidate = false` reaches the finalizer as Infinity; it means "cache
+  // indefinitely", which is the static policy rather than an `s-maxage` value.
+  if (revalidateSeconds === Infinity) return STATIC_CACHE_CONTROL;
+  return buildRevalidateCacheControl(revalidateSeconds, expireSeconds);
+}
 
 function applyPendingDynamicCdnHeaders(
   headers: Headers,
@@ -103,15 +131,13 @@ function applyPendingDynamicCdnHeaders(
  */
 function applyProvenCdnHeaders(
   headers: Headers,
-  cacheControl: string,
-  dynamicUsed: boolean,
+  outcome: AppPageCacheWriteOutcome,
   tags?: readonly string[],
   options: { omitCacheState?: boolean } = {},
 ): void {
-  applyCdnResponseHeaders(
-    headers,
-    dynamicUsed ? { cacheControl: NO_STORE_CACHE_CONTROL } : { cacheControl, tags },
-  );
+  const cacheControl = buildProvenCacheControl(outcome);
+  const cacheable = outcome.dynamicUsed === false && outcome.cachePolicy !== null;
+  applyCdnResponseHeaders(headers, cacheable ? { cacheControl, tags } : { cacheControl });
   applyCacheState(headers, options);
 }
 
@@ -150,6 +176,119 @@ function resolveAppPageCacheWritePolicy(options: {
   return { expireSeconds, revalidateSeconds };
 }
 
+/**
+ * Persist a rendered page, unless the drained stream showed the render was
+ * dynamic or left no cache lifetime. Reports back what actually applied so a
+ * caller emitting a final cache policy can build headers from it.
+ */
+async function writeAppPageHtmlCacheEntry(
+  cachedHtml: string,
+  response: Response,
+  options: FinalizeAppPageHtmlCacheResponseOptions,
+): Promise<AppPageCacheWriteOutcome> {
+  const htmlKey = options.isrHtmlKey(options.cleanPathname);
+  try {
+    if (
+      options.capturedDynamicUsageBeforeContextCleanup?.() === true ||
+      options.consumeDynamicUsage()
+    ) {
+      options.isrDebug?.("HTML cache write skipped (dynamic usage during render)", htmlKey);
+      return { dynamicUsed: true, cachePolicy: null };
+    }
+
+    const cachePolicy = resolveAppPageCacheWritePolicy({
+      expireSeconds: options.expireSeconds,
+      requestCacheLife: options.getRequestCacheLife?.(),
+      revalidateSeconds: options.revalidateSeconds,
+    });
+    if (!cachePolicy) {
+      options.isrDebug?.("HTML cache write skipped (no cache policy)", htmlKey);
+      return { dynamicUsed: false, cachePolicy: null };
+    }
+
+    const rscKey = options.isrRscKey(
+      options.cleanPathname,
+      null,
+      undefined,
+      options.interceptionContext,
+    );
+    const pageTags = options.getPageTags();
+    const observationState =
+      options.consumeRenderObservationState?.() ?? createEmptyAppPageRenderObservationState();
+    const htmlRenderObservation = options.createHtmlRenderObservation?.({
+      cacheTags: pageTags,
+      state: observationState,
+    });
+    const rscRenderObservation = options.createRscRenderObservation?.({
+      cacheTags: pageTags,
+      state: observationState,
+    });
+    const linkHeader = response.headers.get("link");
+    const writes = [
+      options.isrSet(
+        htmlKey,
+        buildAppPageCacheValue(
+          cachedHtml,
+          undefined,
+          200,
+          htmlRenderObservation,
+          linkHeader ? { link: linkHeader } : undefined,
+        ),
+        cachePolicy.revalidateSeconds,
+        pageTags,
+        cachePolicy.expireSeconds,
+      ),
+    ];
+
+    if (options.capturedRscDataPromise) {
+      writes.push(
+        options.capturedRscDataPromise.then((rscData) =>
+          options.isrSet(
+            rscKey,
+            buildAppPageCacheValue("", rscData, 200, rscRenderObservation),
+            cachePolicy.revalidateSeconds,
+            pageTags,
+            cachePolicy.expireSeconds,
+          ),
+        ),
+      );
+    }
+
+    await Promise.all(writes);
+    options.isrDebug?.("HTML cache written", htmlKey);
+    return { dynamicUsed: false, cachePolicy };
+  } catch (cacheError) {
+    console.error("[vinext] ISR cache write error:", cacheError);
+    return UNPROVEN_OUTCOME;
+  }
+}
+
+/**
+ * Buffer the render, resolve what it actually was, then answer with a single
+ * final cache policy. Used when the active CDN adapter cannot retract a policy
+ * it has already advertised to a shared cache.
+ */
+async function finalizeProvenAppPageHtmlResponse(
+  response: Response,
+  body: ReadableStream<Uint8Array>,
+  options: FinalizeAppPageHtmlCacheResponseOptions,
+): Promise<Response> {
+  const html = await readStreamAsText(body);
+  const cachePromise = writeAppPageHtmlCacheEntry(html, response, options);
+  options.waitUntil?.(cachePromise.then(() => undefined));
+
+  const headers = new Headers(response.headers);
+  applyProvenCdnHeaders(headers, await cachePromise, options.getPageTags(), {
+    omitCacheState: options.omitPendingDynamicCacheState === true,
+  });
+
+  return new Response(html, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export function finalizeAppPageHtmlCacheResponse(
   response: Response,
   options: FinalizeAppPageHtmlCacheResponseOptions,
@@ -158,90 +297,17 @@ export function finalizeAppPageHtmlCacheResponse(
     return response;
   }
 
+  // The proven path buffers the body anyway, so it skips the tee entirely and
+  // reuses the single copy for both the cache write and the client response.
+  if (options.preserveClientResponseHeaders !== true && cdnRequiresProvenCachePolicy()) {
+    return finalizeProvenAppPageHtmlResponse(response, response.body, options);
+  }
+
   const [streamForClient, streamForCache] = response.body.tee();
-  const htmlKey = options.isrHtmlKey(options.cleanPathname);
-  const rscKey = options.isrRscKey(
-    options.cleanPathname,
-    null,
-    undefined,
-    options.interceptionContext,
-  );
-  // Read before any adapter rewrites `Cache-Control` on the client headers.
-  const renderedCacheControl = response.headers.get("Cache-Control") ?? "";
 
   const cachePromise = (async (): Promise<AppPageCacheWriteOutcome> => {
-    try {
-      const cachedHtml = await readStreamAsText(streamForCache);
-
-      if (
-        options.capturedDynamicUsageBeforeContextCleanup?.() === true ||
-        options.consumeDynamicUsage()
-      ) {
-        options.isrDebug?.("HTML cache write skipped (dynamic usage during render)", htmlKey);
-        return { dynamicUsed: true };
-      }
-
-      const cachePolicy = resolveAppPageCacheWritePolicy({
-        expireSeconds: options.expireSeconds,
-        requestCacheLife: options.getRequestCacheLife?.(),
-        revalidateSeconds: options.revalidateSeconds,
-      });
-      if (!cachePolicy) {
-        options.isrDebug?.("HTML cache write skipped (no cache policy)", htmlKey);
-        return { dynamicUsed: false };
-      }
-
-      const pageTags = options.getPageTags();
-      const observationState =
-        options.consumeRenderObservationState?.() ?? createEmptyAppPageRenderObservationState();
-      const htmlRenderObservation = options.createHtmlRenderObservation?.({
-        cacheTags: pageTags,
-        state: observationState,
-      });
-      const rscRenderObservation = options.createRscRenderObservation?.({
-        cacheTags: pageTags,
-        state: observationState,
-      });
-      const linkHeader = response.headers.get("link");
-      const writes = [
-        options.isrSet(
-          htmlKey,
-          buildAppPageCacheValue(
-            cachedHtml,
-            undefined,
-            200,
-            htmlRenderObservation,
-            linkHeader ? { link: linkHeader } : undefined,
-          ),
-          cachePolicy.revalidateSeconds,
-          pageTags,
-          cachePolicy.expireSeconds,
-        ),
-      ];
-
-      if (options.capturedRscDataPromise) {
-        writes.push(
-          options.capturedRscDataPromise.then((rscData) =>
-            options.isrSet(
-              rscKey,
-              buildAppPageCacheValue("", rscData, 200, rscRenderObservation),
-              cachePolicy.revalidateSeconds,
-              pageTags,
-              cachePolicy.expireSeconds,
-            ),
-          ),
-        );
-      }
-
-      await Promise.all(writes);
-      options.isrDebug?.("HTML cache written", htmlKey);
-      return { dynamicUsed: false };
-    } catch (cacheError) {
-      console.error("[vinext] ISR cache write error:", cacheError);
-      // Fail closed: a render we could not prove static must not be promoted
-      // to a shared cache.
-      return { dynamicUsed: true };
-    }
+    const cachedHtml = await readStreamAsText(streamForCache);
+    return writeAppPageHtmlCacheEntry(cachedHtml, response, options);
   })();
 
   options.waitUntil?.(cachePromise.then(() => undefined));
@@ -252,27 +318,6 @@ export function finalizeAppPageHtmlCacheResponse(
       statusText: response.statusText,
       headers: response.headers,
     });
-  }
-
-  if (cdnRequiresProvenCachePolicy()) {
-    // This adapter's headers are the storage decision for a cache shared
-    // between users, so a preliminary policy cannot be taken back once sent.
-    // Hold the response until the stream proves whether the render was dynamic.
-    return (async () => {
-      const [{ dynamicUsed }, html] = await Promise.all([
-        cachePromise,
-        readStreamAsText(streamForClient),
-      ]);
-      const headers = new Headers(response.headers);
-      applyProvenCdnHeaders(headers, renderedCacheControl, dynamicUsed, options.getPageTags(), {
-        omitCacheState: options.omitPendingDynamicCacheState === true,
-      });
-      return new Response(html, {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-      });
-    })();
   }
 
   const clientHeaders = new Headers(response.headers);
@@ -300,15 +345,13 @@ export function finalizeAppPageRscCacheResponse(
     return response;
   }
 
-  const renderedCacheControl = response.headers.get("Cache-Control") ?? "";
-
   if (cdnRequiresProvenCachePolicy()) {
     // Same shared-cache hazard as the HTML path: buffer the RSC payload so only
     // a final, proven policy ever reaches the edge.
     return (async () => {
-      const [{ dynamicUsed }, body] = await Promise.all([cachePromise, response.arrayBuffer()]);
+      const [outcome, body] = await Promise.all([cachePromise, response.arrayBuffer()]);
       const headers = new Headers(response.headers);
-      applyProvenCdnHeaders(headers, renderedCacheControl, dynamicUsed, options.getPageTags(), {
+      applyProvenCdnHeaders(headers, outcome, options.getPageTags(), {
         omitCacheState: options.omitPendingDynamicCacheState === true,
       });
       return new Response(body, {
@@ -362,7 +405,7 @@ function startAppPageRscCacheWrite(
 
       if (options.consumeDynamicUsage()) {
         options.isrDebug?.("RSC cache write skipped (dynamic usage during render)", rscKey);
-        return { dynamicUsed: true };
+        return { dynamicUsed: true, cachePolicy: null };
       }
 
       const cachePolicy = resolveAppPageCacheWritePolicy({
@@ -372,7 +415,7 @@ function startAppPageRscCacheWrite(
       });
       if (!cachePolicy) {
         options.isrDebug?.("RSC cache write skipped (no cache policy)", rscKey);
-        return { dynamicUsed: false };
+        return { dynamicUsed: false, cachePolicy: null };
       }
 
       const pageTags = options.getPageTags();
@@ -390,11 +433,10 @@ function startAppPageRscCacheWrite(
         cachePolicy.expireSeconds,
       );
       options.isrDebug?.("RSC cache written", rscKey);
-      return { dynamicUsed: false };
+      return { dynamicUsed: false, cachePolicy };
     } catch (cacheError) {
       console.error("[vinext] ISR RSC cache write error:", cacheError);
-      // Fail closed, as in the HTML path.
-      return { dynamicUsed: true };
+      return UNPROVEN_OUTCOME;
     }
   })();
 
