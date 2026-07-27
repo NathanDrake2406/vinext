@@ -1,5 +1,5 @@
 // Expands Webpack's build-time `require.context(dir, recursive, regexp)` API
-// into a static module map backed by Vite's `import.meta.glob` (eager).
+// into a static module map backed by eager static imports.
 //
 // Webpack exposes `require.context` to build a map of modules at compile time.
 // Next.js apps still use it — typically written as `(require as any).context(...)`
@@ -7,18 +7,19 @@
 // throws `require is not defined`.
 //
 // This transform rewrites each genuine `require.context(...)` call into an IIFE
-// that wraps the result of `import.meta.glob(<patterns>, { eager: true })`,
-// exposing the subset of the Webpack context interface used in practice:
+// backed by modules selected at build time, exposing the subset of the Webpack
+// context interface used in practice:
 //
 //   const ctx = require.context("./dir", true, /\.js$/);
 //   ctx.keys();        // ["./a.js", "./b.js", ...] (relative to dir, sorted)
 //   ctx("./a.js");     // the module namespace object
 //   ctx.resolve("./a.js"); // the relative key (best-effort)
-//   ctx.id;            // the glob base dir
+//   ctx.id;            // the context base dir
 //
-// Only the literal three-argument form with a static string directory is
-// rewritten; anything dynamic is left untouched so we never silently break
-// unrelated code.
+// Only literal forms with a static string directory are rewritten; anything
+// dynamic is left untouched so we never silently break unrelated code.
+import { glob, stat } from "node:fs/promises";
+import path, { toSlash } from "pathslash";
 import { parseAst, type Plugin } from "vite";
 import MagicString from "magic-string";
 import {
@@ -29,7 +30,6 @@ import {
   type AstRange,
   type AstRecord,
 } from "./ast-utils.js";
-import { createTransformCache } from "./transform-cache.js";
 
 const TRANSFORMABLE_EXTENSIONS = new Set([
   ".js",
@@ -50,8 +50,24 @@ type ParsedCall = {
   flags: string;
 };
 
+type ContextModule = {
+  binding: string;
+  key: string;
+  specifier: string;
+};
+
+type WatchedContext = {
+  directory: string;
+  recursive: boolean;
+  pattern: string;
+  flags: string;
+};
+
 export function createRequireContextPlugin(): Plugin {
-  const cached = createTransformCache<undefined, TransformResult>();
+  // Static imports make edits to existing matches visible automatically. Keep
+  // the context definitions as well so a create/delete event that changes the
+  // matched file set can invalidate and re-transform the importing module.
+  const watchedContexts = new WeakMap<object, Map<string, WatchedContext[]>>();
 
   return {
     name: "vinext:require-context",
@@ -63,9 +79,47 @@ export function createRequireContextPlugin(): Plugin {
         id: /\.(?:[cm]?[jt]s|[jt]sx)(?:\?.*)?$/i,
         code: /\brequire\b[\s\S]*\.context/,
       },
-      handler(code, id) {
-        return cached(id, code, undefined, () => transformRequireContext(code, id));
+      async handler(code, id) {
+        const transformed = await transformRequireContext(code, id);
+        const contextsForEnvironment =
+          watchedContexts.get(this.environment) ?? new Map<string, WatchedContext[]>();
+        watchedContexts.set(this.environment, contextsForEnvironment);
+
+        if (!transformed) {
+          contextsForEnvironment.delete(id);
+          return null;
+        }
+
+        contextsForEnvironment.set(id, transformed.contexts);
+        for (const context of transformed.contexts) {
+          this.addWatchFile(context.directory);
+        }
+
+        return {
+          code: transformed.code,
+          map: transformed.map,
+        };
       },
+    },
+    hotUpdate({ type, file, modules }) {
+      if (type === "update") return;
+
+      const contextsForEnvironment = watchedContexts.get(this.environment);
+      if (!contextsForEnvironment) return;
+
+      const normalizedFile = toSlash(file);
+      const affectedModules = new Set(modules);
+      let addedImporter = false;
+
+      for (const [id, contexts] of contextsForEnvironment) {
+        if (!contexts.some((context) => matchesWatchedContext(normalizedFile, context))) continue;
+        const module = this.environment.moduleGraph.getModuleById(id);
+        if (!module || affectedModules.has(module)) continue;
+        affectedModules.add(module);
+        addedImporter = true;
+      }
+
+      return addedImporter ? [...affectedModules] : undefined;
     },
   };
 }
@@ -73,9 +127,10 @@ export function createRequireContextPlugin(): Plugin {
 type TransformResult = {
   code: string;
   map: ReturnType<MagicString["generateMap"]>;
-} | null;
+  contexts: WatchedContext[];
+};
 
-function transformRequireContext(code: string, id: string): TransformResult {
+async function transformRequireContext(code: string, id: string): Promise<TransformResult | null> {
   const lang = langForId(id)!;
 
   let ast: unknown;
@@ -89,13 +144,26 @@ function transformRequireContext(code: string, id: string): TransformResult {
   if (calls.length === 0) return null;
 
   const output = new MagicString(code);
-  for (const call of calls) {
-    output.overwrite(call.range.start, call.range.end, buildReplacement(call));
+  const importOffset = findImportInsertionOffset(ast);
+  const imports: string[] = [];
+  const contexts: WatchedContext[] = [];
+  for (const [callIndex, call] of calls.entries()) {
+    const resolved = await resolveContextModules(id, call, callIndex);
+    contexts.push(resolved.context);
+    for (const module of resolved.modules) {
+      imports.push(`import * as ${module.binding} from ${JSON.stringify(module.specifier)};`);
+    }
+    output.overwrite(call.range.start, call.range.end, buildReplacement(call, resolved.modules));
+  }
+  if (imports.length > 0) {
+    const importBlock = `${importOffset > 0 ? "\n" : ""}${imports.join("\n")}\n`;
+    output.appendLeft(importOffset, importBlock);
   }
 
   return {
     code: output.toString(),
     map: output.generateMap({ hires: "boundary" }),
+    contexts,
   };
 }
 
@@ -139,6 +207,27 @@ function collectRequireContextCalls(ast: unknown): ParsedCall[] {
   return calls;
 }
 
+function findImportInsertionOffset(ast: unknown): number {
+  if (!isAstRecord(ast) || ast.type !== "Program") return 0;
+
+  let offset = 0;
+  if (isAstRecord(ast.hashbang) && hasRange(ast.hashbang)) {
+    offset = ast.hashbang.end;
+  }
+  for (const statement of nodeArray(ast.body)) {
+    if (
+      !isAstRecord(statement) ||
+      statement.type !== "ExpressionStatement" ||
+      typeof statement.directive !== "string" ||
+      !hasRange(statement)
+    ) {
+      break;
+    }
+    offset = statement.end;
+  }
+  return offset;
+}
+
 // Matches `require.context(dir, recursive?, regexp?)` where the callee object
 // is the `require` identifier, optionally wrapped in a `(require as any)`
 // TypeScript assertion or parentheses. Returns null for anything that does not
@@ -160,8 +249,8 @@ function parseRequireContextCall(node: AstRecord): ParsedCall | null {
 
   const args = nodeArray(node.arguments);
   // First arg: the directory string. Required and must be a static, relative
-  // path — `import.meta.glob` only accepts relative (`./`, `../`) or absolute
-  // glob patterns, so a bare/aliased specifier is left untouched.
+  // path so each matched file can become a relative static import. A
+  // bare/aliased specifier is left untouched.
   const dir = stringLiteralValue(args[0]);
   if (dir == null || !(dir.startsWith("./") || dir.startsWith("../"))) return null;
 
@@ -177,12 +266,11 @@ function parseRequireContextCall(node: AstRecord): ParsedCall | null {
   }
 
   // Third arg: filter regexp. Optional; defaults to matching every module.
-  // Parity caveat: with no regexp, the underlying `import.meta.glob` only
-  // surfaces files Vite can resolve as modules, so extensionless keys that
-  // Webpack would include can be dropped. Real-world `require.context` usage
-  // almost always passes a regexp, and upstream Next.js's own test for the
-  // extensionless case is disabled (Turbopack-pending), so this is left as a
-  // documented, low-risk divergence rather than worked around.
+  // Parity caveat: webpack's resolver can expose both extensionless and
+  // extension-qualified requests for one physical file. This transform maps
+  // each discovered file once, so the extensionless alias can be absent.
+  // Upstream Next.js's test for that case is disabled (Turbopack-pending), so
+  // this remains a documented, low-risk divergence.
   let pattern = "";
   let flags = "";
   if (args.length >= 3) {
@@ -265,39 +353,19 @@ function regexLiteralValue(value: unknown): { pattern: string; flags: string } |
   return null;
 }
 
-// Builds an IIFE that produces a Webpack-compatible require.context function
-// backed by `import.meta.glob`. Vite statically analyses the `import.meta.glob`
-// call, so its arguments must be literals.
-function buildReplacement(call: ParsedCall): string {
-  const globPattern = globPatternFor(call.dir, call.recursive);
-  // Eager so the modules resolve synchronously, like Webpack's require.context.
-  const glob = `import.meta.glob(${JSON.stringify(globPattern)}, { eager: true })`;
+// Builds an IIFE that produces a Webpack-compatible require.context function.
+// Webpack filters directory entries before it creates module dependencies. The
+// generated map must therefore contain only modules accepted by the regexp;
+// filtering a broad eager import here would already have evaluated excluded
+// modules and included them in the bundle.
+function buildReplacement(call: ParsedCall, modules: ContextModule[]): string {
   const base = JSON.stringify(stripTrailingSlash(call.dir));
-  // Strip the global (`g`) and sticky (`y`) flags: they make `RegExp.test()`
-  // stateful via `lastIndex`, so consecutive membership checks over the sorted
-  // keys would alternate true/false and silently drop matching modules. They
-  // are meaningless for the per-key `.test()` filter Webpack applies.
-  const filterFlags = call.flags.replace(/[gy]/g, "");
-  const regexArgs = `${JSON.stringify(call.pattern)}, ${JSON.stringify(filterFlags)}`;
-
-  // The runtime helper below normalises glob keys (which are relative to the
-  // current module, e.g. "./grandparent/parent/file1.js") into context keys
-  // relative to the base dir ("./parent/file1.js"), applies the regexp filter,
-  // and sorts them for deterministic ordering.
+  const entries = modules.map((module) => `${JSON.stringify(module.key)}: ${module.binding}`);
   return [
     "(() => {",
-    `  const __modules = ${glob};`,
     `  const __base = ${base};`,
-    `  const __re = ${call.pattern ? `new RegExp(${regexArgs})` : "null"};`,
-    "  const __prefix = __base.endsWith('/') ? __base : __base + '/';",
-    "  const __map = Object.create(null);",
-    "  for (const __abs in __modules) {",
-    "    if (!__abs.startsWith(__prefix)) continue;",
-    "    const __key = './' + __abs.slice(__prefix.length);",
-    "    if (__re && !__re.test(__key)) continue;",
-    "    __map[__key] = __modules[__abs];",
-    "  }",
-    "  const __keys = Object.keys(__map).sort();",
+    `  const __map = Object.assign(Object.create(null), {${entries.join(",")}});`,
+    `  const __keys = ${JSON.stringify(modules.map((module) => module.key))};`,
     "  const __ctx = (__key) => {",
     "    if (__key in __map) return __map[__key];",
     "    const __err = new Error('Cannot find module \\'' + __key + '\\'');",
@@ -312,11 +380,70 @@ function buildReplacement(call: ParsedCall): string {
   ].join("\n");
 }
 
-// Webpack's `recursive` flag controls whether subdirectories are included.
-// Vite's glob uses `*` (one segment) vs `**` (any depth).
-function globPatternFor(dir: string, recursive: boolean): string {
-  const base = stripTrailingSlash(dir);
-  return recursive ? `${base}/**/*` : `${base}/*`;
+async function resolveContextModules(
+  id: string,
+  call: ParsedCall,
+  callIndex: number,
+): Promise<{ context: WatchedContext; modules: ContextModule[] }> {
+  const importer = toSlash(id.split("?", 1)[0]);
+  const directory = path.resolve(path.dirname(importer), call.dir);
+  const context: WatchedContext = {
+    directory,
+    recursive: call.recursive,
+    pattern: call.pattern,
+    flags: filterFlags(call.flags),
+  };
+  const regexp = call.pattern ? new RegExp(call.pattern, context.flags) : null;
+  const modules: ContextModule[] = [];
+  const globPattern = call.recursive ? "**/*" : "*";
+
+  for await (const entry of glob(globPattern, { cwd: directory, withFileTypes: true })) {
+    if (!entry.isFile()) {
+      if (!entry.isSymbolicLink()) continue;
+      try {
+        if (!(await stat(path.join(toSlash(entry.parentPath), entry.name))).isFile()) continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+    }
+
+    const candidate = path.relative(directory, path.join(toSlash(entry.parentPath), entry.name));
+    const key = `./${candidate}`;
+    if (regexp && !regexp.test(key)) continue;
+    modules.push({
+      binding: `__vinext_require_context_${callIndex}_${modules.length}`,
+      key,
+      specifier: `${stripTrailingSlash(call.dir)}/${candidate}`,
+    });
+  }
+
+  modules.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+  return { context, modules };
+}
+
+function matchesWatchedContext(file: string, context: WatchedContext): boolean {
+  const candidate = path.relative(context.directory, file);
+  if (
+    candidate.length === 0 ||
+    candidate === ".." ||
+    candidate.startsWith("../") ||
+    candidate.split("/").some((segment) => segment.startsWith(".")) ||
+    (!context.recursive && candidate.includes("/"))
+  ) {
+    return false;
+  }
+
+  return (
+    context.pattern === "" || new RegExp(context.pattern, context.flags).test(`./${candidate}`)
+  );
+}
+
+// Global and sticky regexps make repeated RegExp.test() calls stateful. They do
+// not change which individual context key should match, so normalize them once
+// before build-time filtering and development invalidation.
+function filterFlags(flags: string): string {
+  return flags.replace(/[gy]/g, "");
 }
 
 function stripTrailingSlash(value: string): string {
