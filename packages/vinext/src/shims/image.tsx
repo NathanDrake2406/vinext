@@ -216,6 +216,21 @@ function isRemoteUrl(src: string): boolean {
   return src.startsWith("http://") || src.startsWith("https://") || src.startsWith("//");
 }
 
+/**
+ * `data:` and `blob:` sources carry their own bytes, so no loader can do
+ * anything useful with them — a custom loader would rewrite an inline URI into a
+ * CDN request for a path that does not exist.
+ *
+ * Upstream forces these to `unoptimized` (`get-img-props.ts:270`), which makes
+ * `generateImgAttrs` hand back the original `src` with no `srcSet`. Callers must
+ * apply this alongside the other `unoptimized` triggers, and after the
+ * missing-loader-prop check: upstream raises that error earlier still (`:184`),
+ * so a bare `images.loader: "custom"` is reported even for an inline source.
+ */
+function isInlineSrc(src: string): boolean {
+  return src.startsWith("data:") || src.startsWith("blob:");
+}
+
 function isSvgUrl(src: string): boolean {
   try {
     return new URL(src, "http://vinext.local").pathname.toLowerCase().endsWith(".svg");
@@ -629,7 +644,10 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   // where invoking the loader surfaces the error carrying this image's src.
   const reportsMissingLoaderProp = loader === undefined && requiresLoaderProp;
 
-  if ((_unoptimized === true || __globallyUnoptimized) && !reportsMissingLoaderProp) {
+  if (
+    (_unoptimized === true || __globallyUnoptimized || isInlineSrc(src)) &&
+    !reportsMissingLoaderProp
+  ) {
     // Unoptimized images are fetched directly by the browser, so intentionally
     // skip remote URL validation: there is no server-side optimizer fetch and
     // therefore no SSRF surface. This matches Next.js behavior.
@@ -701,7 +719,6 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
     return (
       <img
         ref={mergedRef}
-        src={renderedSrc}
         alt={alt}
         width={fill ? undefined : imgWidth}
         height={fill ? undefined : imgHeight}
@@ -710,6 +727,11 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         decoding="async"
         srcSet={attributes.srcSet}
         sizes={attributes.sizes}
+        // Set after `srcSet`: React writes attributes in prop order, and a
+        // `src` applied first makes the browser start fetching the fallback
+        // candidate before it can see the responsive set. This is the ordering
+        // `generateImgAttrs` returns and upstream spreads.
+        src={renderedSrc}
         className={className}
         data-nimg={fill ? "fill" : "1"}
         onLoad={handleLoad}
@@ -920,7 +942,10 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
   // before optimization is decided, so `unoptimized` cannot hide it.
   const reportsMissingLoaderProp = loader === undefined && requiresLoaderProp;
 
-  if ((_unoptimized === true || __globallyUnoptimized) && !reportsMissingLoaderProp) {
+  if (
+    (_unoptimized === true || __globallyUnoptimized || isInlineSrc(src)) &&
+    !reportsMissingLoaderProp
+  ) {
     // As in the component path, unoptimized images never reach the server-side
     // optimizer, so remote URL validation is intentionally unnecessary.
     const renderedSrc = overrideSrc || src;
@@ -1010,9 +1035,6 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
     placeholder === "blur" && sanitizedBlurURL ? blurBackgroundStyle(sanitizedBlurURL) : undefined;
 
   const imageProps: ImgProps = {
-    // Match Next.js: overrideSrc changes the fallback `src` without changing
-    // the loader-generated candidates in `srcSet`.
-    src: overrideSrc || optimizedSrc,
     alt,
     width: fill ? undefined : imgWidth,
     height: fill ? undefined : imgHeight,
@@ -1021,6 +1043,11 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
     decoding: "async" as const,
     srcSet,
     sizes: loaderAttributes?.sizes ?? sizes ?? (fill ? "100vw" : undefined),
+    // Keyed after `srcSet` so a caller spreading these onto an <img> writes the
+    // attributes in the order the browser wants — see the component path.
+    // Match Next.js: overrideSrc changes the fallback `src` without changing
+    // the loader-generated candidates in `srcSet`.
+    src: overrideSrc || optimizedSrc,
     className,
     style: fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style },
     ...rest,

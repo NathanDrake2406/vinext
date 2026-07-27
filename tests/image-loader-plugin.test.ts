@@ -49,6 +49,10 @@ import { getImageProps } from "next/image";
 
 const loaderProp = ({ src, width }) => \`https://prop.example.com\${src}?w=\${width}\`;
 
+// A 1x1 GIF. Inline bytes: no loader can turn this into a fetchable CDN URL.
+const DATA_URI =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
 function probe(id, props) {
   let text;
   try {
@@ -68,6 +72,8 @@ export default function Page() {
       {probe("unoptimized", { ...base, unoptimized: true })}
       {probe("loader-prop", { ...base, loader: loaderProp })}
       {probe("loader-prop-unoptimized", { ...base, loader: loaderProp, unoptimized: true })}
+      {probe("data-uri", { ...base, src: DATA_URI })}
+      {probe("blob-uri", { ...base, src: "blob:https://example.com/abc-123" })}
     </main>
   );
 }
@@ -237,6 +243,21 @@ export default function Page() {
     const { html } = await fetchHtml(baseUrl, "/probe");
 
     expect(probeText(html, "loader-prop")).toContain("OK https://prop.example.com/photo.jpg");
+  });
+
+  it("leaves data: and blob: sources untouched", async () => {
+    // Upstream forces these to `unoptimized` before any loader runs
+    // (`get-img-props.ts:270`). Without that guard a configured loaderFile
+    // rewrites the inline bytes into `https://images.example.com/data:image/...`
+    // — a CDN request for a path that cannot exist — and emits a srcSet of
+    // them. Asserting the exact string, not just the absence of the CDN host,
+    // so a future change that merely mangles the URI differently still fails.
+    const { html } = await fetchHtml(baseUrl, "/probe");
+
+    expect(probeText(html, "data-uri")).toBe(
+      "OK data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7 | none",
+    );
+    expect(probeText(html, "blob-uri")).toBe("OK blob:https://example.com/abc-123 | none");
   });
 });
 
