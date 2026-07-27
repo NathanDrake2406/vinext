@@ -909,6 +909,10 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     sourceUrl.pathname = hadBasePath
       ? addBasePathToPathname(interceptionContextHeader, options.basePath)
       : interceptionContextHeader;
+    // Rebuilding a Request with a new URL transfers its body stream. Preserve
+    // the original branch for Server Action dispatch and give source-route
+    // middleware an independent branch, as the initial middleware pass does.
+    const sourceRequest = userlandRequest.body ? userlandRequest.clone() : userlandRequest;
     const sourceMiddlewareResult = await runMiddleware({
       cleanPathname: interceptionContextHeader,
       // Deliberately not the request's `middlewareContext`. This run decides
@@ -917,7 +921,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       context: { headers: null, requestHeaders: null, status: null },
       hadBasePath,
       isDataRequest: isMiddlewareDataRequest,
-      request: cloneRequestWithUrl(userlandRequest, sourceUrl.href),
+      request: cloneRequestWithUrl(sourceRequest, sourceUrl.href),
     });
     // Only a returned response is a denial. A rewrite or a normalized pathname
     // means middleware let this source through and merely sends it elsewhere,
