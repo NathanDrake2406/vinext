@@ -171,12 +171,6 @@ export default defineConfig({
         test: {
           name: "unit",
           setupFiles: [MSW_SETUP],
-          // Matches the integration project. 47 files here boot a dev server or
-          // run a build, and vitest's 5s default left the ones that forgot a
-          // per-test timeout on a ~20% margin (middleware-matcher-auth's
-          // auth-guard case measures 4.0s under parallel load). Per-test
-          // `it(…, fn, N)` still wins.
-          testTimeout: 30000,
           // `scripts/**` covers the release-tooling unit tests
           // (scripts/create-changeset.test.ts, scripts/version.test.ts), which
           // are pure-logic and have no fixture/server dependencies.
