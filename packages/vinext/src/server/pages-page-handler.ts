@@ -23,6 +23,7 @@ import {
   PAGES_PREVIEW_CACHE_CONTROL,
   type PagesPreviewState,
 } from "./pages-preview.js";
+import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import { resolvePagesPageData } from "./pages-page-data.js";
 import type { PagesPageModule } from "./pages-page-data.js";
 import { resolvePagesPageMethodResponse } from "./pages-page-method.js";
@@ -270,8 +271,15 @@ export type CreatePagesPageHandlerOptions = {
   getFontPreloads: () => Array<{ href: string; type: string }>;
   /** `renderToReadableStream` from `react-dom/server.edge`. */
   renderToReadableStream: (element: ReactNode) => Promise<ReadableStream<Uint8Array>>;
-  /** Render a second ISR pass to a string (wraps renderToReadableStream). */
-  renderIsrPassToStringAsync: (element: ReactNode) => Promise<string>;
+  /**
+   * Render a second ISR pass to a string (wraps renderToReadableStream).
+   * `onHeadReady` runs inside the pass's head scope, after the render and
+   * before the scope unwinds, so callers can read the collected `<head>`.
+   */
+  renderIsrPassToStringAsync: (
+    element: ReactNode,
+    onHeadReady?: () => Promise<void>,
+  ) => Promise<string>;
   /** `safeJsonStringify` from `vinext/html`. */
   safeJsonStringify: (value: unknown) => string;
   /** `sanitizeDestination` from the config-matchers module. */
@@ -824,6 +832,17 @@ export function createPagesPageHandler(
           asPath: routerAsPath,
           resolvedUrl: pagesResolvedUrl,
           renderIsrPassToStringAsync,
+          // Regeneration re-renders the page but reuses the cached shell, so
+          // the refreshed `next/head` output has to be read out of the render
+          // pass explicitly. `_document.getInitialProps` runs here too because
+          // its `head` tags share the same collector — omitting it would drop
+          // them from the regenerated shell.
+          collectIsrHeadHTML: getSSRHeadHTML
+            ? async () => {
+                await callDocumentGetInitialProps(DocumentComponent, setDocumentInitialHead);
+                return getSSRHeadHTML();
+              }
+            : undefined,
           route: { isDynamic: route.isDynamic },
           routePattern,
           routeUrl: renderRouteUrl,

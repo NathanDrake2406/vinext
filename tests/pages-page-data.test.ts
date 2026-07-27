@@ -158,6 +158,78 @@ describe("pages page data", () => {
     expect(html).toContain('"__vinext":{"hasMiddleware":true}');
   });
 
+  it("refreshes next/head tags in the regenerated shell without disturbing document markup", async () => {
+    // The collector only yields tags once the page has rendered, so the
+    // regenerated head must come from the callback the render pass invokes
+    // rather than from anything captured beforehand.
+    const collectIsrHeadHTML = vi.fn(async () => '<title data-next-head="">fresh</title>');
+
+    const html = await renderPagesIsrHtml({
+      buildId: "build-123",
+      cachedHtml:
+        '<!DOCTYPE html><html><head><meta charSet="utf-8" data-next-head="" /><title data-next-head="">stale</title><style data-vinext-doc="">.a{}</style></head><body><div id="__next"><div>stale-body</div></div><script>window.__NEXT_DATA__ = {"old":1}</script></body></html>',
+      collectIsrHeadHTML,
+      createPageElement(_pageProps: Record<string, unknown>) {
+        return "page";
+      },
+      i18n: {
+        locale: "en",
+        locales: ["en"],
+        defaultLocale: "en",
+        domainLocales: [],
+      },
+      pageProps: { title: "fresh" },
+      params: { slug: "post" },
+      renderIsrPassToStringAsync: vi.fn(async (_element, onHeadReady) => {
+        await onHeadReady?.();
+        return "<div>fresh-body</div>";
+      }),
+      routePattern: "/posts/[slug]",
+      safeJsonStringify(value: unknown) {
+        return JSON.stringify(value);
+      },
+    });
+
+    expect(collectIsrHeadHTML).toHaveBeenCalled();
+    expect(html).toContain('<title data-next-head="">fresh</title>');
+    expect(html).not.toContain("stale");
+    // Head markup outside the collector's run belongs to _document and is not
+    // regenerated, so the swap must leave it in place.
+    expect(html).toContain('<style data-vinext-doc="">.a{}</style>');
+    expect(html).toContain("<div>fresh-body</div>");
+  });
+
+  it("leaves the cached head alone when the regeneration collects no head", async () => {
+    const cachedHead = '<title data-next-head="">cached</title>';
+    const html = await renderPagesIsrHtml({
+      buildId: "build-123",
+      cachedHtml: `<!DOCTYPE html><html><head>${cachedHead}</head><body><div id="__next"><div>stale-body</div></div><script>window.__NEXT_DATA__ = {"old":1}</script></body></html>`,
+      collectIsrHeadHTML: vi.fn(async () => ""),
+      createPageElement(_pageProps: Record<string, unknown>) {
+        return "page";
+      },
+      i18n: {
+        locale: "en",
+        locales: ["en"],
+        defaultLocale: "en",
+        domainLocales: [],
+      },
+      pageProps: {},
+      params: {},
+      renderIsrPassToStringAsync: vi.fn(async (_element, onHeadReady) => {
+        await onHeadReady?.();
+        return "<div>fresh-body</div>";
+      }),
+      routePattern: "/posts/[slug]",
+      safeJsonStringify(value: unknown) {
+        return JSON.stringify(value);
+      },
+    });
+
+    expect(html).toContain(cachedHead);
+    expect(html).toContain("<div>fresh-body</div>");
+  });
+
   it("preserves custom app props in fallback shells", async () => {
     const AppComponent = Object.assign(function App() {}, {
       getInitialProps() {
