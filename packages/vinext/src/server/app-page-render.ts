@@ -83,6 +83,8 @@ import type {
 } from "./app-layout-param-observation.js";
 import { getStaticLayoutObservationSkipRejection } from "./app-layout-param-observation.js";
 import { peekDynamicUsage } from "vinext/shims/headers";
+import { VINEXT_RSC_COMPLETION_METADATA_HEADER } from "./headers.js";
+import { appendRscCompletionMetadata } from "./rsc-completion-metadata.js";
 
 type AppPageBoundaryOnError = (
   error: unknown,
@@ -627,6 +629,23 @@ function wrapRscResponseForDevErrorReporting(
 export async function renderAppPageLifecycle(
   options: RenderAppPageLifecycleOptions,
 ): Promise<Response> {
+  // Request dynamic state is consumptive, but both cache finalization and the
+  // streamed client completion marker need the final answer. Keep the first
+  // positive observation for this render so whichever branch drains first
+  // cannot hide it from the other.
+  let dynamicUsageObserved = false;
+  let dynamicUsageFinalized = false;
+  const consumeRenderDynamicUsage = (): boolean => {
+    if (!dynamicUsageObserved) dynamicUsageObserved = options.consumeDynamicUsage();
+    return dynamicUsageObserved;
+  };
+  const finalizeRenderDynamicUsage = (): boolean => {
+    if (!dynamicUsageFinalized) {
+      consumeRenderDynamicUsage();
+      dynamicUsageFinalized = true;
+    }
+    return dynamicUsageObserved;
+  };
   const configuredProbePageBeforeRender = options.probePageBeforeRender ?? options.isRscRequest;
   const probePageBeforeRender =
     options.isRscRequest ||
@@ -709,8 +728,7 @@ export async function renderAppPageLifecycle(
   const shouldBypassRscCacheForSkipTransport =
     options.isRscRequest && isSkipTransportEnabled(skipDisposition);
   const dynamicStaleTimeSeconds =
-    options.dynamicStaleTimeSeconds ??
-    (options.isForceDynamic ? resolveConfiguredDynamicStaleTimeSeconds() : undefined);
+    options.dynamicStaleTimeSeconds ?? resolveConfiguredDynamicStaleTimeSeconds();
   const outgoingElement = AppElementsWire.encodeOutgoingPayload({
     element: options.element,
     layoutFlags,
@@ -762,13 +780,14 @@ export async function renderAppPageLifecycle(
   const shouldWaitForAllReady =
     options.isPrerender === true && options.isSpeculativePrerender !== true;
   const shouldReadRequestCacheLifeForPrerender = options.isPrerender === true;
-  const shouldCaptureRscForCacheMetadata =
+  const mayResolveCacheLifeAfterHeaders =
     options.isProgressiveActionRender !== true &&
-    (options.isProduction || options.isPrerender === true) &&
     (revalidateSeconds === null || (revalidateSeconds > 0 && revalidateSeconds !== Infinity)) &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
     !shouldBypassRscCacheForSkipTransport;
+  const shouldCaptureRscForCacheMetadata =
+    (options.isProduction || options.isPrerender === true) && mayResolveCacheLifeAfterHeaders;
   const createBufferedRscStream = (close: boolean): ReadableStream<Uint8Array> =>
     new ReadableStream<Uint8Array>({
       start(controller) {
@@ -812,7 +831,7 @@ export async function renderAppPageLifecycle(
       }));
     }
 
-    const dynamicUsedDuringBuild = options.consumeDynamicUsage();
+    const dynamicUsedDuringBuild = consumeRenderDynamicUsage();
     // When skip transport is enabled, omit cacheState because the response is a
     // per-client payload, not a shared-cache MISS/HIT artifact. The absence also
     // keeps finalizeAppPageRscCacheResponse from overwriting no-store.
@@ -835,18 +854,22 @@ export async function renderAppPageLifecycle(
       dynamicStaleTimeSeconds !== undefined &&
       options.isPrerender !== true &&
       !options.isForceStatic &&
-      (dynamicUsedDuringBuild || options.isForceDynamic || !shouldCaptureRscForCacheMetadata);
+      (dynamicUsedDuringBuild || options.isForceDynamic);
     // The response streams before the captured render resolves its cacheLife
-    // (#961) — mark the claim pending so the client bounds reuse.
-    const staleTimePending = options.isPrerender !== true && shouldCaptureRscForCacheMetadata;
+    // (#961) — mark the claim pending so the client bounds reuse. This is also
+    // the conservative dev transport: dev does not persist ISR artifacts, but
+    // nested `use cache` scopes still resolve only while the stream is read.
+    // Known-dynamic renders carry the config bound instead, keeping the two
+    // wire states mutually exclusive.
+    const staleTimePending =
+      options.isPrerender !== true && mayResolveCacheLifeAfterHeaders && !dynamicUsedDuringBuild;
     const rscResponse = buildAppPageRscResponse(rscForResponse, {
       cacheTags: options.isPrerender === true ? options.getPageTags() : undefined,
       staleTimePending,
-      // Only on dynamic renders — the Next.js !isStaticGeneration gate
-      // (app-render.tsx:2223). NOT paired with the pending marker: that would
-      // kill prefetch reuse of statically-prefetchable dynamic-param routes
-      // (segment-cache-client-params compat test); a late-dynamic response is
-      // capped at the 30s pending floor instead.
+      // Only on renders already known to be dynamic. A render that becomes
+      // dynamic while streaming keeps the pending marker; its completed body
+      // metadata carries this config bound so cache publication can tighten
+      // the conservative pending expiry after decoding.
       dynamicStaleTimeSeconds: shouldEmitDynamicStaleTime ? dynamicStaleTimeSeconds : undefined,
       isEdgeRuntime: options.isEdgeRuntime,
       middlewareContext: options.middlewareContext,
@@ -875,16 +898,39 @@ export async function renderAppPageLifecycle(
     // if uncaught by user code. Full parity with Next.js would require checking
     // invalidDynamicUsageError after SSR rendering, which is deferred as out of scope
     // for this PR focused on client-side navigations.
-    const devRscResponse =
-      !options.isProduction && rscResponse.body && options.consumeInvalidDynamicUsageError
-        ? wrapRscResponseForDevErrorReporting(rscResponse, options.consumeInvalidDynamicUsageError)
+    const completionHeaders = new Headers(rscResponse.headers);
+    completionHeaders.set(VINEXT_RSC_COMPLETION_METADATA_HEADER, "1");
+    const completionResponse =
+      !shouldEmitDynamicStaleTime &&
+      dynamicStaleTimeSeconds !== undefined &&
+      options.isPrerender !== true &&
+      !options.isForceStatic &&
+      rscResponse.body
+        ? new Response(
+            appendRscCompletionMetadata(rscResponse.body, () =>
+              finalizeRenderDynamicUsage() ? { dynamicStaleTimeSeconds } : undefined,
+            ),
+            {
+              status: rscResponse.status,
+              statusText: rscResponse.statusText,
+              headers: completionHeaders,
+            },
+          )
         : rscResponse;
+
+    const devRscResponse =
+      !options.isProduction && completionResponse.body && options.consumeInvalidDynamicUsageError
+        ? wrapRscResponseForDevErrorReporting(
+            completionResponse,
+            options.consumeInvalidDynamicUsageError,
+          )
+        : completionResponse;
 
     return finalizeAppPageRscCacheResponse(devRscResponse, {
       capturedRscDataPromise:
         options.isProduction && shouldCaptureRscForCacheMetadata ? capturedRscDataRef.value : null,
       cleanPathname: options.cleanPathname,
-      consumeDynamicUsage: options.consumeDynamicUsage,
+      consumeDynamicUsage: finalizeRenderDynamicUsage,
       consumeRenderObservationState: options.consumeRenderObservationState,
       createRscRenderObservation(input) {
         return createAppPageRenderObservation({
@@ -931,6 +977,7 @@ export async function renderAppPageLifecycle(
     getStyles: options.getFontStyles,
   });
   const fontLinkHeader = buildAppPageFontLinkHeader(fontData.preloads);
+  let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
   let dynamicUsedDuringHtmlRender = false;
   let renderEnd: number | undefined;
 
@@ -968,7 +1015,17 @@ export async function renderAppPageLifecycle(
           // Runs after the RSC embed drains, so this peek observes the
           // completed render's minimum. Peek, not consume — the cache-write
           // closure owns the consuming read.
-          const requestCacheLife = options.peekRequestCacheLife?.();
+          // Prerendering drains the captured RSC stream and consumes the
+          // completed request cache life before the HTML stream reaches this
+          // done-script callback. Reuse that captured value here; peeking the
+          // now-cleared request state would omit the client stale claim from
+          // the prerendered HTML even though the seeded cache entry retains it.
+          // Runtime renders have not consumed the state yet and still use the
+          // non-destructive peek so the cache-write closure remains its owner.
+          const requestCacheLife =
+            options.isPrerender === true
+              ? requestCacheLifeForPrerender
+              : options.peekRequestCacheLife?.();
           const staleTimeSeconds = resolveClientStaleTimeSeconds(requestCacheLife);
           return {
             kind,
@@ -1055,8 +1112,7 @@ export async function renderAppPageLifecycle(
   }
 
   // Eagerly read values that must be captured before the stream is consumed.
-  let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
-  let dynamicUsedDuringRender = options.consumeDynamicUsage();
+  let dynamicUsedDuringRender = consumeRenderDynamicUsage();
   dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
   const stopSpeculativeMetadataWaitOnDynamicUsage =
     options.isSpeculativePrerender === true && shouldReadRequestCacheLifeForPrerender
@@ -1083,7 +1139,7 @@ export async function renderAppPageLifecycle(
       revalidateSeconds,
     }));
   }
-  dynamicUsedDuringRender = dynamicUsedDuringRender || options.consumeDynamicUsage();
+  dynamicUsedDuringRender = dynamicUsedDuringRender || consumeRenderDynamicUsage();
   dynamicUsedDuringHtmlRender = dynamicUsedDuringRender;
 
   const draftCookie = options.getDraftModeCookieHeader();
@@ -1097,7 +1153,7 @@ export async function renderAppPageLifecycle(
   // See: https://github.com/cloudflare/vinext/issues/660
   const safeHtmlStream = deferUntilStreamConsumed(htmlStream, () => {
     dynamicUsedBeforeContextCleanup =
-      dynamicUsedBeforeContextCleanup || options.consumeDynamicUsage();
+      dynamicUsedBeforeContextCleanup || consumeRenderDynamicUsage();
     dynamicUsedDuringHtmlRender = dynamicUsedBeforeContextCleanup;
     options.clearRequestContext();
   });
@@ -1173,7 +1229,7 @@ export async function renderAppPageLifecycle(
       },
       capturedRscDataPromise: capturedRscDataRef.value,
       cleanPathname: options.cleanPathname,
-      consumeDynamicUsage: options.consumeDynamicUsage,
+      consumeDynamicUsage: consumeRenderDynamicUsage,
       consumeRenderObservationState: options.consumeRenderObservationState,
       createHtmlRenderObservation(input) {
         return createAppPageRenderObservation({

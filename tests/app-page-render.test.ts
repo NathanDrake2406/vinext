@@ -32,8 +32,10 @@ import {
   NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
+  VINEXT_RSC_COMPLETION_METADATA_HEADER,
   VINEXT_STALE_TIME_PENDING_HEADER,
 } from "../packages/vinext/src/server/headers.js";
+import { extractRscCompletionMetadata } from "../packages/vinext/src/server/rsc-completion-metadata.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 import type { IsrWritePolicy } from "../packages/vinext/src/server/isr-cache.js";
 import type { InitialNavigationCacheMetadata } from "../packages/vinext/src/server/app-ssr-stream.js";
@@ -621,7 +623,10 @@ describe("app page render lifecycle", () => {
     expect(common.waitUntilPromises).toHaveLength(1);
 
     streamGate.resolve();
-    await expect(response.text()).resolves.toBe("flight-data");
+    expect(response.headers.get(VINEXT_RSC_COMPLETION_METADATA_HEADER)).toBe("1");
+    const completed = extractRscCompletionMetadata(await response.arrayBuffer());
+    expect(new TextDecoder().decode(completed.buffer)).toBe("flight-data");
+    expect(completed.metadata).toEqual({ dynamicStaleTimeSeconds: 0 });
     await Promise.all(common.waitUntilPromises);
     expect(common.isrSet).not.toHaveBeenCalled();
   });
@@ -1314,6 +1319,7 @@ describe("app page render lifecycle", () => {
     const common = createCommonOptions();
     const response = await renderAppPageLifecycle({
       ...common.options,
+      consumeDynamicUsage: vi.fn(() => true),
       dynamicStaleTimeSeconds: 60,
       isRscRequest: true,
     });
@@ -1412,7 +1418,7 @@ describe("app page render lifecycle", () => {
     await expect(response.text()).resolves.toBe("flight-data");
   });
 
-  it("never advertises a client stale time on a streaming render", async () => {
+  it("never advertises a resolved cacheLife stale time on a streaming render", async () => {
     // Regression guard for the shape this feature must not take. `use cache`
     // scopes below the page keep resolving while the RSC stream is consumed,
     // long after headers are committed, so any value read here describes the
@@ -1433,11 +1439,11 @@ describe("app page render lifecycle", () => {
     });
 
     expect(response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBeNull();
-    // The configured client stale time is a build-time constant and still ships.
-    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBe("300");
-    // Dev never captures for cache metadata, so there is no pending claim to
-    // advertise — matching Next.js dev, which emits no stale signal at all.
-    expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBeNull();
+    // The render has not proven dynamic before its stream is consumed, so the
+    // configured dynamic bound is carried in the body metadata and the header
+    // remains a conservative pending claim until completion.
+    expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBeNull();
+    expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
     await expect(response.text()).resolves.toBe("flight-data");
   });
 

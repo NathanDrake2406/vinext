@@ -899,6 +899,24 @@ describe("prerenderApp — default mode (app-basic)", () => {
     expect(manifestRoute).toMatchObject({ revalidate: 1, expire: 3 });
   });
 
+  it("embeds the completed cacheLife stale time in prerendered initial HTML", () => {
+    // The prerender path consumes request-scoped cache metadata after the RSC
+    // stream settles. The later HTML done script must reuse that completed
+    // value so hydration seeds the visited-response cache with the same stale
+    // claim that warm HTML/RSC cache-hit headers replay.
+    const r = findRoute(results, "/use-cache-test");
+    expect(r).toMatchObject({
+      route: "/use-cache-test",
+      status: "rendered",
+      revalidate: 1,
+      stale: 30,
+    });
+
+    const html = fs.readFileSync(path.join(outDir, "use-cache-test.html"), "utf-8");
+    expect(html).toContain('"initialCacheKind":"static"');
+    expect(html).toContain('"staleTimeSeconds":30');
+  });
+
   it("records collected App Router cache tags for cache seeding", () => {
     const r = findRoute(results, "/unstable-cache-test");
     expect(r).toMatchObject({

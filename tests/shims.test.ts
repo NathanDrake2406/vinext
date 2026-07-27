@@ -7305,7 +7305,9 @@ describe('"use cache" runtime', () => {
         await import("../packages/vinext/src/shims/cache.js");
       setCacheHandler(new MemoryCacheHandler());
 
+      let innerCalls = 0;
       const innerFn = async () => {
+        innerCalls++;
         cacheLife({ expire: 60 }); // 1 minute, under 5 minute threshold
         return "inner";
       };
@@ -7317,19 +7319,26 @@ describe('"use cache" runtime', () => {
       };
       const outerCached = registerCachedFunction(outerFn, "test:nested-short-outer");
 
-      let thrown: Error | undefined;
-      try {
-        await outerCached();
-      } catch (e) {
-        thrown = e as Error;
-      }
+      // The first outer call executes and stores the inner value before the
+      // outer validation throws. The second outer call therefore reads a warm
+      // inner HIT; it must surface the same nested-dynamic error rather than
+      // making correctness depend on cache temperature.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let thrown: Error | undefined;
+        try {
+          await outerCached();
+        } catch (e) {
+          thrown = e as Error;
+        }
 
-      expect(thrown).toBeDefined();
-      expect(thrown!.message).toContain("expire");
-      expect(thrown!.message).toContain('"use cache"');
-      expect(thrown!.message).toContain("not allowed");
-      expect(thrown!.cause).toBeDefined();
-      expect((thrown!.cause as Error).message).toContain("dynamic cache life");
+        expect(thrown).toBeDefined();
+        expect(thrown!.message).toContain("expire");
+        expect(thrown!.message).toContain('"use cache"');
+        expect(thrown!.message).toContain("not allowed");
+        expect(thrown!.cause).toBeDefined();
+        expect((thrown!.cause as Error).message).toContain("dynamic cache life");
+      }
+      expect(innerCalls).toBe(1);
     });
   });
 

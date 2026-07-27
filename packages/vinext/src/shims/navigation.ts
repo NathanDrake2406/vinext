@@ -44,8 +44,10 @@ import {
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_PARAMS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
+  VINEXT_RSC_COMPLETION_METADATA_HEADER,
   VINEXT_STALE_TIME_PENDING_HEADER,
 } from "../server/headers.js";
+import { extractRscCompletionMetadata } from "../server/rsc-completion-metadata.js";
 import { toBrowserNavigationHref, toSameOriginAppPath, withBasePath } from "./url-utils.js";
 import { navigationPlanner } from "../server/navigation-planner.js";
 import { stripBasePath } from "../utils/base-path.js";
@@ -291,6 +293,8 @@ export type ServerStaleTime =
 export type CachedRscResponse = {
   compatibilityIdHeader?: string | null;
   buffer: ArrayBuffer;
+  /** Dynamic bound observed after the RSC stream completed. */
+  completedDynamicStaleTimeSeconds?: number;
   contentType: string;
   dynamicStaleTimeSeconds?: number;
   expiresAt?: number;
@@ -984,13 +988,21 @@ export function createCachedRscResponseSnapshot(
   buffer: ArrayBuffer,
   responseUrl: string | null = null,
 ): CachedRscResponse {
-  const dynamicStaleTimeSeconds = parseStaleTimeSecondsHeader(
+  const headerDynamicStaleTimeSeconds = parseStaleTimeSecondsHeader(
     response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER),
   );
+  const completionMode = response.headers.get(VINEXT_RSC_COMPLETION_METADATA_HEADER);
+  const extracted = completionMode === "1" ? extractRscCompletionMetadata(buffer) : { buffer };
+  const completedDynamicStaleTimeSeconds =
+    completionMode === "resolved"
+      ? headerDynamicStaleTimeSeconds
+      : (extracted.metadata?.dynamicStaleTimeSeconds ?? headerDynamicStaleTimeSeconds);
+  const dynamicStaleTimeSeconds = completedDynamicStaleTimeSeconds ?? headerDynamicStaleTimeSeconds;
   const serverStaleTime = parseServerStaleTimeHeaders(response.headers);
   return {
     compatibilityIdHeader: response.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
-    buffer,
+    buffer: extracted.buffer,
+    ...(completedDynamicStaleTimeSeconds !== undefined ? { completedDynamicStaleTimeSeconds } : {}),
     contentType: response.headers.get("content-type") ?? VINEXT_RSC_CONTENT_TYPE,
     ...(dynamicStaleTimeSeconds !== undefined ? { dynamicStaleTimeSeconds } : {}),
     mountedSlotsHeader: response.headers.get(VINEXT_MOUNTED_SLOTS_HEADER),
@@ -1061,6 +1073,9 @@ export function restoreRscResponse(cached: CachedRscResponse, copy = true): Resp
   }
   if (isStaleTimeSeconds(cached.dynamicStaleTimeSeconds)) {
     headers.set(VINEXT_DYNAMIC_STALE_TIME_HEADER, String(cached.dynamicStaleTimeSeconds));
+  }
+  if (isStaleTimeSeconds(cached.completedDynamicStaleTimeSeconds)) {
+    headers.set(VINEXT_RSC_COMPLETION_METADATA_HEADER, "resolved");
   }
   if (cached.serverStaleTime?.kind === "pending") {
     headers.set(VINEXT_STALE_TIME_PENDING_HEADER, "1");

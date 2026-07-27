@@ -708,7 +708,27 @@ function recordRequestScopedCacheControl(cacheControl: CacheControlMetadata | un
     expire: cacheControl.expire,
     stale: cacheControl.stale,
   };
-  cacheContextStorage.getStore()?.lifeConfigs.push(life);
+  const parentCtx = cacheContextStorage.getStore();
+  parentCtx?.lifeConfigs.push(life);
+
+  // A warm nested HIT must preserve the same dynamic-cache validation as the
+  // MISS that produced it. The persisted cache-control fields already contain
+  // the values Next.js checks at the cache read site, so derive the signal
+  // from them instead of extending the stored payload. Capture the current
+  // inner-cache call site while it is still on the stack; the enclosing scope
+  // later applies its explicit cacheLife suppression exactly as on a MISS.
+  if (
+    parentCtx &&
+    parentCtx.variant !== "private" &&
+    (cacheControl.revalidate === 0 ||
+      (cacheControl.expire !== undefined && cacheControl.expire < DYNAMIC_EXPIRE))
+  ) {
+    const error = new NestedDynamicUseCacheError();
+    if (typeof Error.captureStackTrace === "function") {
+      Error.captureStackTrace(error, recordRequestScopedCacheControl);
+    }
+    parentCtx.dynamicNestedCacheError ??= error;
+  }
   _setRequestScopedCacheLife(life);
 }
 

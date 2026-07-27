@@ -181,9 +181,11 @@ import {
 import {
   VINEXT_CLIENT_REUSE_MANIFEST_HEADER,
   VINEXT_PARAMS_HEADER,
+  VINEXT_RSC_COMPLETION_METADATA_HEADER,
   VINEXT_RSC_REDIRECT_HEADER,
   VINEXT_RSC_REDIRECT_TYPE_HEADER,
 } from "./headers.js";
+import { stripRscCompletionMetadata } from "./rsc-completion-metadata.js";
 import { removeStylesheetLinksCoveredByInlineCss } from "./app-inline-css-client.js";
 import {
   navigationPlanner,
@@ -2184,7 +2186,11 @@ function bootstrapHydration(
           // narrowing only.
           return;
         }
-        const [reactBranch, cacheBranch] = navBody.tee();
+        const [rawReactBranch, cacheBranch] = navBody.tee();
+        const reactBranch =
+          navResponse.headers.get(VINEXT_RSC_COMPLETION_METADATA_HEADER) === "1"
+            ? stripRscCompletionMetadata(rawReactBranch)
+            : rawReactBranch;
         const reactResponse = new Response(reactBranch, {
           status: navResponse.status,
           headers: navResponse.headers,
@@ -2267,10 +2273,17 @@ function bootstrapHydration(
             cacheBuffer,
             navResponseUrl,
           );
-          const { dynamicStaleTimeSeconds: _staticDynamicStaleTime, ...staticResponseSnapshot } =
-            responseSnapshot;
+          const completedResponseResolvedDynamic =
+            responseSnapshot.completedDynamicStaleTimeSeconds !== undefined;
+          const cacheRestorable =
+            !completedResponseResolvedDynamic && isCacheRestorableAppPayloadMetadata(metadata);
+          const {
+            completedDynamicStaleTimeSeconds: _staticCompletedDynamicStaleTime,
+            dynamicStaleTimeSeconds: _staticDynamicStaleTime,
+            ...staticResponseSnapshot
+          } = responseSnapshot;
           const snapshot = {
-            ...(isCacheRestorableAppPayloadMetadata(metadata)
+            ...(cacheRestorable
               ? staticResponseSnapshot
               : {
                   ...responseSnapshot,
@@ -2282,14 +2295,19 @@ function bootstrapHydration(
             // A navigation that consumes prefetched Flight data keeps that
             // prefetch freshness window when committed, matching Next's
             // segment-cache handoff instead of recomputing dynamic freshness.
-            ...(navResponseExpiresAt !== undefined ? { expiresAt: navResponseExpiresAt } : {}),
+            // The exception is a response whose completion footer records
+            // dynamic request usage: its final dynamic bound is more precise
+            // than the provisional prefetch expiry.
+            ...(navResponseExpiresAt !== undefined && !completedResponseResolvedDynamic
+              ? { expiresAt: navResponseExpiresAt }
+              : {}),
             mountedSlotsHeader: getMountedSlotIdsHeader(renderedElements),
           };
           const interceptionContext = resolveVisitedResponseInterceptionContext(
             requestInterceptionContext,
             metadata.interceptionContext,
           );
-          if (isCacheRestorableAppPayloadMetadata(metadata)) {
+          if (cacheRestorable) {
             if (navigationCacheGeneration !== clientNavigationCacheGeneration) return;
             storeVisitedResponseSnapshot(
               rscUrl,
@@ -2320,6 +2338,7 @@ function bootstrapHydration(
               DYNAMIC_NAVIGATION_CACHE_TTL,
               mountedSlotsHeader,
               committedElements,
+              !completedResponseResolvedDynamic,
             );
           }
         } catch {

@@ -116,6 +116,16 @@ async function navigateToNoLoading(page: Page): Promise<string> {
   return readNoLoadingRandom(page);
 }
 
+async function navigateToLateDynamic(page: Page): Promise<string> {
+  await page.click("#client-cache-late-dynamic");
+  return page.locator("#client-cache-late-dynamic-random").innerText();
+}
+
+async function navigateHomeFromLateDynamic(page: Page): Promise<void> {
+  await page.click("#client-cache-late-dynamic-back");
+  await expect(page.locator("#client-cache-home")).toBeVisible();
+}
+
 async function revealAccordionLink(page: Page, href: string) {
   await page.locator(`[data-link-accordion="${href}"]`).click();
   return page.locator(`a[data-link-accordion-anchor="${href}"]`);
@@ -199,6 +209,26 @@ test.describe("Next.js compat: client cache", () => {
     expect(requestsFor(requests, `${ROOT}/no-loading/1`).some((request) => !request.partial)).toBe(
       true,
     );
+  });
+
+  test("a pending prefetch that becomes dynamic uses the completed dynamic bound", async ({
+    page,
+  }) => {
+    const target = "/nextjs-compat/client-cache-late-dynamic";
+    const requests = trackRscRequests(page);
+    await openHome(page);
+    await page.hover("#client-cache-late-dynamic");
+    await expect
+      .poll(() => requestsFor(requests, target).some((request) => !request.partial))
+      .toBe(true);
+
+    const initial = await navigateToLateDynamic(page);
+    requests.length = 0;
+    await navigateHomeFromLateDynamic(page);
+
+    const renewed = await navigateToLateDynamic(page);
+    expect(requestsFor(requests, target).some((request) => !request.partial)).toBe(true);
+    expect(renewed).not.toBe(initial);
   });
 
   test("parallel-slot state changes independently and the full payload remains reusable", async ({
