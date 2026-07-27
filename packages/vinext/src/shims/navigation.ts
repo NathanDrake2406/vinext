@@ -713,6 +713,21 @@ function evictPrefetchCacheIfNeeded(): void {
   }
 }
 
+/**
+ * Prefetch-cache generation counter. `router.prefetch()` captures it before its
+ * `await`s and re-checks after, so setup belonging to a superseded generation
+ * cannot register an entry. It advances on two events, both of which mean "any
+ * prefetch still being set up is now based on stale state":
+ *   - a navigation starts (`notifyAppNavigationStart`), which will fetch the
+ *     route itself — a late prefetch would duplicate that request
+ *   - the prefetch cache is invalidated (`invalidatePrefetchCache`, reached via
+ *     `router.refresh()`), which would otherwise be undone for that one route by
+ *     a closure that started before the refresh
+ * Mirrors `linkPrefetchNavigationEpoch` in link.tsx, which currently advances
+ * only on the first of those.
+ */
+let appNavigationEpoch = 0;
+
 function clearPrefetchInvalidation(entry: PrefetchCacheEntry): void {
   if (entry.invalidationTimer !== undefined) {
     clearTimeout(entry.invalidationTimer);
@@ -816,17 +831,27 @@ export function discardLearningOnlyPrefetchCacheEntry(
   const normalizedTarget = normalizeRscCacheLookupUrl(rscUrl);
   if (normalizedTarget === null) return false;
 
-  let discarded = false;
+  // Collect before deleting: notifying runs subscriber callbacks synchronously,
+  // and a callback that seeds a new prefetch would otherwise be appended to the
+  // Map this loop is still iterating.
+  const superseded: Array<[string, PrefetchCacheEntry]> = [];
   for (const [cacheKey, entry] of cache) {
     if (entry.cacheForNavigation !== false || entry.prefetchKind !== "navigation") continue;
     const source = parsePrefetchCacheKey(cacheKey);
     if (source.interceptionContext !== interceptionContext) continue;
     if (normalizeRscCacheLookupUrl(source.rscUrl) !== normalizedTarget) continue;
 
-    deletePrefetchCacheEntry(cache, prefetched, cacheKey, entry, false);
-    discarded = true;
+    superseded.push([cacheKey, entry]);
   }
-  return discarded;
+
+  // A superseded prefetch is dirty in Next.js terms — its payload is being
+  // replaced by a navigation-reusable one — so `onInvalidate` subscribers are
+  // notified rather than silently dropped. Both callers (`router.prefetch()`
+  // and `<Link>`) reach this on the learning-only -> reusable upgrade.
+  for (const [cacheKey, entry] of superseded) {
+    deletePrefetchCacheEntry(cache, prefetched, cacheKey, entry, true);
+  }
+  return superseded.length > 0;
 }
 
 function invalidatePrefetchCacheEntry(cacheKey: string): void {
@@ -871,6 +896,11 @@ function attachPrefetchInvalidationCallback(
 }
 
 export function invalidatePrefetchCache(): void {
+  // Void prefetch setup that is still in flight. Without this, a closure that
+  // started before `router.refresh()` resumes afterwards and repopulates a
+  // navigation-reusable entry built from the pre-refresh cache generation,
+  // undoing the invalidation for that route.
+  appNavigationEpoch += 1;
   const cache = getPrefetchCache();
   const prefetched = getPrefetchedUrls();
   for (const [cacheKey, entry] of cache) {
@@ -2090,14 +2120,6 @@ function hardNavigateTo(fullHref: string, mode: "push" | "replace"): void {
     window.location.assign(fullHref);
   }
 }
-
-/**
- * Bumped whenever a navigation starts. `router.prefetch()` captures it before
- * its `await`s so a navigation that wins the setup race can cancel the late
- * prefetch instead of letting it issue a second request for the same route.
- * Mirrors `linkPrefetchNavigationEpoch` in link.tsx.
- */
-let appNavigationEpoch = 0;
 
 /**
  * Signal that a navigation is starting: cancel in-flight prefetch setup and

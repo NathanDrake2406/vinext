@@ -654,6 +654,59 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchCache().size).toBe(0);
   });
 
+  it("notifies onInvalidate when a learning-only prefetch is superseded (#2707)", async () => {
+    // A loading-shell route: the default `kind` resolves to learning-only, and
+    // a later `kind: "full"` upgrades the same URL to a reusable entry.
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: true, patternParts: ["reports"], isDynamic: false },
+    ];
+    let fetchedUrl: string | undefined;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      fetchedUrl = toRscUrlString(input);
+      return new Response("flight", { headers: { "content-type": "text/x-component" } });
+    });
+    (globalThis as any).fetch = fetch;
+
+    const onInvalidate = vi.fn();
+    appRouterInstance.prefetch("/reports", { onInvalidate });
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+    if (fetchedUrl === undefined) {
+      throw new Error("Expected router.prefetch to fetch an RSC URL");
+    }
+    const learningKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
+    await waitForPrefetchSetup(
+      () => getPrefetchCache().get(learningKey)?.outcome === "cache-seeded",
+    );
+    expect(getPrefetchCache().get(learningKey)?.cacheForNavigation).toBe(false);
+
+    // The upgrade discards the learning-only entry. Its subscriber must be told
+    // the payload is gone rather than have the callback silently dropped.
+    appRouterInstance.prefetch("/reports", { kind: "full" });
+    await waitForPrefetchSetup(() => onInvalidate.mock.calls.length > 0);
+    expect(onInvalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repopulate the prefetch cache across an invalidation (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+    ];
+    const fetch = vi.fn(
+      async () => new Response("flight", { headers: { "content-type": "text/x-component" } }),
+    );
+    (globalThis as any).fetch = fetch;
+
+    // router.refresh() reaches invalidatePrefetchCache() while this closure is
+    // still awaiting its policy import, i.e. before it registers anything.
+    appRouterInstance.prefetch("/dashboard");
+    invalidatePrefetchCache();
+
+    await settlePrefetchSetup();
+
+    // The entry would have been built from the pre-refresh cache generation.
+    expect(fetch).not.toHaveBeenCalled();
+    expect(getPrefetchCache().size).toBe(0);
+  });
+
   it("keeps onInvalidate alive after navigation consumes the prefetch (#2707)", async () => {
     (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
       { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
