@@ -202,6 +202,12 @@ export function resolveAppPageTemplateStateKey(
   treePosition: number,
   params: AppPageParams,
 ): string {
+  // Route groups are levels of their own, so a template above one keys off the
+  // group rather than the first visible segment below it — sibling routes
+  // inside the group share the template and keep its state. Next does the same:
+  // the template key is `createRouterCacheKey(activeSegment)` for the immediate
+  // child segment (`.nextjs-ref` client/components/layout-router.tsx), and
+  // group segments are present in the FlightRouterState.
   const end = treePosition < routeSegments.length ? treePosition + 1 : routeSegments.length;
   const statePath = routeSegments
     .slice(0, end)
