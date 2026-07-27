@@ -137,6 +137,13 @@ async function waitForPrefetchSetup(isReady: () => boolean = () => true): Promis
   } while (Date.now() < deadline);
 }
 
+/** Drain enough macrotasks for a prefetch setup closure to run to completion. */
+async function settlePrefetchSetup(): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 describe("prefetch cache eviction", () => {
   it("router.prefetch does not fetch for a bot user agent", async () => {
     const fetch = vi.fn();
@@ -620,6 +627,62 @@ describe("prefetch cache eviction", () => {
     // cache key.
     expect(fetch).not.toHaveBeenCalled();
 
+    invalidatePrefetchCache();
+    expect(onInvalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels router.prefetch setup when a navigation starts in the same task (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+    ];
+    const fetch = vi.fn(
+      async () => new Response("flight", { headers: { "content-type": "text/x-component" } }),
+    );
+    (globalThis as any).fetch = fetch;
+
+    // No polling between the two calls: navigation starts while the prefetch
+    // closure is still awaiting its module imports and RSC URL, i.e. before it
+    // has registered anything navigation could share.
+    appRouterInstance.prefetch("/dashboard");
+    appRouterInstance.push("/dashboard");
+
+    await settlePrefetchSetup();
+
+    // Navigation owns the request for this route now; the late prefetch must
+    // not start a second one.
+    expect(fetch).not.toHaveBeenCalled();
+    expect(getPrefetchCache().size).toBe(0);
+  });
+
+  it("keeps onInvalidate alive after navigation consumes the prefetch (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+    ];
+    let fetchedUrl: string | undefined;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      fetchedUrl = toRscUrlString(input);
+      return new Response("flight", { headers: { "content-type": "text/x-component" } });
+    });
+    (globalThis as any).fetch = fetch;
+
+    const onInvalidate = vi.fn();
+    appRouterInstance.prefetch("/dashboard", { onInvalidate });
+    await waitForPrefetchSetup(() => fetch.mock.calls.length > 0);
+    if (fetchedUrl === undefined) {
+      throw new Error("Expected router.prefetch to fetch an RSC URL");
+    }
+    const cacheKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
+    await waitForPrefetchSetup(() => getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded");
+
+    // Navigation takes the payload; the cache entry is gone but the
+    // subscription must outlive it.
+    expect(consumePrefetchResponse(fetchedUrl, null, null)).not.toBeNull();
+    expect(getPrefetchCache().get(cacheKey)).toBeUndefined();
+    expect(onInvalidate).not.toHaveBeenCalled();
+
+    invalidatePrefetchCache();
+    expect(onInvalidate).toHaveBeenCalledTimes(1);
+    // Fires exactly once, matching Next.js's prefetch-task contract.
     invalidatePrefetchCache();
     expect(onInvalidate).toHaveBeenCalledTimes(1);
   });
