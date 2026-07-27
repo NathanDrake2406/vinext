@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 
+export const unstable_dynamicStaleTime = 60;
+
 async function LateDynamicContent() {
   // Keep the request API below the page component so the page probe initially
   // treats this route as cacheable; React discovers the dynamic read only while
@@ -13,7 +15,11 @@ async function LateDynamicContent() {
 export default function ClientCacheLateDynamicTarget() {
   return (
     <main>
-      <Link href="/nextjs-compat/client-cache" prefetch={false} id="client-cache-late-dynamic-back">
+      <Link
+        href="/nextjs-compat/client-cache-late-dynamic-return"
+        prefetch={false}
+        id="client-cache-late-dynamic-back"
+      >
         Back to client cache home
       </Link>
       <LateDynamicContent />

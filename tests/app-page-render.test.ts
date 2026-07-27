@@ -614,10 +614,8 @@ describe("app page render lifecycle", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
     expect(response.headers.get("x-vinext-cache")).toBeNull();
-    // The pending marker went out before the render turned dynamic; the client
-    // caps this response at the 30s pending floor. Known limit: a cold stream
-    // cannot know its outcome, and bounding every pending response by
-    // staleTimes.dynamic would break static prefetch reuse instead.
+    // The pending marker went out before the render turned dynamic. Completion
+    // metadata replaces this provisional bound after the body resolves.
     expect(response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
     expect(response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER)).toBeNull();
     expect(common.waitUntilPromises).toHaveLength(1);

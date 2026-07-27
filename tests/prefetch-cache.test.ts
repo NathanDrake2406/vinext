@@ -15,10 +15,12 @@ import { VINEXT_RSC_COMPATIBILITY_ID_HEADER } from "../packages/vinext/src/serve
 import {
   NEXT_ROUTER_STALE_TIME_HEADER,
   VINEXT_DYNAMIC_STALE_TIME_HEADER,
+  VINEXT_RSC_COMPLETION_METADATA_HEADER,
   VINEXT_STALE_TIME_PENDING_HEADER,
   VINEXT_MOUNTED_SLOTS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
+import { appendRscCompletionMetadata } from "../packages/vinext/src/server/rsc-completion-metadata.js";
 
 type Navigation = typeof import("../packages/vinext/src/shims/navigation.js");
 let storePrefetchResponse: Navigation["storePrefetchResponse"];
@@ -31,6 +33,7 @@ let PREFETCH_CACHE_TTL: Navigation["PREFETCH_CACHE_TTL"];
 let DYNAMIC_NAVIGATION_CACHE_TTL: Navigation["DYNAMIC_NAVIGATION_CACHE_TTL"];
 let snapshotRscResponse: Navigation["snapshotRscResponse"];
 let restoreRscResponse: Navigation["restoreRscResponse"];
+let resolveCachedRscResponseTtlMs: Navigation["resolveCachedRscResponseTtlMs"];
 let prefetchRscResponse: Navigation["prefetchRscResponse"];
 let invalidatePrefetchCache: Navigation["invalidatePrefetchCache"];
 let hasPrefetchCacheEntryForNavigation: Navigation["hasPrefetchCacheEntryForNavigation"];
@@ -69,6 +72,7 @@ beforeEach(async () => {
   DYNAMIC_NAVIGATION_CACHE_TTL = nav.DYNAMIC_NAVIGATION_CACHE_TTL;
   snapshotRscResponse = nav.snapshotRscResponse;
   restoreRscResponse = nav.restoreRscResponse;
+  resolveCachedRscResponseTtlMs = nav.resolveCachedRscResponseTtlMs;
   prefetchRscResponse = nav.prefetchRscResponse;
   invalidatePrefetchCache = nav.invalidatePrefetchCache;
   hasPrefetchCacheEntryForNavigation = nav.hasPrefetchCacheEntryForNavigation;
@@ -447,6 +451,34 @@ describe("prefetch cache eviction", () => {
 
     expect(snapshot.serverStaleTime).toEqual({ kind: "pending" });
     expect(restored.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
+  });
+
+  it("replaces a provisional pending bound with completed dynamic metadata", async () => {
+    const response = new Response(
+      appendRscCompletionMetadata(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("flight"));
+            controller.close();
+          },
+        }),
+        () => ({ dynamicStaleTimeSeconds: 60 }),
+      ),
+      {
+        headers: {
+          "content-type": "text/x-component",
+          [VINEXT_RSC_COMPLETION_METADATA_HEADER]: "1",
+          [VINEXT_STALE_TIME_PENDING_HEADER]: "1",
+        },
+      },
+    );
+
+    const snapshot = await snapshotRscResponse(response);
+
+    expect(snapshot.completedDynamicStaleTimeSeconds).toBe(60);
+    expect(snapshot.serverStaleTime).toBeUndefined();
+    expect(resolveCachedRscResponseTtlMs(snapshot, 300_000)).toBe(60_000);
+    expect(restoreRscResponse(snapshot).headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBeNull();
   });
 
   it("releases queued App prefetch fetch slots after consuming the response body", async () => {

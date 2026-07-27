@@ -226,6 +226,16 @@ test.describe("Next.js compat: client cache", () => {
     requests.length = 0;
     await navigateHomeFromLateDynamic(page);
 
+    // The provisional pending marker would expire this at the 30s floor. The
+    // completed 60s dynamic bound must replace it instead.
+    await advanceTime(page, 30_001);
+    const reused = await navigateToLateDynamic(page);
+    expect(requestsFor(requests, target)).toEqual([]);
+    expect(reused).toBe(initial);
+
+    await navigateHomeFromLateDynamic(page);
+    await advanceTime(page, 30_000);
+    requests.length = 0;
     const renewed = await navigateToLateDynamic(page);
     expect(requestsFor(requests, target).some((request) => !request.partial)).toBe(true);
     expect(renewed).not.toBe(initial);
