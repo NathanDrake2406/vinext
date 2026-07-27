@@ -274,6 +274,19 @@ export const PREFETCH_CACHE_TTL = resolveClientRouterStaleTime(
 const MIN_SERVER_STALE_TIME_SECONDS = 30;
 const MIN_PREFETCH_STALE_TIME_MS = MIN_SERVER_STALE_TIME_SECONDS * 1000;
 
+/**
+ * The render's `cacheLife` claim about client reuse. The wire treats the two
+ * variants as mutually exclusive — a response carries either the resolved
+ * bound (`NEXT_ROUTER_STALE_TIME_HEADER`) or the pending marker
+ * (`VINEXT_STALE_TIME_PENDING_HEADER`), never both — so the cached form
+ * encodes that rather than trusting every producer to keep them apart.
+ */
+export type ServerStaleTime =
+  /** Cacheable render streamed before its `cacheLife` resolved; reuse is bounded at the 30s floor. */
+  | { kind: "pending" }
+  /** Resolved reuse bound, min-combined with the config-derived `dynamicStaleTimeSeconds`. */
+  | { kind: "resolved"; seconds: number };
+
 /** A buffered RSC response stored as an ArrayBuffer for replay. */
 export type CachedRscResponse = {
   compatibilityIdHeader?: string | null;
@@ -285,16 +298,7 @@ export type CachedRscResponse = {
   paramsHeader: string | null;
   preparedElements?: AppElements;
   renderedPathAndSearch: string | null;
-  /**
-   * Cacheable render streamed before its `cacheLife` resolved
-   * (`VINEXT_STALE_TIME_PENDING_HEADER`); reuse is bounded at the 30s floor.
-   */
-  staleTimePending?: boolean;
-  /**
-   * Reuse bound from the render's `cacheLife` (`NEXT_ROUTER_STALE_TIME_HEADER`).
-   * Min-combined with the config-derived `dynamicStaleTimeSeconds`.
-   */
-  staleTimeSeconds?: number;
+  serverStaleTime?: ServerStaleTime;
   url: string;
 };
 
@@ -413,43 +417,34 @@ function parseStaleTimeSecondsHeader(value: string | null): number | undefined {
 }
 
 /**
+ * The floor a `cacheLife` claim licenses. A pending claim contributes exactly
+ * the floor — the least any resolution of it could have granted.
+ */
+function serverStaleTimeSeconds(server: ServerStaleTime | undefined): number | undefined {
+  if (server === undefined) return undefined;
+  if (server.kind === "pending") return MIN_SERVER_STALE_TIME_SECONDS;
+  return Math.max(server.seconds, MIN_SERVER_STALE_TIME_SECONDS);
+}
+
+/**
  * Min-combine the two independent staleness lattices a response can carry:
  * `dynamicStaleTimeSeconds` (from `experimental.staleTimes` config) and
- * `staleTimeSeconds` (from the render's `cacheLife`) — neither may override
+ * `serverStaleTime` (from the render's `cacheLife`) — neither may override
  * the other. The cacheLife value is floored *before* the min so the floor
- * never raises the config bound. A pending claim substitutes the floor, the
- * least any resolution of it could have licensed. Undefined = no signal;
- * the caller's fallback TTL stays in force.
+ * never raises the config bound. Undefined = no signal; the caller's
+ * fallback TTL stays in force.
  */
 function resolveRscResponseStaleTimeSeconds(
-  cached: Pick<
-    CachedRscResponse,
-    "dynamicStaleTimeSeconds" | "staleTimePending" | "staleTimeSeconds"
-  >,
+  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "serverStaleTime">,
 ): number | undefined {
   const dynamic = cached.dynamicStaleTimeSeconds;
-  const resolved = cached.staleTimeSeconds;
-  const hasDynamic = isStaleTimeSeconds(dynamic);
-  const floored = isStaleTimeSeconds(resolved)
-    ? Math.max(resolved, MIN_SERVER_STALE_TIME_SECONDS)
-    : undefined;
-  let combined: number | undefined;
-  if (hasDynamic && floored !== undefined) combined = Math.min(dynamic, floored);
-  else if (hasDynamic) combined = dynamic;
-  else combined = floored;
-  if (cached.staleTimePending === true) {
-    return combined === undefined
-      ? MIN_SERVER_STALE_TIME_SECONDS
-      : Math.min(combined, MIN_SERVER_STALE_TIME_SECONDS);
-  }
-  return combined;
+  const server = serverStaleTimeSeconds(cached.serverStaleTime);
+  if (!isStaleTimeSeconds(dynamic)) return server;
+  return server === undefined ? dynamic : Math.min(dynamic, server);
 }
 
 export function resolveCachedRscResponseTtlMs(
-  cached: Pick<
-    CachedRscResponse,
-    "dynamicStaleTimeSeconds" | "staleTimePending" | "staleTimeSeconds"
-  >,
+  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "serverStaleTime">,
   fallbackTtlMs: number,
 ): number {
   const seconds = resolveRscResponseStaleTimeSeconds(cached);
@@ -461,10 +456,7 @@ export function resolveCachedRscResponseTtlMs(
 
 export function resolveCachedRscResponseExpiresAt(
   timestamp: number,
-  cached: Pick<
-    CachedRscResponse,
-    "dynamicStaleTimeSeconds" | "expiresAt" | "staleTimePending" | "staleTimeSeconds"
-  >,
+  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt" | "serverStaleTime">,
   fallbackTtlMs: number,
 ): number {
   if (isCacheExpiresAt(cached.expiresAt)) {
@@ -475,10 +467,7 @@ export function resolveCachedRscResponseExpiresAt(
 
 function resolvePrefetchedRscResponseExpiresAt(
   timestamp: number,
-  cached: Pick<
-    CachedRscResponse,
-    "dynamicStaleTimeSeconds" | "expiresAt" | "staleTimePending" | "staleTimeSeconds"
-  >,
+  cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt" | "serverStaleTime">,
   fallbackTtlMs: number,
   minimumTtlMs: number = MIN_PREFETCH_STALE_TIME_MS,
 ): number {
@@ -998,10 +987,7 @@ export function createCachedRscResponseSnapshot(
   const dynamicStaleTimeSeconds = parseStaleTimeSecondsHeader(
     response.headers.get(VINEXT_DYNAMIC_STALE_TIME_HEADER),
   );
-  const staleTimeSeconds = parseStaleTimeSecondsHeader(
-    response.headers.get(NEXT_ROUTER_STALE_TIME_HEADER),
-  );
-  const staleTimePending = response.headers.get(VINEXT_STALE_TIME_PENDING_HEADER) === "1";
+  const serverStaleTime = parseServerStaleTimeHeaders(response.headers);
   return {
     compatibilityIdHeader: response.headers.get(VINEXT_RSC_COMPATIBILITY_ID_HEADER),
     buffer,
@@ -1012,10 +998,20 @@ export function createCachedRscResponseSnapshot(
     renderedPathAndSearch: parseRenderedPathAndSearchHeader(
       response.headers.get(VINEXT_RENDERED_PATH_AND_SEARCH_HEADER),
     ),
-    ...(staleTimePending ? { staleTimePending: true } : {}),
-    ...(staleTimeSeconds !== undefined ? { staleTimeSeconds } : {}),
+    ...(serverStaleTime === undefined ? {} : { serverStaleTime }),
     url: responseUrl ?? response.url,
   };
+}
+
+/**
+ * Collapse the two mutually-exclusive wire headers into one state. A pending
+ * marker wins: it says the render committed headers before `cacheLife` settled,
+ * so any resolved value alongside it cannot describe the completed render.
+ */
+function parseServerStaleTimeHeaders(headers: Headers): ServerStaleTime | undefined {
+  if (headers.get(VINEXT_STALE_TIME_PENDING_HEADER) === "1") return { kind: "pending" };
+  const seconds = parseStaleTimeSecondsHeader(headers.get(NEXT_ROUTER_STALE_TIME_HEADER));
+  return seconds === undefined ? undefined : { kind: "resolved", seconds };
 }
 
 function parseRenderedPathAndSearchHeader(value: string | null): string | null {
@@ -1066,11 +1062,10 @@ export function restoreRscResponse(cached: CachedRscResponse, copy = true): Resp
   if (isStaleTimeSeconds(cached.dynamicStaleTimeSeconds)) {
     headers.set(VINEXT_DYNAMIC_STALE_TIME_HEADER, String(cached.dynamicStaleTimeSeconds));
   }
-  if (isStaleTimeSeconds(cached.staleTimeSeconds)) {
-    headers.set(NEXT_ROUTER_STALE_TIME_HEADER, String(cached.staleTimeSeconds));
-  }
-  if (cached.staleTimePending === true) {
+  if (cached.serverStaleTime?.kind === "pending") {
     headers.set(VINEXT_STALE_TIME_PENDING_HEADER, "1");
+  } else if (cached.serverStaleTime !== undefined) {
+    headers.set(NEXT_ROUTER_STALE_TIME_HEADER, String(cached.serverStaleTime.seconds));
   }
   if (cached.paramsHeader != null) {
     headers.set(VINEXT_PARAMS_HEADER, cached.paramsHeader);

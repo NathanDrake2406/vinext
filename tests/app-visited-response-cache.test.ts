@@ -83,7 +83,7 @@ describe("visited response cache freshness", () => {
     const entry = createVisitedResponseCacheEntry({
       now,
       params: {},
-      response: createCachedResponse({ staleTimeSeconds: 30 }),
+      response: createCachedResponse({ serverStaleTime: { kind: "resolved", seconds: 30 } }),
     });
 
     expect(entry.expiresAt).toBe(now + 30_000);
@@ -103,7 +103,7 @@ describe("visited response cache freshness", () => {
     const entry = createVisitedResponseCacheEntry({
       now,
       params: {},
-      response: createCachedResponse({ staleTimePending: true }),
+      response: createCachedResponse({ serverStaleTime: { kind: "pending" } }),
     });
 
     expect(entry.expiresAt).toBe(now + 30_000);
@@ -115,7 +115,10 @@ describe("visited response cache freshness", () => {
     const entry = createVisitedResponseCacheEntry({
       now,
       params: {},
-      response: createCachedResponse({ dynamicStaleTimeSeconds: 0, staleTimePending: true }),
+      response: createCachedResponse({
+        dynamicStaleTimeSeconds: 0,
+        serverStaleTime: { kind: "pending" },
+      }),
     });
 
     expect(entry.expiresAt).toBe(now);
@@ -134,7 +137,7 @@ describe("visited response cache freshness", () => {
     const entry = createVisitedResponseCacheEntry({
       now,
       params: {},
-      response: createCachedResponse({ staleTimeSeconds: 5 }),
+      response: createCachedResponse({ serverStaleTime: { kind: "resolved", seconds: 5 } }),
     });
 
     expect(entry.expiresAt).toBe(now + 30_000);
@@ -150,7 +153,10 @@ describe("visited response cache freshness", () => {
       createVisitedResponseCacheEntry({
         now,
         params: {},
-        response: createCachedResponse({ dynamicStaleTimeSeconds: 120, staleTimeSeconds: 30 }),
+        response: createCachedResponse({
+          dynamicStaleTimeSeconds: 120,
+          serverStaleTime: { kind: "resolved", seconds: 30 },
+        }),
       }).expiresAt,
     ).toBe(now + 30_000);
 
@@ -158,7 +164,10 @@ describe("visited response cache freshness", () => {
       createVisitedResponseCacheEntry({
         now,
         params: {},
-        response: createCachedResponse({ dynamicStaleTimeSeconds: 10, staleTimeSeconds: 300 }),
+        response: createCachedResponse({
+          dynamicStaleTimeSeconds: 10,
+          serverStaleTime: { kind: "resolved", seconds: 300 },
+        }),
       }).expiresAt,
     ).toBe(now + 10_000);
   });

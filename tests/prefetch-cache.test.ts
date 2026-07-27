@@ -430,7 +430,7 @@ describe("prefetch cache eviction", () => {
     const snapshot = await snapshotRscResponse(response);
     const restored = restoreRscResponse(snapshot);
 
-    expect(snapshot.staleTimeSeconds).toBe(30);
+    expect(snapshot.serverStaleTime).toEqual({ kind: "resolved", seconds: 30 });
     expect(restored.headers.get(NEXT_ROUTER_STALE_TIME_HEADER)).toBe("30");
   });
 
@@ -445,7 +445,7 @@ describe("prefetch cache eviction", () => {
     const snapshot = await snapshotRscResponse(response);
     const restored = restoreRscResponse(snapshot);
 
-    expect(snapshot.staleTimePending).toBe(true);
+    expect(snapshot.serverStaleTime).toEqual({ kind: "pending" });
     expect(restored.headers.get(VINEXT_STALE_TIME_PENDING_HEADER)).toBe("1");
   });
 
