@@ -56,7 +56,14 @@ export function scheduleAppPrefetchFetch(
     const control = { cancel: () => controller.abort() };
     appPrefetchFetchControls.set(promise, control);
     void promise.then(
-      () => appPrefetchFetchControls.delete(promise),
+      (response) => {
+        // Keep cancellation live while the response body streams. The
+        // consumer releases this after snapshotting (or when dropping a
+        // non-success response), matching the low-priority lifecycle below.
+        (response as Response & Record<symbol, (() => void) | undefined>)[
+          APP_PREFETCH_FETCH_SLOT_RELEASE_KEY
+        ] = () => appPrefetchFetchControls.delete(promise);
+      },
       () => appPrefetchFetchControls.delete(promise),
     );
     return promise;
@@ -73,6 +80,7 @@ export function scheduleAppPrefetchFetch(
       const release = () => {
         if (didRelease) return;
         didRelease = true;
+        appPrefetchFetchControls.delete(promise);
         activeDefaultAppPrefetchRequests -= 1;
         drainDefaultAppPrefetchQueue();
       };
@@ -80,7 +88,6 @@ export function scheduleAppPrefetchFetch(
       try {
         fetcher(controller.signal).then(
           (response) => {
-            appPrefetchFetchControls.delete(promise);
             (response as Response & Record<symbol, (() => void) | undefined>)[
               APP_PREFETCH_FETCH_SLOT_RELEASE_KEY
             ] = release;

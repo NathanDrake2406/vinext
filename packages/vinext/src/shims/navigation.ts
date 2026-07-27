@@ -2549,7 +2549,7 @@ const _appRouter: AppRouterInstance = {
       if (HAS_CLIENT_REWRITES) {
         await preloadHybridClientRouteOwner();
       }
-      const hybridOwner = resolveHybridClientRouteOwner(prefetchHref);
+      const hybridOwner = resolveHybridClientRouteOwner(fullHref);
       if (hybridOwner === "pages" || hybridOwner === "document") {
         return;
       }
@@ -2582,7 +2582,7 @@ const _appRouter: AppRouterInstance = {
       const policy =
         kind === "full"
           ? resolveFullAppRoutePrefetch()
-          : resolveAutoAppRoutePrefetch(rewrittenPrefetchHref ?? prefetchHref);
+          : resolveAutoAppRoutePrefetch(rewrittenPrefetchHref ?? fullHref);
       const reusable = policy.shouldPrefetch && policy.cacheForNavigation;
       // The call-time header snapshot defaults to AUTO/learning semantics.
       // A full reusable prefetch is the one policy that suppresses this header.

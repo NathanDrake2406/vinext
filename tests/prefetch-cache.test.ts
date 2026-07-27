@@ -688,6 +688,77 @@ describe("prefetch cache eviction", () => {
     );
   });
 
+  it("keeps an abort control while a superseded response body is streaming (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: true, patternParts: ["reports"], isDynamic: false },
+    ];
+    let firstSignal: AbortSignal | undefined;
+    const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (fetch.mock.calls.length === 1) {
+        firstSignal = init?.signal ?? undefined;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            firstSignal?.addEventListener("abort", () => controller.error(firstSignal?.reason), {
+              once: true,
+            });
+          },
+        });
+        // Headers resolve immediately while arrayBuffer() remains pending.
+        return Promise.resolve(
+          new Response(body, { headers: { "content-type": "text/x-component" } }),
+        );
+      }
+      return Promise.resolve(
+        new Response("flight", { headers: { "content-type": "text/x-component" } }),
+      );
+    });
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/reports");
+    await waitForPrefetchSetup(() => fetch.mock.calls.length === 1);
+    // Allow fetch()'s resolved Response to enter snapshotRscResponse(), where
+    // its body remains in flight and continues to own a queue slot.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    appRouterInstance.prefetch("/reports", { kind: "full" });
+    await waitForPrefetchSetup(() => fetch.mock.calls.length === 2);
+
+    expect(firstSignal?.aborted).toBe(true);
+    await waitForPrefetchSetup(() =>
+      [...getPrefetchCache().values()].some((entry) => entry.outcome === "cache-seeded"),
+    );
+  });
+
+  it("resolves relative router.prefetch policy from the call-time URL (#2707)", async () => {
+    const window = (globalThis as any).window;
+    window.location.pathname = "/docs/current";
+    window.location.href = "http://localhost/docs/current";
+    window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["docs", "next"], isDynamic: false },
+    ];
+    let fetchedUrl: string | undefined;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      fetchedUrl = toRscUrlString(input);
+      return new Response("flight", { headers: { "content-type": "text/x-component" } });
+    });
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("next");
+    // Policy and ownership resolution run after dynamic imports. Moving the
+    // browser URL in the same task must not make the relative href resolve from
+    // this later location.
+    window.location.pathname = "/elsewhere";
+    window.location.href = "http://localhost/elsewhere";
+
+    await waitForPrefetchSetup(() => fetch.mock.calls.length === 1);
+    if (fetchedUrl === undefined) throw new Error("Expected the relative prefetch to fetch");
+    expect(new URL(fetchedUrl, "http://localhost").pathname).toBe("/docs/next");
+    const cacheKey = AppElementsWire.encodeCacheKey(fetchedUrl, null);
+    await waitForPrefetchSetup(() => getPrefetchCache().get(cacheKey)?.outcome === "cache-seeded");
+    expect(consumePrefetchResponse(fetchedUrl, null, null)).not.toBeNull();
+  });
+
   it("does not repopulate the prefetch cache across an invalidation (#2707)", async () => {
     (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
       { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
