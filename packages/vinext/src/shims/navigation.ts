@@ -46,7 +46,12 @@ import {
   VINEXT_PARAMS_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../server/headers.js";
-import { toBrowserNavigationHref, toSameOriginAppPath, withBasePath } from "./url-utils.js";
+import {
+  isHashOnlyBrowserUrlChange,
+  toBrowserNavigationHref,
+  toSameOriginAppPath,
+  withBasePath,
+} from "./url-utils.js";
 import { navigationPlanner } from "../server/navigation-planner.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
@@ -2209,7 +2214,27 @@ function resetStaleLinkStatus(): void {
  */
 function notifyAppNavigationStart(href: string): void {
   const destination = toAppPrefetchDestination(href);
-  // A destination on another origin cannot duplicate a same-origin prefetch.
+  // A destination on another origin cannot duplicate a same-origin prefetch,
+  // and a same-document hash change scrolls to its target without an RSC
+  // fetch, so neither supersedes a pending prefetch. The hash is stripped from
+  // the destination above precisely because it does not select a resource —
+  // which makes checking for the same-document case here load-bearing.
+  if (destination !== null && !isHashOnlyBrowserUrlChange(href, window.location.href, __basePath)) {
+    cancelPendingPrefetchSetups(destination);
+  }
+  resetStaleLinkStatus();
+}
+
+/**
+ * popstate variant. The browser has already applied the history entry by the
+ * time this runs, so the pre-navigation URL that `isHashOnlyBrowserUrlChange`
+ * needs is gone. Back/forward across a route boundary does drive an RSC fetch
+ * (`app-browser-entry.ts`'s popstate handler), so cancelling by destination is
+ * right; a hash-only entry over-cancels, which costs one re-prefetch and can
+ * never cause a duplicate request.
+ */
+function notifyAppPopstateNavigationStart(): void {
+  const destination = toAppPrefetchDestination(window.location.href);
   if (destination !== null) cancelPendingPrefetchSetups(destination);
   resetStaleLinkStatus();
 }
@@ -2848,7 +2873,7 @@ if (!isServer) {
       // not initiate, so clear any sticky `useLinkStatus()` pending state. Runs
       // for both routers; the App Router's own popstate handler (in
       // app-browser-entry.ts) drives scroll restoration and RSC fetching.
-      notifyAppNavigationStart(window.location.href);
+      notifyAppPopstateNavigationStart();
     });
 
     window.addEventListener("popstate", (event) => {

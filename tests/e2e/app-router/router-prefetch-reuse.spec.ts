@@ -140,6 +140,34 @@ test.describe("router.prefetch navigation reuse", () => {
     await expect.poll(() => filmRscRequests.length).toBe(1);
   });
 
+  test("a same-document hash change does not cancel a pending prefetch", async ({ page }) => {
+    // The fragment is stripped when comparing a navigation against pending
+    // prefetch destinations, because it never reaches the RSC request. That
+    // makes a hash-only navigation compare equal to the route it scrolls
+    // within — but it issues no request, so it must not cancel anything.
+    //
+    // Like the shallow-history case above, this cannot live in the unit suite:
+    // driving a hash navigation there needs a DOM the harness does not have.
+    await page.goto(`${BASE}${FILM_HREF}`);
+    await waitForAppRouterHydration(page);
+
+    const filmRscRequests: string[] = [];
+    page.on("request", (request) => {
+      if (isFilmRscRequest(request)) filmRscRequests.push(request.url());
+    });
+
+    await page.evaluate((href) => {
+      const router = (window as RouterWindow).next?.router;
+      if (router === undefined) throw new Error("Missing app router instance");
+      router.prefetch(href);
+      // Already on href, so this only scrolls — it is not the navigation that
+      // would make the prefetch above redundant.
+      void router.push(`${href}#cast`);
+    }, FILM_HREF);
+
+    await expect.poll(() => filmRscRequests.length).toBe(1);
+  });
+
   test("click without prefetch issues exactly one navigation request", async ({ page }) => {
     // Guards the request counter above: proves a plain click is observed as a
     // /film/* RSC request, so the reuse test's "still 1" assertion is meaningful.
