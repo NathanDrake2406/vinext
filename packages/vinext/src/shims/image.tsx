@@ -249,8 +249,8 @@ function getFillStyle(
     width: "100%",
     height: "100%",
     objectFit: "cover",
-    ...backgroundStyle,
     ...style,
+    ...backgroundStyle,
   };
 }
 
@@ -260,6 +260,12 @@ function getFillStyle(
  * Upstream builds this style independently of which loader produced the URLs
  * (`get-img-props.ts` merges `placeholderStyle` last, for every path), so the
  * caller owns the "should it be showing" decision and this owns only the shape.
+ *
+ * Callers must spread it *after* the user's `style`. It wins on purpose: a
+ * caller that sets `backgroundImage` for its own reasons would otherwise
+ * silently suppress the placeholder for the few hundred ms it exists, and the
+ * user style takes over again once `blurComplete` drops the placeholder
+ * entirely. Upstream merges in the same order (`get-img-props.ts:574-577`).
  *
  * @param sanitizedBlurDataURL Must already have passed `sanitizeBlurDataURL` —
  *   it is interpolated into a CSS `url()` and would otherwise allow injection.
@@ -676,7 +682,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         data-nimg={fill ? "fill" : "1"}
         onLoad={handleLoad}
         onError={handleError}
-        style={fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style }}
+        style={fill ? getFillStyle(style, blurStyle) : { ...style, ...blurStyle }}
         {...rest}
       />
     );
@@ -736,7 +742,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
         data-nimg={fill ? "fill" : "1"}
         onLoad={handleLoad}
         onError={handleError}
-        style={fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style }}
+        style={fill ? getFillStyle(style, blurStyle) : { ...style, ...blurStyle }}
         {...rest}
       />
     );
@@ -896,7 +902,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
       data-nimg={fill ? "fill" : "1"}
       onLoad={handleLoad}
       onError={handleError}
-      style={fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style }}
+      style={fill ? getFillStyle(style, blurStyle) : { ...style, ...blurStyle }}
       {...rest}
     />
   );
@@ -963,7 +969,7 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
       fetchPriority: priority ? ("high" as const) : undefined,
       decoding: "async" as const,
       className,
-      style: fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style },
+      style: fill ? getFillStyle(style, blurStyle) : { ...style, ...blurStyle },
       ...rest,
       sizes: sizes ?? (fill ? "100vw" : undefined),
       srcSet: undefined,
@@ -1049,7 +1055,7 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
     // the loader-generated candidates in `srcSet`.
     src: overrideSrc || optimizedSrc,
     className,
-    style: fill ? getFillStyle(style, blurStyle) : { ...blurStyle, ...style },
+    style: fill ? getFillStyle(style, blurStyle) : { ...style, ...blurStyle },
     ...rest,
   };
   return { props: Object.assign(imageProps, { "data-nimg": fill ? "fill" : "1" }) };

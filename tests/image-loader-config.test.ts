@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { toSlash } from "pathslash";
 import { describe, it, expect } from "vite-plus/test";
 import {
   generateImageLoaderModule,
@@ -171,7 +172,11 @@ describe("resolveNextConfig images.loaderFile", () => {
   it("resolves a relative loaderFile against the project root", async () => {
     const root = makeProjectRoot();
     const config = await resolveNextConfig({ images: { loaderFile: "./loader.mjs" } }, root);
-    expect(config.images?.loaderFile).toBe(`${root}/loader.mjs`);
+    // `resolveImageLoaderFile` returns a `toSlash`-normalized path, so the
+    // expectation has to be normalized too — `root` comes from `mkdtempSync`
+    // and carries native separators, which on Windows would otherwise compare a
+    // half-backslash path against a forward-slash one.
+    expect(config.images?.loaderFile).toBe(toSlash(path.join(root, "loader.mjs")));
   });
 
   it("leaves loaderFile undefined when unset", async () => {

@@ -203,6 +203,30 @@ describe("Image SSR rendering", () => {
     expect(html).toContain("background-size:cover");
   });
 
+  it("keeps the blur placeholder above a caller background style", () => {
+    // Upstream merges `placeholderStyle` after `imgStyle` — which already
+    // contains the caller's `style` — so the placeholder wins while it is
+    // showing (`get-img-props.ts:574-577`). Merged the other way the
+    // placeholder is present in the style object but invisible, which is the
+    // failure this pins: assert the blur URL wins, not merely that it appears.
+    const blurDataURL = "data:image/png;base64,abc123";
+    for (const fill of [false, true]) {
+      const html = ReactDOMServer.renderToString(
+        React.createElement(Image, {
+          alt: "blurry",
+          src: "/photo.jpg",
+          ...(fill ? { fill: true } : { width: 400, height: 300 }),
+          placeholder: "blur",
+          blurDataURL,
+          style: { backgroundImage: "url(/caller.png)", backgroundSize: "contain" },
+        }),
+      );
+      expect(html, `fill=${fill}`).toContain(`background-image:url(${blurDataURL})`);
+      expect(html, `fill=${fill}`).not.toContain("url(/caller.png)");
+      expect(html, `fill=${fill}`).toContain("background-size:cover");
+    }
+  });
+
   it("renders with custom loader", () => {
     const loader = ({ src, width, quality }: { src: string; width: number; quality?: number }) =>
       `https://cdn.example.com${src}?w=${width}&q=${quality || 75}`;
