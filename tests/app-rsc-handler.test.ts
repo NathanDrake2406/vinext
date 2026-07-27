@@ -592,6 +592,62 @@ describe("createAppRscHandler", () => {
     );
   });
 
+  // Interception renders the source route's tree, so that route must clear the
+  // same middleware boundary a direct request to it would. Next.js never renders
+  // the source for this request (its rewrite targets the intercepting route and
+  // the client keeps its own segments), so there is no upstream behaviour to
+  // mirror here; the boundary exists because vinext renders the extra route.
+  it("denies an interception source route that middleware rejects", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const sourceRoute = createPageRoute({ pattern: "/feed/secret" });
+    const dispatchMatchedPage = vi.fn(async () => new Response("secret"));
+    const middlewarePaths: string[] = [];
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      matchInterceptRoute: (_pathname, sourcePathname) =>
+        sourcePathname === "/feed/secret" ? { route: sourceRoute, params: {} } : null,
+      matchRoute: (pathname: string) =>
+        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+      async runMiddleware({ cleanPathname }) {
+        middlewarePaths.push(cleanPathname);
+        return cleanPathname.startsWith("/feed/secret")
+          ? { kind: "response", response: new Response("denied", { status: 401 }) }
+          : { kind: "continue", cleanPathname, rewritten: false, search: null };
+      },
+    });
+
+    const headers = createRscRequestHeaders({ interceptionContext: "/feed/secret" });
+    const rscUrl = await createRscRequestUrl("/docs/photos/1", headers);
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(401);
+    await expect(response.text()).resolves.toBe("denied");
+    expect(middlewarePaths).toEqual(["/photos/1", "/feed/secret"]);
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("does not re-run middleware when no interception context is supplied", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const middlewarePaths: string[] = [];
+    const handler = createHandler({
+      configHeaders: [],
+      matchInterceptRoute: () => null,
+      matchRoute: (pathname: string) =>
+        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+      async runMiddleware({ cleanPathname }) {
+        middlewarePaths.push(cleanPathname);
+        return { kind: "continue", cleanPathname, rewritten: false, search: null };
+      },
+    });
+
+    const headers = createRscRequestHeaders({});
+    const rscUrl = await createRscRequestUrl("/docs/photos/1", headers);
+    await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(middlewarePaths).toEqual(["/photos/1"]);
+  });
+
   it("uses the request pathname consistently for encoded interception targets", async () => {
     const sourceRoute = createPageRoute({
       isDynamic: true,

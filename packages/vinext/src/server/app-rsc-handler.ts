@@ -886,12 +886,54 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const preActionRoutePathname = cleanPathnameIsRequestPathname
     ? requestCleanPathname
     : cleanPathname;
+  // Interception renders the *source* route's tree for this request. Next.js
+  // never does that: its generated rewrite points at the intercepting route and
+  // the client keeps the segments it already holds, so only the requested target
+  // is rendered server-side. Because vinext renders the source tree instead, one
+  // request reaches a second route that the middleware run above never saw, since
+  // that run received the target's cleanPathname. The source pathname arrives in
+  // a client header, so authorize it before anything downstream renders from it.
+  // Skipped when the source resolves to the route already matched and authorized
+  // for this request, which is also the case where interception does not fire.
+  const interceptionSourceMatch =
+    filesystemRouteEligible && isRscRequest && interceptionContextHeader !== null
+      ? (options.matchInterceptRoute?.(preActionRoutePathname, interceptionContextHeader) ?? null)
+      : null;
+  if (
+    interceptionSourceMatch !== null &&
+    interceptionContextHeader !== null &&
+    runMiddleware &&
+    interceptionSourceMatch.route !== directPreActionMatch?.route
+  ) {
+    const sourceUrl = new URL(userlandRequest.url);
+    sourceUrl.pathname = hadBasePath
+      ? addBasePathToPathname(interceptionContextHeader, options.basePath)
+      : interceptionContextHeader;
+    const sourceMiddlewareResult = await runMiddleware({
+      cleanPathname: interceptionContextHeader,
+      // Deliberately not the request's `middlewareContext`. This run decides
+      // whether the source route may render; it does not contribute headers or
+      // status to the target's response, which belongs to a different route.
+      context: { headers: null, requestHeaders: null, status: null },
+      hadBasePath,
+      isDataRequest: isMiddlewareDataRequest,
+      request: cloneRequestWithUrl(userlandRequest, sourceUrl.href),
+    });
+    // Only a returned response is a denial. A rewrite or a normalized pathname
+    // means middleware let this source through and merely sends it elsewhere,
+    // which is a routing concern rather than an authorization one, and Next.js
+    // would not re-render the source for this request either way.
+    if (sourceMiddlewareResult.kind === "response") {
+      options.clearRequestContext();
+      return sourceMiddlewareResult.response;
+    }
+  }
   const interceptionPreActionMatch =
     filesystemRouteEligible &&
     directPreActionMatch === null &&
     isRscRequest &&
     interceptionContextHeader !== null
-      ? (options.matchInterceptRoute?.(preActionRoutePathname, interceptionContextHeader) ?? null)
+      ? interceptionSourceMatch
       : null;
   const preActionMatch = directPreActionMatch ?? interceptionPreActionMatch;
   const isInterceptionMatch = interceptionPreActionMatch !== null;
