@@ -225,7 +225,7 @@ export type PagesPageModule = {
 type RenderPagesIsrHtmlOptions = {
   buildId: string | null;
   cachedHtml: string;
-  collectIsrHeadHTML?: (() => Promise<string>) | undefined;
+  collectIsrHeadHTML?: (() => string) | undefined;
   createPageElement: (props: Record<string, unknown>) => ReactNode;
   i18n: PagesI18nRenderContext;
   pageProps: Record<string, unknown>;
@@ -347,7 +347,7 @@ export type ResolvePagesPageDataOptions = {
    * inside that render's head scope so the regenerated shell can pick up
    * `next/head` output derived from the refreshed `getStaticProps` data.
    */
-  collectIsrHeadHTML?: (() => Promise<string>) | undefined;
+  collectIsrHeadHTML?: (() => string) | undefined;
   vinext?: VinextNextData["__vinext"];
   nextData?: PagesNextDataExtras;
   /**
@@ -1012,6 +1012,14 @@ const SSR_HEAD_TAG_PATTERN =
   /<(title|meta|link|style|script|base|noscript)\b[^>]*?\sdata-next-head=""[^>]*?(?:\/>|>[\s\S]*?<\/\1>)/g;
 
 /**
+ * Matches a whole `<script>`/`<style>` element. Their bodies are raw text, so
+ * markup-looking strings inside them are not markup — and `headChildToHTML()`
+ * only escapes `</script`/`</style`, so an inline script from `next/head` may
+ * legitimately carry a literal `</head>`.
+ */
+const RAW_TEXT_ELEMENT_PATTERN = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
+
+/**
  * Replace the `next/head` region of a cached shell with a freshly collected
  * one.
  *
@@ -1036,7 +1044,14 @@ function refreshCachedHeadTags(cachedHtml: string, freshHead: string): string {
   // cached head alone rather than deleting the tags we do have.
   if (!freshHead) return cachedHtml;
 
-  const headEnd = cachedHtml.indexOf("</head>");
+  // Blank out raw-text bodies before locating the boundary so a `</head>`
+  // string inside an inline script is not mistaken for the closing tag —
+  // that would truncate the scan and leave stale tags behind the fresh head.
+  // The replacement is length-preserving, so the index still maps onto
+  // `cachedHtml`.
+  const headEnd = cachedHtml
+    .replace(RAW_TEXT_ELEMENT_PATTERN, (element) => " ".repeat(element.length))
+    .indexOf("</head>");
   if (headEnd < 0) return cachedHtml;
 
   const matches = [...cachedHtml.slice(0, headEnd).matchAll(SSR_HEAD_TAG_PATTERN)];
@@ -1092,7 +1107,7 @@ export async function renderPagesIsrHtml(options: RenderPagesIsrHtmlOptions): Pr
     options.createPageElement(renderProps),
     collectHead &&
       (async () => {
-        freshHead = await collectHead();
+        freshHead = collectHead();
       }),
   );
   const nextDataScript = buildPagesNextDataScript({
