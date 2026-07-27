@@ -22,7 +22,10 @@ import type {
   VinextLinkPrefetchRoute,
   VinextPagesLinkPrefetchRoute,
 } from "../packages/vinext/src/client/vinext-next-data.js";
-import type { ClientRewrites } from "../packages/vinext/src/client/client-rewrites.js";
+import {
+  toClientRewrites,
+  type ClientRewrites,
+} from "../packages/vinext/src/client/client-rewrites.js";
 import {
   resolveHybridClientRewriteHref,
   resolveHybridClientRouteOwner,
@@ -207,36 +210,52 @@ describe("resolveHybridClientRouteOwner", () => {
     expect(resolveHybridClientRouteOwner("/source?preview=1", "")).toBe("app");
   });
 
-  it("hands server-evaluated rewrites back to the document request", () => {
+  it("hands rewrites with browser-invisible conditions back to the document request", () => {
     installWindow({
       app: [appRoute(["app-destination"], false)],
       pages: [],
-      rewrites: {
+      rewrites: toClientRewrites({
         afterFiles: [],
-        beforeFiles: [{ source: "/source", requiresServerEvaluation: true }],
+        beforeFiles: [
+          {
+            source: "/cookie-source",
+            destination: "/app-destination",
+            has: [{ type: "cookie", key: "internal-access", value: "cookie-secret" }],
+          },
+          {
+            source: "/header-source",
+            destination: "/app-destination",
+            has: [{ type: "header", key: "x-origin-auth", value: "header-secret" }],
+          },
+        ],
         fallback: [],
-      },
+      }),
     });
 
-    expect(resolveHybridClientRewriteHref("/source", "")).toBeNull();
-    expect(resolveHybridClientRouteOwner("/source", "")).toBe("document");
+    expect(resolveHybridClientRewriteHref("/cookie-source", "")).toBeNull();
+    expect(resolveHybridClientRouteOwner("/cookie-source", "")).toBe("document");
+    expect(resolveHybridClientRewriteHref("/header-source", "")).toBeNull();
+    expect(resolveHybridClientRouteOwner("/header-source", "")).toBe("document");
   });
 
-  it("checks public has conditions before handing a rewrite to the server", () => {
+  it("uses browser-authoritative conditions as a server handoff prefilter", () => {
     installWindow({
       app: [appRoute(["app-destination"], false)],
       pages: [],
-      rewrites: {
+      rewrites: toClientRewrites({
         afterFiles: [],
         beforeFiles: [
           {
             source: "/source",
-            has: [{ type: "query", key: "preview", value: "1" }],
-            requiresServerEvaluation: true,
+            destination: "/app-destination",
+            has: [
+              { type: "query", key: "preview", value: "1" },
+              { type: "cookie", key: "internal-access", value: "cookie-secret" },
+            ],
           },
         ],
         fallback: [],
-      },
+      }),
     });
 
     expect(resolveHybridClientRouteOwner("/source", "")).toBeNull();

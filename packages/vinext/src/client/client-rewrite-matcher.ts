@@ -18,7 +18,7 @@ export function matchClientRewrite(
       {
         source: rewrite.source,
         // Server-evaluated rules use a harmless local destination only to
-        // determine whether their public source/has fields match.
+        // determine whether their client-safe source/has fields match.
         destination: rewrite.destination ?? "/",
         has: rewrite.has,
         locale: rewrite.locale,

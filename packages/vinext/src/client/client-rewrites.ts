@@ -1,14 +1,21 @@
-import type { NextRewrite, ResolvedNextConfig } from "../config/next-config.js";
+import type { HasCondition, NextRewrite, ResolvedNextConfig } from "../config/next-config.js";
 import { isExternalUrl } from "../utils/external-url.js";
 
-type ClientRewriteFields = Pick<NextRewrite, "basePath" | "has" | "locale" | "source">;
+type ClientHasCondition = Omit<HasCondition, "type"> & {
+  type: "host" | "query";
+};
+
+type ClientRewriteFields = Pick<NextRewrite, "basePath" | "locale" | "source"> & {
+  has?: ClientHasCondition[];
+};
 
 /**
  * Rewrite data that is safe to publish in a browser bundle.
  *
  * Rules that require server-only data deliberately omit both the destination
  * and the data that made server evaluation necessary. The client can still
- * match their public source/has fields, then hand the navigation to the server.
+ * use browser-authoritative conditions as a prefilter before handing the
+ * navigation to the server.
  */
 export type ClientRewrite =
   | (ClientRewriteFields & {
@@ -26,15 +33,39 @@ export type ClientRewrites = {
   fallback: ClientRewrite[];
 };
 
+function isClientHasCondition(condition: HasCondition): condition is ClientHasCondition {
+  switch (condition.type) {
+    case "host":
+    case "query":
+      return true;
+    case "cookie":
+    case "header":
+      // Headers may be added or changed by an intermediary, and HttpOnly
+      // cookies are intentionally unavailable to browser JavaScript.
+      return false;
+    default:
+      // Runtime config is an external boundary. Keep unknown future condition
+      // types server-owned even before the public TypeScript type learns them.
+      return false;
+  }
+}
+
 function toClientRewrite(rewrite: NextRewrite): ClientRewrite {
+  const clientHas = rewrite.has?.filter(isClientHasCondition);
+  const hasServerOnlyCondition =
+    rewrite.has?.some((condition) => !isClientHasCondition(condition)) ?? false;
   const common = {
     source: rewrite.source,
-    has: rewrite.has,
+    has: clientHas?.length ? clientHas : undefined,
     locale: rewrite.locale,
     basePath: rewrite.basePath,
   };
 
-  if (isExternalUrl(rewrite.destination) || (rewrite.missing?.length ?? 0) > 0) {
+  if (
+    isExternalUrl(rewrite.destination) ||
+    (rewrite.missing?.length ?? 0) > 0 ||
+    hasServerOnlyCondition
+  ) {
     return {
       ...common,
       requiresServerEvaluation: true,
@@ -44,7 +75,7 @@ function toClientRewrite(rewrite: NextRewrite): ClientRewrite {
   return {
     source: rewrite.source,
     destination: rewrite.destination,
-    has: rewrite.has,
+    has: common.has,
     locale: rewrite.locale,
     basePath: rewrite.basePath,
   };

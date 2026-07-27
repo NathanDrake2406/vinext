@@ -142,12 +142,22 @@ describe("App Router generated manifest construction", () => {
           source: "/external",
           destination: "https://internal.example/proxy?token=external-destination-canary",
         },
+        {
+          source: "/header",
+          destination: "/header-target-canary",
+          has: [{ type: "header", key: "x-origin-auth", value: "header-secret-canary" }],
+        },
       ],
       fallback: [
         {
           source: "/missing-cookie",
           destination: "/about",
           missing: [{ type: "cookie", key: "session", value: "missing-condition-canary" }],
+        },
+        {
+          source: "/cookie",
+          destination: "/cookie-target-canary",
+          has: [{ type: "cookie", key: "internal-access", value: "cookie-secret-canary" }],
         },
       ],
     });
@@ -158,6 +168,10 @@ describe("App Router generated manifest construction", () => {
     expect(code).not.toContain("internal.example");
     expect(code).not.toContain("external-destination-canary");
     expect(code).not.toContain("missing-condition-canary");
+    expect(code).not.toContain("header-target-canary");
+    expect(code).not.toContain("header-secret-canary");
+    expect(code).not.toContain("cookie-target-canary");
+    expect(code).not.toContain("cookie-secret-canary");
   });
 
   it("embeds the Link auto-prefetch route manifest in the browser entry", () => {
@@ -1392,12 +1406,22 @@ describe("Pages Router entry template", () => {
                 source: "/external",
                 destination: "https://internal.example/proxy?token=external-destination-canary",
               },
+              {
+                source: "/header",
+                destination: "/header-target-canary",
+                has: [{ type: "header", key: "x-origin-auth", value: "header-secret-canary" }],
+              },
             ],
             fallback: [
               {
                 source: "/missing-cookie",
                 destination: "/about",
                 missing: [{ type: "cookie", key: "session", value: "missing-condition-canary" }],
+              },
+              {
+                source: "/cookie",
+                destination: "/cookie-target-canary",
+                has: [{ type: "cookie", key: "internal-access", value: "cookie-secret-canary" }],
               },
             ],
           }),
@@ -1411,6 +1435,10 @@ describe("Pages Router entry template", () => {
       expect(code).not.toContain("internal.example");
       expect(code).not.toContain("external-destination-canary");
       expect(code).not.toContain("missing-condition-canary");
+      expect(code).not.toContain("header-target-canary");
+      expect(code).not.toContain("header-secret-canary");
+      expect(code).not.toContain("cookie-target-canary");
+      expect(code).not.toContain("cookie-secret-canary");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
