@@ -23,6 +23,7 @@ import {
   isAppPageRouteGroupSegment,
   resolveAppPagePatternStateKey,
   resolveAppPageRouteStateKey,
+  type AppPageSemanticSegment,
 } from "./app-page-segment-state.js";
 import { AppElementsWire, type AppElements } from "./app-elements.js";
 import { resolveAppPageParentHttpAccessBoundary, type AppPageParams } from "./app-page-boundary.js";
@@ -766,13 +767,32 @@ function isVisibleInterceptedSlotSegment(segment: string): boolean {
   return isInterceptedSlotIdentitySegment(segment) && !isAppPageRouteGroupSegment(segment);
 }
 
+/**
+ * Resolve the slot's semantic branch: the segments that give the intercepted
+ * slot its identity, with the interception marker split off and each segment
+ * already bound to the param map that owns it (the route's params up to the
+ * marker, the slot's params from the marker on).
+ */
 export function resolveInterceptedSlotIdentitySegments(
   sourcePageSegments: readonly string[] | null | undefined,
   slotKey: string,
-): readonly string[] | null {
+): readonly AppPageSemanticSegment[] | null {
   const source = resolveInterceptedSlotSource(sourcePageSegments, slotKey);
   if (!source || !sourcePageSegments) return null;
-  return sourcePageSegments.slice(source.segmentStart).filter(isInterceptedSlotIdentitySegment);
+  const semanticSegments: AppPageSemanticSegment[] = [];
+  let beforeMarker = true;
+  for (let index = source.segmentStart; index < sourcePageSegments.length; index++) {
+    const segment = sourcePageSegments[index];
+    if (!isInterceptedSlotIdentitySegment(segment)) continue;
+    const isMarkerSegment = index === source.markerIndex;
+    semanticSegments.push({
+      marker: isMarkerSegment ? source.marker.prefix : null,
+      paramSource: beforeMarker && !isMarkerSegment ? "route" : "slot",
+      segment: isMarkerSegment ? segment.slice(source.marker.prefix.length) : segment,
+    });
+    if (isMarkerSegment) beforeMarker = false;
+  }
+  return semanticSegments;
 }
 
 export function resolveInterceptedSlotSegments(

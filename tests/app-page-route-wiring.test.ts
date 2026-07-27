@@ -36,6 +36,29 @@ import {
 } from "../packages/vinext/src/shims/unified-request-context.js";
 import { buildPageElements as buildResolvedPageElements } from "../packages/vinext/src/server/app-page-element-builder.js";
 import { createNextBfcacheIdMap } from "../packages/vinext/src/server/app-bfcache-identity.js";
+import type { AppPageSemanticSegment } from "../packages/vinext/src/server/app-page-segment-state.js";
+
+const INTERCEPTION_MARKERS = ["(...)", "(..)(..)", "(..)", "(.)"] as const;
+
+/**
+ * Build the resolved semantic branch the route matcher hands to slot overrides.
+ * Production parses filesystem syntax once, in
+ * `resolveInterceptedSlotIdentitySegments`; fixtures still spell segments the
+ * filesystem way, so this mirrors that resolution for readability.
+ */
+function toSemanticSegments(segments: readonly string[]): AppPageSemanticSegment[] {
+  let beforeMarker = true;
+  return segments.map((segment) => {
+    const marker = INTERCEPTION_MARKERS.find((prefix) => segment.startsWith(prefix)) ?? null;
+    const paramSource = beforeMarker && marker === null ? "route" : "slot";
+    if (marker !== null) beforeMarker = false;
+    return {
+      marker,
+      paramSource,
+      segment: marker === null ? segment : segment.slice(marker.length),
+    };
+  });
+}
 
 function readNode(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -1838,7 +1861,7 @@ describe("app page route wiring helpers", () => {
         slotOverrides: {
           modal: {
             branchSegments: ["photos", "[album]", "[id]"],
-            identitySegments: ["(.)photos", "[album]", "[id]"],
+            identitySegments: toSemanticSegments(["(.)photos", "[album]", "[id]"]),
             layoutModules: [
               { default: PhotosLayout } as AppPageModule,
               { default: AlbumLayout } as AppPageModule,
@@ -1971,7 +1994,7 @@ describe("app page route wiring helpers", () => {
         slotOverrides: {
           modal: {
             branchSegments: ["[id]", "photo", "[id]"],
-            identitySegments: ["[id]", marker, "[id]"],
+            identitySegments: toSemanticSegments(["[id]", marker, "[id]"]),
             layoutModules: [{ default: SourceLayout } as AppPageModule],
             layoutSegments: [["[id]"]],
             pageModule: { default: SlotPage },
@@ -2060,7 +2083,7 @@ describe("app page route wiring helpers", () => {
       slotOverrides: {
         modal: {
           branchSegments: ["photo", "[id]"],
-          identitySegments,
+          identitySegments: toSemanticSegments(identitySegments),
           pageModule: { default: SlotPage },
           params: { id: "1" },
           routeSegments: ["photo", "[id]"],
@@ -2851,7 +2874,7 @@ describe("app page route wiring helpers", () => {
         slotOverrides: {
           modal: {
             branchSegments: identitySegments.map((segment) => segment.replace("(.)", "")),
-            identitySegments,
+            identitySegments: toSemanticSegments(identitySegments),
             pageModule: { default: SlotPage },
             params: { id: "42" },
             routeSegments: identitySegments.map((segment) => segment.replace("(.)", "")),

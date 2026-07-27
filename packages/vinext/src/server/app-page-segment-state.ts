@@ -130,6 +130,30 @@ export function resolveAppPageSegmentStateKey(
   return "";
 }
 
+/**
+ * A branch segment already resolved by route matching: the interception marker
+ * is split off and the param map that binds the segment is chosen. Downstream
+ * layers serialise these; they never reparse filesystem interception syntax.
+ */
+export type AppPageSemanticSegment = Readonly<{
+  /** Interception marker this segment carries, or null when it is a plain segment. */
+  marker: string | null;
+  /** Whether the route's matched params or the slot's own params bind the segment. */
+  paramSource: "route" | "slot";
+  /** Segment name with any interception marker removed. */
+  segment: string;
+}>;
+
+export function resolveAppPageSemanticSegmentStateKey(
+  semanticSegment: AppPageSemanticSegment,
+  params: AppPageParams,
+): string {
+  const { marker, segment } = semanticSegment;
+  if (isAppPageRouteGroupSegment(segment)) return segment;
+  const stateKey = resolveAppPageSegmentStateKey([segment], 0, params);
+  return marker ? JSON.stringify([marker, stateKey]) : stateKey;
+}
+
 export function resolveAppPageRouteStateKey(
   routeSegments: readonly string[],
   params: AppPageParams,

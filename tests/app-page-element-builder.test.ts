@@ -949,7 +949,13 @@ describe("buildPageElements", () => {
         ],
         "modal@(shell)/@outer/sub/@modal",
       ),
-    ).toEqual(["before", "(group)", "(.)[username]", "(nested)", "[id]"]);
+    ).toEqual([
+      { marker: null, paramSource: "route", segment: "before" },
+      { marker: null, paramSource: "route", segment: "(group)" },
+      { marker: "(.)", paramSource: "slot", segment: "[username]" },
+      { marker: null, paramSource: "slot", segment: "(nested)" },
+      { marker: null, paramSource: "slot", segment: "[id]" },
+    ]);
     expect(
       resolveAppPageRouteStateKey(interceptedSegments ?? [], { username: "foo", id: "1" }),
     ).toBe(JSON.stringify(["before", "username|foo|d", "id|1|d"]));
@@ -960,8 +966,8 @@ describe("buildPageElements", () => {
     const slotKey = "inner@feed/@outer/(.)photo/@inner";
 
     expect(resolveInterceptedSlotIdentitySegments(sourceSegments, slotKey)).toEqual([
-      "(.)comments",
-      "[id]",
+      { marker: "(.)", paramSource: "slot", segment: "comments" },
+      { marker: null, paramSource: "slot", segment: "[id]" },
     ]);
     expect(resolveInterceptedSlotSegments(sourceSegments, slotKey)).toEqual(["comments", "[id]"]);
   });
