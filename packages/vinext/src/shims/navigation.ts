@@ -708,19 +708,60 @@ function evictPrefetchCacheIfNeeded(): void {
 }
 
 /**
- * Prefetch-cache generation counter. `router.prefetch()` captures it before its
- * `await`s and re-checks after, so setup belonging to a superseded generation
- * cannot register an entry. It advances on two events, both of which mean "any
- * prefetch still being set up is now based on stale state":
- *   - a navigation starts (`notifyAppNavigationStart`), which will fetch the
- *     route itself — a late prefetch would duplicate that request
- *   - the prefetch cache is invalidated (`invalidatePrefetchCache`, reached via
- *     `router.refresh()`), which would otherwise be undone for that one route by
- *     a closure that started before the refresh
- * Mirrors `linkPrefetchNavigationEpoch` in link.tsx, which currently advances
- * only on the first of those.
+ * `router.prefetch()` calls whose asynchronous setup is still running. Each one
+ * registers a token before its first `await` and re-checks `cancelled` after,
+ * so superseded setup cannot register a cache entry or start a request.
+ *
+ * Cancellation is sticky and scoped to the destination:
+ *   - a navigation to the same href (`notifyAppNavigationStart`) will fetch that
+ *     route itself, so a late prefetch would duplicate the request. Navigations
+ *     elsewhere leave the prefetch alone — nothing else is going to fetch it,
+ *     and dropping it would make an explicit prefetch timing-dependent.
+ *   - invalidating the whole cache (`invalidatePrefetchCache`, reached via
+ *     `router.refresh()`) cancels every pending setup, which would otherwise
+ *     repopulate one route from the pre-refresh generation.
+ *
+ * Sticky matters: a navigation to `/a` followed by one to `/b` must leave a
+ * pending `/a` prefetch cancelled, which comparing against a "current
+ * destination" value would not.
+ *
+ * `linkPrefetchNavigationEpoch` in link.tsx still uses a global counter for the
+ * navigation case; unifying the two is tracked separately.
  */
-let appNavigationEpoch = 0;
+type PendingPrefetchSetup = { readonly destination: string; cancelled: boolean };
+const pendingPrefetchSetups = new Set<PendingPrefetchSetup>();
+
+function beginPrefetchSetup(destination: string): PendingPrefetchSetup {
+  const setup: PendingPrefetchSetup = { destination, cancelled: false };
+  pendingPrefetchSetups.add(setup);
+  return setup;
+}
+
+/** Passing `null` cancels every pending setup regardless of destination. */
+function cancelPendingPrefetchSetups(destination: string | null): void {
+  for (const setup of pendingPrefetchSetups) {
+    if (destination === null || setup.destination === destination) {
+      setup.cancelled = true;
+    }
+  }
+}
+
+/**
+ * Normalize a navigation or prefetch target to the browser href both sides
+ * compare on. Returns null when the target is not same-origin — no same-origin
+ * prefetch can be a duplicate of it — and on the server, where
+ * `navigateClientSide` can still be reached but there is nothing to cancel.
+ */
+function toAppPrefetchDestination(href: string): string | null {
+  if (isServer) return null;
+  let localHref = href;
+  if (isExternalUrl(href)) {
+    const localPath = toSameOriginAppPath(href, __basePath);
+    if (localPath == null) return null;
+    localHref = localPath;
+  }
+  return toBrowserNavigationHref(localHref, window.location.href, __basePath);
+}
 
 function clearPrefetchInvalidation(entry: PrefetchCacheEntry): void {
   if (entry.invalidationTimer !== undefined) {
@@ -904,11 +945,11 @@ function attachPrefetchInvalidationCallback(
 }
 
 export function invalidatePrefetchCache(): void {
-  // Void prefetch setup that is still in flight. Without this, a closure that
-  // started before `router.refresh()` resumes afterwards and repopulates a
-  // navigation-reusable entry built from the pre-refresh cache generation,
-  // undoing the invalidation for that route.
-  appNavigationEpoch += 1;
+  // Void prefetch setup that is still in flight, whatever its destination.
+  // Without this, a closure that started before `router.refresh()` resumes
+  // afterwards and repopulates a navigation-reusable entry built from the
+  // pre-refresh cache generation, undoing the invalidation for that route.
+  cancelPendingPrefetchSetups(null);
   const cache = getPrefetchCache();
   const prefetched = getPrefetchedUrls();
   for (const [cacheKey, entry] of cache) {
@@ -1401,6 +1442,11 @@ export async function consumePrefetchResponseForNavigation(
   if (!match) return null;
   const { cacheKey, entry } = match;
 
+  // Checked before touching the request queue: a navigation superseded while
+  // the caller prepared this lookup must not promote its destination past the
+  // concurrency cap, where it would compete with the current navigation.
+  if (options?.shouldConsume?.() === false) return null;
+
   if (entry.pending !== undefined) {
     // This navigation is about to wait on the prefetch's request. If that
     // request is still queued behind the low-priority concurrency cap, waiting
@@ -1409,9 +1455,9 @@ export async function consumePrefetchResponseForNavigation(
     promoteAppPrefetchFetch(entry.fetchPromise);
     await entry.pending.catch(() => {});
     if (cache.get(cacheKey) !== entry) return null;
+    // Re-checked for a navigation superseded while the request was in flight.
+    if (options?.shouldConsume?.() === false) return null;
   }
-
-  if (options?.shouldConsume?.() === false) return null;
 
   return consumeMatchedPrefetchResponse(cacheKey, entry, mountedSlotsHeader);
 }
@@ -2138,13 +2184,16 @@ function hardNavigateTo(fullHref: string, mode: "push" | "replace"): void {
 }
 
 /**
- * Signal that a navigation is starting: cancel in-flight prefetch setup and
- * reset any link still showing a `useLinkStatus()` pending state that did not
- * initiate this navigation (e.g. a programmatic router.push or form submit).
- * A <Link> click registers itself first, so the hook keeps that link pending.
+ * Signal that a navigation to `href` is starting: cancel in-flight prefetch
+ * setup for that same destination, and reset any link still showing a
+ * `useLinkStatus()` pending state that did not initiate this navigation (e.g. a
+ * programmatic router.push or form submit). A <Link> click registers itself
+ * first, so the hook keeps that link pending.
  */
-function notifyAppNavigationStart(): void {
-  appNavigationEpoch += 1;
+function notifyAppNavigationStart(href: string): void {
+  const destination = toAppPrefetchDestination(href);
+  // A destination on another origin cannot duplicate a same-origin prefetch.
+  if (destination !== null) cancelPendingPrefetchSetups(destination);
   getNavigationRuntime()?.functions.notifyLinkNavigationStart?.();
 }
 
@@ -2158,7 +2207,7 @@ export async function navigateClientSide(
   programmaticTransition = false,
   visibleCommitMode: NavigationRuntimeVisibleCommitMode = "transition",
 ): Promise<void> {
-  notifyAppNavigationStart();
+  notifyAppNavigationStart(href);
 
   // Normalize same-origin absolute URLs to local paths for SPA navigation
   let normalizedHref = href;
@@ -2348,7 +2397,7 @@ const _appRouter: AppRouterInstance = {
     // An imperative navigation supersedes any <Link>-owned pending state.
     // Clear it before entering the navigation transition so React does not
     // defer the idle update behind the suspended destination render.
-    notifyAppNavigationStart();
+    notifyAppNavigationStart(href);
     const releaseNavigation = trackScheduledAppRouterNavigation();
     try {
       React.startTransition(() => {
@@ -2363,7 +2412,7 @@ const _appRouter: AppRouterInstance = {
   replace(href: string, options?: { scroll?: boolean }): void {
     assertSafeNavigationUrl(href);
     if (isServer) return;
-    notifyAppNavigationStart();
+    notifyAppNavigationStart(href);
     const releaseNavigation = trackScheduledAppRouterNavigation();
     try {
       React.startTransition(() => {
@@ -2420,18 +2469,18 @@ const _appRouter: AppRouterInstance = {
     } catch {
       throw new Error(`Cannot prefetch '${href}' because it cannot be converted to a URL.`);
     }
-    const navigationEpoch = appNavigationEpoch;
+    // Normalize same-origin absolute URLs to local paths; bail for external
+    // origins so we don't pollute the prefetch cache with a same-path .rsc on
+    // the current origin. Mirrors Link's prefetchUrl and navigateClientSide.
+    const prefetchHref = isExternalUrl(href) ? toSameOriginAppPath(href, __basePath) : href;
+    if (prefetchHref == null) return;
+    // Resolved here rather than inside the closure so relative hrefs resolve
+    // against the URL at call time, and so the destination is registered before
+    // a navigation in this same task can start.
+    const fullHref = toAppPrefetchDestination(prefetchHref);
+    if (fullHref === null) return;
+    const setup = beginPrefetchSetup(fullHref);
     void (async () => {
-      // Normalize same-origin absolute URLs to local paths; no-op for external
-      // origins so we don't pollute the prefetch cache with a same-path .rsc on
-      // the current origin. Mirrors Link's prefetchUrl and navigateClientSide.
-      let prefetchHref = href;
-      if (isExternalUrl(href)) {
-        const localPath = toSameOriginAppPath(href, __basePath);
-        if (localPath == null) return;
-        prefetchHref = localPath;
-      }
-
       // Hybrid ownership: when a Pages route owns the URL, the App Router
       // cannot serve it (Pages produces HTML documents / `_next/data` JSON,
       // not RSC streams). Prefetching an RSC URL would either 404 or warm
@@ -2462,7 +2511,7 @@ const _appRouter: AppRouterInstance = {
       // the previous learning-only fetch: an explicit programmatic prefetch
       // must still fetch, and loading-shell routes keep feeding the
       // optimistic-route-template learner.
-      const fullHref = toBrowserNavigationHref(prefetchHref, window.location.href, __basePath);
+      //
       // A configured rewrite can map this href onto a different App route;
       // the policy must describe the destination the request will actually
       // resolve to, not the source pattern (mirrors Link's prefetchPolicyHref).
@@ -2501,12 +2550,13 @@ const _appRouter: AppRouterInstance = {
           ? [createRscRequestUrl(rewrittenPrefetchHref, headers)]
           : []),
       ]);
-      // A navigation can start in the same task as this call and win the race
-      // above (hybrid-route module load, policy import, RSC URL generation).
-      // Nothing was registered in the cache during that window, so navigation
-      // already began its own request; starting a second one here would break
-      // the one-request-per-route invariant. Mirrors Link's equivalent guard.
-      if (navigationEpoch !== appNavigationEpoch) return;
+      // A navigation to this same href can start in the same task as this call
+      // and win the race above (hybrid-route module load, policy import, RSC
+      // URL generation). Nothing was registered in the cache during that
+      // window, so navigation already began its own request; starting a second
+      // one here would break the one-request-per-route invariant. Mirrors
+      // Link's equivalent guard.
+      if (setup.cancelled) return;
       const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
       const prefetched = getPrefetchedUrls();
       if (reusable) {
@@ -2561,9 +2611,13 @@ const _appRouter: AppRouterInstance = {
               prefetchKind: "navigation",
             },
       );
-    })().catch((error) => {
-      console.error("[vinext] RSC prefetch setup error:", error);
-    });
+    })()
+      .catch((error: unknown) => {
+        console.error("[vinext] RSC prefetch setup error:", error);
+      })
+      .finally(() => {
+        pendingPrefetchSetups.delete(setup);
+      });
   },
 };
 
@@ -2775,7 +2829,7 @@ if (!isServer) {
       // not initiate, so clear any sticky `useLinkStatus()` pending state. Runs
       // for both routers; the App Router's own popstate handler (in
       // app-browser-entry.ts) drives scroll restoration and RSC fetching.
-      notifyAppNavigationStart();
+      notifyAppNavigationStart(window.location.href);
     });
 
     window.addEventListener("popstate", (event) => {
@@ -2799,7 +2853,7 @@ if (!isServer) {
       if (state.suppressUrlNotifyCount === 0) {
         // A raw history.pushState (shallow routing) starts a navigation that did
         // not go through navigateClientSide; clear any sticky pending link.
-        notifyAppNavigationStart();
+        notifyAppNavigationStart(window.location.href);
         commitClientNavigationState();
       }
     };
@@ -2816,7 +2870,7 @@ if (!isServer) {
         url,
       );
       if (state.suppressUrlNotifyCount === 0) {
-        notifyAppNavigationStart();
+        notifyAppNavigationStart(window.location.href);
         commitClientNavigationState();
       }
     };

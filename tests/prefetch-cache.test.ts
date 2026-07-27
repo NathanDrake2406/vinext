@@ -679,6 +679,52 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchCache().size).toBe(0);
   });
 
+  // A navigation cancels prefetch setup only for the route it is about to
+  // fetch itself. These two cases differ only in where the navigation goes, so
+  // together they pin the scoping: a global "any navigation cancels everything"
+  // rule passes the first and fails the second.
+  it("cancels prefetch setup superseded by a navigation to the same route (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+    ];
+    const fetch = vi.fn(
+      async () => new Response("flight", { headers: { "content-type": "text/x-component" } }),
+    );
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/dashboard");
+    appRouterInstance.push("/dashboard");
+
+    await settlePrefetchSetup();
+
+    // The navigation fetches /dashboard itself; a late prefetch would make it
+    // two requests for one route.
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves prefetch setup alone when the navigation goes elsewhere (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+      { canPrefetchLoadingShell: false, patternParts: ["settings"], isDynamic: false },
+    ];
+    let fetchedUrl: string | undefined;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      fetchedUrl = toRscUrlString(input);
+      return new Response("flight", { headers: { "content-type": "text/x-component" } });
+    });
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/dashboard");
+    appRouterInstance.push("/settings");
+
+    await settlePrefetchSetup();
+
+    // Nothing else is going to fetch /dashboard, so dropping it here would make
+    // an explicit prefetch depend on unrelated navigation timing.
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetchedUrl).toContain("/dashboard");
+  });
+
   it("keeps onInvalidate alive after navigation consumes the prefetch (#2707)", async () => {
     (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
       { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
