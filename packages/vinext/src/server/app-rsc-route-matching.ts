@@ -64,6 +64,7 @@ type AppRscSlotForMatching = {
 };
 
 type AppRscSiblingInterceptForMatching = {
+  id?: string | null;
   targetPattern: string;
   sourceMatchPattern: string | null;
   sourcePageSegments?: readonly string[];
@@ -114,6 +115,7 @@ type AppRscInterceptLoadState = {
 };
 
 type AppRscInterceptLookupEntry = {
+  interceptionGraphId: string | null;
   sourceRouteIndex: number;
   slotKey: string;
   targetPattern: string;
@@ -440,6 +442,7 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
               ? (patternToIndex.get(sourceMatchPattern) ?? routeIndex)
               : routeIndex;
           interceptLookup.push({
+            interceptionGraphId: null,
             sourceRouteIndex: ownerRouteIndex,
             slotKey,
             slotId: typeof slotModule.id === "string" ? slotModule.id : null,
@@ -481,6 +484,7 @@ function createInterceptLookup<Route extends AppRscRouteForMatching>(
           ? sourceMatchPattern.split("/").filter(Boolean)
           : null;
         interceptLookup.push({
+          interceptionGraphId: typeof intercept.id === "string" ? intercept.id : null,
           sourceRouteIndex: routeIndex,
           slotKey: SIBLING_PAGE_INTERCEPT_SLOT_KEY,
           slotId: typeof intercept.slotId === "string" ? intercept.slotId : null,

@@ -1181,6 +1181,7 @@ export default createAppRscHandler({
       setNavigationContext,
       toInterceptOpts(intercept) {
         return {
+          interceptGraphId: intercept.interceptionGraphId,
           interceptionContext,
           interceptLayouts: intercept.interceptLayouts,
           interceptLayoutSegments: intercept.interceptLayoutSegments,

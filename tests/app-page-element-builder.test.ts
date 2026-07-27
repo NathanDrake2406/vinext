@@ -455,6 +455,8 @@ describe("buildPageElements", () => {
       source: string,
       sourceId: string,
       id: string,
+      targetRouteGraphId: string | null = "graph-route:/photo/:id",
+      interceptionGraphId = "graph-interception:/feed->/photo/:slug",
     ): Promise<string | undefined> => {
       const route = createSyntheticRoute({
         ids: {
@@ -477,12 +479,13 @@ describe("buildPageElements", () => {
           params: { sourceId },
           routePath: `/photo/${id}`,
           opts: {
+            interceptGraphId: interceptionGraphId,
             interceptSlotKey: SIBLING_PAGE_INTERCEPT_SLOT_KEY,
             interceptPage: createSyntheticPageModule(InterceptPage),
             interceptParams: { slug: id },
             interceptSourcePageSegments: [source, "(.)photo", "[slug]"],
             interceptTargetPatternParts: ["photo", ":slug"],
-            interceptTargetRouteGraphId: "graph-route:/photo/:id",
+            interceptTargetRouteGraphId: targetRouteGraphId,
           },
         }),
       );
@@ -496,6 +499,10 @@ describe("buildPageElements", () => {
     expect(await buildIdentity("feed", "a", "43")).not.toBe(first);
     expect(await buildIdentity("feed", "b", "42")).not.toBe(first);
     expect(await buildIdentity("gallery", "a", "42")).not.toBe(first);
+    expect(await buildIdentity("feed", "a", "42", null)).toBe(first);
+    expect(
+      await buildIdentity("feed", "a", "42", null, "graph-interception:/feed->/album/:slug"),
+    ).not.toBe(first);
   });
 
   it("keeps interception context out of the error payload route ID", async () => {

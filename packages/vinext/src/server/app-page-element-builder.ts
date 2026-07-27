@@ -83,6 +83,7 @@ export type AppPageBuildRoute<
 };
 
 export type AppPageInterceptOptions<TModule extends AppPageModule = AppPageModule> = {
+  interceptGraphId?: string | null;
   interceptionContext?: string | null;
   interceptLayouts?: readonly (TModule | null | undefined)[] | null;
   interceptLayoutSegments?: readonly (readonly string[])[] | null;
@@ -248,15 +249,15 @@ export async function buildPageElements<
     ? opts?.interceptSourcePageSegments
     : route.routeSegments;
   const semanticPageIdentity = isSiblingIntercept
-    ? route.ids?.route && opts?.interceptTargetRouteGraphId && opts.interceptTargetPatternParts
+    ? route.ids?.route && opts?.interceptGraphId && opts.interceptTargetPatternParts
       ? {
           boundSegmentKey: resolveAppPagePatternStateKey(
             opts.interceptTargetPatternParts,
             effectiveParams,
           ),
+          interceptionGraphId: opts.interceptGraphId,
           sourceBoundSegmentKey: resolveAppPageRouteStateKey(route.routeSegments ?? [], params),
           sourceRouteGraphId: route.ids.route,
-          targetRouteGraphId: opts.interceptTargetRouteGraphId,
         }
       : null
     : undefined;

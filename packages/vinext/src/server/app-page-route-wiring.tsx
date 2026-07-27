@@ -265,9 +265,9 @@ type BuildAppPageElementsOptions<
   routePath: string;
   semanticPageIdentity?: Readonly<{
     boundSegmentKey: string;
+    interceptionGraphId: string;
     sourceBoundSegmentKey: string;
     sourceRouteGraphId: string;
-    targetRouteGraphId: string;
   }> | null;
   semanticInterceptionTargetRouteId?: string | null;
   sourcePageSegments?: readonly string[] | null;
@@ -729,9 +729,9 @@ function createAppPageSegmentPlan<
   semanticPageIdentity:
     | Readonly<{
         boundSegmentKey: string;
+        interceptionGraphId: string;
         sourceBoundSegmentKey: string;
         sourceRouteGraphId: string;
-        targetRouteGraphId: string;
       }>
     | null
     | undefined;
@@ -830,11 +830,11 @@ function createAppPageSegmentPlan<
     if (options.semanticPageIdentity !== null) {
       identities[options.pageElementId] = deriveBfcacheSegmentIdentity({
         boundSegmentKey: options.semanticPageIdentity.boundSegmentKey,
+        interceptionGraphId: options.semanticPageIdentity.interceptionGraphId,
         kind: "sibling-interception",
         rootBoundaryId,
         sourceBoundSegmentKey: options.semanticPageIdentity.sourceBoundSegmentKey,
         sourceRouteGraphId: options.semanticPageIdentity.sourceRouteGraphId,
-        targetRouteGraphId: options.semanticPageIdentity.targetRouteGraphId,
       });
     }
   } else if (pageBinding) {

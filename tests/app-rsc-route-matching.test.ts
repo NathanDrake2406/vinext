@@ -771,6 +771,41 @@ describe("App RSC route matching", () => {
       );
     });
 
+    it("carries sibling interception identity when the direct target uses a broader catch-all", () => {
+      // Ported from Next.js: test/e2e/app-dir/interception-routes-multiple-catchall
+      // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/interception-routes-multiple-catchall/interception-routes-multiple-catchall.test.ts
+      const interceptionGraphId =
+        "interception:slot:__vinext_sibling_intercept:/templates:/templates->/showcase/:catchAll+";
+      const matcher = createAppRscRouteMatcher([
+        {
+          ids: { route: "graph-route:/templates/:source+" },
+          pattern: "/templates/:source+",
+          patternParts: ["templates", ":source+"],
+          siblingIntercepts: [
+            {
+              id: interceptionGraphId,
+              targetPattern: "/showcase/:catchAll+",
+              sourceMatchPattern: "/templates",
+              sourcePageSegments: ["templates", "(..)showcase", "[...catchAll]"],
+              slotId: "slot:__vinext_sibling_intercept:/templates",
+              interceptLayouts: [],
+              page: "intercept-page",
+              params: ["catchAll"],
+            },
+          ],
+        },
+        {
+          ids: { route: "graph-route:/:catchAll+" },
+          pattern: "/:catchAll+",
+          patternParts: [":catchAll+"],
+        },
+      ] as any);
+
+      const hit = matcher.findIntercept("/showcase/single", "/templates/multi/slug");
+      expect(hit?.targetRouteGraphId).toBeNull();
+      expect(hit?.interceptionGraphId).toBe(interceptionGraphId);
+    });
+
     it("matches dynamic segments in the intercepting route pattern", () => {
       // /[lang]/foo/(..)photos has interceptingRoute `/[lang]/foo`,
       // header regex `^/(?<lang>[^/]+)/foo(?:/.*)?$`.
