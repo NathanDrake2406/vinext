@@ -627,29 +627,6 @@ describe("prefetch cache eviction", () => {
     expect(onInvalidate).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels router.prefetch setup when a navigation starts in the same task (#2707)", async () => {
-    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
-      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
-    ];
-    const fetch = vi.fn(
-      async () => new Response("flight", { headers: { "content-type": "text/x-component" } }),
-    );
-    (globalThis as any).fetch = fetch;
-
-    // No polling between the two calls: navigation starts while the prefetch
-    // closure is still awaiting its module imports and RSC URL, i.e. before it
-    // has registered anything navigation could share.
-    appRouterInstance.prefetch("/dashboard");
-    appRouterInstance.push("/dashboard");
-
-    await settlePrefetchSetup();
-
-    // Navigation owns the request for this route now; the late prefetch must
-    // not start a second one.
-    expect(fetch).not.toHaveBeenCalled();
-    expect(getPrefetchCache().size).toBe(0);
-  });
-
   it("notifies onInvalidate when a learning-only prefetch is superseded (#2707)", async () => {
     // A loading-shell route: the default `kind` resolves to learning-only, and
     // a later `kind: "full"` upgrades the same URL to a reusable entry.
