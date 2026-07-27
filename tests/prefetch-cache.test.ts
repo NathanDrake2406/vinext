@@ -931,7 +931,7 @@ describe("prefetch cache eviction", () => {
     const requestedPrefetchHeaders: Array<string | null> = [];
     const deferredResponses: Array<(response: Response) => void> = [];
     const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-      requestedPrefetchHeaders.push((init?.headers as Headers).get("Next-Router-Prefetch"));
+      requestedPrefetchHeaders.push(new Headers(init?.headers).get("Next-Router-Prefetch"));
       return new Promise<Response>((resolve) => deferredResponses.push(resolve));
     });
     (globalThis as any).fetch = fetch;
