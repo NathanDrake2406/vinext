@@ -112,6 +112,34 @@ test.describe("router.prefetch navigation reuse", () => {
     expect(filmRscRequests.length).toBe(1);
   });
 
+  test("a shallow history update does not cancel a pending prefetch", async ({ page }) => {
+    // Only a navigation that fetches the destination itself makes a pending
+    // prefetch for it redundant. A raw history.pushState moves the URL without
+    // requesting anything, so it must leave the prefetch running.
+    //
+    // The unit suite cannot cover this: it stubs window.history, so the shim's
+    // pushState patch is never the function under test there.
+    const filmRscRequests: string[] = [];
+    page.on("request", (request) => {
+      if (isFilmRscRequest(request)) filmRscRequests.push(request.url());
+    });
+
+    await page.goto(`${BASE}/top`);
+    await waitForAppRouterHydration(page);
+
+    await page.evaluate((href) => {
+      const router = (window as RouterWindow).next?.router;
+      if (router === undefined) throw new Error("Missing app router instance");
+      router.prefetch(href);
+      // Same task, so this lands while prefetch setup is still in flight, and
+      // targets the very href being prefetched — the case that would be
+      // cancelled if shallow routing counted as a navigation.
+      window.history.pushState(null, "", href);
+    }, FILM_HREF);
+
+    await expect.poll(() => filmRscRequests.length).toBe(1);
+  });
+
   test("click without prefetch issues exactly one navigation request", async ({ page }) => {
     // Guards the request counter above: proves a plain click is observed as a
     // /film/* RSC request, so the reuse test's "still 1" assertion is meaningful.

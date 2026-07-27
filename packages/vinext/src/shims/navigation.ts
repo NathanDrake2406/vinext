@@ -2184,17 +2184,26 @@ function hardNavigateTo(fullHref: string, mode: "push" | "replace"): void {
 }
 
 /**
- * Signal that a navigation to `href` is starting: cancel in-flight prefetch
- * setup for that same destination, and reset any link still showing a
- * `useLinkStatus()` pending state that did not initiate this navigation (e.g. a
- * programmatic router.push or form submit). A <Link> click registers itself
- * first, so the hook keeps that link pending.
+ * Reset any link still showing a `useLinkStatus()` pending state that did not
+ * initiate the navigation now starting (e.g. a programmatic router.push, a form
+ * submit, or a raw history update). A <Link> click registers itself first, so
+ * the hook keeps that link pending.
+ */
+function resetStaleLinkStatus(): void {
+  getNavigationRuntime()?.functions.notifyLinkNavigationStart?.();
+}
+
+/**
+ * Signal that a navigation to `href` is starting, for the callers that will
+ * fetch the destination. Separate from `resetStaleLinkStatus()` because a raw
+ * `history.pushState` also supersedes a pending link but issues no request —
+ * cancelling a prefetch there would drop it with nothing to take its place.
  */
 function notifyAppNavigationStart(href: string): void {
   const destination = toAppPrefetchDestination(href);
   // A destination on another origin cannot duplicate a same-origin prefetch.
   if (destination !== null) cancelPendingPrefetchSetups(destination);
-  getNavigationRuntime()?.functions.notifyLinkNavigationStart?.();
+  resetStaleLinkStatus();
 }
 
 /**
@@ -2851,9 +2860,10 @@ if (!isServer) {
         url,
       );
       if (state.suppressUrlNotifyCount === 0) {
-        // A raw history.pushState (shallow routing) starts a navigation that did
-        // not go through navigateClientSide; clear any sticky pending link.
-        notifyAppNavigationStart(window.location.href);
+        // A raw history.pushState (shallow routing) supersedes a pending link,
+        // but changes browser state only — it issues no RSC request, so it must
+        // not cancel prefetch setup for the URL it moves to.
+        resetStaleLinkStatus();
         commitClientNavigationState();
       }
     };
@@ -2870,7 +2880,7 @@ if (!isServer) {
         url,
       );
       if (state.suppressUrlNotifyCount === 0) {
-        notifyAppNavigationStart(window.location.href);
+        resetStaleLinkStatus();
         commitClientNavigationState();
       }
     };
