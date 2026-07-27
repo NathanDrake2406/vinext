@@ -98,23 +98,12 @@ export type BfcacheSegmentDescriptor =
 // `:`) inside their fields as data instead of structural delimiters.
 export function deriveBfcacheSegmentIdentity(descriptor: BfcacheSegmentDescriptor): string {
   switch (descriptor.kind) {
+    // Route-tree segments share one shape: the kind tag keeps them distinct.
     case "page":
-      return JSON.stringify([
-        "page",
-        descriptor.graphId,
-        descriptor.rootBoundaryId,
-        descriptor.boundSegmentKey,
-      ]);
     case "layout":
-      return JSON.stringify([
-        "layout",
-        descriptor.graphId,
-        descriptor.rootBoundaryId,
-        descriptor.boundSegmentKey,
-      ]);
     case "template":
       return JSON.stringify([
-        "template",
+        descriptor.kind,
         descriptor.graphId,
         descriptor.rootBoundaryId,
         descriptor.boundSegmentKey,
