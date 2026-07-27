@@ -651,6 +651,65 @@ describe("App RSC route matching", () => {
       });
     });
 
+    it("never promotes a Route Handler as the concrete interception source", () => {
+      // The source pathname arrives as an unauthenticated client header
+      // (X-Vinext-Interception-Context / Next-URL), and the resolved source
+      // route is what later renders or dispatches. A `route.ts` has no page,
+      // layouts, or slots, so it can never own an interception source tree;
+      // resolving one would let a crafted context execute a Route Handler that
+      // merely lives under the intercepting route. Next.js rewrites the
+      // intercepted target to a fixed destination (the intercepting route), so
+      // falling back to the slot owner is also the parity-correct choice.
+      // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/generate-interception-routes-rewrites.ts
+      const matcher = createAppRscRouteMatcher([
+        route("/feed", ["feed"], {
+          modal: {
+            intercepts: [
+              {
+                sourceMatchPattern: "/feed",
+                targetPattern: "/hidden",
+                interceptLayouts: ["layout"],
+                page: "modal-hidden",
+                params: [],
+              },
+            ],
+          },
+        }),
+        { ...route("/feed/admin", ["feed", "admin"]), routeHandler: {} },
+        route("/feed/:tab", ["feed", ":tab"]),
+      ]);
+
+      // A Route Handler descendant falls back to the slot owner (index 0).
+      expect(matcher.findIntercept("/hidden", "/feed/admin")).toMatchObject({
+        sourceRouteIndex: 0,
+      });
+      // A lazy Route Handler is classified the same before its first load.
+      const lazyMatcher = createAppRscRouteMatcher([
+        route("/feed", ["feed"], {
+          modal: {
+            intercepts: [
+              {
+                sourceMatchPattern: "/feed",
+                targetPattern: "/hidden",
+                interceptLayouts: ["layout"],
+                page: "modal-hidden",
+                params: [],
+              },
+            ],
+          },
+        }),
+        { ...route("/feed/admin", ["feed", "admin"]), __loadRouteHandler: async () => ({}) },
+      ]);
+      expect(lazyMatcher.findIntercept("/hidden", "/feed/admin")).toMatchObject({
+        sourceRouteIndex: 0,
+      });
+      // Page descendants still resolve concretely, preserving their params.
+      expect(matcher.findIntercept("/hidden", "/feed/recent")).toMatchObject({
+        sourceRouteIndex: 2,
+        sourceMatchedParams: { tab: "recent" },
+      });
+    });
+
     it("treats a sourceMatchPattern of `/` as matching any source", () => {
       // Slot at root (`/@modal/(.)groups/[id]/new`) yields intercepting route `/`,
       // which Next.js implements as `^/.*$` — i.e. any source.

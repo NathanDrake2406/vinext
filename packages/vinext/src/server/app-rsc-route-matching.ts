@@ -284,17 +284,30 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
         if (params === null) continue;
         canonicalizeAppPageParams(params);
 
-        const concreteSourceRouteIndex =
-          matchedSourceRoute && entry.sourceMatchPatternParts !== null
-            ? (routeIndexes.get(matchedSourceRoute.route) ?? entry.sourceRouteIndex)
-            : entry.sourceRouteIndex;
+        // Resolving the claimed source pathname to its concrete descendant
+        // route (#2042) keeps dynamic source params intact, but the source
+        // pathname is an unauthenticated client header and the resolved route
+        // becomes the route that renders or dispatches. A Route Handler has no
+        // page, layouts, or parallel slots, so it can never own or sit inside
+        // an interception source tree; promoting one only lets a crafted
+        // interception context execute a `route.ts` that happens to live under
+        // the intercepting route. Fall back to the slot owner instead, which is
+        // the fixed destination Next.js' generated interception rewrite uses.
+        const concreteSourceRoute =
+          matchedSourceRoute &&
+          entry.sourceMatchPatternParts !== null &&
+          !isAppRouteHandlerRoute(matchedSourceRoute.route)
+            ? matchedSourceRoute
+            : null;
+        const concreteSourceRouteIndex = concreteSourceRoute
+          ? (routeIndexes.get(concreteSourceRoute.route) ?? entry.sourceRouteIndex)
+          : entry.sourceRouteIndex;
         const sourceRoute = routes[concreteSourceRouteIndex];
-        const matchedSourceParams =
-          matchedSourceRoute && entry.sourceMatchPatternParts !== null
-            ? matchedSourceRoute.params
-            : sourceRoute
-              ? matchRoutePatternRaw(sourceParts, sourceRoute.patternParts)
-              : null;
+        const matchedSourceParams = concreteSourceRoute
+          ? concreteSourceRoute.params
+          : sourceRoute
+            ? matchRoutePatternRaw(sourceParts, sourceRoute.patternParts)
+            : null;
 
         // Secondary gate (from #1249): when the entry has no
         // `sourceMatchPatternParts` declared (older manifest shapes), reject
