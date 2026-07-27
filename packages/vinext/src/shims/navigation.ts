@@ -80,6 +80,7 @@ import {
   type NavigationContext,
 } from "./navigation-context-state.js";
 import {
+  cancelAppPrefetchFetch,
   promoteAppPrefetchFetch,
   releaseAppPrefetchFetchSlot,
   scheduleAppPrefetchFetch,
@@ -760,7 +761,13 @@ function toAppPrefetchDestination(href: string): string | null {
     if (localPath == null) return null;
     localHref = localPath;
   }
-  return toBrowserNavigationHref(localHref, window.location.href, __basePath);
+  const browserHref = toBrowserNavigationHref(localHref, window.location.href, __basePath);
+  try {
+    const url = new URL(browserHref, window.location.href);
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return browserHref.split("#", 1)[0];
+  }
 }
 
 function clearPrefetchInvalidation(entry: PrefetchCacheEntry): void {
@@ -884,6 +891,7 @@ export function discardLearningOnlyPrefetchCacheEntry(
   // notified rather than silently dropped. Both callers (`router.prefetch()`
   // and `<Link>`) reach this on the learning-only -> reusable upgrade.
   for (const [cacheKey, entry] of superseded) {
+    cancelAppPrefetchFetch(entry.fetchPromise);
     deletePrefetchCacheEntry(cache, prefetched, cacheKey, entry, true);
   }
   return superseded.length > 0;
@@ -2496,10 +2504,11 @@ const _appRouter: AppRouterInstance = {
       // an unusable cache entry. The matching `push`/`replace` call will
       // hard-navigate via `window.location`, so a no-op here is correct —
       // the document prefetch the link shim emits on hover still runs.
-      // Load the rewrite-aware module first (mirrors Link, which always
-      // resolves ownership and rewrites through the full module) so the
-      // prefetch policy below sees the rewritten destination route.
-      if (HAS_PAGES_ROUTER || HAS_CLIENT_REWRITES) {
+      // Load the rewrite-aware module when client rewrites can affect the
+      // destination policy. Without rewrites, the synchronous direct resolver
+      // below already has enough manifest data to distinguish App and Pages
+      // ownership, avoiding a feature-specific chunk on the prefetch path.
+      if (HAS_CLIENT_REWRITES) {
         await preloadHybridClientRouteOwner();
       }
       const hybridOwner = resolveHybridClientRouteOwner(prefetchHref);
@@ -2591,11 +2600,12 @@ const _appRouter: AppRouterInstance = {
       prefetchRscResponse(
         rscUrl,
         scheduleAppPrefetchFetch(
-          () =>
+          (signal) =>
             fetch(rscUrl, {
               headers,
               credentials: "include",
               priority: "low" as RequestInit["priority"],
+              signal,
             }),
           "low",
         ),

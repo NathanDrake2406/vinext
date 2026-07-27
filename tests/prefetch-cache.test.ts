@@ -658,6 +658,36 @@ describe("prefetch cache eviction", () => {
     expect(onInvalidate).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts an in-flight learning-only request when a full prefetch supersedes it (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: true, patternParts: ["reports"], isDynamic: false },
+    ];
+    let firstSignal: AbortSignal | undefined;
+    const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (fetch.mock.calls.length === 1) {
+        firstSignal = init?.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          firstSignal?.addEventListener("abort", () => reject(firstSignal?.reason), { once: true });
+        });
+      }
+      return Promise.resolve(
+        new Response("flight", { headers: { "content-type": "text/x-component" } }),
+      );
+    });
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/reports");
+    await waitForPrefetchSetup(() => fetch.mock.calls.length === 1);
+
+    appRouterInstance.prefetch("/reports", { kind: "full" });
+    await waitForPrefetchSetup(() => fetch.mock.calls.length === 2);
+
+    expect(firstSignal?.aborted).toBe(true);
+    await waitForPrefetchSetup(() =>
+      [...getPrefetchCache().values()].some((entry) => entry.outcome === "cache-seeded"),
+    );
+  });
+
   it("does not repopulate the prefetch cache across an invalidation (#2707)", async () => {
     (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
       { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
@@ -699,6 +729,25 @@ describe("prefetch cache eviction", () => {
 
     // The navigation fetches /dashboard itself; a late prefetch would make it
     // two requests for one route.
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("cancels prefetch setup when only the navigation hash differs (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      { canPrefetchLoadingShell: false, patternParts: ["dashboard"], isDynamic: false },
+    ];
+    const fetch = vi.fn(
+      async () => new Response("flight", { headers: { "content-type": "text/x-component" } }),
+    );
+    (globalThis as any).fetch = fetch;
+
+    appRouterInstance.prefetch("/dashboard");
+    appRouterInstance.push("/dashboard#details");
+
+    await settlePrefetchSetup();
+
+    // Hash fragments never reach an RSC request, so these are the same data
+    // destination and the late prefetch would duplicate navigation's fetch.
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -866,6 +915,52 @@ describe("prefetch cache eviction", () => {
     expect(snapshot).not.toBeNull();
 
     for (const resolve of deferredResponses.slice(0, 4)) {
+      resolve(new Response("flight", { headers: { "content-type": "text/x-component" } }));
+    }
+  });
+
+  it("removes a superseded learning-only request from the prefetch queue (#2707)", async () => {
+    (globalThis as any).window.__VINEXT_LINK_PREFETCH_ROUTES__ = [
+      ...Array.from({ length: 4 }, (_unused, index) => ({
+        canPrefetchLoadingShell: false,
+        patternParts: [`occupy-${index}`],
+        isDynamic: false,
+      })),
+      { canPrefetchLoadingShell: true, patternParts: ["reports"], isDynamic: false },
+    ];
+    const requestedPrefetchHeaders: Array<string | null> = [];
+    const deferredResponses: Array<(response: Response) => void> = [];
+    const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestedPrefetchHeaders.push((init?.headers as Headers).get("Next-Router-Prefetch"));
+      return new Promise<Response>((resolve) => deferredResponses.push(resolve));
+    });
+    (globalThis as any).fetch = fetch;
+
+    for (let index = 0; index < 4; index++) {
+      appRouterInstance.prefetch(`/occupy-${index}`);
+    }
+    await waitForPrefetchSetup(() => fetch.mock.calls.length === 4);
+
+    // The learning-only request is queued behind the four occupied slots.
+    appRouterInstance.prefetch("/reports");
+    await waitForPrefetchSetup(() =>
+      [...getPrefetchCache().keys()].some((key) => key.includes("reports")),
+    );
+    expect(fetch).toHaveBeenCalledTimes(4);
+
+    // Upgrading to a full prefetch must remove that queued runner rather than
+    // leave it ahead of the replacement request.
+    appRouterInstance.prefetch("/reports", { kind: "full" });
+    await settlePrefetchSetup();
+    expect(fetch).toHaveBeenCalledTimes(4);
+
+    deferredResponses[0](
+      new Response("flight", { headers: { "content-type": "text/x-component" } }),
+    );
+    await waitForPrefetchSetup(() => fetch.mock.calls.length === 5);
+    expect(requestedPrefetchHeaders[4]).toBeNull();
+
+    for (const resolve of deferredResponses.slice(1)) {
       resolve(new Response("flight", { headers: { "content-type": "text/x-component" } }));
     }
   });

@@ -4,8 +4,12 @@ const APP_PREFETCH_FETCH_SLOT_RELEASE_KEY = Symbol.for("vinext.appPrefetchFetchS
 
 const MAX_DEFAULT_APP_PREFETCH_REQUESTS = 4;
 const defaultAppPrefetchQueue: Array<() => void> = [];
-/** Lets a consumer find the queued runner behind a promise it already holds. */
-const queuedAppPrefetchRunners = new WeakMap<Promise<Response>, () => void>();
+type AppPrefetchFetchControl = {
+  cancel: () => void;
+  runner?: () => void;
+};
+/** Lets a consumer promote or cancel the request behind a promise it already holds. */
+const appPrefetchFetchControls = new WeakMap<Promise<Response>, AppPrefetchFetchControl>();
 let activeDefaultAppPrefetchRequests = 0;
 let defaultAppPrefetchDrainScheduled = false;
 
@@ -43,16 +47,28 @@ export function releaseAppPrefetchFetchSlot(response: Response): void {
  * releaseAppPrefetchFetchSlot() when it drops the response without consuming it.
  */
 export function scheduleAppPrefetchFetch(
-  fetcher: () => Promise<Response>,
+  fetcher: (signal: AbortSignal) => Promise<Response>,
   priority: "low" | "high",
 ): Promise<Response> {
+  const controller = new AbortController();
   if (priority === "high") {
-    return fetcher();
+    const promise = fetcher(controller.signal);
+    const control = { cancel: () => controller.abort() };
+    appPrefetchFetchControls.set(promise, control);
+    void promise.then(
+      () => appPrefetchFetchControls.delete(promise),
+      () => appPrefetchFetchControls.delete(promise),
+    );
+    return promise;
   }
 
   let runner!: () => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  let started = false;
   const promise = new Promise<Response>((resolve, reject) => {
+    rejectPromise = reject;
     runner = () => {
+      started = true;
       let didRelease = false;
       const release = () => {
         if (didRelease) return;
@@ -62,19 +78,22 @@ export function scheduleAppPrefetchFetch(
       };
 
       try {
-        fetcher().then(
+        fetcher(controller.signal).then(
           (response) => {
+            appPrefetchFetchControls.delete(promise);
             (response as Response & Record<symbol, (() => void) | undefined>)[
               APP_PREFETCH_FETCH_SLOT_RELEASE_KEY
             ] = release;
             resolve(response);
           },
           (error: unknown) => {
+            appPrefetchFetchControls.delete(promise);
             release();
             reject(error);
           },
         );
       } catch (error) {
+        appPrefetchFetchControls.delete(promise);
         release();
         reject(error);
       }
@@ -82,9 +101,29 @@ export function scheduleAppPrefetchFetch(
   });
 
   defaultAppPrefetchQueue.push(runner);
-  queuedAppPrefetchRunners.set(promise, runner);
+  appPrefetchFetchControls.set(promise, {
+    runner,
+    cancel: () => {
+      if (started) {
+        controller.abort();
+        return;
+      }
+      const index = defaultAppPrefetchQueue.indexOf(runner);
+      if (index === -1) return;
+      defaultAppPrefetchQueue.splice(index, 1);
+      appPrefetchFetchControls.delete(promise);
+      controller.abort();
+      rejectPromise(controller.signal.reason);
+    },
+  });
   scheduleDefaultAppPrefetchDrain();
   return promise;
+}
+
+/** Cancel a queued or in-flight prefetch request. No-op once it has settled. */
+export function cancelAppPrefetchFetch(promise: Promise<Response> | undefined): void {
+  if (promise === undefined) return;
+  appPrefetchFetchControls.get(promise)?.cancel();
 }
 
 /**
@@ -101,13 +140,13 @@ export function scheduleAppPrefetchFetch(
  */
 export function promoteAppPrefetchFetch(promise: Promise<Response> | undefined): void {
   if (promise === undefined) return;
-  const runner = queuedAppPrefetchRunners.get(promise);
+  const control = appPrefetchFetchControls.get(promise);
+  const runner = control?.runner;
   if (runner === undefined) return;
 
   const index = defaultAppPrefetchQueue.indexOf(runner);
   if (index === -1) return;
   defaultAppPrefetchQueue.splice(index, 1);
-  queuedAppPrefetchRunners.delete(promise);
 
   activeDefaultAppPrefetchRequests += 1;
   runner();

@@ -538,11 +538,12 @@ function prefetchUrl(
         }
         const fetchFullRscPayload = () =>
           scheduleAppPrefetchFetch(
-            () =>
+            (signal) =>
               fetch(rscUrl, {
                 headers,
                 credentials: "include",
                 priority,
+                signal,
                 // @ts-expect-error — purpose is a valid fetch option in some browsers
                 purpose: "prefetch",
               }),
@@ -568,11 +569,12 @@ function prefetchUrl(
             prefetchRscResponse(
               shellRscUrl,
               scheduleAppPrefetchFetch(
-                () =>
+                (signal) =>
                   fetch(shellRscUrl, {
                     headers: shellHeaders,
                     credentials: "include",
                     priority,
+                    signal,
                     // @ts-expect-error — purpose is a valid fetch option in some browsers
                     purpose: "prefetch",
                   }),
@@ -684,11 +686,12 @@ function prefetchUrl(
                   prefetchRscResponse(
                     shellRscUrl,
                     scheduleAppPrefetchFetch(
-                      () =>
+                      (signal) =>
                         fetch(shellRscUrl, {
                           headers: shellHeaders,
                           credentials: "include",
                           priority,
+                          signal,
                           // @ts-expect-error — purpose is a valid fetch option in some browsers
                           purpose: "prefetch",
                         }),
@@ -719,11 +722,12 @@ function prefetchUrl(
                   }
                 }
                 return scheduleAppPrefetchFetch(
-                  () =>
+                  (signal) =>
                     fetch(rscUrl, {
                       headers,
                       credentials: "include",
                       priority,
+                      signal,
                       // @ts-expect-error — purpose is a valid fetch option in some browsers
                       purpose: "prefetch",
                     }),
