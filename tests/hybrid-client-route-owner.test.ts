@@ -22,7 +22,7 @@ import type {
   VinextLinkPrefetchRoute,
   VinextPagesLinkPrefetchRoute,
 } from "../packages/vinext/src/client/vinext-next-data.js";
-import type { NextRewrite } from "../packages/vinext/src/config/next-config.js";
+import type { ClientRewrites } from "../packages/vinext/src/client/client-rewrites.js";
 import {
   resolveHybridClientRewriteHref,
   resolveHybridClientRouteOwner,
@@ -33,11 +33,7 @@ const APP_BASE = "http://localhost/";
 type WindowState = {
   app: VinextLinkPrefetchRoute[];
   pages: VinextPagesLinkPrefetchRoute[];
-  rewrites?: {
-    afterFiles: NextRewrite[];
-    beforeFiles: NextRewrite[];
-    fallback: NextRewrite[];
-  };
+  rewrites?: ClientRewrites;
 };
 
 function installWindow({ app, pages, rewrites }: WindowState): void {
@@ -209,6 +205,42 @@ describe("resolveHybridClientRouteOwner", () => {
 
     expect(resolveHybridClientRouteOwner("/source", "")).toBeNull();
     expect(resolveHybridClientRouteOwner("/source?preview=1", "")).toBe("app");
+  });
+
+  it("hands server-evaluated rewrites back to the document request", () => {
+    installWindow({
+      app: [appRoute(["app-destination"], false)],
+      pages: [],
+      rewrites: {
+        afterFiles: [],
+        beforeFiles: [{ source: "/source", requiresServerEvaluation: true }],
+        fallback: [],
+      },
+    });
+
+    expect(resolveHybridClientRewriteHref("/source", "")).toBeNull();
+    expect(resolveHybridClientRouteOwner("/source", "")).toBe("document");
+  });
+
+  it("checks public has conditions before handing a rewrite to the server", () => {
+    installWindow({
+      app: [appRoute(["app-destination"], false)],
+      pages: [],
+      rewrites: {
+        afterFiles: [],
+        beforeFiles: [
+          {
+            source: "/source",
+            has: [{ type: "query", key: "preview", value: "1" }],
+            requiresServerEvaluation: true,
+          },
+        ],
+        fallback: [],
+      },
+    });
+
+    expect(resolveHybridClientRouteOwner("/source", "")).toBeNull();
+    expect(resolveHybridClientRouteOwner("/source?preview=1", "")).toBe("document");
   });
 
   it("applies every beforeFiles rewrite before choosing ownership", () => {

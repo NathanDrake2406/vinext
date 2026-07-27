@@ -20751,6 +20751,48 @@ describe("Pages Router _next/data client navigation", () => {
     }
   });
 
+  it("hands server-evaluated rewrites to a document navigation", async () => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+
+    const destinationLoader = vi.fn(async () => makePageModule("destination"));
+    const { win } = createDataNavWindow({
+      loaders: {
+        "/": vi.fn(async () => makePageModule("home")),
+        "/conditional": destinationLoader,
+      },
+      ssgPatterns: [],
+      sspPatterns: [],
+    });
+    const hrefAssignments = trackHrefAssignmentsLocal(win);
+    (win as any).__VINEXT_CLIENT_REWRITES__ = {
+      beforeFiles: [{ source: "/conditional", requiresServerEvaluation: true }],
+      afterFiles: [],
+      fallback: [],
+    };
+    (globalThis as any).window = win;
+    vi.resetModules();
+
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    globalThis.fetch = fetchMock as any;
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      const result = await Router.push("/conditional");
+
+      expect(result).toBe(false);
+      expect(hrefAssignments).toContain("/conditional");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(destinationLoader).not.toHaveBeenCalled();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
   it("preserves the visible pathname for query-only beforeFiles rewrite navigations", async () => {
     const previousWindow = (globalThis as any).window;
     const originalFetch = globalThis.fetch;
