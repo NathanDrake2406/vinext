@@ -35,7 +35,7 @@ import {
   VINEXT_STALE_TIME_PENDING_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
-import type { AppPageCacheWritePolicy } from "../packages/vinext/src/server/isr-cache.js";
+import type { IsrWritePolicy } from "../packages/vinext/src/server/isr-cache.js";
 import type { InitialNavigationCacheMetadata } from "../packages/vinext/src/server/app-ssr-stream.js";
 import {
   DefaultCdnCacheAdapter,
@@ -123,7 +123,7 @@ function createCommonOptions() {
       }),
   );
   const isrSet = vi.fn(
-    async (_key: string, _data: CachedAppPageValue, _policy: AppPageCacheWritePolicy) => {},
+    async (_key: string, _data: CachedAppPageValue, _policy: IsrWritePolicy) => {},
   );
 
   return {
@@ -553,7 +553,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 60, tags: ["_N_T_/posts/post"] },
+      { cacheControl: { revalidate: 60 }, tags: ["_N_T_/posts/post"] },
     );
     const cachedValue = common.isrSet.mock.calls[0]?.[1];
     expect(cachedValue?.renderObservation).toMatchObject({
@@ -695,7 +695,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 1, expireSeconds: 60, staleSeconds: 30, tags: ["_N_T_/posts/post"] },
+      { cacheControl: { revalidate: 1, expire: 60, stale: 30 }, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -721,7 +721,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 10, expireSeconds: 45, staleSeconds: 300, tags: ["_N_T_/posts/post"] },
+      { cacheControl: { revalidate: 10, expire: 45, stale: 300 }, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -773,7 +773,7 @@ describe("app page render lifecycle", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 7, expireSeconds: 11, tags: ["_N_T_/posts/post"] },
+      { cacheControl: { revalidate: 7, expire: 11 }, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -860,13 +860,13 @@ describe("app page render lifecycle", () => {
       1,
       "html:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 30, tags: ["_N_T_/posts/post"] },
+      { cacheControl: { revalidate: 30 }, tags: ["_N_T_/posts/post"] },
     );
     expect(common.isrSet).toHaveBeenNthCalledWith(
       2,
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 30, tags: ["_N_T_/posts/post"] },
+      { cacheControl: { revalidate: 30 }, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -913,13 +913,13 @@ describe("app page render lifecycle", () => {
       1,
       "html:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 5, expireSeconds: 9, tags: ["_N_T_/posts/post"] },
+      { cacheControl: { revalidate: 5, expire: 9 }, tags: ["_N_T_/posts/post"] },
     );
     expect(common.isrSet).toHaveBeenNthCalledWith(
       2,
       "rsc:/posts/post",
       expect.objectContaining({ kind: "APP_PAGE" }),
-      { revalidateSeconds: 5, expireSeconds: 9, tags: ["_N_T_/posts/post"] },
+      { cacheControl: { revalidate: 5, expire: 9 }, tags: ["_N_T_/posts/post"] },
     );
   });
 

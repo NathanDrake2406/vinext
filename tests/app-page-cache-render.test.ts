@@ -18,7 +18,7 @@ function createStream(chunks: string[]): ReadableStream<Uint8Array> {
 describe("renderAppPageCacheArtifacts", () => {
   it("carries the consumed cacheLife stale onto the regenerated cacheControl", async () => {
     // Regression: background regeneration goes through this producer, and its
-    // cacheControl feeds resolveRegeneratedAppPageCachePolicy. Dropping stale
+    // cacheControl feeds resolveRegeneratedAppPageCacheControl. Dropping stale
     // here silently widened client reuse back to the configured fallback after
     // the first regen — the mocked-cacheControl regen tests never caught it
     // because they supplied a `stale` this producer could not emit.

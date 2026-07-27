@@ -270,9 +270,7 @@ describe("pages page response", () => {
         html: expect.stringContaining("<div>live-body</div>"),
         pageData: { pageProps: { title: "hello" } },
       }),
-      60,
-      undefined,
-      300,
+      { cacheControl: { revalidate: 60, expire: 300 } },
     );
   });
 
@@ -294,9 +292,7 @@ describe("pages page response", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "pages:/posts/post",
       expect.objectContaining({ kind: "PAGES" }),
-      false,
-      undefined,
-      undefined,
+      { cacheControl: { revalidate: false } },
     );
   });
 
@@ -323,9 +319,7 @@ describe("pages page response", () => {
       expect.objectContaining({
         html: expect.stringContaining("\u20ac<div>live-body</div>"),
       }),
-      60,
-      undefined,
-      undefined,
+      { cacheControl: { revalidate: 60 } },
     );
   });
 

@@ -6,7 +6,8 @@ import {
   createEmptyAppPageRenderObservationState,
   type AppPageRenderObservationState,
 } from "./app-page-render-observation.js";
-import { buildAppPageCacheValue, type AppPageCacheSetter } from "./isr-cache.js";
+import { buildAppPageCacheValue, isrCacheControl, type AppPageCacheSetter } from "./isr-cache.js";
+import type { CacheControlMetadata } from "vinext/shims/cache-handler";
 import type { RenderObservation } from "./cache-proof.js";
 import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.js";
 import { readStreamAsText } from "../utils/text-stream.js";
@@ -87,11 +88,11 @@ function applyPendingDynamicCdnHeaders(
   setCacheStateHeaders(headers, "MISS");
 }
 
-function resolveAppPageCacheWritePolicy(options: {
+function resolveAppPageCacheControl(options: {
   expireSeconds?: number;
   requestCacheLife?: AppPageRequestCacheLife | null;
   revalidateSeconds: number | null;
-}): { expireSeconds?: number; revalidateSeconds: number; staleSeconds?: number } | null {
+}): CacheControlMetadata | null {
   let revalidateSeconds = options.revalidateSeconds;
   let expireSeconds = options.expireSeconds;
   const requestCacheLife = options.requestCacheLife;
@@ -112,11 +113,10 @@ function resolveAppPageCacheWritePolicy(options: {
 
   // Callers reach this only after the render's stream drained, so the
   // request-scoped accumulation is the completed render's minimum.
-  return {
+  return isrCacheControl(revalidateSeconds, {
     expireSeconds,
-    revalidateSeconds,
     staleSeconds: resolveClientStaleTimeSeconds(requestCacheLife),
-  };
+  });
 }
 
 export function finalizeAppPageHtmlCacheResponse(
@@ -154,12 +154,12 @@ export function finalizeAppPageHtmlCacheResponse(
         return;
       }
 
-      const cachePolicy = resolveAppPageCacheWritePolicy({
+      const cacheControl = resolveAppPageCacheControl({
         expireSeconds: options.expireSeconds,
         requestCacheLife: options.getRequestCacheLife?.(),
         revalidateSeconds: options.revalidateSeconds,
       });
-      if (!cachePolicy) {
+      if (!cacheControl) {
         options.isrDebug?.("HTML cache write skipped (no cache policy)", htmlKey);
         return;
       }
@@ -186,7 +186,7 @@ export function finalizeAppPageHtmlCacheResponse(
             htmlRenderObservation,
             linkHeader ? { link: linkHeader } : undefined,
           ),
-          { ...cachePolicy, tags: pageTags },
+          { cacheControl, tags: pageTags },
         ),
       ];
 
@@ -194,7 +194,7 @@ export function finalizeAppPageHtmlCacheResponse(
         writes.push(
           options.capturedRscDataPromise.then((rscData) =>
             options.isrSet(rscKey, buildAppPageCacheValue("", rscData, 200, rscRenderObservation), {
-              ...cachePolicy,
+              cacheControl,
               tags: pageTags,
             }),
           ),
@@ -265,12 +265,12 @@ export function scheduleAppPageRscCacheWrite(
         return;
       }
 
-      const cachePolicy = resolveAppPageCacheWritePolicy({
+      const cacheControl = resolveAppPageCacheControl({
         expireSeconds: options.expireSeconds,
         requestCacheLife: options.getRequestCacheLife?.(),
         revalidateSeconds: options.revalidateSeconds,
       });
-      if (!cachePolicy) {
+      if (!cacheControl) {
         options.isrDebug?.("RSC cache write skipped (no cache policy)", rscKey);
         return;
       }
@@ -283,7 +283,7 @@ export function scheduleAppPageRscCacheWrite(
         state: observationState,
       });
       await options.isrSet(rscKey, buildAppPageCacheValue("", rscData, 200, rscRenderObservation), {
-        ...cachePolicy,
+        cacheControl,
         tags: pageTags,
       });
       options.isrDebug?.("RSC cache written", rscKey);

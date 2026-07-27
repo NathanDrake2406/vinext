@@ -734,7 +734,7 @@ describe("app page cache helpers", () => {
       key: string;
       expireSeconds: number | undefined;
       linkHeader: string | string[] | undefined;
-      revalidateSeconds: number;
+      revalidateSeconds: number | false;
     }> = [];
     const rscData = new TextEncoder().encode("fresh-flight").buffer;
 
@@ -752,9 +752,9 @@ describe("app page cache helpers", () => {
       async isrSet(key, data, policy) {
         isrSetCalls.push({
           key,
-          expireSeconds: policy.expireSeconds,
+          expireSeconds: policy.cacheControl.expire,
           linkHeader: data.headers?.link,
-          revalidateSeconds: policy.revalidateSeconds,
+          revalidateSeconds: policy.cacheControl.revalidate,
         });
       },
       mountedSlotsHeader: "slot:forged:/",
@@ -798,7 +798,7 @@ describe("app page cache helpers", () => {
     const isrSetCalls: Array<{
       key: string;
       expireSeconds: number | undefined;
-      revalidateSeconds: number;
+      revalidateSeconds: number | false;
     }> = [];
     const rscData = new TextEncoder().encode("fresh-flight").buffer;
 
@@ -818,8 +818,8 @@ describe("app page cache helpers", () => {
       async isrSet(key, _data, policy) {
         isrSetCalls.push({
           key,
-          expireSeconds: policy.expireSeconds,
-          revalidateSeconds: policy.revalidateSeconds,
+          expireSeconds: policy.cacheControl.expire,
+          revalidateSeconds: policy.cacheControl.revalidate,
         });
       },
       revalidateSeconds: 3,
@@ -1095,7 +1095,7 @@ describe("app page cache helpers", () => {
       hasRscData: boolean;
       linkHeader: string | string[] | undefined;
       expireSeconds: number | undefined;
-      revalidateSeconds: number;
+      revalidateSeconds: number | false;
       tags: string[];
     }> = [];
     const debugCalls: Array<[string, string]> = [];
@@ -1136,9 +1136,9 @@ describe("app page cache helpers", () => {
             html: data.html,
             hasRscData: Boolean(data.rscData),
             linkHeader: data.headers?.link,
-            expireSeconds: policy.expireSeconds,
-            revalidateSeconds: policy.revalidateSeconds,
-            tags: policy.tags,
+            expireSeconds: policy.cacheControl.expire,
+            revalidateSeconds: policy.cacheControl.revalidate,
+            tags: policy.tags ?? [],
           });
         },
         expireSeconds: 300,
@@ -1296,7 +1296,7 @@ describe("app page cache helpers", () => {
       html: string;
       hasRscData: boolean;
       expireSeconds: number | undefined;
-      revalidateSeconds: number;
+      revalidateSeconds: number | false;
       tags: string[];
     }> = [];
 
@@ -1321,9 +1321,9 @@ describe("app page cache helpers", () => {
           key,
           html: data.html,
           hasRscData: Boolean(data.rscData),
-          expireSeconds: policy.expireSeconds,
-          revalidateSeconds: policy.revalidateSeconds,
-          tags: policy.tags,
+          expireSeconds: policy.cacheControl.expire,
+          revalidateSeconds: policy.cacheControl.revalidate,
+          tags: policy.tags ?? [],
         });
       },
       expireSeconds: 300,

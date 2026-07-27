@@ -784,9 +784,9 @@ describe("app page dispatch", () => {
         requestApis: expect.arrayContaining([{ kind: "searchParams", status: "notObserved" }]),
       },
     });
-    expect(cachePolicy.revalidateSeconds).toBe(60);
+    expect(cachePolicy.cacheControl.revalidate).toBe(60);
     expect(cachePolicy.tags).toEqual(expect.arrayContaining(["_N_T_/posts/hello"]));
-    expect(cachePolicy.expireSeconds).toBeUndefined();
+    expect(cachePolicy.cacheControl.expire).toBeUndefined();
   });
 
   it("does not reuse queryless HTML when the page reads searchParams", async () => {

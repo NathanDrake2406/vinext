@@ -180,65 +180,55 @@ export async function isrGet(key: string): Promise<ISRCacheEntry | null> {
 }
 
 /**
- * Store a value in the ISR cache with a revalidation period.
+ * Assemble cache-control metadata, omitting the dimensions the producing
+ * render made no claim about. Shared by every ISR writer so `expire`/`stale`
+ * are never invented from `revalidate`.
+ */
+export function isrCacheControl(
+  revalidateSeconds: number | false,
+  claims: { expireSeconds?: number; staleSeconds?: number } = {},
+): CacheControlMetadata {
+  return {
+    revalidate: revalidateSeconds,
+    ...(claims.expireSeconds === undefined ? {} : { expire: claims.expireSeconds }),
+    ...(claims.staleSeconds === undefined ? {} : { stale: claims.staleSeconds }),
+  };
+}
+
+/**
+ * Write policy for one ISR entry: the cache metadata the producing render
+ * resolved, plus the tags that can invalidate it. Routers differ only in which
+ * `cacheControl` dimensions they populate — App pages carry the client-router
+ * `stale` bound, Pages Router and route handlers do not.
+ */
+export type IsrWritePolicy = {
+  cacheControl: CacheControlMetadata;
+  tags?: string[];
+};
+
+/**
+ * Store a value in the ISR cache under the given write policy.
  */
 export async function isrSet(
   key: string,
   data: IncrementalCacheValue | null,
-  revalidateSeconds: number | false,
-  tags?: string[],
-  expireSeconds?: number,
-  staleSeconds?: number,
+  policy: IsrWritePolicy,
 ): Promise<void> {
   await getCdnCacheAdapter().set(key, data, {
-    cacheControl: {
-      revalidate: revalidateSeconds,
-      ...(expireSeconds === undefined ? {} : { expire: expireSeconds }),
-      ...(staleSeconds === undefined ? {} : { stale: staleSeconds }),
-    } satisfies CacheControlMetadata,
+    cacheControl: policy.cacheControl,
     // `revalidate` is the legacy vinext CacheHandler context field. `expire`
     // and `stale` are newer metadata and intentionally only live inside
     // cacheControl.
-    revalidate: revalidateSeconds,
-    tags: tags ?? [],
+    revalidate: policy.cacheControl.revalidate,
+    tags: policy.tags ?? [],
   });
 }
-
-/**
- * Write policy for one App Router page cache entry: shared-cache dimensions
- * plus the client-router `stale` bound (see `CacheControlMetadata.stale`).
- */
-export type AppPageCacheWritePolicy = {
-  revalidateSeconds: number;
-  expireSeconds?: number;
-  staleSeconds?: number;
-  tags: string[];
-};
 
 export type AppPageCacheSetter = (
   key: string,
   data: CachedAppPageValue,
-  policy: AppPageCacheWritePolicy,
+  policy: IsrWritePolicy,
 ) => Promise<void>;
-
-/**
- * App Router page variant of {@link isrSet}. The positional form stays for the
- * Pages Router and route handlers, which never carry `stale`.
- */
-export async function isrSetAppPage(
-  key: string,
-  data: CachedAppPageValue,
-  policy: AppPageCacheWritePolicy,
-): Promise<void> {
-  await isrSet(
-    key,
-    data,
-    policy.revalidateSeconds,
-    policy.tags,
-    policy.expireSeconds,
-    policy.staleSeconds,
-  );
-}
 
 export async function isrSetPrerenderedAppPage(
   key: string,
@@ -270,11 +260,7 @@ export async function isrSetPrerenderedAppPage(
   const ctx: Record<string, unknown> = {};
   if (revalidateSeconds !== undefined) {
     ctx.revalidate = revalidateSeconds;
-    ctx.cacheControl = {
-      revalidate: revalidateSeconds,
-      ...(metadata.expireSeconds === undefined ? {} : { expire: metadata.expireSeconds }),
-      ...(metadata.staleSeconds === undefined ? {} : { stale: metadata.staleSeconds }),
-    } satisfies CacheControlMetadata;
+    ctx.cacheControl = isrCacheControl(revalidateSeconds, metadata);
   }
   if (tags && tags.length > 0) {
     ctx.tags = tags;

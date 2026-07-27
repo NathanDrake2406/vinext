@@ -277,7 +277,7 @@ function applyRequestCacheLife(options: {
 
   // `stale` is deliberately absent: it is the client-router dimension and must
   // not leak into `Cache-Control`. It travels on the cache entry instead (see
-  // resolveAppPageCacheWritePolicy).
+  // resolveAppPageCacheControl).
   return { expireSeconds, revalidateSeconds };
 }
 

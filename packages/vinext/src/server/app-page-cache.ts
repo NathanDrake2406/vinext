@@ -13,6 +13,7 @@ import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.j
 import { setCacheStateHeaders } from "./cache-headers.js";
 import {
   buildAppPageCacheValue,
+  isrCacheControl,
   type AppPageCacheSetter,
   type ISRCacheEntry,
 } from "./isr-cache.js";
@@ -202,11 +203,11 @@ function hasQueryInvariantAppPageProof(cachedValue: CachedAppPageValue): boolean
   );
 }
 
-function resolveRegeneratedAppPageCachePolicy(options: {
+function resolveRegeneratedAppPageCacheControl(options: {
   expireSeconds?: number;
   renderCacheControl?: CacheControlMetadata;
   routeRevalidateSeconds: number;
-}): { expireSeconds?: number; revalidateSeconds: number; staleSeconds?: number } {
+}): CacheControlMetadata {
   let revalidateSeconds = options.routeRevalidateSeconds;
   const renderRevalidateSeconds = options.renderCacheControl?.revalidate;
   // An indefinite nested cache lifetime does not tighten the route's own
@@ -218,14 +219,12 @@ function resolveRegeneratedAppPageCachePolicy(options: {
         : renderRevalidateSeconds;
   }
 
-  const expireSeconds = options.renderCacheControl?.expire ?? options.expireSeconds;
-  return {
-    expireSeconds,
-    revalidateSeconds,
+  return isrCacheControl(revalidateSeconds, {
+    expireSeconds: options.renderCacheControl?.expire ?? options.expireSeconds,
     // Carry the regenerating render's own claim onto the refreshed entry, so a
     // background regen does not quietly drop it and widen client reuse.
     staleSeconds: resolveClientStaleTimeSeconds(options.renderCacheControl),
-  };
+  });
 }
 
 export function buildAppPageCachedResponse(
@@ -452,7 +451,7 @@ export async function readAppPageCacheResponse(
       // reuse it instead of recomputing the hash.
       options.scheduleBackgroundRegeneration(isrKey, async () => {
         const revalidatedPage = await options.renderFreshPageForCache();
-        const cachePolicy = resolveRegeneratedAppPageCachePolicy({
+        const cacheControl = resolveRegeneratedAppPageCacheControl({
           expireSeconds: options.expireSeconds,
           renderCacheControl: revalidatedPage.cacheControl,
           routeRevalidateSeconds: options.revalidateSeconds,
@@ -476,7 +475,7 @@ export async function readAppPageCacheResponse(
               200,
               revalidatedPage.rscRenderObservation,
             ),
-            { ...cachePolicy, tags: revalidatedPage.tags },
+            { cacheControl, tags: revalidatedPage.tags },
           ),
         ];
 
@@ -495,7 +494,7 @@ export async function readAppPageCacheResponse(
                 revalidatedPage.htmlRenderObservation,
                 revalidatedPage.linkHeader ? { link: revalidatedPage.linkHeader } : undefined,
               ),
-              { ...cachePolicy, tags: revalidatedPage.tags },
+              { cacheControl, tags: revalidatedPage.tags },
             ),
           );
         }

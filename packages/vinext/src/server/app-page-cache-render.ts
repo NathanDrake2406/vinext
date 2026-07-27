@@ -156,7 +156,7 @@ export async function renderAppPageCacheArtifacts(
     cacheControl:
       typeof cacheLife?.revalidate === "number"
         ? // `stale` must survive regeneration: this producer feeds
-          // resolveRegeneratedAppPageCachePolicy, and dropping it here would
+          // resolveRegeneratedAppPageCacheControl, and dropping it here would
           // widen client reuse back to the configured fallback after the first
           // background regen.
           { revalidate: cacheLife.revalidate, expire: cacheLife.expire, stale: cacheLife.stale }
