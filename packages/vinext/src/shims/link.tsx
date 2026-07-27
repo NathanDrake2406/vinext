@@ -480,15 +480,7 @@ function prefetchUrl(
         const autoPrefetch =
           mode === "auto"
             ? resolveAutoAppRoutePrefetch(prefetchPolicyHref)
-            : mode === "full-after-shell"
-              ? {
-                  cacheForNavigation: true,
-                  fallbackTtl: "static" as const,
-                  minimumTtlMs: undefined,
-                  prefetchShellFirst: true,
-                  shouldPrefetch: true,
-                }
-              : resolveFullAppRoutePrefetch();
+            : resolveFullAppRoutePrefetch();
         if (!autoPrefetch.shouldPrefetch) return;
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);

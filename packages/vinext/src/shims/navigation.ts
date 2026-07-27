@@ -563,25 +563,16 @@ export function hasPrefetchCacheEntryForNavigation(
   );
   if (match === null) return false;
 
-  // Register onInvalidate against the matched entry, not the caller's exact
-  // cache key — the match may be a normalized `_rsc` variant or an alias, so
-  // an exact-key lookup after this call could silently miss it.
-  const attachOnInvalidate = (): void => {
-    if (options.onInvalidate === undefined) return;
-    addPrefetchInvalidationCallback(match.entry, options.onInvalidate);
-    if (match.entry.outcome === "cache-seeded") {
-      schedulePrefetchInvalidation(match.cacheKey, match.entry);
-    }
-  };
-
-  if (match.entry.pending !== undefined) {
+  // In flight, or settled and still fresh: either way the entry is reusable.
+  if (
+    match.entry.pending !== undefined ||
+    resolvePrefetchCacheEntryExpiresAt(match.entry) > Date.now()
+  ) {
     touchPrefetchCacheEntry(getPrefetchCache(), match.cacheKey, match.entry);
-    attachOnInvalidate();
-    return true;
-  }
-  if (resolvePrefetchCacheEntryExpiresAt(match.entry) > Date.now()) {
-    touchPrefetchCacheEntry(getPrefetchCache(), match.cacheKey, match.entry);
-    attachOnInvalidate();
+    // Register onInvalidate against the matched entry, not the caller's exact
+    // cache key — the match may be a normalized `_rsc` variant or an alias, so
+    // an exact-key lookup after this call could silently miss it.
+    attachPrefetchInvalidationToEntry(match.cacheKey, match.entry, options.onInvalidate);
     return true;
   }
 
@@ -882,6 +873,23 @@ function addPrefetchInvalidationCallback(
   entry.onInvalidateCallbacks.add(onInvalidate);
 }
 
+/**
+ * Attach `onInvalidate` to an entry the caller already holds. A settled entry
+ * needs its invalidation timer started here — nothing else will schedule one
+ * once `prefetchRscResponse` has finished with it.
+ */
+function attachPrefetchInvalidationToEntry(
+  cacheKey: string,
+  entry: PrefetchCacheEntry,
+  onInvalidate: (() => void) | undefined,
+): void {
+  if (onInvalidate === undefined) return;
+  addPrefetchInvalidationCallback(entry, onInvalidate);
+  if (entry.outcome === "cache-seeded") {
+    schedulePrefetchInvalidation(cacheKey, entry);
+  }
+}
+
 function attachPrefetchInvalidationCallback(
   cacheKey: string,
   onInvalidate: (() => void) | undefined,
@@ -889,10 +897,7 @@ function attachPrefetchInvalidationCallback(
   if (onInvalidate === undefined) return;
   const entry = getPrefetchCache().get(cacheKey);
   if (!entry) return;
-  addPrefetchInvalidationCallback(entry, onInvalidate);
-  if (entry.outcome === "cache-seeded") {
-    schedulePrefetchInvalidation(cacheKey, entry);
-  }
+  attachPrefetchInvalidationToEntry(cacheKey, entry, onInvalidate);
 }
 
 export function invalidatePrefetchCache(): void {
@@ -2468,20 +2473,23 @@ const _appRouter: AppRouterInstance = {
       const headers = createAppPrefetchRequestHeaders({
         fetchPriority: "low",
         interceptionContext,
+        // `|| null` keeps the helper's "set unless null/undefined" rule from
+        // emitting an empty slot header where this call site skipped it.
+        mountedSlotsHeader: mountedSlotsHeader || null,
         prefetchKind: reusable ? kind : undefined,
       });
       if (reusable && kind === "auto") {
         headers.set(NEXT_ROUTER_PREFETCH_HEADER, "1");
         headers.set(NEXT_ROUTER_SEGMENT_PREFETCH_HEADER, __prefetchInlining ? "/__PAGE__" : "1");
       }
-      if (mountedSlotsHeader) {
-        headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
-      }
-      const rscUrl = await createRscRequestUrl(fullHref, headers);
-      const additionalRscUrls =
-        rewrittenPrefetchHref !== null && rewrittenPrefetchHref !== fullHref
-          ? [await createRscRequestUrl(rewrittenPrefetchHref, headers)]
-          : [];
+      // Both derive from the same headers and neither feeds the other, so the
+      // rewrite variant is generated alongside rather than after.
+      const [rscUrl, ...additionalRscUrls] = await Promise.all([
+        createRscRequestUrl(fullHref, headers),
+        ...(rewrittenPrefetchHref !== null && rewrittenPrefetchHref !== fullHref
+          ? [createRscRequestUrl(rewrittenPrefetchHref, headers)]
+          : []),
+      ]);
       // A navigation can start in the same task as this call and win the race
       // above (hybrid-route module load, policy import, RSC URL generation).
       // Nothing was registered in the cache during that window, so navigation
