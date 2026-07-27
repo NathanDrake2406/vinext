@@ -37,6 +37,19 @@ describe("NextScript", () => {
     expect(html).toContain('data-vinext-script-nonce="test-nonce"');
     expect(html).toContain('data-vinext-script-cross-origin="anonymous"');
   });
+
+  it("HTML-escapes getInlineScriptSource output so page data cannot break out of the script tag", () => {
+    // Custom _document implementations embed this string in an inline
+    // <script>; an unescaped "</script>" in page data would end the tag.
+    const source = NextScript.getInlineScriptSource({
+      __NEXT_DATA__: { props: { evil: "</script><script>alert(1)</script>" } },
+    } as unknown as Parameters<typeof NextScript.getInlineScriptSource>[0]);
+    expect(source).not.toContain("</script>");
+    expect(source).toContain("\\u003c/script\\u003e");
+    expect(JSON.parse(source)).toEqual({
+      props: { evil: "</script><script>alert(1)</script>" },
+    });
+  });
 });
 
 describe("Head", () => {
