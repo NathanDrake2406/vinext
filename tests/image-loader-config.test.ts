@@ -15,7 +15,6 @@ import { pathToFileURL } from "node:url";
 import { describe, it, expect } from "vite-plus/test";
 import {
   generateImageLoaderModule,
-  MISSING_CUSTOM_LOADER_MARKER,
   VIRTUAL_IMAGE_LOADER,
 } from "../packages/vinext/src/image/image-loader-virtual.js";
 import { resolveNextConfig } from "../packages/vinext/src/config/next-config.js";
@@ -83,18 +82,6 @@ describe("generateImageLoaderModule", () => {
     expect(code).not.toContain("export default undefined;");
   });
 
-  it('marks the bare-"custom" export so the shim can tell it from a real loader', () => {
-    // The shim reads this to report the misconfiguration before it decides
-    // whether an image is optimized — an `unoptimized` image legitimately
-    // bypasses a real loader, but must not bypass this one.
-    const code = generateImageLoaderModule({ loader: "custom" });
-    expect(code).toContain(`customImageLoader.${MISSING_CUSTOM_LOADER_MARKER} = true;`);
-    // Only the bare-"custom" stub carries it; a real loader must not.
-    expect(generateImageLoaderModule({ loaderFile: "/project/l.js" })).not.toContain(
-      MISSING_CUSTOM_LOADER_MARKER,
-    );
-  });
-
   it('prefers the loaderFile when both it and loader:"custom" are set', () => {
     const code = generateImageLoaderModule({ loader: "custom", loaderFile: "/project/l.js" });
     expect(code).toContain('from "/project/l.js"');
@@ -149,18 +136,32 @@ describe("generated virtual:vinext-image-loader module", () => {
     );
   });
 
-  it('carries the marker on the executed bare-"custom" export', async () => {
-    // Asserted on the imported module rather than the source string: the
-    // property is assigned after `export default function`, and only running it
-    // proves the assignment lands on the exported binding.
+  it('exports requiresLoaderProp from every branch, set only for bare-"custom"', async () => {
+    // The shim imports this name unconditionally, so a branch that omitted it
+    // would fail to link rather than degrade — importing each variant is what
+    // proves all three satisfy the contract. Only the bare-"custom" stub sets
+    // it: the shim reports that misconfiguration before it decides whether an
+    // image is optimized, since `unoptimized` legitimately bypasses a real
+    // loader but must not bypass the error.
     const root = makeProjectRoot();
-    const mod = (await importGenerated(
-      root,
-      "generated-custom-marker.mjs",
-      generateImageLoaderModule({ loader: "custom" }),
-    )) as { default: Record<string, unknown> };
+    const variants = [
+      { name: "requires-none.mjs", images: undefined, expected: false },
+      {
+        name: "requires-file.mjs",
+        images: { loaderFile: path.join(root, "loader.mjs") },
+        expected: false,
+      },
+      { name: "requires-custom.mjs", images: { loader: "custom" as const }, expected: true },
+    ];
 
-    expect(mod.default[MISSING_CUSTOM_LOADER_MARKER]).toBe(true);
+    for (const variant of variants) {
+      const mod = (await importGenerated(
+        root,
+        variant.name,
+        generateImageLoaderModule(variant.images),
+      )) as { requiresLoaderProp: boolean };
+      expect(mod.requiresLoaderProp).toBe(variant.expected);
+    }
   });
 });
 

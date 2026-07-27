@@ -31,7 +31,7 @@ import { useMergedRef } from "./use-merged-ref.js";
 // loader is used. A per-image `loader` prop always takes precedence.
 // Config cannot travel through the `process.env.__VINEXT_IMAGE_*` defines used
 // below — those carry JSON, and a loader is a function.
-import configuredImageLoader from "virtual:vinext-image-loader";
+import configuredImageLoader, { requiresLoaderProp } from "virtual:vinext-image-loader";
 
 export type { ImageLoader, StaticImageData, StaticRequire };
 export type ImageLoaderProps = Parameters<ImageLoader>[0];
@@ -627,8 +627,7 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   // raises that error before it decides whether an image is optimized, so
   // `unoptimized` must not skip past it — fall through to the loader branch,
   // where invoking the loader surfaces the error carrying this image's src.
-  const reportsMissingLoaderProp =
-    loader === undefined && configuredImageLoader?.__vinext_img_missing_loader === true;
+  const reportsMissingLoaderProp = loader === undefined && requiresLoaderProp;
 
   if ((_unoptimized === true || __globallyUnoptimized) && !reportsMissingLoaderProp) {
     // Unoptimized images are fetched directly by the browser, so intentionally
@@ -919,8 +918,7 @@ export function getImageProps(props: ImageProps): { props: ImgProps } {
 
   // Mirrors the component path: a bare `images.loader: "custom"` is reported
   // before optimization is decided, so `unoptimized` cannot hide it.
-  const reportsMissingLoaderProp =
-    loader === undefined && configuredImageLoader?.__vinext_img_missing_loader === true;
+  const reportsMissingLoaderProp = loader === undefined && requiresLoaderProp;
 
   if ((_unoptimized === true || __globallyUnoptimized) && !reportsMissingLoaderProp) {
     // As in the component path, unoptimized images never reach the server-side

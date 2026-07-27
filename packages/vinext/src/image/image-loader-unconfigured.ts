@@ -10,9 +10,8 @@
  * `generateImageLoaderModule()` output rather than trying to swap this module.
  */
 const imageLoader:
-  | (((props: { src: string; width: number; quality?: number }) => string) & {
-      __vinext_img_missing_loader?: true;
-    })
+  | ((props: { src: string; width: number; quality?: number }) => string)
   | undefined = undefined;
 
 export default imageLoader;
+export const requiresLoaderProp = false;

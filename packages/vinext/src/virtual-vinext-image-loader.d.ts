@@ -13,15 +13,14 @@
  */
 declare module "virtual:vinext-image-loader" {
   const imageLoader:
-    | (((props: { src: string; width: number; quality?: number }) => string) & {
-        /**
-         * Set when `images.loader` is `"custom"` with no `images.loaderFile`:
-         * the export reports that each `<Image>` must pass its own `loader`
-         * prop rather than generating URLs. See `MISSING_CUSTOM_LOADER_MARKER`
-         * in `image/image-loader-virtual.ts`.
-         */
-        __vinext_img_missing_loader?: true;
-      })
+    | ((props: { src: string; width: number; quality?: number }) => string)
     | undefined;
   export default imageLoader;
+
+  /**
+   * True when `images.loader` is `"custom"` with no `images.loaderFile`: the
+   * default export then reports that each `<Image>` must pass its own `loader`
+   * prop rather than generating URLs.
+   */
+  export const requiresLoaderProp: boolean;
 }

@@ -10,25 +10,16 @@
  * shim imports this virtual module unconditionally and the plugin generates
  * either a re-export of the user's loader or an inert stub.
  *
- * The generated module always has a default export, so the shim's unconditional
- * import stays valid whether or not `loaderFile` is configured.
+ * Every branch emits the same two exports so the shim's unconditional import
+ * stays valid whether or not `loaderFile` is configured: `default` is the loader
+ * (or `undefined`), and `requiresLoaderProp` says whether the configuration
+ * demands that each `<Image>` bring its own `loader` prop.
  *
  * This mirrors the adapter pattern in `image/image-adapters-virtual.ts`.
  */
 
 /** Public virtual module id imported by the `next/image` shim. */
 export const VIRTUAL_IMAGE_LOADER = "virtual:vinext-image-loader";
-
-/**
- * Property stamped on the generated loader when `images.loader` is `"custom"`
- * with no `images.loaderFile`, so the shim can distinguish "the user configured
- * a loader" from "the user configured that every image must bring its own".
- *
- * Mirrors upstream's `__next_img_default` marker on its built-in loader. The
- * name is duplicated in `shims/image.tsx` and `virtual-vinext-image-loader.d.ts`
- * because the generated module is a string and cannot import this constant.
- */
-export const MISSING_CUSTOM_LOADER_MARKER = "__vinext_img_missing_loader";
 
 /**
  * Next.js's error for a `loaderFile` whose module has no default export.
@@ -64,11 +55,11 @@ export function generateImageLoaderModule(images?: {
       "  );",
       "}",
       "",
-      "// Marks this export as a misconfiguration report rather than a working",
-      "// loader. Upstream raises the missing-prop error before it decides whether",
-      "// an image is optimized, so the shim needs to tell the two apart: an",
+      "// The default export above reports a misconfiguration rather than",
+      "// generating URLs. Upstream raises the missing-prop error before it decides",
+      "// whether an image is optimized, so the shim needs to tell the two apart: an",
       "// `unoptimized` image bypasses a real loader, but must not bypass this one.",
-      `customImageLoader.${MISSING_CUSTOM_LOADER_MARKER} = true;`,
+      "export const requiresLoaderProp = true;",
       "",
     ].join("\n");
   }
@@ -79,6 +70,7 @@ export function generateImageLoaderModule(images?: {
     return [
       "// vinext: no images.loaderFile configured — the built-in /_next/image loader is used.",
       "export default undefined;",
+      "export const requiresLoaderProp = false;",
       "",
     ].join("\n");
   }
@@ -98,6 +90,7 @@ export function generateImageLoaderModule(images?: {
     "}",
     "",
     "export default __vinextImageLoader;",
+    "export const requiresLoaderProp = false;",
     "",
   ].join("\n");
 }
