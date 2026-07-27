@@ -35,7 +35,8 @@ function isFiniteNonNegative(value: number | undefined): value is number {
  * the producing render claimed. Two rules: never synthesize `stale` from
  * `revalidate`/`expire` (the `default` profile would license ~136y of reuse),
  * and never clamp it by them (Next.js replays the stored value verbatim;
- * `expire` is a serve-side ceiling, not a client bound).
+ * `expire` is a serve-side ceiling, not a client bound). A literal `stale: 0`
+ * is still a real client claim; it must not be treated as absent.
  */
 export function resolveClientStaleTimeSeconds(
   cacheLife: { stale?: number } | null | undefined,
