@@ -103,10 +103,18 @@ export function createRequireContextPlugin(): Plugin {
       },
     },
     hotUpdate({ type, file, modules }) {
-      if (type === "update") return;
-
       const contextsForEnvironment = watchedContexts.get(this.environment);
       if (!contextsForEnvironment) return;
+
+      // The event's own modules retransform after this update, but the
+      // transform filter skips modules that no longer call require.context —
+      // its map cleanup never runs for them. Drop their entries here instead;
+      // the transform re-adds any that still match.
+      for (const module of modules) {
+        if (module.id != null) contextsForEnvironment.delete(module.id);
+      }
+
+      if (type === "update") return;
 
       const normalizedFile = toSlash(file);
       const affectedModules = new Set(modules);
@@ -400,19 +408,22 @@ async function resolveContextModules(
     flags: filterFlags(call.flags),
   };
   const regexp = call.pattern ? new RegExp(call.pattern, context.flags) : null;
-  const modules: ContextModule[] = [];
+  const accepted: Omit<ContextModule, "binding">[] = [];
 
   for (const candidate of await listContextFiles(directory, call.recursive)) {
     const key = `./${candidate}`;
     if (regexp && !regexp.test(key)) continue;
-    modules.push({
-      binding: `${bindingPrefix}_${callIndex}_${modules.length}`,
-      key,
-      specifier: `${stripTrailingSlash(call.dir)}/${candidate}`,
-    });
+    accepted.push({ key, specifier: `${stripTrailingSlash(call.dir)}/${candidate}` });
   }
 
-  modules.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+  // Assign binding indices after sorting: readdir order is filesystem
+  // dependent, and index-before-sort would leak that order into the generated
+  // identifiers, changing bundle bytes for an unchanged source tree.
+  accepted.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+  const modules = accepted.map((entry, index) => ({
+    ...entry,
+    binding: `${bindingPrefix}_${callIndex}_${index}`,
+  }));
   return { context, modules };
 }
 
@@ -485,6 +496,12 @@ function matchesWatchedContext(file: string, context: WatchedContext): boolean {
   ) {
     return false;
   }
+
+  // A created or deleted directory in a recursive context can add or remove
+  // matching descendants even though its own path fails the file regexp (the
+  // watcher may only report the directory, e.g. a symlinked directory with
+  // followSymlinks disabled), so membership alone must invalidate.
+  if (context.recursive) return true;
 
   return (
     context.pattern === "" || new RegExp(context.pattern, context.flags).test(`./${candidate}`)
