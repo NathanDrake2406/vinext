@@ -521,6 +521,52 @@ describe("createAppRscHandler", () => {
     expect(middlewareRequest!.nextUrl.pathname).toBe("/outside");
   });
 
+  // A redirecting Server Action renders the target page inline, so the target's
+  // middleware only runs if the handler hands the action dispatch a way to run
+  // it. Without this an action on a public path could return a middleware-gated
+  // page's Flight payload.
+  it("runs middleware for Server Action redirect targets", async () => {
+    const seenPathnames: string[] = [];
+    const middleware = vi.fn((request: NextRequest) => {
+      const { pathname } = new URL(request.url);
+      seenPathnames.push(pathname);
+      return pathname === "/docs/protected"
+        ? new Response("unauthorized", { status: 401 })
+        : new Response(null, { headers: { "x-middleware-next": "1" } });
+    });
+    let runRedirectTargetMiddleware:
+      | ((options: { cleanPathname: string; request: Request }) => Promise<{ kind: string }>)
+      | undefined;
+    const handler = createHandler({
+      configHeaders: [],
+      handleServerActionRequest: async (options) => {
+        runRedirectTargetMiddleware = options.runRedirectTargetMiddleware;
+        return new Response("action");
+      },
+      middlewareModule: { default: middleware },
+    });
+
+    const response = await handler(
+      new Request("https://example.test/docs/about", {
+        method: "POST",
+        headers: { "next-action": "action-id", "content-type": "text/plain" },
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    expect(seenPathnames).toEqual(["/docs/about"]);
+
+    expect(runRedirectTargetMiddleware).toBeDefined();
+    await expect(
+      runRedirectTargetMiddleware!({
+        cleanPathname: "/protected",
+        request: new Request("https://example.test/docs/protected"),
+      }),
+    ).resolves.toEqual({ kind: "diverted" });
+    expect(seenPathnames).toEqual(["/docs/about", "/docs/protected"]);
+  });
+
   it.each([
     "url=%2Fimg.jpg&w=640junk&q=75",
     "url=%2Fimg.jpg&w=640&q=75&extra=1",

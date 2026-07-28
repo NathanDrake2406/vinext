@@ -198,6 +198,15 @@ type DecodeServerActionReplyOptions<TTemporaryReferences> = {
   temporaryReferences: TTemporaryReferences;
 };
 
+/**
+ * Outcome of running middleware for an action-redirect target. `diverted` means
+ * middleware blocked, redirected, or rewrote the target, so it cannot be
+ * rendered inline and has to be resolved by a real navigation.
+ */
+export type ActionRedirectMiddlewareResult =
+  | { kind: "continue"; responseHeaders: Headers | null }
+  | { kind: "diverted" };
+
 export type HandleProgressiveServerActionRequestOptions = {
   actionId: string | null;
   allowedOrigins: string[];
@@ -281,6 +290,17 @@ export type HandleServerActionRscRequestOptions<
   maxActionBodySizeLabel: string;
   middlewareHeaders: Headers | null;
   middlewareStatus: number | null | undefined;
+  /**
+   * Run userland middleware for an internal action-redirect target before that
+   * target is rendered inline. Middleware only ran for the action's own path,
+   * so without this the target's middleware — commonly the app's authorization
+   * boundary — would never see the request. Absent when the app has no
+   * middleware.
+   */
+  runRedirectTargetMiddleware?: (options: {
+    cleanPathname: string;
+    request: Request;
+  }) => Promise<ActionRedirectMiddlewareResult>;
   mountedSlotsHeader: string | null;
   readBodyWithLimit: ReadBodyWithLimit;
   readFormDataWithLimit: ReadFormDataWithLimit;
@@ -1312,6 +1332,24 @@ export async function handleServerActionRscRequest<
           draftModeSecret: options.draftModeSecret,
         }),
       );
+      // Middleware ran for the action's own path, not the target's. Run it here
+      // (against the headers context above, so request-header overrides land on
+      // the render) and hand anything it wants to change back to the client as a
+      // plain redirect it will re-request through the full pipeline.
+      if (options.runRedirectTargetMiddleware) {
+        const targetMiddleware = await options.runRedirectTargetMiddleware({
+          cleanPathname: targetPathname,
+          request: redirectRenderRequest,
+        });
+        if (targetMiddleware.kind === "diverted") {
+          options.clearRequestContext();
+          return new Response(null, {
+            status: 303,
+            headers: withoutRscBodyHeaders(redirectHeaders),
+          });
+        }
+        mergeMiddlewareResponseHeaders(redirectHeaders, targetMiddleware.responseHeaders);
+      }
       const redirectDynamicConfig = options.resolveRouteDynamicConfig?.(targetMatch.route);
       const redirectSearchParams = prepareActionPageRerenderContext({
         draftModeCookie: actionDraftCookie,

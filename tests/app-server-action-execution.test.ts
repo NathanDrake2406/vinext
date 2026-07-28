@@ -1983,6 +1983,87 @@ describe("app server action execution helpers", () => {
     expect(buildPageElement).not.toHaveBeenCalled();
   });
 
+  it("falls back to header-only redirects when target middleware diverts the request", async () => {
+    const buildPageElement = vi.fn(() => "should-not-render");
+    const runRedirectTargetMiddleware = vi.fn(async () => ({ kind: "diverted" }) as const);
+
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        buildPageElement,
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/protected"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/protected") {
+            return {
+              params: {},
+              route: { id: "protected", page: {}, params: [], pattern: "/protected" },
+            };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        runRedirectTargetMiddleware,
+      }),
+    );
+
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get("x-action-redirect")).toBe("/protected");
+    expect(response?.headers.get("content-type")).toBeNull();
+    expect(await response?.text()).toBe("");
+    expect(buildPageElement).not.toHaveBeenCalled();
+    expect(runRedirectTargetMiddleware).toHaveBeenCalledWith({
+      cleanPathname: "/protected",
+      request: expect.any(Request),
+    });
+  });
+
+  it("renders redirect targets that middleware passes through and keeps its response headers", async () => {
+    let middlewareRequest: Request | null = null;
+    const runRedirectTargetMiddleware = vi.fn(async (targetOptions: { request: Request }) => {
+      middlewareRequest = targetOptions.request;
+      return {
+        kind: "continue" as const,
+        responseHeaders: new Headers({ "x-from-target-middleware": "1" }),
+      };
+    });
+
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/redirect-target"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/redirect-target") {
+            return {
+              params: {},
+              route: { id: "redirect-target", page: {}, params: [], pattern: "/redirect-target" },
+            };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        runRedirectTargetMiddleware,
+      }),
+    );
+
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get("x-from-target-middleware")).toBe("1");
+    expect(JSON.parse(await response!.text())).toEqual({
+      root: "redirect-target:{}:none",
+      returnValue: { ok: true },
+    });
+
+    expect(middlewareRequest).not.toBeNull();
+    expect(middlewareRequest!.method).toBe("GET");
+    expect(middlewareRequest!.url).toBe("https://example.com/redirect-target");
+    expect(middlewareRequest!.headers.get("next-action")).toBeNull();
+  });
+
   it("does not emit x-action-revalidated when a fetch action revalidates a tag with a profile", async () => {
     const response = await handleServerActionRscRequest(
       createRscOptions({

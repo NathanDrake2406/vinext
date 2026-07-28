@@ -71,6 +71,7 @@ import {
 } from "./image-optimization.js";
 import { runWithPrerenderWorkUnit } from "./prerender-work-unit-setup.js";
 import { buildPostMwRequestContext } from "./app-post-middleware-context.js";
+import type { ActionRedirectMiddlewareResult } from "./app-server-action-execution.js";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
 import type { AppPagePprFallbackCacheShell } from "./app-ppr-fallback-shell.js";
 import type { ClientReuseManifestParseResult } from "./client-reuse-manifest.js";
@@ -256,6 +257,10 @@ type HandleServerActionRequestOptions<TRoute> = {
   scriptNonce?: string;
   routeMatch: AppRscRouteMatch<TRoute> | null;
   routePathname: string;
+  runRedirectTargetMiddleware?: (options: {
+    cleanPathname: string;
+    request: Request;
+  }) => Promise<ActionRedirectMiddlewareResult>;
   searchParams: URLSearchParams;
 };
 
@@ -691,6 +696,38 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     resolvedUrl = cleanPathname + url.search;
   }
 
+  // A server action that redirects renders the target page inline instead of
+  // making the client re-request it, so the target's middleware has to be run
+  // here or it is skipped entirely. Only a clean pass-through can be rendered
+  // inline: a block, redirect, rewrite, or status override has to be resolved by
+  // a real navigation through the full request pipeline.
+  const runRedirectTargetMiddleware = runMiddleware
+    ? async (targetOptions: {
+        cleanPathname: string;
+        request: Request;
+      }): Promise<ActionRedirectMiddlewareResult> => {
+        const targetContext: AppRscMiddlewareContext = {
+          headers: null,
+          requestHeaders: null,
+          status: null,
+        };
+        const targetResult = await runMiddleware({
+          cleanPathname: targetOptions.cleanPathname,
+          context: targetContext,
+          hadBasePath,
+          isDataRequest: false,
+          request: targetOptions.request,
+        });
+        if (targetResult.kind === "response" || targetResult.rewritten) {
+          return { kind: "diverted" };
+        }
+        if (targetContext.status !== null && targetContext.status !== 200) {
+          return { kind: "diverted" };
+        }
+        return { kind: "continue", responseHeaders: targetContext.headers };
+      }
+    : undefined;
+
   const scriptNonce = getScriptNonceFromHeaderSources(request.headers, middlewareContext.headers);
   const postMiddlewareRequestContext = buildPostMwRequestContext(userlandRequest);
   let filesystemRouteEligible = hadBasePath || didMiddlewareRewrite;
@@ -972,6 +1009,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           scriptNonce,
           routeMatch: preActionMatch,
           routePathname: preActionRoutePathname,
+          runRedirectTargetMiddleware,
           searchParams: getResolvedSearchParams(),
         })
       : null;

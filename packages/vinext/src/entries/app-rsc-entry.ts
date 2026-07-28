@@ -1072,6 +1072,7 @@ export default createAppRscHandler({
     scriptNonce,
     routeMatch,
     routePathname,
+    runRedirectTargetMiddleware,
     searchParams,
   }) {
     const {
@@ -1173,6 +1174,7 @@ export default createAppRscHandler({
       },
       resolveRouteRuntime: __resolveRouteRuntime,
       request,
+      runRedirectTargetMiddleware,
       sanitizeErrorForClient(error) {
         return __sanitizeErrorForClient(error);
       },
