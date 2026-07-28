@@ -123,11 +123,18 @@ function applyPendingDynamicCdnHeaders(
   applyCacheState(headers, options);
 }
 
+/** A policy that forbids shared caches from storing the response. */
+const NON_SHARED_CACHEABLE_RE = /\b(?:no-store|no-cache|private)\b/i;
+
 /**
  * Stamp the *final* cache policy, once the render has proven whether it used a
  * request API. A dynamic render is demoted to `no-store` so no shared cache can
  * store a personalized response; a proven-static render gets the real policy
  * with no `pendingDynamicCheck` caveat attached.
+ *
+ * The most restrictive authority wins: middleware owns singular response
+ * headers, so a `Cache-Control` it set to private/no-cache/no-store must veto
+ * edge caching no matter what lifetime the render itself resolved to.
  */
 function applyProvenCdnHeaders(
   headers: Headers,
@@ -135,6 +142,12 @@ function applyProvenCdnHeaders(
   tags?: readonly string[],
   options: { omitCacheState?: boolean } = {},
 ): void {
+  const existingCacheControl = headers.get("Cache-Control");
+  if (existingCacheControl !== null && NON_SHARED_CACHEABLE_RE.test(existingCacheControl)) {
+    applyCdnResponseHeaders(headers, { cacheControl: existingCacheControl });
+    applyCacheState(headers, options);
+    return;
+  }
   const cacheControl = buildProvenCacheControl(outcome);
   const cacheable = outcome.dynamicUsed === false && outcome.cachePolicy !== null;
   applyCdnResponseHeaders(headers, cacheable ? { cacheControl, tags } : { cacheControl });
