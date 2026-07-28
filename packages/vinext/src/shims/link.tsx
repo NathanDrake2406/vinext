@@ -414,16 +414,27 @@ function prefetchUrl(
 
   const runPrefetch = () => {
     let setup: PendingPrefetchSetup | null = null;
+    // Setup work that keeps running after the outer closure returns (the
+    // fire-and-forget loading shell, the staged shell-first payload). The
+    // token must stay registered until these can no longer write to the
+    // prefetch cache, or a cancellation during their awaits finds no token
+    // and their guards never trip.
+    const stagedSetupWork: Promise<unknown>[] = [];
     void (async () => {
       if (hasAppNavigationRuntime()) {
         if (isBotUserAgent(window.navigator?.userAgent ?? "")) return;
 
         // Registered before the first await, so a navigation to this
         // destination or a cache invalidation in the same task cancels the
-        // setup below instead of racing it. `fullHref` is same-origin local
-        // (getLinkPrefetchHref returned non-null) and this runs on the client,
-        // so the destination always resolves; the fallback is unreachable.
-        setup = beginPrefetchSetup(toAppPrefetchDestination(fullHref) ?? fullHref);
+        // setup below instead of racing it. The destination is derived from
+        // the app-relative `prefetchHref`, matching what navigations pass to
+        // `toAppPrefetchDestination` — `fullHref` already carries basePath and
+        // would get it prefixed a second time, producing a key no navigation
+        // ever matches. `prefetchHref` is same-origin local (getLinkPrefetchHref
+        // returned non-null) and this runs on the client, so the destination
+        // always resolves; the fallback is unreachable.
+        const activeSetup = beginPrefetchSetup(toAppPrefetchDestination(prefetchHref) ?? fullHref);
+        setup = activeSetup;
         const [
           navigation,
           { AppElementsWire },
@@ -448,7 +459,7 @@ function prefetchUrl(
         // Cancellation also arrives from invalidatePrefetchCache(): a
         // router.refresh() while these modules load voids the whole cache
         // generation, and resuming would repopulate one route from it.
-        if (setup.cancelled) return;
+        if (activeSetup.cancelled) return;
         const {
           getPrefetchInterceptionContext,
           getPrefetchCache,
@@ -540,7 +551,7 @@ function prefetchUrl(
         // Re-checked after the RSC-URL awaits above: a cancellation that
         // arrived since the module-loading check must not reach the cache
         // writes below. Mirrors router.prefetch()'s guard in navigation.ts.
-        if (setup.cancelled) return;
+        if (activeSetup.cancelled) return;
         const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
         const prefetched = getPrefetchedUrls();
         if (autoPrefetch.cacheForNavigation) {
@@ -576,6 +587,11 @@ function prefetchUrl(
             shellHeaders.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
           }
           const shellRscUrl = await createRscRequestUrl(fullHref, shellHeaders);
+          // This helper outlives the outer closure (it is launched without
+          // being awaited), so a cancellation that lands during the await
+          // above must stop it here before it registers a shell entry in an
+          // invalidated cache generation.
+          if (activeSetup.cancelled) return;
           const shellCacheKey = AppElementsWire.encodeCacheKey(shellRscUrl, interceptionContext);
           const shellCache = getPrefetchCache();
           let shellEntry = shellCache.get(shellCacheKey);
@@ -696,7 +712,11 @@ function prefetchUrl(
                 );
                 const shellCache = getPrefetchCache();
                 let shellEntry = shellCache.get(shellCacheKey);
-                if (shellEntry === undefined) {
+                // Guard only the side write: this closure's return value feeds
+                // the navigation entry registered before any cancellation, so
+                // it must still resolve; only a new route-tree entry must not
+                // be added to an invalidated cache generation.
+                if (shellEntry === undefined && !activeSetup.cancelled) {
                   getPrefetchedUrls().add(shellCacheKey);
                   prefetchRscResponse(
                     shellRscUrl,
@@ -750,6 +770,11 @@ function prefetchUrl(
                 );
               })()
             : fetchFullRscPayload();
+        if (autoPrefetch.cacheForNavigation && (gateViaRouteTree || gateViaLoadingShell)) {
+          // The staged closure writes shell/route-tree entries between its
+          // awaits; hold the token until it settles.
+          stagedSetupWork.push(fetchPromise.catch(() => {}));
+        }
         if (
           !__prefetchInlining &&
           mode === "full" &&
@@ -758,7 +783,7 @@ function prefetchUrl(
           mountedSlotsHeader === null &&
           !gateViaExplicitSearchShell
         ) {
-          void fetchLoadingShellForReuse();
+          stagedSetupWork.push(fetchLoadingShellForReuse().catch(() => {}));
         }
         prefetchRscResponse(
           rscUrl,
@@ -823,7 +848,11 @@ function prefetchUrl(
         console.error("[vinext] RSC prefetch setup error:", error);
       })
       .finally(() => {
-        if (setup !== null) finishPrefetchSetup(setup);
+        if (setup === null) return;
+        const registered = setup;
+        // Not until the outer closure ends: staged helpers keep writing after
+        // it, and an unregistered token can no longer be cancelled.
+        void Promise.allSettled(stagedSetupWork).then(() => finishPrefetchSetup(registered));
       });
   };
 

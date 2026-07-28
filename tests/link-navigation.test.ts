@@ -1861,6 +1861,93 @@ describe("Link prefetch scheduling", () => {
     }
   });
 
+  it("cancels a pending Link prefetch on same-route navigation under a basePath (#2718)", async () => {
+    // The cancellation key must come from the app-relative href on both sides.
+    // Deriving it from the basePath-prefixed browser href double-prefixes it
+    // (/docs + /docs/intent-prefetch-target), so the navigation's key never
+    // matches and the same-route prefetch survives as a duplicate request.
+    vi.stubEnv("__NEXT_ROUTER_BASEPATH", "/docs");
+    const result = await renderIsolatedLink({
+      href: "/intent-prefetch-target",
+      nodeEnv: "production",
+      windowOverrides: {
+        location: {
+          href: "https://example.com/docs/current",
+          origin: "https://example.com",
+          pathname: "/docs/current",
+          search: "",
+        },
+      },
+    });
+    const { navigateClientSide } = await import("../packages/vinext/src/shims/navigation.js");
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      void navigateClientSide("/intent-prefetch-target", "push", false).catch(() => {});
+      await flushPrefetchTasks();
+
+      expect(result.fetch).not.toHaveBeenCalled();
+    } finally {
+      result.restoreNodeEnv();
+    }
+  });
+
+  it("does not register a staged loading shell after a cache invalidation (#2718)", async () => {
+    // An explicit full prefetch launches its loading-shell warmup without
+    // awaiting it, and the outer setup finishes while that helper is still
+    // parked at createRscRequestUrl(). Gate that call so the invalidation
+    // deterministically lands inside the helper's await window.
+    let releaseShellRscUrl = () => {};
+    const shellRscUrlGate = new Promise<void>((resolve) => {
+      releaseShellRscUrl = resolve;
+    });
+    vi.doMock("../packages/vinext/src/server/app-rsc-cache-busting.js", async () => {
+      const actual = await vi.importActual<
+        typeof import("../packages/vinext/src/server/app-rsc-cache-busting.js")
+      >("../packages/vinext/src/server/app-rsc-cache-busting.js");
+      return {
+        ...actual,
+        createRscRequestUrl: async (href: string, headers: Headers) => {
+          if (
+            headers.get(VINEXT_RSC_RENDER_MODE_HEADER) ===
+            APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
+          ) {
+            await shellRscUrlGate;
+          }
+          return actual.createRscRequestUrl(href, headers);
+        },
+      };
+    });
+    // Hover intent rather than a viewport entry, for the same reason as the
+    // invalidation test above: a visible link would legitimately re-prefetch
+    // after the invalidation and mask the staged leak.
+    const result = await renderIsolatedLink({
+      href: "/blog/hello",
+      nodeEnv: "production",
+      props: { prefetch: true },
+    });
+    const { getPrefetchCache, invalidatePrefetchCache } =
+      await import("../packages/vinext/src/shims/navigation.js");
+
+    try {
+      result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
+      // The full-payload fetch proves setup ran past the point where the
+      // shell helper was launched; the helper itself is held at the gate.
+      await waitForFetchCalls(result.fetch, 1);
+      invalidatePrefetchCache();
+      releaseShellRscUrl();
+      await flushPrefetchTasks();
+
+      // A resumed helper would fetch the shell and register it in the
+      // invalidated cache generation.
+      expect(result.fetch).toHaveBeenCalledTimes(1);
+      expect(getPrefetchCache().size).toBe(0);
+    } finally {
+      vi.doUnmock("../packages/vinext/src/server/app-rsc-cache-busting.js");
+      result.restoreNodeEnv();
+    }
+  });
+
   it("re-prefetches a visible Link when the exact cache entry has gone stale", async () => {
     const observer = stubIntersectionObserver();
 
