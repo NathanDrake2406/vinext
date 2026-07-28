@@ -1895,32 +1895,10 @@ describe("Link prefetch scheduling", () => {
   it("does not register a staged loading shell after a cache invalidation (#2718)", async () => {
     // An explicit full prefetch launches its loading-shell warmup without
     // awaiting it, and the outer setup finishes while that helper is still
-    // parked at createRscRequestUrl(). Gate that call so the invalidation
-    // deterministically lands inside the helper's await window.
-    let releaseShellRscUrl = () => {};
-    const shellRscUrlGate = new Promise<void>((resolve) => {
-      releaseShellRscUrl = resolve;
-    });
-    vi.doMock("../packages/vinext/src/server/app-rsc-cache-busting.js", async () => {
-      const actual = await vi.importActual<
-        typeof import("../packages/vinext/src/server/app-rsc-cache-busting.js")
-      >("../packages/vinext/src/server/app-rsc-cache-busting.js");
-      return {
-        ...actual,
-        createRscRequestUrl: async (href: string, headers: Headers) => {
-          if (
-            headers.get(VINEXT_RSC_RENDER_MODE_HEADER) ===
-            APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL
-          ) {
-            await shellRscUrlGate;
-          }
-          return actual.createRscRequestUrl(href, headers);
-        },
-      };
-    });
-    // Hover intent rather than a viewport entry, for the same reason as the
-    // invalidation test above: a visible link would legitimately re-prefetch
-    // after the invalidation and mask the staged leak.
+    // awaiting createRscRequestUrl(). Hover intent rather than a viewport
+    // entry, for the same reason as the invalidation test above: a visible
+    // link would legitimately re-prefetch after the invalidation and mask the
+    // staged leak.
     const result = await renderIsolatedLink({
       href: "/blog/hello",
       nodeEnv: "production",
@@ -1930,12 +1908,19 @@ describe("Link prefetch scheduling", () => {
       await import("../packages/vinext/src/shims/navigation.js");
 
     try {
+      // Timing, driven entirely from the stubbed fetch boundary: a
+      // high-priority intent prefetch issues its full-payload fetch
+      // synchronously inside the setup closure, in the same synchronous
+      // stretch that launches the shell helper. A microtask scheduled from
+      // that fetch call therefore runs after the closure returns but before
+      // the helper's createRscRequestUrl() can resolve — its SHA-256 digest
+      // completes through the event loop — so the invalidation lands
+      // deterministically inside the helper's pre-write window.
+      result.fetch.mockImplementationOnce(() => {
+        void Promise.resolve().then(() => invalidatePrefetchCache());
+        return Promise.resolve(new Response(""));
+      });
       result.capturedAnchorProps.onMouseEnter?.({ currentTarget: result.anchor });
-      // The full-payload fetch proves setup ran past the point where the
-      // shell helper was launched; the helper itself is held at the gate.
-      await waitForFetchCalls(result.fetch, 1);
-      invalidatePrefetchCache();
-      releaseShellRscUrl();
       await flushPrefetchTasks();
 
       // A resumed helper would fetch the shell and register it in the
@@ -1943,7 +1928,6 @@ describe("Link prefetch scheduling", () => {
       expect(result.fetch).toHaveBeenCalledTimes(1);
       expect(getPrefetchCache().size).toBe(0);
     } finally {
-      vi.doUnmock("../packages/vinext/src/server/app-rsc-cache-busting.js");
       result.restoreNodeEnv();
     }
   });
