@@ -7246,6 +7246,71 @@ describe('"use cache" runtime', () => {
     }
   });
 
+  it("derives a stale nested hit's cache life from the entry revalidate when cacheControl is absent", async () => {
+    // Regression: a custom CacheHandler or legacy entry can return a stale
+    // FETCH value without the optional `cacheControl` metadata. The required
+    // `value.revalidate` still bounds the entry's lifetime, so an outer miss
+    // embedding the served hit must inherit it instead of resolving the
+    // default 900s window around stale child data.
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+
+    const childKey = "use-cache:test:swr-bare-child";
+    const outerKey = "use-cache:test:swr-bare-outer";
+
+    const staleChild = {
+      lastModified: Date.now() - 2_000,
+      cacheState: "stale",
+      value: {
+        kind: "FETCH",
+        data: { headers: {}, body: JSON.stringify({ child: "stale" }), url: childKey },
+        tags: [],
+        revalidate: 5,
+      },
+    } satisfies CacheHandlerValue;
+
+    const setEntry = vi.fn<CacheHandler["set"]>(async () => {});
+    setCacheHandler({
+      async get(key) {
+        return key === childKey ? staleChild : null;
+      },
+      set: setEntry,
+      async revalidateTag() {},
+    });
+
+    const waitUntilCalls: Promise<unknown>[] = [];
+    const requestContext = createRequestContext({
+      functionCacheRevalidationMode: "background",
+      executionContext: {
+        waitUntil(promise) {
+          waitUntilCalls.push(promise);
+        },
+      },
+    });
+
+    const child = registerCachedFunction(async () => ({ child: "fresh" }), "test:swr-bare-child");
+    const outer = registerCachedFunction(async () => {
+      const c = await child();
+      return { outer: true, c };
+    }, "test:swr-bare-outer");
+
+    try {
+      await runWithRequestContext(requestContext, () => outer());
+      const outerSet = setEntry.mock.calls.find(([key]) => key === outerKey);
+      expect(outerSet).toBeDefined();
+      expect((outerSet![2] as { cacheControl?: unknown }).cacheControl).toEqual({
+        revalidate: 5,
+      });
+    } finally {
+      await Promise.allSettled(waitUntilCalls);
+      setCacheHandler(new MemoryCacheHandler());
+    }
+  });
+
   it('"use cache" revalidates expired shared entries in the foreground', async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");

@@ -602,7 +602,12 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           // corrupted entry falls through to foreground execution and must not
           // affect the enclosing page's cache metadata.
           propagateCacheTagsToRequest(existing.value.tags);
-          propagateHitCacheControl(existing.cacheControl);
+          // Custom or legacy handlers may omit the optional `cacheControl`
+          // metadata; the required FETCH-value `revalidate` still bounds the
+          // served entry's lifetime, so an enclosing scope must inherit it.
+          propagateHitCacheControl(
+            existing.cacheControl ?? { revalidate: existing.value.revalidate },
+          );
           if (cacheReadAction === "serve-and-revalidate") {
             scheduleBackgroundCacheRevalidation(
               cacheKey,
@@ -767,8 +772,7 @@ function throwPrivateUseCacheInsidePublicUseCacheError(): never {
  * both the parent `lifeConfigs` and the request store keeps the double record
  * safe.
  */
-function propagateHitCacheControl(cacheControl: CacheControlMetadata | undefined): void {
-  if (cacheControl === undefined) return;
+function propagateHitCacheControl(cacheControl: CacheControlMetadata): void {
   const life: CacheLifeConfig = {
     // `false` is an indefinite lifetime and therefore does not constrain an
     // enclosing cache scope's finite revalidation window.
