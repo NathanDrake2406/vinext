@@ -61,6 +61,7 @@ type ResolveAppPageHtmlResponsePolicyOptions = {
   dynamicUsedDuringRender: boolean;
   isProgressiveActionRender?: boolean;
   hasScriptNonce: boolean;
+  hasRewrittenPathname?: boolean;
 } & ResolveAppPageResponsePolicyBaseOptions;
 
 type AppPageHtmlResponsePolicy = {
@@ -191,6 +192,20 @@ export function resolveAppPageRscResponsePolicy(
 }
 
 export function resolveAppPageHtmlResponsePolicy(
+  options: ResolveAppPageHtmlResponsePolicyOptions,
+): AppPageHtmlResponsePolicy {
+  const policy = resolveAppPageHtmlRenderPolicy(options);
+  // The ISR key is the rewrite destination, but the rendered HTML bakes the
+  // canonical (pre-rewrite) pathname into the navigation bootstrap. Sharing
+  // that artifact would replay one visitor's external path — invite or reset
+  // tokens, tenant ids — to the next visitor of a different one.
+  if (options.hasRewrittenPathname && policy.shouldWriteToCache) {
+    return { ...policy, shouldWriteToCache: false };
+  }
+  return policy;
+}
+
+function resolveAppPageHtmlRenderPolicy(
   options: ResolveAppPageHtmlResponsePolicyOptions,
 ): AppPageHtmlResponsePolicy {
   if (options.isDraftMode) {

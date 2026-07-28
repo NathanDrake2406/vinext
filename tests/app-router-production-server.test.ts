@@ -1116,6 +1116,29 @@ describe("App Router Production server (startProdServer)", () => {
     expect(ts2).toBe(ts1);
   });
 
+  // The rendered HTML carries the canonical (pre-rewrite) pathname in the
+  // navigation bootstrap script, so an ISR entry keyed only by the rewrite
+  // destination would replay one visitor's external path — invite/reset
+  // tokens, tenant ids — to the next visitor of a different external path.
+  it("does not serve one rewritten request's canonical pathname to another", async () => {
+    const first = await fetch(`${baseUrl}/invite/alice-secret-token`);
+    expect(first.status).toBe(200);
+    const firstHtml = await first.text();
+    expect(firstHtml).toContain("/invite/alice-secret-token");
+
+    const second = await fetch(`${baseUrl}/invite/bob-public-token`);
+    expect(second.status).toBe(200);
+    const secondHtml = await second.text();
+    expect(secondHtml).toContain("/invite/bob-public-token");
+    expect(secondHtml).not.toContain("alice-secret-token");
+
+    // Flight payloads are addressed by the destination route and carry no
+    // canonical pathname, so they stay shareable across rewrite sources.
+    const rsc = await fetch(`${baseUrl}/invite/carol-secret-token.rsc`);
+    expect(rsc.status).toBe(200);
+    expect(await rsc.text()).not.toContain("carol-secret-token");
+  });
+
   it("applies middleware request header overrides before App->Pages fallback rendering in production", async () => {
     const res = await fetch(`${baseUrl}/pages-header-override-delete`, {
       headers: {

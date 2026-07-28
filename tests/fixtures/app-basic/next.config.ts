@@ -171,6 +171,14 @@ const nextConfig: NextConfig = {
           source: "/rewritten-use-pathname",
           destination: "/nextjs-compat/hooks-search",
         },
+        // Used by Vitest: app-router-production-server.test.ts — many external
+        // token-bearing paths rewrite onto one cacheable App page, so the
+        // canonical pathname baked into a render must not be reused by the
+        // ISR HTML/RSC cache for a different external path.
+        {
+          source: "/invite/:token",
+          destination: "/nav-cache-isolation",
+        },
       ],
       fallback: [
         // Used by Vitest: app-router.test.ts — fallback rewrite gated on a

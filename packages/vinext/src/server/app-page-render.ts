@@ -135,6 +135,7 @@ type RenderAppPageLifecycleOptions = {
   handlerStart: number;
   hasCustomGlobalError?: boolean;
   hasLoadingBoundary: boolean;
+  hasRewrittenPathname?: boolean;
   dynamicStaleTimeSeconds?: number;
   isDynamicError: boolean;
   isDraftMode: boolean;
@@ -1092,6 +1093,7 @@ export async function renderAppPageLifecycle(
     dynamicUsedDuringRender,
     isProgressiveActionRender: options.isProgressiveActionRender === true,
     hasScriptNonce: Boolean(options.scriptNonce),
+    hasRewrittenPathname: options.hasRewrittenPathname === true,
     isDraftMode: options.isDraftMode,
     isDynamicError: options.isDynamicError,
     isForceDynamic: options.isForceDynamic,
@@ -1134,6 +1136,7 @@ export async function renderAppPageLifecycle(
     !options.isDynamicError &&
     !options.isForceStatic &&
     !options.scriptNonce &&
+    options.hasRewrittenPathname !== true &&
     options.isProgressiveActionRender !== true &&
     !dynamicUsedDuringRender;
 
