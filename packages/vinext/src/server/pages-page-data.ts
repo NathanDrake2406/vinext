@@ -1677,6 +1677,9 @@ export async function resolvePagesPageData(
     if (shortCircuit) {
       return shortCircuit;
     }
+    // `_app.getInitialProps` receives the same mutable `ctx.res`. Surface it so
+    // status/headers it set survive and the response defaults to `no-store`.
+    gsspRes = getSharedReqRes().res;
   }
 
   if (
@@ -1709,6 +1712,7 @@ export async function resolvePagesPageData(
       pageProps = { ...pageProps, ...initialProps };
       renderProps = { ...renderProps, pageProps };
     }
+    gsspRes = res;
   }
 
   return {

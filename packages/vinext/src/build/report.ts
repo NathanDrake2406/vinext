@@ -177,6 +177,33 @@ function hasNamedExportInProgram(program: Program, name: string): boolean {
   return false;
 }
 
+/**
+ * Detects a Pages Router `getInitialProps` declaration: either the function
+ * form (`Page.getInitialProps = …`) or a static class member. Only top-level
+ * statements are inspected, matching the rest of this module's AST analysis.
+ */
+function hasPagesGetInitialPropsInProgram(program: Program): boolean {
+  return program.body.some((node) => {
+    if (node.type === "ExpressionStatement") {
+      const { expression } = node;
+      return (
+        expression.type === "AssignmentExpression" &&
+        expression.left.type === "MemberExpression" &&
+        propertyKeyName(expression.left.property) === "getInitialProps"
+      );
+    }
+
+    const declaration = node.type === "ExportDefaultDeclaration" ? node.declaration : node;
+    if (declaration.type !== "ClassDeclaration") return false;
+    return declaration.body.body.some(
+      (element) =>
+        (element.type === "MethodDefinition" || element.type === "PropertyDefinition") &&
+        element.static &&
+        propertyKeyName(element.key) === "getInitialProps",
+    );
+  });
+}
+
 function unwrapStaticExpression(expression: Expression): Expression {
   let current = expression;
   while (
@@ -678,6 +705,13 @@ export function classifyPagesRoute(filePath: string): {
   const program = parseRouteModule(code);
 
   if (program && hasNamedExportInProgram(program, "getServerSideProps")) {
+    return { type: "ssr" };
+  }
+
+  // Next.js excludes pages with getInitialProps from automatic static
+  // optimization. Treat them as SSR so request-derived props can never be
+  // prerendered into publicly cached static files.
+  if (program && hasPagesGetInitialPropsInProgram(program)) {
     return { type: "ssr" };
   }
 

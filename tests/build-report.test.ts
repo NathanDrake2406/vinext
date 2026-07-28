@@ -417,6 +417,32 @@ describe("classifyPagesRoute", () => {
     expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
   });
 
+  // Next.js excludes getInitialProps pages from automatic static optimization;
+  // classifying them static would prerender request-derived props into a
+  // publicly cached file.
+  it.each([
+    [
+      "function assignment",
+      "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nexport default Account\n",
+    ],
+    [
+      "static class method",
+      "export default class Account extends Component {\n  static async getInitialProps() { return {} }\n  render() { return null }\n}\n",
+    ],
+    [
+      "static class field",
+      "export default class Account extends Component {\n  static getInitialProps = async () => ({})\n  render() { return null }\n}\n",
+    ],
+  ])("classifies pages declaring getInitialProps via %s as ssr", async (_name, source) => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
+    const filePath = path.join(tmpRoot, "pages", "account.tsx");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, source);
+
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "ssr" });
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
   it("classifies api routes by path segment", () => {
     // Path contains /pages/api/ → always api
     const filePath = path.join(FIXTURES_PAGES, "api", "hello.ts");

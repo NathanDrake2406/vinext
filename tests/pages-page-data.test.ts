@@ -126,6 +126,24 @@ describe("pages page data", () => {
     });
   });
 
+  // `_app.getInitialProps` mutates the same `ctx.res` a getServerSideProps page
+  // would. Dropping it loses the status/headers it set and the caller can no
+  // longer tell the response is per-request.
+  it("returns the mutable response after _app.getInitialProps runs", async () => {
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(function App() {}, {
+          getInitialProps({ ctx }: { ctx: { res: { statusCode: number } } }) {
+            ctx.res.statusCode = 503;
+            return { pageProps: {} };
+          },
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ kind: "render", gsspRes: { statusCode: 503 } });
+  });
+
   it("renders fresh ISR HTML while preserving custom document gaps and tail scripts", async () => {
     const html = await renderPagesIsrHtml({
       buildId: "build-123",
@@ -499,6 +517,9 @@ describe("pages page data", () => {
     expect(result).toMatchObject({
       kind: "render",
       pageProps: { reqUrl: "/3", asPath: "/3" },
+      gsspRes: {
+        statusCode: 200,
+      },
     });
   });
 
