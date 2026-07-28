@@ -1036,6 +1036,7 @@ export function createPagesPageHandler(
             : undefined,
           documentReqRes,
           gsspRes,
+          deferErrorCachePolicy: shouldApplyErrorResponsePolicy,
           isrCacheKey: pageIsrCacheKey,
           isrCachePathname,
           expireSeconds: isrExpireSeconds,
