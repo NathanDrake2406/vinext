@@ -419,11 +419,13 @@ async function resolveContextModules(
 // Enumerates candidate files like webpack's context walk: dot-entries are
 // skipped (matching the prior glob semantics), symlinks resolve through stats —
 // including symlinked directories in recursive contexts, which `fs.glob` does
-// not descend into — and a realpath guard breaks symlink cycles. A missing
-// context directory yields an empty context rather than an error.
+// not descend into — and a missing context directory yields an empty context
+// rather than an error. Cycles are broken by tracking realpaths along the
+// current recursion path only, so distinct symlink aliases of the same target
+// still enumerate under their own keys.
 async function listContextFiles(directory: string, recursive: boolean): Promise<string[]> {
   const files: string[] = [];
-  const visitedDirectories = new Set<string>();
+  const ancestorRealPaths = new Set<string>();
 
   async function walk(currentDirectory: string, prefix: string): Promise<void> {
     let realDirectory: string;
@@ -436,26 +438,30 @@ async function listContextFiles(directory: string, recursive: boolean): Promise<
       if (code === "ENOENT" || code === "ENOTDIR") return;
       throw error;
     }
-    if (visitedDirectories.has(realDirectory)) return;
-    visitedDirectories.add(realDirectory);
+    if (ancestorRealPaths.has(realDirectory)) return;
+    ancestorRealPaths.add(realDirectory);
 
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      const entryPath = path.join(currentDirectory, entry.name);
-      let isFile = entry.isFile();
-      let isDirectory = entry.isDirectory();
-      if (entry.isSymbolicLink()) {
-        try {
-          const stats = await stat(entryPath);
-          isFile = stats.isFile();
-          isDirectory = stats.isDirectory();
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-          throw error;
+    try {
+      for (const entry of entries) {
+        if (entry.name.startsWith(".")) continue;
+        const entryPath = path.join(currentDirectory, entry.name);
+        let isFile = entry.isFile();
+        let isDirectory = entry.isDirectory();
+        if (entry.isSymbolicLink()) {
+          try {
+            const stats = await stat(entryPath);
+            isFile = stats.isFile();
+            isDirectory = stats.isDirectory();
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+            throw error;
+          }
         }
+        if (isFile) files.push(`${prefix}${entry.name}`);
+        else if (isDirectory && recursive) await walk(entryPath, `${prefix}${entry.name}/`);
       }
-      if (isFile) files.push(`${prefix}${entry.name}`);
-      else if (isDirectory && recursive) await walk(entryPath, `${prefix}${entry.name}/`);
+    } finally {
+      ancestorRealPaths.delete(realDirectory);
     }
   }
 

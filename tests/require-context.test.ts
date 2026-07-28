@@ -64,6 +64,9 @@ describe("vinext:require-context", () => {
       await writeFile(path.join(root, "target/sub/deep.js"), "export default 1;\n");
       await mkdir(path.join(root, "context"));
       await symlink(path.join(root, "target"), path.join(root, "context/link"));
+      await symlink(path.join(root, "target"), path.join(root, "context/alias"));
+      // A cycle back into the context itself must terminate, not recurse forever.
+      await symlink(path.join(root, "context"), path.join(root, "target/loop"));
 
       const transform = createTransform();
       const result = await transform(
@@ -71,7 +74,9 @@ describe("vinext:require-context", () => {
         path.join(root, "page.tsx"),
       );
 
+      // Distinct symlink aliases of one target each keep their own keys.
       expect(result?.code).toContain('"./link/sub/deep.js"');
+      expect(result?.code).toContain('"./alias/sub/deep.js"');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
