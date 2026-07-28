@@ -1680,9 +1680,15 @@ export async function resolvePagesPageData(
     }
     // `_app.getInitialProps` receives the same mutable `ctx.res`. Surface it so
     // status/headers it set survive and the response defaults to `no-store`.
-    // Only a real override makes the render per-request; merely extending the
-    // built-in `App` inherits it and stays auto-static-optimizable.
-    if (hasPagesAppGetInitialPropsOverride(options.AppComponent)) {
+    //
+    // Merely extending the built-in `App` inherits `getInitialProps` and stays
+    // auto-static-optimizable — but the inherited implementation still delegates
+    // to the page's own `getInitialProps`, so a page declaring one is per-request
+    // even when the app overrides nothing.
+    if (
+      hasPagesAppGetInitialPropsOverride(options.AppComponent) ||
+      hasPagesGetInitialProps(options.pageModule.default)
+    ) {
       gsspRes = getSharedReqRes().res;
     }
   }

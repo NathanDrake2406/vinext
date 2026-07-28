@@ -188,21 +188,28 @@ function classHasStaticGetInitialProps(declaration: ESTree.Class): boolean {
 
 /**
  * Detects a Pages Router `getInitialProps` declaration: either the function
- * form (`Page.getInitialProps = …`) or a static member on the class the module
- * default-exports. Only top-level statements are inspected, matching the rest
- * of this module's AST analysis.
+ * form (`Page.getInitialProps = …`) or a static member on a class. Only
+ * top-level statements are inspected, matching the rest of this module's AST
+ * analysis.
  *
- * Class detection is scoped to the default export so a non-exported helper
- * class that happens to declare `static getInitialProps` cannot force an
- * otherwise-static route to SSR (a hard build error under `output: "export"`).
+ * Both forms are scoped to the module's default export. A non-exported helper
+ * that happens to declare `getInitialProps` must not force an otherwise-static
+ * route to SSR — under `output: "export"` that is a hard build error.
  */
 function hasPagesGetInitialPropsInProgram(program: Program): boolean {
-  // `export default Page` — remember the name so `class Page {…}` declared
-  // elsewhere at the top level still resolves to the default export.
+  // Resolve the default export's binding name so `Page.getInitialProps = …` and
+  // `class Page {…}` declared elsewhere at the top level still match it.
   let defaultExportName: string | null = null;
   for (const node of program.body) {
     if (node.type !== "ExportDefaultDeclaration") continue;
-    if (node.declaration.type === "Identifier") defaultExportName = node.declaration.name;
+    const { declaration } = node;
+    if (declaration.type === "Identifier") defaultExportName = declaration.name;
+    else if (
+      (declaration.type === "FunctionDeclaration" || declaration.type === "ClassDeclaration") &&
+      declaration.id
+    ) {
+      defaultExportName = declaration.id.name;
+    }
   }
 
   return program.body.some((node) => {
@@ -211,6 +218,8 @@ function hasPagesGetInitialPropsInProgram(program: Program): boolean {
       return (
         expression.type === "AssignmentExpression" &&
         expression.left.type === "MemberExpression" &&
+        expression.left.object.type === "Identifier" &&
+        expression.left.object.name === defaultExportName &&
         propertyKeyName(expression.left.property) === "getInitialProps"
       );
     }

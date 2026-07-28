@@ -1036,7 +1036,11 @@ export function createPagesPageHandler(
             : undefined,
           documentReqRes,
           gsspRes,
-          deferErrorCachePolicy: shouldApplyErrorResponsePolicy,
+          // Only a static error renderer may inherit the source route's shared
+          // `s-maxage` lifetime. A `/404` using getInitialProps renders
+          // per-request (it can read cookies/headers), so it keeps its
+          // `no-store` default rather than being cached for every visitor.
+          deferErrorCachePolicy: shouldApplyErrorResponsePolicy && !gsspRes,
           isrCacheKey: pageIsrCacheKey,
           isrCachePathname,
           expireSeconds: isrExpireSeconds,

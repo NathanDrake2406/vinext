@@ -1484,7 +1484,14 @@ export function createSSRHandler(
           if (typeof pageModule.getStaticProps === "function") {
             dataHeaders["Cache-Control"] = DEV_PAGES_CACHE_CONTROL;
             dataHeaders[NEXTJS_CACHE_HEADER] = isOnDemandRevalidate ? "REVALIDATED" : "HIT";
-          } else if (ranPagesGetInitialProps && !hasCacheControlHeader(dataHeaders)) {
+          } else if (
+            ranPagesGetInitialProps &&
+            !hasCacheControlHeader(dataHeaders) &&
+            // getInitialProps writes through `res.setHeader`, and these headers
+            // later win via writeHead — so an explicit user policy lives here,
+            // not in the local bag.
+            !res.hasHeader("Cache-Control")
+          ) {
             dataHeaders["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
           }
           if ((statusCode ?? 200) === 200) {
@@ -1696,7 +1703,14 @@ export function createSSRHandler(
             : isOnDemandRevalidate
               ? "REVALIDATED"
               : "HIT";
-        } else if (ranPagesGetInitialProps && !hasCacheControlHeader(extraHeaders)) {
+        } else if (
+          ranPagesGetInitialProps &&
+          !hasCacheControlHeader(extraHeaders) &&
+          // `extraHeaders` is passed to writeHead, which overrides earlier
+          // setHeader calls — so a policy set inside getInitialProps would be
+          // silently replaced unless we look at the live response too.
+          !res.hasHeader("Cache-Control")
+        ) {
           extraHeaders["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
         }
         applyDevPagesPreviewHeaders(extraHeaders, requestPreview);

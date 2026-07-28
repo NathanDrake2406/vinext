@@ -307,10 +307,17 @@ test("production revalidation stores the current content and notFound lifetime",
   expect(nonExpiringRedirect.status()).toBe(307);
   expect(nonExpiringRedirect.headers()["cache-control"]).toContain("s-maxage=31536000");
 
+  // This fixture's `pages/404.tsx` declares getInitialProps and reads the
+  // `x-viewer` request header into its props, so the rendered 404 is
+  // per-request. The source route's notFound lifetime governs its own ISR
+  // entry (still a HIT below), but the personalized body must never inherit a
+  // shared `s-maxage` — a CDN would serve one visitor's 404 to everyone.
   await request.get(`${origin}/api/revalidate-parity?mode=notFound&revalidate=2`);
   const numericNotFound = await request.get(`${origin}/revalidate-parity-target`);
   expect(numericNotFound.status()).toBe(404);
-  expect(numericNotFound.headers()["cache-control"]).toContain("s-maxage=2");
+  expect(numericNotFound.headers()["cache-control"]).toBe(
+    "private, no-cache, no-store, max-age=0, must-revalidate",
+  );
   expect(await numericNotFound.text()).toContain("404 - Page Not Found");
 
   await request.get(`${origin}/api/revalidate-parity?mode=notFound&revalidate=false`);
@@ -318,7 +325,9 @@ test("production revalidation stores the current content and notFound lifetime",
     const nonExpiringNotFound = await request.get(`${origin}/revalidate-parity-target`);
     expect(nonExpiringNotFound.status()).toBe(404);
     expect(nonExpiringNotFound.headers()["x-nextjs-cache"]).toBe("HIT");
-    expect(nonExpiringNotFound.headers()["cache-control"]).toContain("s-maxage=31536000");
+    expect(nonExpiringNotFound.headers()["cache-control"]).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
     expect(await nonExpiringNotFound.text()).toContain("404 - Page Not Found");
   }
 });
