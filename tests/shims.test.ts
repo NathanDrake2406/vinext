@@ -6684,6 +6684,43 @@ describe('"use cache" runtime', () => {
     expect(callCount).toBe(2);
   });
 
+  it("bypasses the shared cache in draft mode", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { setHeadersContext } = await import("../packages/vinext/src/shims/headers.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    let draftContent = false;
+    const cached = registerCachedFunction(
+      async () => (draftContent ? "DRAFT" : "PUBLIC"),
+      "test:draft-bypass",
+    );
+    const enterRequest = (draftModeEnabled: boolean) => {
+      setHeadersContext({ headers: new Headers(), cookies: new Map(), draftModeEnabled });
+    };
+
+    try {
+      // A preview request must not seed the entry public requests read.
+      enterRequest(true);
+      draftContent = true;
+      expect(await cached()).toBe("DRAFT");
+
+      enterRequest(false);
+      draftContent = false;
+      expect(await cached()).toBe("PUBLIC");
+
+      // ...and must not read back the public entry either.
+      enterRequest(true);
+      draftContent = true;
+      expect(await cached()).toBe("DRAFT");
+    } finally {
+      setHeadersContext(null);
+      setCacheHandler(new MemoryCacheHandler());
+    }
+  });
+
   it("scopes shared cache entries by build ID", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
