@@ -55,6 +55,12 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   isrRscKey: AppPageRscCacheKeyBuilder;
   isrSet: AppPageCacheSetter;
   interceptionContext?: string | null;
+  /**
+   * The `Cache-Control` middleware set on the response, if any. Middleware owns
+   * the header, so a proven-path finalizer must not replace it with the
+   * render's resolved policy — only demote it for a dynamic render.
+   */
+  middlewareCacheControl?: string | null;
   omitPendingDynamicCacheState?: boolean;
   preserveClientResponseHeaders?: boolean;
   expireSeconds?: number;
@@ -75,6 +81,8 @@ type ScheduleAppPageRscCacheWriteOptions = {
   isrRscKey: AppPageRscCacheKeyBuilder;
   isrSet: AppPageCacheSetter;
   interceptionContext?: string | null;
+  /** See {@link FinalizeAppPageHtmlCacheResponseOptions.middlewareCacheControl}. */
+  middlewareCacheControl?: string | null;
   mountedSlotsHeader?: string | null;
   omitPendingDynamicCacheState?: boolean;
   renderMode?: AppRscRenderMode;
@@ -134,17 +142,30 @@ const NON_SHARED_CACHEABLE_RE = /\b(?:no-store|no-cache|private)\b/i;
  *
  * The most restrictive authority wins: middleware owns singular response
  * headers, so a `Cache-Control` it set to private/no-cache/no-store must veto
- * edge caching no matter what lifetime the render itself resolved to.
+ * edge caching no matter what lifetime the render itself resolved to. A
+ * *cacheable* middleware override is likewise preserved for a proven-static
+ * render — only a dynamic render overrules it, because a personalized response
+ * must never reach a shared cache regardless of who asked for caching.
  */
 function applyProvenCdnHeaders(
   headers: Headers,
   outcome: AppPageCacheWriteOutcome,
   tags?: readonly string[],
-  options: { omitCacheState?: boolean } = {},
+  options: { middlewareCacheControl?: string | null; omitCacheState?: boolean } = {},
 ): void {
   const existingCacheControl = headers.get("Cache-Control");
   if (existingCacheControl !== null && NON_SHARED_CACHEABLE_RE.test(existingCacheControl)) {
     applyCdnResponseHeaders(headers, { cacheControl: existingCacheControl });
+    applyCacheState(headers, options);
+    return;
+  }
+  // Middleware's cacheable policy wins over the render's resolved lifetime —
+  // it owns the header, and only its value can be distinguished here from the
+  // provisional policy the resolved one replaces. A non-cacheable middleware
+  // value never reaches this branch (it is the existing header, vetoed above).
+  const middlewareCacheControl = options.middlewareCacheControl ?? null;
+  if (outcome.dynamicUsed === false && middlewareCacheControl !== null) {
+    applyCdnResponseHeaders(headers, { cacheControl: middlewareCacheControl, tags });
     applyCacheState(headers, options);
     return;
   }
@@ -292,6 +313,7 @@ async function finalizeProvenAppPageHtmlResponse(
 
   const headers = new Headers(response.headers);
   applyProvenCdnHeaders(headers, await cachePromise, options.getPageTags(), {
+    middlewareCacheControl: options.middlewareCacheControl,
     omitCacheState: options.omitPendingDynamicCacheState === true,
   });
 
@@ -365,6 +387,7 @@ export function finalizeAppPageRscCacheResponse(
       const [outcome, body] = await Promise.all([cachePromise, response.arrayBuffer()]);
       const headers = new Headers(response.headers);
       applyProvenCdnHeaders(headers, outcome, options.getPageTags(), {
+        middlewareCacheControl: options.middlewareCacheControl,
         omitCacheState: options.omitPendingDynamicCacheState === true,
       });
       return new Response(body, {

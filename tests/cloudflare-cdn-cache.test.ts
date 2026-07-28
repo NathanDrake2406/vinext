@@ -176,8 +176,12 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
     dynamicUsed: boolean;
     /** A `cacheLife()` resolved while the stream was still draining. */
     lateCacheLife?: { revalidate?: number; expire?: number };
-    /** Simulates middleware overriding the provisional policy (it owns Cache-Control). */
-    responseCacheControl?: string;
+    /**
+     * Simulates middleware overriding the provisional policy: the merge stamps
+     * its value on the response, and the render lifecycle threads the same
+     * value to the finalizer (middleware owns Cache-Control).
+     */
+    middlewareCacheControl?: string;
   }): Promise<Response> {
     return Promise.resolve(
       finalizeAppPageHtmlCacheResponse(
@@ -186,7 +190,7 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
             "Content-Type": "text/html; charset=utf-8",
             // The provisional ISR policy, computed before the stream drained.
             "Cache-Control":
-              options.responseCacheControl ?? "s-maxage=60, stale-while-revalidate=540",
+              options.middlewareCacheControl ?? "s-maxage=60, stale-while-revalidate=540",
           },
         }),
         {
@@ -199,6 +203,7 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
           isrHtmlKey: (pathname) => `html:${pathname}`,
           isrRscKey: (pathname) => `rsc:${pathname}`,
           async isrSet() {},
+          middlewareCacheControl: options.middlewareCacheControl ?? null,
           revalidateSeconds: 60,
           expireSeconds: 600,
         },
@@ -247,7 +252,7 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
     // Middleware owns Cache-Control (mergeMiddlewareResponseHeaders). A page it
     // marked non-cacheable must not be promoted to the shared edge cache just
     // because the render itself never touched a request API.
-    const response = await finalize({ dynamicUsed: false, responseCacheControl: "no-store" });
+    const response = await finalize({ dynamicUsed: false, middlewareCacheControl: "no-store" });
 
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBeNull();
@@ -260,11 +265,25 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
     // rather than being rewritten to the framework's no-store.
     const response = await finalize({
       dynamicUsed: true,
-      responseCacheControl: "private, max-age=30",
+      middlewareCacheControl: "private, max-age=30",
     });
 
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cache-Control")).toBe("private, max-age=30");
+  });
+
+  it("advertises a cacheable middleware override, not the route lifetime", async () => {
+    // Middleware tightened the policy to 5s. Rebuilding from the route's 60s
+    // would serve content 55s staler than middleware asked for.
+    const response = await finalize({
+      dynamicUsed: false,
+      middlewareCacheControl: "s-maxage=5, stale-while-revalidate=55",
+    });
+
+    expect(response.headers.get("CDN-Cache-Control")).toBe(
+      "public, max-age=5, stale-while-revalidate=55",
+    );
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
   });
 
   it("does not advertise a policy the render dropped mid-stream", async () => {
