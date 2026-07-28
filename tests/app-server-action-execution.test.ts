@@ -2173,6 +2173,7 @@ describe("app server action execution helpers", () => {
             responseHeaders: new Headers({
               location: "/target-mw-location",
               "content-type": "text/html",
+              "content-length": "0",
               "x-action-redirect": "/target-hijack",
               "x-target-mw": "1",
             }),
@@ -2183,13 +2184,15 @@ describe("app server action execution helpers", () => {
 
     // The wrapper's protocol headers steer the action client: a Location on the
     // 303 would make fetch follow it before the client reads x-action-redirect,
-    // a foreign Content-Type flips the client to a hard navigation, and
+    // a foreign Content-Type flips the client to a hard navigation, a stale
+    // Content-Length misframes the generated Flight stream, and
     // x-action-redirect is the destination itself. Ordinary middleware headers
     // must still come through.
     expect(response?.status).toBe(303);
     expect(response?.headers.get("x-action-redirect")).toBe("/redirect-target");
     expect(response?.headers.get("location")).toBeNull();
     expect(response?.headers.get("content-type")).toContain("text/x-component");
+    expect(response?.headers.get("content-length")).toBeNull();
     expect(response?.headers.get("x-action-mw")).toBe("1");
     expect(response?.headers.get("x-target-mw")).toBe("1");
   });
@@ -2217,6 +2220,7 @@ describe("app server action execution helpers", () => {
         middlewareHeaders: new Headers([
           ["set-cookie", "session=; Max-Age=0"],
           ["set-cookie", "csrf=rotated"],
+          ["set-cookie", "admin=1; Path=/account"],
         ]),
         request: createFetchActionRequest({ cookie: "session=live; csrf=old; theme=dark" }),
         async runRedirectTargetMiddleware(targetOptions: { request: Request }) {
@@ -2229,7 +2233,9 @@ describe("app server action execution helpers", () => {
     // The action middleware deleted the session and rotated csrf. The browser
     // applies those before navigating to the redirect target, so target
     // middleware evaluating the pre-mutation jar would authorize on a
-    // credential the response is simultaneously revoking.
+    // credential the response is simultaneously revoking. The /account-scoped
+    // cookie is one a browser would never send to /redirect-target, so it must
+    // not appear either.
     expect(middlewareRequest).not.toBeNull();
     expect(middlewareRequest!.headers.get("cookie")).toBe("csrf=rotated; theme=dark");
   });

@@ -491,15 +491,49 @@ function applySetCookieMutationsToRequestCookieHeader(
     : [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
+/** RFC 6265 §5.1.4: the default cookie path is the request path's directory. */
+function defaultCookiePath(requestPathname: string): string {
+  if (!requestPathname.startsWith("/")) return "/";
+  const lastSlash = requestPathname.lastIndexOf("/");
+  return lastSlash <= 0 ? "/" : requestPathname.slice(0, lastSlash);
+}
+
+/** A missing or invalid Path attribute means the default path applies. */
+function readSetCookiePath(setCookie: string): string | null {
+  for (const part of setCookie.split(";").slice(1)) {
+    const equalsIndex = part.indexOf("=");
+    if (equalsIndex === -1) continue;
+    if (part.slice(0, equalsIndex).trim().toLowerCase() !== "path") continue;
+    const value = part.slice(equalsIndex + 1).trim();
+    return value.startsWith("/") ? value : null;
+  }
+  return null;
+}
+
+/** RFC 6265 §5.1.4 path-match. */
+function cookiePathMatches(cookiePath: string, requestPath: string): boolean {
+  if (cookiePath === requestPath) return true;
+  if (!requestPath.startsWith(cookiePath)) return false;
+  return cookiePath.endsWith("/") || requestPath[cookiePath.length] === "/";
+}
+
 function createActionRedirectRenderRequest(options: {
   pendingCookies: readonly string[];
   request: Request;
   url: URL;
 }): Request {
   const headers = cloneActionRedirectHeaders(options.request.headers);
+  // A browser only carries a Set-Cookie into the target navigation when the
+  // cookie's Path (or the default derived from the action URL) path-matches
+  // the target, so a mutation scoped elsewhere must not reach the target's
+  // middleware or render.
+  const actionDefaultPath = defaultCookiePath(new URL(options.request.url).pathname);
+  const applicableCookies = options.pendingCookies.filter((cookie) =>
+    cookiePathMatches(readSetCookiePath(cookie) ?? actionDefaultPath, options.url.pathname),
+  );
   const cookieHeader = applySetCookieMutationsToRequestCookieHeader(
     headers.get("cookie"),
-    options.pendingCookies,
+    applicableCookies,
   );
   if (cookieHeader === null) {
     headers.delete("cookie");
@@ -535,10 +569,12 @@ function createActionRedirectMiddlewareRequest(renderRequest: Request, accept: s
  * redirect wrapper: `Location` would give the (usually 303) wrapper genuine
  * HTTP-redirect semantics that fetch follows before the client reads the
  * control headers, a foreign `Content-Type` makes the client treat the Flight
- * body as non-RSC and hard-navigate, and the x-action-* headers steer the
- * client's navigation and cache invalidation.
+ * body as non-RSC and hard-navigate, a stale `Content-Length` misframes the
+ * generated Flight stream, and the x-action-* headers steer the client's
+ * navigation and cache invalidation.
  */
 const ACTION_REDIRECT_PROTECTED_HEADERS = [
+  "content-length",
   "content-type",
   "location",
   ACTION_REDIRECT_HEADER,
