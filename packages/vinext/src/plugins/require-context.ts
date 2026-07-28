@@ -18,7 +18,8 @@
 //
 // Only literal forms with a static string directory are rewritten; anything
 // dynamic is left untouched so we never silently break unrelated code.
-import { glob, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { readdir, realpath, stat } from "node:fs/promises";
 import path, { toSlash } from "pathslash";
 import { parseAst, type Plugin } from "vite";
 import MagicString from "magic-string";
@@ -147,8 +148,12 @@ async function transformRequireContext(code: string, id: string): Promise<Transf
   const importOffset = findImportInsertionOffset(ast);
   const imports: string[] = [];
   const contexts: WatchedContext[] = [];
+  // A fixed binding name could redeclare an identifier the source already
+  // uses; grow the prefix until it appears nowhere in the module.
+  let bindingPrefix = "__vinext_require_context";
+  while (code.includes(bindingPrefix)) bindingPrefix += "_";
   for (const [callIndex, call] of calls.entries()) {
-    const resolved = await resolveContextModules(id, call, callIndex);
+    const resolved = await resolveContextModules(id, call, bindingPrefix, callIndex);
     contexts.push(resolved.context);
     for (const module of resolved.modules) {
       imports.push(`import * as ${module.binding} from ${JSON.stringify(module.specifier)};`);
@@ -383,6 +388,7 @@ function buildReplacement(call: ParsedCall, modules: ContextModule[]): string {
 async function resolveContextModules(
   id: string,
   call: ParsedCall,
+  bindingPrefix: string,
   callIndex: number,
 ): Promise<{ context: WatchedContext; modules: ContextModule[] }> {
   const importer = toSlash(id.split("?", 1)[0]);
@@ -395,24 +401,12 @@ async function resolveContextModules(
   };
   const regexp = call.pattern ? new RegExp(call.pattern, context.flags) : null;
   const modules: ContextModule[] = [];
-  const globPattern = call.recursive ? "**/*" : "*";
 
-  for await (const entry of glob(globPattern, { cwd: directory, withFileTypes: true })) {
-    if (!entry.isFile()) {
-      if (!entry.isSymbolicLink()) continue;
-      try {
-        if (!(await stat(path.join(toSlash(entry.parentPath), entry.name))).isFile()) continue;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw error;
-      }
-    }
-
-    const candidate = path.relative(directory, path.join(toSlash(entry.parentPath), entry.name));
+  for (const candidate of await listContextFiles(directory, call.recursive)) {
     const key = `./${candidate}`;
     if (regexp && !regexp.test(key)) continue;
     modules.push({
-      binding: `__vinext_require_context_${callIndex}_${modules.length}`,
+      binding: `${bindingPrefix}_${callIndex}_${modules.length}`,
       key,
       specifier: `${stripTrailingSlash(call.dir)}/${candidate}`,
     });
@@ -420,6 +414,53 @@ async function resolveContextModules(
 
   modules.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
   return { context, modules };
+}
+
+// Enumerates candidate files like webpack's context walk: dot-entries are
+// skipped (matching the prior glob semantics), symlinks resolve through stats —
+// including symlinked directories in recursive contexts, which `fs.glob` does
+// not descend into — and a realpath guard breaks symlink cycles. A missing
+// context directory yields an empty context rather than an error.
+async function listContextFiles(directory: string, recursive: boolean): Promise<string[]> {
+  const files: string[] = [];
+  const visitedDirectories = new Set<string>();
+
+  async function walk(currentDirectory: string, prefix: string): Promise<void> {
+    let realDirectory: string;
+    let entries: Dirent[];
+    try {
+      realDirectory = await realpath(currentDirectory);
+      entries = await readdir(currentDirectory, { withFileTypes: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return;
+      throw error;
+    }
+    if (visitedDirectories.has(realDirectory)) return;
+    visitedDirectories.add(realDirectory);
+
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const entryPath = path.join(currentDirectory, entry.name);
+      let isFile = entry.isFile();
+      let isDirectory = entry.isDirectory();
+      if (entry.isSymbolicLink()) {
+        try {
+          const stats = await stat(entryPath);
+          isFile = stats.isFile();
+          isDirectory = stats.isDirectory();
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+      }
+      if (isFile) files.push(`${prefix}${entry.name}`);
+      else if (isDirectory && recursive) await walk(entryPath, `${prefix}${entry.name}/`);
+    }
+  }
+
+  await walk(directory, "");
+  return files;
 }
 
 function matchesWatchedContext(file: string, context: WatchedContext): boolean {
