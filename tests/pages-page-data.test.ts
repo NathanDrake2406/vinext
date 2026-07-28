@@ -144,6 +144,23 @@ describe("pages page data", () => {
     expect(result).toMatchObject({ kind: "render", gsspRes: { statusCode: 503 } });
   });
 
+  // `class MyApp extends App {}` inherits getInitialProps rather than overriding
+  // it. Next.js still auto-static-optimizes those pages, so exposing gsspRes
+  // here would wrongly force the response to no-store.
+  it("does not expose a response for an _app that inherits getInitialProps", async () => {
+    const inherited = () => ({ pageProps: {} });
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(function App() {}, {
+          getInitialProps: inherited,
+          origGetInitialProps: inherited,
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ kind: "render", gsspRes: null });
+  });
+
   it("renders fresh ISR HTML while preserving custom document gaps and tail scripts", async () => {
     const html = await renderPagesIsrHtml({
       buildId: "build-123",

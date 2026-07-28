@@ -26,6 +26,7 @@ import {
 import { matchesIfNoneMatch } from "./http-conditional.js";
 import {
   createPagesGetInitialPropsRouter,
+  hasPagesAppGetInitialPropsOverride,
   hasPagesGetInitialProps,
   isResponseSent,
   loadPagesGetInitialProps,
@@ -1679,7 +1680,11 @@ export async function resolvePagesPageData(
     }
     // `_app.getInitialProps` receives the same mutable `ctx.res`. Surface it so
     // status/headers it set survive and the response defaults to `no-store`.
-    gsspRes = getSharedReqRes().res;
+    // Only a real override makes the render per-request; merely extending the
+    // built-in `App` inherits it and stays auto-static-optimizable.
+    if (hasPagesAppGetInitialPropsOverride(options.AppComponent)) {
+      gsspRes = getSharedReqRes().res;
+    }
   }
 
   if (

@@ -177,12 +177,34 @@ function hasNamedExportInProgram(program: Program, name: string): boolean {
   return false;
 }
 
+function classHasStaticGetInitialProps(declaration: ESTree.Class): boolean {
+  return declaration.body.body.some(
+    (element) =>
+      (element.type === "MethodDefinition" || element.type === "PropertyDefinition") &&
+      element.static &&
+      propertyKeyName(element.key) === "getInitialProps",
+  );
+}
+
 /**
  * Detects a Pages Router `getInitialProps` declaration: either the function
- * form (`Page.getInitialProps = …`) or a static class member. Only top-level
- * statements are inspected, matching the rest of this module's AST analysis.
+ * form (`Page.getInitialProps = …`) or a static member on the class the module
+ * default-exports. Only top-level statements are inspected, matching the rest
+ * of this module's AST analysis.
+ *
+ * Class detection is scoped to the default export so a non-exported helper
+ * class that happens to declare `static getInitialProps` cannot force an
+ * otherwise-static route to SSR (a hard build error under `output: "export"`).
  */
 function hasPagesGetInitialPropsInProgram(program: Program): boolean {
+  // `export default Page` — remember the name so `class Page {…}` declared
+  // elsewhere at the top level still resolves to the default export.
+  let defaultExportName: string | null = null;
+  for (const node of program.body) {
+    if (node.type !== "ExportDefaultDeclaration") continue;
+    if (node.declaration.type === "Identifier") defaultExportName = node.declaration.name;
+  }
+
   return program.body.some((node) => {
     if (node.type === "ExpressionStatement") {
       const { expression } = node;
@@ -193,13 +215,17 @@ function hasPagesGetInitialPropsInProgram(program: Program): boolean {
       );
     }
 
-    const declaration = node.type === "ExportDefaultDeclaration" ? node.declaration : node;
-    if (declaration.type !== "ClassDeclaration") return false;
-    return declaration.body.body.some(
-      (element) =>
-        (element.type === "MethodDefinition" || element.type === "PropertyDefinition") &&
-        element.static &&
-        propertyKeyName(element.key) === "getInitialProps",
+    if (node.type === "ExportDefaultDeclaration") {
+      return (
+        node.declaration.type === "ClassDeclaration" &&
+        classHasStaticGetInitialProps(node.declaration)
+      );
+    }
+
+    return (
+      node.type === "ClassDeclaration" &&
+      node.id?.name === defaultExportName &&
+      classHasStaticGetInitialProps(node)
     );
   });
 }
@@ -688,6 +714,8 @@ export function classifyLayoutSegmentConfig(code: string): LayoutBuildClassifica
 export function classifyPagesRoute(filePath: string): {
   type: RouteType;
   revalidate?: number;
+  /** Which data-fetching API forced `ssr`, so callers can name it in errors. */
+  ssrSource?: "getServerSideProps" | "getInitialProps";
 } {
   // API routes are identified by their path
   const normalized = toSlash(filePath);
@@ -705,14 +733,14 @@ export function classifyPagesRoute(filePath: string): {
   const program = parseRouteModule(code);
 
   if (program && hasNamedExportInProgram(program, "getServerSideProps")) {
-    return { type: "ssr" };
+    return { type: "ssr", ssrSource: "getServerSideProps" };
   }
 
   // Next.js excludes pages with getInitialProps from automatic static
   // optimization. Treat them as SSR so request-derived props can never be
   // prerendered into publicly cached static files.
   if (program && hasPagesGetInitialPropsInProgram(program)) {
-    return { type: "ssr" };
+    return { type: "ssr", ssrSource: "getInitialProps" };
   }
 
   if (program && hasNamedExportInProgram(program, "getStaticProps")) {

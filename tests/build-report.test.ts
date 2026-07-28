@@ -409,7 +409,10 @@ describe("classifyPagesRoute", () => {
 
   it("classifies ssr.tsx as ssr", () => {
     const filePath = path.join(FIXTURES_PAGES, "ssr.tsx");
-    expect(classifyPagesRoute(filePath)).toEqual({ type: "ssr" });
+    expect(classifyPagesRoute(filePath)).toEqual({
+      type: "ssr",
+      ssrSource: "getServerSideProps",
+    });
   });
 
   it("classifies index.tsx as static", () => {
@@ -439,7 +442,27 @@ describe("classifyPagesRoute", () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, source);
 
-    expect(classifyPagesRoute(filePath)).toEqual({ type: "ssr" });
+    // `ssrSource` names the real API so an output: "export" build does not tell
+    // the user to remove a getServerSideProps that was never there.
+    expect(classifyPagesRoute(filePath)).toEqual({
+      type: "ssr",
+      ssrSource: "getInitialProps",
+    });
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  // A helper class is not the page. Forcing ssr here would be a hard build
+  // error under output: "export" for a route that renders statically fine.
+  it("ignores getInitialProps on a class that is not the default export", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
+    const filePath = path.join(tmpRoot, "pages", "account.tsx");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      "class LegacyWidget { static async getInitialProps() { return {} } }\nexport default function Account() { return null }\n",
+    );
+
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
     await fs.rm(tmpRoot, { recursive: true, force: true });
   });
 

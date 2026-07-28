@@ -763,7 +763,11 @@ export async function prerenderPages({
       // that non-2xx response as a prerender failure.
       if (route.pattern === "/404") continue;
 
-      const { type, revalidate: classifiedRevalidate } = classifyPagesRoute(route.filePath);
+      const {
+        type,
+        revalidate: classifiedRevalidate,
+        ssrSource,
+      } = classifyPagesRoute(route.filePath);
 
       // Route type detection uses static file analysis (classifyPagesRoute).
       // Rendering is always done via HTTP through a local prod server, so we
@@ -775,7 +779,7 @@ export async function prerenderPages({
           results.push({
             route: route.pattern,
             status: "error",
-            error: `Page uses getServerSideProps which is not supported with output: 'export'. Use getStaticProps instead.`,
+            error: `Page uses ${ssrSource ?? "getServerSideProps"} which is not supported with output: 'export'. Use getStaticProps instead.`,
           });
         } else {
           results.push({ route: route.pattern, status: "skipped", reason: "ssr" });
