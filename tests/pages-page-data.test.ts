@@ -499,6 +499,9 @@ describe("pages page data", () => {
     expect(result).toMatchObject({
       kind: "render",
       pageProps: { reqUrl: "/3", asPath: "/3" },
+      gsspRes: {
+        statusCode: 200,
+      },
     });
   });
 

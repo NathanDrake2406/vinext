@@ -417,6 +417,19 @@ describe("classifyPagesRoute", () => {
     expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
   });
 
+  it("classifies pages with getInitialProps as ssr", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
+    const filePath = path.join(tmpRoot, "pages", "account.tsx");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nexport default Account\n",
+    );
+
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "ssr" });
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
   it("classifies api routes by path segment", () => {
     // Path contains /pages/api/ → always api
     const filePath = path.join(FIXTURES_PAGES, "api", "hello.ts");

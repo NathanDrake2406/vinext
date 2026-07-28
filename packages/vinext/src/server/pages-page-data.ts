@@ -1677,6 +1677,7 @@ export async function resolvePagesPageData(
     if (shortCircuit) {
       return shortCircuit;
     }
+    gsspRes = sharedReqRes!.res;
   }
 
   if (
@@ -1709,6 +1710,7 @@ export async function resolvePagesPageData(
       pageProps = { ...pageProps, ...initialProps };
       renderProps = { ...renderProps, pageProps };
     }
+    gsspRes = res;
   }
 
   return {

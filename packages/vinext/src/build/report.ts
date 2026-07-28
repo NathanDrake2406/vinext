@@ -177,6 +177,40 @@ function hasNamedExportInProgram(program: Program, name: string): boolean {
   return false;
 }
 
+function hasPagesGetInitialPropsInProgram(program: Program): boolean {
+  return program.body.some((node) => {
+    if (node.type === "ExpressionStatement") {
+      const expression = node.expression;
+      if (
+        expression.type !== "AssignmentExpression" ||
+        expression.left.type !== "MemberExpression"
+      ) {
+        return false;
+      }
+      const property = expression.left.property;
+      return (
+        (!expression.left.computed &&
+          property.type === "Identifier" &&
+          property.name === "getInitialProps") ||
+        (expression.left.computed &&
+          property.type === "Literal" &&
+          property.value === "getInitialProps")
+      );
+    }
+
+    const declaration = node.type === "ExportDefaultDeclaration" ? node.declaration : node;
+    if (declaration.type !== "ClassDeclaration") return false;
+    return declaration.body.body.some((element) => {
+      if (element.type !== "MethodDefinition" || !element.static) return false;
+      const key = element.key;
+      return (
+        (!element.computed && key.type === "Identifier" && key.name === "getInitialProps") ||
+        (element.computed && key.type === "Literal" && key.value === "getInitialProps")
+      );
+    });
+  });
+}
+
 function unwrapStaticExpression(expression: Expression): Expression {
   let current = expression;
   while (
@@ -678,6 +712,13 @@ export function classifyPagesRoute(filePath: string): {
   const program = parseRouteModule(code);
 
   if (program && hasNamedExportInProgram(program, "getServerSideProps")) {
+    return { type: "ssr" };
+  }
+
+  // Next.js excludes pages with getInitialProps from automatic static
+  // optimization. Treat them as SSR so request-derived props can never be
+  // prerendered into publicly cached static files.
+  if (program && hasPagesGetInitialPropsInProgram(program)) {
     return { type: "ssr" };
   }
 
