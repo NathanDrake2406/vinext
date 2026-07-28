@@ -81,6 +81,7 @@ import {
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import {
+  hasPagesAppGetInitialPropsOverride,
   hasPagesGetInitialProps,
   loadDevAppInitialProps,
   loadPagesGetInitialProps,
@@ -143,6 +144,11 @@ function applyDevPagesPreviewResponse(res: ServerResponse, preview: PagesPreview
 }
 
 const DEV_PAGES_CACHE_CONTROL = "no-cache, must-revalidate";
+
+/** Node header bags are case-preserving, so match Cache-Control case-insensitively. */
+function hasCacheControlHeader(headers: Record<string, unknown>): boolean {
+  return Object.keys(headers).some((key) => key.toLowerCase() === "cache-control");
+}
 const PAGES_CACHE_ONE_YEAR_SECONDS = 31_536_000;
 
 function applyDevPagesCacheHeaders(
@@ -1124,6 +1130,11 @@ export function createSSRHandler(
 
         const hasAppGetInitialProps = hasPagesGetInitialProps(AppComponent);
 
+        // Mirrors the production resolver: a real getInitialProps makes the
+        // render per-request, so the response must not be cached. Inheriting
+        // App's getInitialProps is not an override and stays optimizable.
+        let ranPagesGetInitialProps = hasPagesAppGetInitialPropsOverride(AppComponent);
+
         // Thin glue over loadDevAppInitialProps: build the React AppTree closure,
         // delegate the decision to the tested helper, and apply the result.
         // Returns true when the App ended the response (caller must stop).
@@ -1293,10 +1304,7 @@ export function createSSRHandler(
           // Skip when gSSP already set one via res.setHeader (case-insensitive)
           // or when ISR is layered on top below — that branch overwrites this
           // default with the ISR cache-control. Fixes #1461.
-          const hasUserCacheControl = Object.keys(gsspExtraHeaders).some(
-            (k) => k.toLowerCase() === "cache-control",
-          );
-          if (!hasUserCacheControl) {
+          if (!hasCacheControlHeader(gsspExtraHeaders)) {
             gsspExtraHeaders["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
           }
         }
@@ -1459,6 +1467,7 @@ export function createSSRHandler(
           if (initialProps) {
             pageProps = { ...pageProps, ...initialProps };
             renderProps = { ...renderProps, pageProps };
+            ranPagesGetInitialProps = true;
           }
         }
 
@@ -1475,6 +1484,8 @@ export function createSSRHandler(
           if (typeof pageModule.getStaticProps === "function") {
             dataHeaders["Cache-Control"] = DEV_PAGES_CACHE_CONTROL;
             dataHeaders[NEXTJS_CACHE_HEADER] = isOnDemandRevalidate ? "REVALIDATED" : "HIT";
+          } else if (ranPagesGetInitialProps && !hasCacheControlHeader(dataHeaders)) {
+            dataHeaders["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
           }
           if ((statusCode ?? 200) === 200) {
             const matchedPathname = `${locale ? `/${locale}` : ""}${patternToNextFormat(route.pattern)}`;
@@ -1685,6 +1696,8 @@ export function createSSRHandler(
             : isOnDemandRevalidate
               ? "REVALIDATED"
               : "HIT";
+        } else if (ranPagesGetInitialProps && !hasCacheControlHeader(extraHeaders)) {
+          extraHeaders["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
         }
         applyDevPagesPreviewHeaders(extraHeaders, requestPreview);
 
