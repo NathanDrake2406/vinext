@@ -1,34 +1,41 @@
+import path from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import { createRequireContextPlugin } from "../packages/vinext/src/plugins/require-context.js";
 
-function unwrapHook(hook: any): Function {
-  return typeof hook === "function" ? hook : hook?.handler;
-}
+const importerId = path.resolve(
+  import.meta.dirname,
+  "./fixtures/app-basic/app/nextjs-compat/require-context/page.tsx",
+);
 
-function createTransform(): Function {
+function createTransform(): (code: string, id: string) => Promise<{ code: string } | null> {
   const plugin = createRequireContextPlugin();
-  return unwrapHook(plugin.transform).bind(plugin);
+  const hook = plugin.transform;
+  const handler = typeof hook === "function" ? hook : hook?.handler;
+  // The handler keys per-environment state and registers directory watchers;
+  // give it the minimal plugin context those two calls need.
+  const context = { environment: {}, addWatchFile: () => {} };
+  return handler!.bind(context as never) as never;
 }
 
 describe("vinext:require-context", () => {
-  it("rewrites literal require.context calls into an import.meta.glob map", () => {
+  it("emits static imports only for modules accepted by the regexp", async () => {
     const transform = createTransform();
-    const result = transform(
-      `const ctx = require.context("./posts", true, /\\.md$/);`,
-      "/app/page.tsx",
+    const result = await transform(
+      `const ctx = require.context("./filtered", false, /\\.safe\\.js$/);`,
+      importerId,
     );
 
-    expect(result.code).toContain('import.meta.glob("./posts/**/*", { eager: true })');
+    expect(result?.code).toContain('from "./filtered/included.safe.js"');
+    expect(result?.code).not.toContain("excluded.js");
+    expect(result?.code).toContain('["./included.safe.js"]');
   });
 
-  it("reuses the cached transform result for a repeated id/source pair", () => {
+  it("inserts generated imports after the directive prologue", async () => {
     const transform = createTransform();
-    const source = `const ctx = require.context("./posts", true, /\\.md$/);`;
+    const source = `"use client";\nconst ctx = require.context("./filtered", false, /\\.safe\\.js$/);`;
+    const result = await transform(source, importerId);
 
-    const first = transform(source, "/app/page.tsx");
-    expect(first).toBeTruthy();
-    expect(transform(source, "/app/page.tsx")).toBe(first);
-    expect(transform(`${source}\nconsole.log("changed");`, "/app/page.tsx")).not.toBe(first);
-    expect(transform(source, "/app/other.tsx")).not.toBe(first);
+    const code = result!.code;
+    expect(code.indexOf('"use client"')).toBeLessThan(code.indexOf("import * as "));
   });
 });
