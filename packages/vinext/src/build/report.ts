@@ -177,13 +177,72 @@ function hasNamedExportInProgram(program: Program, name: string): boolean {
   return false;
 }
 
+/**
+ * A `getInitialProps` that resolves to a non-function is not a data hook — the
+ * runtime helper only recognises a callable. Bare `static getInitialProps;` and
+ * `getInitialProps = undefined` (a disabled feature flag) must stay static.
+ */
+function isCallableGetInitialProps(value: Expression | null | undefined): boolean {
+  if (!value) return false;
+  const expression = unwrapStaticExpression(value);
+  return !(expression.type === "Identifier" && expression.name === "undefined");
+}
+
 function classHasStaticGetInitialProps(declaration: ESTree.Class): boolean {
-  return declaration.body.body.some(
-    (element) =>
-      (element.type === "MethodDefinition" || element.type === "PropertyDefinition") &&
+  return declaration.body.body.some((element) => {
+    // A method is always callable; a class field only when it initialises to
+    // something callable.
+    if (element.type === "MethodDefinition") {
+      return element.static && propertyKeyName(element.key) === "getInitialProps";
+    }
+    return (
+      element.type === "PropertyDefinition" &&
       element.static &&
-      propertyKeyName(element.key) === "getInitialProps",
-  );
+      propertyKeyName(element.key) === "getInitialProps" &&
+      isCallableGetInitialProps(element.value)
+    );
+  });
+}
+
+/**
+ * Collects the local bindings a default export can resolve to. HOC wrappers
+ * (`export default withRouter(Page)`) are the supported legacy shape and this
+ * repo's `withRouter` forwards `getInitialProps` to the returned component, so
+ * the wrapped identifier has to count as the page too.
+ */
+function collectDefaultExportNames(
+  declaration: ESTree.ExportDefaultDeclaration["declaration"],
+  names: Set<string>,
+): void {
+  if (declaration.type === "FunctionDeclaration" || declaration.type === "ClassDeclaration") {
+    if (declaration.id) names.add(declaration.id.name);
+    return;
+  }
+
+  if (declaration.type === "Identifier") {
+    names.add(declaration.name);
+    return;
+  }
+
+  // `withRouter(Page)`, `connect(…)(Page)`, `memo(withA(Page))` — the page is an
+  // argument. The callee is the wrapper, never the page.
+  if (declaration.type === "CallExpression") {
+    for (const argument of declaration.arguments) {
+      if (argument.type !== "SpreadElement") collectDefaultExportNames(argument, names);
+    }
+    return;
+  }
+
+  // The wrappers unwrapStaticExpression strips, e.g. `Page as NextPage`.
+  if (
+    declaration.type === "ParenthesizedExpression" ||
+    declaration.type === "TSAsExpression" ||
+    declaration.type === "TSSatisfiesExpression" ||
+    declaration.type === "TSTypeAssertion" ||
+    declaration.type === "TSNonNullExpression"
+  ) {
+    collectDefaultExportNames(declaration.expression, names);
+  }
 }
 
 /**
@@ -194,21 +253,13 @@ function classHasStaticGetInitialProps(declaration: ESTree.Class): boolean {
  *
  * Both forms are scoped to the module's default export. A non-exported helper
  * that happens to declare `getInitialProps` must not force an otherwise-static
- * route to SSR — under `output: "export"` that is a hard build error.
+ * route to SSR.
  */
 function hasPagesGetInitialPropsInProgram(program: Program): boolean {
-  // Resolve the default export's binding name so `Page.getInitialProps = …` and
-  // `class Page {…}` declared elsewhere at the top level still match it.
-  let defaultExportName: string | null = null;
+  const defaultExportNames = new Set<string>();
   for (const node of program.body) {
-    if (node.type !== "ExportDefaultDeclaration") continue;
-    const { declaration } = node;
-    if (declaration.type === "Identifier") defaultExportName = declaration.name;
-    else if (
-      (declaration.type === "FunctionDeclaration" || declaration.type === "ClassDeclaration") &&
-      declaration.id
-    ) {
-      defaultExportName = declaration.id.name;
+    if (node.type === "ExportDefaultDeclaration") {
+      collectDefaultExportNames(node.declaration, defaultExportNames);
     }
   }
 
@@ -219,8 +270,9 @@ function hasPagesGetInitialPropsInProgram(program: Program): boolean {
         expression.type === "AssignmentExpression" &&
         expression.left.type === "MemberExpression" &&
         expression.left.object.type === "Identifier" &&
-        expression.left.object.name === defaultExportName &&
-        propertyKeyName(expression.left.property) === "getInitialProps"
+        defaultExportNames.has(expression.left.object.name) &&
+        propertyKeyName(expression.left.property) === "getInitialProps" &&
+        isCallableGetInitialProps(expression.right)
       );
     }
 
@@ -233,7 +285,9 @@ function hasPagesGetInitialPropsInProgram(program: Program): boolean {
 
     return (
       node.type === "ClassDeclaration" &&
-      node.id?.name === defaultExportName &&
+      node.id !== null &&
+      node.id !== undefined &&
+      defaultExportNames.has(node.id.name) &&
       classHasStaticGetInitialProps(node)
     );
   });

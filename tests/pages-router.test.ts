@@ -8298,6 +8298,14 @@ describe("Static export (Pages Router)", () => {
     expect(result.files).toContain("about.html");
     const aboutHtml = fs.readFileSync(path.join(exportDir, "about.html"), "utf-8");
     expect(aboutHtml).toContain("About");
+
+    // getInitialProps opts a page out of Automatic Static Optimization, but
+    // Next.js still runs it at export time and only warns — only
+    // getServerSideProps is a hard error under output: "export".
+    expect(result.errors.filter((e) => e.route === "/gip-export")).toEqual([]);
+    expect(result.files).toContain("gip-export.html");
+    const gipHtml = fs.readFileSync(path.join(exportDir, "gip-export.html"), "utf-8");
+    expect(gipHtml).toContain("exported-gip");
   });
 
   it("pre-renders dynamic routes from getStaticPaths", async () => {

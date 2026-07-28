@@ -436,18 +436,47 @@ describe("classifyPagesRoute", () => {
       "static class field",
       "export default class Account extends Component {\n  static getInitialProps = async () => ({})\n  render() { return null }\n}\n",
     ],
+    // `withRouter` forwards getInitialProps to the component it returns, so the
+    // route is still per-request even though the default export is a call.
+    [
+      "an HOC-wrapped default export",
+      "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nexport default withRouter(Account)\n",
+    ],
+    [
+      "a curried HOC default export",
+      "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nexport default connect(mapState)(Account)\n",
+    ],
   ])("classifies pages declaring getInitialProps via %s as ssr", async (_name, source) => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
     const filePath = path.join(tmpRoot, "pages", "account.tsx");
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, source);
 
-    // `ssrSource` names the real API so an output: "export" build does not tell
-    // the user to remove a getServerSideProps that was never there.
+    // `ssrSource` names the real API so `output: "export"` can allow
+    // getInitialProps (Next.js runs it at export time) while still rejecting
+    // getServerSideProps.
     expect(classifyPagesRoute(filePath)).toEqual({
       type: "ssr",
       ssrSource: "getInitialProps",
     });
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  // The runtime only treats a callable getInitialProps as a data hook. A
+  // declaration that resolves to undefined must keep its prerendering.
+  it.each([
+    ["an uninitialized class field", "  static getInitialProps\n"],
+    ["a class field set to undefined", "  static getInitialProps = undefined\n"],
+  ])("classifies a page with %s as static", async (_name, member) => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
+    const filePath = path.join(tmpRoot, "pages", "account.tsx");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      `export default class Account extends Component {\n${member}  render() { return null }\n}\n`,
+    );
+
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
     await fs.rm(tmpRoot, { recursive: true, force: true });
   });
 

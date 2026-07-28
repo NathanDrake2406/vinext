@@ -774,12 +774,19 @@ export async function prerenderPages({
       // don't have direct access to module exports at prerender time.
       const effectiveType = type;
 
-      if (effectiveType === "ssr") {
+      // Next.js runs `getInitialProps` at export time and only discourages it
+      // (errors/get-initial-props-export); `getServerSideProps` is the API that
+      // hard-errors (errors/gssp-export). Outside export mode a getInitialProps
+      // page still opts out of Automatic Static Optimization, so it must not be
+      // prerendered into shared output.
+      const exportsWithGetInitialProps = mode === "export" && ssrSource === "getInitialProps";
+
+      if (effectiveType === "ssr" && !exportsWithGetInitialProps) {
         if (mode === "export") {
           results.push({
             route: route.pattern,
             status: "error",
-            error: `Page uses ${ssrSource ?? "getServerSideProps"} which is not supported with output: 'export'. Use getStaticProps instead.`,
+            error: `Page uses getServerSideProps which is not supported with output: 'export'. Use getStaticProps instead.`,
           });
         } else {
           results.push({ route: route.pattern, status: "skipped", reason: "ssr" });

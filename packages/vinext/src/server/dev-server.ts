@@ -1132,8 +1132,12 @@ export function createSSRHandler(
 
         // Mirrors the production resolver: a real getInitialProps makes the
         // render per-request, so the response must not be cached. Inheriting
-        // App's getInitialProps is not an override and stays optimizable.
-        let ranPagesGetInitialProps = hasPagesAppGetInitialPropsOverride(AppComponent);
+        // App's getInitialProps is not an override and stays optimizable — but
+        // the inherited copy still delegates to the page's own method, so a page
+        // declaring one is per-request regardless of what the App does.
+        let ranPagesGetInitialProps =
+          hasPagesAppGetInitialPropsOverride(AppComponent) ||
+          hasPagesGetInitialProps(PageComponent);
 
         // Thin glue over loadDevAppInitialProps: build the React AppTree closure,
         // delegate the decision to the tested helper, and apply the result.
