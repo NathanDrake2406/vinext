@@ -47,8 +47,6 @@ import {
   navigatePagesRouterLinkWithFallback,
   resolvePagesRouterQueryOnlyHref,
 } from "../client/pages-router-link-navigation.js";
-import { createRouteTrieCache, matchRouteWithTrie } from "../routing/route-matching.js";
-import { stripBasePath } from "../utils/base-path.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import {
   getPagesMiddlewareDataHref,
@@ -57,6 +55,11 @@ import {
 } from "./internal/pages-data-target.js";
 import { interpolateDynamicRouteHref, resolveDynamicRouteHref } from "./internal/interpolate-as.js";
 import { markAppRouteDetectedOnPrefetch } from "./internal/app-route-detection.js";
+import {
+  canAutoPrefetchFullAppRoute,
+  resolveAutoAppRoutePrefetch,
+  resolveFullAppRoutePrefetch,
+} from "./internal/app-route-prefetch-policy.js";
 import { RouterContext } from "./internal/router-context.js";
 import { getCurrentBrowserLocale } from "./client-locale.js";
 import {
@@ -196,7 +199,6 @@ const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
 /** trailingSlash from next.config.js, injected by the plugin at build time */
 const __trailingSlash: boolean = process.env.__VINEXT_TRAILING_SLASH === "true";
 const __prefetchInlining: boolean = process.env.__VINEXT_PREFETCH_INLINING === "true";
-const linkPrefetchRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>();
 
 function resolveHref(href: LinkProps["href"]): string {
   if (typeof href === "string") return href;
@@ -332,104 +334,12 @@ export function resolveLinkPrefetchMode(
   return "auto";
 }
 
-function toSameOriginRouteHref(href: string): string | null {
-  if (typeof window === "undefined") return null;
-
-  let url: URL;
-  try {
-    url = new URL(href, window.location.href);
-  } catch {
-    return null;
-  }
-
-  if (url.origin !== window.location.origin) return null;
-
-  return `${stripBasePath(url.pathname, __basePath)}${url.search}`;
-}
+// Re-exported so the public test surface of this shim is unchanged after the
+// policy helpers moved to internal/app-route-prefetch-policy.ts.
+export { canAutoPrefetchFullAppRoute, resolveAutoAppRoutePrefetch };
 
 function getLinkPrefetchRouterMode(): LinkPrefetchRouterMode {
   return hasAppNavigationRuntime() ? "app" : "pages";
-}
-
-function resolveMatchedAutoAppRoutePrefetch(route: VinextLinkPrefetchRoute): {
-  cacheForNavigation: boolean;
-  prefetchShellFirst: boolean;
-  shouldPrefetch: boolean;
-} {
-  const hasLoadingShell = route.canPrefetchLoadingShell;
-  return {
-    // Automatic prefetches are only unsafe as authoritative navigation
-    // payloads for dynamic routes whose active parallel branches must be
-    // derived from the click-time target tree. Other concrete dynamic URLs can
-    // match Next.js's full-prefetch behavior, including client-param routes.
-    cacheForNavigation: !hasLoadingShell && route.requiresDynamicNavigationRequest !== true,
-    prefetchShellFirst: !route.isDynamic,
-    shouldPrefetch: true,
-  };
-}
-
-export function canAutoPrefetchFullAppRoute(href: string): boolean {
-  if (typeof window === "undefined") return false;
-
-  const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
-  if (!routes) return false;
-
-  const routeHref = toSameOriginRouteHref(href);
-  if (routeHref === null) return false;
-
-  const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
-  if (!match) return false;
-
-  return resolveAutoAppRoutePrefetch(href).cacheForNavigation;
-}
-
-export function resolveAutoAppRoutePrefetch(href: string): {
-  cacheForNavigation: boolean;
-  prefetchShellFirst: boolean;
-  shouldPrefetch: boolean;
-} {
-  if (typeof window === "undefined") {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
-  }
-
-  const routes = window.__VINEXT_LINK_PREFETCH_ROUTES__;
-  if (!routes) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
-  }
-
-  const routeHref = toSameOriginRouteHref(href);
-  if (routeHref === null) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
-  }
-
-  const match = matchRouteWithTrie(routeHref, routes, linkPrefetchRouteTrieCache);
-  if (!match) {
-    return { cacheForNavigation: false, prefetchShellFirst: false, shouldPrefetch: false };
-  }
-
-  const prefetch = resolveMatchedAutoAppRoutePrefetch(match.route);
-  const url = new URL(routeHref, "http://vinext.local");
-  if (url.search !== "") {
-    return {
-      ...prefetch,
-      cacheForNavigation: false,
-      prefetchShellFirst: true,
-    };
-  }
-
-  return prefetch;
-}
-
-function resolveFullAppRoutePrefetch(): {
-  cacheForNavigation: true;
-  prefetchShellFirst: boolean;
-  shouldPrefetch: true;
-} {
-  return {
-    cacheForNavigation: true,
-    prefetchShellFirst: true,
-    shouldPrefetch: true,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -539,6 +449,8 @@ function prefetchUrl(
           hasPrefetchCacheEntryForNavigation,
           peekPrefetchResponseForNavigation,
           prefetchRscResponse,
+          prepareNavigationPrefetchSnapshot,
+          DYNAMIC_NAVIGATION_CACHE_TTL,
           restoreRscResponse,
           PREFETCH_CACHE_TTL,
         } = navigation;
@@ -568,9 +480,7 @@ function prefetchUrl(
         const autoPrefetch =
           mode === "auto"
             ? resolveAutoAppRoutePrefetch(prefetchPolicyHref)
-            : mode === "full-after-shell"
-              ? { cacheForNavigation: true, prefetchShellFirst: true, shouldPrefetch: true }
-              : resolveFullAppRoutePrefetch();
+            : resolveFullAppRoutePrefetch();
         if (!autoPrefetch.shouldPrefetch) return;
 
         const interceptionContext = getPrefetchInterceptionContext(fullHref);
@@ -628,11 +538,12 @@ function prefetchUrl(
         }
         const fetchFullRscPayload = () =>
           scheduleAppPrefetchFetch(
-            () =>
+            (signal) =>
               fetch(rscUrl, {
                 headers,
                 credentials: "include",
                 priority,
+                signal,
                 // @ts-expect-error — purpose is a valid fetch option in some browsers
                 purpose: "prefetch",
               }),
@@ -658,11 +569,12 @@ function prefetchUrl(
             prefetchRscResponse(
               shellRscUrl,
               scheduleAppPrefetchFetch(
-                () =>
+                (signal) =>
                   fetch(shellRscUrl, {
                     headers: shellHeaders,
                     credentials: "include",
                     priority,
+                    signal,
                     // @ts-expect-error — purpose is a valid fetch option in some browsers
                     purpose: "prefetch",
                   }),
@@ -774,11 +686,12 @@ function prefetchUrl(
                   prefetchRscResponse(
                     shellRscUrl,
                     scheduleAppPrefetchFetch(
-                      () =>
+                      (signal) =>
                         fetch(shellRscUrl, {
                           headers: shellHeaders,
                           credentials: "include",
                           priority,
+                          signal,
                           // @ts-expect-error — purpose is a valid fetch option in some browsers
                           purpose: "prefetch",
                         }),
@@ -809,11 +722,12 @@ function prefetchUrl(
                   }
                 }
                 return scheduleAppPrefetchFetch(
-                  () =>
+                  (signal) =>
                     fetch(rscUrl, {
                       headers,
                       credentials: "include",
                       priority,
+                      signal,
                       // @ts-expect-error — purpose is a valid fetch option in some browsers
                       purpose: "prefetch",
                     }),
@@ -839,20 +753,15 @@ function prefetchUrl(
           undefined,
           {
             cacheForNavigation: autoPrefetch.cacheForNavigation,
-            fallbackTtlMs: PREFETCH_CACHE_TTL,
+            fallbackTtlMs:
+              autoPrefetch.fallbackTtl === "dynamic"
+                ? DYNAMIC_NAVIGATION_CACHE_TTL
+                : PREFETCH_CACHE_TTL,
+            minimumTtlMs: autoPrefetch.minimumTtlMs,
             optimisticRouteShell: isOptimisticRouteShellPrefetch,
             prefetchKind: isOptimisticRouteShellPrefetch ? "loading-shell" : "navigation",
             prepareSnapshot: autoPrefetch.cacheForNavigation
-              ? async (snapshot) => {
-                  const preparePrefetchResponse =
-                    getNavigationRuntime()?.functions.preparePrefetchResponse;
-                  if (!preparePrefetchResponse) {
-                    throw new Error("App Router prefetch preparation is unavailable");
-                  }
-                  return (await preparePrefetchResponse(
-                    restoreRscResponse(snapshot),
-                  )) as ReturnType<typeof AppElementsWire.decode>;
-                }
+              ? prepareNavigationPrefetchSnapshot
               : undefined,
             searchAgnosticShell: isAutomaticSearchParamShell && !hasSearchAgnosticShell,
           },
