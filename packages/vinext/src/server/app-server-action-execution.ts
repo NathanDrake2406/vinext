@@ -1371,6 +1371,10 @@ export async function handleServerActionRscRequest<
             options.request.headers.get("accept"),
           ),
         });
+        // Diverting costs the target one extra middleware execution, since the
+        // client's navigation runs it again. A pass-through — the common case —
+        // runs it exactly once because no navigation follows, so the extra run
+        // buys a single round-trip redirect for every app that has middleware.
         if (targetMiddleware.kind === "diverted") {
           options.clearRequestContext();
           return new Response(null, {
