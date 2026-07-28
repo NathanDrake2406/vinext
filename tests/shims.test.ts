@@ -4829,7 +4829,7 @@ describe("next/server shim", () => {
     expect(req.cookies.has("missing")).toBe(false);
   });
 
-  it("NextRequest copies a Request body without disturbing the source request", async () => {
+  it("NextRequest transfers a Request body instead of teeing it", async () => {
     const { NextRequest } = await import("../packages/vinext/src/shims/server.js");
     const source = new Request("https://example.com/api/echo", {
       body: JSON.stringify({ ok: true }),
@@ -4840,8 +4840,10 @@ describe("next/server shim", () => {
     const req = new NextRequest(source);
 
     await expect(req.json()).resolves.toEqual({ ok: true });
-    expect(source.bodyUsed).toBe(false);
-    await expect(source.json()).resolves.toEqual({ ok: true });
+    // Next.js parity (`super(input, init)`), and the reason it matters: cloning
+    // here would tee the body, and the branch left on `source` would buffer the
+    // whole request in memory because nothing reads or cancels it.
+    expect(source.bodyUsed).toBe(true);
   });
 
   it("NextResponse.json() creates a JSON response", async () => {
