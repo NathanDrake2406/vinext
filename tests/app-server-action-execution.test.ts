@@ -58,6 +58,8 @@ type TestRoute = {
   routeHandler?: unknown;
   routeSegments?: readonly string[];
   runtime?: "edge" | "experimental-edge" | "nodejs" | null;
+  /** Manifest lazy-module thunk; set when the route's page is not yet hydrated. */
+  __loadPage?: unknown;
 };
 
 type TestInterceptOptions = {
@@ -1985,11 +1987,13 @@ describe("app server action execution helpers", () => {
 
   it("falls back to header-only redirects when target middleware diverts the request", async () => {
     const buildPageElement = vi.fn(() => "should-not-render");
+    const ensureRouteLoaded = vi.fn();
     const runRedirectTargetMiddleware = vi.fn(async () => ({ kind: "diverted" }) as const);
 
     const response = await handleServerActionRscRequest(
       createRscOptions({
         buildPageElement,
+        ensureRouteLoaded,
         loadServerAction() {
           return Promise.resolve(() => redirect("/protected"));
         },
@@ -2014,6 +2018,9 @@ describe("app server action execution helpers", () => {
     expect(response?.headers.get("content-type")).toBeNull();
     expect(await response?.text()).toBe("");
     expect(buildPageElement).not.toHaveBeenCalled();
+    // Hydrating a route imports its modules and runs their top-level code —
+    // a middleware-blocked target must never get that far.
+    expect(ensureRouteLoaded).not.toHaveBeenCalled();
     expect(runRedirectTargetMiddleware).toHaveBeenCalledWith({
       cleanPathname: "/protected",
       request: expect.any(Request),
@@ -2030,6 +2037,12 @@ describe("app server action execution helpers", () => {
         responseHeaders: new Headers({ "x-from-target-middleware": "1" }),
       };
     });
+    const actionRequest = createFetchActionRequest({
+      accept: "text/x-component",
+      "x-vinext-mw-ctx": JSON.stringify({}),
+    });
+    // Workers attach cf to the inbound request; new Request() never copies it.
+    Object.defineProperty(actionRequest, "cf", { value: { country: "AU" }, enumerable: true });
 
     const response = await handleServerActionRscRequest(
       createRscOptions({
@@ -2040,10 +2053,7 @@ describe("app server action execution helpers", () => {
         loadServerAction() {
           return Promise.resolve(() => redirect("/redirect-target"));
         },
-        request: createFetchActionRequest({
-          accept: "text/x-component",
-          "x-vinext-mw-ctx": JSON.stringify({}),
-        }),
+        request: actionRequest,
         matchRoute(pathname) {
           if (pathname === "/redirect-target") {
             return {
@@ -2081,6 +2091,93 @@ describe("app server action execution helpers", () => {
     expect(renderRequest).not.toBeNull();
     expect(renderRequest!.headers.get("accept")).toBeNull();
     expect(renderRequest!.headers.get("x-vinext-mw-ctx")).toBeNull();
+
+    // Middleware that authorizes on request.cf (geo checks) must not fail open
+    // on the reconstructed target requests.
+    expect(Reflect.get(middlewareRequest!, "cf")).toEqual({ country: "AU" });
+    expect(Reflect.get(renderRequest!, "cf")).toEqual({ country: "AU" });
+  });
+
+  it("runs target middleware before hydrating a lazy target route's modules", async () => {
+    const events: string[] = [];
+    const lazyRoute: TestRoute = {
+      id: "lazy-protected",
+      params: [],
+      pattern: "/lazy-protected",
+      __loadPage: () => Promise.resolve({}),
+    };
+
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        ensureRouteLoaded(route) {
+          events.push(`load:${route.id}`);
+          if (route === lazyRoute) route.page = {};
+        },
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/lazy-protected"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/lazy-protected") {
+            return { params: {}, route: lazyRoute };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        async runRedirectTargetMiddleware() {
+          events.push("middleware");
+          return { kind: "continue", responseHeaders: null };
+        },
+      }),
+    );
+
+    // The unhydrated route only advertises its page via the lazy thunk, so it
+    // must still count as renderable, and middleware must run before the
+    // hydration that executes the page module's top-level code.
+    expect(events).toEqual(["middleware", "load:lazy-protected", "load:dashboard"]);
+    expect(response?.status).toBe(303);
+    expect(JSON.parse(await response!.text())).toEqual({
+      root: "lazy-protected:{}:none",
+      returnValue: { ok: true },
+    });
+  });
+
+  it("strips a middleware Location header from the action redirect response", async () => {
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/redirect-target"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/redirect-target") {
+            return {
+              params: {},
+              route: { id: "redirect-target", page: {}, params: [], pattern: "/redirect-target" },
+            };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        middlewareHeaders: new Headers({ location: "/mw-location", "x-action-mw": "1" }),
+        async runRedirectTargetMiddleware() {
+          return {
+            kind: "continue",
+            responseHeaders: new Headers({ location: "/target-mw-location", "x-target-mw": "1" }),
+          };
+        },
+      }),
+    );
+
+    // The wrapper's real target travels in x-action-redirect; a Location header
+    // on the 303 would make fetch follow it before the client reads that.
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get("x-action-redirect")).toBe("/redirect-target");
+    expect(response?.headers.get("location")).toBeNull();
+    expect(response?.headers.get("x-action-mw")).toBe("1");
+    expect(response?.headers.get("x-target-mw")).toBe("1");
   });
 
   it("does not emit x-action-revalidated when a fetch action revalidates a tag with a profile", async () => {

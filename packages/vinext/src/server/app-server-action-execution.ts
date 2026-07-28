@@ -51,7 +51,11 @@ import {
   parseNextHttpErrorDigest,
   parseNextRedirectDigest,
 } from "./next-error-digest.js";
-import { validateCsrfOrigin, validateServerActionPayload } from "./request-pipeline.js";
+import {
+  attachRequestCfMetadata,
+  validateCsrfOrigin,
+  validateServerActionPayload,
+} from "./request-pipeline.js";
 import { readStreamAsTextWithLimit } from "../utils/text-stream.js";
 import {
   createServerActionNotFoundResponse,
@@ -102,6 +106,13 @@ type AppServerActionRoute = {
   pattern: string;
   rootParamNames?: readonly string[];
   routeHandler?: unknown;
+  /**
+   * Manifest lazy-module thunks (see app-route-module-loader.ts). Present when
+   * the route is lazy; `page`/`routeHandler` stay unset until hydration, so
+   * these are what identify the route's kind without importing its modules.
+   */
+  __loadPage?: unknown;
+  __loadRouteHandler?: unknown;
   routeSegments?: readonly string[];
   params?: readonly string[] | null;
   slots?: Readonly<
@@ -495,10 +506,10 @@ function createActionRedirectRenderRequest(options: {
     headers.set("cookie", cookieHeader);
   }
 
-  return new Request(options.url, {
-    headers,
-    method: "GET",
-  });
+  return attachRequestCfMetadata(
+    new Request(options.url, { headers, method: "GET" }),
+    options.request,
+  );
 }
 
 /**
@@ -512,7 +523,25 @@ function createActionRedirectMiddlewareRequest(renderRequest: Request, accept: s
 
   const headers = new Headers(renderRequest.headers);
   headers.set("accept", accept);
-  return new Request(renderRequest.url, { headers, method: "GET" });
+  return attachRequestCfMetadata(
+    new Request(renderRequest.url, { headers, method: "GET" }),
+    renderRequest,
+  );
+}
+
+/**
+ * Merge pass-through middleware response headers onto the action redirect
+ * wrapper, minus `Location`: the wrapper's real target travels in
+ * x-action-redirect and its status is usually 303, so a stray middleware
+ * `Location` would give it genuine HTTP-redirect semantics — fetch would
+ * follow it before the action client can read the control headers.
+ */
+function mergeActionRedirectMiddlewareHeaders(
+  target: Headers,
+  middlewareHeaders: Headers | null,
+): void {
+  mergeMiddlewareResponseHeaders(target, middlewareHeaders);
+  target.delete("location");
 }
 
 function withoutRscBodyHeaders(headers: Headers): Headers {
@@ -794,9 +823,15 @@ function shouldUseForwardedActionRedirectStatus<TRoute extends AppServerActionRo
   return currentRuntime !== targetRuntime;
 }
 
+/**
+ * Decided from lazy thunks as well as hydrated fields so it needs no
+ * `ensureRouteLoaded` first: a middleware-blocked target must never execute
+ * its modules' top-level code, so the route cannot be hydrated before
+ * middleware has cleared it.
+ */
 function canRenderActionRedirectTarget(route: AppServerActionRoute): boolean {
-  if ("routeHandler" in route && route.routeHandler) return false;
-  return route.page !== null && route.page !== undefined;
+  if (("routeHandler" in route && route.routeHandler) || route.__loadRouteHandler) return false;
+  return (route.page !== null && route.page !== undefined) || route.__loadPage != null;
 }
 
 function getActionHttpFallbackStatus(error: unknown): number | null {
@@ -1298,7 +1333,7 @@ export async function handleServerActionRscRequest<
         Vary: VINEXT_RSC_VARY_HEADER,
       });
       applyEdgeRuntimeHeader(redirectHeaders, options.isEdgeRuntime);
-      mergeMiddlewareResponseHeaders(redirectHeaders, options.middlewareHeaders);
+      mergeActionRedirectMiddlewareHeaders(redirectHeaders, options.middlewareHeaders);
       applyRscCompatibilityIdHeader(redirectHeaders);
       // Prefix basePath onto the redirect target. The client-side handler in
       // app-browser-entry reads ACTION_REDIRECT_HEADER and calls
@@ -1332,9 +1367,6 @@ export async function handleServerActionRscRequest<
 
       const targetPathname = stripBasePath(redirectTarget.pathname, options.basePath ?? "");
       const targetMatch = options.matchRoute(targetPathname);
-      // Hydrate the redirect target before reading its page/route-handler
-      // modules (canRenderActionRedirectTarget + fetch-cache-mode below).
-      if (targetMatch) await options.ensureRouteLoaded?.(targetMatch.route);
       if (!targetMatch || !canRenderActionRedirectTarget(targetMatch.route)) {
         options.clearRequestContext();
         return new Response(null, {
@@ -1342,9 +1374,6 @@ export async function handleServerActionRscRequest<
           headers: withoutRscBodyHeaders(redirectHeaders),
         });
       }
-      const currentMatch = options.currentRouteMatch;
-      // Hydrate the current route before resolving its runtime below.
-      if (currentMatch) await options.ensureRouteLoaded?.(currentMatch.route);
 
       const redirectRenderRequest = createActionRedirectRenderRequest({
         pendingCookies: [
@@ -1382,8 +1411,16 @@ export async function handleServerActionRscRequest<
             headers: withoutRscBodyHeaders(redirectHeaders),
           });
         }
-        mergeMiddlewareResponseHeaders(redirectHeaders, targetMiddleware.responseHeaders);
+        mergeActionRedirectMiddlewareHeaders(redirectHeaders, targetMiddleware.responseHeaders);
       }
+      // Hydrate the target only now that middleware has cleared it: importing
+      // its modules runs their top-level code, which a blocked target must
+      // never execute. The dynamic-config / fetch-cache reads below need the
+      // hydrated route.
+      await options.ensureRouteLoaded?.(targetMatch.route);
+      const currentMatch = options.currentRouteMatch;
+      // Hydrate the current route before resolving its runtime below.
+      if (currentMatch) await options.ensureRouteLoaded?.(currentMatch.route);
       const redirectDynamicConfig = options.resolveRouteDynamicConfig?.(targetMatch.route);
       const redirectSearchParams = prepareActionPageRerenderContext({
         draftModeCookie: actionDraftCookie,
