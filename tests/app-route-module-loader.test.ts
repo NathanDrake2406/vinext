@@ -4,6 +4,11 @@ import {
   loadAppInterceptLayouts,
   type LazyLoadableRoute,
 } from "../packages/vinext/src/server/app-route-module-loader.js";
+import { cookies, headersContextFromRequest } from "../packages/vinext/src/shims/headers.js";
+import {
+  createRequestContext,
+  runWithRequestContext,
+} from "../packages/vinext/src/shims/unified-request-context.js";
 
 describe("ensureAppRouteModulesLoaded", () => {
   it("returns the route synchronously when there are no lazy thunks (eager route)", () => {
@@ -227,5 +232,37 @@ describe("loadAppInterceptLayouts", () => {
 
     // No loaders → returns a resolved promise wrapping the same array, no imports.
     return expect(loadAppInterceptLayouts(intercept)).resolves.toBe(intercept.interceptLayouts);
+  });
+});
+
+describe("lazy hydration request-context isolation", () => {
+  it("evaluates a lazy module outside the request context that triggered hydration", async () => {
+    const request = new Request("https://example.com/dashboard", {
+      headers: { cookie: "session=victim-secret" },
+    });
+    const requestContext = createRequestContext({
+      headersContext: headersContextFromRequest(request),
+    });
+    const route: LazyLoadableRoute = {
+      page: null,
+      __loadPage: () => import("./fixtures/module-scope-request-capture.js"),
+    };
+
+    const liveCookie = await runWithRequestContext(requestContext, async () => {
+      // Read first: proves the request context really is active at the
+      // hydration call site, so the assertion below is isolation rather than
+      // an absent context.
+      const live = (await cookies()).get("session")?.value;
+      await ensureAppRouteModulesLoaded(route);
+      return live;
+    });
+
+    expect(liveCookie).toBe("victim-secret");
+    // Module scope must see no request at all — matching Next.js, which loads
+    // components before entering the request store. Anything else would be
+    // cached on `route.page` and reused for every later visitor.
+    expect((route.page as { moduleScopeCookieAccess: string }).moduleScopeCookieAccess).toBe(
+      "rejected-no-request-context",
+    );
   });
 });

@@ -21,7 +21,18 @@
  * Callers must `await` it before any synchronous read of route modules
  * (segment config, fetch-cache mode, runtime resolution, dispatch branch,
  * element building, etc.).
+ *
+ * Every thunk is invoked via `runOutsideRequestContext`. Hydration runs inside
+ * the matched request's scope, and a dynamic `import()` propagates
+ * AsyncLocalStorage into the imported module's top-level evaluation — so
+ * without that guard, module-scope `headers()`/`cookies()` would bind to
+ * whichever request happened to be first. Since a module evaluates once per
+ * isolate and its namespace is cached here, that first request's data would
+ * then be served to every later one. Matching Next.js, which loads components
+ * before entering the request store, module scope simply sees no request.
  */
+
+import { runOutsideRequestContext } from "vinext/shims/unified-request-context";
 
 type LazyModuleThunk = () => Promise<unknown>;
 type LazyModuleLoaderArray = readonly (LazyModuleThunk | null | undefined)[];
@@ -106,7 +117,7 @@ function pushFieldLoad(
 ): void {
   if (!loader || target[field] != null) return;
   loads.push(
-    loader().then((module) => {
+    runOutsideRequestContext(loader).then((module) => {
       target[field] = module;
     }),
   );
@@ -128,7 +139,7 @@ function pushArrayLoads(
   for (const [index, loader] of loaders.entries()) {
     if (index >= slots.length || !loader || slots[index] != null) continue;
     loads.push(
-      loader().then((module) => {
+      runOutsideRequestContext(loader).then((module) => {
         slots[index] = module;
       }),
     );
