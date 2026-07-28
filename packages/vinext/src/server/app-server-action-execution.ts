@@ -37,6 +37,7 @@ import {
   VINEXT_RSC_CONTENT_TYPE,
   VINEXT_RSC_VARY_HEADER,
   applyRscCompatibilityIdHeader,
+  stripRscCacheBustingSearchParam,
 } from "./app-rsc-cache-busting.js";
 import { applyEdgeRuntimeHeader } from "./app-page-response.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
@@ -530,18 +531,41 @@ function createActionRedirectMiddlewareRequest(renderRequest: Request, accept: s
 }
 
 /**
+ * Headers a pass-through middleware must not be able to change on the action
+ * redirect wrapper: `Location` would give the (usually 303) wrapper genuine
+ * HTTP-redirect semantics that fetch follows before the client reads the
+ * control headers, a foreign `Content-Type` makes the client treat the Flight
+ * body as non-RSC and hard-navigate, and the x-action-* headers steer the
+ * client's navigation and cache invalidation.
+ */
+const ACTION_REDIRECT_PROTECTED_HEADERS = [
+  "content-type",
+  "location",
+  ACTION_REDIRECT_HEADER,
+  ACTION_REDIRECT_TYPE_HEADER,
+  ACTION_REDIRECT_STATUS_HEADER,
+  ACTION_REVALIDATED_HEADER,
+];
+
+/**
  * Merge pass-through middleware response headers onto the action redirect
- * wrapper, minus `Location`: the wrapper's real target travels in
- * x-action-redirect and its status is usually 303, so a stray middleware
- * `Location` would give it genuine HTTP-redirect semantics — fetch would
- * follow it before the action client can read the control headers.
+ * wrapper, then restore the wrapper's own protocol headers — including their
+ * absence, so middleware can neither replace nor pre-inject them.
  */
 function mergeActionRedirectMiddlewareHeaders(
   target: Headers,
   middlewareHeaders: Headers | null,
 ): void {
+  if (!middlewareHeaders) return;
+
+  const protectedValues = ACTION_REDIRECT_PROTECTED_HEADERS.map(
+    (name) => [name, target.get(name)] as const,
+  );
   mergeMiddlewareResponseHeaders(target, middlewareHeaders);
-  target.delete("location");
+  for (const [name, value] of protectedValues) {
+    if (value === null) target.delete(name);
+    else target.set(name, value);
+  }
 }
 
 function withoutRscBodyHeaders(headers: Headers): Headers {
@@ -1365,6 +1389,12 @@ export async function handleServerActionRscRequest<
         });
       }
 
+      // The real request pipeline strips the internal `_rsc` transport param
+      // before middleware and rendering (app-rsc-handler); the synthetic target
+      // must match, or middleware matchers see a query no navigation carries.
+      // The x-action-redirect header above keeps the verbatim URL — a diverted
+      // client re-request goes through the pipeline's own `_rsc` validation.
+      stripRscCacheBustingSearchParam(redirectTarget);
       const targetPathname = stripBasePath(redirectTarget.pathname, options.basePath ?? "");
       const targetMatch = options.matchRoute(targetPathname);
       if (!targetMatch || !canRenderActionRedirectTarget(targetMatch.route)) {
@@ -1376,7 +1406,12 @@ export async function handleServerActionRscRequest<
       }
 
       const redirectRenderRequest = createActionRedirectRenderRequest({
+        // The action middleware's Set-Cookie mutations (session rotation or
+        // deletion) come first so the target sees the cookie jar the browser
+        // would carry into the navigation; the action's own cookies().set()
+        // calls land after middleware and win for the same name.
         pendingCookies: [
+          ...(options.middlewareHeaders?.getSetCookie() ?? []),
           ...actionPendingCookies,
           ...(actionDraftCookie ? [actionDraftCookie] : []),
         ],

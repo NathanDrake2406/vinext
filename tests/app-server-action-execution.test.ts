@@ -2143,7 +2143,7 @@ describe("app server action execution helpers", () => {
     });
   });
 
-  it("strips a middleware Location header from the action redirect response", async () => {
+  it("keeps the action protocol headers when merging middleware headers onto the redirect response", async () => {
     const response = await handleServerActionRscRequest(
       createRscOptions({
         loadServerAction() {
@@ -2161,23 +2161,115 @@ describe("app server action execution helpers", () => {
             route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
           };
         },
-        middlewareHeaders: new Headers({ location: "/mw-location", "x-action-mw": "1" }),
+        middlewareHeaders: new Headers({
+          location: "/mw-location",
+          "content-type": "text/html",
+          "x-action-redirect": "/mw-hijack",
+          "x-action-mw": "1",
+        }),
         async runRedirectTargetMiddleware() {
           return {
             kind: "continue",
-            responseHeaders: new Headers({ location: "/target-mw-location", "x-target-mw": "1" }),
+            responseHeaders: new Headers({
+              location: "/target-mw-location",
+              "content-type": "text/html",
+              "x-action-redirect": "/target-hijack",
+              "x-target-mw": "1",
+            }),
           };
         },
       }),
     );
 
-    // The wrapper's real target travels in x-action-redirect; a Location header
-    // on the 303 would make fetch follow it before the client reads that.
+    // The wrapper's protocol headers steer the action client: a Location on the
+    // 303 would make fetch follow it before the client reads x-action-redirect,
+    // a foreign Content-Type flips the client to a hard navigation, and
+    // x-action-redirect is the destination itself. Ordinary middleware headers
+    // must still come through.
     expect(response?.status).toBe(303);
     expect(response?.headers.get("x-action-redirect")).toBe("/redirect-target");
     expect(response?.headers.get("location")).toBeNull();
+    expect(response?.headers.get("content-type")).toContain("text/x-component");
     expect(response?.headers.get("x-action-mw")).toBe("1");
     expect(response?.headers.get("x-target-mw")).toBe("1");
+  });
+
+  it("applies the action middleware's cookie mutations to the redirect target request", async () => {
+    let middlewareRequest: Request | null = null;
+
+    await handleServerActionRscRequest(
+      createRscOptions({
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/redirect-target"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/redirect-target") {
+            return {
+              params: {},
+              route: { id: "redirect-target", page: {}, params: [], pattern: "/redirect-target" },
+            };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        middlewareHeaders: new Headers([
+          ["set-cookie", "session=; Max-Age=0"],
+          ["set-cookie", "csrf=rotated"],
+        ]),
+        request: createFetchActionRequest({ cookie: "session=live; csrf=old; theme=dark" }),
+        async runRedirectTargetMiddleware(targetOptions: { request: Request }) {
+          middlewareRequest = targetOptions.request;
+          return { kind: "continue", responseHeaders: null };
+        },
+      }),
+    );
+
+    // The action middleware deleted the session and rotated csrf. The browser
+    // applies those before navigating to the redirect target, so target
+    // middleware evaluating the pre-mutation jar would authorize on a
+    // credential the response is simultaneously revoking.
+    expect(middlewareRequest).not.toBeNull();
+    expect(middlewareRequest!.headers.get("cookie")).toBe("csrf=rotated; theme=dark");
+  });
+
+  it("strips the internal _rsc param from the redirect target before middleware", async () => {
+    let middlewareRequest: Request | null = null;
+
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/redirect-target?_rsc=abc123&tab=x"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/redirect-target") {
+            return {
+              params: {},
+              route: { id: "redirect-target", page: {}, params: [], pattern: "/redirect-target" },
+            };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        async runRedirectTargetMiddleware(targetOptions: { request: Request }) {
+          middlewareRequest = targetOptions.request;
+          return { kind: "continue", responseHeaders: null };
+        },
+      }),
+    );
+
+    // The real pipeline strips `_rsc` before middleware, so matchers keyed on
+    // it would branch differently for the synthetic request than for the
+    // navigation it stands in for. The client-facing redirect header keeps the
+    // verbatim URL — a diverted re-request goes through real validation.
+    expect(middlewareRequest).not.toBeNull();
+    const middlewareUrl = new URL(middlewareRequest!.url);
+    expect(middlewareUrl.searchParams.get("_rsc")).toBeNull();
+    expect(middlewareUrl.searchParams.get("tab")).toBe("x");
+    expect(response?.headers.get("x-action-redirect")).toBe("/redirect-target?_rsc=abc123&tab=x");
   });
 
   it("does not emit x-action-revalidated when a fetch action revalidates a tag with a profile", async () => {
