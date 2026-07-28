@@ -447,13 +447,18 @@ async function listContextFiles(directory: string, recursive: boolean): Promise<
         const entryPath = path.join(currentDirectory, entry.name);
         let isFile = entry.isFile();
         let isDirectory = entry.isDirectory();
-        if (entry.isSymbolicLink()) {
+        // Covers symlinks and filesystems without dirent type info (NFS, SMB,
+        // FUSE), where entries report neither file nor directory. Broken links
+        // (ENOENT) and self-referential link loops (ELOOP) are unresolvable,
+        // so they cannot become context entries.
+        if (!isFile && !isDirectory) {
           try {
             const stats = await stat(entryPath);
             isFile = stats.isFile();
             isDirectory = stats.isDirectory();
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === "ENOENT" || code === "ELOOP") continue;
             throw error;
           }
         }

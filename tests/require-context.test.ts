@@ -67,6 +67,8 @@ describe("vinext:require-context", () => {
       await symlink(path.join(root, "target"), path.join(root, "context/alias"));
       // A cycle back into the context itself must terminate, not recurse forever.
       await symlink(path.join(root, "context"), path.join(root, "target/loop"));
+      // A self-referential symlink (stat -> ELOOP) must be skipped, not throw.
+      await symlink(path.join(root, "context/self"), path.join(root, "context/self"));
 
       const transform = createTransform();
       const result = await transform(
