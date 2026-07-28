@@ -345,7 +345,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
   isrGet: AppPageCacheGetter;
-  isrHtmlKey: (pathname: string) => string;
+  isrHtmlKey: (pathname: string, canonicalPathname?: string) => string;
   isrRscKey: (
     pathname: string,
     mountedSlotsHeader?: string | null,
@@ -508,7 +508,6 @@ export function shouldReadAppPageCache(options: {
   isForceDynamic: boolean;
   isProduction: boolean;
   isRscRequest: boolean;
-  hasRewrittenPathname?: boolean;
   revalidateSeconds: number | null;
   scriptNonce?: string;
 }): boolean {
@@ -517,9 +516,6 @@ export function shouldReadAppPageCache(options: {
     !options.isProgressiveActionRender &&
     !options.isDraftMode &&
     !options.isForceDynamic &&
-    // HTML entries embed the rendering request's canonical pathname, which a
-    // rewritten request does not share with the key's destination pathname.
-    (options.isRscRequest || options.hasRewrittenPathname !== true) &&
     (options.isRscRequest || !options.scriptNonce) &&
     (options.revalidateSeconds === null || options.revalidateSeconds > 0)
   );
@@ -658,12 +654,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   const shouldUseEmptySearchParams = isForceStatic || isPrefetchDynamicShell;
   const hasRequestSearchParams =
     !shouldUseEmptySearchParams && hasSearchParams(options.searchParams);
-  // Middleware and next.config rewrites move `cleanPathname` to the internal
-  // destination while the render keeps the canonical pathname the visitor
-  // requested. The page cache is keyed by the destination alone, so a rewritten
-  // render must not be read from or written to it.
-  const hasRewrittenPathname =
-    options.displayPathname !== undefined && options.displayPathname !== options.cleanPathname;
   const pageSearchParams = shouldUseEmptySearchParams
     ? new URLSearchParams()
     : options.searchParams;
@@ -719,7 +709,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
 
   if (
     shouldReadAppPageCache({
-      hasRewrittenPathname,
       isDraftMode,
       isForceDynamic,
       isProgressiveActionRender: options.isProgressiveActionRender === true,
@@ -731,6 +720,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   ) {
     const { readAppPageCacheResponse } = await import("./app-page-cache.js");
     const cachedPageResponse = await readAppPageCacheResponse({
+      canonicalPathname: options.displayPathname,
       cleanPathname: options.cleanPathname,
       clearRequestContext: options.clearRequestContext,
       hasRequestSearchParams,
@@ -1110,6 +1100,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     basePath: options.basePath,
     clientTraceMetadata: options.clientTraceMetadata,
     reactMaxHeadersLength: options.reactMaxHeadersLength,
+    canonicalPathname: options.displayPathname,
     cleanPathname: options.cleanPathname,
     clearRequestContext: options.clearRequestContext,
     consumeDynamicUsage,
@@ -1137,7 +1128,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     },
     handlerStart: options.handlerStart,
     hasLoadingBoundary: hasActiveLoadingBoundary,
-    hasRewrittenPathname,
     omitPendingDynamicCacheState: hasRequestSearchParams,
     formState: options.formState ?? null,
     isProgressiveActionRender: options.isProgressiveActionRender === true,

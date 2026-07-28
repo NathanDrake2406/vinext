@@ -37,6 +37,8 @@ type BuildAppPageCacheRenderObservation = (input: {
 type FinalizeAppPageHtmlCacheResponseOptions = {
   capturedDynamicUsageBeforeContextCleanup?: () => boolean;
   capturedRscDataPromise: Promise<ArrayBuffer> | null;
+  /** Pre-rewrite pathname baked into this render's navigation bootstrap. */
+  canonicalPathname?: string;
   cleanPathname: string;
   consumeDynamicUsage: () => boolean;
   consumeRenderObservationState?: () => AppPageRenderObservationState;
@@ -45,7 +47,7 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   getPageTags: () => string[];
   getRequestCacheLife?: () => AppPageRequestCacheLife | null;
   isrDebug?: AppPageDebugLogger;
-  isrHtmlKey: (pathname: string) => string;
+  isrHtmlKey: (pathname: string, canonicalPathname?: string) => string;
   isrRscKey: AppPageRscCacheKeyBuilder;
   isrSet: AppPageCacheSetter;
   interceptionContext?: string | null;
@@ -128,7 +130,7 @@ export function finalizeAppPageHtmlCacheResponse(
   }
 
   const [streamForClient, streamForCache] = response.body.tee();
-  const htmlKey = options.isrHtmlKey(options.cleanPathname);
+  const htmlKey = options.isrHtmlKey(options.cleanPathname, options.canonicalPathname);
   const rscKey = options.isrRscKey(
     options.cleanPathname,
     null,

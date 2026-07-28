@@ -425,8 +425,21 @@ export function appIsrCacheKey(
   return buildCacheKey(prefix, pathname, suffix);
 }
 
-export function appIsrHtmlKey(pathname: string): string {
-  return appIsrCacheKey(pathname, "html");
+/**
+ * Build the ISR cache key for an App page's HTML artifact.
+ *
+ * `pathname` is the rewrite destination, which decides what was rendered.
+ * A rewritten render additionally bakes its canonical (pre-rewrite) pathname
+ * into the navigation bootstrap script, so entries carrying one external path
+ * must not be served to a request that arrived on a different one. Requests
+ * that were not rewritten keep the plain `html` suffix.
+ */
+export function appIsrHtmlKey(pathname: string, canonicalPathname?: string): string {
+  const suffix =
+    canonicalPathname === undefined || canonicalPathname === pathname
+      ? "html"
+      : `html:canonical:${fnv1a64(canonicalPathname)}`;
+  return appIsrCacheKey(pathname, suffix);
 }
 
 function normalizeInterceptionContextForCacheKey(interceptionContext: string): string | null {

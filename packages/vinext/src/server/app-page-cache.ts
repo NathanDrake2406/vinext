@@ -87,10 +87,12 @@ type ReadAppPageCacheResponseOptions = {
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
   isrGet: AppPageCacheGetter;
-  isrHtmlKey: (pathname: string) => string;
+  isrHtmlKey: (pathname: string, canonicalPathname?: string) => string;
   isrRscKey: AppPageRscCacheKeyBuilder;
   isrSet: AppPageCacheSetter;
   interceptionContext?: string | null;
+  /** Pre-rewrite pathname baked into this render's navigation bootstrap. */
+  canonicalPathname?: string;
   hasRequestSearchParams?: boolean;
   middlewareHeaders?: Headers | null;
   middlewareStatus?: number | null;
@@ -350,7 +352,7 @@ export async function readAppPageCacheResponse(
         options.renderMode,
         options.interceptionContext,
       )
-    : options.isrHtmlKey(options.cleanPathname);
+    : options.isrHtmlKey(options.cleanPathname, options.canonicalPathname);
   const artifact = options.isRscRequest ? "rsc" : "html";
 
   try {

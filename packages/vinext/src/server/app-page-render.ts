@@ -133,9 +133,10 @@ type RenderAppPageLifecycleOptions = {
   peekRequestCacheLife?: () => AppPageRequestCacheLife | null;
   getDraftModeCookieHeader: () => string | null | undefined;
   handlerStart: number;
+  /** Pre-rewrite pathname baked into this render's navigation bootstrap. */
+  canonicalPathname?: string;
   hasCustomGlobalError?: boolean;
   hasLoadingBoundary: boolean;
-  hasRewrittenPathname?: boolean;
   dynamicStaleTimeSeconds?: number;
   isDynamicError: boolean;
   isDraftMode: boolean;
@@ -150,7 +151,7 @@ type RenderAppPageLifecycleOptions = {
   omitPendingDynamicCacheState?: boolean;
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
-  isrHtmlKey: (pathname: string) => string;
+  isrHtmlKey: (pathname: string, canonicalPathname?: string) => string;
   isrRscKey: (
     pathname: string,
     mountedSlotsHeader?: string | null,
@@ -1093,7 +1094,6 @@ export async function renderAppPageLifecycle(
     dynamicUsedDuringRender,
     isProgressiveActionRender: options.isProgressiveActionRender === true,
     hasScriptNonce: Boolean(options.scriptNonce),
-    hasRewrittenPathname: options.hasRewrittenPathname === true,
     isDraftMode: options.isDraftMode,
     isDynamicError: options.isDynamicError,
     isForceDynamic: options.isForceDynamic,
@@ -1136,7 +1136,6 @@ export async function renderAppPageLifecycle(
     !options.isDynamicError &&
     !options.isForceStatic &&
     !options.scriptNonce &&
-    options.hasRewrittenPathname !== true &&
     options.isProgressiveActionRender !== true &&
     !dynamicUsedDuringRender;
 
@@ -1194,6 +1193,7 @@ export async function renderAppPageLifecycle(
       getRequestCacheLife() {
         return readRequestCacheLifeForCachePolicy(options);
       },
+      canonicalPathname: options.canonicalPathname,
       isrDebug: options.isrDebug,
       isrHtmlKey: options.isrHtmlKey,
       isrRscKey: options.isrRscKey,
