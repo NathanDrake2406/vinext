@@ -11,3 +11,14 @@ import { redirect } from "next/navigation";
 export async function redirectToBlockedPath(): Promise<void> {
   redirect("/admin");
 }
+
+/**
+ * Percent-encoded alias of the same blocked path. Route matching that decodes
+ * would resolve this to the `/admin` page, while middleware and a real
+ * navigation both see `/adm%69n`. Deliberately not `/%61dmin`, which this
+ * fixture's middleware rewrites — a rewrite already forces a real navigation,
+ * which would hide whether the target was matched with request identity.
+ */
+export async function redirectToEncodedBlockedPath(): Promise<void> {
+  redirect("/adm%69n");
+}

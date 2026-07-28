@@ -31,6 +31,7 @@ import {
   ACTION_REDIRECT_STATUS_HEADER,
   ACTION_REDIRECT_TYPE_HEADER,
   ACTION_REVALIDATED_HEADER,
+  VINEXT_MW_CTX_HEADER,
 } from "./headers.js";
 import {
   VINEXT_RSC_CONTENT_TYPE,
@@ -284,6 +285,13 @@ export type HandleServerActionRscRequestOptions<
   isEdgeRuntime?: boolean;
   isRscRequest: boolean;
   loadServerAction: (actionId: string) => Promise<unknown>;
+  /**
+   * Match an action redirect target. Must use *request* route identity — the
+   * raw, undecoded pathname — because the target is rendered as if the client
+   * had navigated to it. A matcher that decodes would resolve an encoded alias
+   * like `/%61dmin` to `/admin` and render a page the navigation itself, and
+   * the middleware that just ran for `/%61dmin`, would never have reached.
+   */
   matchRoute: (pathname: string) => AppServerActionMatch<TRoute> | null;
   maxActionBodySize: number;
   /** Verbatim `serverActions.bodySizeLimit` config string (e.g. "2mb") for the body-exceeded error. */
@@ -384,6 +392,11 @@ const ACTION_REDIRECT_RENDER_STRIPPED_HEADERS = [
   "rsc",
   "x-action-forwarded",
   "x-rsc-action",
+  // Hybrid app+pages dev attaches the Pages handler's middleware result for the
+  // *action* path. Left on the redirect target's request it would make
+  // applyForwardedMiddlewareContext replay that result instead of executing
+  // middleware for the target.
+  VINEXT_MW_CTX_HEADER,
 ];
 
 function setActionRevalidatedHeader(headers: Headers, kind: ActionRevalidationKind): void {
@@ -486,6 +499,20 @@ function createActionRedirectRenderRequest(options: {
     headers,
     method: "GET",
   });
+}
+
+/**
+ * Middleware matchers can gate on request headers (`has`/`missing`), so the
+ * request middleware sees for a redirect target must carry what the navigation
+ * the client would otherwise have made carries. The render request drops
+ * `Accept` along with the action transport headers; put it back.
+ */
+function createActionRedirectMiddlewareRequest(renderRequest: Request, accept: string | null) {
+  if (accept === null) return renderRequest;
+
+  const headers = new Headers(renderRequest.headers);
+  headers.set("accept", accept);
+  return new Request(renderRequest.url, { headers, method: "GET" });
 }
 
 function withoutRscBodyHeaders(headers: Headers): Headers {
@@ -1339,7 +1366,10 @@ export async function handleServerActionRscRequest<
       if (options.runRedirectTargetMiddleware) {
         const targetMiddleware = await options.runRedirectTargetMiddleware({
           cleanPathname: targetPathname,
-          request: redirectRenderRequest,
+          request: createActionRedirectMiddlewareRequest(
+            redirectRenderRequest,
+            options.request.headers.get("accept"),
+          ),
         });
         if (targetMiddleware.kind === "diverted") {
           options.clearRequestContext();

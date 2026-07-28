@@ -1154,8 +1154,10 @@ export default createAppRscHandler({
       },
       isRscRequest,
       loadServerAction,
+      // Redirect targets are rendered as if the client had navigated to them,
+      // so they must route on the raw pathname a real request would use.
       matchRoute(pathnameToMatch) {
-        return matchRoute(pathnameToMatch);
+        return matchRequestRoute(pathnameToMatch);
       },
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,
       maxActionBodySizeLabel: __MAX_ACTION_BODY_SIZE_LABEL,

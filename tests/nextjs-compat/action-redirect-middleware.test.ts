@@ -18,7 +18,22 @@ import type { ViteDevServer } from "vite-plus";
 import { APP_FIXTURE_DIR, startFixtureServer } from "../helpers.js";
 
 const ACTION_PATH = "/nextjs-compat/action-redirect-middleware";
-const ACTION_ID = "/app/nextjs-compat/action-redirect-middleware/actions.ts#redirectToBlockedPath";
+const ACTIONS = "/app/nextjs-compat/action-redirect-middleware/actions.ts";
+const ACTION_ID = `${ACTIONS}#redirectToBlockedPath`;
+const ENCODED_ACTION_ID = `${ACTIONS}#redirectToEncodedBlockedPath`;
+
+async function postAction(
+  baseUrl: string,
+  actionId: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ res: Response; text: string }> {
+  const res = await fetch(`${baseUrl}${ACTION_PATH}.rsc`, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain", "x-rsc-action": actionId, ...extraHeaders },
+    body: JSON.stringify([]),
+  });
+  return { res, text: await res.text() };
+}
 
 describe("Next.js compat: server action redirect targets run middleware", () => {
   let server: ViteDevServer;
@@ -40,21 +55,37 @@ describe("Next.js compat: server action redirect targets run middleware", () => 
   });
 
   it("does not return the blocked target's payload from the action response", async () => {
-    const res = await fetch(`${baseUrl}${ACTION_PATH}.rsc`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain",
-        "x-rsc-action": ACTION_ID,
-      },
-      body: JSON.stringify([]),
-    });
-    const text = await res.text();
+    const { res, text } = await postAction(baseUrl, ACTION_ID);
 
     expect(res.headers.get("x-action-redirect")).toBe("/admin");
     expect(text).not.toContain("Protected admin content");
     // A header-only redirect the client re-requests through the full pipeline,
     // where middleware gets to block it.
     expect(res.headers.get("content-type")).toBeNull();
+    expect(text).toBe("");
+  });
+
+  // The dev-only forwarded-middleware-context header carries the *action* path's
+  // middleware result. Replayed for the target it would skip middleware
+  // execution entirely, so it must not survive onto the target's request.
+  it("ignores a forwarded middleware context when evaluating the target", async () => {
+    const { res, text } = await postAction(baseUrl, ACTION_ID, {
+      "x-vinext-mw-ctx": JSON.stringify({ h: [["x-mw-ran", "true"]] }),
+    });
+
+    expect(res.headers.get("x-action-redirect")).toBe("/admin");
+    expect(text).not.toContain("Protected admin content");
+    expect(text).toBe("");
+  });
+
+  // Route matching that decodes resolves /adm%69n to the /admin page, but
+  // middleware and a real navigation both see /adm%69n. Rendering the decoded
+  // route inline would serve a page neither of them reached.
+  it("does not render a percent-encoded alias of the blocked target", async () => {
+    const { res, text } = await postAction(baseUrl, ENCODED_ACTION_ID);
+
+    expect(res.headers.get("x-action-redirect")).toBe("/adm%69n");
+    expect(text).not.toContain("Protected admin content");
     expect(text).toBe("");
   });
 });

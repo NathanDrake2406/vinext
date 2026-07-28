@@ -2022,6 +2022,7 @@ describe("app server action execution helpers", () => {
 
   it("renders redirect targets that middleware passes through and keeps its response headers", async () => {
     let middlewareRequest: Request | null = null;
+    let renderRequest: Request | null = null;
     const runRedirectTargetMiddleware = vi.fn(async (targetOptions: { request: Request }) => {
       middlewareRequest = targetOptions.request;
       return {
@@ -2032,9 +2033,17 @@ describe("app server action execution helpers", () => {
 
     const response = await handleServerActionRscRequest(
       createRscOptions({
+        buildPageElement({ route: matchedRoute, request }) {
+          renderRequest = request;
+          return `${matchedRoute.id}:{}:none`;
+        },
         loadServerAction() {
           return Promise.resolve(() => redirect("/redirect-target"));
         },
+        request: createFetchActionRequest({
+          accept: "text/x-component",
+          "x-vinext-mw-ctx": JSON.stringify({}),
+        }),
         matchRoute(pathname) {
           if (pathname === "/redirect-target") {
             return {
@@ -2058,10 +2067,20 @@ describe("app server action execution helpers", () => {
       returnValue: { ok: true },
     });
 
+    // Middleware must see the request the client would otherwise have sent:
+    // a GET for the target that still carries Accept, which object matchers can
+    // gate on. The forwarded-middleware-context header describes the *action*
+    // path's result and would make the target skip middleware entirely.
     expect(middlewareRequest).not.toBeNull();
     expect(middlewareRequest!.method).toBe("GET");
     expect(middlewareRequest!.url).toBe("https://example.com/redirect-target");
+    expect(middlewareRequest!.headers.get("accept")).toBe("text/x-component");
     expect(middlewareRequest!.headers.get("next-action")).toBeNull();
+    expect(middlewareRequest!.headers.get("x-vinext-mw-ctx")).toBeNull();
+
+    expect(renderRequest).not.toBeNull();
+    expect(renderRequest!.headers.get("accept")).toBeNull();
+    expect(renderRequest!.headers.get("x-vinext-mw-ctx")).toBeNull();
   });
 
   it("does not emit x-action-revalidated when a fetch action revalidates a tag with a profile", async () => {
