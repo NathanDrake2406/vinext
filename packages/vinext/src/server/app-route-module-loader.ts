@@ -38,11 +38,19 @@ type LazyModuleThunk = () => Promise<unknown>;
 type LazyModuleLoaderArray = readonly (LazyModuleThunk | null | undefined)[];
 
 type LazyLoadableIntercept = {
+  page?: unknown;
+  __pageLoader?: LazyModuleThunk | null;
+  notFound?: unknown;
+  __loadNotFound?: LazyModuleThunk | null;
   interceptLayouts?: readonly unknown[] | null;
   __loadInterceptLayouts?: LazyModuleLoaderArray | null;
   interceptLoadings?: readonly unknown[] | null;
   __loadInterceptLoadings?: LazyModuleLoaderArray | null;
   __loadState?: {
+    page?: unknown;
+    pageLoading?: Promise<unknown> | null;
+    notFound?: unknown;
+    notFoundLoading?: Promise<unknown> | null;
     interceptLayoutsLoading: Promise<readonly unknown[]> | null;
   };
 };
@@ -144,6 +152,55 @@ function pushArrayLoads(
       }),
     );
   }
+}
+
+/**
+ * Hydrate one lazily-imported intercept module onto the intercept, dedup'd
+ * through `__loadState` so concurrent navigations share a single import.
+ *
+ * The intercept's page and not-found modules were loaded inline at their call
+ * sites, which meant they missed the isolation every other route module gets.
+ * They are user modules cached for the isolate's lifetime just like the rest,
+ * so they belong on this path.
+ */
+async function hydrateInterceptModule(
+  intercept: LazyLoadableIntercept,
+  loader: LazyModuleThunk | null | undefined,
+  field: "page" | "notFound",
+  loadingField: "pageLoading" | "notFoundLoading",
+): Promise<void> {
+  const loadState = intercept.__loadState;
+  const cached = loadState?.[field];
+  if (cached != null) intercept[field] = cached;
+  if (!loader || intercept[field] != null) return;
+
+  const loading =
+    loadState?.[loadingField] ??
+    runOutsideRequestScopes(loader)
+      .then((module) => {
+        intercept[field] = module;
+        if (loadState) {
+          loadState[field] = module;
+          loadState[loadingField] = null;
+        }
+        return module;
+      })
+      .catch((error: unknown) => {
+        if (loadState) loadState[loadingField] = null;
+        throw error;
+      });
+  if (loadState) loadState[loadingField] = loading;
+  await loading;
+}
+
+/** Hydrate an intercepting route's page module onto `intercept.page`. */
+export function loadAppInterceptPage(intercept: LazyLoadableIntercept): Promise<void> {
+  return hydrateInterceptModule(intercept, intercept.__pageLoader, "page", "pageLoading");
+}
+
+/** Hydrate an intercepting route's not-found boundary onto `intercept.notFound`. */
+export function loadAppInterceptNotFound(intercept: LazyLoadableIntercept): Promise<void> {
+  return hydrateInterceptModule(intercept, intercept.__loadNotFound, "notFound", "notFoundLoading");
 }
 
 export function loadAppInterceptLayouts(
