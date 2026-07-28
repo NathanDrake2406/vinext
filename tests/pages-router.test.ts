@@ -3120,7 +3120,11 @@ export default function Page(props) {
     const cookie = await enablePreview();
     const response = await fetch(`${previewBaseUrl}/initial-props`, { headers: { cookie } });
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).not.toBe(
+    // Cache-Control is no longer a preview signal: PAGES_PREVIEW_CACHE_CONTROL
+    // and the getInitialProps no-store default are the same string, and this
+    // page uses getInitialProps. Preview activation is asserted below via
+    // __NEXT_DATA__, which distinguishes the two unambiguously.
+    expect(response.headers.get("cache-control")).toBe(
       "private, no-cache, no-store, max-age=0, must-revalidate",
     );
     const html = await response.text();
