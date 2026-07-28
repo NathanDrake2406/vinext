@@ -179,13 +179,20 @@ function hasNamedExportInProgram(program: Program, name: string): boolean {
 
 /**
  * A `getInitialProps` that resolves to a non-function is not a data hook — the
- * runtime helper only recognises a callable. Bare `static getInitialProps;` and
- * `getInitialProps = undefined` (a disabled feature flag) must stay static.
+ * runtime helper only recognises a callable. Bare `static getInitialProps;`,
+ * `getInitialProps = undefined`/`null` (a disabled feature flag), and other
+ * statically evident non-function values must stay static.
  */
 function isCallableGetInitialProps(value: Expression | null | undefined): boolean {
   if (!value) return false;
   const expression = unwrapStaticExpression(value);
-  return !(expression.type === "Identifier" && expression.name === "undefined");
+  if (expression.type === "Identifier") return expression.name !== "undefined";
+  return (
+    expression.type !== "Literal" &&
+    expression.type !== "TemplateLiteral" &&
+    expression.type !== "ArrayExpression" &&
+    expression.type !== "ObjectExpression"
+  );
 }
 
 function classHasStaticGetInitialProps(declaration: ESTree.Class): boolean {
@@ -260,6 +267,30 @@ function hasPagesGetInitialPropsInProgram(program: Program): boolean {
   for (const node of program.body) {
     if (node.type === "ExportDefaultDeclaration") {
       collectDefaultExportNames(node.declaration, defaultExportNames);
+    }
+  }
+
+  // `const Wrapped = withRouter(Page); export default Wrapped` — follow
+  // top-level variable initializers so the wrapped page counts too. Loops to a
+  // fixed point for chains (`const A = withRouter(Page); const B = memo(A)`).
+  let resolved = true;
+  while (resolved) {
+    resolved = false;
+    for (const node of program.body) {
+      const statement = node.type === "ExportNamedDeclaration" ? node.declaration : node;
+      if (statement?.type !== "VariableDeclaration") continue;
+      for (const declarator of statement.declarations) {
+        if (
+          declarator.id.type !== "Identifier" ||
+          !defaultExportNames.has(declarator.id.name) ||
+          !declarator.init
+        ) {
+          continue;
+        }
+        const before = defaultExportNames.size;
+        collectDefaultExportNames(declarator.init, defaultExportNames);
+        if (defaultExportNames.size > before) resolved = true;
+      }
     }
   }
 

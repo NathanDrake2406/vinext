@@ -446,6 +446,16 @@ describe("classifyPagesRoute", () => {
       "a curried HOC default export",
       "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nexport default connect(mapState)(Account)\n",
     ],
+    // The wrapper can also be assigned to a named binding before export; the
+    // classifier follows top-level initializers (including chains) to the page.
+    [
+      "a named HOC binding",
+      "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nconst Wrapped = withRouter(Account)\nexport default Wrapped\n",
+    ],
+    [
+      "a chained named HOC binding",
+      "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nconst Routed = withRouter(Account)\nconst Wrapped = memo(Routed)\nexport default Wrapped\n",
+    ],
   ])("classifies pages declaring getInitialProps via %s as ssr", async (_name, source) => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
     const filePath = path.join(tmpRoot, "pages", "account.tsx");
@@ -467,6 +477,7 @@ describe("classifyPagesRoute", () => {
   it.each([
     ["an uninitialized class field", "  static getInitialProps\n"],
     ["a class field set to undefined", "  static getInitialProps = undefined\n"],
+    ["a class field set to null", "  static getInitialProps = null\n"],
   ])("classifies a page with %s as static", async (_name, member) => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
     const filePath = path.join(tmpRoot, "pages", "account.tsx");
@@ -479,6 +490,24 @@ describe("classifyPagesRoute", () => {
     expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
     await fs.rm(tmpRoot, { recursive: true, force: true });
   });
+
+  // Explicitly disabling the hook with a non-function literal must not cost
+  // the page its prerendering; the runtime only invokes a callable.
+  it.each([["null"], ["false"]])(
+    "classifies a page assigning getInitialProps = %s as static",
+    async (value) => {
+      const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
+      const filePath = path.join(tmpRoot, "pages", "account.tsx");
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(
+        filePath,
+        `function Account() { return null }\nAccount.getInitialProps = ${value}\nexport default Account\n`,
+      );
+
+      expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    },
+  );
 
   // A helper class is not the page. Forcing ssr here would be a hard build
   // error under output: "export" for a route that renders statically fine.
