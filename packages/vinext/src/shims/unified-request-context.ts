@@ -348,20 +348,6 @@ export function runWithRequestContext<T>(
 }
 
 /**
- * Run `fn` — and every async continuation it starts — outside any request
- * context, so `isInsideUnifiedScope()` is false and the shims fall back to
- * their no-request behaviour.
- *
- * Used for work that must not observe the request that happened to trigger it,
- * most notably one-time module evaluation whose result is cached for the
- * isolate's lifetime. `exit()` is one of the `AsyncLocalStorage` methods
- * workerd implements (unlike `enterWith()`/`disable()`).
- */
-export function runOutsideRequestContext<T>(fn: () => T): T {
-  return _als.exit(fn);
-}
-
-/**
  * Run `fn` in a nested unified scope derived from the current request context.
  * Used by legacy runWith* wrappers to reset or override one sub-state while
  * preserving proper async isolation for continuations created inside `fn`.

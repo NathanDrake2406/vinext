@@ -9,6 +9,11 @@ import {
   createRequestContext,
   runWithRequestContext,
 } from "../packages/vinext/src/shims/unified-request-context.js";
+import {
+  getRequestExecutionContext,
+  runWithExecutionContext,
+} from "../packages/vinext/src/shims/request-context.js";
+import { after } from "../packages/vinext/src/shims/server.js";
 
 describe("ensureAppRouteModulesLoaded", () => {
   it("returns the route synchronously when there are no lazy thunks (eager route)", () => {
@@ -264,5 +269,46 @@ describe("lazy hydration request-context isolation", () => {
     expect((route.page as { moduleScopeCookieAccess: string }).moduleScopeCookieAccess).toBe(
       "rejected-no-request-context",
     );
+  });
+
+  it("also escapes the execution-context scope the Cloudflare entry enters outside the request context", async () => {
+    // app-router-entry.ts wraps the whole handler in runWithExecutionContext()
+    // before app-rsc-handler.ts opens the unified request context, so the two
+    // stores nest at different depths. Exiting only the unified one would leave
+    // the worker's ExecutionContext visible — and after() takes its
+    // getRequestExecutionContext() fallback precisely when the unified store is
+    // absent, so a partial exit enables that path instead of closing it.
+    const waitUntil = vi.fn();
+    const executionContext = { waitUntil, passThroughOnException() {} };
+    let moduleScopeExecutionContext: unknown = "loader-not-called";
+    let moduleScopeAfter = "loader-not-called";
+
+    const route: LazyLoadableRoute = {
+      page: null,
+      __loadPage: async () => {
+        moduleScopeExecutionContext = getRequestExecutionContext();
+        try {
+          after(() => {});
+          moduleScopeAfter = "registered";
+        } catch (error) {
+          moduleScopeAfter = (error as Error).message;
+        }
+        return { default: () => null };
+      },
+    };
+
+    const requestContext = createRequestContext({
+      headersContext: headersContextFromRequest(new Request("https://example.com/dashboard")),
+      executionContext,
+    });
+
+    await runWithExecutionContext(executionContext, () =>
+      runWithRequestContext(requestContext, () => ensureAppRouteModulesLoaded(route)),
+    );
+
+    expect(moduleScopeExecutionContext).toBeNull();
+    expect(moduleScopeAfter).toBe("`after()` was called outside a request scope");
+    // Nothing was attached to the first request's lifecycle.
+    expect(waitUntil).not.toHaveBeenCalled();
   });
 });
