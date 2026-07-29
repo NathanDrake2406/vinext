@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   ensureAppRouteModulesLoaded,
+  loadAppInterceptNotFound,
+  loadAppInterceptPage,
   loadAppInterceptLayouts,
   type LazyLoadableRoute,
 } from "../packages/vinext/src/server/app-route-module-loader.js";
@@ -237,6 +239,52 @@ describe("loadAppInterceptLayouts", () => {
 
     // No loaders → returns a resolved promise wrapping the same array, no imports.
     return expect(loadAppInterceptLayouts(intercept)).resolves.toBe(intercept.interceptLayouts);
+  });
+});
+
+describe.each([
+  ["page", "__pageLoader", "pageLoading", loadAppInterceptPage],
+  ["notFound", "__loadNotFound", "notFoundLoading", loadAppInterceptNotFound],
+] as const)("loadAppIntercept%s", (field, loaderField, loadingField, load) => {
+  it("publishes a shared concurrent load onto every request-local intercept clone", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const module = { default: () => null };
+    const loader = vi.fn(async () => {
+      await gate;
+      return module;
+    });
+    const loadState = {
+      page: null,
+      pageLoading: null,
+      notFound: null,
+      notFoundLoading: null,
+      interceptLayoutsLoading: null,
+    };
+    const first = {
+      [field]: null,
+      [loaderField]: loader,
+      __loadState: loadState,
+    };
+    const second = {
+      [field]: null,
+      [loaderField]: loader,
+      __loadState: loadState,
+    };
+
+    const firstLoad = load(first);
+    const secondLoad = load(second);
+    expect(loadState[loadingField]).not.toBeNull();
+    release();
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(first[field]).toBe(module);
+    expect(second[field]).toBe(module);
+    expect(loadState[field]).toBe(module);
+    expect(loadState[loadingField]).toBeNull();
   });
 });
 

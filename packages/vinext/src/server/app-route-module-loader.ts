@@ -190,7 +190,11 @@ async function hydrateInterceptModule(
         throw error;
       });
   if (loadState) loadState[loadingField] = loading;
-  await loading;
+  // Each matched interception is a request-local clone that shares only
+  // `__loadState`. A concurrent caller can therefore observe the in-flight
+  // promise above without being the clone assigned by its `.then()` callback.
+  // Publish the resolved namespace onto every caller's clone before returning.
+  intercept[field] = await loading;
 }
 
 /** Hydrate an intercepting route's page module onto `intercept.page`. */
