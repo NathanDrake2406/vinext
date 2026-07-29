@@ -100,12 +100,17 @@ function applyMountedSlotRscNoStoreHeaders(
   // Middleware owns ordinary response headers, but it must not be able to keep
   // a provider-specific shared-cache override on a payload whose cache identity
   // the server deliberately cannot prove. Clear the built-in CDN adapter's
-  // recognized override headers even when another adapter is active.
+  // recognized override headers even when another adapter is active. This hard
+  // override is slot-specific because these variants have no persistent
+  // admission path at all; ordinary pending renders are handled by the separate
+  // completion-and-write flow.
   headers.delete("CDN-Cache-Control");
   headers.delete("Cloudflare-CDN-Cache-Control");
   headers.delete("Cache-Tag");
   applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
   if (options.omitCacheState === true || !hadCacheState) {
+    // Dynamic and draft responses intentionally have no cache state. Do not
+    // manufacture a MISS solely because the request carried mounted slots.
     headers.delete(VINEXT_CACHE_HEADER);
     headers.delete(NEXTJS_CACHE_HEADER);
     return;
