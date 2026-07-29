@@ -6,6 +6,7 @@ import type {
 } from "../config/next-config.js";
 import type { BasePathMatchState } from "../config/config-matchers.js";
 import { requestContextFromRequest } from "../config/request-context.js";
+import { normalizePathnameForRouteMatchStrict } from "../routing/utils.js";
 import { isExternalUrl } from "../utils/external-url.js";
 import { headersContextFromRequest, runWithHeadersContext } from "vinext/shims/headers";
 import {
@@ -56,8 +57,9 @@ import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
 import { buildNextDataNotFoundResponse, normalizePagesDataRequest } from "./pages-data-route.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
-import { notFoundResponse } from "./http-error-responses.js";
+import { badRequestResponse, notFoundResponse } from "./http-error-responses.js";
 import { isOnDemandRevalidateRequest, PRERENDER_REVALIDATE_HEADER } from "./isr-cache.js";
+import { normalizePath } from "./normalize-path.js";
 import { getRenderedConcreteUrlPathsForRoute } from "./pregenerated-concrete-paths.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
 import { buildPageCacheTags } from "./implicit-tags.js";
@@ -926,6 +928,18 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     runMiddleware &&
     interceptionSourceMatch.route !== directPreActionMatch?.route
   ) {
+    let sourceMiddlewarePathname: string;
+    try {
+      // Route matching has already decoded the client-provided source path.
+      // Give middleware matchers the same normalized identity a direct request
+      // receives while keeping the original encoded spelling in NextRequest.
+      sourceMiddlewarePathname = normalizePath(
+        normalizePathnameForRouteMatchStrict(interceptionContextHeader),
+      );
+    } catch {
+      options.clearRequestContext();
+      return badRequestResponse();
+    }
     const sourceUrl = new URL(userlandRequest.url);
     sourceUrl.pathname = hadBasePath
       ? addBasePathToPathname(interceptionContextHeader, options.basePath)
@@ -935,6 +949,10 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     // middleware an independent branch, as the initial middleware pass does.
     const sourceRequest = userlandRequest.body ? userlandRequest.clone() : userlandRequest;
     const sourceMiddlewareRequest = cloneRequestWithUrl(sourceRequest, sourceUrl.href);
+    // Hybrid dev attaches the target route's middleware result so the RSC
+    // entry does not execute it twice. This is a distinct source route and
+    // must run middleware itself rather than replaying the target's decision.
+    sourceMiddlewareRequest.headers.delete(VINEXT_MW_CTX_HEADER);
     const sourceMiddlewareContext: AppRscMiddlewareContext = {
       headers: null,
       requestHeaders: null,
@@ -953,7 +971,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     try {
       sourceMiddlewareResult = await runWithHeadersContext(sourceHeadersContext, () =>
         runMiddleware({
-          cleanPathname: interceptionContextHeader,
+          cleanPathname: sourceMiddlewarePathname,
           // Deliberately not the request's `middlewareContext`. This run decides
           // whether the source route may render; it does not contribute headers
           // or status to the target's response, which belongs to another route.
@@ -972,7 +990,10 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         !sourceMiddlewareRequest.bodyUsed &&
         !sourceMiddlewareRequest.body.locked
       ) {
-        await sourceMiddlewareRequest.body.cancel();
+        // Cancellation marks this throwaway branch as released immediately,
+        // but its promise may not settle until another tee branch finishes.
+        // Do not delay Server Action dispatch on a streaming request body.
+        void sourceMiddlewareRequest.body.cancel().catch(() => {});
       }
     }
     if (sourceMiddlewareResult.kind === "response") {
@@ -997,7 +1018,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     // valid because they still authorize the same effective request.
     if (
       sourceMiddlewareResult.rewritten &&
-      (sourceMiddlewareResult.cleanPathname !== interceptionContextHeader ||
+      (sourceMiddlewareResult.cleanPathname !== sourceMiddlewarePathname ||
         sourceMiddlewareResult.search !== sourceUrl.search)
     ) {
       options.clearRequestContext();
