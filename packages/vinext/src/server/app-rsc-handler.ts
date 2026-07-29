@@ -108,6 +108,27 @@ type RootParamNamesMap = AppPrerenderRootParamNamesMap;
 
 type AppRscMiddlewareContext = AppMiddlewareContext;
 
+function haveSameRequestHeaders(first: Headers, second: Headers): boolean {
+  for (const [name, value] of first) {
+    if (second.get(name) !== value) return false;
+  }
+  for (const name of second.keys()) {
+    if (!first.has(name)) return false;
+  }
+  return true;
+}
+
+function haveSameRequestCookies(
+  first: ReadonlyMap<string, string>,
+  second: ReadonlyMap<string, string>,
+): boolean {
+  if (first.size !== second.size) return false;
+  for (const [name, value] of first) {
+    if (second.get(name) !== value) return false;
+  }
+  return true;
+}
+
 type RunAppMiddlewareOptions = {
   cleanPathname: string;
   context: AppRscMiddlewareContext;
@@ -919,15 +940,18 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       requestHeaders: null,
       status: null,
     };
+    const sourceHeadersContext = headersContextFromRequest(sourceMiddlewareRequest, {
+      draftModeSecret: options.draftModeSecret,
+    });
+    const sourceRequestHeaders = new Headers(sourceHeadersContext.headers);
+    const sourceRequestCookies = new Map(sourceHeadersContext.cookies);
     // Keep source authorization in a child request context. In particular,
     // NextResponse.next({ request: { headers } }) mutates the live headers
     // context; allowing those overrides to escape would make the target render
     // observe headers from a different route.
-    const sourceMiddlewareResult = await runWithHeadersContext(
-      headersContextFromRequest(sourceMiddlewareRequest, {
-        draftModeSecret: options.draftModeSecret,
-      }),
-      () =>
+    let sourceMiddlewareResult: ApplyAppMiddlewareResult;
+    try {
+      sourceMiddlewareResult = await runWithHeadersContext(sourceHeadersContext, () =>
         runMiddleware({
           cleanPathname: interceptionContextHeader,
           // Deliberately not the request's `middlewareContext`. This run decides
@@ -938,10 +962,33 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           isDataRequest: isMiddlewareDataRequest,
           request: sourceMiddlewareRequest,
         }),
-    );
+      );
+    } finally {
+      // requestWithoutFlightHeaders() clones this synthetic request before
+      // middleware reads it. Cancel our otherwise-unused tee branch so a large
+      // Server Action body cannot remain buffered until garbage collection.
+      if (
+        sourceMiddlewareRequest.body &&
+        !sourceMiddlewareRequest.bodyUsed &&
+        !sourceMiddlewareRequest.body.locked
+      ) {
+        await sourceMiddlewareRequest.body.cancel();
+      }
+    }
     if (sourceMiddlewareResult.kind === "response") {
       options.clearRequestContext();
       return sourceMiddlewareResult.response;
+    }
+    // Request-header and cookie overrides are part of the source middleware's
+    // authorization result. The source and target currently share one render
+    // context, so neither applying those overrides globally nor discarding them
+    // is safe. Fail closed until the source subtree has an isolated context.
+    if (
+      !haveSameRequestHeaders(sourceRequestHeaders, sourceHeadersContext.headers) ||
+      !haveSameRequestCookies(sourceRequestCookies, sourceHeadersContext.cookies)
+    ) {
+      options.clearRequestContext();
+      return notFoundResponse();
     }
     // An internal rewrite that changes the source route or query is not
     // authorization to render the original source. Following that rewrite

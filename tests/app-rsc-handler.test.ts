@@ -23,7 +23,6 @@ import {
 } from "../packages/vinext/src/server/headers.js";
 import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
-import { getHeadersContext } from "../packages/vinext/src/shims/headers.js";
 import {
   handleMetadataRouteRequest,
   type MetadataRuntimeRoute,
@@ -760,16 +759,29 @@ describe("createAppRscHandler", () => {
     expect(dispatchMatchedPage).toHaveBeenCalledOnce();
   });
 
-  it("isolates source authorization request-header overrides from the target render", async () => {
+  it.each([
+    {
+      kind: "request headers",
+      sourceResponseHeaders: new Headers({
+        "x-middleware-next": "1",
+        "x-middleware-override-headers": "x-source-only",
+        "x-middleware-request-x-source-only": "source",
+      }),
+    },
+    {
+      kind: "cookies set by middleware",
+      sourceResponseHeaders: new Headers({
+        "x-middleware-next": "1",
+        "x-middleware-set-cookie": "source-session=1; Path=/",
+      }),
+    },
+  ])("fails closed when source authorization changes $kind", async ({ sourceResponseHeaders }) => {
     const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
     const sourceRoute = createPageRoute({ pattern: "/feed" });
-    let renderedHeaders = new Headers();
+    const dispatchMatchedPage = vi.fn(async () => new Response("secret"));
     const handler = createHandler({
       configHeaders: [],
-      dispatchMatchedPage: async () => {
-        renderedHeaders = new Headers(getHeadersContext()?.headers);
-        return new Response("page");
-      },
+      dispatchMatchedPage,
       matchInterceptRoute: (_pathname, sourcePathname) =>
         sourcePathname === "/feed" ? { route: sourceRoute, params: {} } : null,
       matchRoute: (pathname: string) =>
@@ -779,28 +791,17 @@ describe("createAppRscHandler", () => {
           if (request.nextUrl.pathname !== "/feed") {
             return new Response(null, { headers: { "x-middleware-next": "1" } });
           }
-          return new Response(null, {
-            headers: {
-              "x-middleware-next": "1",
-              "x-middleware-override-headers": "cookie,x-source-only",
-              "x-middleware-request-cookie": "source-session=1",
-              "x-middleware-request-x-source-only": "source",
-            },
-          });
+          return new Response(null, { headers: sourceResponseHeaders });
         },
       },
     });
 
     const headers = createRscRequestHeaders({ interceptionContext: "/feed" });
-    headers.set("cookie", "target-session=1");
-    headers.set("x-target-only", "target");
     const rscUrl = await createRscRequestUrl("/docs/photos/1", headers);
     const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
 
-    expect(response.status).toBe(200);
-    expect(renderedHeaders.get("x-target-only")).toBe("target");
-    expect(renderedHeaders.get("x-source-only")).toBeNull();
-    expect(renderedHeaders.get("cookie")).toBe("target-session=1");
+    expect(response.status).toBe(404);
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
   });
 
   it("preserves the Server Action body after authorizing an interception source", async () => {
@@ -818,8 +819,11 @@ describe("createAppRscHandler", () => {
       matchRoute: (pathname: string) =>
         pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
       middlewareModule: {
-        default(request: NextRequest) {
+        async default(request: NextRequest) {
           middlewarePaths.push(request.nextUrl.pathname);
+          if (request.nextUrl.pathname === "/feed") {
+            expect(await request.text()).toBe("action-body");
+          }
           return new Response(null, { headers: { "x-middleware-next": "1" } });
         },
       },
