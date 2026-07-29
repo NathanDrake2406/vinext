@@ -9521,6 +9521,63 @@ describe("double-encoded path handling in middleware", () => {
     await expect(request.json()).resolves.toEqual({ message: "hello" });
   });
 
+  it("App Router middleware cancels its unread body branch in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    try {
+      const { applyAppMiddleware } =
+        await import("../packages/vinext/src/server/app-middleware.js");
+      const request = new Request("http://localhost:3000/actions", {
+        body: "action-payload",
+        method: "POST",
+      });
+      let middlewareRequest: Request | undefined;
+
+      const result = await applyAppMiddleware({
+        cleanPathname: "/actions",
+        context: { headers: null, requestHeaders: null, status: null },
+        isProxy: false,
+        module: {
+          default: (request: Request) => {
+            middlewareRequest = request;
+            return new Response(null, { headers: { "x-middleware-next": "1" } });
+          },
+        },
+        request,
+      });
+
+      expect(result.kind).toBe("continue");
+      await vi.waitFor(() => expect(middlewareRequest?.bodyUsed).toBe(true));
+      await expect(request.text()).resolves.toBe("action-payload");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("App Router middleware cancels the downstream body branch when it returns a response", async () => {
+    const { applyAppMiddleware } = await import("../packages/vinext/src/server/app-middleware.js");
+    const sourceCancel = vi.fn();
+    const request = new Request("http://localhost:3000/upload", {
+      body: new ReadableStream<Uint8Array>({
+        cancel: sourceCancel,
+      }),
+      duplex: "half",
+      method: "POST",
+    } as RequestInit & { duplex: "half" });
+
+    const result = await applyAppMiddleware({
+      cleanPathname: "/upload",
+      context: { headers: null, requestHeaders: null, status: null },
+      isProxy: false,
+      module: {
+        default: () => new Response("blocked", { status: 403 }),
+      },
+      request,
+    });
+
+    expect(result.kind).toBe("response");
+    await vi.waitFor(() => expect(sourceCancel).toHaveBeenCalledOnce());
+  });
+
   it("external middleware rewrite proxy strips upstream x-middleware headers without middleware context", async () => {
     const { proxyExternalMiddlewareRewrite } =
       await import("../packages/vinext/src/server/app-middleware.js");
