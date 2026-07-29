@@ -76,6 +76,7 @@ describe("StaticFileCache", () => {
     expect(entry).toBeDefined();
     expect(entry!.original.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     expect(entry!.original.headers["Content-Length"]).toBe("12"); // "const x = 1;"
+    expect(Date.parse(entry!.original.headers["Last-Modified"])).not.toBeNaN();
     expect(entry!.original.path).toBe(
       toSlash(path.join(clientDir, "_next/static/index-abc123.js")),
     );
@@ -87,6 +88,44 @@ describe("StaticFileCache", () => {
     const cache = await StaticFileCache.create(clientDir);
 
     expect(cache.lookup("/_next/static/missing-xyz789.js")).toBeUndefined();
+  });
+
+  it("ignores precompressed variants that are not smaller than the original", async () => {
+    await writeFile(clientDir, "_next/static/app-abc123.js", "small original");
+    await writeFile(clientDir, "_next/static/app-abc123.js.br", "larger brotli representation");
+
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/_next/static/app-abc123.js");
+
+    expect(entry?.br).toBeUndefined();
+    expect(entry?.original.headers.Vary).toBeUndefined();
+  });
+
+  it("ignores variants whose savings do not cover response-header overhead", async () => {
+    await writeFile(clientDir, "_next/static/app-abc123.js", "x".repeat(1000));
+    await writeFile(clientDir, "_next/static/app-abc123.js.br", "y".repeat(955));
+    await writeFile(clientDir, "_next/static/app-abc123.js.gz", "z".repeat(953));
+
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/_next/static/app-abc123.js");
+
+    expect(entry?.br).toBeUndefined();
+    expect(entry?.gz).toBeUndefined();
+    expect(entry?.original.headers.Vary).toBeUndefined();
+  });
+
+  it("does not serve temporary files left by interrupted precompression", async () => {
+    const basename = "app-abc123.js.br.123.123e4567-e89b-42d3-a456-426614174000.tmp";
+    const temporaryPath = `_next/static/${basename}`;
+    await writeFile(clientDir, temporaryPath, "partial compressed content");
+    await writeFile(clientDir, `downloads/${basename}`, "legitimate public content");
+
+    const cache = await StaticFileCache.create(clientDir);
+
+    expect(cache.lookup("/" + temporaryPath)).toBeUndefined();
+    expect(cache.lookup(`/downloads/${basename}`)?.original.buffer?.toString()).toBe(
+      "legitimate public content",
+    );
   });
 
   it("sets immutable cache-control for hashed assets under /assets/", async () => {
