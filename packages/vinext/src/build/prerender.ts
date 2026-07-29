@@ -793,12 +793,11 @@ export async function prerenderPages({
       // both getInitialProps and getServerSideProps during every production
       // build instead of quietly turning these pages into SSR routes.
       if ((route.pattern === "/404" || route.pattern === "/500") && type === "ssr") {
-        const source = ssrSource === "getInitialProps" ? "getInitialProps" : "getServerSideProps";
         invalidStatusPages.add(route.pattern);
         results.push({
           route: route.pattern,
           status: "error",
-          error: `pages${route.pattern} cannot use ${source}. Static status pages must be statically rendered.`,
+          error: `\`pages${route.pattern}\` can not have getInitialProps/getServerSideProps, https://nextjs.org/docs/messages/404-get-initial-props`,
           fatal: true,
         });
         continue;

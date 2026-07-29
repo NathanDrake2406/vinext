@@ -635,14 +635,25 @@ describe("prerenderPages — getInitialProps build classification", () => {
         _prodServer: { server, port },
       });
 
-      expect(findRoute(result.routes, "/404")).toMatchObject({
+      const page404 = findRoute(result.routes, "/404");
+      expect(page404).toMatchObject({
         status: "error",
         fatal: true,
       });
-      expect(findRoute(result.routes, "/500")).toMatchObject({
+      const page500 = findRoute(result.routes, "/500");
+      expect(page500).toMatchObject({
         status: "error",
         fatal: true,
       });
+      if (page404?.status !== "error" || page500?.status !== "error") {
+        throw new Error("expected both static status pages to fail prerender");
+      }
+      expect(page404.error).toContain(
+        "`pages/404` can not have getInitialProps/getServerSideProps",
+      );
+      expect(page500.error).toContain(
+        "`pages/500` can not have getInitialProps/getServerSideProps",
+      );
       expect(requestCount).toBe(0);
     } finally {
       await closeServer(server);

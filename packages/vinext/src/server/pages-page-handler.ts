@@ -72,6 +72,7 @@ import { buildMissIsrCacheControl, ISR_NEVER_CACHE_CONTROL } from "./isr-decisio
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
 import {
+  assertPagesStaticStatusPageDataHooks,
   hasPagesGetInitialProps,
   type PagesGetInitialPropsRouter,
 } from "./pages-get-initial-props.js";
@@ -695,6 +696,11 @@ export function createPagesPageHandler(
         if (!PageComponent) {
           return new Response("Page has no default export", { status: 500 });
         }
+        assertPagesStaticStatusPageDataHooks(
+          routePattern,
+          PageComponent,
+          pageModule.getServerSideProps,
+        );
 
         // Reject non-GET/HEAD on static (no getServerSideProps) routes with
         // 405 + Allow: GET, HEAD. Skip for error/status pages, data requests,
@@ -1037,9 +1043,9 @@ export function createPagesPageHandler(
           documentReqRes,
           gsspRes,
           // Only a static error renderer may inherit the source route's shared
-          // `s-maxage` lifetime. A `/404` using getInitialProps renders
-          // per-request (it can read cookies/headers), so it keeps its
-          // `no-store` default rather than being cached for every visitor.
+          // `s-maxage` lifetime. A custom App or error renderer that ran
+          // getInitialProps is per-request, so it keeps its `no-store` default
+          // rather than being cached for every visitor.
           deferErrorCachePolicy: shouldApplyErrorResponsePolicy && !gsspRes,
           isrCacheKey: pageIsrCacheKey,
           isrCachePathname,

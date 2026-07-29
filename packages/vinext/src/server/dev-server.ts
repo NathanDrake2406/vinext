@@ -81,6 +81,7 @@ import {
 } from "./pages-document-initial-props.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
 import {
+  assertPagesStaticStatusPageDataHooks,
   hasPagesAppGetInitialPropsOverride,
   hasPagesGetInitialProps,
   loadDevAppInitialProps,
@@ -995,6 +996,11 @@ export function createSSRHandler(
           res.end("Page has no default export");
           return;
         }
+        assertPagesStaticStatusPageDataHooks(
+          patternToNextFormat(route.pattern),
+          PageComponent,
+          pageModule.getServerSideProps,
+        );
 
         // Refs #1463: reject non-GET/HEAD methods on static (no
         // getServerSideProps) Pages routes with 405 + Allow: GET, HEAD.
@@ -1911,6 +1917,13 @@ async function renderErrorPage(
       candidateLoaded = true;
       const ErrorComponent = errorModule.default;
       if (!ErrorComponent) continue;
+      if (candidate !== "_error") {
+        assertPagesStaticStatusPageDataHooks(
+          `/${candidate}`,
+          ErrorComponent,
+          errorModule.getServerSideProps,
+        );
+      }
 
       // Try to load _app.tsx to wrap the error page
       // oxlint-disable-next-line typescript/no-explicit-any
