@@ -1,5 +1,5 @@
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
-import { applyCdnResponseHeaders } from "./cache-control.js";
+import { applyCdnResponseHeaders, NO_STORE_CACHE_CONTROL } from "./cache-control.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
 import { NEXTJS_CACHE_HEADER, VINEXT_CACHE_HEADER } from "./headers.js";
 import {
@@ -81,6 +81,24 @@ function applyPendingDynamicCdnHeaders(
   const cacheable = headers.get("Cache-Control") ?? "";
   applyCdnResponseHeaders(headers, { cacheControl: cacheable, pendingDynamicCheck: true, tags });
   if (options.omitCacheState === true) {
+    headers.delete(VINEXT_CACHE_HEADER);
+    headers.delete(NEXTJS_CACHE_HEADER);
+    return;
+  }
+  setCacheStateHeaders(headers, "MISS");
+}
+
+function applyMountedSlotRscNoStoreHeaders(
+  headers: Headers,
+  options: { omitCacheState?: boolean } = {},
+): void {
+  const hadCacheState = headers.has(VINEXT_CACHE_HEADER) || headers.has(NEXTJS_CACHE_HEADER);
+  // Mounted-slot RSC payloads deliberately bypass the slot-blind persistent
+  // cache. Make that same bypass explicit to every CDN adapter: an edge-managed
+  // adapter may intentionally cache pending-dynamic responses, so the generic
+  // pendingDynamicCheck signal is not strong enough for this variant.
+  applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
+  if (options.omitCacheState === true || !hadCacheState) {
     headers.delete(VINEXT_CACHE_HEADER);
     headers.delete(NEXTJS_CACHE_HEADER);
     return;
@@ -225,18 +243,25 @@ export function finalizeAppPageRscCacheResponse(
   // independent decisions. Mounted-slot variants are deliberately never stored
   // (their RSC key is slot-blind), but a fresh MISS stream can still reach a
   // dynamic API after the cache policy was chosen, so shared caches must not
-  // keep it either way. Gate on preserveClientResponseHeaders alone, matching
-  // finalizeAppPageHtmlCacheResponse.
+  // keep it either way. An explicit no-store policy is required for mounted
+  // slots because edge-managed adapters may cache pending-dynamic responses.
   scheduleAppPageRscCacheWrite(options);
 
-  if (options.preserveClientResponseHeaders === true) {
+  const isMountedSlotVariant = Boolean(options.mountedSlotsHeader);
+  if (options.preserveClientResponseHeaders === true && !isMountedSlotVariant) {
     return response;
   }
 
   const clientHeaders = new Headers(response.headers);
-  applyPendingDynamicCdnHeaders(clientHeaders, options.getPageTags(), {
-    omitCacheState: options.omitPendingDynamicCacheState === true,
-  });
+  if (isMountedSlotVariant) {
+    applyMountedSlotRscNoStoreHeaders(clientHeaders, {
+      omitCacheState: options.omitPendingDynamicCacheState === true,
+    });
+  } else {
+    applyPendingDynamicCdnHeaders(clientHeaders, options.getPageTags(), {
+      omitCacheState: options.omitPendingDynamicCacheState === true,
+    });
+  }
 
   return new Response(response.body, {
     status: response.status,
