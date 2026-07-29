@@ -5,6 +5,7 @@ import {
   type PagesEntry,
 } from "../packages/vinext/src/server/app-pages-bridge.js";
 import type { AppMiddlewareContext } from "../packages/vinext/src/server/app-middleware.js";
+import { applyRouteHandlerMiddlewareContext } from "../packages/vinext/src/server/app-route-handler-response.js";
 import { handlePagesApiRoute } from "../packages/vinext/src/server/pages-api-route.js";
 import {
   runWithExecutionContext,
@@ -294,6 +295,44 @@ describe("renderPagesFallback", () => {
 
     expect(renderedHeader).toBe("injected");
     expect(renderedCf).toBe(cf);
+  });
+
+  it("applies middleware response headers to Pages data renders", async () => {
+    const renderPage = vi.fn(
+      () =>
+        new Response('{"pageProps":{"ok":true}}', {
+          headers: [
+            ["content-type", "application/json"],
+            ["set-cookie", "page=1; Path=/"],
+          ],
+        }),
+    );
+    const request = new Request("http://localhost/pages-dir/search");
+
+    const response = await renderPagesFallback(
+      {
+        isDataRequest: true,
+        isRscRequest: false,
+        middlewareContext: {
+          headers: new Headers([
+            ["set-cookie", "middleware=1; Path=/"],
+            ["x-middleware-response", "present"],
+          ]),
+          requestHeaders: null,
+          status: null,
+        },
+        request,
+        url: new URL(request.url),
+      },
+      {
+        ...defaultDeps,
+        applyRouteHandlerMiddlewareContext,
+        loadPagesEntry: () => ({ renderPage }),
+      },
+    );
+
+    expect(response?.headers.get("x-middleware-response")).toBe("present");
+    expect(response?.headers.getSetCookie()).toEqual(["page=1; Path=/", "middleware=1; Path=/"]);
   });
 
   it("matches rewritten Pages data requests against the rewritten destination", async () => {
