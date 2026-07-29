@@ -193,6 +193,44 @@ describe("CloudflareCdnCacheAdapter", () => {
     await expect(response.text()).resolves.toBe("slot-specific-flight");
   });
 
+  it("clears middleware CDN overrides for pending dynamic misses", async () => {
+    setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+
+    const response = finalizeAppPageRscCacheResponse(
+      new Response("pending-dynamic-flight", {
+        headers: {
+          "Cache-Control": "s-maxage=60",
+          "Cache-Tag": "/dashboard",
+          "CDN-Cache-Control": "public, max-age=60",
+          "Cloudflare-CDN-Cache-Control": "public, max-age=60",
+          "X-Vinext-Cache": "MISS",
+        },
+      }),
+      {
+        capturedRscDataPromise: null,
+        cleanPathname: "/dashboard",
+        consumeDynamicUsage() {
+          return false;
+        },
+        dynamicUsedDuringBuild: false,
+        getPageTags() {
+          return ["/dashboard"];
+        },
+        isrRscKey: vi.fn(),
+        isrSet: vi.fn(),
+        preserveClientResponseHeaders: false,
+        revalidateSeconds: 60,
+      },
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Tag")).toBeNull();
+    expect(response.headers.get("X-Vinext-Cache")).toBe("MISS");
+    await expect(response.text()).resolves.toBe("pending-dynamic-flight");
+  });
+
   it("revalidateTag purges the Workers Cache by tag via ctx.cache.purge", async () => {
     const purge = vi.fn(async () => {});
     await runWithExecutionContext({ waitUntil() {}, cache: { purge } }, async () => {

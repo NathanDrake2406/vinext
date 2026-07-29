@@ -78,39 +78,49 @@ function applyPendingDynamicCdnHeaders(
   tags?: readonly string[],
   options: { omitCacheState?: boolean } = {},
 ): void {
+  clearSharedCacheOverrides(headers);
   const cacheable = headers.get("Cache-Control") ?? "";
   applyCdnResponseHeaders(headers, { cacheControl: cacheable, pendingDynamicCheck: true, tags });
-  if (options.omitCacheState === true) {
-    headers.delete(VINEXT_CACHE_HEADER);
-    headers.delete(NEXTJS_CACHE_HEADER);
-    return;
-  }
-  setCacheStateHeaders(headers, "MISS");
+  finalizePendingCacheStateHeaders(headers, options);
 }
 
 function applyMountedSlotRscNoStoreHeaders(
   headers: Headers,
   options: { omitCacheState?: boolean } = {},
 ): void {
-  const hadCacheState = headers.has(VINEXT_CACHE_HEADER) || headers.has(NEXTJS_CACHE_HEADER);
   // Mounted-slot RSC payloads deliberately bypass the slot-blind persistent
   // cache. Make that same bypass explicit to every CDN adapter: an edge-managed
   // adapter may intentionally cache pending-dynamic responses, so the generic
   // pendingDynamicCheck signal is not strong enough for this variant.
-  // Middleware owns ordinary response headers, but it must not be able to keep
-  // a provider-specific shared-cache override on a payload whose cache identity
-  // the server deliberately cannot prove. Clear the built-in CDN adapter's
-  // recognized override headers even when another adapter is active. This hard
-  // override is slot-specific because these variants have no persistent
-  // admission path at all; ordinary pending renders are handled by the separate
-  // completion-and-write flow.
+  // Middleware owns ordinary response headers, but provider-specific shared-
+  // cache overrides are cleared before both pending-response adapter calls so
+  // they cannot defeat the adapter's policy. This branch additionally forces
+  // no-store because mounted variants have no persistent admission path at all.
+  clearSharedCacheOverrides(headers);
+  applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
+  // Dynamic and draft responses intentionally have no cache state. Do not
+  // manufacture a MISS solely because the request carried mounted slots.
+  finalizePendingCacheStateHeaders(headers, {
+    ...options,
+    preserveMissingCacheState: true,
+  });
+}
+
+function clearSharedCacheOverrides(headers: Headers): void {
   headers.delete("CDN-Cache-Control");
   headers.delete("Cloudflare-CDN-Cache-Control");
   headers.delete("Cache-Tag");
-  applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
-  if (options.omitCacheState === true || !hadCacheState) {
-    // Dynamic and draft responses intentionally have no cache state. Do not
-    // manufacture a MISS solely because the request carried mounted slots.
+}
+
+function finalizePendingCacheStateHeaders(
+  headers: Headers,
+  options: { omitCacheState?: boolean; preserveMissingCacheState?: boolean } = {},
+): void {
+  const hadCacheState = headers.has(VINEXT_CACHE_HEADER) || headers.has(NEXTJS_CACHE_HEADER);
+  if (
+    options.omitCacheState === true ||
+    (options.preserveMissingCacheState === true && !hadCacheState)
+  ) {
     headers.delete(VINEXT_CACHE_HEADER);
     headers.delete(NEXTJS_CACHE_HEADER);
     return;
