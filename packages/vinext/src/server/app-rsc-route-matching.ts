@@ -303,6 +303,13 @@ export function createAppRscRouteMatcher<Route extends AppRscRouteForMatching>(
           ? (routeIndexes.get(concreteSourceRoute.route) ?? entry.sourceRouteIndex)
           : entry.sourceRouteIndex;
         const sourceRoute = routes[concreteSourceRouteIndex];
+        // The fallback owner can itself be a Route Handler. The route graph
+        // retains slots discovered beside `route.ts`, so rejecting only a
+        // concrete descendant handler is insufficient: promoting that owner
+        // would reach the same handler dispatch branch. A handler cannot be a
+        // renderable interception source, so let another matching intercept
+        // win or reject this interception entirely.
+        if (sourceRoute && isAppRouteHandlerRoute(sourceRoute)) continue;
         const matchedSourceParams = concreteSourceRoute
           ? concreteSourceRoute.params
           : sourceRoute

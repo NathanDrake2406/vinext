@@ -710,6 +710,65 @@ describe("App RSC route matching", () => {
       });
     });
 
+    it.each([
+      {
+        ownerPattern: "/feed",
+        ownerParts: ["feed"],
+        sourcePathname: "/feed",
+        targetPattern: "/feed/hidden",
+        targetPathname: "/feed/hidden",
+      },
+      {
+        ownerPattern: "/:locale/feed",
+        ownerParts: [":locale", "feed"],
+        sourcePathname: "/en/feed",
+        targetPattern: "/:locale/feed/hidden",
+        targetPathname: "/en/feed/hidden",
+      },
+      {
+        ownerPattern: "/docs/:slug+",
+        ownerParts: ["docs", ":slug+"],
+        sourcePathname: "/docs/a/b",
+        targetPattern: "/hidden",
+        targetPathname: "/hidden",
+      },
+      {
+        ownerPattern: "/:locale*",
+        ownerParts: [":locale*"],
+        sourcePathname: "/en/us",
+        targetPattern: "/hidden",
+        targetPathname: "/hidden",
+      },
+    ])(
+      "never promotes a Route Handler slot owner for $ownerPattern",
+      ({ ownerParts, ownerPattern, sourcePathname, targetPathname, targetPattern }) => {
+        // The route graph retains parallel slots discovered beside `route.ts`.
+        // Next.js accepts this filesystem shape and rewrites the intercepted
+        // target to the modal page; it never executes the owning handler.
+        // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/generate-interception-routes-rewrites.ts
+        const matcher = createAppRscRouteMatcher([
+          {
+            ...route(ownerPattern, ownerParts, {
+              modal: {
+                intercepts: [
+                  {
+                    sourceMatchPattern: ownerPattern,
+                    targetPattern,
+                    interceptLayouts: ["layout"],
+                    page: "modal-page",
+                    params: [],
+                  },
+                ],
+              },
+            }),
+            __loadRouteHandler: async () => ({}),
+          },
+        ]);
+
+        expect(matcher.findIntercept(targetPathname, sourcePathname)).toBeNull();
+      },
+    );
+
     it("keeps the slot owner's dynamic params when falling back from a descendant", () => {
       // The slot owner is what renders once a descendant source is rejected, and
       // `matchInterceptRoute` reads the promoted route's params solely from
