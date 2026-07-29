@@ -7,7 +7,7 @@ import type {
 import type { BasePathMatchState } from "../config/config-matchers.js";
 import { requestContextFromRequest } from "../config/request-context.js";
 import { isExternalUrl } from "../utils/external-url.js";
-import { headersContextFromRequest } from "vinext/shims/headers";
+import { headersContextFromRequest, runWithHeadersContext } from "vinext/shims/headers";
 import {
   ACTION_REVALIDATED_HEADER,
   NEXT_ACTION_HEADER,
@@ -913,23 +913,48 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     // the original branch for Server Action dispatch and give source-route
     // middleware an independent branch, as the initial middleware pass does.
     const sourceRequest = userlandRequest.body ? userlandRequest.clone() : userlandRequest;
-    const sourceMiddlewareResult = await runMiddleware({
-      cleanPathname: interceptionContextHeader,
-      // Deliberately not the request's `middlewareContext`. This run decides
-      // whether the source route may render; it does not contribute headers or
-      // status to the target's response, which belongs to a different route.
-      context: { headers: null, requestHeaders: null, status: null },
-      hadBasePath,
-      isDataRequest: isMiddlewareDataRequest,
-      request: cloneRequestWithUrl(sourceRequest, sourceUrl.href),
-    });
-    // Only a returned response is a denial. A rewrite or a normalized pathname
-    // means middleware let this source through and merely sends it elsewhere,
-    // which is a routing concern rather than an authorization one, and Next.js
-    // would not re-render the source for this request either way.
+    const sourceMiddlewareRequest = cloneRequestWithUrl(sourceRequest, sourceUrl.href);
+    const sourceMiddlewareContext: AppRscMiddlewareContext = {
+      headers: null,
+      requestHeaders: null,
+      status: null,
+    };
+    // Keep source authorization in a child request context. In particular,
+    // NextResponse.next({ request: { headers } }) mutates the live headers
+    // context; allowing those overrides to escape would make the target render
+    // observe headers from a different route.
+    const sourceMiddlewareResult = await runWithHeadersContext(
+      headersContextFromRequest(sourceMiddlewareRequest, {
+        draftModeSecret: options.draftModeSecret,
+      }),
+      () =>
+        runMiddleware({
+          cleanPathname: interceptionContextHeader,
+          // Deliberately not the request's `middlewareContext`. This run decides
+          // whether the source route may render; it does not contribute headers
+          // or status to the target's response, which belongs to another route.
+          context: sourceMiddlewareContext,
+          hadBasePath,
+          isDataRequest: isMiddlewareDataRequest,
+          request: sourceMiddlewareRequest,
+        }),
+    );
     if (sourceMiddlewareResult.kind === "response") {
       options.clearRequestContext();
       return sourceMiddlewareResult.response;
+    }
+    // An internal rewrite that changes the source route or query is not
+    // authorization to render the original source. Following that rewrite
+    // would require dispatching a second, unrelated route inside the
+    // interception response; fail closed instead. Identity rewrites remain
+    // valid because they still authorize the same effective request.
+    if (
+      sourceMiddlewareResult.rewritten &&
+      (sourceMiddlewareResult.cleanPathname !== interceptionContextHeader ||
+        sourceMiddlewareResult.search !== sourceUrl.search)
+    ) {
+      options.clearRequestContext();
+      return notFoundResponse();
     }
   }
   const interceptionPreActionMatch =
