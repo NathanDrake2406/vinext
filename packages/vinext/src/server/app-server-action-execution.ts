@@ -428,10 +428,12 @@ const ACTION_REDIRECT_FORWARDED_FORBIDDEN_HEADERS = [
   "transfer-encoding",
 ];
 
-// Next.js explicitly removes its action header after merging the action
-// response into the target request. Do the same for both action protocols and
-// vinext's dev-only forwarded middleware context.
+// Headers that must not use ordinary response-over-request merging. Next.js
+// explicitly removes its action header, vinext also has its own action/dev
+// protocol headers, and Cookie is rebuilt separately from the original jar plus
+// Set-Cookie mutations.
 const ACTION_REDIRECT_FORWARDED_PROTOCOL_HEADERS = [
+  "cookie",
   "next-action",
   "rsc",
   "x-action-forwarded",
@@ -630,7 +632,10 @@ function createActionRedirectMiddlewareRequest(renderRequest: Request, accept: s
  * navigation and cache invalidation.
  */
 const ACTION_REDIRECT_PROTECTED_HEADERS = [
-  "content-length",
+  // Next.js does not copy these connection/framing headers from the internal
+  // target GET onto the action wrapper. Set-Cookie is the exception here: it
+  // carries middleware mutations back to the browser and is merged additively.
+  ...ACTION_REDIRECT_FORWARDED_FORBIDDEN_HEADERS.filter((name) => name !== "set-cookie"),
   "content-type",
   "location",
   ACTION_REDIRECT_HEADER,

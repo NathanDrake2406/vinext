@@ -2168,9 +2168,12 @@ describe("app server action execution helpers", () => {
         },
         middlewareHeaders: new Headers({
           accept: "application/action-middleware",
+          cookie: "forged=1",
           "content-length": "999",
+          "set-cookie": "session=rotated; Path=/",
           "x-action-auth-context": "member",
         }),
+        request: createFetchActionRequest({ cookie: "theme=dark" }),
         async runRedirectTargetMiddleware(targetOptions: { request: Request }) {
           middlewareRequest = targetOptions.request;
           return { kind: "continue", responseHeaders: null };
@@ -2182,10 +2185,12 @@ describe("app server action execution helpers", () => {
     expect(response?.headers.get("content-length")).toBeNull();
     expect(middlewareRequest).not.toBeNull();
     expect(middlewareRequest!.headers.get("accept")).toBe("application/action-middleware");
+    expect(middlewareRequest!.headers.get("cookie")).toBe("theme=dark; session=rotated");
     expect(middlewareRequest!.headers.get("content-length")).toBeNull();
     expect(middlewareRequest!.headers.get("x-action-auth-context")).toBe("member");
     expect(renderRequest).not.toBeNull();
     expect(renderRequest!.headers.get("accept")).toBe("application/action-middleware");
+    expect(renderRequest!.headers.get("cookie")).toBe("theme=dark; session=rotated");
     expect(renderRequest!.headers.get("content-length")).toBeNull();
     expect(renderRequest!.headers.get("x-action-auth-context")).toBe("member");
   });
@@ -2254,6 +2259,7 @@ describe("app server action execution helpers", () => {
           };
         },
         middlewareHeaders: new Headers({
+          "content-encoding": "br",
           location: "/mw-location",
           "content-type": "text/html",
           "x-action-redirect": "/mw-hijack",
@@ -2263,9 +2269,13 @@ describe("app server action execution helpers", () => {
           return {
             kind: "continue",
             responseHeaders: new Headers({
+              "accept-encoding": "gzip",
+              connection: "close",
+              "content-encoding": "gzip",
               location: "/target-mw-location",
               "content-type": "text/html",
               "content-length": "0",
+              "transfer-encoding": "chunked",
               "x-action-redirect": "/target-hijack",
               "x-target-mw": "1",
             }),
@@ -2284,7 +2294,11 @@ describe("app server action execution helpers", () => {
     expect(response?.headers.get("x-action-redirect")).toBe("/redirect-target");
     expect(response?.headers.get("location")).toBeNull();
     expect(response?.headers.get("content-type")).toContain("text/x-component");
+    expect(response?.headers.get("accept-encoding")).toBeNull();
+    expect(response?.headers.get("connection")).toBeNull();
+    expect(response?.headers.get("content-encoding")).toBeNull();
     expect(response?.headers.get("content-length")).toBeNull();
+    expect(response?.headers.get("transfer-encoding")).toBeNull();
     expect(response?.headers.get("x-action-mw")).toBe("1");
     expect(response?.headers.get("x-target-mw")).toBe("1");
   });
