@@ -349,7 +349,10 @@ export async function executeMiddleware(
       waitUntilPromises,
     };
   } finally {
-    if (nextRequest.body) {
+    // Middleware may transfer its request stream directly into the response.
+    // In that case the response owns consumption; cancelling here would
+    // disturb the body before the server can send it.
+    if (nextRequest.body && response?.body !== nextRequest.body) {
       void nextRequest.body.cancel().catch(() => {});
     }
   }
