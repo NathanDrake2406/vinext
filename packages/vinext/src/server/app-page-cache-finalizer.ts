@@ -117,6 +117,8 @@ function finalizePendingCacheStateHeaders(
   options: { omitCacheState?: boolean; preserveMissingCacheState?: boolean } = {},
 ): void {
   const hadCacheState = headers.has(VINEXT_CACHE_HEADER) || headers.has(NEXTJS_CACHE_HEADER);
+  // Either an explicitly omitted provisional state or an intentionally absent
+  // mounted dynamic/draft state must remain headerless.
   if (
     options.omitCacheState === true ||
     (options.preserveMissingCacheState === true && !hadCacheState)
