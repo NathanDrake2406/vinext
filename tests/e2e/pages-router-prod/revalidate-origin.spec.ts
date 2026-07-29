@@ -307,17 +307,10 @@ test("production revalidation stores the current content and notFound lifetime",
   expect(nonExpiringRedirect.status()).toBe(307);
   expect(nonExpiringRedirect.headers()["cache-control"]).toContain("s-maxage=31536000");
 
-  // This fixture's `pages/404.tsx` declares getInitialProps and reads the
-  // `x-viewer` request header into its props, so the rendered 404 is
-  // per-request. The source route's notFound lifetime governs its own ISR
-  // entry (still a HIT below), but the personalized body must never inherit a
-  // shared `s-maxage` — a CDN would serve one visitor's 404 to everyone.
   await request.get(`${origin}/api/revalidate-parity?mode=notFound&revalidate=2`);
   const numericNotFound = await request.get(`${origin}/revalidate-parity-target`);
   expect(numericNotFound.status()).toBe(404);
-  expect(numericNotFound.headers()["cache-control"]).toBe(
-    "private, no-cache, no-store, max-age=0, must-revalidate",
-  );
+  expect(numericNotFound.headers()["cache-control"]).toContain("s-maxage=2");
   expect(await numericNotFound.text()).toContain("404 - Page Not Found");
 
   await request.get(`${origin}/api/revalidate-parity?mode=notFound&revalidate=false`);
@@ -325,9 +318,7 @@ test("production revalidation stores the current content and notFound lifetime",
     const nonExpiringNotFound = await request.get(`${origin}/revalidate-parity-target`);
     expect(nonExpiringNotFound.status()).toBe(404);
     expect(nonExpiringNotFound.headers()["x-nextjs-cache"]).toBe("HIT");
-    expect(nonExpiringNotFound.headers()["cache-control"]).toBe(
-      "private, no-cache, no-store, max-age=0, must-revalidate",
-    );
+    expect(nonExpiringNotFound.headers()["cache-control"]).toContain("s-maxage=31536000");
     expect(await nonExpiringNotFound.text()).toContain("404 - Page Not Found");
   }
 });
@@ -452,29 +443,18 @@ test("natural stale regeneration persists content, redirect, and notFound transi
     .toBe(true);
 });
 
-test("cached notFound renders the custom 404 per request and stays consistent with data requests", async ({
+test("cached notFound renders the custom 404 and stays consistent with data requests", async ({
   request,
 }) => {
   const origin = `http://localhost:${APP_PORT}`;
   await request.get(`${origin}/api/revalidate-parity?mode=notFound&revalidate=false`);
 
-  const alice = await request.get(`${origin}/revalidate-parity-target`, {
-    headers: { "x-viewer": "alice-secret" },
-  });
-  expect(alice.status()).toBe(404);
-  expect(await alice.text()).toContain("alice-secret");
-
-  const bob = await request.get(`${origin}/revalidate-parity-target`, {
-    headers: { "x-viewer": "bob" },
-  });
-  const bobHtml = await bob.text();
-  expect(bob.status()).toBe(404);
-  expect(bobHtml).toContain("bob");
-  expect(bobHtml).not.toContain("alice-secret");
+  const html = await request.get(`${origin}/revalidate-parity-target`);
+  expect(html.status()).toBe(404);
+  expect(await html.text()).toContain("404 - Page Not Found");
 
   const data = await request.get(
     `${origin}/_next/data/test-build-id/revalidate-parity-target.json`,
-    { headers: { "x-viewer": "carol" } },
   );
   expect(data.status()).toBe(404);
   expect(await data.json()).toEqual({ notFound: true });

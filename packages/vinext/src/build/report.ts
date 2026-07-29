@@ -267,6 +267,18 @@ function hasPagesGetInitialPropsInProgram(program: Program): boolean {
   for (const node of program.body) {
     if (node.type === "ExportDefaultDeclaration") {
       collectDefaultExportNames(node.declaration, defaultExportNames);
+      continue;
+    }
+
+    // `export { Page as default }` is equivalent to `export default Page`.
+    // Missing this form classifies a request-dependent page as static even
+    // though the runtime receives the same default-exported component.
+    if (node.type === "ExportNamedDeclaration") {
+      for (const specifier of node.specifiers) {
+        if (moduleExportNameValue(specifier.exported) !== "default") continue;
+        const localName = moduleExportNameValue(specifier.local);
+        if (localName) defaultExportNames.add(localName);
+      }
     }
   }
 

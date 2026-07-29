@@ -456,6 +456,10 @@ describe("classifyPagesRoute", () => {
       "a chained named HOC binding",
       "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nconst Routed = withRouter(Account)\nconst Wrapped = memo(Routed)\nexport default Wrapped\n",
     ],
+    [
+      "a named default export specifier",
+      "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nexport { Account as default }\n",
+    ],
   ])("classifies pages declaring getInitialProps via %s as ssr", async (_name, source) => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
     const filePath = path.join(tmpRoot, "pages", "account.tsx");
