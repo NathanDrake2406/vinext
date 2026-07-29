@@ -180,6 +180,7 @@ async function _handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promis
     if (!isNodeApiRouteModule(route.module)) {
       return new Response("API route does not export a default function", { status: 500 });
     }
+    const handler = route.module.default;
 
     const query = buildPagesApiQuery(options.url, params);
 
@@ -221,23 +222,62 @@ async function _handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promis
     // (e.g. proxy middleware that attaches its pipe asynchronously) sends it.
     const externalResolver = route.module.config?.api?.externalResolver || false;
 
-    await route.module.default(req, res);
-    // Auto-end if no stream is in progress. Without this guard a handler
-    // that forgets to call res.end() would leave the request hanging.
-    // Skipped for `externalResolver: true` routes, which legitimately
-    // respond after the handler settles.
-    if (!externalResolver && !resWasPiped && !res.headersSent) {
-      res.end();
+    const completeHandler = () => {
+      // Auto-end if no stream is in progress. Without this guard a handler
+      // that forgets to call res.end() would leave the request hanging.
+      // Skipped for `externalResolver: true` routes, which legitimately
+      // respond after the handler settles.
+      if (!externalResolver && !resWasPiped && !res.headersSent) {
+        res.end();
+      }
+    };
+    const finalizeResponse = (response: Response) => {
+      // The response resolves on the first write; if `end()` still has not
+      // been called by the time it settles, the body is a live stream (e.g. a
+      // piped proxy upstream). Mark it so buffering adapters forward it as a
+      // stream instead of holding the whole body in memory until the source
+      // closes.
+      if (!res.writableEnded) {
+        markVinextStreamedApiResponse(response);
+      }
+      return response;
+    };
+    const destroyAfterHandlerError = (error: unknown): never => {
+      const normalizedError = error instanceof Error ? error : new Error(String(error));
+      // Once a handler has started writing, the Fetch Response may already be
+      // on its way to the client. Error the bridge so a parked write callback
+      // and the response consumer both settle instead of abandoning the
+      // stream while the error is reported below.
+      res.destroy(normalizedError);
+      throw normalizedError;
+    };
+
+    const responseReady = responsePromise.then((response) => ({
+      type: "response" as const,
+      response,
+    }));
+    // Schedule invocation after both sides of the race have rejection
+    // handlers attached. A synchronous throw may destroy the response bridge,
+    // which rejects responsePromise as well as the handler completion.
+    const handlerCompletion = Promise.resolve()
+      .then(() => handler(req, res))
+      .then(() => ({ type: "handler" as const }), destroyAfterHandlerError);
+
+    // A real Node ServerResponse is consumed by the socket while the API
+    // handler is still running. Mirror that concurrency at the Fetch boundary:
+    // a handler is allowed to await pipeline() or `drain`, so expose the body
+    // as soon as its first write commits the Response instead of waiting for
+    // the handler to finish first.
+    const firstSettled = await Promise.race([responseReady, handlerCompletion]);
+    if (firstSettled.type === "response") {
+      void handlerCompletion.then(completeHandler, (error) => {
+        void options.reportRequestError?.(error, route.pattern);
+      });
+      return finalizeResponse(firstSettled.response);
     }
-    const response = await responsePromise;
-    // The response resolves on the first write; if `end()` still has not been
-    // called by the time it settles, the body is a live stream (e.g. a piped
-    // proxy upstream). Mark it so buffering adapters forward it as a stream
-    // instead of holding the whole body in memory until the source closes.
-    if (!res.writableEnded) {
-      markVinextStreamedApiResponse(response);
-    }
-    return response;
+
+    completeHandler();
+    return finalizeResponse(await responsePromise);
   } catch (error) {
     if (error instanceof PagesApiBodyParseError) {
       return new Response(error.message, {

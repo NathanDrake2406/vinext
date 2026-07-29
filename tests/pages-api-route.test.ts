@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { PassThrough, Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -981,6 +983,84 @@ describe("pages api route", () => {
     const body = await response.arrayBuffer();
     expect(body.byteLength).toBe(totalChunks * chunk.length);
     expect(produced).toBe(totalChunks);
+  });
+
+  it("streams while an API handler awaits a backpressured pipeline", async () => {
+    // Ported from Next.js's awaited Pages API pipeline pattern:
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/cancel-request/pages/api/node-api.ts
+    // The Node socket consumes `res` concurrently with the handler. The Fetch
+    // bridge must do the same or pipeline() waits for a pull that cannot begin
+    // until handlePagesApiRoute() returns.
+    const totalChunks = 20;
+    const chunk = Buffer.alloc(64 * 1024, "x");
+    let handlerSettled = false;
+
+    const response = await handlePagesApiRoute({
+      match: createMatch(async (_req, res) => {
+        await pipeline(
+          Readable.from(
+            (function* () {
+              for (let i = 0; i < totalChunks; i++) yield chunk;
+            })(),
+          ),
+          res,
+        );
+        handlerSettled = true;
+      }),
+      request: new Request("https://example.com/api/awaited-pipeline"),
+      url: "/api/awaited-pipeline",
+    });
+
+    expect(handlerSettled).toBe(false);
+    const body = await response.arrayBuffer();
+    expect(body.byteLength).toBe(totalChunks * chunk.length);
+    await vi.waitFor(() => expect(handlerSettled).toBe(true));
+  });
+
+  it("streams while an API handler awaits drain", async () => {
+    const totalChunks = 20;
+    const chunk = Buffer.alloc(64 * 1024, "x");
+    let handlerSettled = false;
+
+    const response = await handlePagesApiRoute({
+      match: createMatch(async (_req, res) => {
+        for (let i = 0; i < totalChunks; i++) {
+          if (!res.write(chunk)) await once(res, "drain");
+        }
+        res.end();
+        handlerSettled = true;
+      }),
+      request: new Request("https://example.com/api/awaited-drain"),
+      url: "/api/awaited-drain",
+    });
+
+    expect(handlerSettled).toBe(false);
+    const body = await response.arrayBuffer();
+    expect(body.byteLength).toBe(totalChunks * chunk.length);
+    await vi.waitFor(() => expect(handlerSettled).toBe(true));
+  });
+
+  it("unwinds a parked write when an active streaming handler rejects", async () => {
+    const reportRequestError = vi.fn();
+    const failure = new Error("handler failed after writing");
+    let writeSettled = false;
+
+    const response = await handlePagesApiRoute({
+      match: createMatch(async (_req, res) => {
+        res.write(Buffer.alloc(64 * 1024), () => {
+          writeSettled = true;
+        });
+        throw failure;
+      }),
+      reportRequestError,
+      request: new Request("https://example.com/api/reject-after-write"),
+      url: "/api/reject-after-write",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).rejects.toThrow(failure.message);
+    await vi.waitFor(() => expect(writeSettled).toBe(true));
+    expect(reportRequestError).toHaveBeenCalledWith(failure, "/api/test");
   });
 
   it("marks a response as streamed only while its handler is still writing", async () => {
