@@ -193,6 +193,45 @@ describe("CloudflareCdnCacheAdapter", () => {
     await expect(response.text()).resolves.toBe("slot-specific-flight");
   });
 
+  it("keeps mounted dynamic responses headerless while clearing CDN overrides", async () => {
+    setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+
+    const response = finalizeAppPageRscCacheResponse(
+      new Response("dynamic-slot-flight", {
+        headers: {
+          "Cache-Control": "no-store, must-revalidate",
+          "Cache-Tag": "/dashboard",
+          "CDN-Cache-Control": "public, max-age=60",
+          "Cloudflare-CDN-Cache-Control": "public, max-age=60",
+        },
+      }),
+      {
+        capturedRscDataPromise: null,
+        cleanPathname: "/dashboard",
+        consumeDynamicUsage() {
+          return true;
+        },
+        dynamicUsedDuringBuild: true,
+        getPageTags() {
+          return ["/dashboard"];
+        },
+        isrRscKey: vi.fn(),
+        isrSet: vi.fn(),
+        mountedSlotsHeader: "slot:auth:/",
+        preserveClientResponseHeaders: true,
+        revalidateSeconds: null,
+      },
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Tag")).toBeNull();
+    expect(response.headers.get("X-Vinext-Cache")).toBeNull();
+    expect(response.headers.get("X-Nextjs-Cache")).toBeNull();
+    await expect(response.text()).resolves.toBe("dynamic-slot-flight");
+  });
+
   it("clears middleware CDN overrides for pending dynamic misses", async () => {
     setCdnCacheAdapter(new DefaultCdnCacheAdapter());
 
