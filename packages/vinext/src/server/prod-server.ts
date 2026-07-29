@@ -2249,7 +2249,9 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // carry no defaultContentType — send them verbatim without injecting a
         // Content-Type, matching the pre-refactor behavior. Buffered render/api
         // responses below apply a Content-Type fallback; streamed API responses
-        // apply the same fallback here since they skip the buffered path.
+        // apply the same fallback here since they skip the buffered path. Live
+        // API bodies also cannot use the buffered path's size threshold without
+        // defeating streaming, so sendWebResponse chooses compression up front.
         if (shouldStream || !response.body || result.defaultContentType === undefined) {
           if (
             streamedApi &&

@@ -410,8 +410,9 @@ class PagesResponseStream extends Writable {
     // body's queue is full, hold the write callback until the consumer pulls.
     // A held callback makes `write()` return false, which pauses any piped
     // source (e.g. a proxied upstream) instead of queueing chunks without
-    // bound. Writes issued by `end(data)` belong to a complete body — finish
-    // them immediately so `finish` is not gated on the first read.
+    // bound. `end(data)` writes can park here too because Node sets
+    // writableEnded after _write returns; the adapter's first body pull
+    // releases them, and the completed response remains on the buffered path.
     if (
       this.controller &&
       !this.streamEnded &&
