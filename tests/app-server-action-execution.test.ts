@@ -2273,12 +2273,10 @@ describe("app server action execution helpers", () => {
       }),
     );
 
-    // The action middleware deleted the session and rotated csrf. The browser
-    // applies those before navigating to the redirect target, so target
-    // middleware evaluating the pre-mutation jar would authorize on a
-    // credential the response is simultaneously revoking. The /account-scoped
-    // cookie is one a browser would never send to /redirect-target, so it must
-    // not appear either.
+    // The action middleware deleted the session and rotated csrf, so target
+    // middleware must not authorize on the credential the response is
+    // simultaneously revoking. The newly emitted /account-scoped cookie still
+    // carries enough metadata to keep it out of /redirect-target as well.
     expect(middlewareRequest).not.toBeNull();
     expect(middlewareRequest!.headers.get("cookie")).toBe("csrf=rotated; theme=dark");
   });

@@ -525,10 +525,11 @@ function createActionRedirectRenderRequest(options: {
   url: URL;
 }): Request {
   const headers = cloneActionRedirectHeaders(options.request.headers);
-  // A browser only carries a Set-Cookie into the target navigation when the
-  // cookie's Path (or the default derived from the action URL) path-matches
-  // the target, so a mutation scoped elsewhere must not reach the target's
-  // middleware or render.
+  // Like Next.js' internal action-redirect GET, this is necessarily a lossy
+  // cookie projection: the inbound Cookie header no longer carries the Path,
+  // Domain, or acceptance metadata from the browser's jar. For newly emitted
+  // mutations the Path is still available, so avoid forwarding a known path
+  // mismatch even though older inbound cookies cannot be re-scoped here.
   const actionDefaultPath = defaultCookiePath(new URL(options.request.url).pathname);
   const applicableCookies = options.pendingCookies.filter((cookie) =>
     cookiePathMatches(readSetCookiePath(cookie) ?? actionDefaultPath, options.url.pathname),
@@ -1444,10 +1445,10 @@ export async function handleServerActionRscRequest<
       }
 
       const redirectRenderRequest = createActionRedirectRenderRequest({
-        // The action middleware's Set-Cookie mutations (session rotation or
-        // deletion) come first so the target sees the cookie jar the browser
-        // would carry into the navigation; the action's own cookies().set()
-        // calls land after middleware and win for the same name.
+        // Project the action middleware's Set-Cookie mutations (session
+        // rotation or deletion) into the internal target request first; the
+        // action's own cookies().set() calls land after middleware and win for
+        // the same name, matching Next.js' forwarded-cookie ordering.
         pendingCookies: [
           ...(options.middlewareHeaders?.getSetCookie() ?? []),
           ...actionPendingCookies,
