@@ -6718,9 +6718,9 @@ describe('"use cache" runtime', () => {
       draftContent = true;
       expect(await cached()).toBe("DRAFT");
 
-      // The draft execution must not replace the public entry either.
+      // Leave the source in its draft state: seeing PUBLIC again proves the
+      // draft execution neither replaced nor invalidated the existing entry.
       enterRequest(false);
-      draftContent = false;
       expect(await cached()).toBe("PUBLIC");
     } finally {
       setHeadersContext(null);
