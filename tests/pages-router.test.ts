@@ -6212,6 +6212,11 @@ export default function CounterPage() {
       expect(isrFirstHtml).toContain('data-testid="head-before">0<');
       expect(isrFirstHtml).toContain('data-testid="private-cache-before">0<');
       expect(isrFirstHtml).toContain('data-testid="inserted-html-before">0<');
+      const firstTimestamp = isrFirstHtml.match(/data-testid="timestamp">(\d+)</)?.[1];
+      expect(firstTimestamp).toBeDefined();
+      expect(isrFirstHtml).toContain(
+        `<title data-next-head="">ISR Second Render State ${firstTimestamp}</title>`,
+      );
 
       const isrSecondRes = await fetch(`${prodUrl}/isr-second-render-state`);
       expect(isrSecondRes.status).toBe(200);
@@ -6220,6 +6225,27 @@ export default function CounterPage() {
       expect(isrSecondHtml).toContain('data-testid="head-before">0<');
       expect(isrSecondHtml).toContain('data-testid="private-cache-before">0<');
       expect(isrSecondHtml).toContain('data-testid="inserted-html-before">0<');
+
+      // Ported from Next.js's full-render ISR contract: a regeneration reruns
+      // the complete Pages render, so metadata derived from getStaticProps
+      // must advance with the body rather than remaining in the cached shell.
+      // Next.js source: packages/next/src/server/render.tsx
+      const revalidateRes = await fetch(
+        `${prodUrl}/api/revalidate-reason?path=${encodeURIComponent("/isr-second-render-state")}`,
+      );
+      expect(revalidateRes.status).toBe(200);
+      expect(await revalidateRes.json()).toEqual({ revalidated: true });
+
+      const isrRegeneratedRes = await fetch(`${prodUrl}/isr-second-render-state`);
+      expect(isrRegeneratedRes.status).toBe(200);
+      expect(isrRegeneratedRes.headers.get("x-vinext-cache")).toBe("HIT");
+      const isrRegeneratedHtml = await isrRegeneratedRes.text();
+      const regeneratedTimestamp = isrRegeneratedHtml.match(/data-testid="timestamp">(\d+)</)?.[1];
+      expect(regeneratedTimestamp).toBeDefined();
+      expect(regeneratedTimestamp).not.toBe(firstTimestamp);
+      expect(isrRegeneratedHtml).toContain(
+        `<title data-next-head="">ISR Second Render State ${regeneratedTimestamp}</title>`,
+      );
 
       // Test: SSR page with getServerSideProps
       const ssrRes = await fetch(`${prodUrl}/ssr`);
