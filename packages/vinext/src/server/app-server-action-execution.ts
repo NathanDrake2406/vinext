@@ -59,6 +59,7 @@ import {
   validateServerActionPayload,
 } from "./request-pipeline.js";
 import { readStreamAsTextWithLimit } from "../utils/text-stream.js";
+import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
 import {
   createServerActionNotFoundResponse,
   getServerActionNotFoundMessage,
@@ -311,6 +312,8 @@ export type HandleServerActionRscRequestOptions<
   /** Verbatim `serverActions.bodySizeLimit` config string (e.g. "2mb") for the body-exceeded error. */
   maxActionBodySizeLabel: string;
   middlewareHeaders: Headers | null;
+  /** Raw middleware response headers used to reconstruct request-header overrides. */
+  middlewareRequestHeaders: Headers | null;
   middlewareStatus: number | null | undefined;
   /**
    * Run userland middleware for an internal action-redirect target before that
@@ -398,11 +401,8 @@ const SERVER_ACTION_ARGS_LIMIT = 1000;
 const ACTION_DID_NOT_REVALIDATE = 0 satisfies ActionRevalidationKind;
 const ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC = 1 satisfies ActionRevalidationKind;
 const ACTION_REDIRECT_RENDER_STRIPPED_HEADERS = [
-  "accept",
   "content-length",
-  "content-type",
   "next-action",
-  "origin",
   "rsc",
   "x-action-forwarded",
   "x-rsc-action",
@@ -572,12 +572,23 @@ function cookiePathMatches(cookiePath: string, requestPath: string): boolean {
 
 function createActionRedirectRenderRequest(options: {
   actionMiddlewareHeaders: Headers | null;
+  actionMiddlewareRequestHeaders: Headers | null;
   pendingCookies: readonly string[];
   request: Request;
   url: URL;
 }): Request {
+  // App middleware request overrides are applied to headers()/cookies() through
+  // ALS, while the Request object remains the pre-middleware request. Next.js
+  // mutates req.headers before its internal target GET, so reconstruct that
+  // effective request here before forwarding ordinary response headers.
+  const effectiveRequestHeaders = options.actionMiddlewareRequestHeaders
+    ? (buildRequestHeadersFromMiddlewareResponse(
+        options.request.headers,
+        options.actionMiddlewareRequestHeaders,
+      ) ?? options.request.headers)
+    : options.request.headers;
   const headers = cloneActionRedirectHeaders(
-    options.request.headers,
+    effectiveRequestHeaders,
     options.actionMiddlewareHeaders,
   );
   // Like Next.js' internal action-redirect GET, this is necessarily a lossy
@@ -602,23 +613,6 @@ function createActionRedirectRenderRequest(options: {
   return attachRequestCfMetadata(
     new Request(options.url, { headers, method: "GET" }),
     options.request,
-  );
-}
-
-/**
- * Middleware matchers can gate on request headers (`has`/`missing`), so the
- * request middleware sees for a redirect target must carry what the navigation
- * the client would otherwise have made carries. The render request drops
- * `Accept` along with the action transport headers; put it back.
- */
-function createActionRedirectMiddlewareRequest(renderRequest: Request, accept: string | null) {
-  if (accept === null) return renderRequest;
-
-  const headers = new Headers(renderRequest.headers);
-  headers.set("accept", accept);
-  return attachRequestCfMetadata(
-    new Request(renderRequest.url, { headers, method: "GET" }),
-    renderRequest,
   );
 }
 
@@ -1504,6 +1498,7 @@ export async function handleServerActionRscRequest<
 
       const redirectRenderRequest = createActionRedirectRenderRequest({
         actionMiddlewareHeaders: options.middlewareHeaders,
+        actionMiddlewareRequestHeaders: options.middlewareRequestHeaders,
         // Project the action middleware's Set-Cookie mutations (session
         // rotation or deletion) into the internal target request first; the
         // action's own cookies().set() calls land after middleware and win for
@@ -1528,10 +1523,7 @@ export async function handleServerActionRscRequest<
       if (options.runRedirectTargetMiddleware) {
         const targetMiddleware = await options.runRedirectTargetMiddleware({
           cleanPathname: targetPathname,
-          request: createActionRedirectMiddlewareRequest(
-            redirectRenderRequest,
-            redirectRenderRequest.headers.get("accept") ?? options.request.headers.get("accept"),
-          ),
+          request: redirectRenderRequest,
         });
         // Diverting costs the target one extra middleware execution, since the
         // client's navigation runs it again. A pass-through — the common case —

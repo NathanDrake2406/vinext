@@ -1163,6 +1163,7 @@ export default createAppRscHandler({
       maxActionBodySize: __MAX_ACTION_BODY_SIZE,
       maxActionBodySizeLabel: __MAX_ACTION_BODY_SIZE_LABEL,
       middlewareHeaders: middlewareContext.headers,
+      middlewareRequestHeaders: middlewareContext.requestHeaders,
       middlewareStatus: middlewareContext.status,
       mountedSlotsHeader,
       readBodyWithLimit: __readBodyWithLimit,

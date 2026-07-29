@@ -289,6 +289,7 @@ function createRscOptions(
     maxActionBodySize: 1024,
     maxActionBodySizeLabel: "1kb",
     middlewareHeaders: null,
+    middlewareRequestHeaders: null,
     middlewareStatus: null,
     mountedSlotsHeader: null,
     readBodyWithLimit() {
@@ -1740,7 +1741,7 @@ describe("app server action execution helpers", () => {
     }
   });
 
-  it("renders internal action redirects with a clean GET request and action cookies", async () => {
+  it("renders internal action redirects with a target GET and action context", async () => {
     // Ported from Next.js: test/e2e/app-dir/actions/app-action-node-middleware.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions/app-action-node-middleware.test.ts
     const renderRequests: Request[] = [];
@@ -1789,8 +1790,9 @@ describe("app server action execution helpers", () => {
     expect(renderRequest.headers.get("next-action")).toBeNull();
     expect(renderRequest.headers.get("x-rsc-action")).toBeNull();
     expect(renderRequest.headers.get("rsc")).toBeNull();
-    expect(renderRequest.headers.get("content-type")).toBeNull();
-    expect(renderRequest.headers.get("origin")).toBeNull();
+    expect(renderRequest.headers.get("accept")).toBe("text/x-component");
+    expect(renderRequest.headers.get("content-type")).toBe("text/plain;charset=UTF-8");
+    expect(renderRequest.headers.get("origin")).toBe("https://example.com");
     expect(renderRequest.headers.get("cookie")).toBe(
       "session=1; __prerender_bypass=draft-secret; theme=dark",
     );
@@ -2077,19 +2079,23 @@ describe("app server action execution helpers", () => {
       returnValue: { ok: true },
     });
 
-    // Middleware must see the request the client would otherwise have sent:
-    // a GET for the target that still carries Accept, which object matchers can
-    // gate on. The forwarded-middleware-context header describes the *action*
-    // path's result and would make the target skip middleware entirely.
+    // Middleware sees the same effective headers as Next.js' internal target
+    // GET, including Accept. The forwarded-middleware-context header describes
+    // the *action* path's result and would make the target skip middleware
+    // entirely.
     expect(middlewareRequest).not.toBeNull();
     expect(middlewareRequest!.method).toBe("GET");
     expect(middlewareRequest!.url).toBe("https://example.com/redirect-target");
     expect(middlewareRequest!.headers.get("accept")).toBe("text/x-component");
+    expect(middlewareRequest!.headers.get("content-type")).toBe("text/plain;charset=UTF-8");
+    expect(middlewareRequest!.headers.get("origin")).toBe("https://example.com");
     expect(middlewareRequest!.headers.get("next-action")).toBeNull();
     expect(middlewareRequest!.headers.get("x-vinext-mw-ctx")).toBeNull();
 
     expect(renderRequest).not.toBeNull();
-    expect(renderRequest!.headers.get("accept")).toBeNull();
+    expect(renderRequest!.headers.get("accept")).toBe("text/x-component");
+    expect(renderRequest!.headers.get("content-type")).toBe("text/plain;charset=UTF-8");
+    expect(renderRequest!.headers.get("origin")).toBe("https://example.com");
     expect(renderRequest!.headers.get("x-vinext-mw-ctx")).toBeNull();
 
     // Middleware that authorizes on request.cf (geo checks) must not fail open
@@ -2193,6 +2199,54 @@ describe("app server action execution helpers", () => {
     expect(renderRequest!.headers.get("cookie")).toBe("theme=dark; session=rotated");
     expect(renderRequest!.headers.get("content-length")).toBeNull();
     expect(renderRequest!.headers.get("x-action-auth-context")).toBe("member");
+  });
+
+  it("starts redirect targets from action middleware's request-header overrides", async () => {
+    let middlewareRequest: Request | null = null;
+    let renderRequest: Request | null = null;
+
+    await handleServerActionRscRequest(
+      createRscOptions({
+        buildPageElement({ route: matchedRoute, request }) {
+          renderRequest = request;
+          return `${matchedRoute.id}:{}:none`;
+        },
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/redirect-target"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/redirect-target") {
+            return {
+              params: {},
+              route: { id: "redirect-target", page: {}, params: [], pattern: "/redirect-target" },
+            };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        middlewareRequestHeaders: new Headers({
+          "x-middleware-override-headers": "x-auth-context",
+          "x-middleware-request-x-auth-context": "sanitized",
+        }),
+        request: createFetchActionRequest({
+          "x-attacker-controlled": "forged",
+          "x-auth-context": "untrusted",
+        }),
+        async runRedirectTargetMiddleware(targetOptions: { request: Request }) {
+          middlewareRequest = targetOptions.request;
+          return { kind: "continue", responseHeaders: null };
+        },
+      }),
+    );
+
+    expect(middlewareRequest).not.toBeNull();
+    expect(middlewareRequest!.headers.get("x-auth-context")).toBe("sanitized");
+    expect(middlewareRequest!.headers.get("x-attacker-controlled")).toBeNull();
+    expect(renderRequest).not.toBeNull();
+    expect(renderRequest!.headers.get("x-auth-context")).toBe("sanitized");
+    expect(renderRequest!.headers.get("x-attacker-controlled")).toBeNull();
   });
 
   it("runs target middleware before hydrating a lazy target route's modules", async () => {
