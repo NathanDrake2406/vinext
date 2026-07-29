@@ -1043,12 +1043,12 @@ describe("pages api route", () => {
   it("unwinds a parked write when an active streaming handler rejects", async () => {
     const reportRequestError = vi.fn();
     const failure = new Error("handler failed after writing");
-    let writeSettled = false;
+    let writeError: Error | null | undefined;
 
     const response = await handlePagesApiRoute({
       match: createMatch(async (_req, res) => {
-        res.write(Buffer.alloc(64 * 1024), () => {
-          writeSettled = true;
+        res.write(Buffer.alloc(64 * 1024), (error: Error | null | undefined) => {
+          writeError = error;
         });
         throw failure;
       }),
@@ -1059,8 +1059,26 @@ describe("pages api route", () => {
 
     expect(response.status).toBe(200);
     await expect(response.text()).rejects.toThrow(failure.message);
-    await vi.waitFor(() => expect(writeSettled).toBe(true));
+    await vi.waitFor(() => expect(writeError).toBe(failure));
     expect(reportRequestError).toHaveBeenCalledWith(failure, "/api/test");
+  });
+
+  it("passes cancellation errors to a parked write callback", async () => {
+    const cancellation = new Error("client cancelled");
+    let writeError: Error | null | undefined;
+
+    const response = await handlePagesApiRoute({
+      match: createMatch((_req, res) => {
+        res.write(Buffer.alloc(64 * 1024), (error: Error | null | undefined) => {
+          writeError = error;
+        });
+      }),
+      request: new Request("https://example.com/api/cancel-parked-write"),
+      url: "/api/cancel-parked-write",
+    });
+
+    await response.body!.cancel(cancellation);
+    await vi.waitFor(() => expect(writeError).toBe(cancellation));
   });
 
   it("marks a response as streamed only while its handler is still writing", async () => {

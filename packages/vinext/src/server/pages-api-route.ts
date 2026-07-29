@@ -23,7 +23,11 @@ import {
   isEdgeApiRuntime,
   type EdgeApiExecutionRuntime,
 } from "./edge-api-runtime.js";
-import { runWithExecutionContext, type ExecutionContextLike } from "vinext/shims/request-context";
+import {
+  getRequestExecutionContext,
+  runWithExecutionContext,
+  type ExecutionContextLike,
+} from "vinext/shims/request-context";
 import { NextRequest } from "vinext/shims/server";
 
 type PagesApiRouteConfig = {
@@ -270,9 +274,16 @@ async function _handlePagesApiRoute(options: HandlePagesApiRouteOptions): Promis
     // the handler to finish first.
     const firstSettled = await Promise.race([responseReady, handlerCompletion]);
     if (firstSettled.type === "response") {
-      void handlerCompletion.then(completeHandler, (error) => {
+      const handlerLifecycle = handlerCompletion.then(completeHandler, (error) => {
         void options.reportRequestError?.(error, route.pattern);
       });
+      // The body may already be complete (for example, res.end() followed by
+      // awaited cleanup), so keeping only a floating promise is not enough on
+      // Workers. Register the remaining handler lifecycle before returning;
+      // this also covers hybrid App/Pages requests, where the context is
+      // inherited from the surrounding App Router handler rather than passed
+      // through options.ctx.
+      getRequestExecutionContext()?.waitUntil(handlerLifecycle);
       return finalizeResponse(firstSettled.response);
     }
 

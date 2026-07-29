@@ -254,7 +254,7 @@ class PagesResponseStream extends Writable {
   private controller: ReadableStreamDefaultController | null = null;
   private readonly bufferedChunks: Buffer[] = [];
   private streamEnded = false;
-  private pendingWrite: (() => void) | null = null;
+  private pendingWrite: ((error?: Error | null) => void) | null = null;
 
   constructor(
     private readonly resolveResponse: (value: Response) => void,
@@ -441,7 +441,7 @@ class PagesResponseStream extends Writable {
     this.streamEnded = true;
     // A write parked for backpressure would otherwise never complete; release
     // it so piped sources unwind instead of waiting on a dead stream.
-    this.releasePendingWrite();
+    this.releasePendingWrite(error);
     if (!this.resolved) {
       if (error) {
         this.resolved = true;
@@ -483,10 +483,10 @@ class PagesResponseStream extends Writable {
     this.resHeaders[name.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
   }
 
-  private releasePendingWrite(): void {
+  private releasePendingWrite(error?: Error | null): void {
     const callback = this.pendingWrite;
     this.pendingWrite = null;
-    callback?.();
+    callback?.(error);
   }
 
   private resolveOnce(): void {
