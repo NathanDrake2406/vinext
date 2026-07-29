@@ -960,6 +960,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     interceptionSourceMatch.route !== directPreActionMatch?.route
   ) {
     const sourceUrl = new URL(userlandRequest.url);
+    sourceUrl.search = new URL(resolvedUrl, url).search;
     sourceUrl.pathname = hadBasePath
       ? addBasePathToPathname(interceptionSourcePathname, options.basePath)
       : interceptionSourcePathname;

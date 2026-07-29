@@ -768,6 +768,90 @@ describe("createAppRscHandler", () => {
     );
   });
 
+  it("authorizes the interception source with the target's resolved query", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const sourceRoute = createPageRoute({ pattern: "/feed" });
+    const middlewareRequests: Array<[string, string]> = [];
+    const dispatchMatchedPage = vi.fn(
+      async ({ searchParams }: { searchParams: URLSearchParams }) =>
+        new Response(searchParams.get("view") ?? "missing"),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      matchInterceptRoute: (_pathname, sourcePathname) =>
+        sourcePathname === "/feed" ? { route: sourceRoute, params: {} } : null,
+      matchRoute: (pathname: string) =>
+        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+      async runMiddleware({ cleanPathname, request }) {
+        middlewareRequests.push([cleanPathname, new URL(request.url).search]);
+        return {
+          kind: "continue",
+          cleanPathname,
+          rewritten: cleanPathname === "/photos/1",
+          search: cleanPathname === "/photos/1" ? "?view=private" : null,
+        };
+      },
+    });
+
+    const headers = createRscRequestHeaders({ interceptionContext: "/feed" });
+    const rscUrl = await createRscRequestUrl("/docs/photos/1?view=public", headers);
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("private");
+    expect(middlewareRequests).toEqual([
+      ["/photos/1", "?view=public"],
+      ["/feed", "?view=private"],
+    ]);
+  });
+
+  it("authorizes an intercepted Server Action source with the resolved query", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const sourceRoute = createPageRoute({ pattern: "/feed" });
+    const middlewareRequests: Array<[string, string]> = [];
+    const handleServerActionRequest = vi.fn(
+      async ({ searchParams }: { searchParams: URLSearchParams }) =>
+        new Response(searchParams.get("view") ?? "missing"),
+    );
+    const handler = createHandler({
+      configHeaders: [],
+      handleServerActionRequest,
+      matchInterceptRoute: (_pathname, sourcePathname) =>
+        sourcePathname === "/feed" ? { route: sourceRoute, params: {} } : null,
+      matchRoute: (pathname: string) =>
+        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+      async runMiddleware({ cleanPathname, request }) {
+        middlewareRequests.push([cleanPathname, new URL(request.url).search]);
+        return {
+          kind: "continue",
+          cleanPathname,
+          rewritten: cleanPathname === "/photos/1",
+          search: cleanPathname === "/photos/1" ? "?view=private" : null,
+        };
+      },
+    });
+
+    const headers = createRscRequestHeaders({ interceptionContext: "/feed" });
+    headers.set("content-type", "text/plain");
+    headers.set("next-action", "interception-action");
+    const response = await handler(
+      new Request("https://example.test/docs/photos/1?view=public", {
+        body: "action-body",
+        headers,
+        method: "POST",
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("private");
+    expect(middlewareRequests).toEqual([
+      ["/photos/1", "?view=public"],
+      ["/feed", "?view=private"],
+    ]);
+  });
+
   it("does not replay a forwarded target middleware result for the interception source", async () => {
     const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
     const sourceRoute = createPageRoute({ pattern: "/feed/secret" });
