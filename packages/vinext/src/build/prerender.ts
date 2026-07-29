@@ -942,6 +942,25 @@ export async function prerenderPages({
         let result: PrerenderRouteResult;
         try {
           const response = await renderPage(urlPath);
+          const cacheControl = response.headers.get("cache-control")?.toLowerCase() ?? "";
+          // Static source analysis is only an early skip optimization. The
+          // rendered response is authoritative: imported/re-exported
+          // getInitialProps components and other statically opaque dynamic
+          // shapes reach the runtime, which marks them no-store. Never persist
+          // that request-derived output into the shared prerender cache.
+          // `output: "export"` is deliberately exempt because Next.js runs
+          // getInitialProps once and writes its result for explicit export.
+          if (mode !== "export" && cacheControl.includes("no-store")) {
+            await response.body?.cancel();
+            result = { route: route.pattern, status: "skipped", reason: "dynamic" };
+            onProgress?.({
+              completed: ++completed,
+              total: pagesToRender.length,
+              route: urlPath,
+              status: result.status,
+            });
+            return result;
+          }
           const outputFiles: string[] = [];
           const htmlOutputPath = getOutputPath(urlPath, config.trailingSlash);
           const htmlFullPath = path.join(outDir, htmlOutputPath);
@@ -1018,8 +1037,12 @@ export async function prerenderPages({
     if (shouldPrerender404 && (hasCustom404 || hasErrorPage)) {
       try {
         const notFoundRes = await renderPage(hasCustom404 ? "/404" : NOT_FOUND_SENTINEL_PATH);
+        const cacheControl = notFoundRes.headers.get("cache-control")?.toLowerCase() ?? "";
         const contentType = notFoundRes.headers.get("content-type") ?? "";
-        if (notFoundRes.status === 404 && contentType.includes("text/html")) {
+        if (mode !== "export" && cacheControl.includes("no-store")) {
+          await notFoundRes.body?.cancel();
+          results.push({ route: "/404", status: "skipped", reason: "dynamic" });
+        } else if (notFoundRes.status === 404 && contentType.includes("text/html")) {
           const html404 = await notFoundRes.text();
           const fullPath = path.join(outDir, "404.html");
           fs.writeFileSync(fullPath, html404, "utf-8");

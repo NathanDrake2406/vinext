@@ -436,6 +436,10 @@ describe("classifyPagesRoute", () => {
       "static class field",
       "export default class Account extends Component {\n  static getInitialProps = async () => ({})\n  render() { return null }\n}\n",
     ],
+    [
+      "direct default class expression",
+      "export default (class extends Component { static async getInitialProps() { return {} } render() { return null } })\n",
+    ],
     // `withRouter` forwards getInitialProps to the component it returns, so the
     // route is still per-request even though the default export is a call.
     [

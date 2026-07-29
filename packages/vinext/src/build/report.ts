@@ -320,10 +320,23 @@ function hasPagesGetInitialPropsInProgram(program: Program): boolean {
     }
 
     if (node.type === "ExportDefaultDeclaration") {
-      return (
-        node.declaration.type === "ClassDeclaration" &&
-        classHasStaticGetInitialProps(node.declaration)
-      );
+      if (node.declaration.type === "ClassDeclaration") {
+        return classHasStaticGetInitialProps(node.declaration);
+      }
+      if (node.declaration.type === "ClassExpression") {
+        return classHasStaticGetInitialProps(node.declaration);
+      }
+      if (
+        node.declaration.type === "ParenthesizedExpression" ||
+        node.declaration.type === "TSAsExpression" ||
+        node.declaration.type === "TSSatisfiesExpression" ||
+        node.declaration.type === "TSTypeAssertion" ||
+        node.declaration.type === "TSNonNullExpression"
+      ) {
+        const declaration = unwrapStaticExpression(node.declaration);
+        return declaration.type === "ClassExpression" && classHasStaticGetInitialProps(declaration);
+      }
+      return false;
     }
 
     const declaration = node.type === "ExportNamedDeclaration" ? node.declaration : node;
