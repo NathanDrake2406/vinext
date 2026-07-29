@@ -605,6 +605,21 @@ describe("prerenderPages — getInitialProps build classification", () => {
         reason: "dynamic",
       });
       expect(fs.existsSync(path.join(root, "out", "404.html"))).toBe(false);
+
+      const exportResult = await prerenderPages({
+        mode: "export",
+        routes: await pagesRouter(pagesDir),
+        apiRoutes: await apiRouter(pagesDir),
+        pagesDir,
+        outDir: path.join(root, "export-out"),
+        config: await resolveNextConfig({ output: "export" }),
+        _prodServer: { server, port },
+      });
+      expect(findRoute(exportResult.routes, "/404")).toMatchObject({
+        status: "skipped",
+        reason: "dynamic",
+      });
+      expect(fs.existsSync(path.join(root, "export-out", "404.html"))).toBe(false);
     } finally {
       await closeServer(server);
       fs.rmSync(root, { recursive: true, force: true });

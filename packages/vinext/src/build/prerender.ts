@@ -1039,7 +1039,9 @@ export async function prerenderPages({
         const notFoundRes = await renderPage(hasCustom404 ? "/404" : NOT_FOUND_SENTINEL_PATH);
         const cacheControl = notFoundRes.headers.get("cache-control")?.toLowerCase() ?? "";
         const contentType = notFoundRes.headers.get("content-type") ?? "";
-        if (mode !== "export" && cacheControl.includes("no-store")) {
+        // Unlike ordinary page getInitialProps, a non-static `_error` does not
+        // produce an automatic 404 artifact even for an explicit export.
+        if (cacheControl.includes("no-store")) {
           await notFoundRes.body?.cancel();
           results.push({ route: "/404", status: "skipped", reason: "dynamic" });
         } else if (notFoundRes.status === 404 && contentType.includes("text/html")) {
