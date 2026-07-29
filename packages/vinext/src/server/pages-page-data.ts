@@ -1015,12 +1015,14 @@ const SSR_HEAD_TAG_PATTERN =
   /<(title|meta|link|style|script|base|noscript)\b[^>]*?\sdata-next-head=""[^>]*?(?:\/>|>[\s\S]*?<\/\1>)/g;
 
 /**
- * Matches a whole `<script>`/`<style>` element. Their bodies are raw text, so
- * markup-looking strings inside them are not markup — and `headChildToHTML()`
- * only escapes `</script`/`</style`, so an inline script from `next/head` may
- * legitimately carry a literal `</head>`.
+ * Matches a whole head element whose body may contain markup-looking text.
+ * Script/style are raw-text elements, title is RCDATA, and noscript is raw
+ * text while scripting is enabled. In all four, a literal `</head>` does not
+ * close the document head. `headChildToHTML()` only escapes the element's own
+ * closing sequence for script/style, while `dangerouslySetInnerHTML` may leave
+ * `</head>` intact in any of them.
  */
-const RAW_TEXT_ELEMENT_PATTERN = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const HEAD_TEXT_ELEMENT_PATTERN = /<(script|style|title|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi;
 
 /**
  * Replace the `next/head` region of a cached shell with a freshly collected
@@ -1047,13 +1049,13 @@ function refreshCachedHeadTags(cachedHtml: string, freshHead: string): string {
   // cached head alone rather than deleting the tags we do have.
   if (!freshHead) return cachedHtml;
 
-  // Blank out raw-text bodies before locating the boundary so a `</head>`
-  // string inside an inline script is not mistaken for the closing tag —
-  // that would truncate the scan and leave stale tags behind the fresh head.
-  // The replacement is length-preserving, so the index still maps onto
+  // Blank out raw-text/RCDATA elements before locating the boundary so a
+  // `</head>` string inside one is not mistaken for the closing tag — that
+  // would truncate the scan and leave stale tags behind the fresh head. The
+  // replacement is length-preserving, so the index still maps onto
   // `cachedHtml`.
   const headEnd = cachedHtml
-    .replace(RAW_TEXT_ELEMENT_PATTERN, (element) => " ".repeat(element.length))
+    .replace(HEAD_TEXT_ELEMENT_PATTERN, (element) => " ".repeat(element.length))
     .indexOf("</head>");
   if (headEnd < 0) return cachedHtml;
 

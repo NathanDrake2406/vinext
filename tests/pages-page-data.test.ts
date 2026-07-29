@@ -265,6 +265,40 @@ describe("pages page data", () => {
     expect(html).not.toContain("var marker");
   });
 
+  it("swaps the whole head run when title RCDATA contains a literal </head>", async () => {
+    // `title` is an RCDATA element: only its own `</title>` end tag closes it,
+    // so `</head>` here is text rather than the document-head boundary.
+    const titleWithMarkupText =
+      '<title data-next-head="">stale prefix </head> stale suffix</title>';
+    const html = await renderPagesIsrHtml({
+      buildId: "build-123",
+      cachedHtml:
+        '<!DOCTYPE html><html><head><meta charset="utf-8" data-next-head="" />' +
+        `${titleWithMarkupText}</head>` +
+        '<body><div id="__next"><div>stale-body</div></div>' +
+        '<script>window.__NEXT_DATA__ = {"old":1}</script></body></html>',
+      collectIsrHeadHTML: vi.fn(() => '<title data-next-head="">fresh</title>'),
+      createPageElement(_pageProps: Record<string, unknown>) {
+        return "page";
+      },
+      i18n: { locale: "en", locales: ["en"], defaultLocale: "en", domainLocales: [] },
+      pageProps: {},
+      params: {},
+      renderIsrPassToStringAsync: vi.fn(async (_element, onHeadReady) => {
+        await onHeadReady?.();
+        return "<div>fresh-body</div>";
+      }),
+      routePattern: "/posts/[slug]",
+      safeJsonStringify(value: unknown) {
+        return JSON.stringify(value);
+      },
+    });
+
+    expect(html).toContain('<title data-next-head="">fresh</title>');
+    expect(html).not.toContain("stale prefix");
+    expect(html.match(/<title data-next-head="">/g)).toHaveLength(1);
+  });
+
   it("preserves custom app props in fallback shells", async () => {
     const AppComponent = Object.assign(function App() {}, {
       getInitialProps() {
