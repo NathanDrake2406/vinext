@@ -5,7 +5,6 @@ import {
   type PagesEntry,
 } from "../packages/vinext/src/server/app-pages-bridge.js";
 import type { AppMiddlewareContext } from "../packages/vinext/src/server/app-middleware.js";
-import { applyRouteHandlerMiddlewareContext } from "../packages/vinext/src/server/app-route-handler-response.js";
 import { handlePagesApiRoute } from "../packages/vinext/src/server/pages-api-route.js";
 import {
   runWithExecutionContext,
@@ -302,8 +301,10 @@ describe("renderPagesFallback", () => {
       () =>
         new Response('{"pageProps":{"ok":true}}', {
           headers: [
+            ["cache-control", "private, no-cache, no-store, max-age=0, must-revalidate"],
+            ["content-length", "25"],
             ["content-type", "application/json"],
-            ["set-cookie", "page=1; Path=/"],
+            ["set-cookie", "session=fresh; Path=/"],
           ],
         }),
     );
@@ -315,7 +316,9 @@ describe("renderPagesFallback", () => {
         isRscRequest: false,
         middlewareContext: {
           headers: new Headers([
-            ["set-cookie", "middleware=1; Path=/"],
+            ["cache-control", "public, max-age=3600"],
+            ["content-length", "999"],
+            ["set-cookie", "session=stale; Path=/"],
             ["x-middleware-response", "present"],
           ]),
           requestHeaders: null,
@@ -326,14 +329,59 @@ describe("renderPagesFallback", () => {
       },
       {
         ...defaultDeps,
-        applyRouteHandlerMiddlewareContext,
         loadPagesEntry: () => ({ renderPage }),
       },
     );
 
     expect(response?.headers.get("x-middleware-response")).toBe("present");
-    expect(response?.headers.getSetCookie()).toEqual(["page=1; Path=/", "middleware=1; Path=/"]);
+    expect(response?.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
+    expect(response?.headers.get("content-length")).toBe("25");
+    expect(response?.headers.getSetCookie()).toEqual([
+      "session=stale; Path=/",
+      "session=fresh; Path=/",
+    ]);
   });
+
+  it.each([204, 205, 304])(
+    "drops the Pages response body when middleware overrides its status to %s",
+    async (status) => {
+      const renderPage = vi.fn(
+        () =>
+          new Response("page body", {
+            headers: {
+              "content-encoding": "gzip",
+              "content-length": "9",
+              "content-type": "text/plain",
+              "transfer-encoding": "chunked",
+            },
+          }),
+      );
+      const request = new Request("http://localhost/pages-dir/search");
+
+      const response = await renderPagesFallback(
+        {
+          isDataRequest: true,
+          isRscRequest: false,
+          middlewareContext: { headers: null, requestHeaders: null, status },
+          request,
+          url: new URL(request.url),
+        },
+        {
+          ...defaultDeps,
+          loadPagesEntry: () => ({ renderPage }),
+        },
+      );
+
+      expect(response?.status).toBe(status);
+      expect(await response?.text()).toBe("");
+      expect(response?.headers.get("content-encoding")).toBeNull();
+      expect(response?.headers.get("content-length")).toBeNull();
+      expect(response?.headers.get("content-type")).toBeNull();
+      expect(response?.headers.get("transfer-encoding")).toBeNull();
+    },
+  );
 
   it("matches rewritten Pages data requests against the rewritten destination", async () => {
     const matchPageRoute = vi.fn(() => ({
