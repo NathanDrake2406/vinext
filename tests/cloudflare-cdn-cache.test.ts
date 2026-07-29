@@ -152,6 +152,47 @@ describe("CloudflareCdnCacheAdapter", () => {
     },
   );
 
+  it("clears middleware CDN overrides for mounted slots with the default adapter", async () => {
+    setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+
+    const response = finalizeAppPageRscCacheResponse(
+      new Response("slot-specific-flight", {
+        headers: {
+          "Cache-Control": "s-maxage=60",
+          "Cache-Tag": "/dashboard",
+          "CDN-Cache-Control": "public, max-age=60",
+          "Cloudflare-CDN-Cache-Control": "public, max-age=60",
+          "X-Vinext-Cache": "STATIC",
+        },
+      }),
+      {
+        capturedRscDataPromise: Promise.resolve(
+          new TextEncoder().encode("slot-specific-flight").buffer,
+        ),
+        cleanPathname: "/dashboard",
+        consumeDynamicUsage() {
+          return false;
+        },
+        dynamicUsedDuringBuild: false,
+        getPageTags() {
+          return ["/dashboard"];
+        },
+        isrRscKey: vi.fn(),
+        isrSet: vi.fn(),
+        mountedSlotsHeader: "slot:auth:/",
+        preserveClientResponseHeaders: true,
+        revalidateSeconds: 60,
+      },
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Tag")).toBeNull();
+    expect(response.headers.get("X-Vinext-Cache")).toBe("MISS");
+    await expect(response.text()).resolves.toBe("slot-specific-flight");
+  });
+
   it("revalidateTag purges the Workers Cache by tag via ctx.cache.purge", async () => {
     const purge = vi.fn(async () => {});
     await runWithExecutionContext({ waitUntil() {}, cache: { purge } }, async () => {

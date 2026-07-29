@@ -97,6 +97,13 @@ function applyMountedSlotRscNoStoreHeaders(
   // cache. Make that same bypass explicit to every CDN adapter: an edge-managed
   // adapter may intentionally cache pending-dynamic responses, so the generic
   // pendingDynamicCheck signal is not strong enough for this variant.
+  // Middleware owns ordinary response headers, but it must not be able to keep
+  // a provider-specific shared-cache override on a payload whose cache identity
+  // the server deliberately cannot prove. Clear the built-in CDN adapter's
+  // recognized override headers even when another adapter is active.
+  headers.delete("CDN-Cache-Control");
+  headers.delete("Cloudflare-CDN-Cache-Control");
+  headers.delete("Cache-Tag");
   applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
   if (options.omitCacheState === true || !hadCacheState) {
     headers.delete(VINEXT_CACHE_HEADER);
