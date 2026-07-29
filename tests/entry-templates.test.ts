@@ -1381,6 +1381,7 @@ describe("App Router entry templates", () => {
 describe("Pages Router entry template", () => {
   it("embeds only client-safe rewrite data in the Pages browser entry", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-client-rewrites-"));
+
     const pagesDir = path.join(tmpDir, "pages");
 
     try {
@@ -1439,6 +1440,32 @@ describe("Pages Router entry template", () => {
       expect(code).not.toContain("header-secret-canary");
       expect(code).not.toContain("cookie-target-canary");
       expect(code).not.toContain("cookie-secret-canary");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("embeds the build-time public-file inventory", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-pages-public-entry-"));
+    const pagesDir = path.join(tmpDir, "pages");
+
+    try {
+      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pagesDir, "index.tsx"),
+        "export default function Page() { return null; }",
+      );
+
+      const code = await generateServerEntry(
+        pagesDir,
+        await resolveNextConfig({}),
+        createValidFileMatcher(),
+        null,
+        null,
+        ["/static.txt"],
+      );
+
+      expect(code).toContain('export const publicFiles = new Set(["/static.txt"]);');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
