@@ -413,6 +413,32 @@ const ACTION_REDIRECT_RENDER_STRIPPED_HEADERS = [
   VINEXT_MW_CTX_HEADER,
 ];
 
+// Matches Next.js' actionsForbiddenHeaders. These describe the action
+// response's framing/connection rather than the internal target GET and must
+// not be forwarded as request headers.
+const ACTION_REDIRECT_FORWARDED_FORBIDDEN_HEADERS = [
+  "accept-encoding",
+  "connection",
+  "content-encoding",
+  "content-length",
+  "expect",
+  "keep-alive",
+  "keepalive",
+  "set-cookie",
+  "transfer-encoding",
+];
+
+// Next.js explicitly removes its action header after merging the action
+// response into the target request. Do the same for both action protocols and
+// vinext's dev-only forwarded middleware context.
+const ACTION_REDIRECT_FORWARDED_PROTOCOL_HEADERS = [
+  "next-action",
+  "rsc",
+  "x-action-forwarded",
+  "x-rsc-action",
+  VINEXT_MW_CTX_HEADER,
+];
+
 function setActionRevalidatedHeader(headers: Headers, kind: ActionRevalidationKind): void {
   if (kind === ACTION_DID_NOT_REVALIDATE) return;
   headers.set(ACTION_REVALIDATED_HEADER, JSON.stringify(kind));
@@ -434,10 +460,33 @@ function clearRejectedActionSideEffects(getAndClearPendingCookies: () => string[
   getAndClearActionRevalidationKind();
 }
 
-function cloneActionRedirectHeaders(requestHeaders: Headers): Headers {
+function cloneActionRedirectHeaders(
+  requestHeaders: Headers,
+  actionMiddlewareHeaders: Headers | null,
+): Headers {
   const headers = new Headers(requestHeaders);
+  for (const header of ACTION_REDIRECT_FORWARDED_FORBIDDEN_HEADERS) {
+    headers.delete(header);
+  }
   for (const header of ACTION_REDIRECT_RENDER_STRIPPED_HEADERS) {
     headers.delete(header);
+  }
+
+  // Next.js' internal target GET merges ordinary action response headers over
+  // the request headers before running the target pipeline. Merge after
+  // stripping the action request's transport headers so a middleware-emitted
+  // value such as Accept or Content-Type remains an intentional target header.
+  if (actionMiddlewareHeaders) {
+    for (const [name, value] of actionMiddlewareHeaders) {
+      const normalizedName = name.toLowerCase();
+      if (
+        ACTION_REDIRECT_FORWARDED_FORBIDDEN_HEADERS.includes(normalizedName) ||
+        ACTION_REDIRECT_FORWARDED_PROTOCOL_HEADERS.includes(normalizedName)
+      ) {
+        continue;
+      }
+      headers.set(name, value);
+    }
   }
   return headers;
 }
@@ -520,11 +569,15 @@ function cookiePathMatches(cookiePath: string, requestPath: string): boolean {
 }
 
 function createActionRedirectRenderRequest(options: {
+  actionMiddlewareHeaders: Headers | null;
   pendingCookies: readonly string[];
   request: Request;
   url: URL;
 }): Request {
-  const headers = cloneActionRedirectHeaders(options.request.headers);
+  const headers = cloneActionRedirectHeaders(
+    options.request.headers,
+    options.actionMiddlewareHeaders,
+  );
   // Like Next.js' internal action-redirect GET, this is necessarily a lossy
   // cookie projection: the inbound Cookie header no longer carries the Path,
   // Domain, or acceptance metadata from the browser's jar. For newly emitted
@@ -1445,6 +1498,7 @@ export async function handleServerActionRscRequest<
       }
 
       const redirectRenderRequest = createActionRedirectRenderRequest({
+        actionMiddlewareHeaders: options.middlewareHeaders,
         // Project the action middleware's Set-Cookie mutations (session
         // rotation or deletion) into the internal target request first; the
         // action's own cookies().set() calls land after middleware and win for
@@ -1471,7 +1525,7 @@ export async function handleServerActionRscRequest<
           cleanPathname: targetPathname,
           request: createActionRedirectMiddlewareRequest(
             redirectRenderRequest,
-            options.request.headers.get("accept"),
+            redirectRenderRequest.headers.get("accept") ?? options.request.headers.get("accept"),
           ),
         });
         // Diverting costs the target one extra middleware execution, since the
@@ -1522,8 +1576,8 @@ export async function handleServerActionRscRequest<
       // generated nonce. Build the inline target with the nonce on the final
       // response it represents, not the stale action-path nonce.
       const redirectScriptNonce = getScriptNonceFromHeaderSources(
-        redirectRenderRequest.headers,
         redirectHeaders,
+        redirectRenderRequest.headers,
       );
       const rscStream = await runWithRootParamsScope(
         pickRootParams(targetMatch.params, targetMatch.route.rootParamNames),

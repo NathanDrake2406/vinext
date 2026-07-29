@@ -2141,6 +2141,55 @@ describe("app server action execution helpers", () => {
     );
   });
 
+  it("forwards filtered action middleware response headers to the redirect target", async () => {
+    let middlewareRequest: Request | null = null;
+    let renderRequest: Request | null = null;
+
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        buildPageElement({ route: matchedRoute, request }) {
+          renderRequest = request;
+          return `${matchedRoute.id}:{}:none`;
+        },
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/redirect-target"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/redirect-target") {
+            return {
+              params: {},
+              route: { id: "redirect-target", page: {}, params: [], pattern: "/redirect-target" },
+            };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        middlewareHeaders: new Headers({
+          accept: "application/action-middleware",
+          "content-length": "999",
+          "x-action-auth-context": "member",
+        }),
+        async runRedirectTargetMiddleware(targetOptions: { request: Request }) {
+          middlewareRequest = targetOptions.request;
+          return { kind: "continue", responseHeaders: null };
+        },
+      }),
+    );
+
+    expect(response?.status).toBe(303);
+    expect(response?.headers.get("content-length")).toBeNull();
+    expect(middlewareRequest).not.toBeNull();
+    expect(middlewareRequest!.headers.get("accept")).toBe("application/action-middleware");
+    expect(middlewareRequest!.headers.get("content-length")).toBeNull();
+    expect(middlewareRequest!.headers.get("x-action-auth-context")).toBe("member");
+    expect(renderRequest).not.toBeNull();
+    expect(renderRequest!.headers.get("accept")).toBe("application/action-middleware");
+    expect(renderRequest!.headers.get("content-length")).toBeNull();
+    expect(renderRequest!.headers.get("x-action-auth-context")).toBe("member");
+  });
+
   it("runs target middleware before hydrating a lazy target route's modules", async () => {
     const events: string[] = [];
     const lazyRoute: TestRoute = {
