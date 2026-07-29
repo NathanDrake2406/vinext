@@ -8,9 +8,14 @@ import type { BasePathMatchState } from "../config/config-matchers.js";
 import { requestContextFromRequest } from "../config/request-context.js";
 import { normalizePathnameForRouteMatchStrict } from "../routing/utils.js";
 import { isExternalUrl } from "../utils/external-url.js";
-import { headersContextFromRequest, runWithHeadersContext } from "vinext/shims/headers";
+import {
+  getHeadersContext,
+  headersContextFromRequest,
+  runWithHeadersContext,
+} from "vinext/shims/headers";
 import {
   ACTION_REVALIDATED_HEADER,
+  FLIGHT_HEADERS,
   NEXT_ACTION_HEADER,
   RSC_ACTION_HEADER,
   RSC_HEADER,
@@ -59,7 +64,7 @@ import { buildNextDataNotFoundResponse, normalizePagesDataRequest } from "./page
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
 import { badRequestResponse, notFoundResponse } from "./http-error-responses.js";
 import { isOnDemandRevalidateRequest, PRERENDER_REVALIDATE_HEADER } from "./isr-cache.js";
-import { normalizePath } from "./normalize-path.js";
+import { isInterceptionMatchedUrlPath, normalizePath } from "./normalize-path.js";
 import { getRenderedConcreteUrlPathsForRoute } from "./pregenerated-concrete-paths.js";
 import { getScriptNonceFromHeaderSources } from "./csp.js";
 import { buildPageCacheTags } from "./implicit-tags.js";
@@ -110,16 +115,6 @@ type RootParamNamesMap = AppPrerenderRootParamNamesMap;
 
 type AppRscMiddlewareContext = AppMiddlewareContext;
 
-function haveSameRequestHeaders(first: Headers, second: Headers): boolean {
-  for (const [name, value] of first) {
-    if (second.get(name) !== value) return false;
-  }
-  for (const name of second.keys()) {
-    if (!first.has(name)) return false;
-  }
-  return true;
-}
-
 function haveSameRequestCookies(
   first: ReadonlyMap<string, string>,
   second: ReadonlyMap<string, string>,
@@ -127,6 +122,28 @@ function haveSameRequestCookies(
   if (first.size !== second.size) return false;
   for (const [name, value] of first) {
     if (second.get(name) !== value) return false;
+  }
+  return true;
+}
+
+function haveSamePageParams(first: AppPageParams, second: AppPageParams): boolean {
+  const firstKeys = Object.keys(first);
+  const secondKeys = Object.keys(second);
+  if (firstKeys.length !== secondKeys.length) return false;
+  for (const key of firstKeys) {
+    const firstValue = first[key];
+    const secondValue = second[key];
+    if (Array.isArray(firstValue)) {
+      if (
+        !Array.isArray(secondValue) ||
+        firstValue.length !== secondValue.length ||
+        firstValue.some((value, index) => value !== secondValue[index])
+      ) {
+        return false;
+      }
+    } else if (firstValue !== secondValue) {
+      return false;
+    }
   }
   return true;
 }
@@ -918,41 +935,63 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // a client header, so authorize it before anything downstream renders from it.
   // Skipped when the source resolves to the route already matched and authorized
   // for this request, which is also the case where interception does not fire.
-  const interceptionSourceMatch =
-    filesystemRouteEligible && isRscRequest && interceptionContextHeader !== null
-      ? (options.matchInterceptRoute?.(preActionRoutePathname, interceptionContextHeader) ?? null)
-      : null;
-  if (
-    interceptionSourceMatch !== null &&
-    interceptionContextHeader !== null &&
-    runMiddleware &&
-    interceptionSourceMatch.route !== directPreActionMatch?.route
-  ) {
-    let sourceMiddlewarePathname: string;
+  let interceptionSourcePathname: string | null = null;
+  if (filesystemRouteEligible && isRscRequest && interceptionContextHeader !== null) {
     try {
-      // Route matching has already decoded the client-provided source path.
-      // Give middleware matchers the same normalized identity a direct request
-      // receives while keeping the original encoded spelling in NextRequest.
-      sourceMiddlewarePathname = normalizePath(
+      if (!isInterceptionMatchedUrlPath(interceptionContextHeader)) {
+        throw new Error("Invalid interception source pathname");
+      }
+      interceptionSourcePathname = normalizePath(
         normalizePathnameForRouteMatchStrict(interceptionContextHeader),
       );
     } catch {
       options.clearRequestContext();
       return badRequestResponse();
     }
+  }
+  const interceptionSourceMatch =
+    interceptionSourcePathname !== null
+      ? (options.matchInterceptRoute?.(preActionRoutePathname, interceptionSourcePathname) ?? null)
+      : null;
+  if (
+    interceptionSourceMatch !== null &&
+    interceptionSourcePathname !== null &&
+    runMiddleware &&
+    interceptionSourceMatch.route !== directPreActionMatch?.route
+  ) {
     const sourceUrl = new URL(userlandRequest.url);
     sourceUrl.pathname = hadBasePath
-      ? addBasePathToPathname(interceptionContextHeader, options.basePath)
-      : interceptionContextHeader;
-    // Rebuilding a Request with a new URL transfers its body stream. Preserve
-    // the original branch for Server Action dispatch and give source-route
-    // middleware an independent branch, as the initial middleware pass does.
+      ? addBasePathToPathname(interceptionSourcePathname, options.basePath)
+      : interceptionSourcePathname;
+    // Clone before rebuilding the URL so runtimes that transfer Request bodies
+    // cannot disturb the original Server Action branch. Release the temporary
+    // clone when reconstruction leaves it readable.
     const sourceRequest = userlandRequest.body ? userlandRequest.clone() : userlandRequest;
     const sourceMiddlewareRequest = cloneRequestWithUrl(sourceRequest, sourceUrl.href);
     // Hybrid dev attaches the target route's middleware result so the RSC
     // entry does not execute it twice. This is a distinct source route and
     // must run middleware itself rather than replaying the target's decision.
     sourceMiddlewareRequest.headers.delete(VINEXT_MW_CTX_HEADER);
+    // Strip Flight headers on this owned branch before applyAppMiddleware so
+    // it does not need another body tee solely to hide transport metadata.
+    for (const header of FLIGHT_HEADERS) sourceMiddlewareRequest.headers.delete(header);
+    const targetHeadersContext = getHeadersContext();
+    const targetRequestHeaders = targetHeadersContext
+      ? new Headers(targetHeadersContext.headers)
+      : null;
+    targetRequestHeaders?.delete(VINEXT_MW_CTX_HEADER);
+    for (const header of FLIGHT_HEADERS) targetRequestHeaders?.delete(header);
+    // Chain source authorization from the request identity already established
+    // by target middleware, while keeping transport-only headers hidden.
+    if (targetRequestHeaders) {
+      const sourceHeaderNames = Array.from(sourceMiddlewareRequest.headers.keys());
+      for (const header of sourceHeaderNames) {
+        sourceMiddlewareRequest.headers.delete(header);
+      }
+      for (const [name, value] of targetRequestHeaders) {
+        sourceMiddlewareRequest.headers.append(name, value);
+      }
+    }
     const sourceMiddlewareContext: AppRscMiddlewareContext = {
       headers: null,
       requestHeaders: null,
@@ -961,8 +1000,6 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     const sourceHeadersContext = headersContextFromRequest(sourceMiddlewareRequest, {
       draftModeSecret: options.draftModeSecret,
     });
-    const sourceRequestHeaders = new Headers(sourceHeadersContext.headers);
-    const sourceRequestCookies = new Map(sourceHeadersContext.cookies);
     // Keep source authorization in a child request context. In particular,
     // NextResponse.next({ request: { headers } }) mutates the live headers
     // context; allowing those overrides to escape would make the target render
@@ -971,7 +1008,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     try {
       sourceMiddlewareResult = await runWithHeadersContext(sourceHeadersContext, () =>
         runMiddleware({
-          cleanPathname: sourceMiddlewarePathname,
+          cleanPathname: interceptionSourcePathname,
           // Deliberately not the request's `middlewareContext`. This run decides
           // whether the source route may render; it does not contribute headers
           // or status to the target's response, which belongs to another route.
@@ -982,9 +1019,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         }),
       );
     } finally {
-      // requestWithoutFlightHeaders() clones this synthetic request before
-      // middleware reads it. Cancel our otherwise-unused tee branch so a large
-      // Server Action body cannot remain buffered until garbage collection.
+      // Release every temporary branch owned by source authorization. Some
+      // runtimes transfer sourceRequest into sourceMiddlewareRequest; the
+      // body-state checks make the cleanup safe in both transfer and tee cases.
       if (
         sourceMiddlewareRequest.body &&
         !sourceMiddlewareRequest.bodyUsed &&
@@ -995,41 +1032,65 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
         // Do not delay Server Action dispatch on a streaming request body.
         void sourceMiddlewareRequest.body.cancel().catch(() => {});
       }
+      if (
+        sourceRequest !== userlandRequest &&
+        sourceRequest.body &&
+        !sourceRequest.bodyUsed &&
+        !sourceRequest.body.locked
+      ) {
+        void sourceRequest.body.cancel().catch(() => {});
+      }
     }
     if (sourceMiddlewareResult.kind === "response") {
       options.clearRequestContext();
       return sourceMiddlewareResult.response;
     }
-    // Request-header and cookie overrides are part of the source middleware's
-    // authorization result. The source and target currently share one render
-    // context, so neither applying those overrides globally nor discarding them
-    // is safe. Fail closed until the source subtree has an isolated context.
+    // The source and target share one render context. Existing target headers
+    // and all cookies are identity-bearing and may not be replaced/deleted by
+    // source middleware. Pure header additions are safe to retain and are
+    // copied into the live render context instead of silently discarded.
+    let sourceHeadersCompatible = true;
+    if (targetRequestHeaders) {
+      for (const [name, value] of targetRequestHeaders) {
+        if (sourceHeadersContext.headers.get(name) !== value) {
+          sourceHeadersCompatible = false;
+          break;
+        }
+      }
+    }
     if (
-      !haveSameRequestHeaders(sourceRequestHeaders, sourceHeadersContext.headers) ||
-      !haveSameRequestCookies(sourceRequestCookies, sourceHeadersContext.cookies)
+      !targetHeadersContext ||
+      !targetRequestHeaders ||
+      !sourceHeadersCompatible ||
+      !haveSameRequestCookies(targetHeadersContext.cookies, sourceHeadersContext.cookies)
     ) {
       options.clearRequestContext();
       return notFoundResponse();
     }
-    // An internal rewrite that changes the source route or query is not
-    // authorization to render the original source. Following that rewrite
-    // would require dispatching a second, unrelated route inside the
-    // interception response; fail closed instead. Identity rewrites remain
-    // valid because they still authorize the same effective request.
-    if (
-      sourceMiddlewareResult.rewritten &&
-      (sourceMiddlewareResult.cleanPathname !== sourceMiddlewarePathname ||
-        sourceMiddlewareResult.search !== sourceUrl.search)
-    ) {
-      options.clearRequestContext();
-      return notFoundResponse();
+    for (const [name, value] of sourceHeadersContext.headers) {
+      if (!targetRequestHeaders.has(name)) targetHeadersContext.headers.set(name, value);
+    }
+    if (sourceMiddlewareResult.rewritten) {
+      // Rewrites such as locale insertion are valid only when they resolve to
+      // the exact source route and params already selected for interception.
+      // A different route, params, or query would authorize one identity and
+      // render another, so fail closed instead.
+      const rewrittenSourceMatch = options.matchRoute(sourceMiddlewareResult.cleanPathname);
+      if (
+        sourceMiddlewareResult.search !== sourceUrl.search ||
+        rewrittenSourceMatch?.route !== interceptionSourceMatch.route ||
+        !haveSamePageParams(rewrittenSourceMatch.params, interceptionSourceMatch.params)
+      ) {
+        options.clearRequestContext();
+        return notFoundResponse();
+      }
     }
   }
   const interceptionPreActionMatch =
     filesystemRouteEligible &&
     directPreActionMatch === null &&
     isRscRequest &&
-    interceptionContextHeader !== null
+    interceptionSourcePathname !== null
       ? interceptionSourceMatch
       : null;
   const preActionMatch = directPreActionMatch ?? interceptionPreActionMatch;
@@ -1103,7 +1164,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           actionId,
           cleanPathname,
           contentType,
-          interceptionContext: interceptionContextHeader,
+          interceptionContext: interceptionSourcePathname,
           isRscRequest,
           middlewareContext,
           mountedSlotsHeader,
@@ -1388,7 +1449,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     actionError: normalizedProgressiveActionError,
     actionFailed,
     handlerStart,
-    interceptionContext: interceptionContextHeader,
+    interceptionContext: interceptionSourcePathname,
     interceptionPathname: cleanPathnameIsRequestPathname ? requestCleanPathname : cleanPathname,
     isProgressiveActionRender,
     isRscRequest,

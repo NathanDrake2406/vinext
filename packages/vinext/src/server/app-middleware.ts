@@ -80,7 +80,11 @@ function requestWithoutFlightHeaders(request: Request): Request {
 
   if (!hasFlightHeader) return request;
   const source = request.body ? request.clone() : request;
-  return cloneRequestWithHeaders(source, headers);
+  const stripped = cloneRequestWithHeaders(source, headers);
+  if (source !== request && source.body && !source.bodyUsed && !source.body.locked) {
+    void source.body.cancel().catch(() => {});
+  }
+  return stripped;
 }
 
 function appendForwardedHeader(headers: Headers, value: unknown): void {
@@ -212,90 +216,104 @@ export async function applyAppMiddleware(
 ): Promise<ApplyAppMiddlewareResult> {
   const forwarded = applyForwardedMiddlewareContext(options.request, options.context);
   const middlewareRequest = requestWithoutFlightHeaders(options.request);
-  let cleanPathname = options.cleanPathname;
-  let rewritten = false;
-  let search: string | null = null;
+  try {
+    let cleanPathname = options.cleanPathname;
+    let rewritten = false;
+    let search: string | null = null;
 
-  if (forwarded.rewriteUrl) {
-    try {
-      if (isExternalMiddlewareRewrite(forwarded.rewriteUrl, middlewareRequest)) {
-        return {
-          kind: "response",
-          response: await proxyExternalMiddlewareRewrite(
-            middlewareRequest,
-            forwarded.rewriteUrl,
-            options.context,
-          ),
-        };
+    if (forwarded.rewriteUrl) {
+      try {
+        if (isExternalMiddlewareRewrite(forwarded.rewriteUrl, middlewareRequest)) {
+          return {
+            kind: "response",
+            response: await proxyExternalMiddlewareRewrite(
+              middlewareRequest,
+              forwarded.rewriteUrl,
+              options.context,
+            ),
+          };
+        }
+        const rewriteParsed = new URL(forwarded.rewriteUrl, middlewareRequest.url);
+        cleanPathname = rewriteParsed.pathname;
+        rewritten = true;
+        search = rewriteParsed.search;
+      } catch (e) {
+        console.error("[vinext] Failed to apply forwarded middleware rewrite:", e);
+        forwarded.applied = false;
       }
-      const rewriteParsed = new URL(forwarded.rewriteUrl, middlewareRequest.url);
-      cleanPathname = rewriteParsed.pathname;
-      rewritten = true;
-      search = rewriteParsed.search;
-    } catch (e) {
-      console.error("[vinext] Failed to apply forwarded middleware rewrite:", e);
-      forwarded.applied = false;
+    }
+
+    if (!forwarded.applied) {
+      const result = await executeMiddleware({
+        basePath: options.basePath,
+        hadBasePath: options.hadBasePath ?? true,
+        filePath: options.filePath,
+        i18nConfig: options.i18nConfig,
+        isDataRequest: options.isDataRequest,
+        isProxy: options.isProxy,
+        module: options.module,
+        normalizedPathname: cleanPathname,
+        request: middlewareRequest,
+        trailingSlash: options.trailingSlash,
+      });
+
+      if (!result.continue) {
+        if (result.redirectUrl) {
+          return { kind: "response", response: responseFromMiddlewareRedirect(result) };
+        }
+        if (result.response) {
+          return { kind: "response", response: result.response };
+        }
+        return { kind: "response", response: internalServerErrorResponse() };
+      }
+
+      if (result.responseHeaders) {
+        options.context.headers = new Headers(result.responseHeaders);
+      }
+
+      if (result.status !== undefined) {
+        options.context.status = result.status;
+      }
+
+      if (result.rewriteUrl) {
+        if (result.rewriteStatus !== undefined) {
+          options.context.status = result.rewriteStatus;
+        }
+        if (isExternalUrl(result.rewriteUrl)) {
+          return {
+            kind: "response",
+            response: await proxyExternalMiddlewareRewrite(
+              middlewareRequest,
+              result.rewriteUrl,
+              options.context,
+            ),
+          };
+        }
+        const rewriteParsed = new URL(result.rewriteUrl, middlewareRequest.url);
+        cleanPathname = rewriteParsed.pathname;
+        rewritten = true;
+        search = rewriteParsed.search;
+      }
+    }
+
+    if (options.context.headers) {
+      options.context.requestHeaders = new Headers(options.context.headers);
+      applyMiddlewareRequestHeaders(options.context.headers);
+      processMiddlewareHeaders(options.context.headers);
+    }
+
+    return { kind: "continue", cleanPathname, rewritten, search };
+  } finally {
+    // Stripping Flight headers clones requests with bodies so downstream
+    // routing retains its original branch. Release the stripped branch after
+    // middleware/proxy handling; executeMiddleware owns its separate clone.
+    if (
+      middlewareRequest !== options.request &&
+      middlewareRequest.body &&
+      !middlewareRequest.bodyUsed &&
+      !middlewareRequest.body.locked
+    ) {
+      void middlewareRequest.body.cancel().catch(() => {});
     }
   }
-
-  if (!forwarded.applied) {
-    const result = await executeMiddleware({
-      basePath: options.basePath,
-      hadBasePath: options.hadBasePath ?? true,
-      filePath: options.filePath,
-      i18nConfig: options.i18nConfig,
-      isDataRequest: options.isDataRequest,
-      isProxy: options.isProxy,
-      module: options.module,
-      normalizedPathname: cleanPathname,
-      request: middlewareRequest,
-      trailingSlash: options.trailingSlash,
-    });
-
-    if (!result.continue) {
-      if (result.redirectUrl) {
-        return { kind: "response", response: responseFromMiddlewareRedirect(result) };
-      }
-      if (result.response) {
-        return { kind: "response", response: result.response };
-      }
-      return { kind: "response", response: internalServerErrorResponse() };
-    }
-
-    if (result.responseHeaders) {
-      options.context.headers = new Headers(result.responseHeaders);
-    }
-
-    if (result.status !== undefined) {
-      options.context.status = result.status;
-    }
-
-    if (result.rewriteUrl) {
-      if (result.rewriteStatus !== undefined) {
-        options.context.status = result.rewriteStatus;
-      }
-      if (isExternalUrl(result.rewriteUrl)) {
-        return {
-          kind: "response",
-          response: await proxyExternalMiddlewareRewrite(
-            middlewareRequest,
-            result.rewriteUrl,
-            options.context,
-          ),
-        };
-      }
-      const rewriteParsed = new URL(result.rewriteUrl, middlewareRequest.url);
-      cleanPathname = rewriteParsed.pathname;
-      rewritten = true;
-      search = rewriteParsed.search;
-    }
-  }
-
-  if (options.context.headers) {
-    options.context.requestHeaders = new Headers(options.context.headers);
-    applyMiddlewareRequestHeaders(options.context.headers);
-    processMiddlewareHeaders(options.context.headers);
-  }
-
-  return { kind: "continue", cleanPathname, rewritten, search };
 }

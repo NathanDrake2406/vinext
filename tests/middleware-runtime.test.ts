@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { executeMiddleware } from "../packages/vinext/src/server/middleware-runtime.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 
@@ -12,6 +12,43 @@ import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/adapter.ts
 
 describe("middleware redirect protocol", () => {
+  it("releases an unread middleware body branch in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    let resolveCancelled!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      resolveCancelled = resolve;
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("streaming"));
+      },
+      cancel() {
+        resolveCancelled();
+      },
+    });
+    const init: RequestInit = { body, method: "POST" };
+    Object.defineProperty(init, "duplex", { value: "half" });
+    const request = new Request("http://localhost:3000/action", init);
+
+    try {
+      await executeMiddleware({
+        isProxy: false,
+        module: { default: () => undefined },
+        request,
+      });
+      void request.body?.cancel().catch(() => {});
+
+      await expect(
+        Promise.race([
+          cancelled.then(() => true),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+        ]),
+      ).resolves.toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("exposes trusted data-request state to middleware", async () => {
     let capturedRequest: NextRequest | undefined;
     const module = {

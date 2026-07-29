@@ -230,9 +230,9 @@ function createNextRequest(
   hadBasePath?: boolean,
 ): NextRequest {
   const url = new URL(request.url);
-  // Middleware gets an isolated body branch; downstream routing keeps owning
-  // the original request body.
-  let mwRequest = request.body && !request.bodyUsed ? request.clone() : request;
+  // Constructing NextRequest from the input gives middleware an isolated body
+  // branch while downstream routing keeps owning the original request body.
+  let mwRequest = request;
   // NextURL._stripBasePath only recognises basePath when the request URL's
   // pathname actually starts with the configured prefix. Dev requests may
   // arrive after Vite has stripped that prefix, so restore it for requests
@@ -260,9 +260,14 @@ function createNextRequest(
       }
     : undefined;
 
-  return mwRequest instanceof NextRequest
-    ? mwRequest
-    : new NextRequest(mwRequest, nextConfig ? { nextConfig } : undefined);
+  const nextRequest =
+    mwRequest instanceof NextRequest && (!mwRequest.body || mwRequest.bodyUsed)
+      ? mwRequest
+      : new NextRequest(mwRequest, nextConfig ? { nextConfig } : undefined);
+  if (mwRequest !== request && mwRequest.body && !mwRequest.bodyUsed && !mwRequest.body.locked) {
+    void mwRequest.body.cancel().catch(() => {});
+  }
+  return nextRequest;
 }
 
 export async function executeMiddleware(
@@ -340,7 +345,7 @@ export async function executeMiddleware(
       waitUntilPromises,
     };
   } finally {
-    if (process.env.NODE_ENV !== "development" && nextRequest.body) {
+    if (nextRequest.body) {
       void nextRequest.body.cancel().catch(() => {});
     }
   }

@@ -636,17 +636,20 @@ describe("createAppRscHandler", () => {
     const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
     const sourceRoute = createPageRoute({ pattern: "/feed/secret" });
     const dispatchMatchedPage = vi.fn(async () => new Response("secret"));
-    const middleware = vi.fn(() => new Response("denied", { status: 401 }));
+    const middlewarePaths: string[] = [];
     const handler = createHandler({
       configHeaders: [],
       dispatchMatchedPage,
       matchInterceptRoute: (_pathname, sourcePathname) =>
-        sourcePathname === "/%66eed/secret" ? { route: sourceRoute, params: {} } : null,
+        sourcePathname === "/feed/secret" ? { route: sourceRoute, params: {} } : null,
       matchRoute: (pathname: string) =>
         pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
       middlewareModule: {
         config: { matcher: "/feed/:path*" },
-        default: middleware,
+        default(request: NextRequest) {
+          middlewarePaths.push(request.nextUrl.pathname);
+          return new Response("denied", { status: 401 });
+        },
       },
     });
 
@@ -655,7 +658,28 @@ describe("createAppRscHandler", () => {
     const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
 
     expect(response.status).toBe(401);
-    expect(middleware).toHaveBeenCalledOnce();
+    expect(middlewarePaths).toEqual(["/feed/secret"]);
+    expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("rejects interception sources containing a raw query delimiter", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const matchInterceptRoute = vi.fn(() => ({ route: createPageRoute(), params: {} }));
+    const dispatchMatchedPage = vi.fn(async () => new Response("secret"));
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      matchInterceptRoute,
+      matchRoute: (pathname: string) =>
+        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+    });
+
+    const headers = createRscRequestHeaders({ interceptionContext: "/admin?bypass" });
+    const rscUrl = await createRscRequestUrl("/docs/photos/1", headers);
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(400);
+    expect(matchInterceptRoute).not.toHaveBeenCalled();
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
   });
 
@@ -795,8 +819,11 @@ describe("createAppRscHandler", () => {
       dispatchMatchedPage,
       matchInterceptRoute: (_pathname, sourcePathname) =>
         sourcePathname === "/feed" ? { route: sourceRoute, params: {} } : null,
-      matchRoute: (pathname: string) =>
-        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+      matchRoute(pathname: string) {
+        if (pathname === "/photos/1") return { params: {}, route: targetRoute };
+        if (pathname === "/feed") return { params: {}, route: sourceRoute };
+        return null;
+      },
       middlewareModule: {
         default(request: NextRequest) {
           return request.nextUrl.pathname === "/feed"
@@ -827,8 +854,11 @@ describe("createAppRscHandler", () => {
       dispatchMatchedPage,
       matchInterceptRoute: (_pathname, sourcePathname) =>
         sourcePathname === "/feed" ? { route: sourceRoute, params: {} } : null,
-      matchRoute: (pathname: string) =>
-        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+      matchRoute(pathname: string) {
+        if (pathname === "/photos/1") return { params: {}, route: targetRoute };
+        if (pathname === "/feed") return { params: {}, route: sourceRoute };
+        return null;
+      },
       middlewareModule: {
         default(request: NextRequest) {
           return request.nextUrl.pathname === "/feed"
@@ -844,6 +874,49 @@ describe("createAppRscHandler", () => {
 
     const headers = createRscRequestHeaders({ interceptionContext: "/feed" });
     const rscUrl = await createRscRequestUrl("/docs/photos/1?tab=comments", headers);
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(200);
+    expect(dispatchMatchedPage).toHaveBeenCalledOnce();
+  });
+
+  it("allows a source rewrite that resolves to the selected route and params", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const sourceRoute = createPageRoute({
+      pattern: "/:locale/feed",
+      routeSegments: ["[locale]", "feed"],
+    });
+    const dispatchMatchedPage = vi.fn(async () => new Response("page"));
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      matchInterceptRoute: (_pathname, sourcePathname) =>
+        sourcePathname === "/feed" ? { route: sourceRoute, params: { locale: "en" } } : null,
+      matchRoute(pathname: string) {
+        if (pathname === "/photos/1") {
+          return { params: {} as Record<string, string | string[]>, route: targetRoute };
+        }
+        if (pathname === "/en/feed") {
+          return {
+            params: { locale: "en" } as Record<string, string | string[]>,
+            route: sourceRoute,
+          };
+        }
+        return null;
+      },
+      middlewareModule: {
+        default(request: NextRequest) {
+          return request.nextUrl.pathname === "/feed"
+            ? new Response(null, {
+                headers: { "x-middleware-rewrite": "https://example.test/docs/en/feed" },
+              })
+            : new Response(null, { headers: { "x-middleware-next": "1" } });
+        },
+      },
+    });
+
+    const headers = createRscRequestHeaders({ interceptionContext: "/feed" });
+    const rscUrl = await createRscRequestUrl("/docs/photos/1", headers);
     const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
 
     expect(response.status).toBe(200);
@@ -941,16 +1014,24 @@ describe("createAppRscHandler", () => {
   it("does not await cancellation of a streaming Server Action body branch", async () => {
     const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
     const sourceRoute = createPageRoute({ pattern: "/feed" });
-    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    let resolveBodyCancelled!: () => void;
+    const bodyCancelled = new Promise<void>((resolve) => {
+      resolveBodyCancelled = resolve;
+    });
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        bodyController = controller;
         controller.enqueue(new TextEncoder().encode("action-body"));
+      },
+      cancel() {
+        resolveBodyCancelled();
       },
     });
     const handler = createHandler({
       configHeaders: [],
-      handleServerActionRequest: async () => new Response("dispatched"),
+      handleServerActionRequest: async ({ request }: { request: Request }) => {
+        void request.body?.cancel().catch(() => {});
+        return new Response("dispatched");
+      },
       matchInterceptRoute: (_pathname, sourcePathname) =>
         sourcePathname === "/feed" ? { route: sourceRoute, params: {} } : null,
       matchRoute: (pathname: string) =>
@@ -976,13 +1057,18 @@ describe("createAppRscHandler", () => {
         timeout = setTimeout(() => resolve(null), 500);
       }),
     ]);
-    bodyController.close();
     if (timeout) clearTimeout(timeout);
     const response = responseBeforeBodyClose ?? (await responsePromise);
 
     expect(responseBeforeBodyClose).not.toBeNull();
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toBe("dispatched");
+    await expect(
+      Promise.race([
+        bodyCancelled.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+      ]),
+    ).resolves.toBe(true);
   });
 
   it("does not re-run middleware when no interception context is supplied", async () => {
