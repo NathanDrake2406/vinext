@@ -40,6 +40,7 @@ import {
   stripRscCacheBustingSearchParam,
 } from "./app-rsc-cache-busting.js";
 import { applyEdgeRuntimeHeader } from "./app-page-response.js";
+import { getScriptNonceFromHeaderSources } from "./csp.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
 import { resolveAppPageNavigationParams } from "./app-page-element-builder.js";
 import { deferUntilStreamConsumed } from "./app-page-stream.js";
@@ -187,6 +188,7 @@ type BuildServerActionPageElementOptions<TRoute extends AppServerActionRoute, TI
   request: Request;
   route: TRoute;
   searchParams: URLSearchParams;
+  scriptNonce?: string;
   renderMode: AppRscRenderMode;
   observeMetadataSearchParamsAccess?: boolean;
   observePageSearchParamsAccess?: boolean;
@@ -1515,6 +1517,13 @@ export async function handleServerActionRscRequest<
       setCurrentFetchCacheMode(options.resolveRouteFetchCacheMode?.(targetMatch.route) ?? null);
       setCurrentForceDynamicFetchDefault(redirectDynamicConfig === "force-dynamic");
       setCurrentFetchSoftTags(buildServerActionPageTags(targetMatch.route, targetPathname));
+      // Target middleware can replace the action path's CSP with a freshly
+      // generated nonce. Build the inline target with the nonce on the final
+      // response it represents, not the stale action-path nonce.
+      const redirectScriptNonce = getScriptNonceFromHeaderSources(
+        redirectRenderRequest.headers,
+        redirectHeaders,
+      );
       const rscStream = await runWithRootParamsScope(
         pickRootParams(targetMatch.params, targetMatch.route.rootParamNames),
         () =>
@@ -1528,6 +1537,7 @@ export async function handleServerActionRscRequest<
               request: redirectRenderRequest,
               route: targetMatch.route,
               searchParams: redirectSearchParams,
+              scriptNonce: redirectScriptNonce,
               renderMode: APP_RSC_RENDER_MODE_NAVIGATION,
               observeMetadataSearchParamsAccess: redirectDynamicConfig !== "force-static",
               observePageSearchParamsAccess: redirectDynamicConfig !== "force-static",

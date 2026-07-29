@@ -1103,6 +1103,7 @@ export default createAppRscHandler({
         renderMode: actionRenderMode,
         observeMetadataSearchParamsAccess,
         observePageSearchParamsAccess,
+        scriptNonce: targetScriptNonce,
       }) {
         return buildPageElements(actionRoute, actionParams, actionCleanPathname, {
           opts: interceptOpts,
@@ -1113,7 +1114,7 @@ export default createAppRscHandler({
           renderMode: actionRenderMode,
           observeMetadataSearchParamsAccess: observeMetadataSearchParamsAccess === true,
           observePageSearchParamsAccess: observePageSearchParamsAccess === true,
-        }, undefined, actionCleanPathname, scriptNonce);
+        }, undefined, actionCleanPathname, targetScriptNonce ?? scriptNonce);
       },
       cleanPathname,
       clearRequestContext() {

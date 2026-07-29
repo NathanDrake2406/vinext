@@ -2098,6 +2098,49 @@ describe("app server action execution helpers", () => {
     expect(Reflect.get(renderRequest!, "cf")).toEqual({ country: "AU" });
   });
 
+  it("builds an inline redirect target with target middleware's CSP nonce", async () => {
+    const buildPageElement = vi.fn(() => "redirect-target:{}:none");
+
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        buildPageElement,
+        loadServerAction() {
+          return Promise.resolve(() => redirect("/redirect-target"));
+        },
+        matchRoute(pathname) {
+          if (pathname === "/redirect-target") {
+            return {
+              params: {},
+              route: { id: "redirect-target", page: {}, params: [], pattern: "/redirect-target" },
+            };
+          }
+          return {
+            params: {},
+            route: { id: "dashboard", page: {}, params: [], pattern: "/dashboard" },
+          };
+        },
+        middlewareHeaders: new Headers({
+          "content-security-policy": "script-src 'nonce-action-path'",
+        }),
+        async runRedirectTargetMiddleware() {
+          return {
+            kind: "continue",
+            responseHeaders: new Headers({
+              "content-security-policy": "script-src 'nonce-redirect-target'",
+            }),
+          };
+        },
+      }),
+    );
+
+    expect(response?.headers.get("content-security-policy")).toBe(
+      "script-src 'nonce-redirect-target'",
+    );
+    expect(buildPageElement).toHaveBeenCalledWith(
+      expect.objectContaining({ scriptNonce: "redirect-target" }),
+    );
+  });
+
   it("runs target middleware before hydrating a lazy target route's modules", async () => {
     const events: string[] = [];
     const lazyRoute: TestRoute = {
