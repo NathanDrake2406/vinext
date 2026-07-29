@@ -12,7 +12,7 @@ import type {
   DocumentProps,
 } from "@vinext/types/next/upstream/dist/shared/lib/utils";
 import type { HtmlProps } from "@vinext/types/next/upstream/dist/shared/lib/html-context.shared-runtime";
-import { safeJsonStringify } from "../server/html";
+import { safeJsonStringify } from "../server/html.js";
 
 const documentAssetMarkerAttributes = {
   headNonce: "data-vinext-head-nonce",
