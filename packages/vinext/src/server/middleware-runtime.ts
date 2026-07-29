@@ -274,12 +274,13 @@ function createNextRequest(
 function releaseMiddlewareRequestBody(
   request: NextRequest,
   waitUntilPromises: Promise<unknown>[],
+  retainedByResponse = false,
 ): void {
   const body = request.body;
-  if (!body) return;
+  if (!body || retainedByResponse) return;
 
   const cancel = () => {
-    if (!request.bodyUsed && !body.locked) {
+    if (!body.locked) {
       void body.cancel().catch(() => {});
     }
   };
@@ -371,13 +372,14 @@ export async function executeMiddleware(
   }
 
   const waitUntilPromises = drainFetchEvent(fetchEvent);
-  releaseMiddlewareRequestBody(nextRequest, waitUntilPromises);
 
   if (!response) {
+    releaseMiddlewareRequestBody(nextRequest, waitUntilPromises);
     return { continue: true, waitUntilPromises };
   }
 
   if (response.headers.get(MIDDLEWARE_NEXT_HEADER) === "1") {
+    releaseMiddlewareRequestBody(nextRequest, waitUntilPromises);
     return {
       continue: true,
       responseHeaders: collectMiddlewareHeaders(response),
@@ -429,6 +431,7 @@ export async function executeMiddleware(
       // Internal data headers are stripped before middleware runs, so this
       // protocol is gated on trusted classification threaded by the caller.
       if (options.isDataRequest) {
+        releaseMiddlewareRequestBody(nextRequest, waitUntilPromises);
         return {
           continue: false,
           response: dataRedirectResponse(normalizedLocation, response),
@@ -452,6 +455,11 @@ export async function executeMiddleware(
         statusText: response.statusText,
         headers: relativizedResponseHeaders,
       });
+      releaseMiddlewareRequestBody(
+        nextRequest,
+        waitUntilPromises,
+        response.body === nextRequest.body,
+      );
       return {
         continue: false,
         redirectUrl: normalizedLocation,
@@ -500,6 +508,7 @@ export async function executeMiddleware(
     } catch {
       rewritePath = rewriteUrl;
     }
+    releaseMiddlewareRequestBody(nextRequest, waitUntilPromises);
     return {
       continue: true,
       rewriteUrl: rewritePath,
@@ -510,6 +519,7 @@ export async function executeMiddleware(
     };
   }
 
+  releaseMiddlewareRequestBody(nextRequest, waitUntilPromises, response.body === nextRequest.body);
   return {
     continue: false,
     response: stripMiddlewareHeadersFromResponse(response),

@@ -49,6 +49,44 @@ describe("middleware redirect protocol", () => {
     }
   });
 
+  it("releases the unread tail of a partially consumed middleware body", async () => {
+    let resolveCancelled!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      resolveCancelled = resolve;
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("first"));
+      },
+      cancel() {
+        resolveCancelled();
+      },
+    });
+    const init: RequestInit = { body, method: "POST" };
+    Object.defineProperty(init, "duplex", { value: "half" });
+    const request = new Request("http://localhost:3000/action", init);
+
+    await executeMiddleware({
+      isProxy: false,
+      module: {
+        async default(middlewareRequest: NextRequest) {
+          const reader = middlewareRequest.body!.getReader();
+          await reader.read();
+          reader.releaseLock();
+        },
+      },
+      request,
+    });
+    void request.body?.cancel().catch(() => {});
+
+    await expect(
+      Promise.race([
+        cancelled.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+      ]),
+    ).resolves.toBe(true);
+  });
+
   it("keeps the middleware body readable until waitUntil work settles", async () => {
     let continueWaitUntil!: () => void;
     const waitUntilGate = new Promise<void>((resolve) => {
@@ -81,6 +119,27 @@ describe("middleware redirect protocol", () => {
     await Promise.all(result.waitUntilPromises ?? []);
 
     expect(bodyText).toBe("action-body");
+    await expect(request.text()).resolves.toBe("action-body");
+  });
+
+  it("preserves a terminal middleware response backed by the request body", async () => {
+    const request = new Request("http://localhost:3000/action", {
+      body: "action-body",
+      method: "POST",
+    });
+
+    const result = await executeMiddleware({
+      isProxy: false,
+      module: {
+        default(middlewareRequest: NextRequest) {
+          return new Response(middlewareRequest.body);
+        },
+      },
+      request,
+    });
+
+    expect(result.continue).toBe(false);
+    await expect(result.response?.text()).resolves.toBe("action-body");
     await expect(request.text()).resolves.toBe("action-body");
   });
 

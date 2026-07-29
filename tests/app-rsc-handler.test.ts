@@ -719,8 +719,10 @@ describe("createAppRscHandler", () => {
   it("passes the raw interception source to the one-decode route matcher", async () => {
     const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
     const matchInterceptRoute = vi.fn(() => null);
+    const dispatchMatchedPage = vi.fn(async () => new Response("page"));
     const handler = createHandler({
       configHeaders: [],
+      dispatchMatchedPage,
       matchInterceptRoute,
       matchRoute: (pathname: string) =>
         pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
@@ -732,6 +734,38 @@ describe("createAppRscHandler", () => {
 
     expect(response.status).toBe(200);
     expect(matchInterceptRoute).toHaveBeenCalledWith("/photos/1", "/%2561dmin");
+    expect(dispatchMatchedPage).toHaveBeenCalledWith(
+      expect.objectContaining({ interceptionContext: "/%2561dmin" }),
+    );
+  });
+
+  it("passes the raw interception source to Server Action dispatch", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const handleServerActionRequest = vi.fn(async () => new Response("action"));
+    const handler = createHandler({
+      configHeaders: [],
+      handleServerActionRequest,
+      matchInterceptRoute: () => null,
+      matchRoute: (pathname: string) =>
+        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+    });
+
+    const headers = createRscRequestHeaders({ interceptionContext: "/%2561dmin" });
+    headers.set("content-type", "text/plain");
+    headers.set("next-action", "interception-action");
+    const response = await handler(
+      new Request("https://example.test/docs/photos/1", {
+        body: "action-body",
+        headers,
+        method: "POST",
+      }),
+      null,
+    );
+
+    expect(response.status).toBe(200);
+    expect(handleServerActionRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ interceptionContext: "/%2561dmin" }),
+    );
   });
 
   it("does not replay a forwarded target middleware result for the interception source", async () => {
