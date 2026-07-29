@@ -1098,7 +1098,7 @@ describe("App Router Production server (startProdServer)", () => {
   // (and `revalidate = false`) should produce a stable cached response. Two
   // requests must return identical HTML bytes; the first MISS render writes
   // to the cache and the second is a HIT. This was historically broken
-  // because `resolveAppPageCacheWritePolicy` rejected non-finite revalidate
+  // because `resolveAppPageCacheControl` rejected non-finite revalidate
   // intervals, so indefinite-cache pages re-rendered on every request.
   it("export const revalidate = Infinity: second request is a HIT with identical HTML", async () => {
     const res1 = await fetch(`${baseUrl}/revalidate-infinity-test`);
@@ -1426,6 +1426,14 @@ describe("App Router Production server (startProdServer)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("image/svg+xml");
     expect(await res.text()).toContain("vinext");
+  });
+
+  it("returns 405 for unsupported methods on existing public files", async () => {
+    const res = await fetch(`${baseUrl}/logo/logo.svg`, { method: "POST" });
+
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, HEAD");
+    expect(await res.text()).toBe("Method Not Allowed");
   });
 
   it("serves public files under basePath and 404s without it", async () => {
