@@ -950,8 +950,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     }
   }
   const interceptionSourceMatch =
-    interceptionSourcePathname !== null
-      ? (options.matchInterceptRoute?.(preActionRoutePathname, interceptionSourcePathname) ?? null)
+    interceptionSourcePathname !== null && interceptionContextHeader !== null
+      ? (options.matchInterceptRoute?.(preActionRoutePathname, interceptionContextHeader) ?? null)
       : null;
   if (
     interceptionSourceMatch !== null &&
@@ -1067,8 +1067,15 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       options.clearRequestContext();
       return notFoundResponse();
     }
+    let addedSourceHeader = false;
     for (const [name, value] of sourceHeadersContext.headers) {
-      if (!targetRequestHeaders.has(name)) targetHeadersContext.headers.set(name, value);
+      if (!targetRequestHeaders.has(name)) {
+        targetHeadersContext.headers.set(name, value);
+        addedSourceHeader = true;
+      }
+    }
+    if (addedSourceHeader) {
+      targetHeadersContext.readonlyHeaders = undefined;
     }
     if (sourceMiddlewareResult.rewritten) {
       // Rewrites such as locale insertion are valid only when they resolve to

@@ -230,9 +230,10 @@ function createNextRequest(
   hadBasePath?: boolean,
 ): NextRequest {
   const url = new URL(request.url);
-  // Constructing NextRequest from the input gives middleware an isolated body
-  // branch while downstream routing keeps owning the original request body.
-  let mwRequest = request;
+  // Middleware owns an isolated body branch. In particular, rebuilding the
+  // URL below transfers its input body in some runtimes, so never give it the
+  // downstream request's original branch.
+  let mwRequest = request.body && !request.bodyUsed ? request.clone() : request;
   // NextURL._stripBasePath only recognises basePath when the request URL's
   // pathname actually starts with the configured prefix. Dev requests may
   // arrive after Vite has stripped that prefix, so restore it for requests
@@ -268,6 +269,28 @@ function createNextRequest(
     void mwRequest.body.cancel().catch(() => {});
   }
   return nextRequest;
+}
+
+function releaseMiddlewareRequestBody(
+  request: NextRequest,
+  waitUntilPromises: Promise<unknown>[],
+): void {
+  const body = request.body;
+  if (!body) return;
+
+  const cancel = () => {
+    if (!request.bodyUsed && !body.locked) {
+      void body.cancel().catch(() => {});
+    }
+  };
+  if (waitUntilPromises.length === 0) {
+    cancel();
+    return;
+  }
+
+  // waitUntil work is allowed to keep reading the middleware request after
+  // the handler returns. Release the branch only once that work has settled.
+  void Promise.allSettled(waitUntilPromises).then(cancel);
 }
 
 export async function executeMiddleware(
@@ -336,6 +359,7 @@ export async function executeMiddleware(
   } catch (e) {
     console.error("[vinext] Middleware error:", e);
     const waitUntilPromises = drainFetchEvent(fetchEvent);
+    releaseMiddlewareRequestBody(nextRequest, waitUntilPromises);
     const message = options.includeErrorDetails
       ? "Middleware Error: " + (e instanceof Error ? e.message : String(e))
       : "Internal Server Error";
@@ -344,13 +368,10 @@ export async function executeMiddleware(
       response: internalServerErrorResponse(message),
       waitUntilPromises,
     };
-  } finally {
-    if (nextRequest.body) {
-      void nextRequest.body.cancel().catch(() => {});
-    }
   }
 
   const waitUntilPromises = drainFetchEvent(fetchEvent);
+  releaseMiddlewareRequestBody(nextRequest, waitUntilPromises);
 
   if (!response) {
     return { continue: true, waitUntilPromises };

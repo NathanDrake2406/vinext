@@ -49,6 +49,41 @@ describe("middleware redirect protocol", () => {
     }
   });
 
+  it("keeps the middleware body readable until waitUntil work settles", async () => {
+    let continueWaitUntil!: () => void;
+    const waitUntilGate = new Promise<void>((resolve) => {
+      continueWaitUntil = resolve;
+    });
+    let bodyText: string | undefined;
+    const request = new Request("http://localhost:3000/action", {
+      body: "action-body",
+      method: "POST",
+    });
+
+    const result = await executeMiddleware({
+      isProxy: false,
+      module: {
+        default(
+          middlewareRequest: NextRequest,
+          event: { waitUntil(promise: Promise<void>): void },
+        ) {
+          event.waitUntil(
+            waitUntilGate.then(async () => {
+              bodyText = await middlewareRequest.text();
+            }),
+          );
+        },
+      },
+      request,
+    });
+
+    continueWaitUntil();
+    await Promise.all(result.waitUntilPromises ?? []);
+
+    expect(bodyText).toBe("action-body");
+    await expect(request.text()).resolves.toBe("action-body");
+  });
+
   it("exposes trusted data-request state to middleware", async () => {
     let capturedRequest: NextRequest | undefined;
     const module = {
@@ -306,6 +341,25 @@ describe("middleware nextUrl basePath", () => {
     // req.url mirrors the un-stripped URL Next.js middleware receives.
     expect(new URL(captured.request!.url).pathname).toBe("/app/dashboard");
     expect(new URL(captured.request!.url).search).toBe("?q=1");
+  });
+
+  it("preserves the downstream request body when restoring basePath", async () => {
+    const { module } = captureModule();
+    const request = new Request("http://localhost:3000/action", {
+      body: "action-body",
+      method: "POST",
+    });
+
+    await executeMiddleware({
+      basePath: "/app",
+      hadBasePath: true,
+      isProxy: false,
+      module,
+      normalizedPathname: "/action",
+      request,
+    });
+
+    await expect(request.text()).resolves.toBe("action-body");
   });
 
   it("keeps basePath active for Pages flow requests whose URL carries the prefix", async () => {

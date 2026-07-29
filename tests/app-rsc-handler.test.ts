@@ -30,6 +30,10 @@ import {
 } from "../packages/vinext/src/server/metadata-route-response.js";
 import type { MiddlewareModule } from "../packages/vinext/src/server/middleware-runtime.js";
 import { makeThenableParams } from "../packages/vinext/src/shims/thenable-params.js";
+import {
+  getHeadersContext,
+  headers as requestHeaders,
+} from "../packages/vinext/src/shims/headers.js";
 
 type TestRoute = {
   __loadPage?: unknown;
@@ -641,7 +645,7 @@ describe("createAppRscHandler", () => {
       configHeaders: [],
       dispatchMatchedPage,
       matchInterceptRoute: (_pathname, sourcePathname) =>
-        sourcePathname === "/feed/secret" ? { route: sourceRoute, params: {} } : null,
+        sourcePathname === "/%66eed/secret" ? { route: sourceRoute, params: {} } : null,
       matchRoute: (pathname: string) =>
         pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
       middlewareModule: {
@@ -710,6 +714,24 @@ describe("createAppRscHandler", () => {
     expect(response.status).toBe(400);
     expect(middlewarePaths).toEqual(["/photos/1"]);
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("passes the raw interception source to the one-decode route matcher", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const matchInterceptRoute = vi.fn(() => null);
+    const handler = createHandler({
+      configHeaders: [],
+      matchInterceptRoute,
+      matchRoute: (pathname: string) =>
+        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+    });
+
+    const headers = createRscRequestHeaders({ interceptionContext: "/%2561dmin" });
+    const rscUrl = await createRscRequestUrl("/docs/photos/1", headers);
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(200);
+    expect(matchInterceptRoute).toHaveBeenCalledWith("/photos/1", "/%2561dmin");
   });
 
   it("does not replay a forwarded target middleware result for the interception source", async () => {
@@ -966,6 +988,38 @@ describe("createAppRscHandler", () => {
 
     expect(response.status).toBe(404);
     expect(dispatchMatchedPage).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a primed headers snapshot when source middleware adds a header", async () => {
+    const targetRoute = createPageRoute({ pattern: "/photos/1", routeSegments: ["photos", "1"] });
+    const sourceRoute = createPageRoute({ pattern: "/feed" });
+    const dispatchMatchedPage = vi.fn(async () => {
+      const currentHeaders = await requestHeaders();
+      return new Response(currentHeaders.get("x-source") ?? "missing");
+    });
+    const handler = createHandler({
+      configHeaders: [],
+      dispatchMatchedPage,
+      matchInterceptRoute: (_pathname, sourcePathname) =>
+        sourcePathname === "/feed" ? { route: sourceRoute, params: {} } : null,
+      matchRoute: (pathname: string) =>
+        pathname === "/photos/1" ? { params: {}, route: targetRoute } : null,
+      async runMiddleware({ cleanPathname }) {
+        if (cleanPathname === "/photos/1") {
+          await requestHeaders();
+        } else {
+          getHeadersContext()?.headers.set("x-source", "added");
+        }
+        return { kind: "continue", cleanPathname, rewritten: false, search: null };
+      },
+    });
+
+    const headers = createRscRequestHeaders({ interceptionContext: "/feed" });
+    const rscUrl = await createRscRequestUrl("/docs/photos/1", headers);
+    const response = await handler(new Request(`https://example.test${rscUrl}`, { headers }), null);
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("added");
   });
 
   it("preserves the Server Action body after authorizing an interception source", async () => {
