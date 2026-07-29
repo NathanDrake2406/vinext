@@ -6684,6 +6684,8 @@ describe('"use cache" runtime', () => {
     expect(callCount).toBe(2);
   });
 
+  // Ported from Next.js: test/e2e/app-dir/use-cache/use-cache.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/use-cache/use-cache.test.ts
   it("bypasses the shared cache in draft mode", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
@@ -6715,6 +6717,11 @@ describe('"use cache" runtime', () => {
       enterRequest(true);
       draftContent = true;
       expect(await cached()).toBe("DRAFT");
+
+      // The draft execution must not replace the public entry either.
+      enterRequest(false);
+      draftContent = false;
+      expect(await cached()).toBe("PUBLIC");
     } finally {
       setHeadersContext(null);
       setCacheHandler(new MemoryCacheHandler());
