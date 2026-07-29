@@ -14,6 +14,7 @@
 import fsp from "node:fs/promises";
 import path, { toSlash } from "pathslash";
 import { ASSET_PREFIX_URL_DIR } from "../utils/asset-prefix.js";
+import { isPrecompressedVariantBeneficial } from "../utils/precompressed-variant.js";
 
 /** Content-type lookup for static assets. Shared with prod-server.ts. */
 export const CONTENT_TYPES: Record<string, string> = {
@@ -64,6 +65,10 @@ export function contentTypeForPath(filePath: string): string {
  */
 const BUFFER_THRESHOLD = 64 * 1024;
 
+/** Temp files left by an interrupted atomic precompression write. */
+const PRECOMPRESSION_TEMP_FILE_RE =
+  /\.(?:br|gz|zst)\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/i;
+
 /** A servable file variant with pre-computed response headers. */
 type FileVariant = {
   /** Absolute file path (used for streaming large files). */
@@ -79,6 +84,8 @@ type FileVariant = {
 type StaticFileEntry = {
   /** Weak ETag for conditional request matching. */
   etag: string;
+  /** Original file modification time for If-Range date validation. */
+  mtimeMs: number;
   /** Pre-computed headers for 304 Not Modified response. */
   notModifiedHeaders: Record<string, string>;
   /** Original file variant (uncompressed). */
@@ -134,8 +141,6 @@ export class StaticFileCache {
       // Skip .vite/ internal directory
       if (relativePath.startsWith(".vite/") || relativePath === ".vite") continue;
 
-      const ext = path.extname(relativePath);
-      const contentType = contentTypeForPath(relativePath);
       // Files under Vite's `assetsDir` are content-hashed. The default
       // layout writes to `<ASSET_PREFIX_URL_DIR>/` (Next.js's canonical
       // convention); when `assetPrefix` is a path prefix the layout
@@ -152,6 +157,14 @@ export class StaticFileCache {
       const isHashed =
         relativePath.startsWith(`${ASSET_PREFIX_URL_DIR}/`) ||
         relativePath.includes(`/${ASSET_PREFIX_URL_DIR}/`);
+
+      // A hard process exit can strand the temporary side of an atomic
+      // precompression write. Never register that internal artifact as a URL,
+      // but preserve matching user files outside the precompression target.
+      if (isHashed && PRECOMPRESSION_TEMP_FILE_RE.test(relativePath)) continue;
+
+      const ext = path.extname(relativePath);
+      const contentType = contentTypeForPath(relativePath);
       const cacheControl = isHashed
         ? "public, max-age=31536000, immutable"
         : "public, max-age=3600";
@@ -160,10 +173,12 @@ export class StaticFileCache {
         `W/"${fileInfo.size}-${Math.floor(fileInfo.mtimeMs / 1000)}"`;
 
       // Base headers shared by all variants (Content-Type, Cache-Control, ETag)
+      const lastModified = new Date(fileInfo.mtimeMs).toUTCString();
       const baseHeaders = {
         "Content-Type": contentType,
         "Cache-Control": cacheControl,
         ETag: etag,
+        "Last-Modified": lastModified,
       };
 
       // Pre-compute original variant headers
@@ -175,23 +190,28 @@ export class StaticFileCache {
 
       const entry: StaticFileEntry = {
         etag,
-        notModifiedHeaders: { ETag: etag, "Cache-Control": cacheControl },
+        mtimeMs: fileInfo.mtimeMs,
+        notModifiedHeaders: {
+          ETag: etag,
+          "Cache-Control": cacheControl,
+          "Last-Modified": lastModified,
+        },
         original,
       };
 
       // Pre-compute compressed variant headers (with Content-Encoding, Vary, correct Content-Length)
       const brInfo = allFiles.get(relativePath + ".br");
-      if (brInfo) {
+      if (brInfo && isPrecompressedVariantBeneficial(brInfo.size, fileInfo.size, "br")) {
         entry.br = buildVariant(brInfo, baseHeaders, "br");
       }
 
       const gzInfo = allFiles.get(relativePath + ".gz");
-      if (gzInfo) {
+      if (gzInfo && isPrecompressedVariantBeneficial(gzInfo.size, fileInfo.size, "gzip")) {
         entry.gz = buildVariant(gzInfo, baseHeaders, "gzip");
       }
 
       const zstInfo = allFiles.get(relativePath + ".zst");
-      if (zstInfo) {
+      if (zstInfo && isPrecompressedVariantBeneficial(zstInfo.size, fileInfo.size, "zstd")) {
         entry.zst = buildVariant(zstInfo, baseHeaders, "zstd");
       }
 
