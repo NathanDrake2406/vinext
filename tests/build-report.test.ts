@@ -460,6 +460,14 @@ describe("classifyPagesRoute", () => {
       "a named default export specifier",
       "function Account() { return null }\nAccount.getInitialProps = async () => ({})\nexport { Account as default }\n",
     ],
+    [
+      "a class expression exported through a default identifier",
+      "const Account = class extends Component { static async getInitialProps() { return {} } render() { return null } }\nexport default Account\n",
+    ],
+    [
+      "a class expression exported through a named default specifier",
+      "const Account = class extends Component { static async getInitialProps() { return {} } render() { return null } }\nexport { Account as default }\n",
+    ],
   ])("classifies pages declaring getInitialProps via %s as ssr", async (_name, source) => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vinext-report-gip-"));
     const filePath = path.join(tmpRoot, "pages", "account.tsx");

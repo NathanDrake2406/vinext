@@ -326,6 +326,21 @@ function hasPagesGetInitialPropsInProgram(program: Program): boolean {
       );
     }
 
+    const declaration = node.type === "ExportNamedDeclaration" ? node.declaration : node;
+    if (declaration?.type === "VariableDeclaration") {
+      return declaration.declarations.some((declarator) => {
+        if (
+          declarator.id.type !== "Identifier" ||
+          !defaultExportNames.has(declarator.id.name) ||
+          !declarator.init
+        ) {
+          return false;
+        }
+        const initializer = unwrapStaticExpression(declarator.init);
+        return initializer.type === "ClassExpression" && classHasStaticGetInitialProps(initializer);
+      });
+    }
+
     return (
       node.type === "ClassDeclaration" &&
       node.id !== null &&

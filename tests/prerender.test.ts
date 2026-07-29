@@ -505,9 +505,11 @@ describe("prerenderPages — getInitialProps build classification", () => {
     fs.mkdirSync(pagesDir, { recursive: true });
     fs.writeFileSync(
       path.join(pagesDir, "_app.tsx"),
-      "function App({ Component, pageProps }) { return <Component {...pageProps} /> }\n" +
-        "App.getInitialProps = async ({ ctx }) => ({ pageProps: { url: ctx.req.url } })\n" +
-        "export default App\n",
+      "const App = class extends React.Component {\n" +
+        "  static async getInitialProps({ ctx }) { return { pageProps: { url: ctx.req.url } } }\n" +
+        "  render() { const { Component, pageProps } = this.props; return <Component {...pageProps} /> }\n" +
+        "}\n" +
+        "export { App as default }\n",
     );
     fs.writeFileSync(
       path.join(pagesDir, "index.tsx"),
