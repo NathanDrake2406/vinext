@@ -8,6 +8,7 @@ import {
   APP_ROUTE_KEY,
   APP_SOURCE_PAGE_KEY,
   APP_SLOT_BINDINGS_KEY,
+  AppElementsWire,
   type AppElements,
 } from "../packages/vinext/src/server/app-elements.js";
 import type { AppPageModule } from "../packages/vinext/src/server/app-page-route-wiring.js";
@@ -22,12 +23,14 @@ import { resolveAppPageRouteStateKey } from "../packages/vinext/src/server/app-p
 // eslint-disable-next-line import/first
 import {
   buildPageElements,
+  resolveInterceptedSlotIdentitySegments,
   resolveInterceptedSlotSegments,
   resolveAppPageNavigationParams,
   type AppPageBuildRoute,
 } from "../packages/vinext/src/server/app-page-element-builder.js";
 import { probeAppPage } from "../packages/vinext/src/server/app-page-probe.js";
 import { SIBLING_PAGE_INTERCEPT_SLOT_KEY } from "../packages/vinext/src/server/app-rsc-route-matching.js";
+import { APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -153,13 +156,40 @@ async function renderNode(node: React.ReactNode): Promise<string> {
 
 async function renderRouteEntry(elements: AppElements, routeId: string): Promise<string> {
   const { ElementsContext, Slot } = await import("../packages/vinext/src/shims/slot.js");
+  // Production Flight serialization starts every entry in the flat payload.
+  // Include the page entry beside the route so page/layout ordering tests use
+  // the same concurrent render shape instead of creating a route-only cycle.
+  const pageEntry = Object.entries(elements).find(([key]) => key.startsWith("page:"))?.[1];
   return renderNode(
     React.createElement(
       ElementsContext.Provider,
       { value: elements },
-      React.createElement(Slot, { id: routeId }),
+      React.createElement(
+        React.Fragment,
+        null,
+        pageEntry as React.ReactNode,
+        React.createElement(Slot, { id: routeId }),
+      ),
     ),
   );
+}
+
+async function renderElementEntry(elements: AppElements, elementId: string): Promise<string> {
+  const record = elements as Record<string, React.ReactNode>;
+  const element = record[elementId];
+  if (!React.isValidElement(element)) {
+    throw new Error(`Expected React element for ${elementId}`);
+  }
+
+  if (elementId.startsWith("page:")) {
+    return renderNode(element);
+  }
+
+  // Production Flight serialization starts every flat entry concurrently.
+  // Rendering the primary page beside a dependent slot lets its invocation
+  // release the page-initialization barrier just as production does.
+  const pageEntry = Object.entries(record).find(([key]) => key.startsWith("page:"))?.[1];
+  return renderNode(React.createElement(React.Fragment, null, pageEntry, element));
 }
 
 async function buildAndRenderElement(
@@ -183,7 +213,7 @@ async function buildAndRenderElement(
 
   markDynamicUsageMock.mockClear();
   markRenderRequestApiUsageMock.mockClear();
-  return renderNode(element);
+  return renderElementEntry(result, elementId);
 }
 
 function expectNoSearchParamsObservation(): void {
@@ -213,6 +243,153 @@ describe("buildPageElements", () => {
   beforeEach(() => {
     markDynamicUsageMock.mockClear();
     markRenderRequestApiUsageMock.mockClear();
+  });
+
+  it("renders the page before layouts that consume page-initialized request state", async () => {
+    // Regression from nodejs.org's next-intl integration, where the page calls
+    // setRequestLocale() before the parent layout renders NextIntlClientProvider.
+    // https://github.com/nodejs/nodejs.org/commit/5eace3f956c10da92880be7ce16e942bbcb47ff7
+    let requestLocale = "en";
+
+    async function LocalePage({ params }: { params: Promise<{ locale: string }> }) {
+      const { locale } = await params;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      requestLocale = locale;
+      return React.createElement("main", null, `page:${requestLocale}`);
+    }
+
+    function LocaleLayout(props: Record<string, unknown>) {
+      return React.createElement(
+        "section",
+        null,
+        `layout:${requestLocale}`,
+        props.children as React.ReactNode,
+      );
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(LocalePage),
+      layouts: [createSyntheticPageModule(LocaleLayout)],
+      layoutTreePositions: [1],
+      routeSegments: ["[locale]"],
+      pattern: "/:locale",
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({ route, params: { locale: "de" }, routePath: "/de" }),
+    );
+    const html = await renderRouteEntry(result, result[APP_ROUTE_KEY] as string);
+
+    expect(html).toContain("layout:de");
+    expect(html).toContain("page:de");
+    expect(html).not.toContain("layout:en");
+  });
+
+  it("preserves page initialization when async syntax is lowered to a Promise return", async () => {
+    let requestLocale = "en";
+
+    function LoweredLocalePage({ params }: { params: Promise<{ locale: string }> }) {
+      return params.then(({ locale }) => {
+        requestLocale = locale;
+        return React.createElement("main", null, `page:${requestLocale}`);
+      });
+    }
+
+    function LocaleLayout(props: Record<string, unknown>) {
+      return React.createElement(
+        "section",
+        null,
+        `layout:${requestLocale}`,
+        props.children as React.ReactNode,
+      );
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(LoweredLocalePage),
+      layouts: [createSyntheticPageModule(LocaleLayout)],
+      layoutTreePositions: [0],
+      routeSegments: ["[locale]"],
+      pattern: "/:locale",
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({ route, params: { locale: "de" }, routePath: "/de" }),
+    );
+    const html = await renderRouteEntry(result, result[APP_ROUTE_KEY] as string);
+
+    expect(html).toContain("layout:de");
+    expect(html).toContain("page:de");
+    expect(html).not.toContain("layout:en");
+  });
+
+  it("waits for a sync use() page before a synchronous layout without loading UI", async () => {
+    let resolveLocale!: (locale: string) => void;
+    const localePromise = new Promise<string>((resolve) => {
+      resolveLocale = resolve;
+    });
+    let requestLocale = "en";
+
+    function LocalePage() {
+      requestLocale = React.use(localePromise);
+      return React.createElement("main", null, `page:${requestLocale}`);
+    }
+
+    function LocaleLayout(props: Record<string, unknown>) {
+      return React.createElement(
+        "section",
+        null,
+        `layout:${requestLocale}`,
+        props.children as React.ReactNode,
+      );
+    }
+
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(LocalePage),
+      layouts: [createSyntheticPageModule(LocaleLayout)],
+      layoutTreePositions: [0],
+      routeSegments: ["sync-use"],
+      pattern: "/sync-use",
+    });
+
+    const result = await buildPageElements(createBaseOptions({ route, routePath: "/sync-use" }));
+    const htmlPromise = renderRouteEntry(result, result[APP_ROUTE_KEY] as string);
+    await Promise.resolve();
+    resolveLocale("de");
+    const html = await htmlPromise;
+
+    expect(html).toContain("layout:de");
+    expect(html).toContain("page:de");
+    expect(html).not.toContain("layout:en");
+  });
+
+  it("does not wait for an omitted page during loading-shell prefetches", async () => {
+    const Page = vi.fn(() => React.createElement("main", null, "Page content"));
+    const route = createSyntheticRoute({
+      page: createSyntheticPageModule(Page),
+      layouts: [
+        createSyntheticPageModule((props: { children?: React.ReactNode }) =>
+          React.createElement("section", null, props.children),
+        ),
+      ],
+      layoutTreePositions: [0],
+      loading: createSyntheticPageModule(() => React.createElement("p", null, "Loading shell")),
+      routeSegments: ["slow"],
+      pattern: "/slow",
+    });
+    const options = createBaseOptions({ route, routePath: "/slow" });
+
+    const result = await buildPageElements({
+      ...options,
+      pageRequest: {
+        ...options.pageRequest,
+        renderMode: APP_RSC_RENDER_MODE_PREFETCH_LOADING_SHELL,
+      },
+    });
+    const html = await renderRouteEntry(result, result[APP_ROUTE_KEY] as string);
+
+    expect(html).toContain("Loading shell");
+    expect(html).not.toContain("Page content");
+    expect(Page).not.toHaveBeenCalled();
   });
 
   it("returns an error element record when a page module has no default export", async () => {
@@ -444,6 +621,65 @@ describe("buildPageElements", () => {
     );
   });
 
+  it("keys sibling interception pages by target graph and bound params", async () => {
+    function InterceptPage(): React.ReactNode {
+      return React.createElement("div", null, "Intercepted");
+    }
+
+    const buildIdentity = async (
+      source: string,
+      sourceId: string,
+      id: string,
+      targetRouteGraphId: string | null = "graph-route:/photo/:id",
+      interceptionGraphId = "graph-interception:/feed->/photo/:slug",
+    ): Promise<string | undefined> => {
+      const route = createSyntheticRoute({
+        ids: {
+          layouts: [],
+          page: `graph-page:/${source}`,
+          rootBoundary: null,
+          route: `graph-route:/${source}`,
+          routeHandler: null,
+          slots: {},
+          templates: [],
+        },
+        page: createSyntheticPageModule(() => React.createElement("div", null, "Source")),
+        layouts: [],
+        routeSegments: [source, "[sourceId]"],
+        pattern: `/${source}/:sourceId`,
+      });
+      const result = await buildPageElements(
+        createBaseOptions({
+          route,
+          params: { sourceId },
+          routePath: `/photo/${id}`,
+          opts: {
+            interceptGraphId: interceptionGraphId,
+            interceptSlotKey: SIBLING_PAGE_INTERCEPT_SLOT_KEY,
+            interceptPage: createSyntheticPageModule(InterceptPage),
+            interceptParams: { slug: id },
+            interceptSourcePageSegments: [source, "(.)photo", "[slug]"],
+            interceptTargetPatternParts: ["photo", ":slug"],
+            interceptTargetRouteGraphId: targetRouteGraphId,
+          },
+        }),
+      );
+
+      return AppElementsWire.readMetadata(result).bfcacheSegmentIdentities[`page:/photo/${id}`];
+    };
+
+    const first = await buildIdentity("feed", "a", "42");
+    expect(first).toBeDefined();
+    expect(await buildIdentity("feed", "a", "42")).toBe(first);
+    expect(await buildIdentity("feed", "a", "43")).not.toBe(first);
+    expect(await buildIdentity("feed", "b", "42")).not.toBe(first);
+    expect(await buildIdentity("gallery", "a", "42")).not.toBe(first);
+    expect(await buildIdentity("feed", "a", "42", null)).toBe(first);
+    expect(
+      await buildIdentity("feed", "a", "42", null, "graph-interception:/feed->/album/:slug"),
+    ).not.toBe(first);
+  });
+
   it("keeps interception context out of the error payload route ID", async () => {
     const route = createSyntheticRoute({
       page: createSyntheticPageModuleWithoutDefault(),
@@ -574,9 +810,7 @@ describe("buildPageElements", () => {
 
     const result = await buildPageElements(createBaseOptions({ route, routePath: "/exotic-slot" }));
 
-    await expect(
-      renderNode((result as Record<string, React.ReactNode>)["slot:modal:/"]),
-    ).resolves.toContain("memo slot");
+    await expect(renderElementEntry(result, "slot:modal:/")).resolves.toContain("memo slot");
   });
 
   it("records serialized queryless searchParams without marking client pages dynamic", async () => {
@@ -670,6 +904,64 @@ describe("buildPageElements", () => {
         activeRouteId: "route:/dashboard",
         ownerLayoutId: "layout:/",
         slotId: "slot:team:/",
+        state: "active",
+      },
+    ]);
+  });
+
+  it("attaches the active route identity to a synthetic children page carrier", async () => {
+    function TestPage(): React.ReactNode {
+      return React.createElement("div", null, "Child page");
+    }
+    function TestLayout({ children }: { children?: React.ReactNode }): React.ReactNode {
+      return children;
+    }
+
+    const route = createSyntheticRoute({
+      childrenSlot: {
+        id: "slot:children:/parent",
+        ownerTreePath: "/parent",
+        state: "active",
+      },
+      page: createSyntheticPageModule(TestPage),
+      layouts: [createSyntheticPageModule(TestLayout)],
+      layoutTreePositions: [1],
+      routeSegments: ["parent", "[id]"],
+      pattern: "/parent/:id",
+    });
+
+    const result = await buildPageElements(
+      createBaseOptions({ route, routePath: "/parent/two", params: { id: "two" } }),
+    );
+    const record = result as Record<string, unknown>;
+
+    expect(record[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        activeRouteId: "route:/parent/two",
+        ownerLayoutId: "layout:/parent",
+        slotId: "slot:children:/parent",
+        state: "active",
+      },
+    ]);
+    expect(record["slot:children:/parent"]).toBeDefined();
+
+    const intercepted = (await buildPageElements(
+      createBaseOptions({
+        route,
+        routePath: "/photos/two",
+        params: { id: "two" },
+        opts: {
+          interceptionContext: "/parent/two",
+          interceptSlotId: "slot:modal:/parent",
+          interceptSourceMatchedUrl: "/parent/two",
+        },
+      }),
+    )) as Record<string, unknown>;
+    expect(intercepted[APP_SLOT_BINDINGS_KEY]).toEqual([
+      {
+        activeRouteId: "route:/parent/two",
+        ownerLayoutId: "layout:/parent",
+        slotId: "slot:children:/parent",
         state: "active",
       },
     ]);
@@ -815,8 +1107,42 @@ describe("buildPageElements", () => {
     expect(html).toContain('data-modal-segments="before|foo|1"');
     expect(interceptedSegments).toEqual(["before", "[username]", "[id]"]);
     expect(
+      resolveInterceptedSlotIdentitySegments(
+        [
+          "(shell)",
+          "@outer",
+          "sub",
+          "@modal",
+          "before",
+          "(group)",
+          "(.)[username]",
+          "@nested",
+          "(nested)",
+          "[id]",
+        ],
+        "modal@(shell)/@outer/sub/@modal",
+      ),
+    ).toEqual([
+      { marker: null, paramSource: "route", segment: "before" },
+      { marker: null, paramSource: "route", segment: "(group)" },
+      { marker: "(.)", paramSource: "slot", segment: "[username]" },
+      { marker: null, paramSource: "slot", segment: "(nested)" },
+      { marker: null, paramSource: "slot", segment: "[id]" },
+    ]);
+    expect(
       resolveAppPageRouteStateKey(interceptedSegments ?? [], { username: "foo", id: "1" }),
     ).toBe(JSON.stringify(["before", "username|foo|d", "id|1|d"]));
+  });
+
+  it("resolves the interception marker owned by a nested parallel slot", () => {
+    const sourceSegments = ["feed", "@outer", "(.)photo", "@inner", "(.)comments", "[id]"];
+    const slotKey = "inner@feed/@outer/(.)photo/@inner";
+
+    expect(resolveInterceptedSlotIdentitySegments(sourceSegments, slotKey)).toEqual([
+      { marker: "(.)", paramSource: "slot", segment: "comments" },
+      { marker: null, paramSource: "slot", segment: "[id]" },
+    ]);
+    expect(resolveInterceptedSlotSegments(sourceSegments, slotKey)).toEqual(["comments", "[id]"]);
   });
 
   it.each([
@@ -966,7 +1292,7 @@ describe("buildPageElements", () => {
     });
   });
 
-  it("rejects graph slot ids that diverge from the wire slot id", async () => {
+  it("uses wire slot ids only as payload addresses", async () => {
     function TestPage(): React.ReactNode {
       return React.createElement("div", null, "Hello");
     }
@@ -991,9 +1317,13 @@ describe("buildPageElements", () => {
       },
     });
 
-    await expect(
-      buildPageElements(createBaseOptions({ route, routePath: "/feed" })),
-    ).rejects.toThrow("App Router slot id mismatch");
+    const elements = await buildPageElements(createBaseOptions({ route, routePath: "/feed" }));
+    const wireSlotId = AppElementsWire.encodeSlotId("modal", "/feed");
+    const identities = AppElementsWire.readMetadata(elements).bfcacheSegmentIdentities;
+
+    expect(elements[wireSlotId]).toBeDefined();
+    expect(Object.hasOwn(elements, "slot:modal:/wrong")).toBe(false);
+    expect(JSON.parse(identities[wireSlotId])).toContain("slot:modal:/wrong");
   });
 
   it("does NOT call markDynamicUsage while wiring searchParams into the render tree", async () => {
@@ -1185,7 +1515,7 @@ describe("buildPageElements", () => {
 
       markDynamicUsageMock.mockClear();
       markRenderRequestApiUsageMock.mockClear();
-      return renderNode(element);
+      return renderElementEntry(result, "slot:modal:/");
     };
 
     await expectCachedRenderIgnoresQuery({
@@ -1317,7 +1647,7 @@ describe("buildPageElements", () => {
     const record = result as Record<string, unknown>;
     const slotElement = record["slot:modal:/"] as React.ReactNode;
     expect(slotElement).toBeDefined();
-    await renderNode(slotElement);
+    await renderElementEntry(result, "slot:modal:/");
     await expect(capturedSearchParams).resolves.toEqual({ search: "hello" });
   });
 
@@ -1363,7 +1693,7 @@ describe("buildPageElements", () => {
     const record = result as Record<string, unknown>;
     const slotElement = record["slot:modal:/"] as React.ReactNode;
     expect(slotElement).toBeDefined();
-    await renderNode(slotElement);
+    await renderElementEntry(result, "slot:modal:/");
     await expect(capturedSearchParams).resolves.toEqual({ search: "hello" });
   });
 
@@ -1419,7 +1749,7 @@ describe("buildPageElements", () => {
     const record = result as Record<string, unknown>;
     const slotElement = record["slot:bc:/"] as React.ReactNode;
     expect(slotElement).toBeDefined();
-    await renderNode(slotElement);
+    await renderElementEntry(result, "slot:bc:/");
     const slotParams = await capturedParams;
     // Without the fix, urlParts would be ["base","distinct","alice"], the
     // pattern match would fail, and slotParams would silently fall back to
