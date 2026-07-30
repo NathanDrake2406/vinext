@@ -3779,6 +3779,7 @@ route = "staging.example.com/*"`,
       productionHosts: ["staging.example.com"],
       hasUnwarmableProductionRoute: false,
       versionMetadataBinding: "VINEXT_VERSION_METADATA",
+      workersDevEnabled: false,
     });
   });
 
