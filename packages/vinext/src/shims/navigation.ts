@@ -487,11 +487,18 @@ function resolvePrefetchedRscResponseExpiresAt(
   timestamp: number,
   cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt" | "serverStaleTime">,
   fallbackTtlMs: number,
+  honorDynamicStaleTime: boolean,
 ): number {
   if (isCacheExpiresAt(cached.expiresAt)) {
     return cached.expiresAt;
   }
-  const seconds = resolveRscResponseStaleTimeSeconds(cached);
+  // `prefetch={true}` opts into holding dynamic content for the static window,
+  // so only the cacheLife bound applies to it — Next reuses a `full` prefetch
+  // up to `STATIC_STALETIME_MS` regardless of dynamism. An automatic prefetch
+  // additionally honors the dynamic bound.
+  const seconds = honorDynamicStaleTime
+    ? resolveRscResponseStaleTimeSeconds(cached)
+    : serverStaleTimeSeconds(cached.serverStaleTime);
   // Only the unsignalled fallback is floored, mirroring Next's
   // `STATIC_STALETIME_MS = getStaleTimeMs(config)`. A signalled bound is
   // authoritative: the cacheLife half was already floored by
@@ -1304,6 +1311,7 @@ export function prefetchRscResponse(
   behavior: {
     cacheForNavigation?: boolean;
     fallbackTtlMs?: number;
+    honorDynamicStaleTime?: boolean;
     optimisticRouteShell?: boolean;
     prefetchKind?: PrefetchCacheKind;
     prepareSnapshot?: (snapshot: CachedRscResponse) => Promise<AppElements>;
@@ -1347,6 +1355,7 @@ export function prefetchRscResponse(
           entry.timestamp,
           entry.snapshot,
           behavior.fallbackTtlMs ?? PREFETCH_CACHE_TTL,
+          behavior.honorDynamicStaleTime !== false,
         );
         if (behavior.prepareSnapshot) {
           try {
@@ -2748,6 +2757,7 @@ const _appRouter: AppRouterInstance = {
                 policy.fallbackTtl === "dynamic"
                   ? DYNAMIC_NAVIGATION_CACHE_TTL
                   : PREFETCH_CACHE_TTL,
+              honorDynamicStaleTime: policy.honorDynamicStaleTime,
               optimisticRouteShell: false,
               prefetchKind: "navigation",
               prepareSnapshot: prepareNavigationPrefetchSnapshot,

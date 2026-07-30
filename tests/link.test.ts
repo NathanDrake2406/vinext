@@ -339,24 +339,28 @@ describe("Link App Router prefetch mode", () => {
       expect(resolveAutoAppRoutePrefetch("/about")).toEqual({
         cacheForNavigation: true,
         fallbackTtl: "static",
+        honorDynamicStaleTime: true,
         prefetchShellFirst: true,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/blog/hello-world")).toEqual({
         cacheForNavigation: false,
         fallbackTtl: "static",
+        honorDynamicStaleTime: true,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/settings")).toEqual({
         cacheForNavigation: false,
         fallbackTtl: "static",
+        honorDynamicStaleTime: true,
         prefetchShellFirst: true,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/products/1")).toEqual({
         cacheForNavigation: true,
         fallbackTtl: "static",
+        honorDynamicStaleTime: true,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
@@ -366,18 +370,21 @@ describe("Link App Router prefetch mode", () => {
       expect(resolveAutoAppRoutePrefetch("/clothing/1")).toEqual({
         cacheForNavigation: true,
         fallbackTtl: "static",
+        honorDynamicStaleTime: true,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/teams/vercel/dashboard")).toEqual({
         cacheForNavigation: false,
         fallbackTtl: "static",
+        honorDynamicStaleTime: true,
         prefetchShellFirst: false,
         shouldPrefetch: true,
       });
       expect(resolveAutoAppRoutePrefetch("/missing")).toEqual({
         cacheForNavigation: false,
         fallbackTtl: "static",
+        honorDynamicStaleTime: true,
         prefetchShellFirst: false,
         shouldPrefetch: false,
       });

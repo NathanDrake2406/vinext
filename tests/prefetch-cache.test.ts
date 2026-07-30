@@ -1289,6 +1289,65 @@ describe("prefetch cache eviction", () => {
     expect(consumePrefetchResponse(rscUrl, null, null)).toBeNull();
   });
 
+  it("ignores the dynamic bound for an explicit full prefetch", async () => {
+    // Ported from Next.js:
+    // test/e2e/app-dir/segment-cache/metadata/segment-cache-metadata.test.ts
+    // "Because the link is prefetched with prefetch={true}, we should be able
+    // to prefetch the title, even though it's dynamic." Next reuses a `full`
+    // prefetch up to STATIC_STALETIME_MS regardless of dynamism
+    // (getPrefetchEntryCacheStatus); only `auto` degrades at the dynamic bound.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/full-prefetch-dynamic.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "0",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: PREFETCH_CACHE_TTL, honorDynamicStaleTime: false },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + PREFETCH_CACHE_TTL);
+  });
+
+  it("still floors cacheLife for an explicit full prefetch", async () => {
+    // Opting out of the dynamic bound does not opt out of cacheLife: Next
+    // resolves a full prefetch's staleAt through `getStaleTimeMs`, floored 30s.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/full-prefetch-cache-life.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "0",
+            [NEXT_ROUTER_STALE_TIME_HEADER]: "1",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: PREFETCH_CACHE_TTL, honorDynamicStaleTime: false },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
+  });
+
   it("keeps a dynamic bound unfloored even when cacheLife would floor higher", async () => {
     // `use cache` declared cacheLife({ stale: 60 }) but the page also declared
     // `unstable_dynamicStaleTime = 5`. The min-wins combine picks 5s, and the
