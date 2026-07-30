@@ -231,7 +231,9 @@ function describeVersionMismatch(
 ): string {
   return actualVersionId
     ? `expected Worker version ${expectedVersionId}, received ${actualVersionId}`
-    : `expected Worker version ${expectedVersionId}, but the response did not include ${VINEXT_WORKER_VERSION_HEADER}`;
+    : `expected Worker version ${expectedVersionId}, but the response did not include ` +
+        `${VINEXT_WORKER_VERSION_HEADER} — a custom Worker entry must forward its bindings ` +
+        "as `handler.fetch(request, env, ctx)` for the version to be stamped";
 }
 
 async function fetchWithTimeout(
