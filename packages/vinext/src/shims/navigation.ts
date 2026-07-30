@@ -492,23 +492,21 @@ function resolvePrefetchedRscResponseExpiresAt(
   if (isCacheExpiresAt(cached.expiresAt)) {
     return cached.expiresAt;
   }
-  // `prefetch={true}` opts into holding dynamic content for the static window,
-  // so only the cacheLife bound applies to it — Next reuses a `full` prefetch
-  // up to `STATIC_STALETIME_MS` regardless of dynamism. An automatic prefetch
-  // additionally honors the dynamic bound.
-  const seconds = honorDynamicStaleTime
-    ? resolveRscResponseStaleTimeSeconds(cached)
-    : serverStaleTimeSeconds(cached.serverStaleTime);
-  // Only the unsignalled fallback is floored, mirroring Next's
-  // `STATIC_STALETIME_MS = getStaleTimeMs(config)`. A signalled bound is
-  // authoritative: the cacheLife half was already floored by
-  // `serverStaleTimeSeconds`, and Next's `computeDynamicStaleAt` never floors
-  // the dynamic half — so a dynamic render's `0` must expire the entry now
-  // rather than license 30s of credentialed reuse.
+  const seconds = resolveRscResponseStaleTimeSeconds(cached);
+  // No signal: the static prefetch window, floored like Next's
+  // `STATIC_STALETIME_MS = getStaleTimeMs(config)`.
   if (seconds === undefined) {
     return timestamp + Math.max(fallbackTtlMs, MIN_PREFETCH_STALE_TIME_MS);
   }
-  return timestamp + seconds * 1000;
+  // An automatic prefetch takes a dynamic render's bound verbatim, including
+  // below the 30s floor: Next's `computeDynamicStaleAt` never floors it, so a
+  // `0` must expire the entry now rather than license 30s of credentialed
+  // reuse. `prefetch={true}` is an explicit opt-in to caching dynamic content,
+  // and Next reuses a `full` prefetch for the floored static window, so it
+  // keeps the floor.
+  return honorDynamicStaleTime
+    ? timestamp + seconds * 1000
+    : timestamp + Math.max(seconds * 1000, MIN_PREFETCH_STALE_TIME_MS);
 }
 
 function resolvePrefetchCacheEntryExpiresAt(entry: PrefetchCacheEntry): number {

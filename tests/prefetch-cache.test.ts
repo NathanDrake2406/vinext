@@ -1289,13 +1289,13 @@ describe("prefetch cache eviction", () => {
     expect(consumePrefetchResponse(rscUrl, null, null)).toBeNull();
   });
 
-  it("ignores the dynamic bound for an explicit full prefetch", async () => {
+  it("keeps the prefetch floor for an explicit full prefetch of dynamic content", async () => {
     // Ported from Next.js:
     // test/e2e/app-dir/segment-cache/metadata/segment-cache-metadata.test.ts
     // "Because the link is prefetched with prefetch={true}, we should be able
-    // to prefetch the title, even though it's dynamic." Next reuses a `full`
-    // prefetch up to STATIC_STALETIME_MS regardless of dynamism
-    // (getPrefetchEntryCacheStatus); only `auto` degrades at the dynamic bound.
+    // to prefetch the title, even though it's dynamic." `prefetch={true}` opts
+    // into caching dynamic content, so it keeps the floored static window that
+    // Next gives a `full` prefetch rather than expiring at the dynamic bound.
     const now = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const rscUrl = "/full-prefetch-dynamic.rsc";
@@ -1307,34 +1307,6 @@ describe("prefetch cache eviction", () => {
           headers: {
             "content-type": "text/x-component",
             [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "0",
-          },
-        }),
-      ),
-      null,
-      null,
-      undefined,
-      { fallbackTtlMs: PREFETCH_CACHE_TTL, honorDynamicStaleTime: false },
-    );
-    await getPrefetchCache().get(rscUrl)?.pending;
-
-    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + PREFETCH_CACHE_TTL);
-  });
-
-  it("still floors cacheLife for an explicit full prefetch", async () => {
-    // Opting out of the dynamic bound does not opt out of cacheLife: Next
-    // resolves a full prefetch's staleAt through `getStaleTimeMs`, floored 30s.
-    const now = 1_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const rscUrl = "/full-prefetch-cache-life.rsc";
-
-    prefetchRscResponse(
-      rscUrl,
-      Promise.resolve(
-        new Response("flight", {
-          headers: {
-            "content-type": "text/x-component",
-            [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "0",
-            [NEXT_ROUTER_STALE_TIME_HEADER]: "1",
           },
         }),
       ),

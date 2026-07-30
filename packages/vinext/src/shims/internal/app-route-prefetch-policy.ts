@@ -36,12 +36,11 @@ export type AppRoutePrefetchPolicy = {
   cacheForNavigation: boolean;
   fallbackTtl: "dynamic" | "static";
   /**
-   * Whether a dynamic render's stale-time bound caps reuse of this prefetch.
-   * Automatic prefetches honor it; `prefetch={true}` is an explicit opt-in to
-   * holding dynamic content for the static window, so it does not. Mirrors
-   * Next's split between `auto` (which degrades past `DYNAMIC_STALETIME_MS`)
-   * and `full` (reusable to `STATIC_STALETIME_MS`) in
-   * `getPrefetchEntryCacheStatus`.
+   * Whether a dynamic render's stale-time bound applies verbatim, including
+   * below the 30s prefetch floor. Automatic prefetches take it verbatim, so a
+   * dynamic `0` is never reused. `prefetch={true}` opts into caching dynamic
+   * content and keeps the floored static window, mirroring Next's split
+   * between `auto` and `full` in `getPrefetchEntryCacheStatus`.
    */
   honorDynamicStaleTime: boolean;
   prefetchShellFirst: boolean;
