@@ -5,9 +5,10 @@
  * takes production traffic:
  *
  *   validate → upload → inspect and re-verify deployment →
- *   stage new version at 0% → warm through a version override →
+ *   stage new version at 0% → attach desired triggers →
+ *   warm through a version override →
  *   verify the producing version → re-verify the staged split is still active →
- *   promote → apply triggers
+ *   promote
  *
  * If warming fails, this transaction does not promote the new version or
  * issue another remote mutation to undo the staged split. Another deploy may
@@ -180,16 +181,15 @@ function promoteWithoutWarmup(
 }
 
 /**
- * Stage the uploaded version at 0%, attempt a verified warm-up through a
- * version override, then promote to 100% and apply triggers.
+ * Stage the uploaded version at 0%, attach the desired routes, attempt a
+ * verified warm-up through a version override, then promote to 100%.
  *
- * Triggers (routes/schedules/custom domains) are applied AFTER promotion, not
- * before warming. `wrangler triggers deploy` PUTs the script's routes and can
- * detach the current production hostname; running it inside the warm window
- * means a warm/promote failure leaves production routing pointed at a version
- * that never got promoted. Warming instead targets the already-attached
- * production host via the version-override header, so mutations from this
- * transaction leave the new version staged at 0% — already the safe state.
+ * Desired routes must be attached before warming: a newly added or moved
+ * hostname cannot honor the uploaded-version override until it targets this
+ * Worker. The uploaded version remains at 0% while triggers are applied, so
+ * normal requests on both existing and newly attached routes continue to hit
+ * the previous version. If warming fails, the new version remains staged and
+ * never receives production traffic.
  */
 async function warmAndPromote(
   root: string,
@@ -211,6 +211,28 @@ async function warmAndPromote(
   // before promotion prints the workers.dev origin — it has to be derived from
   // the upload's version preview URL.
   const workersDevUrl = parseWorkersDevProductionUrl(upload.previewUrl, upload.versionId);
+  const targetUrls = [
+    ...target.productionHosts.map((host) => `https://${host}`),
+    ...(target.workersDevEnabled && workersDevUrl ? [workersDevUrl] : []),
+  ];
+  const headers = buildVersionOverrideHeaders(target.workerName, upload.versionId);
+  const unavailableTargetMessage =
+    target.hasProductionRoute && target.productionHosts.length === 0
+      ? "CDN pre-warm cannot safely warm path-scoped Worker routes because workers.dev uses a different cache key."
+      : "CDN pre-warm requires a production URL and Worker name for version overrides.";
+  if (options.warmCdnStrict && (targetUrls.length === 0 || !headers)) {
+    throw buildWarmupFailure(unavailableTargetMessage, upload.versionId, previousVersionId);
+  }
+  if (options.warmCdnStrict && target.hasUnwarmableProductionRoute) {
+    throw buildWarmupFailure(
+      "CDN pre-warm cannot cover every production route: an enabled route is " +
+        "path-scoped or wildcard-hosted, so its cache partition cannot be verified.",
+      upload.versionId,
+      previousVersionId,
+    );
+  }
+
+  const triggers = applyTriggersBeforeWarmup(root, options, upload.versionId, previousVersionId);
 
   let warmed = false;
   try {
@@ -224,18 +246,8 @@ async function warmAndPromote(
     // host-wide origin is a separate cache partition: warming one route's host
     // proves nothing about another's, and "warmed" may only be reported when
     // every origin × path pair is confirmed.
-    const targetUrls = [
-      ...target.productionHosts.map((host) => `https://${host}`),
-      ...(target.workersDevEnabled && workersDevUrl ? [workersDevUrl] : []),
-    ];
-    const headers = buildVersionOverrideHeaders(target.workerName, upload.versionId);
     if (targetUrls.length === 0 || !headers) {
-      const message =
-        target.hasProductionRoute && target.productionHosts.length === 0
-          ? "CDN pre-warm cannot safely warm path-scoped Worker routes because workers.dev uses a different cache key."
-          : "CDN pre-warm requires a production URL and Worker name for version overrides.";
-      if (options.warmCdnStrict) throw new Error(message);
-      console.warn(`  ${message} Promoting without pre-warming.`);
+      console.warn(`  ${unavailableTargetMessage} Promoting without pre-warming.`);
     } else {
       // A path-scoped or wildcard-host route has a cache partition this
       // transaction cannot reach, so its presence makes `productionHosts` an
@@ -287,13 +299,7 @@ async function warmAndPromote(
       warmed = allPathsConfirmed && !target.hasUnwarmableProductionRoute;
     }
   } catch (error) {
-    throw new Error(
-      `${formatUnknownError(error)}\n\n` +
-        `CDN warmup failed. This deploy did not promote the uploaded Worker version (${upload.versionId}). ` +
-        `It was staged at 0% alongside the previous version (${previousVersionId}) before warming, ` +
-        "but another deploy may have changed the current traffic split. Run `wrangler deployments status` " +
-        "to inspect the active deployment before retrying.",
-    );
+    throw buildWarmupFailure(error, upload.versionId, previousVersionId);
   }
 
   verifyStagedSplitBeforePromotion(root, options, previousVersionId, upload.versionId);
@@ -313,11 +319,44 @@ async function warmAndPromote(
         "re-promote or retry as needed.",
     );
   }
-  const triggers = applyTriggersAfterPromotion(root, options);
   return {
     url: pickDeployedUrl(triggers.deployedUrl, workersDevUrl, upload.previewUrl),
     warmed,
   };
+}
+
+function buildWarmupFailure(
+  error: unknown,
+  uploadedVersionId: string,
+  previousVersionId: string,
+): Error {
+  return new Error(
+    `${formatUnknownError(error)}\n\n` +
+      `CDN warmup failed. This deploy did not promote the uploaded Worker version (${uploadedVersionId}). ` +
+      `It was staged at 0% alongside the previous version (${previousVersionId}) before warming, ` +
+      "but another deploy may have changed the current traffic split. Run `wrangler deployments status` " +
+      "to inspect the active deployment before retrying.",
+  );
+}
+
+function applyTriggersBeforeWarmup(
+  root: string,
+  options: WranglerTargetOptions,
+  uploadedVersionId: string,
+  previousVersionId: string,
+): WranglerTriggersDeployResult {
+  try {
+    return runWranglerTriggersDeploy(root, options);
+  } catch (error) {
+    throw new Error(
+      `${formatUnknownError(error)}\n\n` +
+        `Could not attach the configured Worker routes before CDN warmup. ` +
+        `Worker version ${uploadedVersionId} was staged at 0% and was not promoted; ` +
+        `the previous version (${previousVersionId}) was at 100% when staging began. ` +
+        "Another deploy or a partial trigger update may have changed remote state. " +
+        "Inspect the current triggers and deployment status before retrying.",
+    );
+  }
 }
 
 /**

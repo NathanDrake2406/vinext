@@ -727,8 +727,6 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
 }
 `,
     );
-    writeFile(tmpDir, "worker/index.ts", "export default { fetch() {} };\n");
-
     await runInit(tmpDir, {
       platform: "cloudflare",
       cloudflare: {
@@ -750,7 +748,6 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     expect(wrangler).toContain('"binding": "VINEXT_KV_CACHE"');
     expect(wrangler).toContain('"images": { "binding": "IMAGES" }');
     expect(wrangler).toContain('"version_metadata": { "binding": "VINEXT_VERSION_METADATA" }');
-    expect(readFile(tmpDir, "worker/index.ts")).toBe("export default { fetch() {} };\n");
   });
 
   it("additively fills missing prerender config on rerun", async () => {
@@ -898,6 +895,50 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     expect(pkg.scripts["deploy:vinext"]).toContain("--experimental-warm-cdn-cache");
   });
 
+  it("rejects automatic CDN warmup setup for a custom Worker entry", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(tmpDir, "worker/index.ts", "export default { fetch() {} };\n");
+    const before = snapshotProject(tmpDir);
+
+    await expect(
+      runInit(tmpDir, {
+        cloudflare: {
+          dataCache: "kv",
+          cdnCache: "workers-cache",
+          imageOptimization: "cloudflare-images",
+          warmCdnCache: true,
+        },
+      }),
+    ).rejects.toThrow(
+      'cannot be configured automatically with custom Worker entry "./worker/index.ts"',
+    );
+    expect(snapshotProject(tmpDir)).toBe(before);
+  });
+
+  it("rejects an existing Wrangler config that names a custom Worker entry", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      '{ "main": "./src/custom-worker.ts", "cache": { "enabled": true } }\n',
+    );
+    const before = snapshotProject(tmpDir);
+
+    await expect(
+      runInit(tmpDir, {
+        cloudflare: {
+          dataCache: "kv",
+          cdnCache: "workers-cache",
+          imageOptimization: "cloudflare-images",
+          warmCdnCache: true,
+        },
+      }),
+    ).rejects.toThrow(
+      'cannot be configured automatically with custom Worker entry "./src/custom-worker.ts"',
+    );
+    expect(snapshotProject(tmpDir)).toBe(before);
+  });
+
   it("rejects cross-version cache config when CDN warmup is requested", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(
@@ -935,10 +976,12 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
   "env": {
     "staging": {
       // environment-local settings stay intact
-      "name": "my-worker-staging"
+      "name": "my-worker-staging",
+      "cache": { "cross_version_cache": false }
     },
     "preview": {
-      "vars": { "EXISTING": "value" }
+      "vars": { "EXISTING": "value" },
+      "cache": { "enabled": false }
     }
   }
 }
@@ -968,6 +1011,8 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     // Matching top-level binding preserved; staging and preview each get it added.
     expect(wrangler.match(/"binding": "VINEXT_VERSION_METADATA"/g)).toHaveLength(3);
     expect(wrangler).toContain('"EXISTING": "value"');
+    expect(wrangler).toContain('"cache": {"cross_version_cache":false,"enabled":true}');
+    expect(wrangler).toContain('"cache": {"enabled":true}');
   });
 
   it("rejects a conflicting user-owned version_metadata binding without mutating the project", async () => {

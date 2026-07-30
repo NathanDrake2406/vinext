@@ -56,6 +56,9 @@ export function validateCloudflarePlatformSetup(
     .map((fileName) => path.join(context.root, fileName))
     .find((candidate) => fs.existsSync(candidate));
   const wranglerCode = wranglerPath ? fs.readFileSync(wranglerPath, "utf-8") : undefined;
+  if (!wranglerCode) {
+    assertWarmupCompatibleWorkerEntry(context.root, cloudflare);
+  }
   const updatedWranglerCode = wranglerCode
     ? updateWranglerConfigForCloudflare(wranglerCode, cloudflare, { root: context.root })
     : undefined;
@@ -177,6 +180,36 @@ function resolveWorkerEntry(root: string): string {
   if (fs.existsSync(path.join(root, "worker", "index.ts"))) return "./worker/index.ts";
   if (fs.existsSync(path.join(root, "worker", "index.js"))) return "./worker/index.js";
   return "vinext/server/fetch-handler";
+}
+
+const VERSION_STAMPING_WORKER_ENTRIES = new Set([
+  "vinext/server/fetch-handler",
+  "vinext/server/app-router-entry",
+  "vinext/server/pages-router-entry",
+]);
+
+function assertWarmupCompatibleWorkerEntry(
+  root: string,
+  options: CloudflareInitOptions,
+  wranglerCode?: string,
+): void {
+  if (!options.warmCdnCache) return;
+
+  let configuredMain: unknown;
+  if (wranglerCode) {
+    const config = JSON.parse(stripJsonComments(wranglerCode)) as Record<string, unknown>;
+    configuredMain = config.main;
+  }
+  const workerEntry =
+    typeof configuredMain === "string" ? configuredMain : resolveWorkerEntry(root);
+  if (VERSION_STAMPING_WORKER_ENTRIES.has(workerEntry)) return;
+
+  throw new Error(
+    `CDN warmup cannot be configured automatically with custom Worker entry "${workerEntry}" ` +
+      "because vinext cannot verify that every response is stamped with the uploaded Worker version. " +
+      'Use "vinext/server/fetch-handler" as Wrangler main, or configure version metadata and ' +
+      "response stamping explicitly in the custom entry without enabling warmup through vinext init.",
+  );
 }
 
 // Cloudflare deployment scaffolding belongs to `vinext init`.
@@ -412,7 +445,10 @@ function ensureVersionMetadataInJsonObject(code: string, scopeLabel: string): st
   );
 }
 
-function ensureNamedEnvironmentVersionMetadata(code: string): string {
+function updateNamedEnvironmentObjects(
+  code: string,
+  updateEnvironment: (environmentCode: string, envName: string) => string,
+): string {
   const envProperty = findTopLevelJsonProperty(code, "env");
   if (!envProperty) return code;
 
@@ -430,13 +466,38 @@ function ensureNamedEnvironmentVersionMetadata(code: string): string {
       environmentProperty.valueEnd,
     );
     if (!environmentCode.trimStart().startsWith("{")) continue;
-    const updatedEnvironment = ensureVersionMetadataInJsonObject(
-      environmentCode,
-      `environment "${envName}"`,
-    );
+    const updatedEnvironment = updateEnvironment(environmentCode, envName);
     updatedEnv = `${updatedEnv.slice(0, environmentProperty.valueStart)}${updatedEnvironment}${updatedEnv.slice(environmentProperty.valueEnd)}`;
   }
   return `${code.slice(0, envProperty.valueStart)}${updatedEnv}${code.slice(envProperty.valueEnd)}`;
+}
+
+function ensureNamedEnvironmentVersionMetadata(code: string): string {
+  return updateNamedEnvironmentObjects(code, (environmentCode, envName) =>
+    ensureVersionMetadataInJsonObject(environmentCode, `environment "${envName}"`),
+  );
+}
+
+function ensureCacheEnabledInJsonObject(code: string): string {
+  const cacheProperty = findTopLevelJsonProperty(code, "cache");
+  if (!cacheProperty) {
+    return appendTopLevelJsonProperty(code, '  "cache": { "enabled": true }');
+  }
+
+  const cache = JSON.parse(
+    stripJsonComments(code.slice(cacheProperty.valueStart, cacheProperty.valueEnd)),
+  );
+  if (isUnknownRecord(cache) && cache.enabled === true) return code;
+
+  const updatedCache = JSON.stringify({
+    ...(isUnknownRecord(cache) ? cache : {}),
+    enabled: true,
+  });
+  return `${code.slice(0, cacheProperty.valueStart)}${updatedCache}${code.slice(cacheProperty.valueEnd)}`;
+}
+
+function ensureNamedEnvironmentCacheEnabled(code: string): string {
+  return updateNamedEnvironmentObjects(code, ensureCacheEnabledInJsonObject);
 }
 
 export function updateWranglerConfigForCloudflare(
@@ -450,6 +511,7 @@ export function updateWranglerConfigForCloudflare(
   } catch (cause) {
     throw new Error("Could not parse the existing Wrangler JSON/JSONC config.", { cause });
   }
+  assertWarmupCompatibleWorkerEntry(context.root ?? process.cwd(), options, code);
   if (Object.hasOwn(config, "pages_build_output_dir")) {
     throw new Error(
       'The existing Wrangler config uses "pages_build_output_dir", which cannot be combined with the Worker "main" required by vinext. Remove "pages_build_output_dir" and rerun vinext init.',
@@ -474,18 +536,8 @@ export function updateWranglerConfigForCloudflare(
     );
   }
   if (options.cdnCache === "workers-cache") {
-    const cacheProperty = findTopLevelJsonProperty(output, "cache");
-    if (!cacheProperty) {
-      output = appendTopLevelJsonProperty(output, '  "cache": { "enabled": true }');
-    } else {
-      const cache = JSON.parse(
-        stripJsonComments(output.slice(cacheProperty.valueStart, cacheProperty.valueEnd)),
-      ) as Record<string, unknown> | null;
-      if (!cache || cache.enabled !== true) {
-        const updatedCache = JSON.stringify({ ...cache, enabled: true });
-        output = `${output.slice(0, cacheProperty.valueStart)}${updatedCache}${output.slice(cacheProperty.valueEnd)}`;
-      }
-    }
+    output = ensureCacheEnabledInJsonObject(output);
+    output = ensureNamedEnvironmentCacheEnabled(output);
   }
   if (options.warmCdnCache) {
     output = ensureVersionMetadataInJsonObject(output, "the top level");

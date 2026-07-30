@@ -283,17 +283,17 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
+      "triggers",
       `fetch:https://app.example.com/:my-worker="${UPLOADED_VERSION_ID}"`,
       `fetch:https://app.example.com/about:my-worker="${UPLOADED_VERSION_ID}"`,
       "status",
       "promote",
-      "triggers",
     ]);
   });
 
-  it("prefers the post-trigger production URL over the version preview URL", async () => {
+  it("prefers the trigger-reported production URL over the version preview URL", async () => {
     // Upload prints a version-scoped preview host and promotion prints no URL
-    // at all, so the only report of the live target is the post-promotion
+    // at all, so the only report of the live target is the pre-warm
     // triggers deploy. The final "Deployed to:" line must name that target
     // rather than a workers.dev host derived from the upload.
     writeFile(
@@ -451,6 +451,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
       if (args.includes("status")) return deploymentStatusOutput();
       if (isStage(args)) return "Staged version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
     const { deployWithCdnWarmup } =
@@ -517,6 +518,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
       if (args.includes("status")) return deploymentStatusOutput();
       if (isStage(args)) return "Staged version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
     const { deployWithCdnWarmup } =
@@ -623,10 +625,10 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
+      "triggers",
       "fetch:https://workers-cache.vinext.workers.dev/cached/intro",
       "status",
       "promote",
-      "triggers",
     ]);
   });
 
@@ -640,6 +642,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("upload")) return `Uploaded version ${UPLOADED_VERSION_ID}\n`;
       if (args.includes("status")) return deploymentStatusOutput();
       if (isStage(args)) return "Staged version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
       throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
     });
     const { deployWithCdnWarmup } =
@@ -686,7 +689,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       warmed: false,
     });
     expect(fetch).not.toHaveBeenCalled();
-    expect(events).toEqual(["stage", "promote", "triggers"]);
+    expect(events).toEqual(["stage", "triggers", "promote"]);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("path-scoped Worker routes"));
   });
 
@@ -735,11 +738,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
+      "triggers",
       "fetch:old-version",
       "fetch:new-version",
       "status",
       "promote",
-      "triggers",
     ]);
   });
 
@@ -848,10 +851,10 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
+      "triggers",
       "fetch:old-version",
       "status",
       "promote-uploaded",
-      "triggers",
     ]);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("confirmed 0/1 path(s) served the uploaded version"),
@@ -902,9 +905,16 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     ).rejects.toThrow(
       /CDN warmup failed for 1\/1 path\(s\); verified 0\/1\.[\s\S]*This deploy did not promote[\s\S]*another deploy may have changed the current traffic split/,
     );
-    // No restore/promote/triggers call: this transaction does not overwrite
-    // whatever active deployment state now exists.
-    expect(events).toEqual(["upload", "status", "status", "stage", "fetch:old-version"]);
+    // Triggers were attached while the previous version still held 100%;
+    // no restore or promotion overwrites whatever deployment state now exists.
+    expect(events).toEqual([
+      "upload",
+      "status",
+      "status",
+      "stage",
+      "triggers",
+      "fetch:old-version",
+    ]);
   });
 
   it("stages and promotes a fresh attempt after a prior warmup left a version staged", async () => {
@@ -996,15 +1006,16 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
+      "triggers",
       "fetch:old-version",
       "upload:retry",
       "status",
       "status",
       "stage",
+      "triggers",
       "fetch:new-version",
       "status",
       "promote",
-      "triggers",
     ]);
     expect(stagingSplits[1]).not.toContain(`${failedVersionId}@0%`);
   });
@@ -1041,8 +1052,9 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     );
     // One status read to classify the deployment, one immediately before
     // staging, and one ownership re-check before the promotion attempt — but
-    // no reconciling re-read after promotion fails, and triggers never run.
-    expect(events).toEqual(["status", "status", "status", "promote-attempt"]);
+    // no reconciling re-read after promotion fails. Triggers run before warmup
+    // while the previous version still holds 100% traffic.
+    expect(events).toEqual(["status", "status", "triggers", "status", "promote-attempt"]);
   });
 
   it("aborts promotion when another deploy replaces the staged split during warmup", async () => {
@@ -1083,7 +1095,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         `no longer matches the staged traffic split[\\s\\S]*observed ${otherDeployVersionId}@100%[\\s\\S]*was not promoted`,
       ),
     );
-    expect(commands).toEqual([]);
+    expect(commands).toEqual(["triggers"]);
   });
 
   it("does not overwrite a deployment that changes before staging", async () => {
@@ -1128,6 +1140,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         throw new Error("status request timed out");
       }
       if (isStage(args)) return "Staged version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
       if (isPromotion(args)) {
         commands.push("promote");
         return "Promoted version\n";
