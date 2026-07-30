@@ -872,8 +872,10 @@ function createFetchDedupeCandidate(
     return null;
   }
 
-  const request =
-    typeof input === "string" || input instanceof URL ? new Request(input, init) : input;
+  // RequestInit overrides a Request input too. Normalize whenever init is
+  // present so the dedupe key describes the request that fetch will execute.
+  // Eligible GET/HEAD requests have no body stream for this to disturb.
+  const request = input instanceof Request && !init ? input : new Request(input, init);
 
   if ((request.method !== "GET" && request.method !== "HEAD") || request.keepalive) {
     return null;

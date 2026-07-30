@@ -2075,6 +2075,89 @@ describe("fetch cache shim", () => {
       expect(data2.count).toBe(2); // Different auth = different cache
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
+
+    it("applies RequestInit overrides when deduping Request inputs", async () => {
+      fetchMock.mockImplementation(async (input, init) => {
+        requestCount++;
+        const request = new Request(input, init);
+        return new Response(
+          JSON.stringify({
+            authorization: request.headers.get("authorization"),
+            credentials: request.credentials,
+          }),
+        );
+      });
+      const request = new Request("https://api.example.com/req-auth-override", {
+        headers: { Authorization: "Bearer base" },
+        credentials: "same-origin",
+      });
+
+      const [aliceResponse, bobResponse] = await Promise.all([
+        fetch(request, {
+          cache: "no-store",
+          headers: { Authorization: "Bearer alice" },
+          credentials: "include",
+        }),
+        fetch(request, {
+          cache: "no-store",
+          headers: { Authorization: "Bearer bob" },
+          credentials: "omit",
+        }),
+      ]);
+
+      expect(await aliceResponse.json()).toEqual({
+        authorization: "Bearer alice",
+        credentials: "include",
+      });
+      expect(await bobResponse.json()).toEqual({
+        authorization: "Bearer bob",
+        credentials: "omit",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not persist a deduped response under a different RequestInit cache key", async () => {
+      fetchMock.mockImplementation(async (input, init) => {
+        requestCount++;
+        const request = new Request(input, init);
+        return new Response(
+          JSON.stringify({
+            authorization: request.headers.get("authorization"),
+            count: requestCount,
+          }),
+        );
+      });
+      const request = new Request("https://api.example.com/req-auth-cache-override");
+
+      const aliceResponse = await fetch(request, {
+        headers: { Authorization: "Bearer alice" },
+        next: { revalidate: 60 },
+      });
+      expect(await aliceResponse.json()).toEqual({
+        authorization: "Bearer alice",
+        count: 1,
+      });
+
+      const bobResponse = await fetch(request, {
+        headers: { Authorization: "Bearer bob" },
+        next: { revalidate: 60 },
+      });
+      expect(await bobResponse.json()).toEqual({
+        authorization: "Bearer bob",
+        count: 2,
+      });
+
+      startNewFetchCacheScope();
+      const cachedBobResponse = await fetch(request, {
+        headers: { Authorization: "Bearer bob" },
+        next: { revalidate: 60 },
+      });
+      expect(await cachedBobResponse.json()).toEqual({
+        authorization: "Bearer bob",
+        count: 2,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   // ── cache: 'no-cache' bypass ────────────────────────────────────────
