@@ -401,6 +401,7 @@ async function applyRewrite(
     rewrites: NextRewrite[];
     /** Raw pathname identity used for config source matching and capture substitution. */
     paramsPathname?: string;
+    validateExternalRewriteRequest: () => Promise<Response | null>;
   },
   cleanPathname: string,
 ): Promise<Response | string | null> {
@@ -418,6 +419,8 @@ async function applyRewrite(
   if (!rewritten) return null;
 
   if (isExternalUrl(rewritten)) {
+    const validationResponse = await options.validateExternalRewriteRequest();
+    if (validationResponse) return validationResponse;
     options.clearRequestContext();
     return configMatchers.proxyExternalRequest(options.request, rewritten);
   }
@@ -694,8 +697,10 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const scriptNonce = getScriptNonceFromHeaderSources(request.headers, middlewareContext.headers);
   const postMiddlewareRequestContext = buildPostMwRequestContext(userlandRequest);
   let filesystemRouteEligible = hadBasePath || didMiddlewareRewrite;
-  const validateClaimedOutsideBasePathRsc = async (): Promise<Response | null> => {
-    if (hadBasePath || !filesystemRouteEligible) return null;
+  const validateClaimedOutsideBasePathRsc = async (
+    routeClaimed = filesystemRouteEligible,
+  ): Promise<Response | null> => {
+    if (hadBasePath || !routeClaimed) return null;
     return resolveInvalidRscCacheBustingRequest({ isRscRequest, request });
   };
 
@@ -721,6 +726,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           cleanPathnameIsRequestPathname ? requestCleanPathname : cleanPathname,
         ),
         rewrites: [rewrite],
+        validateExternalRewriteRequest: () => validateClaimedOutsideBasePathRsc(true),
       },
       matchPathname(cleanPathname),
     );
@@ -760,6 +766,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
             cleanPathnameIsRequestPathname ? requestCleanPathname : cleanPathname,
           ),
           rewrites: [rewrite],
+          validateExternalRewriteRequest: () => validateClaimedOutsideBasePathRsc(true),
         },
         matchPathname(cleanPathname),
       );
@@ -788,6 +795,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
               cleanPathnameIsRequestPathname ? requestCleanPathname : cleanPathname,
             ),
             rewrites: [rewrite],
+            validateExternalRewriteRequest: () => validateClaimedOutsideBasePathRsc(true),
           },
           matchPathname(cleanPathname),
         );
@@ -1032,6 +1040,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
             cleanPathnameIsRequestPathname ? requestCleanPathname : cleanPathname,
           ),
           rewrites: [rewrite],
+          validateExternalRewriteRequest: () => validateClaimedOutsideBasePathRsc(true),
         },
         matchPathname(cleanPathname),
       );
@@ -1081,6 +1090,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
             cleanPathnameIsRequestPathname ? requestCleanPathname : cleanPathname,
           ),
           rewrites: [rewrite],
+          validateExternalRewriteRequest: () => validateClaimedOutsideBasePathRsc(true),
         },
         matchPathname(cleanPathname),
       );
