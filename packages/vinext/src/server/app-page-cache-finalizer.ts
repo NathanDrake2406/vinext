@@ -6,7 +6,6 @@ import {
   createEmptyAppPageRenderObservationState,
   type AppPageRenderObservationState,
 } from "./app-page-render-observation.js";
-import { stripClientTraceMetadataTags } from "./client-trace-metadata.js";
 import { buildAppPageCacheValue, isrCacheControl, type AppPageCacheSetter } from "./isr-cache.js";
 import type { CacheControlMetadata } from "vinext/shims/cache-handler";
 import type { RenderObservation } from "./cache-proof.js";
@@ -151,10 +150,14 @@ export function finalizeAppPageHtmlCacheResponse(
 
   const cachePromise = (async () => {
     try {
-      const cachedHtml = stripClientTraceMetadataTags(
-        await readStreamAsText(streamForCache),
-        options.clientTraceMetadata,
-      );
+      let cachedHtml = await readStreamAsText(streamForCache);
+
+      // Gate on the allow-list so the trace-metadata module stays out of the
+      // RSC server graph for the common case where the feature is unset.
+      if (options.clientTraceMetadata && options.clientTraceMetadata.length > 0) {
+        const { stripClientTraceMetadataTags } = await import("./client-trace-metadata.js");
+        cachedHtml = stripClientTraceMetadataTags(cachedHtml, options.clientTraceMetadata);
+      }
 
       if (
         options.capturedDynamicUsageBeforeContextCleanup?.() === true ||
