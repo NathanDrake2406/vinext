@@ -291,6 +291,36 @@ test.describe("Next.js compat: client cache", () => {
       .poll(() => requestsFor(requests, `${ROOT}/0`).some((request) => !request.partial))
       .toBe(true);
 
+    // Delay committed-cache publication after the prefetch is consumed. The
+    // consumed snapshot must remain discoverable during that handoff so a Link
+    // remount cannot start a duplicate request.
+    await page.evaluate(() => {
+      const originalTee = Reflect.get(
+        ReadableStream.prototype,
+        "tee",
+      ) as typeof ReadableStream.prototype.tee;
+      ReadableStream.prototype.tee = function (this: ReadableStream<unknown>) {
+        ReadableStream.prototype.tee = originalTee;
+        const [reactBranch, cacheBranch] = originalTee.call(this);
+        const cacheReader = cacheBranch.getReader();
+        const delayedCacheBranch = new ReadableStream({
+          async start(controller) {
+            while (true) {
+              const result = await cacheReader.read();
+              if (result.done) break;
+              controller.enqueue(result.value);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+            controller.close();
+          },
+          cancel(reason) {
+            return cacheReader.cancel(reason);
+          },
+        });
+        return [reactBranch, delayedCacheBranch];
+      } as typeof ReadableStream.prototype.tee;
+    });
+
     requests.length = 0;
     await targetLink.click();
     await expect(page.locator("#client-cache-id")).toHaveText("0");
@@ -308,6 +338,7 @@ test.describe("Next.js compat: client cache", () => {
 
     requests.length = 0;
     const cachedTargetLink = await revealAccordionLink(page, `${ROOT}/0`);
+    expect(requestsFor(requests, `${ROOT}/0`)).toEqual([]);
     await cachedTargetLink.click();
     await expect(page.locator("#client-cache-id")).toHaveText("0");
     expect(await readRandom(page)).toBe(initial);

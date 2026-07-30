@@ -1983,6 +1983,17 @@ function bootstrapHydration(
           if (!browserNavigationController.isCurrentNavigation(navId)) return;
           if (prefetchedResponse) {
             prefetchedElements = prefetchedResponse.preparedElements;
+            // Consuming a prefetch removes its cache entry, but the buffered
+            // snapshot remains valid while this navigation renders. Keep it
+            // discoverable until the committed visited-response publication
+            // replaces it, so a Link remount cannot start a duplicate request
+            // in the handoff window.
+            seedPrefetchResponseSnapshot(
+              rscUrl,
+              prefetchedResponse,
+              requestInterceptionContext,
+              mountedSlotsHeader,
+            );
             navResponse = restoreRscResponse(prefetchedResponse, false);
             navResponseExpiresAt = prefetchedResponse.expiresAt;
             navResponseUrl = resolvePrefetchNavigationResponseUrl({
