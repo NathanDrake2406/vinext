@@ -98,9 +98,14 @@ function resolveWorkerName(
 ): string | undefined {
   if (explicitName) return explicitName;
   if (!envName) return config.name;
+  // Service environments (legacy_env: false) address the top-level service
+  // name. Wrangler resolves `name` through inheritableInWranglerEnvironments,
+  // which rejects an env-local `name` there and returns the top-level one
+  // anyway — so the version override must target that name, not the env's.
+  if (config.legacyEnv === false) return config.name;
   const explicitEnvName = config.env?.[envName]?.name;
   if (explicitEnvName) return explicitEnvName;
   if (flattenedEnvConfig) return config.name;
   if (!config.name) return undefined;
-  return config.legacyEnv === false ? config.name : `${config.name}-${envName}`;
+  return `${config.name}-${envName}`;
 }

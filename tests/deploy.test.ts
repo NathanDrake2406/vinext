@@ -3783,6 +3783,43 @@ route = "staging.example.com/*"`,
     });
   });
 
+  // Wrangler resolves `name` via inheritableInWranglerEnvironments: with
+  // legacy_env false it rejects an env-local `name` and returns the top-level
+  // service name. Targeting the env-local name would build a version override
+  // for a Worker that does not exist, so warmup could never verify.
+  it("targets the top-level service name when legacy_env is false", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        name: "my-worker",
+        legacy_env: false,
+        version_metadata: { binding: "VINEXT_VERSION_METADATA" },
+        env: { staging: { name: "my-worker-staging", route: "staging.example.com" } },
+      }),
+    );
+
+    expect(resolveWranglerDeploymentTarget(tmpDir, { env: "staging" })?.workerName).toBe(
+      "my-worker",
+    );
+  });
+
+  it("suffixes the environment name for legacy Wrangler environments", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        name: "my-worker",
+        version_metadata: { binding: "VINEXT_VERSION_METADATA" },
+        env: { staging: { route: "staging.example.com" } },
+      }),
+    );
+
+    expect(resolveWranglerDeploymentTarget(tmpDir, { env: "staging" })?.workerName).toBe(
+      "my-worker-staging",
+    );
+  });
+
   it("skips a disabled custom domain in an inline TOML routes array", () => {
     writeFile(
       tmpDir,
