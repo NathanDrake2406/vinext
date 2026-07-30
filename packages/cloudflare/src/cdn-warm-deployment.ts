@@ -4,9 +4,10 @@
  * Warms Cloudflare's version-isolated CDN cache before a new Worker version
  * takes production traffic:
  *
- *   validate → upload → inspect deployment → stage new version at 0% →
- *   warm through a version override → verify the producing version →
- *   re-verify the staged split is still active → promote → apply triggers
+ *   validate → upload → inspect and re-verify deployment →
+ *   stage new version at 0% → warm through a version override →
+ *   verify the producing version → re-verify the staged split is still active →
+ *   promote → apply triggers
  *
  * If warming fails, this transaction does not promote the new version or
  * issue another remote mutation to undo the staged split. Another deploy may
@@ -112,6 +113,7 @@ export async function deployWithCdnWarmup(
     target,
     upload,
     stagingTraffic[0].versionId,
+    currentVersions,
     stagingTraffic,
     options,
   );
@@ -195,12 +197,14 @@ async function warmAndPromote(
   target: WranglerDeploymentTarget,
   upload: WranglerVersionUploadResult,
   previousVersionId: string,
+  inspectedTraffic: readonly WranglerVersionTraffic[],
   stagingTraffic: readonly WranglerVersionTraffic[],
   options: CdnWarmupOptions,
 ): Promise<CdnWarmupDeployResult> {
   // Workers Cache includes the invoked Worker version in its key unless
   // cross_version_cache is enabled. Staging lets overrides warm the uploaded
   // version's partition while a failed override can only touch the old one.
+  verifyDeploymentUnchangedBeforeStaging(root, options, inspectedTraffic, upload.versionId);
   runWranglerVersionDeploy(root, stagingTraffic, options, "stage");
 
   // `wrangler versions deploy` reports traffic splits, not URLs, so nothing run
@@ -210,20 +214,20 @@ async function warmAndPromote(
 
   let warmed = false;
   try {
-    // A workers.dev URL is the production cache key only when the deployment
-    // has no custom routes. Falling back to it for a path-scoped route would
-    // verify the right Worker version on the wrong hostname and falsely report
-    // the production cache as warm.
+    // A workers.dev URL is a production cache key when Wrangler enables that
+    // origin: by default for route-less deployments, or explicitly alongside
+    // custom routes. Treating it as a fallback for a path-scoped route whose
+    // workers.dev origin is disabled would verify the right Worker version on
+    // the wrong hostname and falsely report the production cache as warm.
     //
     // The hostname is part of Cloudflare's cache key, so every attached
     // host-wide origin is a separate cache partition: warming one route's host
     // proves nothing about another's, and "warmed" may only be reported when
     // every origin × path pair is confirmed.
-    const targetUrls = target.productionHosts.length
-      ? target.productionHosts.map((host) => `https://${host}`)
-      : !target.hasProductionRoute && workersDevUrl
-        ? [workersDevUrl]
-        : [];
+    const targetUrls = [
+      ...target.productionHosts.map((host) => `https://${host}`),
+      ...(target.workersDevEnabled && workersDevUrl ? [workersDevUrl] : []),
+    ];
     const headers = buildVersionOverrideHeaders(target.workerName, upload.versionId);
     if (targetUrls.length === 0 || !headers) {
       const message =
@@ -419,6 +423,55 @@ function verifyStagedSplitBeforePromotion(
         `Another deploy likely ran during the warmup window. ${unpromotedState}`,
     );
   }
+}
+
+/**
+ * Re-read immediately before staging and require the deployment to match the
+ * snapshot used to construct the replacement split. Wrangler's deployment API
+ * has no compare-and-swap primitive, so this is the narrowest available
+ * optimistic-concurrency boundary: a deployment observed between the upload's
+ * first status read and this check is never overwritten with stale traffic.
+ */
+function verifyDeploymentUnchangedBeforeStaging(
+  root: string,
+  options: WranglerTargetOptions,
+  inspectedTraffic: readonly WranglerVersionTraffic[],
+  uploadedVersionId: string,
+): void {
+  const recheck = readWranglerDeploymentStatus(root, options);
+  if ("error" in recheck) {
+    throw new Error(
+      `Could not re-read the current deployment before staging (${recheck.error}). ` +
+        `Worker version ${uploadedVersionId} remains undeployed.`,
+    );
+  }
+  if (trafficMatches(recheck.deployment.versions, inspectedTraffic)) return;
+
+  throw new Error(
+    "The current deployment changed before CDN warmup staging could begin " +
+      `(expected ${formatTraffic(inspectedTraffic)}; observed ${formatTraffic(recheck.deployment.versions)}). ` +
+      `Another deploy likely ran concurrently. Worker version ${uploadedVersionId} remains undeployed.`,
+  );
+}
+
+function trafficMatches(
+  actual: readonly WranglerVersionTraffic[],
+  expected: readonly WranglerVersionTraffic[],
+): boolean {
+  const expectedTraffic = new Map(
+    expected.map((version) => [version.versionId, version.percentage]),
+  );
+  return (
+    actual.length === expectedTraffic.size &&
+    new Set(actual.map((version) => version.versionId)).size === actual.length &&
+    actual.every((version) => expectedTraffic.get(version.versionId) === version.percentage)
+  );
+}
+
+function formatTraffic(versions: readonly WranglerVersionTraffic[]): string {
+  return versions.length
+    ? versions.map((version) => `${version.versionId}@${version.percentage}%`).join(", ")
+    : "no deployed versions";
 }
 
 function readWranglerDeploymentStatus(

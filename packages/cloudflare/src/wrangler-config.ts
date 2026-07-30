@@ -43,6 +43,7 @@ export type WranglerConfig = {
   legacyEnv?: boolean;
   targetEnvironment?: string;
   versionMetadataBinding?: string;
+  workersDev?: boolean;
   env?: Record<string, WranglerEnvironmentConfig>;
 };
 
@@ -61,6 +62,7 @@ type WranglerEnvironmentConfig = {
   definesRoutes?: boolean;
   name?: string;
   versionMetadataBinding?: string;
+  workersDev?: boolean;
 };
 
 export type WranglerCacheConfig = {
@@ -125,6 +127,10 @@ function extractFromJSON(config: Record<string, unknown>): WranglerConfig {
     result.legacyEnv = config.legacy_env;
   }
 
+  if (typeof config.workers_dev === "boolean") {
+    result.workersDev = config.workers_dev;
+  }
+
   // Cloudflare's generated dist/server/wrangler.json is already flattened to
   // the environment selected at build time. Wrangler tags that redirected
   // config so deploy-time readers can distinguish it from a source config
@@ -183,7 +189,8 @@ function extractEnvConfigs(envs: unknown): Record<string, WranglerEnvironmentCon
       envConfig.customDomain ||
       envConfig.warmupHosts ||
       envConfig.definesRoutes ||
-      envConfig.versionMetadataBinding
+      envConfig.versionMetadataBinding ||
+      envConfig.workersDev !== undefined
     ) {
       result[envName] = envConfig;
     }
@@ -197,6 +204,9 @@ function extractEnvironmentConfig(config: Record<string, unknown>): WranglerEnvi
   if (cache) result.cache = cache;
   if (typeof config.name === "string" && config.name.length > 0) {
     result.name = config.name;
+  }
+  if (typeof config.workers_dev === "boolean") {
+    result.workersDev = config.workers_dev;
   }
   if ("route" in config || "routes" in config || "custom_domains" in config) {
     result.definesRoutes = true;

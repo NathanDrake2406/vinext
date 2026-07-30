@@ -26,6 +26,8 @@ export type WranglerDeploymentTarget = {
    * cache partition and warmup must cover all of them.
    */
   productionHosts: readonly string[];
+  /** Whether the production `<name>.<subdomain>.workers.dev` origin is enabled. */
+  workersDevEnabled: boolean;
   /**
    * True when some enabled route could not be reduced to a concrete host-wide
    * origin (path-scoped or wildcard-host patterns). Its cache partition is
@@ -61,12 +63,18 @@ export function resolveWranglerDeploymentTarget(
   // could confirm a warmup for a partition production traffic never reads.
   const routing = envConfig && !envConfig.definesRoutes ? config : selected;
   const cache = resolveCacheConfig(config, envName, flattenedEnvConfig);
+  const workersDev = selected?.workersDev ?? (envName ? config.workersDev : undefined);
+  const hasProductionRoute = Boolean(routing?.customDomain);
   return {
     cacheEnabled: cache?.enabled,
     crossVersionCache: cache?.crossVersionCache,
-    hasProductionRoute: Boolean(routing?.customDomain),
+    hasProductionRoute,
     workerName: resolveWorkerName(config, envName, flattenedEnvConfig, options.name),
     productionHosts: routing?.warmupHosts ?? [],
+    // Wrangler enables workers.dev by default only when no routes are
+    // configured. An explicit true keeps it enabled alongside custom routes,
+    // giving that hostname its own cache partition that warmup must cover.
+    workersDevEnabled: workersDev ?? !hasProductionRoute,
     hasUnwarmableProductionRoute: Boolean(routing?.hasUnwarmableRoute),
     versionMetadataBinding: selected?.versionMetadataBinding,
   };

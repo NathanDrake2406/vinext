@@ -281,6 +281,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(events).toEqual([
       "upload",
       "status",
+      "status",
       "stage",
       `fetch:https://app.example.com/:my-worker="${UPLOADED_VERSION_ID}"`,
       `fetch:https://app.example.com/about:my-worker="${UPLOADED_VERSION_ID}"`,
@@ -359,6 +360,40 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "https://app.example.com/about",
       "https://www.example.com/",
       "https://www.example.com/about",
+    ]);
+  });
+
+  it("warms workers.dev alongside custom routes when it is explicitly enabled", async () => {
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({
+        name: "my-worker",
+        workers_dev: true,
+        route: "app.example.com/*",
+      }),
+    );
+    const fetchedUrls: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      fetchedUrls.push(formatFetchUrl(url));
+      return versionedResponse();
+    });
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return uploadOutput("my-worker");
+      if (args.includes("status")) return deploymentStatusOutput();
+      if (isStage(args)) return "Staged version\n";
+      if (args.includes("triggers")) return "Triggers deployed\n";
+      if (isPromotion(args)) return "Promoted version\n";
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).resolves.toMatchObject({
+      warmed: true,
+    });
+    expect(fetchedUrls.sort()).toEqual([
+      "https://app.example.com/",
+      "https://my-worker.vinext.workers.dev/",
     ]);
   });
 
@@ -586,6 +621,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(events).toEqual([
       "upload",
       "status",
+      "status",
       "stage",
       "fetch:https://workers-cache.vinext.workers.dev/cached/intro",
       "status",
@@ -696,6 +732,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
 
     expect(events).toEqual([
       "upload",
+      "status",
       "status",
       "stage",
       "fetch:old-version",
@@ -809,6 +846,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(events).toEqual([
       "upload",
       "status",
+      "status",
       "stage",
       "fetch:old-version",
       "status",
@@ -866,7 +904,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     );
     // No restore/promote/triggers call: this transaction does not overwrite
     // whatever active deployment state now exists.
-    expect(events).toEqual(["upload", "status", "stage", "fetch:old-version"]);
+    expect(events).toEqual(["upload", "status", "status", "stage", "fetch:old-version"]);
   });
 
   it("stages and promotes a fresh attempt after a prior warmup left a version staged", async () => {
@@ -904,11 +942,12 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("status")) {
         events.push("status");
         statusReads++;
-        // Read 1: clean pre-deploy state. Read 2: the failed attempt left its
-        // version staged at 0%. Read 3: the retry's own staged split, which
-        // the pre-promotion ownership check re-reads.
-        if (statusReads === 1) return currentDeploymentOutput();
-        if (statusReads === 2) {
+        // Reads 1-2: the first attempt's initial and pre-stage snapshots.
+        // Reads 3-4: the failed attempt's 0% version remains present for the
+        // retry's initial and pre-stage snapshots. Read 5 observes the retry's
+        // own staged split before promotion.
+        if (statusReads <= 2) return currentDeploymentOutput();
+        if (statusReads <= 4) {
           return JSON.stringify({
             versions: [
               { version_id: PREVIOUS_VERSION_ID, percentage: 100 },
@@ -955,9 +994,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(events).toEqual([
       "upload:first",
       "status",
+      "status",
       "stage",
       "fetch:old-version",
       "upload:retry",
+      "status",
       "status",
       "stage",
       "fetch:new-version",
@@ -998,10 +1039,10 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
       `Could not confirm the promotion of Worker version ${UPLOADED_VERSION_ID} succeeded`,
     );
-    // One status read before staging, one ownership re-check before the
-    // promotion attempt — but no reconciling re-read after the promotion
-    // fails, and triggers never run.
-    expect(events).toEqual(["status", "status", "promote-attempt"]);
+    // One status read to classify the deployment, one immediately before
+    // staging, and one ownership re-check before the promotion attempt — but
+    // no reconciling re-read after promotion fails, and triggers never run.
+    expect(events).toEqual(["status", "status", "status", "promote-attempt"]);
   });
 
   it("aborts promotion when another deploy replaces the staged split during warmup", async () => {
@@ -1015,7 +1056,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("status")) {
         statusReads++;
         // Deploy B promoted its own version while this deploy was warming.
-        return statusReads === 1
+        return statusReads < 3
           ? currentDeploymentOutput()
           : JSON.stringify({
               versions: [{ version_id: otherDeployVersionId, percentage: 100 }],
@@ -1045,6 +1086,35 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(commands).toEqual([]);
   });
 
+  it("does not overwrite a deployment that changes before staging", async () => {
+    const otherDeployVersionId = "33333333-3333-4333-8333-333333333333";
+    let statusReads = 0;
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return uploadOutput("workers-cache");
+      if (args.includes("status")) {
+        statusReads++;
+        return statusReads === 1
+          ? currentDeploymentOutput()
+          : JSON.stringify({
+              versions: [{ version_id: otherDeployVersionId, percentage: 100 }],
+            });
+      }
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
+      new RegExp(
+        `changed before CDN warmup staging[\\s\\S]*observed ${otherDeployVersionId}@100%[\\s\\S]*remains undeployed`,
+      ),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(execFileSyncMock).toHaveBeenCalledTimes(3);
+    expect(execFileSyncMock.mock.calls.some(([, args]) => isStage(args as string[]))).toBe(false);
+  });
+
   it("aborts promotion when the pre-promotion status re-read fails", async () => {
     const commands: string[] = [];
     let statusReads = 0;
@@ -1054,7 +1124,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       if (args.includes("upload")) return uploadOutput("workers-cache");
       if (args.includes("status")) {
         statusReads++;
-        if (statusReads === 1) return currentDeploymentOutput();
+        if (statusReads < 3) return currentDeploymentOutput();
         throw new Error("status request timed out");
       }
       if (isStage(args)) return "Staged version\n";

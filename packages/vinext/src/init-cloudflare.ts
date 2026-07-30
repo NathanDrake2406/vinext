@@ -455,6 +455,9 @@ export function updateWranglerConfigForCloudflare(
       'The existing Wrangler config uses "pages_build_output_dir", which cannot be combined with the Worker "main" required by vinext. Remove "pages_build_output_dir" and rerun vinext init.',
     );
   }
+  if (options.warmCdnCache) {
+    assertWarmupCompatibleCacheConfig(config);
+  }
   let output = code;
   // Without `main` and `assets` the Cloudflare plugin builds the project as
   // assets-only: the build emits no `dist/server/wrangler.json`, and the deploy
@@ -520,6 +523,31 @@ export function updateWranglerConfigForCloudflare(
     }
   }
   return output;
+}
+
+function assertWarmupCompatibleCacheConfig(config: Record<string, unknown>): void {
+  const incompatibleScopes: string[] = [];
+  if (isUnknownRecord(config.cache) && config.cache.cross_version_cache === true) {
+    incompatibleScopes.push("the top-level cache config");
+  }
+  if (isUnknownRecord(config.env)) {
+    for (const [envName, value] of Object.entries(config.env)) {
+      if (
+        isUnknownRecord(value) &&
+        isUnknownRecord(value.cache) &&
+        value.cache.cross_version_cache === true
+      ) {
+        incompatibleScopes.push(`environment "${envName}"`);
+      }
+    }
+  }
+  if (incompatibleScopes.length === 0) return;
+
+  throw new Error(
+    `CDN warmup cannot be enabled while cache.cross_version_cache is true in ${incompatibleScopes.join(
+      " and ",
+    )}. Set cross_version_cache to false (or remove it) so each Worker version has an isolated cache partition, then rerun vinext init.`,
+  );
 }
 
 export function getWranglerImagesBinding(code: string): string {

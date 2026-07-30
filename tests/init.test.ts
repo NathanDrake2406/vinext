@@ -898,6 +898,33 @@ export default { plugins: [vinext({ cache: { data: customData() } })] };
     expect(pkg.scripts["deploy:vinext"]).toContain("--experimental-warm-cdn-cache");
   });
 
+  it("rejects cross-version cache config when CDN warmup is requested", async () => {
+    setupProject(tmpDir, { router: "app" });
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      `{
+  "cache": { "enabled": true, "cross_version_cache": true }
+}
+`,
+    );
+    const before = snapshotProject(tmpDir);
+
+    await expect(
+      runInit(tmpDir, {
+        cloudflare: {
+          dataCache: "kv",
+          cdnCache: "workers-cache",
+          imageOptimization: "cloudflare-images",
+          warmCdnCache: true,
+        },
+      }),
+    ).rejects.toThrow(
+      "Set cross_version_cache to false (or remove it) so each Worker version has an isolated cache partition",
+    );
+    expect(snapshotProject(tmpDir)).toBe(before);
+  });
+
   it("adds the fixed binding to named environments and stays idempotent", async () => {
     setupProject(tmpDir, { router: "app" });
     writeFile(
