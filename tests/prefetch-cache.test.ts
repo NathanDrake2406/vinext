@@ -1256,7 +1256,14 @@ describe("prefetch cache eviction", () => {
     expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
   });
 
-  it("uses Next.js's minimum prefetch stale window for server stale time zero", async () => {
+  it("expires a zero dynamic stale time immediately instead of flooring it", async () => {
+    // Every dynamic render emits this header (app-page-render.ts defaults it
+    // to `experimental.staleTimes.dynamic`, which is 0). Next keeps the two
+    // stale-time dimensions on separate rules: the cacheLife/router header
+    // goes through `getStaleTimeMs`'s 30s floor, but the dynamic bound goes
+    // through `computeDynamicStaleAt` (segment-cache/bfcache.ts), which
+    // applies no floor. Flooring it here would license 30s of reuse for a
+    // credentialed dynamic payload the route asked never to be reused.
     const now = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const rscUrl = "/zero-stale-prefetch.rsc";
@@ -1278,14 +1285,37 @@ describe("prefetch cache eviction", () => {
     );
     await getPrefetchCache().get(rscUrl)?.pending;
 
-    // Ported from Next.js segment-cache prefetch behavior:
-    // packages/next/src/client/components/segment-cache/cache.ts:getStaleTimeMs
-    // clamps prefetch stale time to at least 30s so too-short server stale
-    // times do not prevent prefetching from being useful.
-    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 30_000);
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now);
+    expect(consumePrefetchResponse(rscUrl, null, null)).toBeNull();
+  });
 
-    const consumed = consumePrefetchResponse(rscUrl, null, null);
-    expect(consumed?.expiresAt).toBe(now + 30_000);
+  it("keeps a dynamic bound unfloored even when cacheLife would floor higher", async () => {
+    // `use cache` declared cacheLife({ stale: 60 }) but the page also declared
+    // `unstable_dynamicStaleTime = 5`. The min-wins combine picks 5s, and the
+    // prefetch path must not raise it back to the 30s cacheLife floor.
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const rscUrl = "/short-dynamic-bound-prefetch.rsc";
+
+    prefetchRscResponse(
+      rscUrl,
+      Promise.resolve(
+        new Response("flight", {
+          headers: {
+            "content-type": "text/x-component",
+            [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "5",
+            [NEXT_ROUTER_STALE_TIME_HEADER]: "60",
+          },
+        }),
+      ),
+      null,
+      null,
+      undefined,
+      { fallbackTtlMs: PREFETCH_CACHE_TTL },
+    );
+    await getPrefetchCache().get(rscUrl)?.pending;
+
+    expect(getPrefetchCache().get(rscUrl)?.expiresAt).toBe(now + 5_000);
   });
 
   it("takes the shorter of the staleTimes config and the resolved cacheLife stale time", async () => {
@@ -1646,26 +1676,33 @@ describe("prefetch cache eviction", () => {
     });
 
     it("allows automatic dynamic full prefetches to expire immediately", async () => {
+      // The vulnerable shape: a route the prefetch policy treats as static
+      // (no dynamic pattern segment, so the static 300s fallback applies) that
+      // nonetheless renders dynamically. The server reports that by echoing
+      // `staleTimes.dynamic` on every dynamic render, and the 300s static
+      // fallback must not survive that signal.
       process.env.__NEXT_CLIENT_ROUTER_DYNAMIC_STALETIME = "0";
+      process.env.__NEXT_CLIENT_ROUTER_STATIC_STALETIME = "300";
       vi.resetModules();
       const nav = await import("../packages/vinext/src/shims/navigation.js");
 
-      const rscUrl = "/without-loading/1.rsc";
+      const rscUrl = "/dashboard.rsc";
       const now = 1_000_000;
       vi.spyOn(Date, "now").mockReturnValue(now);
       nav.prefetchRscResponse(
         rscUrl,
         Promise.resolve(
-          new Response("flight", { headers: { "content-type": "text/x-component" } }),
+          new Response("flight", {
+            headers: {
+              "content-type": "text/x-component",
+              [VINEXT_DYNAMIC_STALE_TIME_HEADER]: "0",
+            },
+          }),
         ),
         null,
         null,
         undefined,
-        {
-          cacheForNavigation: true,
-          fallbackTtlMs: nav.DYNAMIC_NAVIGATION_CACHE_TTL,
-          minimumTtlMs: 0,
-        },
+        { cacheForNavigation: true, fallbackTtlMs: nav.PREFETCH_CACHE_TTL },
       );
 
       const entry = nav.getPrefetchCache().get(rscUrl);

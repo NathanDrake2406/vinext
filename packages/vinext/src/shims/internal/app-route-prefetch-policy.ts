@@ -35,7 +35,6 @@ const linkPrefetchRouteTrieCache = createRouteTrieCache<VinextLinkPrefetchRoute>
 export type AppRoutePrefetchPolicy = {
   cacheForNavigation: boolean;
   fallbackTtl: "dynamic" | "static";
-  minimumTtlMs: number | undefined;
   prefetchShellFirst: boolean;
   shouldPrefetch: boolean;
 };
@@ -59,7 +58,6 @@ function toSameOriginRouteHref(href: string): string | null {
 const NO_APP_ROUTE_PREFETCH: AppRoutePrefetchPolicy = {
   cacheForNavigation: false,
   fallbackTtl: "static",
-  minimumTtlMs: undefined,
   prefetchShellFirst: false,
   shouldPrefetch: false,
 };
@@ -95,7 +93,6 @@ export function resolveAutoAppRoutePrefetch(href: string): AppRoutePrefetchPolic
       !route.canPrefetchLoadingShell &&
       route.requiresDynamicNavigationRequest !== true,
     fallbackTtl: "static",
-    minimumTtlMs: route.isDynamic ? 0 : undefined,
     prefetchShellFirst: hasSearchParams || !route.isDynamic,
     shouldPrefetch: true,
   };
@@ -105,7 +102,6 @@ export function resolveFullAppRoutePrefetch(): AppRoutePrefetchPolicy {
   return {
     cacheForNavigation: true,
     fallbackTtl: "static",
-    minimumTtlMs: undefined,
     prefetchShellFirst: true,
     shouldPrefetch: true,
   };

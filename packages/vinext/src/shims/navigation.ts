@@ -487,18 +487,21 @@ function resolvePrefetchedRscResponseExpiresAt(
   timestamp: number,
   cached: Pick<CachedRscResponse, "dynamicStaleTimeSeconds" | "expiresAt" | "serverStaleTime">,
   fallbackTtlMs: number,
-  minimumTtlMs: number = MIN_PREFETCH_STALE_TIME_MS,
 ): number {
   if (isCacheExpiresAt(cached.expiresAt)) {
     return cached.expiresAt;
   }
   const seconds = resolveRscResponseStaleTimeSeconds(cached);
+  // Only the unsignalled fallback is floored, mirroring Next's
+  // `STATIC_STALETIME_MS = getStaleTimeMs(config)`. A signalled bound is
+  // authoritative: the cacheLife half was already floored by
+  // `serverStaleTimeSeconds`, and Next's `computeDynamicStaleAt` never floors
+  // the dynamic half — so a dynamic render's `0` must expire the entry now
+  // rather than license 30s of credentialed reuse.
   if (seconds === undefined) {
-    return timestamp + Math.max(fallbackTtlMs, minimumTtlMs);
+    return timestamp + Math.max(fallbackTtlMs, MIN_PREFETCH_STALE_TIME_MS);
   }
-  // The cacheLife signal is floored inside the resolver; this outer floor
-  // covers the prefetch-only dimensions (config bound and fallback TTL).
-  return timestamp + Math.max(seconds * 1000, minimumTtlMs);
+  return timestamp + seconds * 1000;
 }
 
 function resolvePrefetchCacheEntryExpiresAt(entry: PrefetchCacheEntry): number {
@@ -1301,7 +1304,6 @@ export function prefetchRscResponse(
   behavior: {
     cacheForNavigation?: boolean;
     fallbackTtlMs?: number;
-    minimumTtlMs?: number;
     optimisticRouteShell?: boolean;
     prefetchKind?: PrefetchCacheKind;
     prepareSnapshot?: (snapshot: CachedRscResponse) => Promise<AppElements>;
@@ -1345,7 +1347,6 @@ export function prefetchRscResponse(
           entry.timestamp,
           entry.snapshot,
           behavior.fallbackTtlMs ?? PREFETCH_CACHE_TTL,
-          behavior.minimumTtlMs,
         );
         if (behavior.prepareSnapshot) {
           try {
@@ -2747,7 +2748,6 @@ const _appRouter: AppRouterInstance = {
                 policy.fallbackTtl === "dynamic"
                   ? DYNAMIC_NAVIGATION_CACHE_TTL
                   : PREFETCH_CACHE_TTL,
-              minimumTtlMs: policy.minimumTtlMs,
               optimisticRouteShell: false,
               prefetchKind: "navigation",
               prepareSnapshot: prepareNavigationPrefetchSnapshot,
