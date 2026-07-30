@@ -6,6 +6,7 @@ import {
   createEmptyAppPageRenderObservationState,
   type AppPageRenderObservationState,
 } from "./app-page-render-observation.js";
+import { stripClientTraceMetadataTags } from "./client-trace-metadata.js";
 import { buildAppPageCacheValue, isrCacheControl, type AppPageCacheSetter } from "./isr-cache.js";
 import type { CacheControlMetadata } from "vinext/shims/cache-handler";
 import type { RenderObservation } from "./cache-proof.js";
@@ -33,6 +34,12 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   capturedDynamicUsageBeforeContextCleanup?: () => boolean;
   capturedRscDataPromise: Promise<ArrayBuffer> | null;
   cleanPathname: string;
+  /**
+   * `experimental.clientTraceMetadata` allow-list. The rendered response keeps
+   * its request-scoped trace `<meta>` tags; the cached copy must not, or the
+   * generating request's trace context is replayed to every later cache HIT.
+   */
+  clientTraceMetadata?: readonly string[];
   consumeDynamicUsage: () => boolean;
   consumeRenderObservationState?: () => AppPageRenderObservationState;
   createHtmlRenderObservation?: BuildAppPageCacheRenderObservation;
@@ -144,7 +151,10 @@ export function finalizeAppPageHtmlCacheResponse(
 
   const cachePromise = (async () => {
     try {
-      const cachedHtml = await readStreamAsText(streamForCache);
+      const cachedHtml = stripClientTraceMetadataTags(
+        await readStreamAsText(streamForCache),
+        options.clientTraceMetadata,
+      );
 
       if (
         options.capturedDynamicUsageBeforeContextCleanup?.() === true ||

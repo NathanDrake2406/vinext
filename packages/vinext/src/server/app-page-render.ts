@@ -1239,6 +1239,7 @@ export async function renderAppPageLifecycle(
       },
       capturedRscDataPromise: capturedRscDataRef.value,
       cleanPathname: options.cleanPathname,
+      clientTraceMetadata: options.clientTraceMetadata,
       consumeDynamicUsage: consumeRenderDynamicUsage,
       consumeRenderObservationState: options.consumeRenderObservationState,
       createHtmlRenderObservation(input) {

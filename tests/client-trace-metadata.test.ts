@@ -10,6 +10,7 @@ import {
   filterClientTraceMetadata,
   getClientTraceMetadataHTML,
   renderClientTraceMetadataTags,
+  stripClientTraceMetadataTags,
   type ClientTraceDataEntry,
 } from "../packages/vinext/src/server/client-trace-metadata.js";
 
@@ -307,5 +308,27 @@ describe("client trace metadata: getClientTraceMetadataHTML", () => {
     });
 
     expect(getClientTraceMetadataHTML(["my-test-key-1"])).toBe("");
+  });
+});
+
+describe("stripClientTraceMetadataTags", () => {
+  it("removes exactly the tags the renderer emits, including escaped keys", () => {
+    const entries = [
+      { key: "traceparent", value: "00-abc-def-01" },
+      { key: 'weird"key', value: "a&b<c>" },
+    ];
+    const allowList = entries.map(({ key }) => key);
+    const html = `<head>${renderClientTraceMetadataTags(entries)}<title>x</title></head>`;
+
+    expect(stripClientTraceMetadataTags(html, allowList)).toBe("<head><title>x</title></head>");
+  });
+
+  it("leaves unrelated meta tags and unconfigured keys alone", () => {
+    const html =
+      '<meta name="description" content="hi"/>' +
+      renderClientTraceMetadataTags([{ key: "baggage", value: "tenant=alice" }]);
+
+    expect(stripClientTraceMetadataTags(html, ["traceparent"])).toBe(html);
+    expect(stripClientTraceMetadataTags(html, undefined)).toBe(html);
   });
 });

@@ -177,6 +177,27 @@ export function renderClientTraceMetadataTags(
 }
 
 /**
+ * Remove the `<meta>` tags `renderClientTraceMetadataTags` emits for the
+ * configured allow-list. App Router HTML cache entries are shared across users,
+ * so the generating request's traceparent/baggage must not survive into them —
+ * a later cache HIT has no request whose trace it could correlate anyway.
+ */
+export function stripClientTraceMetadataTags(
+  html: string,
+  allowList: readonly string[] | undefined,
+): string {
+  if (!allowList || allowList.length === 0) return html;
+  let stripped = html;
+  for (const key of allowList) {
+    // Match the rendered form: HTML-escape the key the same way, then escape
+    // regex metacharacters. Values are attribute-escaped, so `"` never appears.
+    const name = escapeHtmlAttr(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    stripped = stripped.replace(new RegExp(`<meta name="${name}" content="[^"]*"/>`, "g"), "");
+  }
+  return stripped;
+}
+
+/**
  * Convenience helper: read OTel propagation data, filter against the
  * configured allow-list, and render the resulting `<meta>` tags. Returns an
  * empty string when the allow-list is unset, OTel is not installed, or no
