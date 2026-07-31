@@ -1638,15 +1638,52 @@ describe("fetch cache shim", () => {
   });
 
   it("shares persistent cache entries between equivalent URL and Request inputs", async () => {
-    const url = "https://api.example.com/equivalent-inputs";
+    const url = "https://api.example.com";
     const urlResponse = await fetch(url, { next: { revalidate: 60 } });
     expect((await urlResponse.json()).count).toBe(1);
 
+    startNewFetchCacheScope();
     const requestResponse = await fetch(new Request(url), {
       next: { revalidate: 60 },
     });
     expect((await requestResponse.json()).count).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes synthesized Blob content types in the persistent cache key", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      requestCount++;
+      const request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          contentType: request.headers.get("content-type"),
+          count: requestCount,
+        }),
+      );
+    });
+    const url = "https://api.example.com/blob-content-type";
+
+    const jsonResponse = await fetch(url, {
+      method: "POST",
+      body: new Blob(["same-body"], { type: "application/json" }),
+      next: { revalidate: 60 },
+    });
+    expect(await jsonResponse.json()).toEqual({
+      contentType: "application/json",
+      count: 1,
+    });
+
+    startNewFetchCacheScope();
+    const textResponse = await fetch(url, {
+      method: "POST",
+      body: new Blob(["same-body"], { type: "text/plain" }),
+      next: { revalidate: 60 },
+    });
+    expect(await textResponse.json()).toEqual({
+      contentType: "text/plain",
+      count: 2,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("includes Request object bodies in the cache key", async () => {
