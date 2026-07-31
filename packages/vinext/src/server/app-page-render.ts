@@ -83,6 +83,7 @@ import type {
 } from "./app-layout-param-observation.js";
 import { getStaticLayoutObservationSkipRejection } from "./app-layout-param-observation.js";
 import { peekDynamicUsage } from "vinext/shims/headers";
+import { getCdnCacheAdapter } from "vinext/shims/cdn-cache";
 import { VINEXT_RSC_COMPLETION_METADATA_HEADER } from "./headers.js";
 import { appendRscCompletionMetadata } from "./rsc-completion-metadata.js";
 
@@ -992,8 +993,29 @@ export async function renderAppPageLifecycle(
     getStyles: options.getFontStyles,
   });
   const fontLinkHeader = buildAppPageFontLinkHeader(fontData.preloads);
+  // Edge-managed adapters cache the outgoing response stream itself, so there
+  // is no separate cache copy to sanitize. Omit request trace metadata from
+  // responses that can enter that shared cache. Known no-store responses keep
+  // the feature because neither the edge nor the origin will persist them.
+  const hasKnownNoStoreHtmlPolicy =
+    !options.isProduction ||
+    options.isDraftMode ||
+    options.isForceDynamic ||
+    Boolean(options.scriptNonce) ||
+    options.isProgressiveActionRender === true ||
+    revalidateSeconds === 0 ||
+    (options.isEdgeRuntime && revalidateSeconds === null) ||
+    peekDynamicUsage();
+  const originOwnsSharedHtmlStore = getCdnCacheAdapter().ownsBackgroundRevalidation;
+  const clientTraceMetadata =
+    !hasKnownNoStoreHtmlPolicy && !originOwnsSharedHtmlStore
+      ? undefined
+      : options.clientTraceMetadata;
   const clientTraceMetadataMarker =
-    options.clientTraceMetadata && options.clientTraceMetadata.length > 0
+    !hasKnownNoStoreHtmlPolicy &&
+    originOwnsSharedHtmlStore &&
+    clientTraceMetadata &&
+    clientTraceMetadata.length > 0
       ? crypto.randomUUID()
       : undefined;
   let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
@@ -1067,7 +1089,7 @@ export async function renderAppPageLifecycle(
         hasCustomGlobalError: options.hasCustomGlobalError,
         navigationContext: options.getNavigationContext(),
         basePath: options.basePath,
-        clientTraceMetadata: options.clientTraceMetadata,
+        clientTraceMetadata,
         clientTraceMetadataMarker,
         reactMaxHeadersLength: options.reactMaxHeadersLength,
         rootParams: options.rootParams,
