@@ -291,9 +291,10 @@ test.describe("Next.js compat: client cache", () => {
       .poll(() => requestsFor(requests, `${ROOT}/0`).some((request) => !request.partial))
       .toBe(true);
 
-    // Delay committed-cache publication after the prefetch is consumed. The
-    // consumed snapshot must remain discoverable during that handoff so a Link
-    // remount cannot start a duplicate request.
+    // Delay the redundant cache branch that formerly blocked committed-cache
+    // publication after the prefetch was consumed. The consumed snapshot must
+    // remain discoverable during that handoff so a Link remount cannot start a
+    // duplicate request.
     await page.evaluate(() => {
       const originalTee = Reflect.get(
         ReadableStream.prototype,
@@ -301,6 +302,7 @@ test.describe("Next.js compat: client cache", () => {
       ) as typeof ReadableStream.prototype.tee;
       ReadableStream.prototype.tee = function (this: ReadableStream<unknown>) {
         ReadableStream.prototype.tee = originalTee;
+        document.documentElement.dataset.vinextDelayedCacheTee = "pending";
         const [reactBranch, cacheBranch] = originalTee.call(this);
         const cacheReader = cacheBranch.getReader();
         const delayedCacheBranch = new ReadableStream({
@@ -311,6 +313,7 @@ test.describe("Next.js compat: client cache", () => {
               controller.enqueue(result.value);
             }
             await new Promise((resolve) => setTimeout(resolve, 1_000));
+            document.documentElement.dataset.vinextDelayedCacheTee = "complete";
             controller.close();
           },
           cancel(reason) {
@@ -324,6 +327,7 @@ test.describe("Next.js compat: client cache", () => {
     requests.length = 0;
     await targetLink.click();
     await expect(page.locator("#client-cache-id")).toHaveText("0");
+    await expect(page.locator("html")).toHaveAttribute("data-vinext-delayed-cache-tee", "pending");
     const initial = await readRandom(page);
     expect(requestsFor(requests, `${ROOT}/0`)).toEqual([]);
 
