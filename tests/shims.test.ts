@@ -6684,6 +6684,50 @@ describe('"use cache" runtime', () => {
     expect(callCount).toBe(2);
   });
 
+  // Ported from Next.js: test/e2e/app-dir/use-cache/use-cache.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/use-cache/use-cache.test.ts
+  it("bypasses the shared cache in draft mode", async () => {
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const { setCacheHandler, MemoryCacheHandler } =
+      await import("../packages/vinext/src/shims/cache.js");
+    const { setHeadersContext } = await import("../packages/vinext/src/shims/headers.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    let draftContent = false;
+    const cached = registerCachedFunction(
+      async () => (draftContent ? "DRAFT" : "PUBLIC"),
+      "test:draft-bypass",
+    );
+    const enterRequest = (draftModeEnabled: boolean) => {
+      setHeadersContext({ headers: new Headers(), cookies: new Map(), draftModeEnabled });
+    };
+
+    try {
+      // A preview request must not seed the entry public requests read.
+      enterRequest(true);
+      draftContent = true;
+      expect(await cached()).toBe("DRAFT");
+
+      enterRequest(false);
+      draftContent = false;
+      expect(await cached()).toBe("PUBLIC");
+
+      // ...and must not read back the public entry either.
+      enterRequest(true);
+      draftContent = true;
+      expect(await cached()).toBe("DRAFT");
+
+      // Leave the source in its draft state: seeing PUBLIC again proves the
+      // draft execution neither replaced nor invalidated the existing entry.
+      enterRequest(false);
+      expect(await cached()).toBe("PUBLIC");
+    } finally {
+      setHeadersContext(null);
+      setCacheHandler(new MemoryCacheHandler());
+    }
+  });
+
   it("scopes shared cache entries by build ID", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
@@ -9554,7 +9598,11 @@ describe("double-encoded path handling in middleware", () => {
     }
   });
 
-  it("external middleware rewrite proxy preserves credentials when applying partial request overrides", async () => {
+  it("external middleware rewrite proxy does not forward credentials the middleware deleted", async () => {
+    // `x-middleware-override-headers` is the complete post-middleware header set,
+    // so a name missing from it means "deleted" — never "unchanged". Restoring
+    // cookie/authorization here would leak first-party credentials cross-origin.
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
     const { proxyExternalMiddlewareRewrite } =
       await import("../packages/vinext/src/server/app-middleware.js");
     const http = await import("node:http");
@@ -9570,30 +9618,34 @@ describe("double-encoded path handling in middleware", () => {
       const address = server.address();
       expect(address && typeof address === "object").toBe(true);
       const port = address && typeof address === "object" ? address.port : 0;
-      const response = await proxyExternalMiddlewareRewrite(
-        new Request("http://localhost:3000/source", {
-          headers: {
-            authorization: "Bearer secret",
-            cookie: "session=abc",
-            "x-keep": "original",
-          },
-        }),
-        `http://127.0.0.1:${port}/target`,
-        {
-          headers: null,
-          requestHeaders: new Headers({
-            "x-middleware-override-headers": "x-added",
-            "x-middleware-request-x-added": "1",
-          }),
-          status: null,
+      const request = new Request("http://localhost:3000/source", {
+        headers: {
+          authorization: "Bearer secret",
+          cookie: "session=abc",
+          "x-keep": "original",
         },
+      });
+
+      // The documented deletion pattern: clone, delete, rewrite.
+      const headers = new Headers(request.headers);
+      headers.delete("cookie");
+      headers.delete("authorization");
+      headers.set("x-added", "1");
+      const middlewareResponse = NextResponse.rewrite(`http://127.0.0.1:${port}/target`, {
+        request: { headers },
+      });
+
+      const response = await proxyExternalMiddlewareRewrite(
+        request,
+        `http://127.0.0.1:${port}/target`,
+        { headers: null, requestHeaders: middlewareResponse.headers, status: null },
       );
 
       expect(response.status).toBe(200);
-      expect(capturedHeaders.authorization).toBe("Bearer secret");
-      expect(capturedHeaders.cookie).toBe("session=abc");
+      expect(capturedHeaders.authorization).toBeUndefined();
+      expect(capturedHeaders.cookie).toBeUndefined();
       expect(capturedHeaders["x-added"]).toBe("1");
-      expect(capturedHeaders["x-keep"]).toBeUndefined();
+      expect(capturedHeaders["x-keep"]).toBe("original");
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
