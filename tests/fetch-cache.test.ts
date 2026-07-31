@@ -2297,6 +2297,60 @@ describe("fetch cache shim", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    it("bases the auth cache bypass on effective replacement headers", async () => {
+      fetchMock.mockImplementation(async (input, init) => {
+        requestCount++;
+        const request = new Request(input, init);
+        return new Response(
+          JSON.stringify({
+            authorization: request.headers.get("authorization"),
+            count: requestCount,
+          }),
+        );
+      });
+      const makeBaseAuthRequest = () =>
+        new Request("https://api.example.com/replaced-auth-bypass", {
+          headers: { Authorization: "Bearer removed" },
+        });
+
+      const anonymousResponse = await fetch(makeBaseAuthRequest(), {
+        headers: {},
+        next: { tags: ["public-data"] },
+      });
+      expect(await anonymousResponse.json()).toEqual({ authorization: null, count: 1 });
+
+      startNewFetchCacheScope();
+      const cachedAnonymousResponse = await fetch(makeBaseAuthRequest(), {
+        headers: {},
+        next: { tags: ["public-data"] },
+      });
+      expect(await cachedAnonymousResponse.json()).toEqual({ authorization: null, count: 1 });
+
+      startNewFetchCacheScope();
+      const authenticatedResponse = await fetch("https://api.example.com/effective-auth-bypass", {
+        headers: { Authorization: "Bearer effective" },
+        next: { tags: ["user-data"] },
+      });
+      expect(await authenticatedResponse.json()).toEqual({
+        authorization: "Bearer effective",
+        count: 2,
+      });
+
+      startNewFetchCacheScope();
+      const freshAuthenticatedResponse = await fetch(
+        "https://api.example.com/effective-auth-bypass",
+        {
+          headers: { Authorization: "Bearer effective" },
+          next: { tags: ["user-data"] },
+        },
+      );
+      expect(await freshAuthenticatedResponse.json()).toEqual({
+        authorization: "Bearer effective",
+        count: 3,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
     it("auth-keyed safety bypass records a dynamic fetch observation without marking the page dynamic", async () => {
       await fetch("https://api.example.com/auth-bypass-page-output", {
         headers: { Authorization: "Bearer alice" },
