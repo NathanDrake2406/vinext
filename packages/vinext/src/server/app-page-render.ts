@@ -997,26 +997,32 @@ export async function renderAppPageLifecycle(
   // is no separate cache copy to sanitize. Omit request trace metadata from
   // responses that can enter that shared cache. Known no-store responses keep
   // the feature because neither the edge nor the origin will persist them.
+  const middlewareMayControlSharedCaching =
+    options.middlewareContext.headers?.has("cache-control") === true ||
+    options.middlewareContext.headers?.has("cdn-cache-control") === true ||
+    options.middlewareContext.headers?.has("cloudflare-cdn-cache-control") === true;
   const hasKnownNoStoreHtmlPolicy =
-    !options.isProduction ||
-    options.isDraftMode ||
-    options.isForceDynamic ||
-    Boolean(options.scriptNonce) ||
-    options.isProgressiveActionRender === true ||
-    revalidateSeconds === 0 ||
-    (options.isEdgeRuntime &&
-      revalidateSeconds === null &&
-      !options.isForceStatic &&
-      !options.isDynamicError) ||
-    peekDynamicUsage();
+    !middlewareMayControlSharedCaching &&
+    (options.isDraftMode ||
+      options.isForceDynamic ||
+      Boolean(options.scriptNonce) ||
+      options.isProgressiveActionRender === true ||
+      revalidateSeconds === 0 ||
+      (options.isEdgeRuntime &&
+        revalidateSeconds === null &&
+        !options.isForceStatic &&
+        !options.isDynamicError) ||
+      peekDynamicUsage());
   const originOwnsSharedHtmlStore = getCdnCacheAdapter().ownsBackgroundRevalidation;
+  const canSanitizeSeparateOriginCacheCopy =
+    options.isProduction && originOwnsSharedHtmlStore && !middlewareMayControlSharedCaching;
   const clientTraceMetadata =
-    !hasKnownNoStoreHtmlPolicy && !originOwnsSharedHtmlStore
-      ? undefined
-      : options.clientTraceMetadata;
+    hasKnownNoStoreHtmlPolicy || canSanitizeSeparateOriginCacheCopy
+      ? options.clientTraceMetadata
+      : undefined;
   const clientTraceMetadataMarker =
     !hasKnownNoStoreHtmlPolicy &&
-    originOwnsSharedHtmlStore &&
+    canSanitizeSeparateOriginCacheCopy &&
     clientTraceMetadata &&
     clientTraceMetadata.length > 0
       ? crypto.randomUUID()
