@@ -2193,6 +2193,42 @@ describe("fetch cache shim", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
+    it("includes inherited Request options in the persistent cache key", async () => {
+      fetchMock.mockImplementation(async (input, init) => {
+        requestCount++;
+        const request = new Request(input, init);
+        return new Response(
+          JSON.stringify({
+            redirect: request.redirect,
+            count: requestCount,
+          }),
+        );
+      });
+      const manualRequest = new Request("https://api.example.com/request-options", {
+        redirect: "manual",
+      });
+      const followRequest = new Request("https://api.example.com/request-options", {
+        redirect: "follow",
+      });
+
+      const manualResponse = await fetch(manualRequest, {
+        next: { revalidate: 60 },
+      });
+      expect(await manualResponse.json()).toEqual({
+        redirect: "manual",
+        count: 1,
+      });
+
+      const followResponse = await fetch(followRequest, {
+        next: { revalidate: 60 },
+      });
+      expect(await followResponse.json()).toEqual({
+        redirect: "follow",
+        count: 2,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
     // Adapted from Next.js: packages/next/src/server/lib/dedupe-fetch.test.ts
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/lib/dedupe-fetch.test.ts
     it("does not consume an ineligible Request body while checking dedupe eligibility", async () => {

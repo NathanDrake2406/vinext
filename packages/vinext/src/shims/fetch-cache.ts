@@ -163,6 +163,13 @@ type SerializedBodyResult = {
   canonicalizedContentType?: string;
 };
 
+const NORMALIZED_FETCH_METHODS = new Set(["DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"]);
+
+function normalizeFetchMethod(method: string): string {
+  const upperMethod = method.toUpperCase();
+  return NORMALIZED_FETCH_METHODS.has(upperMethod) ? upperMethod : method;
+}
+
 async function readRequestBodyChunksWithinLimit(request: Request): Promise<{
   chunks: Uint8Array[];
   contentType: string | undefined;
@@ -363,19 +370,17 @@ async function buildFetchCacheKey(
   init?: RequestInit & { next?: NextFetchOptions },
 ): Promise<string> {
   let url: string;
-  let method = "GET";
+  const inputRequest = input instanceof Request ? input : undefined;
 
   if (typeof input === "string") {
     url = input;
   } else if (input instanceof URL) {
     url = input.toString();
   } else {
-    // Request object
     url = input.url;
-    method = input.method || "GET";
   }
 
-  if (init?.method) method = init.method;
+  const method = normalizeFetchMethod(init?.method ?? inputRequest?.method ?? "GET");
 
   const headers = collectHeaders(input, init);
   const { bodyChunks, canonicalizedContentType } = await serializeBody(input, init);
@@ -388,13 +393,13 @@ async function buildFetchCacheKey(
     url,
     method,
     headers,
-    init?.mode,
-    init?.redirect,
-    init?.credentials,
-    init?.referrer,
-    init?.referrerPolicy,
-    init?.integrity,
-    init?.cache,
+    init?.mode ?? inputRequest?.mode,
+    init?.redirect ?? inputRequest?.redirect,
+    init?.credentials ?? inputRequest?.credentials,
+    init?.referrer ?? inputRequest?.referrer,
+    init?.referrerPolicy ?? inputRequest?.referrerPolicy,
+    init?.integrity ?? inputRequest?.integrity,
+    init?.cache ?? inputRequest?.cache,
     bodyChunks,
   ]);
 
