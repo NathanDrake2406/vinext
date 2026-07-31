@@ -109,9 +109,30 @@ function hasAuthHeaders(input: string | URL | Request, init?: RequestInit): bool
   return AUTH_HEADERS.some((name) => name in headers);
 }
 
+const BYTE_HEX = Array.from({ length: 256 }, (_, value) => value.toString(16).padStart(2, "0"));
+
+function encodeBodyBytes(bytes: Uint8Array): string {
+  let encoded = "bytes:";
+  for (const byte of bytes) {
+    encoded += BYTE_HEX[byte];
+  }
+  return encoded;
+}
+
+function concatBodyBytes(chunks: Uint8Array[]): Uint8Array {
+  const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 async function serializeFormData(
   formData: FormData,
-  pushBodyChunk: (chunk: string) => void,
+  pushBodyChunk: (chunk: string, byteLength?: number) => void,
   getTotalBodyBytes: () => number,
 ): Promise<void> {
   for (const [key, val] of formData.entries()) {
@@ -125,6 +146,7 @@ async function serializeFormData(
     ) {
       throw new BodyTooLargeForCacheKeyError();
     }
+    const bytes = new Uint8Array(await val.arrayBuffer());
     pushBodyChunk(
       JSON.stringify([
         key,
@@ -132,9 +154,10 @@ async function serializeFormData(
           kind: "file",
           name: val.name,
           type: val.type,
-          value: await val.text(),
+          value: encodeBodyBytes(bytes),
         },
       ]),
+      bytes.byteLength,
     );
   }
 }
@@ -238,27 +261,33 @@ async function serializeBody(
 
   const bodyChunks: string[] = [];
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
   let totalBodyBytes = 0;
   let canonicalizedContentType: string | undefined;
   let defaultContentType: string | undefined;
-  let bodyMetadata: string | undefined;
+  let bodyMetadata: string | undefined = "body-present";
   const hasEffectiveContentType = getEffectiveRequestHeaders(input, init).has("content-type");
 
-  const pushBodyChunk = (chunk: string): void => {
-    totalBodyBytes += encoder.encode(chunk).byteLength;
+  const pushBodyChunk = (chunk: string, byteLength = encoder.encode(chunk).byteLength): void => {
+    totalBodyBytes += byteLength;
     if (totalBodyBytes > MAX_CACHE_KEY_BODY_BYTES) {
       throw new BodyTooLargeForCacheKeyError();
     }
     bodyChunks.push(chunk);
   };
+  const pushBodyBytes = (bytes: Uint8Array): void => {
+    pushBodyChunk(encodeBodyBytes(bytes), bytes.byteLength);
+  };
   const getTotalBodyBytes = (): number => totalBodyBytes;
 
-  if (init?.body instanceof Uint8Array) {
-    if (init.body.byteLength > MAX_CACHE_KEY_BODY_BYTES) {
+  if (init?.body instanceof ArrayBuffer || (init?.body && ArrayBuffer.isView(init.body))) {
+    const bytes =
+      init.body instanceof ArrayBuffer
+        ? new Uint8Array(init.body)
+        : new Uint8Array(init.body.buffer, init.body.byteOffset, init.body.byteLength);
+    if (bytes.byteLength > MAX_CACHE_KEY_BODY_BYTES) {
       throw new BodyTooLargeForCacheKeyError();
     }
-    pushBodyChunk(decoder.decode(init.body));
+    pushBodyBytes(bytes);
     (init as ExtendedRequestInit)._ogBody = init.body;
   } else if (init?.body && typeof (init.body as { getReader?: unknown }).getReader === "function") {
     // ReadableStream
@@ -266,27 +295,20 @@ async function serializeBody(
     const [bodyForHashing, bodyForFetch] = readableBody.tee();
     (init as ExtendedRequestInit)._ogBody = bodyForFetch;
     const reader = bodyForHashing.getReader();
+    const chunks: Uint8Array[] = [];
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (typeof value === "string") {
-          pushBodyChunk(value);
-        } else {
-          // Check raw byte size before the expensive decode to prevent
-          // OOM from a single oversized chunk.
-          totalBodyBytes += value.byteLength;
-          if (totalBodyBytes > MAX_CACHE_KEY_BODY_BYTES) {
-            throw new BodyTooLargeForCacheKeyError();
-          }
-          bodyChunks.push(decoder.decode(value, { stream: true }));
+        const bytes = typeof value === "string" ? encoder.encode(value) : value;
+        totalBodyBytes += bytes.byteLength;
+        if (totalBodyBytes > MAX_CACHE_KEY_BODY_BYTES) {
+          throw new BodyTooLargeForCacheKeyError();
         }
+        chunks.push(bytes);
       }
-      const finalChunk = decoder.decode();
-      if (finalChunk) {
-        pushBodyChunk(finalChunk);
-      }
+      bodyChunks.push(encodeBodyBytes(concatBodyBytes(chunks)));
     } catch (err) {
       await reader.cancel();
       if (err instanceof BodyTooLargeForCacheKeyError) {
@@ -297,7 +319,7 @@ async function serializeBody(
   } else if (init?.body instanceof URLSearchParams) {
     // URLSearchParams — .toString() gives a stable serialization
     (init as ExtendedRequestInit)._ogBody = init.body;
-    pushBodyChunk(init.body.toString());
+    pushBodyBytes(encoder.encode(init.body.toString()));
     if (!hasEffectiveContentType) {
       defaultContentType = "application/x-www-form-urlencoded;charset=UTF-8";
     }
@@ -310,7 +332,7 @@ async function serializeBody(
     // entries already distinguish bodies, so keep only the stable media type.
     if (!hasEffectiveContentType) {
       defaultContentType = "multipart/form-data";
-      bodyMetadata = "valid-multipart-boundary";
+      bodyMetadata = "body-present;valid-multipart-boundary";
     }
   } else if (
     init?.body &&
@@ -321,8 +343,8 @@ async function serializeBody(
     if (blob.size > MAX_CACHE_KEY_BODY_BYTES) {
       throw new BodyTooLargeForCacheKeyError();
     }
-    pushBodyChunk(await blob.text());
     const arrayBuffer = await blob.arrayBuffer();
+    pushBodyBytes(new Uint8Array(arrayBuffer));
     (init as ExtendedRequestInit)._ogBody = new Blob([arrayBuffer], { type: blob.type });
     if (!hasEffectiveContentType) {
       defaultContentType = blob.type || undefined;
@@ -333,7 +355,7 @@ async function serializeBody(
     if (init.body.length > MAX_CACHE_KEY_BODY_BYTES) {
       throw new BodyTooLargeForCacheKeyError();
     }
-    pushBodyChunk(init.body);
+    pushBodyBytes(encoder.encode(init.body));
     (init as ExtendedRequestInit)._ogBody = init.body;
     if (!hasEffectiveContentType) {
       defaultContentType = "text/plain;charset=UTF-8";
@@ -368,7 +390,9 @@ async function serializeBody(
             ? stripMultipartBoundary(contentType)
             : undefined;
         bodyMetadata =
-          formContentType === "multipart/form-data" ? "valid-multipart-boundary" : undefined;
+          formContentType === "multipart/form-data"
+            ? "body-present;valid-multipart-boundary"
+            : "body-present";
         return { bodyChunks, canonicalizedContentType, bodyMetadata };
       } catch (err) {
         if (err instanceof BodyTooLargeForCacheKeyError) {
@@ -378,13 +402,7 @@ async function serializeBody(
       }
     }
 
-    for (const chunk of chunks) {
-      pushBodyChunk(decoder.decode(chunk, { stream: true }));
-    }
-    const finalChunk = decoder.decode();
-    if (finalChunk) {
-      pushBodyChunk(finalChunk);
-    }
+    pushBodyBytes(concatBodyBytes(chunks));
   }
 
   return { bodyChunks, canonicalizedContentType, defaultContentType, bodyMetadata };

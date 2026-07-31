@@ -1686,6 +1686,97 @@ describe("fetch cache shim", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("serializes ArrayBuffer and ArrayBufferView byte ranges in persistent cache keys", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      requestCount++;
+      const request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          bytes: Array.from(new Uint8Array(await request.arrayBuffer())),
+          count: requestCount,
+        }),
+      );
+    });
+    const url = "https://api.example.com/buffer-source-body";
+
+    const arrayBufferResponse = await fetch(url, {
+      method: "POST",
+      body: Uint8Array.of(0x80).buffer,
+      next: { revalidate: 60 },
+    });
+    expect(await arrayBufferResponse.json()).toEqual({ bytes: [0x80], count: 1 });
+
+    startNewFetchCacheScope();
+    const viewBytes = Uint8Array.of(0, 0x81, 0);
+    const dataViewResponse = await fetch(url, {
+      method: "POST",
+      body: new DataView(viewBytes.buffer, 1, 1),
+      next: { revalidate: 60 },
+    });
+    expect(await dataViewResponse.json()).toEqual({ bytes: [0x81], count: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hashes invalid UTF-8 body bytes without replacement-character collisions", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      requestCount++;
+      const request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          bytes: Array.from(new Uint8Array(await request.arrayBuffer())),
+          count: requestCount,
+        }),
+      );
+    });
+    const url = "https://api.example.com/binary-body";
+
+    const firstResponse = await fetch(url, {
+      method: "POST",
+      body: Uint8Array.of(0x80),
+      next: { revalidate: 60 },
+    });
+    expect(await firstResponse.json()).toEqual({ bytes: [0x80], count: 1 });
+
+    startNewFetchCacheScope();
+    const secondResponse = await fetch(url, {
+      method: "POST",
+      body: Uint8Array.of(0x81),
+      next: { revalidate: 60 },
+    });
+    expect(await secondResponse.json()).toEqual({ bytes: [0x81], count: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hashes binary Blob bodies without lossy text decoding", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      requestCount++;
+      const request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          bytes: Array.from(new Uint8Array(await request.arrayBuffer())),
+          count: requestCount,
+        }),
+      );
+    });
+    const url = "https://api.example.com/binary-blob-body";
+
+    const firstResponse = await fetch(url, {
+      method: "POST",
+      body: new Blob([Uint8Array.of(0x80)]),
+      next: { revalidate: 60 },
+    });
+    expect(await firstResponse.json()).toEqual({ bytes: [0x80], count: 1 });
+
+    startNewFetchCacheScope();
+    const secondResponse = await fetch(url, {
+      method: "POST",
+      body: new Blob([Uint8Array.of(0x81)]),
+      next: { revalidate: 60 },
+    });
+    expect(await secondResponse.json()).toEqual({ bytes: [0x81], count: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("distinguishes an empty string body from an absent body in the persistent cache key", async () => {
     fetchMock.mockImplementation(async (input, init) => {
       requestCount++;
@@ -1718,6 +1809,35 @@ describe("fetch cache shim", () => {
       contentType: "text/plain;charset=UTF-8",
       count: 2,
     });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("distinguishes an empty binary body from an absent body in the persistent cache key", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      requestCount++;
+      const request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          hasBody: request.body !== null,
+          count: requestCount,
+        }),
+      );
+    });
+    const url = "https://api.example.com/empty-binary-body";
+
+    const absentResponse = await fetch(url, {
+      method: "POST",
+      next: { revalidate: 60 },
+    });
+    expect(await absentResponse.json()).toEqual({ hasBody: false, count: 1 });
+
+    startNewFetchCacheScope();
+    const emptyResponse = await fetch(url, {
+      method: "POST",
+      body: new Uint8Array(),
+      next: { revalidate: 60 },
+    });
+    expect(await emptyResponse.json()).toEqual({ hasBody: true, count: 2 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -2687,6 +2807,35 @@ describe("fetch cache shim", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
+    it("hashes FormData file bytes without lossy text decoding", async () => {
+      const makeForm = (byte: number) => {
+        const form = new FormData();
+        form.append(
+          "file",
+          new File([Uint8Array.of(byte)], "binary.bin", {
+            type: "application/octet-stream",
+          }),
+        );
+        return form;
+      };
+
+      const res1 = await fetch("https://api.example.com/body-form-file-binary", {
+        method: "POST",
+        body: makeForm(0x80),
+        next: { revalidate: 60 },
+      });
+      expect((await res1.json()).count).toBe(1);
+
+      startNewFetchCacheScope();
+      const res2 = await fetch("https://api.example.com/body-form-file-binary", {
+        method: "POST",
+        body: makeForm(0x81),
+        next: { revalidate: 60 },
+      });
+      expect((await res2.json()).count).toBe(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
     it("ReadableStream bodies are included in cache key", async () => {
       const streamA = new ReadableStream({
         start(controller) {
@@ -2716,6 +2865,32 @@ describe("fetch cache shim", () => {
       });
       const data2 = await res2.json();
       expect(data2.count).toBe(2); // Different stream = different cache
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("hashes ReadableStream bytes without lossy text decoding", async () => {
+      const makeStream = (byte: number) =>
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(Uint8Array.of(byte));
+            controller.close();
+          },
+        });
+
+      const res1 = await fetch("https://api.example.com/body-stream-binary", {
+        method: "POST",
+        body: makeStream(0x80),
+        next: { revalidate: 60 },
+      });
+      expect((await res1.json()).count).toBe(1);
+
+      startNewFetchCacheScope();
+      const res2 = await fetch("https://api.example.com/body-stream-binary", {
+        method: "POST",
+        body: makeStream(0x81),
+        next: { revalidate: 60 },
+      });
+      expect((await res2.json()).count).toBe(2);
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
