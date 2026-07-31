@@ -38,6 +38,7 @@ import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { isUnknownRecord } from "../utils/record.js";
 import { isDangerousScheme } from "vinext/shims/url-safety";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
+import { _markIsrRenderStart } from "vinext/shims/cache-request-state";
 
 export type PagesRedirectResult = {
   destination: string;
@@ -1269,6 +1270,7 @@ export async function resolvePagesPageData(
         async function () {
           return options.runInFreshUnifiedContext(async () => {
             options.applyRequestContexts();
+            _markIsrRenderStart();
             const freshAppResult = await loadPagesAppInitialRenderProps(options, () =>
               options.createGsspReqRes(),
             );

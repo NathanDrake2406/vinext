@@ -431,6 +431,8 @@ describe("ISR expire ceiling", () => {
       cacheControl: { revalidate: 60, expire: 300 },
       revalidate: 60,
       tags: ["tag"],
+      softTags: [],
+      guardSince: expect.any(Number),
     });
   });
 

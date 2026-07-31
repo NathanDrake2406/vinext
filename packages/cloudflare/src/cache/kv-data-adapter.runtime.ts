@@ -339,7 +339,7 @@ export class KVCacheHandler implements CacheHandler {
     return false;
   }
 
-  set(
+  async set(
     key: string,
     data: IncrementalCacheValue | null,
     ctx?: Record<string, unknown>,
@@ -422,10 +422,42 @@ export class KVCacheHandler implements CacheHandler {
     const metadataJson = JSON.stringify({ tags });
     const metadata = metadataJson.length <= 1024 ? { tags } : undefined;
 
+    // Stale-write guard: refuse the write when an invalidation marker for the
+    // entry's tags (context tags plus guard-only soft tags) is newer than the
+    // producer's start. Markers are read fresh from KV, bypassing the local
+    // `_tagCache`, so invalidations that landed in another isolate are seen.
+    // KV has no compare-and-set, so the check-then-put is not atomic across
+    // isolates; the window is bounded by marker propagation latency, and the
+    // same-isolate window is closed because marker writes and this read
+    // serialise through the same KV namespace.
+    const guardSince = readPositiveNumberField(ctx, "guardSince");
+    if (guardSince !== undefined) {
+      const softTags = validUniqueTags(readStringArrayField(ctx, "softTags"));
+      if (await this._guardRefusesWrite(validUniqueTags([...tags, ...softTags]), guardSince)) {
+        return Promise.resolve();
+      }
+    }
+
     return this._put(this._entryKey(key), JSON.stringify(entry), {
       expirationTtl,
       metadata,
     });
+  }
+
+  /**
+   * Whether a write started at `guardSince` must be refused because an
+   * invalidation marker for one of `tags` landed since the producer began.
+   * A corrupt marker refuses the write rather than risking a stale restore.
+   */
+  private async _guardRefusesWrite(tags: string[], guardSince: number): Promise<boolean> {
+    if (tags.length === 0) return false;
+    const markers = await Promise.all(tags.map((tag) => this.kv.get(this._tagKey(tag))));
+    for (const marker of markers) {
+      if (marker === null) continue;
+      const timestamp = Number(marker);
+      if (Number.isNaN(timestamp) || timestamp >= guardSince) return true;
+    }
+    return false;
   }
 
   async revalidateTag(tags: string | string[], _durations?: { expire?: number }): Promise<void> {
@@ -446,6 +478,22 @@ export class KVCacheHandler implements CacheHandler {
     for (const tag of validTags) {
       this._tagCache.set(tag, { timestamp: now, fetchedAt: now });
     }
+  }
+
+  /**
+   * Newest invalidation marker timestamp for any of `tags`, from the local
+   * tag cache. Used only for producer-join decisions (see
+   * `isProducerStaleSince` in cache-handler.ts); the write-side
+   * `_guardRefusesWrite` stays the correctness gate, so cached values that
+   * lag cross-isolate invalidations are acceptable here.
+   */
+  async getInvalidationVersion(tags: string[]): Promise<number> {
+    let version = 0;
+    for (const tag of tags) {
+      const cached = this._tagCache.get(tag);
+      if (cached !== undefined && cached.timestamp > version) version = cached.timestamp;
+    }
+    return version;
   }
 
   /**

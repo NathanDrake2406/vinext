@@ -31,7 +31,11 @@ import { workUnitAsyncStorage } from "./internal/work-unit-async-storage.js";
 import { makeHangingPromise } from "./internal/make-hanging-promise.js";
 import { encodeCacheTag, encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getCdnCacheAdapter } from "./cdn-cache.js";
-import { getDataCacheHandler, type CachedFetchValue } from "./cache-handler.js";
+import {
+  getDataCacheHandler,
+  isProducerStaleSince,
+  type CachedFetchValue,
+} from "./cache-handler.js";
 import { getRequestExecutionContext } from "./request-context.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
 import {
@@ -517,11 +521,14 @@ const _UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY = Symbol.for(
   "vinext.unstableCache.pendingRevalidations",
 );
 
-function getPendingUnstableCacheRevalidations(): Map<string, Promise<void>> {
+function getPendingUnstableCacheRevalidations(): Map<
+  string,
+  { startTime: number; tags: string[]; promise: Promise<void> }
+> {
   const existing = _g[_UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY];
   if (existing instanceof Map) return existing;
 
-  const pending = new Map<string, Promise<void>>();
+  const pending = new Map<string, { startTime: number; tags: string[]; promise: Promise<void> }>();
   _g[_UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY] = pending;
   return pending;
 }
@@ -533,23 +540,49 @@ function waitUntilUnstableCacheRevalidation(promise: Promise<void>): void {
 
 function scheduleUnstableCacheBackgroundRevalidation(
   cacheKey: string,
+  tags: string[],
   refresh: () => Promise<unknown>,
 ): void {
-  const pending = getPendingUnstableCacheRevalidations();
-  if (pending.has(cacheKey)) return;
+  // Runs synchronously until the first marker read, so the no-producer path
+  // still registers the revalidation in the calling tick.
+  void scheduleUnstableCacheBackgroundRevalidationAsync(cacheKey, tags, refresh);
+}
 
+async function scheduleUnstableCacheBackgroundRevalidationAsync(
+  cacheKey: string,
+  tags: string[],
+  refresh: () => Promise<unknown>,
+): Promise<void> {
+  while (true) {
+    const pending = getPendingUnstableCacheRevalidations();
+    const inFlight = pending.get(cacheKey);
+    if (inFlight === undefined) break;
+    // Do not join an in-flight revalidation that an invalidation of its own
+    // tags disqualified: its write is suppressed, so waiting on it would only
+    // strand the caller. Unrelated invalidations never disqualify it;
+    // over-skipping a join merely starts a duplicate revalidation.
+    if (!(await isProducerStaleSince(inFlight.startTime, inFlight.tags))) return;
+    // Identity-check so a concurrent replacement is not clobbered, then
+    // re-read the map: another caller may already have installed a fresh
+    // producer.
+    if (pending.get(cacheKey) !== inFlight) continue;
+    pending.delete(cacheKey);
+  }
+
+  const pending = getPendingUnstableCacheRevalidations();
+  const startTime = Date.now();
   const revalidation = refresh()
     .then(() => undefined)
     .catch((err) => {
       console.error(`[vinext] unstable_cache background revalidation failed for ${cacheKey}:`, err);
     });
   const trackedRevalidation = revalidation.finally(() => {
-    if (pending.get(cacheKey) === trackedRevalidation) {
+    if (pending.get(cacheKey)?.promise === trackedRevalidation) {
       pending.delete(cacheKey);
     }
   });
 
-  pending.set(cacheKey, trackedRevalidation);
+  pending.set(cacheKey, { startTime, tags, promise: trackedRevalidation });
   waitUntilUnstableCacheRevalidation(trackedRevalidation);
 }
 
@@ -560,6 +593,10 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
   tags: string[],
   revalidateSeconds: number | false | undefined,
 ): Promise<Result> {
+  // Capture the start timestamp and soft tags before the producing work runs,
+  // so the guarded write below cannot restore an entry invalidated meanwhile.
+  const startTime = Date.now();
+  const softTags = getCurrentFetchSoftTags();
   const result = await _unstableCacheAls.run(true, () => fn(...args));
 
   const cacheValue: CachedFetchValue = {
@@ -577,9 +614,14 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
     revalidate: typeof revalidateSeconds === "number" ? revalidateSeconds : false,
   };
 
+  // The handler's set refuses the write when any invalidation marker for the
+  // entry's tags (or the request's soft tags) is newer than the start — the
+  // ordering decision lives in the cache-handler boundary.
   await getDataCacheHandler().set(cacheKey, cacheValue, {
     fetchCache: true,
     tags,
+    softTags,
+    guardSince: startTime,
     revalidate: revalidateSeconds,
   });
 
@@ -642,7 +684,7 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
         if (cached.ok) {
           if (existing.cacheState === "stale") {
             if (shouldServeStaleUnstableCacheEntry()) {
-              scheduleUnstableCacheBackgroundRevalidation(cacheKey, () =>
+              scheduleUnstableCacheBackgroundRevalidation(cacheKey, tags, () =>
                 refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
               );
               return cached.value;

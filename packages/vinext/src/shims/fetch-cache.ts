@@ -19,7 +19,12 @@
  *   await runWithFetchCache(async () => { ... render ... });
  */
 
-import { getDataCacheHandler, type CachedFetchValue, type CacheHandler } from "./cache-handler.js";
+import {
+  getDataCacheHandler,
+  isProducerStaleSince,
+  type CachedFetchValue,
+  type CacheHandler,
+} from "./cache-handler.js";
 import { encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import { markDynamicUsage } from "./headers.js";
@@ -449,7 +454,7 @@ const _PENDING_KEY = Symbol.for("vinext.fetchCache.pendingRefetches");
 const _gPending = globalThis as unknown as Record<PropertyKey, unknown>;
 const pendingRefetches = (_gPending[_PENDING_KEY] ??= new Map<string, Promise<void>>()) as Map<
   string,
-  Promise<void>
+  { startTime: number; tags: string[]; promise: Promise<void> }
 >;
 
 // Maximum time a dedup entry can live before being force-cleaned.
@@ -612,14 +617,20 @@ async function writeFetchCacheResponse(
   response: Response,
   tags: string[],
   revalidateSeconds: number,
-  options?: { cloneForReturn?: boolean },
+  options?: { cloneForReturn?: boolean; guardSince?: number; softTags?: string[] },
 ): Promise<void> {
   const cacheValue = await buildFetchCacheValue(response, tags, revalidateSeconds, options);
   if (!cacheValue) return;
 
+  // The handler's set refuses the write when any invalidation marker for the
+  // entry's tags (or the request's soft tags) is newer than the producer's
+  // start — see cache-handler.ts. This drops writes from producers that began
+  // before an invalidation affecting this entry completed.
   await handler.set(cacheKey, cacheValue, {
     fetchCache: true,
     tags,
+    softTags: options?.softTags ?? [],
+    ...(options?.guardSince !== undefined ? { guardSince: options.guardSince } : {}),
     revalidate: revalidateSeconds,
   });
 }
@@ -630,6 +641,8 @@ async function lowerFetchCacheRevalidateIfNeeded(
   cachedValue: CachedFetchValue,
   tags: string[],
   revalidateSeconds: number,
+  guardSince: number,
+  softTags: string[],
 ): Promise<void> {
   if (
     !Number.isFinite(revalidateSeconds) ||
@@ -649,6 +662,8 @@ async function lowerFetchCacheRevalidateIfNeeded(
   await handler.set(cacheKey, updatedValue, {
     fetchCache: true,
     tags: mergedTags,
+    softTags,
+    guardSince,
     revalidate: revalidateSeconds,
   });
 }
@@ -1162,6 +1177,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
     }
     const handler = getDataCacheHandler();
     let mustBypassPendingRevalidation = _hasPendingRevalidatedTag([...tags, ...softTags]);
+    const guardSince = Date.now();
 
     // Try cache first
     try {
@@ -1187,6 +1203,8 @@ function createPatchedFetch(): typeof globalThis.fetch {
           cached.value,
           tags,
           revalidateSeconds,
+          guardSince,
+          softTags,
         );
         const cachedData = cached.value.data;
         return buildCachedFetchResponse(cachedData, input);
@@ -1197,8 +1215,12 @@ function createPatchedFetch(): typeof globalThis.fetch {
       // However, if we have a stale entry, return it and trigger background refetch.
       if (cached?.value && cached.value.kind === "FETCH" && cached.cacheState === "stale") {
         if (shouldRefreshStaleFetchInForeground()) {
+          const refetchGuardSince = Date.now();
           const freshResponse = await dedupeFetch(input, fetchInit);
-          await writeFetchCacheResponse(handler, cacheKey, freshResponse, tags, revalidateSeconds);
+          await writeFetchCacheResponse(handler, cacheKey, freshResponse, tags, revalidateSeconds, {
+            guardSince: refetchGuardSince,
+            softTags,
+          });
           return freshResponse;
         }
 
@@ -1206,11 +1228,24 @@ function createPatchedFetch(): typeof globalThis.fetch {
 
         // Background refetch — deduped so only one in-flight refetch runs
         // per cache key, preventing thundering herd on popular endpoints.
-        if (!pendingRefetches.has(cacheKey)) {
+        const inFlightRefetch = pendingRefetches.get(cacheKey);
+        if (
+          inFlightRefetch === undefined ||
+          (await isProducerStaleSince(inFlightRefetch.startTime, inFlightRefetch.tags))
+        ) {
+          if (inFlightRefetch !== undefined) {
+            // A refetch disqualified by an invalidation of its own tags cannot
+            // be joined: its write is suppressed, so waiting on it would only
+            // strand this caller. Replace it with a fresh refetch.
+            pendingRefetches.delete(cacheKey);
+          }
+          const refetchGuardSince = Date.now();
           const refetchPromise = originalFetch(input, fetchInit)
             .then(async (freshResp) => {
               await writeFetchCacheResponse(handler, cacheKey, freshResp, tags, revalidateSeconds, {
                 cloneForReturn: false,
+                guardSince: refetchGuardSince,
+                softTags,
               });
             })
             .catch((err) => {
@@ -1228,19 +1263,23 @@ function createPatchedFetch(): typeof globalThis.fetch {
             .finally(() => {
               // Only clear if we still own the slot — the timeout may have
               // already replaced it with a newer refetch promise.
-              if (pendingRefetches.get(cacheKey) === refetchPromise) {
+              if (pendingRefetches.get(cacheKey)?.promise === refetchPromise) {
                 pendingRefetches.delete(cacheKey);
               }
               clearTimeout(timeoutId);
             });
 
-          pendingRefetches.set(cacheKey, refetchPromise);
+          pendingRefetches.set(cacheKey, {
+            startTime: refetchGuardSince,
+            tags: [...tags, ...softTags],
+            promise: refetchPromise,
+          });
 
           // Safety net: if the upstream fetch hangs forever, force-clean the
           // dedup entry so future stale hits can retry instead of being
           // permanently suppressed.
           const timeoutId = setTimeout(() => {
-            if (pendingRefetches.get(cacheKey) === refetchPromise) {
+            if (pendingRefetches.get(cacheKey)?.promise === refetchPromise) {
               pendingRefetches.delete(cacheKey);
             }
           }, DEDUP_TIMEOUT_MS);
@@ -1256,7 +1295,11 @@ function createPatchedFetch(): typeof globalThis.fetch {
       console.error("[vinext] fetch cache read error:", cacheErr);
     }
 
-    // Cache miss — fetch from network
+    // Cache miss — fetch from network. This producer begins now, so capture a
+    // fresh guard timestamp: an invalidation that happened earlier in this
+    // render does not disqualify it, only one that completes while it is in
+    // flight.
+    const missGuardSince = Date.now();
     const response = await (mustBypassPendingRevalidation
       ? originalFetch(input, fetchInit)
       : dedupeFetch(input, fetchInit));
@@ -1267,6 +1310,8 @@ function createPatchedFetch(): typeof globalThis.fetch {
         .set(cacheKey, cacheValue, {
           fetchCache: true,
           tags,
+          softTags,
+          guardSince: missGuardSince,
           revalidate: revalidateSeconds,
         })
         .catch((err) => {

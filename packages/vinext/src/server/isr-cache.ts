@@ -22,6 +22,9 @@ import {
 import { getCdnCacheAdapter } from "vinext/shims/cdn-cache";
 import { fnv1a64 } from "../utils/hash.js";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
+import { isProducerStaleSince } from "vinext/shims/cache-handler";
+import { getCurrentFetchSoftTags } from "vinext/shims/fetch-cache";
+import { _getIsrRenderStartTimestamp, _markIsrRenderStart } from "vinext/shims/cache-request-state";
 import { reportRequestError, type OnRequestErrorContext } from "./instrumentation.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 import {
@@ -167,6 +170,9 @@ export type ISRCacheEntry = {
 export async function isrGet(key: string): Promise<ISRCacheEntry | null> {
   // Page-level reads go through the CDN cache adapter. The default adapter
   // reads the data cache; an edge adapter may return null so the CDN serves.
+  // Capture the render start before the read: ISR writes in this request
+  // guard against restoring entries invalidated after this point.
+  _markIsrRenderStart();
   const result = await getCdnCacheAdapter().get(key);
   if (!result) return null;
   const isExpired = result.cacheState === "expired";
@@ -188,6 +194,15 @@ export async function isrSet(
   tags?: string[],
   expireSeconds?: number,
 ): Promise<void> {
+  // A render that began before an invalidation of its tags completed must not
+  // restore the invalidated entry — its `lastModified` stamp would defeat the
+  // read-time tag-timestamp eviction. The handler's set refuses the write when
+  // any invalidation marker for the entry's tags (or the request's soft tags)
+  // is newer than the render start captured at the request's first isrGet (or
+  // at regeneration start). Outside a request scope, fall back to capturing
+  // now, which still guards the write itself.
+  const entryTags = tags ?? [];
+  const guardSince = _getIsrRenderStartTimestamp() ?? Date.now();
   await getCdnCacheAdapter().set(key, data, {
     cacheControl:
       expireSeconds === undefined
@@ -196,7 +211,9 @@ export async function isrSet(
     // `revalidate` is the legacy vinext CacheHandler context field. `expire`
     // is new metadata and intentionally only lives inside cacheControl.
     revalidate: revalidateSeconds,
-    tags: tags ?? [],
+    tags: entryTags,
+    softTags: getCurrentFetchSoftTags(),
+    guardSince,
   });
 }
 
@@ -236,6 +253,8 @@ export async function isrSetPrerenderedAppPage(
   if (tags && tags.length > 0) {
     ctx.tags = tags;
   }
+  // Prerender seeding happens at build time; there is no concurrent
+  // invalidation to race, so no write guard applies.
   await getCdnCacheAdapter().set(key, data, ctx);
 
   if (revalidateSeconds !== undefined) {
@@ -253,7 +272,7 @@ const _PENDING_REGEN_KEY = Symbol.for("vinext.isrCache.pendingRegenerations");
 const _g = globalThis as unknown as Record<PropertyKey, unknown>;
 const pendingRegenerations = (_g[_PENDING_REGEN_KEY] ??= new Map<string, Promise<void>>()) as Map<
   string,
-  Promise<void>
+  { startTime: number; tags: string[]; promise: Promise<void> }
 >;
 
 // Keep on-demand work in a distinct batch from ordinary/stale regeneration.
@@ -264,26 +283,49 @@ const _PENDING_ON_DEMAND_REGEN_KEY = Symbol.for("vinext.isrCache.pendingOnDemand
 const pendingOnDemandRegenerations = (_g[_PENDING_ON_DEMAND_REGEN_KEY] ??= new Map<
   string,
   Promise<unknown>
->()) as Map<string, Promise<unknown>>;
+>()) as Map<string, { startTime: number; tags: string[]; promise: Promise<unknown> }>;
 
 /** Coalesce same-key synchronous on-demand revalidations. */
-export function coalesceOnDemandRevalidation<T>(
+export async function coalesceOnDemandRevalidation<T>(
   key: string,
   renderFn: () => Promise<T>,
 ): Promise<T> {
-  const pending = pendingOnDemandRegenerations.get(key) as Promise<T> | undefined;
-  if (pending) return pending;
+  while (true) {
+    const pending = pendingOnDemandRegenerations.get(key);
+    if (pending === undefined) break;
+    // A post-invalidation caller must not join an on-demand regeneration that
+    // an invalidation of its own tags disqualified: its write is suppressed, so
+    // joining would only strand the caller. Replace it with fresh work instead.
+    // On-demand revalidation is path-based (`res.revalidate(path)`), so the
+    // request's path-derived soft tags are the right disqualifier set.
+    if (!(await isProducerStaleSince(pending.startTime, pending.tags))) {
+      return pending.promise as Promise<T>;
+    }
+    // Identity-check so a concurrent replacement is not clobbered, then
+    // re-read the map: another caller may already have installed a fresh
+    // producer to join.
+    if (pendingOnDemandRegenerations.get(key) !== pending) continue;
+    pendingOnDemandRegenerations.delete(key);
+  }
+
+  const startTime = Date.now();
+  const tags = getCurrentFetchSoftTags();
 
   // Defer invocation until after the promise is registered, matching Next.js's
-  // response-cache scheduler and closing the same-tick stampede window.
+  // response-cache scheduler and closing the same-tick stampede window. Mark
+  // the render start so the regeneration's isrSet writes are guarded from its
+  // own beginning, not just from the write.
   const promise = Promise.resolve()
-    .then(renderFn)
+    .then(() => {
+      _markIsrRenderStart();
+      return renderFn();
+    })
     .finally(() => {
-      if (pendingOnDemandRegenerations.get(key) === promise) {
+      if (pendingOnDemandRegenerations.get(key)?.promise === promise) {
         pendingOnDemandRegenerations.delete(key);
       }
     });
-  pendingOnDemandRegenerations.set(key, promise);
+  pendingOnDemandRegenerations.set(key, { startTime, tags, promise });
   return promise;
 }
 
@@ -291,7 +333,9 @@ export function coalesceOnDemandRevalidation<T>(
  * Trigger a background regeneration for a cache key.
  *
  * If a regeneration for this key is already in progress, this is a no-op.
- * The renderFn should produce the new cache value and call isrSet internally.
+ * A regeneration that an invalidation of its own tags disqualified is
+ * replaced with fresh work instead. The renderFn should produce the new
+ * cache value and call isrSet internally.
  *
  * On Cloudflare Workers the regeneration promise is registered with
  * `ctx.waitUntil()` via the ALS-backed ExecutionContext, keeping the isolate
@@ -313,9 +357,48 @@ export function triggerBackgroundRegeneration(
   // Edge-managed CDN adapters revalidate by re-requesting the origin, so the
   // origin must not also run in-process regeneration.
   if (!getCdnCacheAdapter().ownsBackgroundRevalidation) return;
-  if (pendingRegenerations.has(key)) return;
+  // Runs synchronously until the first marker read, so the no-producer path
+  // still registers the regeneration in the calling tick.
+  void scheduleBackgroundRegeneration(key, renderFn, errorContext);
+}
 
-  const promise = renderFn()
+async function scheduleBackgroundRegeneration(
+  key: string,
+  renderFn: () => Promise<void>,
+  errorContext:
+    | {
+        routerKind: OnRequestErrorContext["routerKind"];
+        routePath: string;
+        routeType: OnRequestErrorContext["routeType"];
+      }
+    | undefined,
+): Promise<void> {
+  while (true) {
+    const inFlight = pendingRegenerations.get(key);
+    if (inFlight === undefined) break;
+    // A regeneration disqualified by an invalidation of its own tags cannot be
+    // joined: its write is suppressed, so a post-invalidation stale hit must
+    // replace it with fresh work instead of waiting on it.
+    if (!(await isProducerStaleSince(inFlight.startTime, inFlight.tags))) return;
+    // Identity-check so a concurrent replacement is not clobbered, then
+    // re-read the map: another caller may already have installed a fresh
+    // producer.
+    if (pendingRegenerations.get(key) !== inFlight) continue;
+    pendingRegenerations.delete(key);
+  }
+
+  const startTime = Date.now();
+  const tags = getCurrentFetchSoftTags();
+
+  // Mark the render start inside the renderFn's execution context (which may
+  // be a fresh context for the regeneration) so its isrSet writes are guarded
+  // from the beginning of the producing work. For the Pages Router the page
+  // rendering path additionally marks the start inside its fresh context (see
+  // pages-page-data).
+  const promise = (async () => {
+    _markIsrRenderStart();
+    await renderFn();
+  })()
     .catch((err) => {
       console.error(`[vinext] ISR background regeneration failed for ${key}:`, err);
       if (errorContext) {
@@ -332,10 +415,12 @@ export function triggerBackgroundRegeneration(
       }
     })
     .finally(() => {
-      pendingRegenerations.delete(key);
+      if (pendingRegenerations.get(key)?.promise === promise) {
+        pendingRegenerations.delete(key);
+      }
     });
 
-  pendingRegenerations.set(key, promise);
+  pendingRegenerations.set(key, { startTime, tags, promise });
 
   // Register with the Workers ExecutionContext (retrieved from ALS) so the
   // runtime keeps the isolate alive until the regeneration completes, even

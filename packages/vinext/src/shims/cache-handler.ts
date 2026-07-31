@@ -83,6 +83,17 @@ export type CacheHandlerContext = {
   [key: string]: unknown;
 };
 
+/**
+ * `set` context fields consumed by the stale-write guard (see below):
+ *
+ * - `guardSince`: wall-clock timestamp captured when the producing work began.
+ *   The handler refuses the write when any invalidation marker for the entry's
+ *   tags (context `tags` plus `softTags`) is >= `guardSince`. Markers are
+ *   backend state (KV tag keys for the production handler), so the guard holds
+ *   across isolates/workers modulo marker propagation, matching the trust
+ *   model of the read-time tag eviction.
+ * - `softTags`: guard-only; never persisted as entry tags.
+ */
 export type CacheHandler = {
   get(key: string, ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null>;
   set(
@@ -92,6 +103,13 @@ export type CacheHandler = {
   ): Promise<void>;
   revalidateTag(tags: string | string[], durations?: { expire?: number }): Promise<void>;
   resetRequestCache?(): void;
+  /**
+   * Max invalidation marker timestamp across the given (encoded) tags, or 0
+   * when none. Handlers may serve this from their local marker cache; it is
+   * only used by producer-join decisions (dedup hygiene), never by the write
+   * guard, which reads fresh markers at commit time.
+   */
+  getInvalidationVersion?(tags: string[]): Promise<number>;
 };
 
 export class NoOpCacheHandler implements CacheHandler {
@@ -106,6 +124,10 @@ export class NoOpCacheHandler implements CacheHandler {
   ): Promise<void> {}
 
   async revalidateTag(_tags: string | string[], _durations?: { expire?: number }): Promise<void> {}
+
+  async getInvalidationVersion(_tags: string[]): Promise<number> {
+    return 0;
+  }
 }
 
 type MemoryEntry = {
@@ -324,6 +346,18 @@ export class MemoryCacheHandler implements CacheHandler {
 
     if (this.maxMemoryCacheSize === 0) return;
 
+    // Stale-write guard: refuse the write when an invalidation marker for the
+    // entry's tags (context tags plus guard-only soft tags) is newer than the
+    // producer's start. The check and the store mutation run in the same
+    // synchronous block, so the decision is atomic within this isolate.
+    const guardSince = readPositiveNumberField(ctx, "guardSince");
+    if (guardSince !== undefined) {
+      for (const tag of [...tags, ...readStringArrayField(ctx, "softTags")]) {
+        const revalidatedAt = this.tagRevalidatedAt.get(tag);
+        if (revalidatedAt !== undefined && revalidatedAt >= guardSince) return;
+      }
+    }
+
     const entry = {
       value: data,
       tags,
@@ -357,6 +391,15 @@ export class MemoryCacheHandler implements CacheHandler {
     }
   }
 
+  async getInvalidationVersion(tags: string[]): Promise<number> {
+    let version = 0;
+    for (const tag of tags) {
+      const revalidatedAt = this.tagRevalidatedAt.get(tag);
+      if (revalidatedAt !== undefined && revalidatedAt > version) version = revalidatedAt;
+    }
+    return version;
+  }
+
   resetRequestCache(): void {}
 }
 
@@ -387,4 +430,26 @@ export function setCacheHandler(handler: CacheHandler): void {
 
 export function getCacheHandler(): CacheHandler {
   return getDataCacheHandler();
+}
+
+/**
+ * Whether an in-flight producer that began at `startTime` must not be joined
+ * by a post-invalidation caller: true when any invalidation marker for its
+ * tags landed since it started. Tag-aware, so an unrelated invalidation never
+ * disqualifies a producer. Tagless producers are never stale (nothing can
+ * invalidate them by tag) and untagged callers join unconditionally; the
+ * write-side `set` guard remains the correctness gate either way.
+ *
+ * Handlers without `getInvalidationVersion` are treated as never stale —
+ * joining only delays recovery by one producer generation, never serves stale
+ * data from the cache.
+ */
+export async function isProducerStaleSince(
+  startTime: number,
+  tags: readonly string[],
+): Promise<boolean> {
+  if (tags.length === 0) return false;
+  const handler = getDataCacheHandler();
+  if (!handler.getInvalidationVersion) return false;
+  return (await handler.getInvalidationVersion([...tags])) >= startTime;
 }
