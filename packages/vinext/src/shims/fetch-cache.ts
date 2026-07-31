@@ -43,7 +43,7 @@ import {
 const HEADER_BLOCKLIST = ["traceparent", "tracestate"];
 
 // Cache key version — bump when changing the key format to bust stale entries
-const CACHE_KEY_PREFIX = "v3";
+const CACHE_KEY_PREFIX = "v4";
 const MAX_CACHE_KEY_BODY_BYTES = 1024 * 1024; // 1 MiB
 
 // "Cache indefinitely" duration — mirrors upstream's CACHE_ONE_YEAR_SECONDS.
@@ -74,34 +74,24 @@ type ExtendedRequestInit = RequestInit & {
 
 /**
  * Collect all headers from the request, excluding the blocklist.
- * Merges headers from both the Request object and the init object,
- * with init taking precedence (matching fetch() spec behavior).
+ * RequestInit headers replace a Request input's headers rather than merging
+ * with them, matching the Request constructor's normalization behavior.
  */
 function collectHeaders(input: string | URL | Request, init?: RequestInit): Record<string, string> {
-  const merged: Record<string, string> = {};
-
-  // Start with headers from Request object (if any)
-  if (input instanceof Request && input.headers) {
-    input.headers.forEach((v, k) => {
-      merged[k] = v;
-    });
-  }
-
-  // Override with headers from init (init takes precedence per fetch spec)
-  if (init?.headers) {
-    const headers =
-      init.headers instanceof Headers ? init.headers : new Headers(init.headers as HeadersInit);
-    headers.forEach((v, k) => {
-      merged[k] = v;
-    });
-  }
+  const headers =
+    init?.headers !== undefined
+      ? new Headers(init.headers)
+      : input instanceof Request
+        ? input.headers
+        : new Headers();
+  const collected = Object.fromEntries(headers.entries());
 
   // Remove blocklisted headers
   for (const blocked of HEADER_BLOCKLIST) {
-    delete merged[blocked];
+    delete collected[blocked];
   }
 
-  return merged;
+  return collected;
 }
 
 /**
@@ -863,8 +853,8 @@ function createFetchDedupeCandidate(
     return null;
   }
 
-  const method = init?.method?.toUpperCase();
-  if (method && method !== "GET" && method !== "HEAD") {
+  const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
     return null;
   }
 

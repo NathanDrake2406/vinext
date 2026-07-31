@@ -2158,6 +2158,65 @@ describe("fetch cache shim", () => {
       });
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
+
+    it("replaces Request headers when deriving the persistent cache key", async () => {
+      fetchMock.mockImplementation(async (input, init) => {
+        requestCount++;
+        const request = new Request(input, init);
+        return new Response(
+          JSON.stringify({
+            authorization: request.headers.get("authorization"),
+            count: requestCount,
+          }),
+        );
+      });
+      const authenticatedRequest = new Request("https://api.example.com/replaced-headers", {
+        headers: { Authorization: "Bearer alice" },
+      });
+
+      const anonymousResponse = await fetch(authenticatedRequest, {
+        headers: {},
+        next: { revalidate: 60 },
+      });
+      expect(await anonymousResponse.json()).toEqual({
+        authorization: null,
+        count: 1,
+      });
+
+      const authenticatedResponse = await fetch(authenticatedRequest, {
+        next: { revalidate: 60 },
+      });
+      expect(await authenticatedResponse.json()).toEqual({
+        authorization: "Bearer alice",
+        count: 2,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    // Adapted from Next.js: packages/next/src/server/lib/dedupe-fetch.test.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/lib/dedupe-fetch.test.ts
+    it("does not consume an ineligible Request body while checking dedupe eligibility", async () => {
+      fetchMock.mockImplementationOnce(async (input) => {
+        expect(input).toBe(request);
+        expect(request.bodyUsed).toBe(false);
+        return new Response(await request.text());
+      });
+      const request = new Request("https://api.example.com/request-body", {
+        method: "POST",
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("stream data"));
+            controller.close();
+          },
+        }),
+        duplex: "half",
+      } as RequestInit & { duplex: "half" });
+
+      const response = await fetch(request, { cache: "no-store" });
+
+      expect(await response.text()).toBe("stream data");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ── cache: 'no-cache' bypass ────────────────────────────────────────
