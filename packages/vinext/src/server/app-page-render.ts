@@ -94,6 +94,13 @@ type AppPageBoundaryOnError = (
 ) => unknown;
 type AppPageDebugLogger = (event: string, detail: string) => void;
 
+const SHARED_CACHE_CONTROL_HEADER_NAMES = [
+  "cache-control",
+  "cdn-cache-control",
+  "cloudflare-cdn-cache-control",
+  "vercel-cdn-cache-control",
+] as const;
+
 type AppPageRequestCacheLife = {
   revalidate?: number;
   expire?: number;
@@ -997,36 +1004,35 @@ export async function renderAppPageLifecycle(
   // is no separate cache copy to sanitize. Omit request trace metadata from
   // responses that can enter that shared cache. Known no-store responses keep
   // the feature because neither the edge nor the origin will persist them.
-  const middlewareMayControlSharedCaching =
-    options.middlewareContext.headers?.has("cache-control") === true ||
-    options.middlewareContext.headers?.has("cdn-cache-control") === true ||
-    options.middlewareContext.headers?.has("cloudflare-cdn-cache-control") === true;
-  const hasKnownNoStoreHtmlPolicy =
-    !middlewareMayControlSharedCaching &&
-    (options.isDraftMode ||
-      options.isForceDynamic ||
-      Boolean(options.scriptNonce) ||
-      options.isProgressiveActionRender === true ||
-      revalidateSeconds === 0 ||
-      (options.isEdgeRuntime &&
-        revalidateSeconds === null &&
-        !options.isForceStatic &&
-        !options.isDynamicError) ||
-      peekDynamicUsage());
-  const originOwnsSharedHtmlStore = getCdnCacheAdapter().ownsBackgroundRevalidation;
-  const canSanitizeSeparateOriginCacheCopy =
-    options.isProduction && originOwnsSharedHtmlStore && !middlewareMayControlSharedCaching;
-  const clientTraceMetadata =
-    hasKnownNoStoreHtmlPolicy || canSanitizeSeparateOriginCacheCopy
-      ? options.clientTraceMetadata
-      : undefined;
-  const clientTraceMetadataMarker =
-    !hasKnownNoStoreHtmlPolicy &&
-    canSanitizeSeparateOriginCacheCopy &&
-    clientTraceMetadata &&
-    clientTraceMetadata.length > 0
-      ? crypto.randomUUID()
-      : undefined;
+  let clientTraceMetadata = options.clientTraceMetadata;
+  let clientTraceMetadataMarker: string | undefined;
+  if (clientTraceMetadata && clientTraceMetadata.length > 0) {
+    const middlewareMayControlSharedCaching = SHARED_CACHE_CONTROL_HEADER_NAMES.some(
+      (name) => options.middlewareContext.headers?.has(name) === true,
+    );
+    const hasKnownNoStoreHtmlPolicy =
+      !middlewareMayControlSharedCaching &&
+      (options.isDraftMode ||
+        options.isForceDynamic ||
+        Boolean(options.scriptNonce) ||
+        options.isProgressiveActionRender === true ||
+        revalidateSeconds === 0 ||
+        (options.isEdgeRuntime &&
+          revalidateSeconds === null &&
+          !options.isForceStatic &&
+          !options.isDynamicError) ||
+        peekDynamicUsage());
+    const canSanitizeSeparateOriginCacheCopy =
+      options.isProduction &&
+      getCdnCacheAdapter().ownsBackgroundRevalidation &&
+      !middlewareMayControlSharedCaching;
+
+    if (!hasKnownNoStoreHtmlPolicy && !canSanitizeSeparateOriginCacheCopy) {
+      clientTraceMetadata = undefined;
+    } else if (!hasKnownNoStoreHtmlPolicy && canSanitizeSeparateOriginCacheCopy) {
+      clientTraceMetadataMarker = crypto.randomUUID();
+    }
+  }
   let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
   let dynamicUsedDuringHtmlRender = false;
   let renderEnd: number | undefined;
