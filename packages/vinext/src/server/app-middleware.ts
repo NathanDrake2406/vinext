@@ -151,14 +151,34 @@ function requestWithMiddlewareRequestHeaders(
   return new Request(request.url, init);
 }
 
+function restoreFlightHeaders(request: Request, source: Request): Request {
+  const headers = new Headers(request.headers);
+  let changed = false;
+
+  for (const name of FLIGHT_HEADERS) {
+    const value = source.headers.get(name);
+    if (value === null) {
+      if (headers.has(name)) {
+        headers.delete(name);
+        changed = true;
+      }
+    } else if (headers.get(name) !== value) {
+      headers.set(name, value);
+      changed = true;
+    }
+  }
+
+  return changed ? cloneRequestWithHeaders(request, headers) : request;
+}
+
 export async function proxyExternalMiddlewareRewrite(
   request: Request,
   rewriteUrl: string,
   context: AppMiddlewareContext,
 ): Promise<Response> {
-  const proxyRequest = requestWithMiddlewareRequestHeaders(
+  const proxyRequest = restoreFlightHeaders(
+    requestWithMiddlewareRequestHeaders(request, context.requestHeaders ?? context.headers),
     request,
-    context.requestHeaders ?? context.headers,
   );
   setHeadersContext(null);
   setNavigationContext(null);
@@ -259,9 +279,7 @@ export async function applyAppMiddleware(
           };
         }
         if (options.middlewareRequest) cancelRequestBody(options.middlewareRequest);
-        const externalRequest = requestWithoutFlightHeaders(
-          options.externalRewriteRequest ?? options.request,
-        );
+        const externalRequest = options.externalRewriteRequest ?? options.request;
         return {
           kind: "response",
           response: await proxyExternalMiddlewareRewrite(
@@ -342,9 +360,7 @@ export async function applyAppMiddleware(
             response: validationResponseWithMiddlewareHeaders(validationResponse, options.context),
           };
         }
-        const externalRequest = requestWithoutFlightHeaders(
-          options.externalRewriteRequest ?? options.request,
-        );
+        const externalRequest = options.externalRewriteRequest ?? options.request;
         return {
           kind: "response",
           response: await proxyExternalMiddlewareRewrite(

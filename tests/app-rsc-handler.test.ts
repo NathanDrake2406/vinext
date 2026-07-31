@@ -1901,9 +1901,12 @@ describe("createAppRscHandler", () => {
   it.each(["middleware", "forwarded"] as const)(
     "forwards valid RSC cache-busting params to %s external rewrite proxies",
     async (mode) => {
-      const receivedUrls: string[] = [];
+      const receivedRequests: Array<{
+        headers: import("node:http").IncomingHttpHeaders;
+        url: string;
+      }> = [];
       const server = createServer((req, res) => {
-        receivedUrls.push(req.url ?? "");
+        receivedRequests.push({ headers: req.headers, url: req.url ?? "" });
         res.writeHead(200, { "content-type": "text/plain" });
         res.end("upstream");
       });
@@ -1912,15 +1915,44 @@ describe("createAppRscHandler", () => {
       const upstreamUrl = `http://127.0.0.1:${address.port}/proxy`;
 
       try {
-        const headers = createRscRequestHeaders({ mountedSlotsHeader: "slot:modal:/" });
+        const headers = createRscRequestHeaders({
+          mountedSlotsHeader: "slot:modal:/",
+          prefetchRouterState: { pathAndSearch: "/outside?tab=latest", routeId: "/outside" },
+        });
+        const routerState = headers.get("next-router-state-tree");
+        expect(routerState).not.toBeNull();
         if (mode === "forwarded") {
-          headers.set(VINEXT_MW_CTX_HEADER, JSON.stringify({ r: upstreamUrl }));
+          headers.set(
+            VINEXT_MW_CTX_HEADER,
+            JSON.stringify({
+              h: [
+                [
+                  "x-middleware-override-headers",
+                  "rsc,next-router-prefetch,next-router-state-tree",
+                ],
+                ["x-middleware-request-next-router-prefetch", "0"],
+                ["x-middleware-request-next-router-state-tree", "tampered"],
+                ["x-middleware-request-rsc", "0"],
+              ],
+              r: upstreamUrl,
+            }),
+          );
         }
         const requestUrl = await createRscRequestUrl("/outside?tab=latest", headers);
         const handler = createHandler({
           configHeaders: [],
           middlewareModule: {
-            default: () => new Response(null, { headers: { "x-middleware-rewrite": upstreamUrl } }),
+            default: () =>
+              new Response(null, {
+                headers: {
+                  "x-middleware-override-headers":
+                    "rsc,next-router-prefetch,next-router-state-tree",
+                  "x-middleware-request-next-router-prefetch": "0",
+                  "x-middleware-request-next-router-state-tree": "tampered",
+                  "x-middleware-request-rsc": "0",
+                  "x-middleware-rewrite": upstreamUrl,
+                },
+              }),
           },
           matchRoute: () => null,
         });
@@ -1931,9 +1963,13 @@ describe("createAppRscHandler", () => {
         );
 
         expect(response.status).toBe(200);
-        expect(receivedUrls).toHaveLength(1);
-        const forwardedUrl = new URL(`http://vinext.local${receivedUrls[0]}`);
+        expect(receivedRequests).toHaveLength(1);
+        const [received] = receivedRequests;
+        const forwardedUrl = new URL(`http://vinext.local${received.url}`);
         expect(forwardedUrl.searchParams.has(VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM)).toBe(true);
+        expect(received.headers[RSC_HEADER.toLowerCase()]).toBe("1");
+        expect(received.headers[NEXT_ROUTER_PREFETCH_HEADER.toLowerCase()]).toBe("1");
+        expect(received.headers["next-router-state-tree"]).toBe(routerState);
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
