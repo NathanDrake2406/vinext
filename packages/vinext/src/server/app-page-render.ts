@@ -1004,7 +1004,10 @@ export async function renderAppPageLifecycle(
     Boolean(options.scriptNonce) ||
     options.isProgressiveActionRender === true ||
     revalidateSeconds === 0 ||
-    (options.isEdgeRuntime && revalidateSeconds === null) ||
+    (options.isEdgeRuntime &&
+      revalidateSeconds === null &&
+      !options.isForceStatic &&
+      !options.isDynamicError) ||
     peekDynamicUsage();
   const originOwnsSharedHtmlStore = getCdnCacheAdapter().ownsBackgroundRevalidation;
   const clientTraceMetadata =
