@@ -165,6 +165,7 @@ type SerializedBodyResult = {
   bodyChunks: string[];
   canonicalizedContentType?: string;
   defaultContentType?: string;
+  bodyMetadata?: string;
 };
 
 const NORMALIZED_FETCH_METHODS = new Set(["DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"]);
@@ -230,7 +231,8 @@ async function serializeBody(
   input: string | URL | Request,
   init?: RequestInit,
 ): Promise<SerializedBodyResult> {
-  if (!init?.body && !(input instanceof Request && input.body)) {
+  const hasInitBody = init?.body !== undefined && init.body !== null;
+  if (!hasInitBody && !(input instanceof Request && input.body)) {
     return { bodyChunks: [] };
   }
 
@@ -240,6 +242,8 @@ async function serializeBody(
   let totalBodyBytes = 0;
   let canonicalizedContentType: string | undefined;
   let defaultContentType: string | undefined;
+  let bodyMetadata: string | undefined;
+  const hasEffectiveContentType = getEffectiveRequestHeaders(input, init).has("content-type");
 
   const pushBodyChunk = (chunk: string): void => {
     totalBodyBytes += encoder.encode(chunk).byteLength;
@@ -294,7 +298,9 @@ async function serializeBody(
     // URLSearchParams — .toString() gives a stable serialization
     (init as ExtendedRequestInit)._ogBody = init.body;
     pushBodyChunk(init.body.toString());
-    defaultContentType = "application/x-www-form-urlencoded;charset=UTF-8";
+    if (!hasEffectiveContentType) {
+      defaultContentType = "application/x-www-form-urlencoded;charset=UTF-8";
+    }
   } else if (init?.body && typeof (init.body as { keys?: unknown }).keys === "function") {
     // FormData
     const formData = init.body as FormData;
@@ -302,7 +308,10 @@ async function serializeBody(
     await serializeFormData(formData, pushBodyChunk, getTotalBodyBytes);
     // The generated boundary is transport-specific and the serialized form
     // entries already distinguish bodies, so keep only the stable media type.
-    defaultContentType = "multipart/form-data";
+    if (!hasEffectiveContentType) {
+      defaultContentType = "multipart/form-data";
+      bodyMetadata = "valid-multipart-boundary";
+    }
   } else if (
     init?.body &&
     typeof (init.body as { arrayBuffer?: unknown }).arrayBuffer === "function"
@@ -315,7 +324,9 @@ async function serializeBody(
     pushBodyChunk(await blob.text());
     const arrayBuffer = await blob.arrayBuffer();
     (init as ExtendedRequestInit)._ogBody = new Blob([arrayBuffer], { type: blob.type });
-    defaultContentType = blob.type || undefined;
+    if (!hasEffectiveContentType) {
+      defaultContentType = blob.type || undefined;
+    }
   } else if (typeof init?.body === "string") {
     // String length is always <= UTF-8 byte length, so this is a
     // cheap lower-bound check that avoids encoder.encode() for huge strings.
@@ -324,7 +335,9 @@ async function serializeBody(
     }
     pushBodyChunk(init.body);
     (init as ExtendedRequestInit)._ogBody = init.body;
-    defaultContentType = "text/plain;charset=UTF-8";
+    if (!hasEffectiveContentType) {
+      defaultContentType = "text/plain;charset=UTF-8";
+    }
   } else if (input instanceof Request && input.body) {
     let chunks: Uint8Array[];
     let contentType: string | undefined;
@@ -354,7 +367,9 @@ async function serializeBody(
           formContentType === "multipart/form-data" && contentType
             ? stripMultipartBoundary(contentType)
             : undefined;
-        return { bodyChunks, canonicalizedContentType };
+        bodyMetadata =
+          formContentType === "multipart/form-data" ? "valid-multipart-boundary" : undefined;
+        return { bodyChunks, canonicalizedContentType, bodyMetadata };
       } catch (err) {
         if (err instanceof BodyTooLargeForCacheKeyError) {
           throw err;
@@ -372,7 +387,7 @@ async function serializeBody(
     }
   }
 
-  return { bodyChunks, canonicalizedContentType, defaultContentType };
+  return { bodyChunks, canonicalizedContentType, defaultContentType, bodyMetadata };
 }
 
 /**
@@ -400,10 +415,8 @@ async function buildFetchCacheKey(
   const method = normalizeFetchMethod(init?.method ?? inputRequest?.method ?? "GET");
 
   const headers = collectHeaders(input, init);
-  const { bodyChunks, canonicalizedContentType, defaultContentType } = await serializeBody(
-    input,
-    init,
-  );
+  const { bodyChunks, canonicalizedContentType, defaultContentType, bodyMetadata } =
+    await serializeBody(input, init);
   if (canonicalizedContentType) {
     headers["content-type"] = canonicalizedContentType;
   } else if (defaultContentType && headers["content-type"] === undefined) {
@@ -423,6 +436,7 @@ async function buildFetchCacheKey(
     init?.integrity ?? inputRequest?.integrity ?? "",
     init?.cache ?? inputRequest?.cache ?? "default",
     bodyChunks,
+    bodyMetadata,
   ]);
 
   const encoder = new TextEncoder();

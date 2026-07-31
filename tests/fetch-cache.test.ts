@@ -1686,6 +1686,41 @@ describe("fetch cache shim", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("distinguishes an empty string body from an absent body in the persistent cache key", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      requestCount++;
+      const request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          contentType: request.headers.get("content-type"),
+          count: requestCount,
+        }),
+      );
+    });
+    const url = "https://api.example.com/empty-string-body";
+
+    const absentResponse = await fetch(url, {
+      method: "POST",
+      next: { revalidate: 60 },
+    });
+    expect(await absentResponse.json()).toEqual({
+      contentType: null,
+      count: 1,
+    });
+
+    startNewFetchCacheScope();
+    const emptyResponse = await fetch(url, {
+      method: "POST",
+      body: "",
+      next: { revalidate: 60 },
+    });
+    expect(await emptyResponse.json()).toEqual({
+      contentType: "text/plain;charset=UTF-8",
+      count: 2,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("includes Request object bodies in the cache key", async () => {
     const req1 = new Request("https://api.example.com/req-body", {
       method: "POST",
@@ -1845,6 +1880,45 @@ describe("fetch cache shim", () => {
     });
     expect(await textResponse.json()).toEqual({
       contentType: "text/plain",
+      count: 2,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("separates generated FormData content types from explicit bare multipart headers", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      requestCount++;
+      const request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          contentType: request.headers.get("content-type"),
+          count: requestCount,
+        }),
+      );
+    });
+    const makeForm = () => {
+      const form = new FormData();
+      form.append("name", "same-value");
+      return form;
+    };
+    const url = "https://api.example.com/form-data-content-type-source";
+
+    const generatedResponse = await fetch(url, {
+      method: "POST",
+      body: makeForm(),
+      next: { revalidate: 60 },
+    });
+    expect((await generatedResponse.json()).count).toBe(1);
+
+    startNewFetchCacheScope();
+    const bareResponse = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data" },
+      body: makeForm(),
+      next: { revalidate: 60 },
+    });
+    expect(await bareResponse.json()).toEqual({
+      contentType: "multipart/form-data",
       count: 2,
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
