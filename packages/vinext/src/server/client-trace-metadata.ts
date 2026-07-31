@@ -176,25 +176,33 @@ export function renderClientTraceMetadataTags(
   return html;
 }
 
+function clientTraceMetadataBlockStart(marker: string): string {
+  return `<!--vinext-client-trace-metadata:${marker}:start-->`;
+}
+
+function clientTraceMetadataBlockEnd(marker: string): string {
+  return `<!--vinext-client-trace-metadata:${marker}:end-->`;
+}
+
 /**
- * Remove the `<meta>` tags `renderClientTraceMetadataTags` emits for the
- * configured allow-list. App Router HTML cache entries are shared across users,
- * so the generating request's traceparent/baggage must not survive into them —
- * a later cache HIT has no request whose trace it could correlate anyway.
+ * Mark the framework-injected trace metadata so a later cache write can remove
+ * exactly that block without matching application-authored `<meta>` tags.
  */
-export function stripClientTraceMetadataTags(
-  html: string,
-  allowList: readonly string[] | undefined,
-): string {
-  if (!allowList || allowList.length === 0) return html;
-  let stripped = html;
-  for (const key of allowList) {
-    // Match the rendered form: HTML-escape the key the same way, then escape
-    // regex metacharacters. Values are attribute-escaped, so `"` never appears.
-    const name = escapeHtmlAttr(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    stripped = stripped.replace(new RegExp(`<meta name="${name}" content="[^"]*"/>`, "g"), "");
-  }
-  return stripped;
+export function markClientTraceMetadataBlock(html: string, marker: string | undefined): string {
+  if (!html || !marker) return html;
+  return `${clientTraceMetadataBlockStart(marker)}${html}${clientTraceMetadataBlockEnd(marker)}`;
+}
+
+/** Remove only the trace metadata block carrying this render's private marker. */
+export function stripClientTraceMetadataBlock(html: string, marker: string | undefined): string {
+  if (!marker) return html;
+  const start = clientTraceMetadataBlockStart(marker);
+  const end = clientTraceMetadataBlockEnd(marker);
+  const startIndex = html.indexOf(start);
+  if (startIndex === -1) return html;
+  const endIndex = html.indexOf(end, startIndex + start.length);
+  if (endIndex === -1) return html;
+  return html.slice(0, startIndex) + html.slice(endIndex + end.length);
 }
 
 /**

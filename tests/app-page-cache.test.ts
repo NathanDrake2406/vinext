@@ -9,7 +9,10 @@ import {
   readAppPageFallbackShellCacheResponse,
   scheduleAppPageRscCacheWrite,
 } from "../packages/vinext/src/server/app-page-cache.js";
-import { renderClientTraceMetadataTags } from "../packages/vinext/src/server/client-trace-metadata.js";
+import {
+  markClientTraceMetadataBlock,
+  renderClientTraceMetadataTags,
+} from "../packages/vinext/src/server/client-trace-metadata.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
 import {
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
@@ -1190,16 +1193,21 @@ describe("app page cache helpers", () => {
       { key: "traceparent", value: "00-abc-def-01" },
       { key: "baggage", value: "tenant=alice,user=alice-123" },
     ]);
+    const traceMetadataMarker = "private-render-marker";
+    const markedTraceMetaHTML = markClientTraceMetadataBlock(traceMetaHTML, traceMetadataMarker);
     expect(traceMetaHTML).not.toBe("");
 
     const response = finalizeAppPageHtmlCacheResponse(
-      new Response(`<head>${traceMetaHTML}</head><h1>page</h1>`, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      }),
+      new Response(
+        `<head><meta name="baggage" content="application-policy"/>${markedTraceMetaHTML}</head><h1>page</h1>`,
+        {
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        },
+      ),
       {
         capturedRscDataPromise: null,
         cleanPathname: "/traced",
-        clientTraceMetadata: ["traceparent", "baggage"],
+        clientTraceMetadataMarker: traceMetadataMarker,
         consumeDynamicUsage() {
           return false;
         },
@@ -1227,7 +1235,9 @@ describe("app page cache helpers", () => {
     await pendingCacheWrites[0];
 
     // ...but the entry every later user is served from carries none of it.
-    expect(storedHtml).toEqual(["<head></head><h1>page</h1>"]);
+    expect(storedHtml).toEqual([
+      '<head><meta name="baggage" content="application-policy"/></head><h1>page</h1>',
+    ]);
   });
 
   it("skips HTML and RSC cache writes when dynamic usage appears during stream rendering", async () => {

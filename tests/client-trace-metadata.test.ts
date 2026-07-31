@@ -9,8 +9,9 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   filterClientTraceMetadata,
   getClientTraceMetadataHTML,
+  markClientTraceMetadataBlock,
   renderClientTraceMetadataTags,
-  stripClientTraceMetadataTags,
+  stripClientTraceMetadataBlock,
   type ClientTraceDataEntry,
 } from "../packages/vinext/src/server/client-trace-metadata.js";
 
@@ -311,24 +312,25 @@ describe("client trace metadata: getClientTraceMetadataHTML", () => {
   });
 });
 
-describe("stripClientTraceMetadataTags", () => {
-  it("removes exactly the tags the renderer emits, including escaped keys", () => {
+describe("client trace metadata cache markers", () => {
+  it("removes exactly the marked framework-injected block", () => {
     const entries = [
       { key: "traceparent", value: "00-abc-def-01" },
       { key: 'weird"key', value: "a&b<c>" },
     ];
-    const allowList = entries.map(({ key }) => key);
-    const html = `<head>${renderClientTraceMetadataTags(entries)}<title>x</title></head>`;
+    const marker = "private-render-marker";
+    const html = `<head>${markClientTraceMetadataBlock(
+      renderClientTraceMetadataTags(entries),
+      marker,
+    )}<title>x</title></head>`;
 
-    expect(stripClientTraceMetadataTags(html, allowList)).toBe("<head><title>x</title></head>");
+    expect(stripClientTraceMetadataBlock(html, marker)).toBe("<head><title>x</title></head>");
   });
 
-  it("leaves unrelated meta tags and unconfigured keys alone", () => {
-    const html =
-      '<meta name="description" content="hi"/>' +
-      renderClientTraceMetadataTags([{ key: "baggage", value: "tenant=alice" }]);
+  it("leaves application-authored tags with allow-listed names alone", () => {
+    const html = '<meta name="baggage" content="application-policy"/>';
 
-    expect(stripClientTraceMetadataTags(html, ["traceparent"])).toBe(html);
-    expect(stripClientTraceMetadataTags(html, undefined)).toBe(html);
+    expect(stripClientTraceMetadataBlock(html, "private-render-marker")).toBe(html);
+    expect(stripClientTraceMetadataBlock(html, undefined)).toBe(html);
   });
 });

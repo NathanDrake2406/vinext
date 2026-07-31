@@ -33,12 +33,8 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   capturedDynamicUsageBeforeContextCleanup?: () => boolean;
   capturedRscDataPromise: Promise<ArrayBuffer> | null;
   cleanPathname: string;
-  /**
-   * `experimental.clientTraceMetadata` allow-list. The rendered response keeps
-   * its request-scoped trace `<meta>` tags; the cached copy must not, or the
-   * generating request's trace context is replayed to every later cache HIT.
-   */
-  clientTraceMetadata?: readonly string[];
+  /** Private marker surrounding this render's injected client trace metadata. */
+  clientTraceMetadataMarker?: string;
   consumeDynamicUsage: () => boolean;
   consumeRenderObservationState?: () => AppPageRenderObservationState;
   createHtmlRenderObservation?: BuildAppPageCacheRenderObservation;
@@ -152,11 +148,11 @@ export function finalizeAppPageHtmlCacheResponse(
     try {
       let cachedHtml = await readStreamAsText(streamForCache);
 
-      // Gate on the allow-list so the trace-metadata module stays out of the
+      // Gate on the marker so the trace-metadata module stays out of the
       // RSC server graph for the common case where the feature is unset.
-      if (options.clientTraceMetadata && options.clientTraceMetadata.length > 0) {
-        const { stripClientTraceMetadataTags } = await import("./client-trace-metadata.js");
-        cachedHtml = stripClientTraceMetadataTags(cachedHtml, options.clientTraceMetadata);
+      if (options.clientTraceMetadataMarker) {
+        const { stripClientTraceMetadataBlock } = await import("./client-trace-metadata.js");
+        cachedHtml = stripClientTraceMetadataBlock(cachedHtml, options.clientTraceMetadataMarker);
       }
 
       if (

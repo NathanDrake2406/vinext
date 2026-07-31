@@ -992,6 +992,10 @@ export async function renderAppPageLifecycle(
     getStyles: options.getFontStyles,
   });
   const fontLinkHeader = buildAppPageFontLinkHeader(fontData.preloads);
+  const clientTraceMetadataMarker =
+    options.clientTraceMetadata && options.clientTraceMetadata.length > 0
+      ? crypto.randomUUID()
+      : undefined;
   let requestCacheLifeForPrerender: AppPageRequestCacheLife | null = null;
   let dynamicUsedDuringHtmlRender = false;
   let renderEnd: number | undefined;
@@ -1064,6 +1068,7 @@ export async function renderAppPageLifecycle(
         navigationContext: options.getNavigationContext(),
         basePath: options.basePath,
         clientTraceMetadata: options.clientTraceMetadata,
+        clientTraceMetadataMarker,
         reactMaxHeadersLength: options.reactMaxHeadersLength,
         rootParams: options.rootParams,
         pprFallbackShellSignal: options.pprFallbackShellSignal,
@@ -1244,7 +1249,7 @@ export async function renderAppPageLifecycle(
       },
       capturedRscDataPromise: capturedRscDataRef.value,
       cleanPathname: options.cleanPathname,
-      clientTraceMetadata: options.clientTraceMetadata,
+      clientTraceMetadataMarker,
       consumeDynamicUsage: consumeRenderDynamicUsage,
       consumeRenderObservationState: options.consumeRenderObservationState,
       createHtmlRenderObservation(input) {
