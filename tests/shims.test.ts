@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { PAGES_FIXTURE_DIR, aliasEntriesToRecord } from "./helpers.js";
 import { isExternalUrl, isHashOnlyChange } from "../packages/vinext/src/shims/router.js";
 import { extractVinextNextDataJson } from "../packages/vinext/src/client/vinext-next-data.js";
+import { toClientRewrites } from "../packages/vinext/src/client/client-rewrites.js";
 import { isValidModulePath } from "../packages/vinext/src/client/validate-module-path.js";
 import vinext from "../packages/vinext/src/index.js";
 import { safeJsonStringify } from "../packages/vinext/src/server/html.js";
@@ -4107,6 +4108,7 @@ describe("next/headers shim", () => {
 
     // Simulate middleware updating the cookie header
     const middlewareResponseHeaders = new Headers({
+      "x-middleware-override-headers": "cookie",
       "x-middleware-request-cookie": "a=2; b=3",
     });
 
@@ -4133,6 +4135,7 @@ describe("next/headers shim", () => {
     await runWithHeadersContext(ctx, async () => {
       applyMiddlewareRequestHeaders(
         new Headers({
+          "x-middleware-override-headers": "cookie",
           "x-middleware-request-cookie": "a=1; a=2; b=4",
         }),
       );
@@ -4164,6 +4167,7 @@ describe("next/headers shim", () => {
     await runWithHeadersContext(ctx, async () => {
       applyMiddlewareRequestHeaders(
         new Headers({
+          "x-middleware-override-headers": "cookie",
           "x-middleware-request-cookie": "empty=; flag",
         }),
       );
@@ -4829,7 +4833,7 @@ describe("next/server shim", () => {
     expect(req.cookies.has("missing")).toBe(false);
   });
 
-  it("NextRequest copies a Request body without disturbing the source request", async () => {
+  it("NextRequest transfers a Request body instead of teeing it", async () => {
     const { NextRequest } = await import("../packages/vinext/src/shims/server.js");
     const source = new Request("https://example.com/api/echo", {
       body: JSON.stringify({ ok: true }),
@@ -4840,8 +4844,10 @@ describe("next/server shim", () => {
     const req = new NextRequest(source);
 
     await expect(req.json()).resolves.toEqual({ ok: true });
-    expect(source.bodyUsed).toBe(false);
-    await expect(source.json()).resolves.toEqual({ ok: true });
+    // Next.js parity (`super(input, init)`), and the reason it matters: cloning
+    // here would tee the body, and the branch left on `source` would buffer the
+    // whole request in memory because nothing reads or cancels it.
+    expect(source.bodyUsed).toBe(true);
   });
 
   it("NextResponse.json() creates a JSON response", async () => {
@@ -9563,6 +9569,63 @@ describe("double-encoded path handling in middleware", () => {
     await expect(request.json()).resolves.toEqual({ message: "hello" });
   });
 
+  it("App Router middleware cancels its unread body branch in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    try {
+      const { applyAppMiddleware } =
+        await import("../packages/vinext/src/server/app-middleware.js");
+      const request = new Request("http://localhost:3000/actions", {
+        body: "action-payload",
+        method: "POST",
+      });
+      let middlewareRequest: Request | undefined;
+
+      const result = await applyAppMiddleware({
+        cleanPathname: "/actions",
+        context: { headers: null, requestHeaders: null, status: null },
+        isProxy: false,
+        module: {
+          default: (request: Request) => {
+            middlewareRequest = request;
+            return new Response(null, { headers: { "x-middleware-next": "1" } });
+          },
+        },
+        request,
+      });
+
+      expect(result.kind).toBe("continue");
+      await vi.waitFor(() => expect(middlewareRequest?.bodyUsed).toBe(true));
+      await expect(request.text()).resolves.toBe("action-payload");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("App Router middleware cancels the downstream body branch when it returns a response", async () => {
+    const { applyAppMiddleware } = await import("../packages/vinext/src/server/app-middleware.js");
+    const sourceCancel = vi.fn();
+    const request = new Request("http://localhost:3000/upload", {
+      body: new ReadableStream<Uint8Array>({
+        cancel: sourceCancel,
+      }),
+      duplex: "half",
+      method: "POST",
+    } as RequestInit & { duplex: "half" });
+
+    const result = await applyAppMiddleware({
+      cleanPathname: "/upload",
+      context: { headers: null, requestHeaders: null, status: null },
+      isProxy: false,
+      module: {
+        default: () => new Response("blocked", { status: 403 }),
+      },
+      request,
+    });
+
+    expect(result.kind).toBe("response");
+    await vi.waitFor(() => expect(sourceCancel).toHaveBeenCalledOnce());
+  });
+
   it("external middleware rewrite proxy strips upstream x-middleware headers without middleware context", async () => {
     const { proxyExternalMiddlewareRewrite } =
       await import("../packages/vinext/src/server/app-middleware.js");
@@ -9645,6 +9708,54 @@ describe("double-encoded path handling in middleware", () => {
       expect(capturedHeaders.authorization).toBeUndefined();
       expect(capturedHeaders.cookie).toBeUndefined();
       expect(capturedHeaders["x-added"]).toBe("1");
+      expect(capturedHeaders["x-keep"]).toBe("original");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("external middleware rewrite proxy preserves headers for an empty override value", async () => {
+    // NextResponse emits an empty override value for `new Headers()`, and
+    // Next.js skips its request-header mutation block for that falsy value.
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/lib/router-utils/resolve-routes.ts
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+    const { proxyExternalMiddlewareRewrite } =
+      await import("../packages/vinext/src/server/app-middleware.js");
+    const http = await import("node:http");
+    let capturedHeaders: Record<string, string | string[] | undefined> = {};
+    const server = http.createServer((req, res) => {
+      capturedHeaders = req.headers;
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("proxied");
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    try {
+      const address = server.address();
+      expect(address && typeof address === "object").toBe(true);
+      const port = address && typeof address === "object" ? address.port : 0;
+      const request = new Request("http://localhost:3000/source", {
+        headers: {
+          authorization: "Bearer secret",
+          cookie: "session=abc",
+          "x-keep": "original",
+        },
+      });
+      const middlewareResponse = NextResponse.rewrite(`http://127.0.0.1:${port}/target`, {
+        request: { headers: new Headers() },
+      });
+
+      expect(middlewareResponse.headers.get("x-middleware-override-headers")).toBe("");
+
+      const response = await proxyExternalMiddlewareRewrite(
+        request,
+        `http://127.0.0.1:${port}/target`,
+        { headers: null, requestHeaders: middlewareResponse.headers, status: null },
+      );
+
+      expect(response.status).toBe(200);
+      expect(capturedHeaders.authorization).toBe("Bearer secret");
+      expect(capturedHeaders.cookie).toBe("session=abc");
       expect(capturedHeaders["x-keep"]).toBe("original");
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -11818,6 +11929,47 @@ describe("middleware request header overrides", () => {
     expect(nextRequest.headers.get("x-keep")).toBe("original");
     expect(nextRequest.headers.get("x-added")).toBe("1");
     expect(postMwReqCtx.cookies).toEqual({ a: "1", b: "2" });
+    expect(middlewareHeaders).toEqual({});
+  });
+
+  it("config-matchers preserves unlisted request values under their literal protocol names", async () => {
+    const { applyMiddlewareRequestHeaders } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+
+    const middlewareHeaders: Record<string, string> = {
+      "x-middleware-request-x-added": "forged-by-middleware",
+      "x-middleware-next": "1",
+    };
+    const request = new Request("http://localhost/test", {
+      headers: { "x-added": "original" },
+    });
+
+    const { request: nextRequest } = applyMiddlewareRequestHeaders(middlewareHeaders, request);
+
+    expect(nextRequest.headers.get("x-added")).toBe("original");
+    expect(nextRequest.headers.get("x-middleware-request-x-added")).toBe("forged-by-middleware");
+    expect(middlewareHeaders).toEqual({
+      "x-middleware-request-x-added": "forged-by-middleware",
+    });
+  });
+
+  it("config-matchers drops empty unlisted request values", async () => {
+    const { applyMiddlewareRequestHeaders } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+
+    const middlewareHeaders: Record<string, string> = {
+      "x-middleware-request-x-empty": "",
+      "x-middleware-next": "1",
+    };
+    const request = new Request("http://localhost/test", {
+      headers: { "x-original": "kept" },
+    });
+
+    const { request: nextRequest } = applyMiddlewareRequestHeaders(middlewareHeaders, request);
+
+    expect(nextRequest).toBe(request);
+    expect(nextRequest.headers.get("x-original")).toBe("kept");
+    expect(nextRequest.headers.has("x-middleware-request-x-empty")).toBe(false);
     expect(middlewareHeaders).toEqual({});
   });
 
@@ -20887,6 +21039,57 @@ describe("Pages Router _next/data client navigation", () => {
         query: { id: "0" },
         props: { pageProps: {} },
       });
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+      globalThis.fetch = originalFetch;
+      vi.resetModules();
+    }
+  });
+
+  it.each([
+    [
+      "an HttpOnly cookie",
+      { type: "cookie", key: "internal-access", value: "cookie-secret" } as const,
+    ],
+    [
+      "a server-added header",
+      { type: "header", key: "x-origin-auth", value: "header-secret" } as const,
+    ],
+  ])("hands a rewrite requiring %s to a document navigation", async (_label, condition) => {
+    const previousWindow = (globalThis as any).window;
+    const originalFetch = globalThis.fetch;
+
+    const destinationLoader = vi.fn(async () => makePageModule("destination"));
+    const { win } = createDataNavWindow({
+      loaders: {
+        "/": vi.fn(async () => makePageModule("home")),
+        "/conditional": destinationLoader,
+      },
+      ssgPatterns: [],
+      sspPatterns: [],
+    });
+    const hrefAssignments = trackHrefAssignmentsLocal(win);
+    (win as any).__VINEXT_CLIENT_REWRITES__ = toClientRewrites({
+      beforeFiles: [{ source: "/conditional", destination: "/private", has: [condition] }],
+      afterFiles: [],
+      fallback: [],
+    });
+    (globalThis as any).window = win;
+    vi.resetModules();
+
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    globalThis.fetch = fetchMock as any;
+
+    try {
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      const Router = routerModule.default;
+      const result = await Router.push("/conditional");
+
+      expect(result).toBe(false);
+      expect(hrefAssignments).toContain("/conditional");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(destinationLoader).not.toHaveBeenCalled();
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = previousWindow;
