@@ -1855,7 +1855,13 @@ describe("createAppRscHandler", () => {
         if (mode === "forwarded") {
           headers.set(
             VINEXT_MW_CTX_HEADER,
-            JSON.stringify({ h: [["set-cookie", "session=forwarded"]], r: upstreamUrl }),
+            JSON.stringify({
+              h: [
+                ["location", "/middleware-location"],
+                ["set-cookie", "session=forwarded"],
+              ],
+              r: upstreamUrl,
+            }),
           );
         }
         const handler = createHandler({
@@ -1864,6 +1870,7 @@ describe("createAppRscHandler", () => {
             default: () =>
               new Response(null, {
                 headers: {
+                  location: "/middleware-location",
                   "set-cookie": "session=middleware",
                   "x-middleware-rewrite": upstreamUrl,
                 },

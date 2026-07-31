@@ -193,9 +193,11 @@ function validationResponseWithMiddlewareHeaders(
   if (!context.headers) return response;
 
   const headers = new Headers(response.headers);
+  const location = headers.get("location");
   const middlewareHeaders = new Headers(context.headers);
   processMiddlewareHeaders(middlewareHeaders);
   mergeMiddlewareResponseHeaders(headers, middlewareHeaders);
+  if (location !== null) headers.set("location", location);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
