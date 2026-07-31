@@ -3311,6 +3311,42 @@ describe("fetch cache shim", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
+    it("does not wait for one tee branch to cancel before oversized stream fallback", async () => {
+      let chunk = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunk >= 10) {
+            controller.close();
+            return;
+          }
+          chunk++;
+          controller.enqueue(new Uint8Array(600 * 1024));
+        },
+      });
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      try {
+        const response = await Promise.race([
+          fetch("https://api.example.com/large-pull-stream", {
+            method: "POST",
+            body: stream,
+            next: { revalidate: 60 },
+          }),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error("oversized stream fallback timed out")),
+              1_000,
+            );
+          }),
+        ]);
+
+        expect((await response.json()).count).toBe(1);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
+
     it("FormData with large File entry bypasses cache and still fetches", async () => {
       const largeContent = "x".repeat(1024 * 1024 + 1);
       const largeFile = new File([largeContent], "big.txt", { type: "text/plain" });
@@ -3332,6 +3368,26 @@ describe("fetch cache shim", () => {
       });
       const data2 = await res2.json();
       expect(data2.count).toBe(2); // bypassed cache because file is oversized
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("FormData with oversized File metadata bypasses cache key generation", async () => {
+      const form = new FormData();
+      form.append("file", new File([], `${"x".repeat(1024 * 1024)}.txt`));
+
+      const res1 = await fetch("https://api.example.com/large-formdata-metadata", {
+        method: "POST",
+        body: form,
+        next: { revalidate: 60 },
+      });
+      expect((await res1.json()).count).toBe(1);
+
+      const res2 = await fetch("https://api.example.com/large-formdata-metadata", {
+        method: "POST",
+        body: form,
+        next: { revalidate: 60 },
+      });
+      expect((await res2.json()).count).toBe(2);
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });

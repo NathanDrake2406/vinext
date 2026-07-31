@@ -135,17 +135,36 @@ async function serializeFormData(
   pushBodyChunk: (chunk: string, byteLength?: number) => void,
   getTotalBodyBytes: () => number,
 ): Promise<void> {
+  const encoder = new TextEncoder();
   for (const [key, val] of formData.entries()) {
     if (typeof val === "string") {
       pushBodyChunk(JSON.stringify([key, { kind: "string", value: val }]));
       continue;
     }
-    if (
-      val.size > MAX_CACHE_KEY_BODY_BYTES ||
-      getTotalBodyBytes() + val.size > MAX_CACHE_KEY_BODY_BYTES
-    ) {
+    // Reject obviously oversized metadata before JSON escaping can amplify an
+    // attacker-controlled field name, filename, or media type.
+    const metadataLowerBound =
+      encoder.encode(key).byteLength +
+      encoder.encode(val.name).byteLength +
+      encoder.encode(val.type).byteLength;
+    if (getTotalBodyBytes() + val.size + metadataLowerBound > MAX_CACHE_KEY_BODY_BYTES) {
       throw new BodyTooLargeForCacheKeyError();
     }
+
+    const metadata = JSON.stringify([
+      key,
+      {
+        kind: "file",
+        name: val.name,
+        type: val.type,
+        value: "bytes:",
+      },
+    ]);
+    const metadataByteLength = encoder.encode(metadata).byteLength;
+    if (getTotalBodyBytes() + val.size + metadataByteLength > MAX_CACHE_KEY_BODY_BYTES) {
+      throw new BodyTooLargeForCacheKeyError();
+    }
+
     const bytes = new Uint8Array(await val.arrayBuffer());
     pushBodyChunk(
       JSON.stringify([
@@ -157,7 +176,7 @@ async function serializeFormData(
           value: encodeBodyBytes(bytes),
         },
       ]),
-      bytes.byteLength,
+      bytes.byteLength + metadataByteLength,
     );
   }
 }
@@ -310,7 +329,9 @@ async function serializeBody(
       }
       bodyChunks.push(encodeBodyBytes(concatBodyBytes(chunks)));
     } catch (err) {
-      await reader.cancel();
+      // Do not await cancellation of one tee branch: it may not settle until
+      // the fallback fetch starts consuming the other branch.
+      void reader.cancel().catch(() => {});
       if (err instanceof BodyTooLargeForCacheKeyError) {
         throw err;
       }
