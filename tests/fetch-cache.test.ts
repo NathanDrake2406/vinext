@@ -1637,6 +1637,18 @@ describe("fetch cache shim", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("shares persistent cache entries between equivalent URL and Request inputs", async () => {
+    const url = "https://api.example.com/equivalent-inputs";
+    const urlResponse = await fetch(url, { next: { revalidate: 60 } });
+    expect((await urlResponse.json()).count).toBe(1);
+
+    const requestResponse = await fetch(new Request(url), {
+      next: { revalidate: 60 },
+    });
+    expect((await requestResponse.json()).count).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("includes Request object bodies in the cache key", async () => {
     const req1 = new Request("https://api.example.com/req-body", {
       method: "POST",
