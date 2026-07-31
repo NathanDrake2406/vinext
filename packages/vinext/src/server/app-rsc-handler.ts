@@ -115,6 +115,7 @@ type RunAppMiddlewareOptions = {
   isDataRequest: boolean;
   middlewareRequest?: Request;
   request: Request;
+  validateExternalRewriteRequest: () => Promise<Response | null>;
 };
 
 type AppRscHandlerRoute = {
@@ -644,6 +645,14 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     : null;
   if (rscCacheBustingRedirect) return rscCacheBustingRedirect;
 
+  let filesystemRouteEligible = hadBasePath;
+  const validateClaimedOutsideBasePathRsc = async (
+    routeClaimed = filesystemRouteEligible,
+  ): Promise<Response | null> => {
+    if (hadBasePath || !routeClaimed) return null;
+    return resolveInvalidRscCacheBustingRequest({ isRscRequest, request });
+  };
+
   const runMiddleware = isOnDemandRevalidateRequest(
     request.headers.get(PRERENDER_REVALIDATE_HEADER),
   )
@@ -679,6 +688,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       isDataRequest: isMiddlewareDataRequest,
       middlewareRequest: isolatedMiddlewareRequest,
       request: userlandRequest,
+      validateExternalRewriteRequest: () => validateClaimedOutsideBasePathRsc(true),
     });
     if (middlewareResult.kind === "response") {
       if (request.body && !request.body.locked) {
@@ -708,13 +718,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
 
   const scriptNonce = getScriptNonceFromHeaderSources(request.headers, middlewareContext.headers);
   const postMiddlewareRequestContext = buildPostMwRequestContext(userlandRequest);
-  let filesystemRouteEligible = hadBasePath || didMiddlewareRewrite;
-  const validateClaimedOutsideBasePathRsc = async (
-    routeClaimed = filesystemRouteEligible,
-  ): Promise<Response | null> => {
-    if (hadBasePath || !routeClaimed) return null;
-    return resolveInvalidRscCacheBustingRequest({ isRscRequest, request });
-  };
+  filesystemRouteEligible ||= didMiddlewareRewrite;
 
   // Rewrites (beforeFiles, afterFiles, fallback) use `matchPathname` from
   // above to splice in the default locale before matching. Route matching

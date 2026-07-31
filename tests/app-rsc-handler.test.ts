@@ -1835,6 +1835,48 @@ describe("createAppRscHandler", () => {
     },
   );
 
+  it("validates out-of-basePath RSC requests before middleware external rewrite proxies", async () => {
+    const receivedUrls: string[] = [];
+    const server = createServer((req, res) => {
+      receivedUrls.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("upstream");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const upstreamUrl = `http://127.0.0.1:${address.port}/proxy`;
+
+    try {
+      const headers = createRscRequestHeaders({ mountedSlotsHeader: "slot:modal:/" });
+      const expectedHash = await computeRscCacheBustingSearchParam(headers);
+      const handler = createHandler({
+        configHeaders: [],
+        middlewareModule: {
+          default: () =>
+            new Response(null, {
+              headers: { "x-middleware-rewrite": upstreamUrl },
+            }),
+        },
+        matchRoute: () => null,
+      });
+
+      for (const method of ["GET", "HEAD"] as const) {
+        const response = await handler(
+          new Request("https://example.test/outside.rsc?tab=latest", { headers, method }),
+          null,
+        );
+
+        expect(response.status).toBe(307);
+        expect(response.headers.get("location")).toBe(
+          `/outside.rsc?tab=latest&_rsc=${expectedHash}`,
+        );
+      }
+      expect(receivedUrls).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("applies basePath false rewrites before rejecting outside-basePath requests", async () => {
     // Ported from Next.js: test/e2e/app-dir/app-basepath/index.test.ts
     // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app-basepath/index.test.ts

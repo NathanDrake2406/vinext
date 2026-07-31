@@ -36,6 +36,7 @@ export type ApplyAppMiddlewareOptions = {
   middlewareRequest?: Request;
   module: MiddlewareModule;
   request: Request;
+  validateExternalRewriteRequest?: () => Promise<Response | null>;
   /**
    * Forwarded to `executeMiddleware` so the NextRequest exposes a NextURL with
    * the configured trailingSlash policy. This is what makes
@@ -228,6 +229,11 @@ export async function applyAppMiddleware(
   if (forwarded.rewriteUrl) {
     try {
       if (isExternalMiddlewareRewrite(forwarded.rewriteUrl, options.request)) {
+        const validationResponse = await options.validateExternalRewriteRequest?.();
+        if (validationResponse) {
+          if (options.middlewareRequest) cancelRequestBody(options.middlewareRequest);
+          return { kind: "response", response: validationResponse };
+        }
         if (options.middlewareRequest) cancelRequestBody(options.middlewareRequest);
         const externalRequest = requestWithoutFlightHeaders(options.request);
         return {
@@ -303,6 +309,8 @@ export async function applyAppMiddleware(
         options.context.status = result.rewriteStatus;
       }
       if (isExternalUrl(result.rewriteUrl)) {
+        const validationResponse = await options.validateExternalRewriteRequest?.();
+        if (validationResponse) return { kind: "response", response: validationResponse };
         const externalRequest = requestWithoutFlightHeaders(options.request);
         return {
           kind: "response",
