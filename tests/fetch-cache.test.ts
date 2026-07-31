@@ -1756,6 +1756,51 @@ describe("fetch cache shim", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("uses replacement content-type headers when serializing Request bodies", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      requestCount++;
+      const request = new Request(input, init);
+      return new Response(
+        JSON.stringify({
+          contentType: request.headers.get("content-type"),
+          count: requestCount,
+        }),
+      );
+    });
+    const makeMultipartRequest = () =>
+      new Request("https://api.example.com/req-form-replaced-content-type", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=base" },
+        body: [
+          "--base",
+          'Content-Disposition: form-data; name="name"',
+          "",
+          "same-value",
+          "--base--",
+          "",
+        ].join("\r\n"),
+      });
+
+    const jsonResponse = await fetch(makeMultipartRequest(), {
+      headers: { "content-type": "application/json" },
+      next: { revalidate: 60 },
+    });
+    expect(await jsonResponse.json()).toEqual({
+      contentType: "application/json",
+      count: 1,
+    });
+
+    const textResponse = await fetch(makeMultipartRequest(), {
+      headers: { "content-type": "text/plain" },
+      next: { revalidate: 60 },
+    });
+    expect(await textResponse.json()).toEqual({
+      contentType: "text/plain",
+      count: 2,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("malformed multipart Request bodies bypass cache instead of hashing raw bytes", async () => {
     const makeMalformedMultipartRequest = () =>
       new Request("https://api.example.com/req-form-malformed", {

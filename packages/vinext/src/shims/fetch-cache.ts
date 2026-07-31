@@ -78,12 +78,7 @@ type ExtendedRequestInit = RequestInit & {
  * with them, matching the Request constructor's normalization behavior.
  */
 function collectHeaders(input: string | URL | Request, init?: RequestInit): Record<string, string> {
-  const headers =
-    init?.headers !== undefined
-      ? new Headers(init.headers)
-      : input instanceof Request
-        ? input.headers
-        : new Headers();
+  const headers = getEffectiveRequestHeaders(input, init);
   const collected = Object.fromEntries(headers.entries());
 
   // Remove blocklisted headers
@@ -92,6 +87,14 @@ function collectHeaders(input: string | URL | Request, init?: RequestInit): Reco
   }
 
   return collected;
+}
+
+function getEffectiveRequestHeaders(input: string | URL | Request, init?: RequestInit): Headers {
+  return init?.headers !== undefined
+    ? new Headers(init.headers)
+    : input instanceof Request
+      ? input.headers
+      : new Headers();
 }
 
 /**
@@ -170,11 +173,14 @@ function normalizeFetchMethod(method: string): string {
   return NORMALIZED_FETCH_METHODS.has(upperMethod) ? upperMethod : method;
 }
 
-async function readRequestBodyChunksWithinLimit(request: Request): Promise<{
+async function readRequestBodyChunksWithinLimit(
+  request: Request,
+  effectiveHeaders: Headers,
+): Promise<{
   chunks: Uint8Array[];
   contentType: string | undefined;
 }> {
-  const contentLengthHeader = request.headers.get("content-length");
+  const contentLengthHeader = effectiveHeaders.get("content-length");
   if (contentLengthHeader) {
     const contentLength = Number(contentLengthHeader);
     if (Number.isFinite(contentLength) && contentLength > MAX_CACHE_KEY_BODY_BYTES) {
@@ -183,7 +189,7 @@ async function readRequestBodyChunksWithinLimit(request: Request): Promise<{
   }
 
   const requestClone = request.clone();
-  const contentType = requestClone.headers.get("content-type") ?? undefined;
+  const contentType = effectiveHeaders.get("content-type") ?? undefined;
   const reader = requestClone.body?.getReader();
   if (!reader) {
     return { chunks: [], contentType };
@@ -315,7 +321,10 @@ async function serializeBody(
     let chunks: Uint8Array[];
     let contentType: string | undefined;
     try {
-      ({ chunks, contentType } = await readRequestBodyChunksWithinLimit(input));
+      ({ chunks, contentType } = await readRequestBodyChunksWithinLimit(
+        input,
+        getEffectiveRequestHeaders(input, init),
+      ));
     } catch (err) {
       if (err instanceof BodyTooLargeForCacheKeyError) {
         throw err;
