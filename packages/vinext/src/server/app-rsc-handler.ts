@@ -111,6 +111,7 @@ type AppRscMiddlewareContext = AppMiddlewareContext;
 type RunAppMiddlewareOptions = {
   cleanPathname: string;
   context: AppRscMiddlewareContext;
+  externalRewriteRequest: Request;
   hadBasePath: boolean;
   isDataRequest: boolean;
   middlewareRequest?: Request;
@@ -684,6 +685,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     const middlewareResult = await runMiddleware({
       cleanPathname,
       context: middlewareContext,
+      externalRewriteRequest: normalizedUserlandRequest,
       hadBasePath,
       isDataRequest: isMiddlewareDataRequest,
       middlewareRequest: isolatedMiddlewareRequest,

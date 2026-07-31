@@ -32,6 +32,8 @@ export type ApplyAppMiddlewareOptions = {
   isDataRequest?: boolean;
   filePath?: string;
   isProxy: boolean;
+  /** Request URL for external proxying, retaining internal transport query params. */
+  externalRewriteRequest?: Request;
   /** An App Router-created body branch dedicated to middleware. */
   middlewareRequest?: Request;
   module: MiddlewareModule;
@@ -184,6 +186,23 @@ export async function proxyExternalMiddlewareRewrite(
   });
 }
 
+function validationResponseWithMiddlewareHeaders(
+  response: Response,
+  context: AppMiddlewareContext,
+): Response {
+  if (!context.headers) return response;
+
+  const headers = new Headers(response.headers);
+  const middlewareHeaders = new Headers(context.headers);
+  processMiddlewareHeaders(middlewareHeaders);
+  mergeMiddlewareResponseHeaders(headers, middlewareHeaders);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 function applyForwardedMiddlewareContext(
   request: Request,
   context: AppMiddlewareContext,
@@ -232,10 +251,15 @@ export async function applyAppMiddleware(
         const validationResponse = await options.validateExternalRewriteRequest?.();
         if (validationResponse) {
           if (options.middlewareRequest) cancelRequestBody(options.middlewareRequest);
-          return { kind: "response", response: validationResponse };
+          return {
+            kind: "response",
+            response: validationResponseWithMiddlewareHeaders(validationResponse, options.context),
+          };
         }
         if (options.middlewareRequest) cancelRequestBody(options.middlewareRequest);
-        const externalRequest = requestWithoutFlightHeaders(options.request);
+        const externalRequest = requestWithoutFlightHeaders(
+          options.externalRewriteRequest ?? options.request,
+        );
         return {
           kind: "response",
           response: await proxyExternalMiddlewareRewrite(
@@ -310,8 +334,15 @@ export async function applyAppMiddleware(
       }
       if (isExternalUrl(result.rewriteUrl)) {
         const validationResponse = await options.validateExternalRewriteRequest?.();
-        if (validationResponse) return { kind: "response", response: validationResponse };
-        const externalRequest = requestWithoutFlightHeaders(options.request);
+        if (validationResponse) {
+          return {
+            kind: "response",
+            response: validationResponseWithMiddlewareHeaders(validationResponse, options.context),
+          };
+        }
+        const externalRequest = requestWithoutFlightHeaders(
+          options.externalRewriteRequest ?? options.request,
+        );
         return {
           kind: "response",
           response: await proxyExternalMiddlewareRewrite(
