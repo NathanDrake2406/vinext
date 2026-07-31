@@ -356,6 +356,10 @@ test.describe("Next.js compat: client cache", () => {
     requests.length = 0;
     const cachedTargetLink = await revealAccordionLink(page, `${ROOT}/0`);
     expect(requestsFor(requests, `${ROOT}/0`)).toEqual([]);
+    await cachedTargetLink.click();
+    await expect(page.locator("#client-cache-id")).toHaveText("0");
+    expect(await readRandom(page)).toBe(initial);
+    expect(requestsFor(requests, `${ROOT}/0`)).toEqual([]);
     await page.evaluate(() => {
       const state = (window as ClientCacheTestWindow)
         .__VINEXT_DELAYED_NAVIGATION_CACHE_PUBLICATION__;
@@ -367,10 +371,6 @@ test.describe("Next.js compat: client cache", () => {
       }
       state.releaseOldNavigationTail();
     });
-    await cachedTargetLink.click();
-    await expect(page.locator("#client-cache-id")).toHaveText("0");
-    expect(await readRandom(page)).toBe(initial);
-    expect(requestsFor(requests, `${ROOT}/0`)).toEqual([]);
 
     const cachedHomeLink = await revealAccordionLink(page, ROOT);
     await cachedHomeLink.click();
