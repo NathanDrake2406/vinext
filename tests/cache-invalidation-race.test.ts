@@ -837,6 +837,55 @@ describe("cache invalidation race guards", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
 
+  it("starts only one replacement when concurrent triggers reject the same producer", async () => {
+    const previousHandler = getCacheHandler();
+    let lookupCount = 0;
+    let invalidationVersion = 0;
+    let releaseLookups!: () => void;
+    const lookupGate = new Promise<void>((resolve) => {
+      releaseLookups = resolve;
+    });
+    setCacheHandler({
+      get: previousHandler.get.bind(previousHandler),
+      set: previousHandler.set.bind(previousHandler),
+      revalidateTag: previousHandler.revalidateTag.bind(previousHandler),
+      async getInvalidationVersion() {
+        lookupCount++;
+        await lookupGate;
+        return invalidationVersion;
+      },
+    });
+
+    let renderCount = 0;
+    let releaseRenders!: () => void;
+    const renderGate = new Promise<void>((resolve) => {
+      releaseRenders = resolve;
+    });
+    const renderFn = async () => {
+      renderCount++;
+      await renderGate;
+    };
+
+    triggerBackgroundRegeneration("race-concurrent-replacement", renderFn, undefined, ["posts"]);
+    await waitUntil(() => renderCount === 1);
+    const firstProducerClock = Date.now();
+    await waitUntil(() => Date.now() > firstProducerClock);
+    invalidationVersion = Date.now();
+    await waitUntil(() => Date.now() > invalidationVersion);
+
+    triggerBackgroundRegeneration("race-concurrent-replacement", renderFn, undefined, ["posts"]);
+    triggerBackgroundRegeneration("race-concurrent-replacement", renderFn, undefined, ["posts"]);
+    await waitUntil(() => lookupCount === 2);
+    releaseLookups();
+
+    await waitUntil(() => renderCount >= 2);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(renderCount).toBe(2);
+
+    releaseRenders();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
   it("uses explicit Pages path tags when deciding whether to replace stale regeneration", async () => {
     let renderCount = 0;
     let releaseRender!: () => void;
@@ -1062,7 +1111,7 @@ describe("cache invalidation race guards", () => {
     await Promise.all([first, second]);
     expect(putCount).toBe(10);
     await expect(handler.getInvalidationVersion(["posts", "comments"])).resolves.toBeGreaterThan(0);
-    expect([...store.keys()].some((key) => key.startsWith("__tag-op:"))).toBe(false);
+    expect([...store.keys()].filter((key) => key.startsWith("__tag-op:"))).toHaveLength(2);
   });
 
   it("preserves KV invalidation order across handler instances", async () => {
@@ -1105,7 +1154,49 @@ describe("cache invalidation race guards", () => {
     await expect(
       new KVCacheHandler(baseKv as never).getInvalidationVersion(["posts"]),
     ).resolves.toBeGreaterThanOrEqual(newerVersion);
-    expect([...store.keys()].some((key) => key.startsWith("__tag-op:"))).toBe(false);
+    expect([...store.keys()].filter((key) => key.startsWith("__tag-op:"))).toHaveLength(1);
+  });
+
+  it("retains newer completion evidence while an older publisher finishes late", async () => {
+    const store = new Map<string, string>();
+    const baseKv = createSharedMockKV(store);
+    let markOlderFinalPutStarted!: () => void;
+    const olderFinalPutStarted = new Promise<void>((resolve) => {
+      markOlderFinalPutStarted = resolve;
+    });
+    let releaseOlderFinalPut!: () => void;
+    const olderFinalPutGate = new Promise<void>((resolve) => {
+      releaseOlderFinalPut = resolve;
+    });
+    let olderFiniteMarkerPuts = 0;
+    const olderKv = {
+      ...baseKv,
+      async put(key: string, value: string) {
+        if (key === "__tag:posts" && Number.isFinite(Number(value))) {
+          olderFiniteMarkerPuts++;
+          if (olderFiniteMarkerPuts === 2) {
+            markOlderFinalPutStarted();
+            await olderFinalPutGate;
+          }
+        }
+        await baseKv.put(key, value);
+      },
+    };
+    const older = new KVCacheHandler(olderKv as never);
+    const newer = new KVCacheHandler(baseKv as never);
+
+    const olderInvalidation = older.revalidateTag("posts");
+    await olderFinalPutStarted;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await newer.revalidateTag("posts");
+    const newerVersion = Number(store.get("__tag:posts"));
+
+    releaseOlderFinalPut();
+    await olderInvalidation;
+
+    await expect(
+      new KVCacheHandler(baseKv as never).getInvalidationVersion(["posts"]),
+    ).resolves.toBeGreaterThanOrEqual(newerVersion);
   });
 
   it("preserves a same-isolate invalidation that lands during a KV marker read", async () => {

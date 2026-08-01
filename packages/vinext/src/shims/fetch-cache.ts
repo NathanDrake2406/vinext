@@ -22,7 +22,7 @@
 import { getDataCacheHandler, type CachedFetchValue, type CacheHandler } from "./cache-handler.js";
 import {
   deletePendingProducerIfOwned,
-  getJoinableProducer,
+  getOrCreateJoinableProducer,
   type PendingProducer,
 } from "./pending-producer.js";
 import { encodeCacheTags } from "../utils/encode-cache-tag.js";
@@ -1251,10 +1251,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
 
         // Background refetch — deduped so only one in-flight refetch runs
         // per cache key, preventing thundering herd on popular endpoints.
-        const inFlightRefetch = pendingRefetches.has(cacheKey)
-          ? await getJoinableProducer(pendingRefetches, cacheKey)
-          : undefined;
-        if (inFlightRefetch === undefined) {
+        const selection = await getOrCreateJoinableProducer(pendingRefetches, cacheKey, () => {
           const refetchGuardSince = Date.now();
           let producer!: PendingProducer<void>;
           let timeoutId: ReturnType<typeof setTimeout>;
@@ -1288,7 +1285,6 @@ function createPatchedFetch(): typeof globalThis.fetch {
             tags: [...tags, ...softTags],
             promise: refetchPromise,
           };
-          pendingRefetches.set(cacheKey, producer);
 
           // Safety net: if the upstream fetch hangs forever, force-clean the
           // dedup entry so future stale hits can retry instead of being
@@ -1297,8 +1293,11 @@ function createPatchedFetch(): typeof globalThis.fetch {
             () => deletePendingProducerIfOwned(pendingRefetches, cacheKey, producer),
             DEDUP_TIMEOUT_MS,
           );
+          return producer;
+        });
 
-          getRequestExecutionContext()?.waitUntil(refetchPromise);
+        if (selection.created) {
+          getRequestExecutionContext()?.waitUntil(selection.producer.promise);
         }
 
         // Return stale data immediately

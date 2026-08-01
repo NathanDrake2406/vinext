@@ -15,6 +15,9 @@ const KV_KEY_MAX_BYTES = 512;
 /** Marker for logical keys that must be hashed to fit in KV. */
 const HASHED_KEY_PREFIX = "__hash:";
 
+/** Canonical UUID text appended to invalidation operation keys. */
+const OPERATION_ID_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
+
 const KV_KEY_ENCODER = new TextEncoder();
 
 export type KvKeySpace = {
@@ -37,9 +40,8 @@ function normalizeAppPrefix(appPrefix: string | undefined): string {
   if (!appPrefix) return "";
 
   const prefix = `${appPrefix}:`;
-  const longestCategoryPrefix = TAG_OPERATION_PREFIX;
-  const shortestHashedKey = `${prefix}${longestCategoryPrefix}${HASHED_KEY_PREFIX}${fnv1a64("")}`;
-  if (kvKeyByteLength(shortestHashedKey) <= KV_KEY_MAX_BYTES) return prefix;
+  const longestGeneratedKey = `${prefix}${TAG_OPERATION_PREFIX}${fnv1a64("")}:${OPERATION_ID_PLACEHOLDER}`;
+  if (kvKeyByteLength(longestGeneratedKey) <= KV_KEY_MAX_BYTES) return prefix;
 
   return `__app:${fnv1a64(appPrefix)}:`;
 }

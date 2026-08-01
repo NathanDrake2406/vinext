@@ -35,7 +35,7 @@ import { getCdnCacheAdapter } from "./cdn-cache.js";
 import { getDataCacheHandler, type CachedFetchValue } from "./cache-handler.js";
 import {
   deletePendingProducerIfOwned,
-  getJoinableProducer,
+  getOrCreateJoinableProducer,
   type PendingProducer,
 } from "./pending-producer.js";
 import { getRequestExecutionContext } from "./request-context.js";
@@ -556,27 +556,25 @@ async function scheduleUnstableCacheBackgroundRevalidationAsync(
   refresh: () => Promise<unknown>,
 ): Promise<void> {
   const pending = getPendingUnstableCacheRevalidations();
-  const inFlight = pending.has(cacheKey) ? await getJoinableProducer(pending, cacheKey) : undefined;
-  // Do not join an in-flight revalidation that an invalidation of its own
-  // tags disqualified: its write is suppressed, so waiting on it would only
-  // strand the caller. The helper removes only that stale producer and keeps
-  // any concurrent replacement intact.
-  if (inFlight !== undefined) return;
-
-  const startTime = Date.now();
-  const revalidation = refresh()
-    .then(() => undefined)
-    .catch((err) => {
-      console.error(`[vinext] unstable_cache background revalidation failed for ${cacheKey}:`, err);
+  const selection = await getOrCreateJoinableProducer(pending, cacheKey, () => {
+    const startTime = Date.now();
+    const revalidation = refresh()
+      .then(() => undefined)
+      .catch((err) => {
+        console.error(
+          `[vinext] unstable_cache background revalidation failed for ${cacheKey}:`,
+          err,
+        );
+      });
+    let producer!: PendingProducer<void>;
+    const trackedRevalidation = revalidation.finally(() => {
+      deletePendingProducerIfOwned(pending, cacheKey, producer);
     });
-  let producer!: PendingProducer<void>;
-  const trackedRevalidation = revalidation.finally(() => {
-    deletePendingProducerIfOwned(pending, cacheKey, producer);
-  });
 
-  producer = { startTime, tags, promise: trackedRevalidation };
-  pending.set(cacheKey, producer);
-  await trackedRevalidation;
+    producer = { startTime, tags, promise: trackedRevalidation };
+    return producer;
+  });
+  if (selection.created) await selection.producer.promise;
 }
 
 async function refreshUnstableCacheResult<Args extends unknown[], Result>(

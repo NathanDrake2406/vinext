@@ -25,7 +25,7 @@ import { fnv1a64 } from "../utils/hash.js";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import {
   deletePendingProducerIfOwned,
-  getJoinableProducer,
+  getOrCreateJoinableProducer,
   type PendingProducer,
 } from "vinext/shims/pending-producer";
 import { getCurrentFetchSoftTags } from "vinext/shims/fetch-cache";
@@ -296,29 +296,25 @@ export async function coalesceOnDemandRevalidation<T>(
   renderFn: () => Promise<T>,
   tags: readonly string[] = getCurrentFetchSoftTags(),
 ): Promise<T> {
-  const pending = pendingOnDemandRegenerations.has(key)
-    ? await getJoinableProducer(pendingOnDemandRegenerations, key)
-    : undefined;
-  if (pending !== undefined) return pending.promise as Promise<T>;
+  const selection = await getOrCreateJoinableProducer(pendingOnDemandRegenerations, key, () => {
+    const startTime = Date.now();
 
-  const startTime = Date.now();
-
-  // Defer invocation until after the promise is registered, matching Next.js's
-  // response-cache scheduler and closing the same-tick stampede window. Mark
-  // the render start so the regeneration's isrSet writes are guarded from its
-  // own beginning, not just from the write.
-  let producer!: PendingProducer<T>;
-  const promise = Promise.resolve()
-    .then(() => {
-      _markIsrRenderStart();
-      return renderFn();
-    })
-    .finally(() => {
-      deletePendingProducerIfOwned(pendingOnDemandRegenerations, key, producer);
-    });
-  producer = { startTime, tags: [...tags], promise };
-  pendingOnDemandRegenerations.set(key, producer);
-  return promise;
+    // Defer invocation until after replacement ownership is reserved,
+    // matching Next.js's response-cache scheduler and closing same-tick and
+    // post-invalidation stampede windows.
+    let producer!: PendingProducer<T>;
+    const promise = Promise.resolve()
+      .then(() => {
+        _markIsrRenderStart();
+        return renderFn();
+      })
+      .finally(() => {
+        deletePendingProducerIfOwned(pendingOnDemandRegenerations, key, producer);
+      });
+    producer = { startTime, tags: [...tags], promise };
+    return producer;
+  });
+  return selection.producer.promise as Promise<T>;
 }
 
 /**
@@ -371,45 +367,42 @@ async function scheduleBackgroundRegeneration(
     | undefined,
   tags: string[],
 ): Promise<void> {
-  const inFlight = pendingRegenerations.has(key)
-    ? await getJoinableProducer(pendingRegenerations, key)
-    : undefined;
-  if (inFlight !== undefined) return;
+  const selection = await getOrCreateJoinableProducer(pendingRegenerations, key, () => {
+    const startTime = Date.now();
 
-  const startTime = Date.now();
+    // Mark the render start inside the renderFn's execution context (which may
+    // be a fresh context for the regeneration) so its isrSet writes are guarded
+    // from the beginning of the producing work. For the Pages Router the page
+    // rendering path additionally marks the start inside its fresh context (see
+    // pages-page-data).
+    let producer!: PendingProducer<void>;
+    const promise = (async () => {
+      _markIsrRenderStart();
+      await renderFn();
+    })()
+      .catch((err) => {
+        console.error(`[vinext] ISR background regeneration failed for ${key}:`, err);
+        if (errorContext) {
+          void reportRequestError(
+            err instanceof Error ? err : new Error(String(err)),
+            { path: key, method: "GET", headers: {} },
+            {
+              routerKind: errorContext.routerKind,
+              routePath: errorContext.routePath,
+              routeType: errorContext.routeType,
+              revalidateReason: "stale",
+            },
+          );
+        }
+      })
+      .finally(() => {
+        deletePendingProducerIfOwned(pendingRegenerations, key, producer);
+      });
 
-  // Mark the render start inside the renderFn's execution context (which may
-  // be a fresh context for the regeneration) so its isrSet writes are guarded
-  // from the beginning of the producing work. For the Pages Router the page
-  // rendering path additionally marks the start inside its fresh context (see
-  // pages-page-data).
-  let producer!: PendingProducer<void>;
-  const promise = (async () => {
-    _markIsrRenderStart();
-    await renderFn();
-  })()
-    .catch((err) => {
-      console.error(`[vinext] ISR background regeneration failed for ${key}:`, err);
-      if (errorContext) {
-        void reportRequestError(
-          err instanceof Error ? err : new Error(String(err)),
-          { path: key, method: "GET", headers: {} },
-          {
-            routerKind: errorContext.routerKind,
-            routePath: errorContext.routePath,
-            routeType: errorContext.routeType,
-            revalidateReason: "stale",
-          },
-        );
-      }
-    })
-    .finally(() => {
-      deletePendingProducerIfOwned(pendingRegenerations, key, producer);
-    });
-
-  producer = { startTime, tags, promise };
-  pendingRegenerations.set(key, producer);
-  await promise;
+    producer = { startTime, tags, promise };
+    return producer;
+  });
+  if (selection.created) await selection.producer.promise;
 }
 
 // ---------------------------------------------------------------------------

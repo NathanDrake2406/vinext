@@ -205,6 +205,19 @@ describe("KVCacheHandler", () => {
       );
     });
 
+    it("budgets the operation UUID when normalizing a long app prefix", async () => {
+      const prefixedHandler = new KVCacheHandler(kv as any, {
+        appPrefix: "p".repeat(460),
+      });
+
+      await prefixedHandler.revalidateTag("posts");
+
+      const storedKeys = kv.put.mock.calls.map(([key]) => key as string);
+      expect(storedKeys.some((key) => key.includes("__tag-op:"))).toBe(true);
+      expect(storedKeys.every((key) => new TextEncoder().encode(key).length <= 512)).toBe(true);
+      expect(storedKeys.some((key) => key.startsWith("__app:"))).toBe(true);
+    });
+
     it("uses the same bounded storage key for multibyte tag writes and reads", async () => {
       const tag = "é".repeat(256);
       await handler.revalidateTag(tag);

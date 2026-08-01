@@ -99,6 +99,13 @@ type KVCacheEntry = {
   cacheControl?: CacheControlMetadata;
 };
 
+type SharedInvalidationState = {
+  version: number;
+  pending: boolean;
+  operationKeys: string[];
+  orderingAnchorKey: string | undefined;
+};
+
 /** Prefix used by revalidatePath for path-based tags. */
 const PATH_TAG_PREFIX = "_N_T_";
 
@@ -232,7 +239,7 @@ export class KVCacheHandler implements CacheHandler {
   private async _readSharedInvalidationState(
     tag: string,
     ignoredPendingKey?: string,
-  ): Promise<{ version: number; pending: boolean; operationKeys: string[] }> {
+  ): Promise<SharedInvalidationState> {
     const operationKeys: string[] = [];
     let cursor: string | undefined;
     do {
@@ -251,6 +258,8 @@ export class KVCacheHandler implements CacheHandler {
 
     let version = 0;
     let pending = false;
+    let orderingAnchorKey: string | undefined;
+    let orderingAnchorVersion = 0;
     // A durable pending marker without operation records comes from the older
     // protocol and must still fail closed. When operation records exist, they
     // are authoritative because the durable marker may be a delayed write.
@@ -275,22 +284,42 @@ export class KVCacheHandler implements CacheHandler {
         continue;
       }
       version = Math.max(version, operationVersion);
+      if (
+        orderingAnchorKey === undefined ||
+        operationVersion > orderingAnchorVersion ||
+        (operationVersion === orderingAnchorVersion && operationKeys[index] > orderingAnchorKey)
+      ) {
+        orderingAnchorKey = operationKeys[index];
+        orderingAnchorVersion = operationVersion;
+      }
     }
-    return { version, pending, operationKeys };
+    return { version, pending, operationKeys, orderingAnchorKey };
+  }
+
+  /** Delete completed records except the immutable maximum-version anchor. */
+  private async _compactInvalidationOperations(state: SharedInvalidationState): Promise<void> {
+    if (state.pending) return;
+    await Promise.all(
+      state.operationKeys
+        .filter((key) => key !== state.orderingAnchorKey)
+        .map((key) => this.kv.delete(key)),
+    );
   }
 
   private async _readSharedInvalidationVersion(tag: string): Promise<number> {
     const state = await this._readSharedInvalidationState(tag);
     if (state.pending) return Number.POSITIVE_INFINITY;
 
-    // Completed operation records normally disappear in the publisher that
-    // observes no remaining pending writer. If a publisher crashed, the next
-    // reader repairs the durable marker before cleaning those records up.
+    // Keep one immutable maximum-version record as an ordering anchor. A
+    // publisher that captured older state can still overwrite the durable key
+    // after this repair, but it cannot delete an anchor it never observed, so
+    // the next reader can recover the newer version. Normal operation remains
+    // bounded to one completed record per tag plus in-flight publishers.
     if (state.operationKeys.length > 0) {
       await this.kv.put(this._tagKey(tag), String(state.version), {
         expirationTtl: 30 * 24 * 3600,
       });
-      await Promise.all(state.operationKeys.map((key) => this.kv.delete(key)));
+      await this._compactInvalidationOperations(state);
     }
     return state.version;
   }
@@ -621,15 +650,20 @@ export class KVCacheHandler implements CacheHandler {
         await this.kv.put(this._tagKey(tag), String(version), {
           expirationTtl: 30 * 24 * 3600,
         });
-        await Promise.all(state.operationKeys.map((key) => this.kv.delete(key)));
+        await this._compactInvalidationOperations(state);
       }),
     );
+    // Re-read after publication before warming local state. This observes an
+    // immutable anchor left by a newer publisher that raced our final durable
+    // write, instead of caching the older pre-write snapshot for the local TTL.
+    const publishedStates = await Promise.all(
+      operations.map(({ tag }) => this._readSharedInvalidationState(tag)),
+    );
+    await Promise.all(publishedStates.map((state) => this._compactInvalidationOperations(state)));
     for (let index = 0; index < operations.length; index++) {
-      const state = postCommitStates[index];
-      const version = Math.max(state.version, completedAt);
       this._tagCache.set(operations[index].tag, {
-        timestamp: state.pending ? Number.NaN : version,
-        fetchedAt: completedAt,
+        timestamp: publishedStates[index].pending ? Number.NaN : publishedStates[index].version,
+        fetchedAt: Date.now(),
       });
     }
   }
