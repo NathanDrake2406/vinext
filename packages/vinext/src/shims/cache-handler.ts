@@ -80,27 +80,35 @@ export type CacheHandlerContext = {
   dev?: boolean;
   maxMemoryCacheSize?: number;
   revalidatedTags?: string[];
+  kind?: string;
+  /** Tags stored on the entry and used by invalidation checks. */
+  tags?: string[];
+  /** Tags used for guarding the write but not persisted on the entry. */
+  softTags?: string[];
   [key: string]: unknown;
 };
 
 /**
- * `set` context fields consumed by the stale-write guard (see below):
+ * Metadata supplied when a producer stores an entry.
  *
- * - `guardSince`: wall-clock timestamp captured when the producing work began.
- *   The handler refuses the write when any invalidation marker for the entry's
- *   tags (context `tags` plus `softTags`) is >= `guardSince`. Markers are
- *   backend state (KV tag keys for the production handler), so the guard holds
- *   across isolates/workers modulo marker propagation, matching the trust
- *   model of the read-time tag eviction.
- * - `softTags`: guard-only; never persisted as entry tags.
+ * The tag and guard fields are part of the CacheHandler contract rather than
+ * opaque implementation metadata: handlers must use them to reject writes
+ * whose producer began before a matching invalidation. `softTags` participate
+ * in that guard but are not persisted as entry tags.
  */
+export type CacheWriteContext = CacheHandlerContext & {
+  fetchCache?: boolean;
+  /** Producer start timestamp; guarded entries must retain it as lastModified. */
+  guardSince?: number;
+  revalidate?: number | false;
+  expire?: number;
+  cacheControl?: CacheControlMetadata;
+  [key: string]: unknown;
+};
+
 export type CacheHandler = {
   get(key: string, ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null>;
-  set(
-    key: string,
-    data: IncrementalCacheValue | null,
-    ctx?: Record<string, unknown>,
-  ): Promise<void>;
+  set(key: string, data: IncrementalCacheValue | null, ctx?: CacheWriteContext): Promise<void>;
   revalidateTag(tags: string | string[], durations?: { expire?: number }): Promise<void>;
   resetRequestCache?(): void;
   /**
@@ -109,7 +117,7 @@ export type CacheHandler = {
    * only used by producer-join decisions (dedup hygiene), never by the write
    * guard, which reads fresh markers at commit time.
    */
-  getInvalidationVersion?(tags: string[]): Promise<number>;
+  getInvalidationVersion(tags: readonly string[]): Promise<number>;
 };
 
 export class NoOpCacheHandler implements CacheHandler {
@@ -120,12 +128,12 @@ export class NoOpCacheHandler implements CacheHandler {
   async set(
     _key: string,
     _data: IncrementalCacheValue | null,
-    _ctx?: Record<string, unknown>,
+    _ctx?: CacheWriteContext,
   ): Promise<void> {}
 
   async revalidateTag(_tags: string | string[], _durations?: { expire?: number }): Promise<void> {}
 
-  async getInvalidationVersion(_tags: string[]): Promise<number> {
+  async getInvalidationVersion(_tags: readonly string[]): Promise<number> {
     return 0;
   }
 }
@@ -306,7 +314,7 @@ export class MemoryCacheHandler implements CacheHandler {
   async set(
     key: string,
     data: IncrementalCacheValue | null,
-    ctx?: Record<string, unknown>,
+    ctx?: CacheWriteContext,
   ): Promise<void> {
     const tagSet = new Set<string>();
     if (data && "tags" in data && Array.isArray(data.tags)) {
@@ -361,7 +369,7 @@ export class MemoryCacheHandler implements CacheHandler {
     const entry = {
       value: data,
       tags,
-      lastModified: now,
+      lastModified: guardSince ?? now,
       revalidateAt,
       expireAt,
       cacheControl,
@@ -391,7 +399,7 @@ export class MemoryCacheHandler implements CacheHandler {
     }
   }
 
-  async getInvalidationVersion(tags: string[]): Promise<number> {
+  async getInvalidationVersion(tags: readonly string[]): Promise<number> {
     let version = 0;
     for (const tag of tags) {
       const revalidatedAt = this.tagRevalidatedAt.get(tag);
@@ -417,6 +425,11 @@ export function configureMemoryCacheHandler(options?: MemoryCacheHandlerOptions)
 }
 
 export function setDataCacheHandler(handler: CacheHandler): void {
+  if (typeof handler.getInvalidationVersion !== "function") {
+    throw new TypeError(
+      "[vinext] CacheHandler must implement getInvalidationVersion() to support cache invalidation fencing",
+    );
+  }
   globalHandlers[HANDLER_KEY] = handler;
 }
 
@@ -439,10 +452,6 @@ export function getCacheHandler(): CacheHandler {
  * disqualifies a producer. Tagless producers are never stale (nothing can
  * invalidate them by tag) and untagged callers join unconditionally; the
  * write-side `set` guard remains the correctness gate either way.
- *
- * Handlers without `getInvalidationVersion` are treated as never stale —
- * joining only delays recovery by one producer generation, never serves stale
- * data from the cache.
  */
 export async function isProducerStaleSince(
   startTime: number,
@@ -450,6 +459,5 @@ export async function isProducerStaleSince(
 ): Promise<boolean> {
   if (tags.length === 0) return false;
   const handler = getDataCacheHandler();
-  if (!handler.getInvalidationVersion) return false;
   return (await handler.getInvalidationVersion([...tags])) >= startTime;
 }

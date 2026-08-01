@@ -9,8 +9,9 @@
  * Background regeneration is deduped — only one regeneration per cache key
  * runs at a time, preventing thundering herd on popular pages.
  *
- * This layer works with any CacheHandler backend (memory, Redis, KV, etc.)
- * because it only uses the standard get/set interface.
+ * This layer works with any backend that implements vinext's CacheHandler
+ * contract (memory, Redis, KV, etc.), including its invalidation-version
+ * capability for safe producer joining.
  */
 
 import {
@@ -22,7 +23,11 @@ import {
 import { getCdnCacheAdapter } from "vinext/shims/cdn-cache";
 import { fnv1a64 } from "../utils/hash.js";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
-import { isProducerStaleSince } from "vinext/shims/cache-handler";
+import {
+  deletePendingProducerIfOwned,
+  getJoinableProducer,
+  type PendingProducer,
+} from "vinext/shims/pending-producer";
 import { getCurrentFetchSoftTags } from "vinext/shims/fetch-cache";
 import { _getIsrRenderStartTimestamp, _markIsrRenderStart } from "vinext/shims/cache-request-state";
 import { reportRequestError, type OnRequestErrorContext } from "./instrumentation.js";
@@ -270,10 +275,10 @@ export async function isrSetPrerenderedAppPage(
 
 const _PENDING_REGEN_KEY = Symbol.for("vinext.isrCache.pendingRegenerations");
 const _g = globalThis as unknown as Record<PropertyKey, unknown>;
-const pendingRegenerations = (_g[_PENDING_REGEN_KEY] ??= new Map<string, Promise<void>>()) as Map<
+const pendingRegenerations = (_g[_PENDING_REGEN_KEY] ??= new Map<
   string,
-  { startTime: number; tags: string[]; promise: Promise<void> }
->;
+  PendingProducer<void>
+>()) as Map<string, PendingProducer<void>>;
 
 // Keep on-demand work in a distinct batch from ordinary/stale regeneration.
 // This mirrors Next.js ResponseCache's `{ key, isOnDemandRevalidate }` batch
@@ -282,31 +287,18 @@ const pendingRegenerations = (_g[_PENDING_REGEN_KEY] ??= new Map<string, Promise
 const _PENDING_ON_DEMAND_REGEN_KEY = Symbol.for("vinext.isrCache.pendingOnDemandRegenerations");
 const pendingOnDemandRegenerations = (_g[_PENDING_ON_DEMAND_REGEN_KEY] ??= new Map<
   string,
-  Promise<unknown>
->()) as Map<string, { startTime: number; tags: string[]; promise: Promise<unknown> }>;
+  PendingProducer<unknown>
+>()) as Map<string, PendingProducer<unknown>>;
 
 /** Coalesce same-key synchronous on-demand revalidations. */
 export async function coalesceOnDemandRevalidation<T>(
   key: string,
   renderFn: () => Promise<T>,
 ): Promise<T> {
-  while (true) {
-    const pending = pendingOnDemandRegenerations.get(key);
-    if (pending === undefined) break;
-    // A post-invalidation caller must not join an on-demand regeneration that
-    // an invalidation of its own tags disqualified: its write is suppressed, so
-    // joining would only strand the caller. Replace it with fresh work instead.
-    // On-demand revalidation is path-based (`res.revalidate(path)`), so the
-    // request's path-derived soft tags are the right disqualifier set.
-    if (!(await isProducerStaleSince(pending.startTime, pending.tags))) {
-      return pending.promise as Promise<T>;
-    }
-    // Identity-check so a concurrent replacement is not clobbered, then
-    // re-read the map: another caller may already have installed a fresh
-    // producer to join.
-    if (pendingOnDemandRegenerations.get(key) !== pending) continue;
-    pendingOnDemandRegenerations.delete(key);
-  }
+  const pending = pendingOnDemandRegenerations.has(key)
+    ? await getJoinableProducer(pendingOnDemandRegenerations, key)
+    : undefined;
+  if (pending !== undefined) return pending.promise as Promise<T>;
 
   const startTime = Date.now();
   const tags = getCurrentFetchSoftTags();
@@ -315,17 +307,17 @@ export async function coalesceOnDemandRevalidation<T>(
   // response-cache scheduler and closing the same-tick stampede window. Mark
   // the render start so the regeneration's isrSet writes are guarded from its
   // own beginning, not just from the write.
+  let producer!: PendingProducer<T>;
   const promise = Promise.resolve()
     .then(() => {
       _markIsrRenderStart();
       return renderFn();
     })
     .finally(() => {
-      if (pendingOnDemandRegenerations.get(key)?.promise === promise) {
-        pendingOnDemandRegenerations.delete(key);
-      }
+      deletePendingProducerIfOwned(pendingOnDemandRegenerations, key, producer);
     });
-  pendingOnDemandRegenerations.set(key, { startTime, tags, promise });
+  producer = { startTime, tags, promise };
+  pendingOnDemandRegenerations.set(key, producer);
   return promise;
 }
 
@@ -373,19 +365,10 @@ async function scheduleBackgroundRegeneration(
       }
     | undefined,
 ): Promise<void> {
-  while (true) {
-    const inFlight = pendingRegenerations.get(key);
-    if (inFlight === undefined) break;
-    // A regeneration disqualified by an invalidation of its own tags cannot be
-    // joined: its write is suppressed, so a post-invalidation stale hit must
-    // replace it with fresh work instead of waiting on it.
-    if (!(await isProducerStaleSince(inFlight.startTime, inFlight.tags))) return;
-    // Identity-check so a concurrent replacement is not clobbered, then
-    // re-read the map: another caller may already have installed a fresh
-    // producer.
-    if (pendingRegenerations.get(key) !== inFlight) continue;
-    pendingRegenerations.delete(key);
-  }
+  const inFlight = pendingRegenerations.has(key)
+    ? await getJoinableProducer(pendingRegenerations, key)
+    : undefined;
+  if (inFlight !== undefined) return;
 
   const startTime = Date.now();
   const tags = getCurrentFetchSoftTags();
@@ -395,6 +378,7 @@ async function scheduleBackgroundRegeneration(
   // from the beginning of the producing work. For the Pages Router the page
   // rendering path additionally marks the start inside its fresh context (see
   // pages-page-data).
+  let producer!: PendingProducer<void>;
   const promise = (async () => {
     _markIsrRenderStart();
     await renderFn();
@@ -415,12 +399,11 @@ async function scheduleBackgroundRegeneration(
       }
     })
     .finally(() => {
-      if (pendingRegenerations.get(key)?.promise === promise) {
-        pendingRegenerations.delete(key);
-      }
+      deletePendingProducerIfOwned(pendingRegenerations, key, producer);
     });
 
-  pendingRegenerations.set(key, { startTime, tags, promise });
+  producer = { startTime, tags, promise };
+  pendingRegenerations.set(key, producer);
 
   // Register with the Workers ExecutionContext (retrieved from ALS) so the
   // runtime keeps the isolate alive until the regeneration completes, even

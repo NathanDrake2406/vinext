@@ -19,12 +19,12 @@
  *   await runWithFetchCache(async () => { ... render ... });
  */
 
+import { getDataCacheHandler, type CachedFetchValue, type CacheHandler } from "./cache-handler.js";
 import {
-  getDataCacheHandler,
-  isProducerStaleSince,
-  type CachedFetchValue,
-  type CacheHandler,
-} from "./cache-handler.js";
+  deletePendingProducerIfOwned,
+  getJoinableProducer,
+  type PendingProducer,
+} from "./pending-producer.js";
 import { encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import { markDynamicUsage } from "./headers.js";
@@ -452,10 +452,10 @@ declare global {
 
 const _PENDING_KEY = Symbol.for("vinext.fetchCache.pendingRefetches");
 const _gPending = globalThis as unknown as Record<PropertyKey, unknown>;
-const pendingRefetches = (_gPending[_PENDING_KEY] ??= new Map<string, Promise<void>>()) as Map<
+const pendingRefetches = (_gPending[_PENDING_KEY] ??= new Map<
   string,
-  { startTime: number; tags: string[]; promise: Promise<void> }
->;
+  PendingProducer<void>
+>()) as Map<string, PendingProducer<void>>;
 
 // Maximum time a dedup entry can live before being force-cleaned.
 // Guards against hung upstream fetches that never settle, which would
@@ -1228,18 +1228,13 @@ function createPatchedFetch(): typeof globalThis.fetch {
 
         // Background refetch — deduped so only one in-flight refetch runs
         // per cache key, preventing thundering herd on popular endpoints.
-        const inFlightRefetch = pendingRefetches.get(cacheKey);
-        if (
-          inFlightRefetch === undefined ||
-          (await isProducerStaleSince(inFlightRefetch.startTime, inFlightRefetch.tags))
-        ) {
-          if (inFlightRefetch !== undefined) {
-            // A refetch disqualified by an invalidation of its own tags cannot
-            // be joined: its write is suppressed, so waiting on it would only
-            // strand this caller. Replace it with a fresh refetch.
-            pendingRefetches.delete(cacheKey);
-          }
+        const inFlightRefetch = pendingRefetches.has(cacheKey)
+          ? await getJoinableProducer(pendingRefetches, cacheKey)
+          : undefined;
+        if (inFlightRefetch === undefined) {
           const refetchGuardSince = Date.now();
+          let producer!: PendingProducer<void>;
+          let timeoutId: ReturnType<typeof setTimeout>;
           const refetchPromise = originalFetch(input, fetchInit)
             .then(async (freshResp) => {
               await writeFetchCacheResponse(handler, cacheKey, freshResp, tags, revalidateSeconds, {
@@ -1261,28 +1256,24 @@ function createPatchedFetch(): typeof globalThis.fetch {
               );
             })
             .finally(() => {
-              // Only clear if we still own the slot — the timeout may have
-              // already replaced it with a newer refetch promise.
-              if (pendingRefetches.get(cacheKey)?.promise === refetchPromise) {
-                pendingRefetches.delete(cacheKey);
-              }
+              deletePendingProducerIfOwned(pendingRefetches, cacheKey, producer);
               clearTimeout(timeoutId);
             });
 
-          pendingRefetches.set(cacheKey, {
+          producer = {
             startTime: refetchGuardSince,
             tags: [...tags, ...softTags],
             promise: refetchPromise,
-          });
+          };
+          pendingRefetches.set(cacheKey, producer);
 
           // Safety net: if the upstream fetch hangs forever, force-clean the
           // dedup entry so future stale hits can retry instead of being
           // permanently suppressed.
-          const timeoutId = setTimeout(() => {
-            if (pendingRefetches.get(cacheKey)?.promise === refetchPromise) {
-              pendingRefetches.delete(cacheKey);
-            }
-          }, DEDUP_TIMEOUT_MS);
+          timeoutId = setTimeout(
+            () => deletePendingProducerIfOwned(pendingRefetches, cacheKey, producer),
+            DEDUP_TIMEOUT_MS,
+          );
 
           getRequestExecutionContext()?.waitUntil(refetchPromise);
         }

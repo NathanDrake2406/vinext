@@ -304,6 +304,9 @@ describe("seedMemoryCacheFromPrerender", () => {
       async revalidateTag(): Promise<void> {
         // not used by this test
       },
+      async getInvalidationVersion(): Promise<number> {
+        return 0;
+      },
     };
     setCacheHandler(handler);
 

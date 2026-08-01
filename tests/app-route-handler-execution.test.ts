@@ -596,6 +596,7 @@ describe("app route handler execution helpers", () => {
     setDataCacheHandler({
       get: previousHandler.get.bind(previousHandler),
       set: previousHandler.set.bind(previousHandler),
+      getInvalidationVersion: previousHandler.getInvalidationVersion.bind(previousHandler),
       async revalidateTag() {
         markInvalidationStarted();
         await invalidationGate;

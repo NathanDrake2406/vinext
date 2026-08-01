@@ -423,6 +423,9 @@ describe("ISR expire ceiling", () => {
         setContext = ctx;
       },
       async revalidateTag() {},
+      async getInvalidationVersion() {
+        return 0;
+      },
     });
 
     await isrSet("compat-test", buildPagesCacheValue("<html>cached</html>", {}), 60, ["tag"], 300);
@@ -459,6 +462,9 @@ describe("ISR expire ceiling", () => {
       },
       async set() {},
       async revalidateTag() {},
+      async getInvalidationVersion() {
+        return 0;
+      },
     });
 
     await expect(isrGet("expired-handler-entry")).resolves.toMatchObject({

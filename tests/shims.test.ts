@@ -6161,6 +6161,9 @@ describe("next/cache shim", () => {
         const tagList = Array.isArray(tags) ? tags : [tags];
         calls.push(`revalidateTag:${tagList.join(",")}`);
       },
+      async getInvalidationVersion() {
+        return 0;
+      },
       resetRequestCache() {
         calls.push("reset");
       },
@@ -6511,6 +6514,9 @@ describe("next/cache shim", () => {
         }
       },
       async revalidateTag(_tags: string | string[]) {},
+      async getInvalidationVersion() {
+        return 0;
+      },
     };
 
     setCacheHandler(handler);
@@ -6582,6 +6588,9 @@ describe("next/cache shim", () => {
       },
       async set() {},
       async revalidateTag(_tags: string | string[]) {},
+      async getInvalidationVersion() {
+        return 0;
+      },
     };
 
     setCacheHandler(handler);

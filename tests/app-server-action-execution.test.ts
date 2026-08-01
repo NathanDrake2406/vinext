@@ -2064,6 +2064,9 @@ describe("app server action execution helpers", () => {
         };
       },
       async set() {},
+      async getInvalidationVersion() {
+        return 0;
+      },
       async revalidateTag() {
         markInvalidationStarted();
         await invalidationGate;

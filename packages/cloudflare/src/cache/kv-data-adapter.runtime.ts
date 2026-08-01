@@ -23,6 +23,7 @@ import { Buffer } from "node:buffer";
 import type {
   CacheHandler,
   CacheHandlerValue,
+  CacheWriteContext,
   CacheControlMetadata,
   CachedAppPageValue,
   CachedRouteValue,
@@ -342,7 +343,7 @@ export class KVCacheHandler implements CacheHandler {
   async set(
     key: string,
     data: IncrementalCacheValue | null,
-    ctx?: Record<string, unknown>,
+    ctx?: CacheWriteContext,
   ): Promise<void> {
     // Collect, validate, and dedupe tags from data and context
     const tagSet = new Set<string>();
@@ -487,7 +488,7 @@ export class KVCacheHandler implements CacheHandler {
    * `_guardRefusesWrite` stays the correctness gate, so cached values that
    * lag cross-isolate invalidations are acceptable here.
    */
-  async getInvalidationVersion(tags: string[]): Promise<number> {
+  async getInvalidationVersion(tags: readonly string[]): Promise<number> {
     let version = 0;
     for (const tag of tags) {
       const cached = this._tagCache.get(tag);

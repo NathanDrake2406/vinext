@@ -5,9 +5,9 @@
  * unstable_cache. Backed by a pluggable CacheHandler that defaults to
  * in-memory but can be swapped for Cloudflare KV, Redis, DynamoDB, etc.
  *
- * The CacheHandler interface matches Next.js 16's CacheHandler class, so
- * existing community adapters (@neshca/cache-handler, @opennextjs/aws, etc.)
- * can be used directly.
+ * The CacheHandler interface follows Next.js 16's CacheHandler shape and adds
+ * vinext's invalidation-fencing contract: handlers must accept the typed
+ * `CacheWriteContext` and implement `getInvalidationVersion()`.
  *
  * Recommended configuration is declarative, via the `cache` option on the
  * `vinext()` plugin in vite.config.ts:
@@ -31,11 +31,12 @@ import { workUnitAsyncStorage } from "./internal/work-unit-async-storage.js";
 import { makeHangingPromise } from "./internal/make-hanging-promise.js";
 import { encodeCacheTag, encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getCdnCacheAdapter } from "./cdn-cache.js";
+import { getDataCacheHandler, type CachedFetchValue } from "./cache-handler.js";
 import {
-  getDataCacheHandler,
-  isProducerStaleSince,
-  type CachedFetchValue,
-} from "./cache-handler.js";
+  deletePendingProducerIfOwned,
+  getJoinableProducer,
+  type PendingProducer,
+} from "./pending-producer.js";
 import { getRequestExecutionContext } from "./request-context.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
 import {
@@ -521,14 +522,11 @@ const _UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY = Symbol.for(
   "vinext.unstableCache.pendingRevalidations",
 );
 
-function getPendingUnstableCacheRevalidations(): Map<
-  string,
-  { startTime: number; tags: string[]; promise: Promise<void> }
-> {
+function getPendingUnstableCacheRevalidations(): Map<string, PendingProducer<void>> {
   const existing = _g[_UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY];
   if (existing instanceof Map) return existing;
 
-  const pending = new Map<string, { startTime: number; tags: string[]; promise: Promise<void> }>();
+  const pending = new Map<string, PendingProducer<void>>();
   _g[_UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY] = pending;
   return pending;
 }
@@ -553,36 +551,27 @@ async function scheduleUnstableCacheBackgroundRevalidationAsync(
   tags: string[],
   refresh: () => Promise<unknown>,
 ): Promise<void> {
-  while (true) {
-    const pending = getPendingUnstableCacheRevalidations();
-    const inFlight = pending.get(cacheKey);
-    if (inFlight === undefined) break;
-    // Do not join an in-flight revalidation that an invalidation of its own
-    // tags disqualified: its write is suppressed, so waiting on it would only
-    // strand the caller. Unrelated invalidations never disqualify it;
-    // over-skipping a join merely starts a duplicate revalidation.
-    if (!(await isProducerStaleSince(inFlight.startTime, inFlight.tags))) return;
-    // Identity-check so a concurrent replacement is not clobbered, then
-    // re-read the map: another caller may already have installed a fresh
-    // producer.
-    if (pending.get(cacheKey) !== inFlight) continue;
-    pending.delete(cacheKey);
-  }
-
   const pending = getPendingUnstableCacheRevalidations();
+  const inFlight = pending.has(cacheKey) ? await getJoinableProducer(pending, cacheKey) : undefined;
+  // Do not join an in-flight revalidation that an invalidation of its own
+  // tags disqualified: its write is suppressed, so waiting on it would only
+  // strand the caller. The helper removes only that stale producer and keeps
+  // any concurrent replacement intact.
+  if (inFlight !== undefined) return;
+
   const startTime = Date.now();
   const revalidation = refresh()
     .then(() => undefined)
     .catch((err) => {
       console.error(`[vinext] unstable_cache background revalidation failed for ${cacheKey}:`, err);
     });
+  let producer!: PendingProducer<void>;
   const trackedRevalidation = revalidation.finally(() => {
-    if (pending.get(cacheKey)?.promise === trackedRevalidation) {
-      pending.delete(cacheKey);
-    }
+    deletePendingProducerIfOwned(pending, cacheKey, producer);
   });
 
-  pending.set(cacheKey, { startTime, tags, promise: trackedRevalidation });
+  producer = { startTime, tags, promise: trackedRevalidation };
+  pending.set(cacheKey, producer);
   waitUntilUnstableCacheRevalidation(trackedRevalidation);
 }
 

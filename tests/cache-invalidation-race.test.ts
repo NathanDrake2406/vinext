@@ -105,6 +105,38 @@ describe("cache invalidation race guards", () => {
     cleanup = withFetchCache();
   });
 
+  it("rejects cache handlers without invalidation-version support", () => {
+    const unsupported = {
+      async get() {
+        return null;
+      },
+      async set() {},
+      async revalidateTag() {},
+    } as unknown as Parameters<typeof setCacheHandler>[0];
+
+    expect(() => setCacheHandler(unsupported)).toThrow(
+      "CacheHandler must implement getInvalidationVersion()",
+    );
+  });
+
+  it("stamps guarded memory entries with the producer start", async () => {
+    const guardSince = Date.now() - 1_000;
+    await getCacheHandler().set(
+      "guarded-memory-entry",
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: "fresh", url: "https://api.example.com/posts" },
+        tags: ["posts"],
+        revalidate: 60,
+      },
+      { tags: ["posts"], guardSince },
+    );
+
+    await expect(getCacheHandler().get("guarded-memory-entry")).resolves.toMatchObject({
+      lastModified: guardSince,
+    });
+  });
+
   afterEach(() => {
     cleanup?.();
     cleanup = null;
@@ -234,6 +266,7 @@ describe("cache invalidation race guards", () => {
         await setGate;
         await inner.set(key, value, ctx);
       },
+      getInvalidationVersion: (tags) => inner.getInvalidationVersion(tags),
       revalidateTag: (tags) => inner.revalidateTag(tags),
     });
 

@@ -74,7 +74,14 @@ describe("DefaultCdnCacheAdapter", () => {
   it("delegates get/set to the active data cache handler", async () => {
     const get = vi.fn(async () => null);
     const set = vi.fn(async () => {});
-    const handler: CacheHandler = { get, set, async revalidateTag() {} };
+    const handler: CacheHandler = {
+      get,
+      set,
+      async revalidateTag() {},
+      async getInvalidationVersion() {
+        return 0;
+      },
+    };
     setDataCacheHandler(handler);
 
     const adapter = new DefaultCdnCacheAdapter();
@@ -160,6 +167,9 @@ describe("edge CDN adapter integration", () => {
       },
       set,
       async revalidateTag() {},
+      async getInvalidationVersion() {
+        return 0;
+      },
     });
     const edge = new EdgeCdnAdapter();
     setCdnCacheAdapter(edge);
@@ -199,6 +209,9 @@ describe("revalidation propagates to both data cache and CDN adapter", () => {
       },
       async set() {},
       revalidateTag: dataRevalidate,
+      async getInvalidationVersion() {
+        return 0;
+      },
     });
     const edge = new EdgeCdnAdapter();
     setCdnCacheAdapter(edge);
