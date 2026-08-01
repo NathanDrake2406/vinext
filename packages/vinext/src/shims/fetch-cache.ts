@@ -872,8 +872,16 @@ function createFetchDedupeCandidate(
     return null;
   }
 
-  const request =
-    typeof input === "string" || input instanceof URL ? new Request(input, init) : input;
+  // Request bodies are deliberately excluded from dedupe. Keep that early
+  // exit before constructing an effective Request so POST and consumed-body
+  // inputs retain their existing pass-through behavior.
+  if (input instanceof Request && input.method !== "GET" && input.method !== "HEAD") {
+    return null;
+  }
+
+  // Construct the effective Request so init overrides (especially headers)
+  // participate in the per-render dedupe key for GET/HEAD Request inputs.
+  const request = new Request(input, init);
 
   if ((request.method !== "GET" && request.method !== "HEAD") || request.keepalive) {
     return null;
@@ -1029,6 +1037,9 @@ function createPatchedFetch(): typeof globalThis.fetch {
     // Draft renders are not static generations. Bypass both shared fetch-cache
     // reads and writes, matching Next.js's `workStore.isDraftMode` guard.
     if (isDraftModeEnabled()) {
+      // Draft fetches are fresh dependencies for layout-reuse observation even
+      // though they still use request-scoped memoization below.
+      recordDynamicFetchObservation(input);
       // Keep request-scoped fetch memoization active while skipping the
       // persistent cache. This is the same path used by other uncached
       // fetches in this shim.

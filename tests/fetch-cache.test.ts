@@ -156,14 +156,52 @@ describe("fetch cache shim", () => {
           fetch(url, { next: { revalidate: 3600 } }),
           fetch(url, { next: { revalidate: 3600 } }),
         ]);
+        return {
+          results: await Promise.all([first.json(), second.json()]),
+          dynamicFetches: peekDynamicFetchObservations(),
+        };
+      });
+
+      expect(results.results).toEqual([
+        { url, count: 1 },
+        { url, count: 1 },
+      ]);
+      expect(results.dynamicFetches).toEqual([url]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      setHeadersContext(null);
+    }
+  });
+
+  it("includes Request init overrides in draft dedupe keys", async () => {
+    const url = "https://api.example.com/draft-mode-request-overrides";
+    const request = new Request(url);
+    setHeadersContext({
+      headers: new Headers(),
+      cookies: new Map(),
+      draftModeEnabled: true,
+    });
+
+    try {
+      const results = await runWithFetchCache(async () => {
+        const [first, second] = await Promise.all([
+          fetch(request, {
+            headers: { Authorization: "Bearer first" },
+            next: { revalidate: 3600 },
+          }),
+          fetch(request, {
+            headers: { Authorization: "Bearer second" },
+            next: { revalidate: 3600 },
+          }),
+        ]);
         return Promise.all([first.json(), second.json()]);
       });
 
       expect(results).toEqual([
         { url, count: 1 },
-        { url, count: 1 },
+        { url, count: 2 },
       ]);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
       setHeadersContext(null);
     }
