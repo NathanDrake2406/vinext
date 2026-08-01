@@ -8,6 +8,20 @@ describe("ensureMutableResponse", () => {
     expect(ensureMutableResponse(response)).toBe(response);
   });
 
+  it("preserves a header that collides with the probe name", () => {
+    // The probe deletes, so it must never run against a response that already
+    // carries the name. Stripping a header the framework does not own is the
+    // same class of bug this helper exists to prevent.
+    const response = new Response("body", {
+      headers: { "x-vinext-header-guard-probe": "set-by-userland" },
+    });
+
+    const mutable = ensureMutableResponse(response);
+
+    expect(mutable.headers.get("x-vinext-header-guard-probe")).toBe("set-by-userland");
+    expect(() => mutable.headers.set("Vary", "RSC")).not.toThrow();
+  });
+
   it("copies a Response with immutable headers so the framework can write to it", () => {
     // Response.redirect() carries the "immutable" headers guard, same as fetch().
     const response = Response.redirect("https://example.test/next", 307);
