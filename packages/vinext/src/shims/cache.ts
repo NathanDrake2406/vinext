@@ -5,9 +5,10 @@
  * unstable_cache. Backed by a pluggable CacheHandler that defaults to
  * in-memory but can be swapped for Cloudflare KV, Redis, DynamoDB, etc.
  *
- * The CacheHandler interface follows Next.js 16's CacheHandler shape and adds
- * vinext's invalidation-fencing contract: handlers must accept the typed
- * `CacheWriteContext` and implement `getInvalidationVersion()`.
+ * The CacheHandler interface follows Next.js 16's CacheHandler shape. Vinext
+ * also passes an optional `CacheWriteContext` and uses
+ * `getInvalidationVersion()` when a handler provides it; legacy handlers are
+ * wrapped with a same-process fencing fallback for compatibility.
  *
  * Recommended configuration is declarative, via the `cache` option on the
  * `vinext()` plugin in vite.config.ts:

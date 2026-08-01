@@ -294,6 +294,7 @@ const pendingOnDemandRegenerations = (_g[_PENDING_ON_DEMAND_REGEN_KEY] ??= new M
 export async function coalesceOnDemandRevalidation<T>(
   key: string,
   renderFn: () => Promise<T>,
+  tags: readonly string[] = getCurrentFetchSoftTags(),
 ): Promise<T> {
   const pending = pendingOnDemandRegenerations.has(key)
     ? await getJoinableProducer(pendingOnDemandRegenerations, key)
@@ -301,7 +302,6 @@ export async function coalesceOnDemandRevalidation<T>(
   if (pending !== undefined) return pending.promise as Promise<T>;
 
   const startTime = Date.now();
-  const tags = getCurrentFetchSoftTags();
 
   // Defer invocation until after the promise is registered, matching Next.js's
   // response-cache scheduler and closing the same-tick stampede window. Mark
@@ -316,7 +316,7 @@ export async function coalesceOnDemandRevalidation<T>(
     .finally(() => {
       deletePendingProducerIfOwned(pendingOnDemandRegenerations, key, producer);
     });
-  producer = { startTime, tags, promise };
+  producer = { startTime, tags: [...tags], promise };
   pendingOnDemandRegenerations.set(key, producer);
   return promise;
 }

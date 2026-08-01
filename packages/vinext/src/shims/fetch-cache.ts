@@ -432,8 +432,14 @@ type NextFetchOptions = {
 
 type FetchDedupeEntry = {
   key: string;
+  startTime: number;
   promise: Promise<Response>;
   response: Response | null;
+};
+
+type FetchProducerResult = {
+  response: Response;
+  startTime: number;
 };
 
 // Extend the standard RequestInit to include `next`
@@ -962,18 +968,26 @@ function buildCachedFetchResponse(
   return response;
 }
 
-function dedupeFetch(
+function fetchWithStart(
   input: string | URL | Request,
   init: RequestInit | undefined,
-): Promise<Response> {
+): Promise<FetchProducerResult> {
+  const startTime = Date.now();
+  return originalFetch(input, init).then((response) => ({ response, startTime }));
+}
+
+function dedupeFetchWithStart(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+): Promise<FetchProducerResult> {
   const state = _getState();
   if (!state.isFetchDedupeActive) {
-    return originalFetch(input, init);
+    return fetchWithStart(input, init);
   }
 
   const candidate = createFetchDedupeCandidate(input, init);
   if (!candidate) {
-    return originalFetch(input, init);
+    return fetchWithStart(input, init);
   }
 
   const entriesByUrl = state.currentFetchDedupeEntries;
@@ -992,13 +1006,15 @@ function dedupeFetch(
       }
       const [responseForCaller, responseForFutureCaller] = cloneDedupeResponse(entry.response);
       entry.response = responseForFutureCaller;
-      return responseForCaller;
+      return { response: responseForCaller, startTime: entry.startTime };
     });
   }
 
+  const startTime = Date.now();
   const promise = originalFetch(input, init);
   const entry: FetchDedupeEntry = {
     key: candidate.key,
+    startTime,
     promise,
     response: null,
   };
@@ -1012,7 +1028,7 @@ function dedupeFetch(
       // FinalizationRegistry cancels any still-unconsumed branch.
       const [responseForCaller, responseForFutureCaller] = cloneDedupeResponse(response);
       entry.response = responseForFutureCaller;
-      return responseForCaller;
+      return { response: responseForCaller, startTime };
     },
     (err) => {
       // Drop the failed entry so a later fetch to the same URL within this
@@ -1024,6 +1040,13 @@ function dedupeFetch(
       throw err;
     },
   );
+}
+
+function dedupeFetch(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+): Promise<Response> {
+  return dedupeFetchWithStart(input, init).then(({ response }) => response);
 }
 
 /**
@@ -1215,8 +1238,8 @@ function createPatchedFetch(): typeof globalThis.fetch {
       // However, if we have a stale entry, return it and trigger background refetch.
       if (cached?.value && cached.value.kind === "FETCH" && cached.cacheState === "stale") {
         if (shouldRefreshStaleFetchInForeground()) {
-          const refetchGuardSince = Date.now();
-          const freshResponse = await dedupeFetch(input, fetchInit);
+          const { response: freshResponse, startTime: refetchGuardSince } =
+            await dedupeFetchWithStart(input, fetchInit);
           await writeFetchCacheResponse(handler, cacheKey, freshResponse, tags, revalidateSeconds, {
             guardSince: refetchGuardSince,
             softTags,
@@ -1290,10 +1313,9 @@ function createPatchedFetch(): typeof globalThis.fetch {
     // fresh guard timestamp: an invalidation that happened earlier in this
     // render does not disqualify it, only one that completes while it is in
     // flight.
-    const missGuardSince = Date.now();
-    const response = await (mustBypassPendingRevalidation
-      ? originalFetch(input, fetchInit)
-      : dedupeFetch(input, fetchInit));
+    const { response, startTime: missGuardSince } = await (mustBypassPendingRevalidation
+      ? fetchWithStart(input, fetchInit)
+      : dedupeFetchWithStart(input, fetchInit));
 
     const cacheValue = await buildFetchCacheValue(response, tags, revalidateSeconds);
     if (cacheValue) {

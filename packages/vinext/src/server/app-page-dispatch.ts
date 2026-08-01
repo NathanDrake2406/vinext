@@ -4,6 +4,7 @@ import type { NavigationContext } from "vinext/shims/navigation";
 import type { ClassificationReason } from "../build/layout-classification-types.js";
 import {
   _consumeRequestScopedCacheLife,
+  _markIsrRenderStart,
   _peekRequestScopedCacheLife,
 } from "vinext/shims/cache-request-state";
 import type { CachedAppPageValue } from "vinext/shims/cache-handler";
@@ -578,6 +579,7 @@ async function runAppPageRevalidationContext<
     ensureFetchPatch();
     setRefreshStaleFetchesInForeground(process.env.VINEXT_PRERENDER === "1");
     setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], options.routeSegments));
+    _markIsrRenderStart();
     options.setNavigationContext({
       pathname: options.displayPathname ?? options.cleanPathname,
       searchParams: new URLSearchParams(),

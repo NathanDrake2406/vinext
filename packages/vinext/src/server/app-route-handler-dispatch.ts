@@ -7,7 +7,7 @@ import {
   setCurrentForceDynamicFetchDefault,
   type FetchCacheMode,
 } from "vinext/shims/fetch-cache";
-import { _drainPendingRevalidations } from "vinext/shims/cache-request-state";
+import { _drainPendingRevalidations, _markIsrRenderStart } from "vinext/shims/cache-request-state";
 import {
   consumeDynamicUsage,
   getActiveDraftModeState,
@@ -140,6 +140,7 @@ async function runInRouteHandlerRevalidationContext(
     setCurrentFetchSoftTags(
       buildRouteHandlerPageCacheTags(options.cleanPathname, [], options.routeSegments),
     );
+    _markIsrRenderStart();
     // The revalidation render runs in a fresh request context, so the fetch
     // defaults applied by `dispatchAppRouteHandler` must be re-applied here.
     setCurrentFetchCacheMode(options.fetchCacheMode);

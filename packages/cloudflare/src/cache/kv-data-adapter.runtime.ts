@@ -87,6 +87,8 @@ type KVCacheEntry = {
   value: SerializedIncrementalCacheValue | null;
   tags: string[];
   lastModified: number;
+  /** Producer start used only for invalidation ordering. */
+  invalidationGuardSince?: number;
   /** Absolute timestamp (ms) after which the entry is "stale" (but still served). */
   revalidateAt: number | null;
   /** Absolute timestamp (ms) after which the entry must block on fresh render. */
@@ -248,13 +250,14 @@ export class KVCacheHandler implements CacheHandler {
       }
     }
 
-    if (await this._hasRevalidatedTag(validUniqueTags(entry.tags), entry.lastModified)) {
+    const invalidationBaseline = entry.invalidationGuardSince ?? entry.lastModified;
+    if (await this._hasRevalidatedTag(validUniqueTags(entry.tags), invalidationBaseline)) {
       this._deleteInBackground(kvKey);
       return null;
     }
 
     const softTags = validUniqueTags(readStringArrayField(_ctx, "softTags"));
-    if (await this._hasRevalidatedTag(softTags, entry.lastModified)) {
+    if (await this._hasRevalidatedTag(softTags, invalidationBaseline)) {
       return null;
     }
 
@@ -297,6 +300,10 @@ export class KVCacheHandler implements CacheHandler {
 
     const now = Date.now();
     const uncachedTags: string[] = [];
+    const uncachedTagSnapshots = new Map<
+      string,
+      { timestamp: number; fetchedAt: number } | undefined
+    >();
 
     // First pass: check local cache for each tag.
     // Delete expired entries to prevent unbounded Map growth in long-lived isolates.
@@ -311,6 +318,7 @@ export class KVCacheHandler implements CacheHandler {
         // Expired or absent — evict stale entry and re-fetch from KV
         if (cached) this._tagCache.delete(tag);
         uncachedTags.push(tag);
+        uncachedTagSnapshots.set(tag, this._tagCache.get(tag));
       }
     }
 
@@ -325,7 +333,10 @@ export class KVCacheHandler implements CacheHandler {
       for (let i = 0; i < uncachedTags.length; i++) {
         const tagTime = tagResults[i];
         const tagTimestamp = tagTime ? Number(tagTime) : 0;
-        this._tagCache.set(uncachedTags[i], { timestamp: tagTimestamp, fetchedAt: now });
+        const current = this._tagCache.get(uncachedTags[i]);
+        if (current === uncachedTagSnapshots.get(uncachedTags[i])) {
+          this._tagCache.set(uncachedTags[i], { timestamp: tagTimestamp, fetchedAt: now });
+        }
       }
 
       for (const tag of uncachedTags) {
@@ -395,7 +406,8 @@ export class KVCacheHandler implements CacheHandler {
     const entry: KVCacheEntry = {
       value: serializable,
       tags,
-      lastModified: guardSince ?? now,
+      lastModified: now,
+      invalidationGuardSince: guardSince,
       revalidateAt,
       expireAt,
       cacheControl,
@@ -428,9 +440,10 @@ export class KVCacheHandler implements CacheHandler {
     // entry's tags (context tags plus guard-only soft tags) is newer than the
     // producer's start. Markers are read fresh from KV, bypassing the local
     // `_tagCache`, so invalidations that landed in another isolate are seen.
-    // Guarded entries retain the producer's start in `lastModified`, so the
-    // normal read-time marker check also rejects invalidations racing this
-    // optimisation and the subsequent put. KV has no compare-and-set, so the
+    // Guarded entries retain the producer's start separately from commit-time
+    // `lastModified`, so normal read-time marker checks reject invalidations
+    // racing this optimisation and the subsequent put without making a slow
+    // producer immediately stale by age. KV has no compare-and-set, so the
     // pre-write check must not be the correctness mechanism.
     if (guardSince !== undefined) {
       const softTags = validUniqueTags(readStringArrayField(ctx, "softTags"));
@@ -482,17 +495,24 @@ export class KVCacheHandler implements CacheHandler {
   }
 
   /**
-   * Newest invalidation marker timestamp for any of `tags`, from the local
-   * tag cache. Used only for producer-join decisions (see
-   * `isProducerStaleSince` in cache-handler.ts); the write-side
-   * `_guardRefusesWrite` stays the correctness gate, so cached values that
-   * lag cross-isolate invalidations are acceptable here.
+   * Newest invalidation marker timestamp for any of `tags`. Producer joins
+   * must observe shared KV rather than the isolate-local marker cache: joining
+   * a pre-invalidation producer can strand synchronous on-demand callers even
+   * though the write-side guard correctly refuses that producer's late write.
    */
   async getInvalidationVersion(tags: readonly string[]): Promise<number> {
+    const validTags = validUniqueTags([...tags]);
+    const markers = await Promise.all(validTags.map((tag) => this.kv.get(this._tagKey(tag))));
     let version = 0;
-    for (const tag of tags) {
-      const cached = this._tagCache.get(tag);
-      if (cached !== undefined && cached.timestamp > version) version = cached.timestamp;
+    for (let i = 0; i < validTags.length; i++) {
+      const marker = markers[i];
+      const timestamp = marker === null ? 0 : Number(marker);
+      if (Number.isNaN(timestamp)) return Number.POSITIVE_INFINITY;
+      const current = this._tagCache.get(validTags[i]);
+      if (Number.isNaN(current?.timestamp)) {
+        return Number.POSITIVE_INFINITY;
+      }
+      version = Math.max(version, timestamp, current?.timestamp ?? 0);
     }
     return version;
   }
@@ -613,6 +633,9 @@ function validateCacheEntry(raw: unknown): KVCacheEntry | null {
 
   // Required fields
   if (typeof obj.lastModified !== "number") return null;
+  if (obj.invalidationGuardSince !== undefined && typeof obj.invalidationGuardSince !== "number") {
+    return null;
+  }
   if (!Array.isArray(obj.tags)) return null;
   if (obj.revalidateAt !== null && typeof obj.revalidateAt !== "number") return null;
   if (obj.expireAt !== undefined && obj.expireAt !== null && typeof obj.expireAt !== "number") {

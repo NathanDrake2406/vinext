@@ -98,7 +98,7 @@ export type CacheHandlerContext = {
  */
 export type CacheWriteContext = CacheHandlerContext & {
   fetchCache?: boolean;
-  /** Producer start timestamp; guarded entries must retain it as lastModified. */
+  /** Producer start timestamp used to fence writes against later invalidations. */
   guardSince?: number;
   revalidate?: number | false;
   expire?: number;
@@ -113,12 +113,14 @@ export type CacheHandler = {
   resetRequestCache?(): void;
   /**
    * Max invalidation marker timestamp across the given (encoded) tags, or 0
-   * when none. Handlers may serve this from their local marker cache; it is
-   * only used by producer-join decisions (dedup hygiene), never by the write
-   * guard, which reads fresh markers at commit time.
+   * when none. Shared backends should read a shared marker here because this
+   * method decides whether post-invalidation callers may join older work.
    */
   getInvalidationVersion(tags: readonly string[]): Promise<number>;
 };
+
+export type CompatibleCacheHandler = Omit<CacheHandler, "getInvalidationVersion"> &
+  Partial<Pick<CacheHandler, "getInvalidationVersion">>;
 
 export class NoOpCacheHandler implements CacheHandler {
   async get(_key: string, _ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null> {
@@ -142,6 +144,7 @@ type MemoryEntry = {
   value: IncrementalCacheValue | null;
   tags: string[];
   lastModified: number;
+  invalidationGuardSince?: number;
   revalidateAt: number | null;
   expireAt: number | null;
   cacheControl?: CacheControlMetadata;
@@ -263,7 +266,7 @@ export class MemoryCacheHandler implements CacheHandler {
 
     for (const tag of entry.tags) {
       const revalidatedAt = this.tagRevalidatedAt.get(tag);
-      if (revalidatedAt && revalidatedAt >= entry.lastModified) {
+      if (revalidatedAt && revalidatedAt >= (entry.invalidationGuardSince ?? entry.lastModified)) {
         this.deleteEntry(key);
         return null;
       }
@@ -271,7 +274,7 @@ export class MemoryCacheHandler implements CacheHandler {
 
     for (const tag of readStringArrayField(ctx, "softTags")) {
       const revalidatedAt = this.tagRevalidatedAt.get(tag);
-      if (revalidatedAt && revalidatedAt >= entry.lastModified) {
+      if (revalidatedAt && revalidatedAt >= (entry.invalidationGuardSince ?? entry.lastModified)) {
         return null;
       }
     }
@@ -369,7 +372,8 @@ export class MemoryCacheHandler implements CacheHandler {
     const entry = {
       value: data,
       tags,
-      lastModified: guardSince ?? now,
+      lastModified: now,
+      invalidationGuardSince: guardSince,
       revalidateAt,
       expireAt,
       cacheControl,
@@ -414,6 +418,94 @@ export class MemoryCacheHandler implements CacheHandler {
 const HANDLER_KEY = Symbol.for("vinext.cacheHandler");
 const globalHandlers = globalThis as unknown as Record<PropertyKey, CacheHandler>;
 
+/**
+ * Preserve the previously supported Next.js CacheHandler shape while adding
+ * same-process invalidation fencing for adapters that predate
+ * `getInvalidationVersion`. New handlers should implement the method so they
+ * can source versions from shared storage when their backend supports it.
+ */
+class LegacyFencedCacheHandler implements CacheHandler {
+  private readonly tagInvalidations = new Map<string, { version: number; token: symbol }>();
+
+  constructor(private readonly delegate: CompatibleCacheHandler) {}
+
+  get(key: string, ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null> {
+    return this.delegate.get(key, ctx);
+  }
+
+  async set(
+    key: string,
+    data: IncrementalCacheValue | null,
+    ctx?: CacheWriteContext,
+  ): Promise<void> {
+    const guardSince = readPositiveNumberField(ctx, "guardSince");
+    const guardedTags = new Set<string>();
+    if (guardSince !== undefined) {
+      for (const tag of readStringArrayField(ctx, "tags")) guardedTags.add(tag);
+      for (const tag of readStringArrayField(ctx, "softTags")) guardedTags.add(tag);
+      if (data && "tags" in data && Array.isArray(data.tags)) {
+        for (const tag of data.tags) guardedTags.add(tag);
+      }
+      for (const tag of guardedTags) {
+        const invalidation = this.tagInvalidations.get(tag);
+        if (invalidation !== undefined && invalidation.version >= guardSince) return;
+      }
+    }
+    await this.delegate.set(key, data, ctx);
+
+    // A legacy delegate may yield between accepting the write and committing
+    // it. If an invalidation completed in that window, repeat it after the
+    // write so the late entry cannot restore stale data.
+    if (guardSince !== undefined) {
+      const invalidatedDuringWrite = [...guardedTags].filter((tag) => {
+        const invalidation = this.tagInvalidations.get(tag);
+        return invalidation !== undefined && invalidation.version >= guardSince;
+      });
+      if (invalidatedDuringWrite.length > 0) {
+        await this.delegate.revalidateTag(invalidatedDuringWrite);
+      }
+    }
+  }
+
+  async revalidateTag(tags: string | string[], durations?: { expire?: number }): Promise<void> {
+    const tagList = Array.isArray(tags) ? tags : [tags];
+    const startedAt = Date.now();
+    const token = Symbol();
+    const previousInvalidations = new Map<string, { version: number; token: symbol } | undefined>();
+    for (const tag of tagList) {
+      previousInvalidations.set(tag, this.tagInvalidations.get(tag));
+      this.tagInvalidations.set(tag, { version: startedAt, token });
+    }
+
+    try {
+      await this.delegate.revalidateTag(tags, durations);
+    } catch (error) {
+      for (const [tag, previousInvalidation] of previousInvalidations) {
+        // Do not roll back a newer invalidation that completed concurrently.
+        if (this.tagInvalidations.get(tag)?.token !== token) continue;
+        if (previousInvalidation === undefined) this.tagInvalidations.delete(tag);
+        else this.tagInvalidations.set(tag, previousInvalidation);
+      }
+      throw error;
+    }
+  }
+
+  resetRequestCache(): void {
+    this.delegate.resetRequestCache?.();
+  }
+
+  async getInvalidationVersion(tags: readonly string[]): Promise<number> {
+    let version = 0;
+    for (const tag of tags) {
+      const invalidation = this.tagInvalidations.get(tag);
+      if (invalidation !== undefined && invalidation.version > version) {
+        version = invalidation.version;
+      }
+    }
+    return version;
+  }
+}
+
 function getActiveHandler(): CacheHandler {
   return globalHandlers[HANDLER_KEY] ?? (globalHandlers[HANDLER_KEY] = new MemoryCacheHandler());
 }
@@ -424,20 +516,21 @@ export function configureMemoryCacheHandler(options?: MemoryCacheHandlerOptions)
   globalHandlers[HANDLER_KEY] = new MemoryCacheHandler(options);
 }
 
-export function setDataCacheHandler(handler: CacheHandler): void {
-  if (typeof handler.getInvalidationVersion !== "function") {
-    throw new TypeError(
-      "[vinext] CacheHandler must implement getInvalidationVersion() to support cache invalidation fencing",
-    );
-  }
-  globalHandlers[HANDLER_KEY] = handler;
+function hasInvalidationVersion(handler: CompatibleCacheHandler): handler is CacheHandler {
+  return typeof handler.getInvalidationVersion === "function";
+}
+
+export function setDataCacheHandler(handler: CompatibleCacheHandler): void {
+  globalHandlers[HANDLER_KEY] = hasInvalidationVersion(handler)
+    ? handler
+    : new LegacyFencedCacheHandler(handler);
 }
 
 export function getDataCacheHandler(): CacheHandler {
   return getActiveHandler();
 }
 
-export function setCacheHandler(handler: CacheHandler): void {
+export function setCacheHandler(handler: CompatibleCacheHandler): void {
   setDataCacheHandler(handler);
 }
 

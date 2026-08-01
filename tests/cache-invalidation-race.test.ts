@@ -105,21 +105,100 @@ describe("cache invalidation race guards", () => {
     cleanup = withFetchCache();
   });
 
-  it("rejects cache handlers without invalidation-version support", () => {
+  it("wraps legacy cache handlers with same-process invalidation fencing", async () => {
+    const set = vi.fn(async () => {});
     const unsupported = {
       async get() {
         return null;
       },
-      async set() {},
+      set,
       async revalidateTag() {},
-    } as unknown as Parameters<typeof setCacheHandler>[0];
+    } satisfies Parameters<typeof setCacheHandler>[0];
 
-    expect(() => setCacheHandler(unsupported)).toThrow(
-      "CacheHandler must implement getInvalidationVersion()",
+    setCacheHandler(unsupported);
+    const guardSince = Date.now();
+    await getCacheHandler().revalidateTag("posts");
+    await getCacheHandler().set(
+      "legacy-guarded-entry",
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: "stale", url: "https://api.example.com/posts" },
+        tags: ["posts"],
+        revalidate: 60,
+      },
+      { tags: ["posts"], guardSince },
     );
+
+    expect(set).not.toHaveBeenCalled();
   });
 
-  it("stamps guarded memory entries with the producer start", async () => {
+  it("re-invalidates a legacy handler when its write commits after invalidation", async () => {
+    let markSetStarted!: () => void;
+    const setStarted = new Promise<void>((resolve) => (markSetStarted = resolve));
+    let releaseSet!: () => void;
+    const setGate = new Promise<void>((resolve) => (releaseSet = resolve));
+    const revalidateTag = vi.fn(async () => {});
+    setCacheHandler({
+      async get() {
+        return null;
+      },
+      async set() {
+        markSetStarted();
+        await setGate;
+      },
+      revalidateTag,
+    });
+    const guardSince = Date.now();
+
+    const write = getCacheHandler().set(
+      "legacy-late-entry",
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: "stale", url: "https://api.example.com/posts" },
+        tags: ["posts"],
+        revalidate: 60,
+      },
+      { tags: ["posts"], guardSince },
+    );
+    await setStarted;
+    await getCacheHandler().revalidateTag("posts");
+    releaseSet();
+    await write;
+
+    expect(revalidateTag).toHaveBeenNthCalledWith(1, "posts", undefined);
+    expect(revalidateTag).toHaveBeenNthCalledWith(2, ["posts"]);
+  });
+
+  it("rolls back a legacy fallback marker when backend invalidation fails", async () => {
+    const set = vi.fn(async () => {});
+    const invalidationError = new Error("invalidation failed");
+    setCacheHandler({
+      async get() {
+        return null;
+      },
+      set,
+      async revalidateTag() {
+        throw invalidationError;
+      },
+    });
+    const guardSince = Date.now();
+
+    await expect(getCacheHandler().revalidateTag("posts")).rejects.toBe(invalidationError);
+    await getCacheHandler().set(
+      "legacy-after-failed-invalidation",
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: "fresh", url: "https://api.example.com/posts" },
+        tags: ["posts"],
+        revalidate: 60,
+      },
+      { tags: ["posts"], guardSince },
+    );
+
+    expect(set).toHaveBeenCalledOnce();
+  });
+
+  it("keeps memory entry age at commit time while retaining the producer guard", async () => {
     const guardSince = Date.now() - 1_000;
     await getCacheHandler().set(
       "guarded-memory-entry",
@@ -133,8 +212,11 @@ describe("cache invalidation race guards", () => {
     );
 
     await expect(getCacheHandler().get("guarded-memory-entry")).resolves.toMatchObject({
-      lastModified: guardSince,
+      lastModified: expect.any(Number),
     });
+    expect((await getCacheHandler().get("guarded-memory-entry"))!.lastModified).toBeGreaterThan(
+      guardSince,
+    );
   });
 
   afterEach(() => {
@@ -201,6 +283,27 @@ describe("cache invalidation race guards", () => {
       next: { revalidate: 3600 },
     });
     expect((await res2.json()).count).toBe(1);
+  });
+
+  it("uses the original producer start when a cacheable fetch joins request memoization", async () => {
+    let resolveFetch!: (response: Response) => void;
+    fetchMock.mockImplementation(
+      () => new Promise<Response>((resolve) => (resolveFetch = resolve)),
+    );
+
+    const originalProducer = fetch("https://api.example.com/race-deduped");
+    await waitUntil(() => fetchMock.mock.calls.length === 1);
+
+    await Promise.resolve(revalidateTag("posts"));
+    const cacheableJoin = fetch("https://api.example.com/race-deduped", {
+      next: { tags: ["posts"] },
+    });
+
+    resolveFetch(new Response("fresh response"));
+    await Promise.all([originalProducer, cacheableJoin]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(memoryStoreSize()).toBe(0);
   });
 
   it("suppresses on overlapping invalidations but allows disjoint ones", async () => {
@@ -537,8 +640,6 @@ describe("cache invalidation race guards", () => {
   });
 
   it("replaces a pre-invalidation on-demand regeneration from a post-invalidation call", async () => {
-    setCurrentFetchSoftTags(["race-page"]);
-
     let renderCount = 0;
     let releaseRender1!: () => void;
     const gate1 = new Promise<void>((resolve) => (releaseRender1 = resolve));
@@ -548,21 +649,57 @@ describe("cache invalidation race guards", () => {
       return id;
     };
 
-    const first = coalesceOnDemandRevalidation("race-ondemand", renderFn);
+    const first = coalesceOnDemandRevalidation("race-ondemand", renderFn, ["race-page"]);
     await waitUntil(() => renderCount === 1);
 
     // Same-side call joins: it resolves with the in-flight render's result.
-    const joined = coalesceOnDemandRevalidation("race-ondemand", renderFn);
+    const joined = coalesceOnDemandRevalidation("race-ondemand", renderFn, ["race-page"]);
 
     // A post-invalidation call must get fresh work, not the stale join.
     await Promise.resolve(revalidateTag("race-page"));
-    const second = coalesceOnDemandRevalidation("race-ondemand", renderFn);
+    const second = coalesceOnDemandRevalidation("race-ondemand", renderFn, ["race-page"]);
     await waitUntil(() => renderCount === 2);
 
     releaseRender1();
     expect(await first).toBe(1);
     expect(await joined).toBe(1);
     expect(await second).toBe(2);
+  });
+
+  it("replaces a background regeneration when version lookup fails", async () => {
+    const previousHandler = getCacheHandler();
+    const lookupError = new Error("version lookup failed");
+    setCacheHandler({
+      get: previousHandler.get.bind(previousHandler),
+      set: previousHandler.set.bind(previousHandler),
+      revalidateTag: previousHandler.revalidateTag.bind(previousHandler),
+      async getInvalidationVersion() {
+        throw lookupError;
+      },
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    setCurrentFetchSoftTags(["race-page"]);
+
+    let renderCount = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const renderFn = async () => {
+      renderCount++;
+      await gate;
+    };
+
+    triggerBackgroundRegeneration("race-version-error", renderFn);
+    await waitUntil(() => renderCount === 1);
+    triggerBackgroundRegeneration("race-version-error", renderFn);
+    await waitUntil(() => renderCount === 2);
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("replacing the in-flight producer"),
+      lookupError,
+    );
+    consoleError.mockRestore();
   });
 
   // ── Cross-isolate KV writes ─────────────────────────────────────────
@@ -613,6 +750,89 @@ describe("cache invalidation race guards", () => {
     expect(entry?.value?.kind).toBe("FETCH");
   });
 
+  it("reads shared KV invalidation markers before joining producers", async () => {
+    const store = new Map<string, string>();
+    const kv = createSharedMockKV(store);
+    const handlerA = new KVCacheHandler(kv as never, { appPrefix: "race" });
+    const handlerB = new KVCacheHandler(kv as never, { appPrefix: "race" });
+
+    await expect(handlerB.getInvalidationVersion(["posts"])).resolves.toBe(0);
+    await handlerA.revalidateTag("posts");
+    await expect(handlerB.getInvalidationVersion(["posts"])).resolves.toBeGreaterThan(0);
+  });
+
+  it("preserves a same-isolate invalidation that lands during a KV marker read", async () => {
+    const store = new Map<string, string>();
+    store.set(
+      "cache:race-read",
+      JSON.stringify({
+        value: {
+          kind: "FETCH",
+          data: { headers: {}, body: "stale", url: "https://api.example.com/posts" },
+          tags: ["posts"],
+          revalidate: 60,
+        },
+        tags: ["posts"],
+        lastModified: Date.now() - 1_000,
+        revalidateAt: null,
+      }),
+    );
+    const baseKv = createSharedMockKV(store);
+    let markMarkerRead!: () => void;
+    const markerRead = new Promise<void>((resolve) => (markMarkerRead = resolve));
+    let releaseMarkerRead!: () => void;
+    const markerReadGate = new Promise<void>((resolve) => (releaseMarkerRead = resolve));
+    const kv = {
+      ...baseKv,
+      async get(key: string) {
+        const value = await baseKv.get(key);
+        if (key === "__tag:posts") {
+          markMarkerRead();
+          await markerReadGate;
+        }
+        return value;
+      },
+    };
+    const handler = new KVCacheHandler(kv as never);
+
+    const read = handler.get("race-read");
+    await markerRead;
+    await handler.revalidateTag("posts");
+    releaseMarkerRead();
+
+    await expect(read).resolves.toBeNull();
+  });
+
+  it("ages guarded KV entries from commit time rather than producer start", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new Map<string, string>();
+      const handler = new KVCacheHandler(createSharedMockKV(store) as never);
+      vi.setSystemTime(1_000);
+      const guardSince = Date.now();
+
+      // Simulate a producer whose one-second revalidation window elapsed while
+      // the upstream response was still being produced.
+      vi.setSystemTime(3_000);
+      await handler.set(
+        "slow-fetch",
+        {
+          kind: "FETCH",
+          data: { headers: {}, body: "fresh", url: "https://api.example.com/slow" },
+          tags: ["posts"],
+          revalidate: 1,
+        },
+        { tags: ["posts"], guardSince, revalidate: 1 },
+      );
+
+      const entry = await handler.get("slow-fetch", { revalidate: 1 });
+      expect(entry?.cacheState).toBeUndefined();
+      expect(entry?.lastModified).toBe(3_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects a late KV put at read time when invalidation races the marker check", async () => {
     const store = new Map<string, string>();
     const baseKv = createSharedMockKV(store);
@@ -657,7 +877,8 @@ describe("cache invalidation race guards", () => {
     await write;
 
     const stored = JSON.parse(store.get("cache:race-check-to-put")!);
-    expect(stored.lastModified).toBe(guardSince);
+    expect(stored.lastModified).toBeGreaterThan(guardSince);
+    expect(stored.invalidationGuardSince).toBe(guardSince);
 
     // A fresh handler must reject the late entry through ordinary read-time
     // validation against the persisted invalidation marker.

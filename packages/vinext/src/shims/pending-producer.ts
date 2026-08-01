@@ -22,7 +22,21 @@ export async function getJoinableProducer<T>(
   while (true) {
     const producer = pending.get(key);
     if (producer === undefined) return undefined;
-    if (!(await isProducerStaleSince(producer.startTime, producer.tags))) return producer;
+    try {
+      if (!(await isProducerStaleSince(producer.startTime, producer.tags))) return producer;
+    } catch (error) {
+      // A failed version lookup cannot prove that the existing producer is
+      // safe to join. Remove only the producer we inspected so the caller can
+      // start replacement work, while a concurrent replacement remains owned
+      // by its creator.
+      console.error(
+        `[vinext] cache invalidation version lookup failed for ${key}; replacing the in-flight producer:`,
+        error,
+      );
+      if (pending.get(key) !== producer) continue;
+      pending.delete(key);
+      return undefined;
+    }
     if (pending.get(key) !== producer) continue;
     pending.delete(key);
   }

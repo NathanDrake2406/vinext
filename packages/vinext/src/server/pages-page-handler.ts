@@ -553,7 +553,9 @@ export function createPagesPageHandler(
       isStaticPropsRoute &&
       isOnDemandRevalidateRequest(request.headers.get(PRERENDER_REVALIDATE_HEADER));
     if (shouldCoalesceOnDemand) {
-      const cacheKey = pageIsrCacheKey("pages", routeUrl.split("?")[0]);
+      const cachePathname = routeUrl.split("?")[0];
+      const cacheKey = pageIsrCacheKey("pages", cachePathname);
+      const tagStem = cachePathname.endsWith("/") ? cachePathname.slice(0, -1) : cachePathname;
       const snapshot = await coalesceOnDemandRevalidation(cacheKey, async () => {
         const response = await renderPage(request, url, manifest, middlewareHeaders, {
           ...options,
@@ -568,7 +570,7 @@ export function createPagesPageHandler(
           status: response.status,
           statusText: response.statusText,
         };
-      });
+      }, [encodeCacheTag(`_N_T_${tagStem || "/"}`)]);
       return new Response(snapshot.body?.slice() ?? null, {
         headers: snapshot.headers,
         status: snapshot.status,
