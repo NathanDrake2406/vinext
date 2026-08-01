@@ -22,7 +22,7 @@
 import { getDataCacheHandler, type CachedFetchValue, type CacheHandler } from "./cache-handler.js";
 import { encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
-import { markDynamicUsage } from "./headers.js";
+import { isDraftModeEnabled, markDynamicUsage } from "./headers.js";
 import { _hasPendingRevalidatedTag, _setRequestScopedCacheLife } from "./cache-request-state.js";
 import { getRequestExecutionContext } from "./request-context.js";
 import {
@@ -1026,6 +1026,12 @@ function createPatchedFetch(): typeof globalThis.fetch {
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> {
+    // Draft renders are not static generations. Bypass both shared fetch-cache
+    // reads and writes, matching Next.js's `workStore.isDraftMode` guard.
+    if (isDraftModeEnabled()) {
+      return originalFetch(input, init);
+    }
+
     const nextOpts = (init as ExtendedRequestInit | undefined)?.next as
       | NextFetchOptions
       | undefined;

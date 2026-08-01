@@ -56,7 +56,8 @@ const {
 } = await import("../packages/vinext/src/shims/fetch-cache.js");
 const { getCacheHandler, revalidatePath, revalidateTag, MemoryCacheHandler, setCacheHandler } =
   await import("../packages/vinext/src/shims/cache.js");
-const { consumeDynamicUsage } = await import("../packages/vinext/src/shims/headers.js");
+const { consumeDynamicUsage, setHeadersContext } =
+  await import("../packages/vinext/src/shims/headers.js");
 const { runWithExecutionContext } = await import("../packages/vinext/src/shims/request-context.js");
 const { createRequestContext, runWithRequestContext } =
   await import("../packages/vinext/src/shims/unified-request-context.js");
@@ -105,6 +106,38 @@ describe("fetch cache shim", () => {
     const data2 = await res2.json();
     expect(data2.count).toBe(1); // Same count = cached
     expect(fetchMock).toHaveBeenCalledTimes(1); // Only one real fetch
+  });
+
+  it("bypasses the shared fetch cache in draft mode", async () => {
+    const url = "https://api.example.com/draft-mode";
+    const fetchOptions = { next: { revalidate: 3600 } };
+    const enterRequest = (draftModeEnabled: boolean) => {
+      setHeadersContext({
+        headers: new Headers(),
+        cookies: new Map(),
+        draftModeEnabled,
+      });
+    };
+
+    try {
+      // Seed the shared entry with published content.
+      enterRequest(false);
+      const published = await fetch(url, fetchOptions);
+      expect((await published.json()).count).toBe(1);
+
+      // Draft mode must bypass both the shared read and the shared write.
+      enterRequest(true);
+      const draft = await fetch(url, fetchOptions);
+      expect((await draft.json()).count).toBe(2);
+
+      // The draft response must not replace the published shared entry.
+      enterRequest(false);
+      const cachedPublished = await fetch(url, fetchOptions);
+      expect((await cachedPublished.json()).count).toBe(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      setHeadersContext(null);
+    }
   });
 
   it("cache: 'force-cache' caches indefinitely", async () => {
