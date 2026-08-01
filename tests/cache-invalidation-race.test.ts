@@ -1029,6 +1029,61 @@ describe("cache invalidation race guards", () => {
     await expect(handlerB.getInvalidationVersion(["posts"])).resolves.toBeGreaterThan(0);
   });
 
+  it("fails closed when a durable pending marker is newer than the list snapshot", async () => {
+    const store = new Map<string, string>();
+    const kv = createSharedMockKV(store);
+    const handler = new KVCacheHandler(kv as never);
+
+    await handler.revalidateTag("posts");
+    const operationPrefix = [...store.keys()].find((key) => key.startsWith("__tag-op:"));
+    expect(operationPrefix).toBeDefined();
+    const unseenOperation = `${operationPrefix}:newer`;
+    store.set("__tag:posts", `vinext:pending:${unseenOperation}`);
+
+    await expect(handler.getInvalidationVersion(["posts"])).resolves.toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("recovers a partially published invalidation without leaving a pending record", async () => {
+    const store = new Map<string, string>();
+    const baseKv = createSharedMockKV(store);
+    let failDurablePendingPut = true;
+    const kv = {
+      ...baseKv,
+      async put(key: string, value: string) {
+        if (failDurablePendingPut && key === "__tag:posts" && value.startsWith("vinext:pending:")) {
+          failDurablePendingPut = false;
+          throw new Error("transient KV failure");
+        }
+        await baseKv.put(key, value);
+      },
+    };
+    const handler = new KVCacheHandler(kv as never);
+
+    await expect(handler.revalidateTag("posts")).rejects.toThrow("transient KV failure");
+    await expect(handler.getInvalidationVersion(["posts"])).resolves.toBeGreaterThan(0);
+    expect([...store.values()].some((value) => value.startsWith("vinext:pending:"))).toBe(false);
+  });
+
+  it("does not rewrite an already settled durable marker on every lookup", async () => {
+    const store = new Map<string, string>();
+    const baseKv = createSharedMockKV(store);
+    let putCount = 0;
+    const kv = {
+      ...baseKv,
+      async put(key: string, value: string) {
+        putCount++;
+        await baseKv.put(key, value);
+      },
+    };
+    const handler = new KVCacheHandler(kv as never);
+
+    await handler.revalidateTag("posts");
+    const settledWrites = putCount;
+    await handler.getInvalidationVersion(["posts"]);
+    await handler.getInvalidationVersion(["posts"]);
+    expect(putCount).toBe(settledWrites);
+  });
+
   it("fences a producer that starts while a KV invalidation marker is being written", async () => {
     const store = new Map<string, string>();
     const baseKv = createSharedMockKV(store);
@@ -1076,7 +1131,7 @@ describe("cache invalidation race guards", () => {
     await expect(producer.get("started-during-invalidation")).resolves.toBeNull();
   });
 
-  it("serializes KV marker publication on one handler", async () => {
+  it("serializes overlapping KV markers without blocking disjoint tags", async () => {
     const store = new Map<string, string>();
     const baseKv = createSharedMockKV(store);
     let markFirstPutStarted!: () => void;
@@ -1104,12 +1159,15 @@ describe("cache invalidation race guards", () => {
     const first = handler.revalidateTag("posts");
     await firstPutStarted;
     const second = handler.revalidateTag("comments");
-    await Promise.resolve();
-    expect(putCount).toBe(2);
+    await waitUntil(() => putCount >= 3);
+    expect(putCount).toBeGreaterThanOrEqual(3);
 
     releaseFirstPut();
     await Promise.all([first, second]);
-    expect(putCount).toBe(10);
+    // Each operation now needs only a pending operation/tag pair, a completed
+    // operation record, and one durable marker repair. Disjoint tags may have
+    // published while the first operation's initial write was blocked.
+    expect(putCount).toBe(8);
     await expect(handler.getInvalidationVersion(["posts", "comments"])).resolves.toBeGreaterThan(0);
     expect([...store.keys()].filter((key) => key.startsWith("__tag-op:"))).toHaveLength(2);
   });
@@ -1174,7 +1232,7 @@ describe("cache invalidation race guards", () => {
       async put(key: string, value: string) {
         if (key === "__tag:posts" && Number.isFinite(Number(value))) {
           olderFiniteMarkerPuts++;
-          if (olderFiniteMarkerPuts === 2) {
+          if (olderFiniteMarkerPuts === 1) {
             markOlderFinalPutStarted();
             await olderFinalPutGate;
           }
