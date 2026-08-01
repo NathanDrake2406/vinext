@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test";
 import { KVCacheHandler } from "../packages/cloudflare/src/cache/kv-data-adapter.runtime.js";
+import type { CacheHandler } from "../packages/vinext/src/shims/cache-handler.js";
 
 let requestCount = 0;
 const defaultFetchMockImplementation = async (input: string | URL | Request) => {
@@ -113,7 +114,7 @@ describe("cache invalidation race guards", () => {
       },
       set,
       async revalidateTag() {},
-    } satisfies Parameters<typeof setCacheHandler>[0];
+    } satisfies CacheHandler;
 
     setCacheHandler(unsupported);
     const guardSince = Date.now();
@@ -196,6 +197,39 @@ describe("cache invalidation race guards", () => {
     );
 
     expect(set).toHaveBeenCalledOnce();
+  });
+
+  it("bounds legacy invalidation markers without admitting older producers", async () => {
+    const set = vi.fn(async () => {});
+    setCacheHandler({
+      async get() {
+        return null;
+      },
+      set,
+      async revalidateTag() {},
+    });
+    const handler = getCacheHandler();
+    const guardSince = Date.now();
+    const tags = Array.from({ length: 10_001 }, (_, index) => `legacy-tag-${index}`);
+
+    await handler.revalidateTag(tags);
+
+    const fallbackState = handler as unknown as {
+      tagInvalidations: Map<string, unknown>;
+    };
+    expect(fallbackState.tagInvalidations.size).toBeLessThanOrEqual(10_000);
+
+    await handler.set(
+      "legacy-evicted-marker",
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: "stale", url: "https://api.example.com/legacy" },
+        tags: [tags[0]],
+        revalidate: 60,
+      },
+      { tags: [tags[0]], guardSince },
+    );
+    expect(set).not.toHaveBeenCalled();
   });
 
   it("keeps memory entry age at commit time while retaining the producer guard", async () => {
@@ -759,6 +793,90 @@ describe("cache invalidation race guards", () => {
     await expect(handlerB.getInvalidationVersion(["posts"])).resolves.toBe(0);
     await handlerA.revalidateTag("posts");
     await expect(handlerB.getInvalidationVersion(["posts"])).resolves.toBeGreaterThan(0);
+  });
+
+  it("fences a producer that starts while a KV invalidation marker is being written", async () => {
+    const store = new Map<string, string>();
+    const baseKv = createSharedMockKV(store);
+    let markInvalidationPutStarted!: () => void;
+    const invalidationPutStarted = new Promise<void>((resolve) => {
+      markInvalidationPutStarted = resolve;
+    });
+    let releaseInvalidationPut!: () => void;
+    const invalidationPutGate = new Promise<void>((resolve) => {
+      releaseInvalidationPut = resolve;
+    });
+    let firstMarkerPut = true;
+    const kv = {
+      ...baseKv,
+      async put(key: string, value: string) {
+        if (key === "__tag:posts" && firstMarkerPut) {
+          firstMarkerPut = false;
+          markInvalidationPutStarted();
+          await invalidationPutGate;
+        }
+        await baseKv.put(key, value);
+      },
+    };
+    const invalidator = new KVCacheHandler(kv as never);
+    const producer = new KVCacheHandler(kv as never);
+
+    const invalidation = invalidator.revalidateTag("posts");
+    await invalidationPutStarted;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const guardSince = Date.now();
+
+    await producer.set(
+      "started-during-invalidation",
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: "stale", url: "https://api.example.com/posts" },
+        tags: ["posts"],
+        revalidate: 60,
+      },
+      { tags: ["posts"], guardSince },
+    );
+
+    releaseInvalidationPut();
+    await invalidation;
+    await expect(producer.get("started-during-invalidation")).resolves.toBeNull();
+  });
+
+  it("serializes KV marker publication on one handler", async () => {
+    const store = new Map<string, string>();
+    const baseKv = createSharedMockKV(store);
+    let markFirstPutStarted!: () => void;
+    const firstPutStarted = new Promise<void>((resolve) => {
+      markFirstPutStarted = resolve;
+    });
+    let releaseFirstPut!: () => void;
+    const firstPutGate = new Promise<void>((resolve) => {
+      releaseFirstPut = resolve;
+    });
+    let putCount = 0;
+    const kv = {
+      ...baseKv,
+      async put(key: string, value: string) {
+        putCount++;
+        if (putCount === 1) {
+          markFirstPutStarted();
+          await firstPutGate;
+        }
+        await baseKv.put(key, value);
+      },
+    };
+    const handler = new KVCacheHandler(kv as never);
+
+    const first = handler.revalidateTag("posts");
+    await firstPutStarted;
+    const second = handler.revalidateTag("comments");
+    await Promise.resolve();
+    expect(putCount).toBe(1);
+
+    releaseFirstPut();
+    await Promise.all([first, second]);
+    expect(putCount).toBe(4);
+    await expect(handler.getInvalidationVersion(["posts", "comments"])).resolves.toBeGreaterThan(0);
   });
 
   it("preserves a same-isolate invalidation that lands during a KV marker read", async () => {

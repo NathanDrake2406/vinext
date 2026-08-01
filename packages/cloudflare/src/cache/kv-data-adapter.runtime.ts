@@ -42,6 +42,7 @@ export { ENTRY_PREFIX } from "./kv-key.js";
 
 /** Default KV namespace binding name read from the Worker `env`. */
 const DEFAULT_BINDING = "VINEXT_KV_CACHE";
+const PENDING_INVALIDATION_MARKER = "vinext:pending";
 
 // ---------------------------------------------------------------------------
 // Serialized cache value types — ArrayBuffer fields replaced with base64 strings
@@ -190,6 +191,8 @@ export class KVCacheHandler implements CacheHandler {
   private _tagCache = new Map<string, { timestamp: number; fetchedAt: number }>();
   /** TTL (ms) for local tag cache entries. After this, re-fetch from KV. */
   private _tagCacheTtl: number;
+  /** Serialize marker publication so an older completion cannot overwrite a newer one. */
+  private _invalidationQueue: Promise<void> = Promise.resolve();
 
   constructor(
     kvNamespace: KVNamespace,
@@ -474,23 +477,42 @@ export class KVCacheHandler implements CacheHandler {
     return false;
   }
 
-  async revalidateTag(tags: string | string[], _durations?: { expire?: number }): Promise<void> {
+  revalidateTag(tags: string | string[], _durations?: { expire?: number }): Promise<void> {
     const tagList = Array.isArray(tags) ? tags : [tags];
-    const now = Date.now();
     const validTags = tagList.filter((t) => validateTag(t) !== null);
-    // Store invalidation timestamp for each tag
-    // Use a long TTL (30 days) so recent invalidations are always found
+    const operation = this._invalidationQueue.then(() => this._publishInvalidation(validTags));
+    this._invalidationQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  private async _publishInvalidation(validTags: string[]): Promise<void> {
+    // Publish an in-progress marker before assigning the completion version.
+    // A producer that starts while the first put is pending either observes
+    // the pending marker and fails closed, or is older than `completedAt` once
+    // the second put lands. This makes invalidation completion the ordering
+    // boundary rather than the time revalidateTag() was invoked.
+    const pendingAt = Date.now();
+    for (const tag of validTags) {
+      this._tagCache.set(tag, { timestamp: Number.NaN, fetchedAt: pendingAt });
+    }
     await Promise.all(
       validTags.map((tag) =>
-        this.kv.put(this._tagKey(tag), String(now), {
+        this.kv.put(this._tagKey(tag), PENDING_INVALIDATION_MARKER, {
           expirationTtl: 30 * 24 * 3600,
         }),
       ),
     );
-    // Update local tag cache immediately so invalidations are reflected
-    // without waiting for the TTL to expire
+
+    const completedAt = Date.now();
+    await Promise.all(
+      validTags.map((tag) =>
+        this.kv.put(this._tagKey(tag), String(completedAt), {
+          expirationTtl: 30 * 24 * 3600,
+        }),
+      ),
+    );
     for (const tag of validTags) {
-      this._tagCache.set(tag, { timestamp: now, fetchedAt: now });
+      this._tagCache.set(tag, { timestamp: completedAt, fetchedAt: completedAt });
     }
   }
 

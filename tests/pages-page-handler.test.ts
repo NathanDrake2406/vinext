@@ -349,8 +349,8 @@ describe("createPagesPageHandler — on-demand terminal responses", () => {
     const firstStarted = new Promise<void>((resolve) => (markFirstStarted = resolve));
     let markSecondStarted!: () => void;
     const secondStarted = new Promise<void>((resolve) => (markSecondStarted = resolve));
-    let releaseRenders!: () => void;
-    const renderGate = new Promise<void>((resolve) => (releaseRenders = resolve));
+    let releaseFirstRender!: () => void;
+    const firstRenderGate = new Promise<void>((resolve) => (releaseFirstRender = resolve));
     const route = makeRoute(
       "/coalesce",
       makePageModule({
@@ -358,8 +358,8 @@ describe("createPagesPageHandler — on-demand terminal responses", () => {
           renderCount++;
           if (renderCount === 1) markFirstStarted();
           if (renderCount === 2) markSecondStarted();
-          await renderGate;
-          return { props: {}, revalidate: 60 };
+          if (renderCount === 1) await firstRenderGate;
+          return { props: { renderCount }, revalidate: 60 };
         },
       }),
     );
@@ -373,15 +373,26 @@ describe("createPagesPageHandler — on-demand terminal responses", () => {
       const first = handler(makeOnDemandRequest(), "/coalesce", null, null, null);
       await firstStarted;
       await getDataCacheHandler().revalidateTag("_N_T_/coalesce");
+      const invalidatedAt = await getDataCacheHandler().getInvalidationVersion(["_N_T_/coalesce"]);
+      while (Date.now() <= invalidatedAt) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
 
       const second = handler(makeOnDemandRequest(), "/coalesce", null, null, null);
       await secondStarted;
       expect(renderCount).toBe(2);
+      await second;
 
-      releaseRenders();
-      await Promise.all([first, second]);
+      releaseFirstRender();
+      await first;
+
+      const cached = await getDataCacheHandler().get("pages:test-build-id:/coalesce");
+      expect(cached?.value).toMatchObject({
+        kind: "PAGES",
+        pageData: { pageProps: { renderCount: 2 } },
+      });
     } finally {
-      releaseRenders();
+      releaseFirstRender();
       setDataCacheHandler(previousHandler);
     }
   });

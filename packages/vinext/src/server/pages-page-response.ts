@@ -437,6 +437,7 @@ async function writePagesIsrCache(options: {
   status: number;
   stream: ReadableStream<Uint8Array>;
   setCache: RenderPagesPageResponseOptions["isrSet"];
+  tags: string[];
 }): Promise<void> {
   const bodyHtml = await readStreamAsText(options.stream);
   await options.setCache(
@@ -449,7 +450,7 @@ async function writePagesIsrCache(options: {
       status: options.status,
     },
     options.revalidateSeconds,
-    undefined,
+    options.tags,
     options.expireSeconds,
   );
 }
@@ -643,6 +644,7 @@ export async function renderPagesPageResponse(
     const cacheBodyStream = cacheBodyStreamPair[1];
     const isrPathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
     const cacheKey = options.isrCacheKey("pages", isrPathname);
+    const tagStem = isrPathname.endsWith("/") ? isrPathname.slice(0, -1) : isrPathname;
 
     const cacheWriteOptions = {
       cacheKey,
@@ -658,6 +660,7 @@ export async function renderPagesPageResponse(
       shellSuffix,
       status: finalStatus,
       stream: cacheBodyStream,
+      tags: [encodeCacheTag(`_N_T_${tagStem || "/"}`)],
     };
     if (options.isOnDemandRevalidate) {
       // Next.js's internal revalidate path waits for `mocked.res.hasStreamed`.

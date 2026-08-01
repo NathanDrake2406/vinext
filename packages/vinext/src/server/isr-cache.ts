@@ -349,9 +349,13 @@ export function triggerBackgroundRegeneration(
   // Edge-managed CDN adapters revalidate by re-requesting the origin, so the
   // origin must not also run in-process regeneration.
   if (!getCdnCacheAdapter().ownsBackgroundRevalidation) return;
-  // Runs synchronously until the first marker read, so the no-producer path
-  // still registers the regeneration in the calling tick.
-  void scheduleBackgroundRegeneration(key, renderFn, errorContext);
+  // Register the scheduler itself before it can yield to an invalidation
+  // version lookup. A stale producer may only be replaced after that shared
+  // lookup completes, and Workers must keep the continuation alive until the
+  // replacement render and its cache write finish.
+  const scheduler = scheduleBackgroundRegeneration(key, renderFn, errorContext);
+  getRequestExecutionContext()?.waitUntil(scheduler);
+  void scheduler;
 }
 
 async function scheduleBackgroundRegeneration(
@@ -404,11 +408,7 @@ async function scheduleBackgroundRegeneration(
 
   producer = { startTime, tags, promise };
   pendingRegenerations.set(key, producer);
-
-  // Register with the Workers ExecutionContext (retrieved from ALS) so the
-  // runtime keeps the isolate alive until the regeneration completes, even
-  // after the Response has already been sent to the client.
-  getRequestExecutionContext()?.waitUntil(promise);
+  await promise;
 }
 
 // ---------------------------------------------------------------------------

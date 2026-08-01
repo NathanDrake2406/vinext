@@ -116,13 +116,14 @@ export type CacheHandler = {
    * when none. Shared backends should read a shared marker here because this
    * method decides whether post-invalidation callers may join older work.
    */
+  getInvalidationVersion?(tags: readonly string[]): Promise<number>;
+};
+
+type VersionedCacheHandler = CacheHandler & {
   getInvalidationVersion(tags: readonly string[]): Promise<number>;
 };
 
-export type CompatibleCacheHandler = Omit<CacheHandler, "getInvalidationVersion"> &
-  Partial<Pick<CacheHandler, "getInvalidationVersion">>;
-
-export class NoOpCacheHandler implements CacheHandler {
+export class NoOpCacheHandler implements VersionedCacheHandler {
   async get(_key: string, _ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null> {
     return null;
   }
@@ -222,7 +223,7 @@ function readPositiveNumberField(
   return typeof value === "number" && value > 0 ? value : undefined;
 }
 
-export class MemoryCacheHandler implements CacheHandler {
+export class MemoryCacheHandler implements VersionedCacheHandler {
   private store = new Map<string, MemoryEntry>();
   private tagRevalidatedAt = new Map<string, number>();
   private readonly maxMemoryCacheSize: number;
@@ -416,7 +417,7 @@ export class MemoryCacheHandler implements CacheHandler {
 }
 
 const HANDLER_KEY = Symbol.for("vinext.cacheHandler");
-const globalHandlers = globalThis as unknown as Record<PropertyKey, CacheHandler>;
+const globalHandlers = globalThis as unknown as Record<PropertyKey, VersionedCacheHandler>;
 
 /**
  * Preserve the previously supported Next.js CacheHandler shape while adding
@@ -424,10 +425,16 @@ const globalHandlers = globalThis as unknown as Record<PropertyKey, CacheHandler
  * `getInvalidationVersion`. New handlers should implement the method so they
  * can source versions from shared storage when their backend supports it.
  */
-class LegacyFencedCacheHandler implements CacheHandler {
+class LegacyFencedCacheHandler implements VersionedCacheHandler {
   private readonly tagInvalidations = new Map<string, { version: number; token: symbol }>();
+  /**
+   * Highest marker evicted from the bounded per-tag map. Treating this floor
+   * as relevant to every tag can cause an extra regeneration, but never lets
+   * an older producer through after its precise marker has been discarded.
+   */
+  private evictedInvalidationFloor = 0;
 
-  constructor(private readonly delegate: CompatibleCacheHandler) {}
+  constructor(private readonly delegate: CacheHandler) {}
 
   get(key: string, ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null> {
     return this.delegate.get(key, ctx);
@@ -441,6 +448,7 @@ class LegacyFencedCacheHandler implements CacheHandler {
     const guardSince = readPositiveNumberField(ctx, "guardSince");
     const guardedTags = new Set<string>();
     if (guardSince !== undefined) {
+      if (this.evictedInvalidationFloor >= guardSince) return;
       for (const tag of readStringArrayField(ctx, "tags")) guardedTags.add(tag);
       for (const tag of readStringArrayField(ctx, "softTags")) guardedTags.add(tag);
       if (data && "tags" in data && Array.isArray(data.tags)) {
@@ -457,10 +465,13 @@ class LegacyFencedCacheHandler implements CacheHandler {
     // it. If an invalidation completed in that window, repeat it after the
     // write so the late entry cannot restore stale data.
     if (guardSince !== undefined) {
-      const invalidatedDuringWrite = [...guardedTags].filter((tag) => {
-        const invalidation = this.tagInvalidations.get(tag);
-        return invalidation !== undefined && invalidation.version >= guardSince;
-      });
+      const invalidatedDuringWrite =
+        this.evictedInvalidationFloor >= guardSince
+          ? [...guardedTags]
+          : [...guardedTags].filter((tag) => {
+              const invalidation = this.tagInvalidations.get(tag);
+              return invalidation !== undefined && invalidation.version >= guardSince;
+            });
       if (invalidatedDuringWrite.length > 0) {
         await this.delegate.revalidateTag(invalidatedDuringWrite);
       }
@@ -479,6 +490,15 @@ class LegacyFencedCacheHandler implements CacheHandler {
 
     try {
       await this.delegate.revalidateTag(tags, durations);
+      while (this.tagInvalidations.size > MAX_REVALIDATED_TAG_ENTRIES) {
+        const oldestTag = this.tagInvalidations.keys().next().value;
+        if (oldestTag === undefined) break;
+        const evicted = this.tagInvalidations.get(oldestTag);
+        if (evicted !== undefined) {
+          this.evictedInvalidationFloor = Math.max(this.evictedInvalidationFloor, evicted.version);
+        }
+        this.tagInvalidations.delete(oldestTag);
+      }
     } catch (error) {
       for (const [tag, previousInvalidation] of previousInvalidations) {
         // Do not roll back a newer invalidation that completed concurrently.
@@ -495,7 +515,7 @@ class LegacyFencedCacheHandler implements CacheHandler {
   }
 
   async getInvalidationVersion(tags: readonly string[]): Promise<number> {
-    let version = 0;
+    let version = this.evictedInvalidationFloor;
     for (const tag of tags) {
       const invalidation = this.tagInvalidations.get(tag);
       if (invalidation !== undefined && invalidation.version > version) {
@@ -506,7 +526,7 @@ class LegacyFencedCacheHandler implements CacheHandler {
   }
 }
 
-function getActiveHandler(): CacheHandler {
+function getActiveHandler(): VersionedCacheHandler {
   return globalHandlers[HANDLER_KEY] ?? (globalHandlers[HANDLER_KEY] = new MemoryCacheHandler());
 }
 
@@ -516,25 +536,25 @@ export function configureMemoryCacheHandler(options?: MemoryCacheHandlerOptions)
   globalHandlers[HANDLER_KEY] = new MemoryCacheHandler(options);
 }
 
-function hasInvalidationVersion(handler: CompatibleCacheHandler): handler is CacheHandler {
+function hasInvalidationVersion(handler: CacheHandler): handler is VersionedCacheHandler {
   return typeof handler.getInvalidationVersion === "function";
 }
 
-export function setDataCacheHandler(handler: CompatibleCacheHandler): void {
+export function setDataCacheHandler(handler: CacheHandler): void {
   globalHandlers[HANDLER_KEY] = hasInvalidationVersion(handler)
     ? handler
     : new LegacyFencedCacheHandler(handler);
 }
 
-export function getDataCacheHandler(): CacheHandler {
+export function getDataCacheHandler(): VersionedCacheHandler {
   return getActiveHandler();
 }
 
-export function setCacheHandler(handler: CompatibleCacheHandler): void {
+export function setCacheHandler(handler: CacheHandler): void {
   setDataCacheHandler(handler);
 }
 
-export function getCacheHandler(): CacheHandler {
+export function getCacheHandler(): VersionedCacheHandler {
   return getDataCacheHandler();
 }
 

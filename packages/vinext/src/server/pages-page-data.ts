@@ -1252,6 +1252,8 @@ export async function resolvePagesPageData(
   if (typeof options.pageModule.getStaticProps === "function") {
     const pathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
     const cacheKey = options.isrCacheKey("pages", pathname);
+    const tagStem = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+    const cacheTags = [encodeCacheTag(`_N_T_${tagStem || "/"}`)];
     const cached =
       onDemandPreviousCacheEntry !== undefined
         ? onDemandPreviousCacheEntry
@@ -1304,14 +1306,14 @@ export async function resolvePagesPageData(
                   props: buildPagesRedirectProps(redirect, freshRenderProps),
                 },
                 revalidateSeconds,
-                undefined,
+                cacheTags,
                 expireSeconds,
               );
               return;
             }
 
             if (freshResult.notFound) {
-              await options.isrSet(cacheKey, null, revalidateSeconds, undefined, expireSeconds);
+              await options.isrSet(cacheKey, null, revalidateSeconds, cacheTags, expireSeconds);
               return;
             }
 
@@ -1342,7 +1344,7 @@ export async function resolvePagesPageData(
                 cacheKey,
                 buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
                 revalidateSeconds,
-                undefined,
+                cacheTags,
                 expireSeconds,
               );
               return;
@@ -1362,7 +1364,7 @@ export async function resolvePagesPageData(
                 status: undefined,
               },
               revalidateSeconds,
-              undefined,
+              cacheTags,
               expireSeconds,
             );
           });
@@ -1588,7 +1590,7 @@ export async function resolvePagesPageData(
             props: buildPagesRedirectProps(redirect, renderProps),
           },
           revalidateSeconds,
-          undefined,
+          cacheTags,
           expireSeconds,
         );
         applyPagesTerminalMissHeaders(response, revalidateSeconds, pathname, expireSeconds);
@@ -1603,7 +1605,7 @@ export async function resolvePagesPageData(
       const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
       const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
       if (previewData === false) {
-        await options.isrSet(cacheKey, null, revalidateSeconds, undefined, expireSeconds);
+        await options.isrSet(cacheKey, null, revalidateSeconds, cacheTags, expireSeconds);
       }
       const notFoundResult = buildPagesNotFoundResult(
         options,
@@ -1664,7 +1666,7 @@ export async function resolvePagesPageData(
           status: undefined,
         },
         revalidateSeconds,
-        undefined,
+        cacheTags,
         isrExpireSeconds,
       );
     }
