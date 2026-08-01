@@ -104,6 +104,7 @@ type SharedInvalidationState = {
   version: number;
   pending: boolean;
   durableVersion: number | undefined;
+  durablePendingKey: string | undefined;
   operationKeys: string[];
   orderingAnchorKey: string | undefined;
 };
@@ -326,15 +327,27 @@ export class KVCacheHandler implements CacheHandler {
         pending = true;
       }
     }
-    return { version, pending, durableVersion, operationKeys, orderingAnchorKey };
+    return {
+      version,
+      pending,
+      durableVersion,
+      durablePendingKey,
+      operationKeys,
+      orderingAnchorKey,
+    };
   }
 
-  /** Delete completed records except the immutable maximum-version anchor. */
+  /**
+   * Delete completed records except the immutable maximum-version anchor and
+   * any operation still named by the durable marker. A delayed publisher can
+   * leave that marker pointing at an older completion, so deleting its record
+   * would turn a settled marker back into a permanently pending one.
+   */
   private async _compactInvalidationOperations(state: SharedInvalidationState): Promise<void> {
     if (state.pending) return;
     await Promise.all(
       state.operationKeys
-        .filter((key) => key !== state.orderingAnchorKey)
+        .filter((key) => key !== state.orderingAnchorKey && key !== state.durablePendingKey)
         .map((key) => this.kv.delete(key)),
     );
   }
@@ -347,9 +360,11 @@ export class KVCacheHandler implements CacheHandler {
     // publisher that captured older state can still overwrite the durable key
     // after this repair, but it cannot delete an anchor it never observed, so
     // the next reader can recover the newer version. Normal operation remains
-    // bounded to one completed record per tag plus in-flight publishers.
+    // bounded to the latest completion plus the completion named by a stale
+    // durable marker, plus in-flight publishers.
     if (
       state.version > 0 &&
+      state.durablePendingKey === undefined &&
       (state.durableVersion === undefined || state.durableVersion < state.version)
     ) {
       await this.kv.put(this._tagKey(tag), String(state.version), {
@@ -639,10 +654,10 @@ export class KVCacheHandler implements CacheHandler {
   }
 
   private async _publishInvalidation(validTags: string[]): Promise<void> {
-    // Publish a unique per-operation marker as well as the durable per-tag
-    // marker. Separate isolates cannot serialize writes to the durable key;
-    // retaining each completion record lets readers take the maximum even if
-    // a delayed older operation overwrites that key afterwards.
+    // Publish one pending durable per-tag marker that names a unique
+    // completion record. Separate isolates cannot serialize writes to the
+    // durable key; retaining each completion record lets readers take the
+    // maximum even if a delayed older operation overwrites that key afterwards.
     const pendingAt = Date.now();
     const operations = validTags.map((tag) => ({
       tag,
@@ -653,21 +668,18 @@ export class KVCacheHandler implements CacheHandler {
     }
     let currentWrites: Promise<void>[] = [];
     try {
-      currentWrites = operations.flatMap(({ tag, key }) => {
+      // The tag marker is the pending fence. The operation record is written
+      // only once, after the fence exists, so a successful invalidation never
+      // performs two immediate writes to either key.
+      currentWrites = operations.map(({ tag, key }) => {
         const marker = pendingInvalidationMarker(key);
-        return [
-          this.kv.put(key, marker, { expirationTtl: INVALIDATION_OPERATION_TTL_SECONDS }),
-          this.kv.put(this._tagKey(tag), marker, {
-            expirationTtl: INVALIDATION_OPERATION_TTL_SECONDS,
-          }),
-        ];
+        return this.kv.put(this._tagKey(tag), marker, {
+          expirationTtl: INVALIDATION_OPERATION_TTL_SECONDS,
+        });
       });
       await Promise.all(currentWrites);
       currentWrites = [];
 
-      // The operation remains pending until its durable write has completed.
-      // This makes a pending record proof that another publisher may still
-      // overwrite the durable key, even when its completion timestamp is older.
       const completedAt = Date.now();
       currentWrites = operations.map(({ key }) =>
         this.kv.put(key, String(completedAt), {
@@ -680,15 +692,14 @@ export class KVCacheHandler implements CacheHandler {
       const postCommitStates = await Promise.all(
         operations.map(({ tag }) => this._readSharedInvalidationState(tag)),
       );
-      currentWrites = operations.map(async ({ tag }, index) => {
+      currentWrites = operations.map(async (_operation, index) => {
         const state = postCommitStates[index];
         if (state.pending) return;
-        const version = Math.max(state.version, completedAt);
-        if (state.durableVersion === undefined || state.durableVersion < version) {
-          await this.kv.put(this._tagKey(tag), String(version), {
-            expirationTtl: 30 * 24 * 3600,
-          });
-        }
+        // The completed operation record is the durable completion evidence.
+        // Keep the tokenized pending marker in place rather than immediately
+        // rewriting the same tag key, which is rate-limited by KV. Readers
+        // treat a token as settled once its operation record is numeric and
+        // repair an absent marker later when necessary.
         await this._compactInvalidationOperations(state);
       });
       await Promise.all(currentWrites);
@@ -723,10 +734,13 @@ export class KVCacheHandler implements CacheHandler {
     operations: Array<{ tag: string; key: string }>,
   ): Promise<void> {
     const recoveryVersion = Date.now();
-    const repairs = operations.flatMap(({ tag, key }) => [
-      this.kv.put(key, String(recoveryVersion), { expirationTtl: 30 * 24 * 3600 }),
-      this._repairPendingMarker(tag, key, recoveryVersion),
-    ]);
+    const repairs = operations.map(async ({ tag, key }) => {
+      const operationMarker = await this.kv.get(key);
+      if (operationMarker === null || !Number.isFinite(Number(operationMarker))) {
+        await this.kv.put(key, String(recoveryVersion), { expirationTtl: 30 * 24 * 3600 });
+      }
+      await this._repairPendingMarker(tag, key, recoveryVersion);
+    });
     const results = await Promise.allSettled(repairs);
     const recovered = results.every((result) => result.status === "fulfilled");
     for (const { tag } of operations) {

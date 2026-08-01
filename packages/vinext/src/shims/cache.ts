@@ -675,7 +675,8 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
         if (cached.ok) {
           if (existing.cacheState === "stale") {
             if (shouldServeStaleUnstableCacheEntry()) {
-              scheduleUnstableCacheBackgroundRevalidation(cacheKey, tags, () =>
+              const producerTags = [...new Set([...tags, ...softTags])];
+              scheduleUnstableCacheBackgroundRevalidation(cacheKey, producerTags, () =>
                 refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
               );
               return cached.value;

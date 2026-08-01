@@ -281,6 +281,33 @@ describe("cache invalidation race guards", () => {
     expect(set).not.toHaveBeenCalled();
   });
 
+  it("retains a conservative memory invalidation floor after tag markers are evicted", async () => {
+    const handler = getCacheHandler();
+
+    const value = {
+      kind: "FETCH" as const,
+      data: { headers: {}, body: "stale", url: "https://api.example.com/memory" },
+      tags: ["evicted-memory-tag"],
+      revalidate: 60,
+    };
+    await handler.set("evicted-memory-entry", value);
+    const guardSince = Date.now();
+
+    await handler.revalidateTag("evicted-memory-tag");
+    await handler.revalidateTag(
+      Array.from({ length: 10_000 }, (_, index) => `memory-tag-${index}`),
+    );
+
+    await handler.set("evicted-memory-late-write", value, {
+      tags: ["evicted-memory-tag"],
+      guardSince,
+    });
+
+    expect(await handler.getInvalidationVersion!(["evicted-memory-tag"])).toBeGreaterThan(0);
+    await expect(handler.get("evicted-memory-entry")).resolves.toBeNull();
+    await expect(handler.get("evicted-memory-late-write")).resolves.toBeNull();
+  });
+
   it("keeps memory entry age at commit time while retaining the producer guard", async () => {
     const guardSince = Date.now() - 1_000;
     await getCacheHandler().set(
@@ -696,6 +723,7 @@ describe("cache invalidation race guards", () => {
       releaseRefresh = resolve;
     });
     let refreshCount = 0;
+    const lookupTags: string[][] = [];
     const staleValue = {
       lastModified: Date.now() - 2_000,
       cacheState: "stale" as const,
@@ -716,7 +744,8 @@ describe("cache invalidation race guards", () => {
       },
       async set() {},
       async revalidateTag() {},
-      async getInvalidationVersion() {
+      async getInvalidationVersion(tags) {
+        lookupTags.push([...tags]);
         await lookupGate;
         return 0;
       },
@@ -734,7 +763,10 @@ describe("cache invalidation race guards", () => {
       unstableCacheRevalidation: "background",
     });
 
-    await runWithRequestContext(backgroundContext, () => cached());
+    await runWithRequestContext(backgroundContext, () => {
+      setCurrentFetchSoftTags(["soft-path"]);
+      return cached();
+    });
     await waitUntil(() => refreshCount === 1);
 
     const registered: Promise<unknown>[] = [];
@@ -751,6 +783,10 @@ describe("cache invalidation race guards", () => {
         await cached();
         expect(registered).toHaveLength(1);
       },
+    );
+
+    expect(lookupTags.some((tags) => tags.includes("posts") && tags.includes("soft-path"))).toBe(
+      true,
     );
 
     releaseLookup();
@@ -1143,10 +1179,12 @@ describe("cache invalidation race guards", () => {
       releaseFirstPut = resolve;
     });
     let putCount = 0;
+    const putsByKey = new Map<string, number>();
     const kv = {
       ...baseKv,
       async put(key: string, value: string) {
         putCount++;
+        putsByKey.set(key, (putsByKey.get(key) ?? 0) + 1);
         if (putCount === 1) {
           markFirstPutStarted();
           await firstPutGate;
@@ -1164,10 +1202,11 @@ describe("cache invalidation race guards", () => {
 
     releaseFirstPut();
     await Promise.all([first, second]);
-    // Each operation now needs only a pending operation/tag pair, a completed
-    // operation record, and one durable marker repair. Disjoint tags may have
-    // published while the first operation's initial write was blocked.
-    expect(putCount).toBe(8);
+    // Each operation needs one pending durable tag marker and one completion
+    // record. Disjoint tags may have published while the first operation's
+    // initial write was blocked.
+    expect(putCount).toBe(4);
+    expect(Math.max(...putsByKey.values())).toBe(1);
     await expect(handler.getInvalidationVersion(["posts", "comments"])).resolves.toBeGreaterThan(0);
     expect([...store.keys()].filter((key) => key.startsWith("__tag-op:"))).toHaveLength(2);
   });
@@ -1186,7 +1225,7 @@ describe("cache invalidation race guards", () => {
     const olderKv = {
       ...baseKv,
       async put(key: string, value: string) {
-        if (key === "__tag:posts" && !Number.isNaN(Number(value))) {
+        if (key.startsWith("__tag-op:") && Number.isFinite(Number(value))) {
           markOlderCompletionStarted();
           await olderCompletionGate;
         }
@@ -1230,7 +1269,7 @@ describe("cache invalidation race guards", () => {
     const olderKv = {
       ...baseKv,
       async put(key: string, value: string) {
-        if (key === "__tag:posts" && Number.isFinite(Number(value))) {
+        if (key.startsWith("__tag-op:") && Number.isFinite(Number(value))) {
           olderFiniteMarkerPuts++;
           if (olderFiniteMarkerPuts === 1) {
             markOlderFinalPutStarted();
@@ -1247,7 +1286,11 @@ describe("cache invalidation race guards", () => {
     await olderFinalPutStarted;
     await new Promise((resolve) => setTimeout(resolve, 5));
     await newer.revalidateTag("posts");
-    const newerVersion = Number(store.get("__tag:posts"));
+    const newerVersion = Math.max(
+      ...[...store.entries()]
+        .filter(([key, value]) => key.startsWith("__tag-op:") && Number.isFinite(Number(value)))
+        .map(([, value]) => Number(value)),
+    );
 
     releaseOlderFinalPut();
     await olderInvalidation;

@@ -226,6 +226,8 @@ function readPositiveNumberField(
 export class MemoryCacheHandler implements VersionedCacheHandler {
   private store = new Map<string, MemoryEntry>();
   private tagRevalidatedAt = new Map<string, number>();
+  /** Highest marker evicted from the bounded tag map. */
+  private evictedInvalidationFloor = 0;
   private readonly maxMemoryCacheSize: number;
   private currentMemoryCacheSize = 0;
 
@@ -265,9 +267,15 @@ export class MemoryCacheHandler implements VersionedCacheHandler {
     const entry = this.store.get(key);
     if (!entry) return null;
 
+    const invalidationBaseline = entry.invalidationGuardSince ?? entry.lastModified;
+    if (this.evictedInvalidationFloor >= invalidationBaseline) {
+      this.deleteEntry(key);
+      return null;
+    }
+
     for (const tag of entry.tags) {
       const revalidatedAt = this.tagRevalidatedAt.get(tag);
-      if (revalidatedAt && revalidatedAt >= (entry.invalidationGuardSince ?? entry.lastModified)) {
+      if (revalidatedAt && revalidatedAt >= invalidationBaseline) {
         this.deleteEntry(key);
         return null;
       }
@@ -275,7 +283,7 @@ export class MemoryCacheHandler implements VersionedCacheHandler {
 
     for (const tag of readStringArrayField(ctx, "softTags")) {
       const revalidatedAt = this.tagRevalidatedAt.get(tag);
-      if (revalidatedAt && revalidatedAt >= (entry.invalidationGuardSince ?? entry.lastModified)) {
+      if (revalidatedAt && revalidatedAt >= invalidationBaseline) {
         return null;
       }
     }
@@ -364,6 +372,7 @@ export class MemoryCacheHandler implements VersionedCacheHandler {
     // synchronous block, so the decision is atomic within this isolate.
     const guardSince = readPositiveNumberField(ctx, "guardSince");
     if (guardSince !== undefined) {
+      if (this.evictedInvalidationFloor >= guardSince) return;
       for (const tag of [...tags, ...readStringArrayField(ctx, "softTags")]) {
         const revalidatedAt = this.tagRevalidatedAt.get(tag);
         if (revalidatedAt !== undefined && revalidatedAt >= guardSince) return;
@@ -399,13 +408,17 @@ export class MemoryCacheHandler implements VersionedCacheHandler {
       while (this.tagRevalidatedAt.size > MAX_REVALIDATED_TAG_ENTRIES) {
         const oldest = this.tagRevalidatedAt.keys().next().value;
         if (oldest === undefined) break;
+        const evicted = this.tagRevalidatedAt.get(oldest);
+        if (evicted !== undefined) {
+          this.evictedInvalidationFloor = Math.max(this.evictedInvalidationFloor, evicted);
+        }
         this.tagRevalidatedAt.delete(oldest);
       }
     }
   }
 
   async getInvalidationVersion(tags: readonly string[]): Promise<number> {
-    let version = 0;
+    let version = this.evictedInvalidationFloor;
     for (const tag of tags) {
       const revalidatedAt = this.tagRevalidatedAt.get(tag);
       if (revalidatedAt !== undefined && revalidatedAt > version) version = revalidatedAt;
