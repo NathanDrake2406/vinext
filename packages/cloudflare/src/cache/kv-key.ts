@@ -3,6 +3,9 @@ import { fnv1a64 } from "vinext/internal/utils/hash";
 /** Key prefix for tag invalidation timestamps. */
 const TAG_PREFIX = "__tag:";
 
+/** Key prefix for transient per-operation invalidation ordering records. */
+const TAG_OPERATION_PREFIX = "__tag-op:";
+
 /** Key prefix for cache entries. */
 export const ENTRY_PREFIX = "cache:";
 
@@ -19,6 +22,7 @@ export type KvKeySpace = {
   entryPrefix: string;
   entryKey(logicalKey: string): string;
   tagKey(tag: string): string;
+  tagOperationPrefix(tag: string): string;
 };
 
 function kvKeyByteLength(key: string): number {
@@ -33,8 +37,7 @@ function normalizeAppPrefix(appPrefix: string | undefined): string {
   if (!appPrefix) return "";
 
   const prefix = `${appPrefix}:`;
-  const longestCategoryPrefix =
-    ENTRY_PREFIX.length >= TAG_PREFIX.length ? ENTRY_PREFIX : TAG_PREFIX;
+  const longestCategoryPrefix = TAG_OPERATION_PREFIX;
   const shortestHashedKey = `${prefix}${longestCategoryPrefix}${HASHED_KEY_PREFIX}${fnv1a64("")}`;
   if (kvKeyByteLength(shortestHashedKey) <= KV_KEY_MAX_BYTES) return prefix;
 
@@ -58,5 +61,8 @@ export function createKvKeySpace(appPrefix: string | undefined): KvKeySpace {
     entryPrefix: `${prefix}${ENTRY_PREFIX}`,
     entryKey: (logicalKey) => buildStorageKey(prefix, ENTRY_PREFIX, logicalKey),
     tagKey: (tag) => buildStorageKey(prefix, TAG_PREFIX, tag),
+    // Operation records always use a bounded tag hash so callers can append a
+    // unique operation id without exceeding KV's 512-byte key limit.
+    tagOperationPrefix: (tag) => `${prefix}${TAG_OPERATION_PREFIX}${fnv1a64(tag)}:`,
   };
 }

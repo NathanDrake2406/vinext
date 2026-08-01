@@ -1075,6 +1075,7 @@ describe("fetch cache shim", () => {
         next: { revalidate: 1 },
       });
       expect((await res1.json()).count).toBe(1);
+      waitUntilSpy.mockClear();
 
       // Manually expire the entry
       const handler = getCacheHandler() as InstanceType<typeof MemoryCacheHandler>;
@@ -1110,6 +1111,7 @@ describe("fetch cache shim", () => {
           next: { revalidate: 1 },
         });
         expect((await res1.json()).count).toBe(1);
+        waitUntilSpy.mockClear();
 
         const handler = getCacheHandler() as InstanceType<typeof MemoryCacheHandler>;
         const store = (handler as any).store as Map<string, any>;

@@ -1319,7 +1319,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
 
     const cacheValue = await buildFetchCacheValue(response, tags, revalidateSeconds);
     if (cacheValue) {
-      handler
+      const write = handler
         .set(cacheKey, cacheValue, {
           fetchCache: true,
           tags,
@@ -1330,6 +1330,10 @@ function createPatchedFetch(): typeof globalThis.fetch {
         .catch((err) => {
           console.error("[vinext] fetch cache write error:", err);
         });
+      // A guarded handler may need asynchronous marker reads before its own
+      // backend write is registered. Keep the full decision-and-write promise
+      // alive when the response returns from a Worker request.
+      getRequestExecutionContext()?.waitUntil(write);
     }
 
     return response;

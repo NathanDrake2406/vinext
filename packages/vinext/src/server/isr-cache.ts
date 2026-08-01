@@ -345,6 +345,7 @@ export function triggerBackgroundRegeneration(
     routePath: string;
     routeType: OnRequestErrorContext["routeType"];
   },
+  tags: readonly string[] = getCurrentFetchSoftTags(),
 ): void {
   // Edge-managed CDN adapters revalidate by re-requesting the origin, so the
   // origin must not also run in-process regeneration.
@@ -353,7 +354,7 @@ export function triggerBackgroundRegeneration(
   // version lookup. A stale producer may only be replaced after that shared
   // lookup completes, and Workers must keep the continuation alive until the
   // replacement render and its cache write finish.
-  const scheduler = scheduleBackgroundRegeneration(key, renderFn, errorContext);
+  const scheduler = scheduleBackgroundRegeneration(key, renderFn, errorContext, [...tags]);
   getRequestExecutionContext()?.waitUntil(scheduler);
   void scheduler;
 }
@@ -368,6 +369,7 @@ async function scheduleBackgroundRegeneration(
         routeType: OnRequestErrorContext["routeType"];
       }
     | undefined,
+  tags: string[],
 ): Promise<void> {
   const inFlight = pendingRegenerations.has(key)
     ? await getJoinableProducer(pendingRegenerations, key)
@@ -375,7 +377,6 @@ async function scheduleBackgroundRegeneration(
   if (inFlight !== undefined) return;
 
   const startTime = Date.now();
-  const tags = getCurrentFetchSoftTags();
 
   // Mark the render start inside the renderFn's execution context (which may
   // be a fresh context for the regeneration) so its isrSet writes are guarded

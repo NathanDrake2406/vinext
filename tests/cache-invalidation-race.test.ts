@@ -42,6 +42,7 @@ const {
   setCacheHandler,
   unstable_cache,
   cacheTag,
+  runWithExecutionContext,
 } = await import("../packages/vinext/src/shims/cache.js");
 const { registerCachedFunction } = await import("../packages/vinext/src/shims/cache-runtime.js");
 const {
@@ -85,7 +86,13 @@ function createSharedMockKV(store: Map<string, string>) {
     delete: async (key: string) => {
       store.delete(key);
     },
-    list: async () => ({ keys: [], list_complete: true }),
+    list: async (options?: { prefix?: string }) => ({
+      keys: [...store.keys()]
+        .filter((key) => key.startsWith(options?.prefix ?? ""))
+        .sort()
+        .map((name) => ({ name })),
+      list_complete: true,
+    }),
   };
 }
 
@@ -168,6 +175,48 @@ describe("cache invalidation race guards", () => {
 
     expect(revalidateTag).toHaveBeenNthCalledWith(1, "posts", undefined);
     expect(revalidateTag).toHaveBeenNthCalledWith(2, ["posts"]);
+  });
+
+  it("fences a legacy producer that starts while invalidation is pending", async () => {
+    let markInvalidationStarted!: () => void;
+    const invalidationStarted = new Promise<void>((resolve) => {
+      markInvalidationStarted = resolve;
+    });
+    let releaseInvalidation!: () => void;
+    const invalidationGate = new Promise<void>((resolve) => {
+      releaseInvalidation = resolve;
+    });
+    const set = vi.fn(async () => {});
+    setCacheHandler({
+      async get() {
+        return null;
+      },
+      set,
+      async revalidateTag() {
+        markInvalidationStarted();
+        await invalidationGate;
+      },
+    });
+
+    const invalidation = getCacheHandler().revalidateTag("posts");
+    await invalidationStarted;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const guardSince = Date.now();
+
+    await getCacheHandler().set(
+      "legacy-started-during-invalidation",
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: "stale", url: "https://api.example.com/posts" },
+        tags: ["posts"],
+        revalidate: 60,
+      },
+      { tags: ["posts"], guardSince },
+    );
+
+    expect(set).not.toHaveBeenCalled();
+    releaseInvalidation();
+    await invalidation;
   });
 
   it("rolls back a legacy fallback marker when backend invalidation fails", async () => {
@@ -317,6 +366,49 @@ describe("cache invalidation race guards", () => {
       next: { revalidate: 3600 },
     });
     expect((await res2.json()).count).toBe(1);
+  });
+
+  it("registers a guarded fetch-miss write with waitUntil before the handler yields", async () => {
+    let markSetStarted!: () => void;
+    const setStarted = new Promise<void>((resolve) => {
+      markSetStarted = resolve;
+    });
+    let releaseSet!: () => void;
+    const setGate = new Promise<void>((resolve) => {
+      releaseSet = resolve;
+    });
+    setCacheHandler({
+      async get() {
+        return null;
+      },
+      async set() {
+        markSetStarted();
+        await setGate;
+      },
+      async revalidateTag() {},
+      async getInvalidationVersion() {
+        return 0;
+      },
+    });
+    const registered: Promise<unknown>[] = [];
+
+    await runWithExecutionContext(
+      {
+        waitUntil(promise) {
+          registered.push(promise);
+        },
+      },
+      async () => {
+        await fetch("https://api.example.com/wait-until-miss", {
+          next: { tags: ["posts"], revalidate: 60 },
+        });
+        await setStarted;
+        expect(registered).toHaveLength(1);
+      },
+    );
+
+    releaseSet();
+    await Promise.all(registered);
   });
 
   it("uses the original producer start when a cacheable fetch joins request memoization", async () => {
@@ -594,6 +686,78 @@ describe("cache invalidation race guards", () => {
     expect(res2).toEqual({ count: 2 });
   });
 
+  it("registers the unstable_cache scheduler before an in-flight version lookup settles", async () => {
+    let releaseLookup!: () => void;
+    const lookupGate = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    let refreshCount = 0;
+    const staleValue = {
+      lastModified: Date.now() - 2_000,
+      cacheState: "stale" as const,
+      value: {
+        kind: "FETCH" as const,
+        data: {
+          headers: {},
+          body: JSON.stringify({ v: "stale" }),
+          url: "unstable_cache:wait-until-race:[]",
+        },
+        tags: ["posts"],
+        revalidate: 1,
+      },
+    };
+    setCacheHandler({
+      async get() {
+        return staleValue;
+      },
+      async set() {},
+      async revalidateTag() {},
+      async getInvalidationVersion() {
+        await lookupGate;
+        return 0;
+      },
+    });
+    const cached = unstable_cache(
+      async () => {
+        refreshCount++;
+        await refreshGate;
+        return { v: "fresh" };
+      },
+      ["wait-until-race"],
+      { tags: ["posts"], revalidate: 1 },
+    );
+    const backgroundContext = createRequestContext({
+      unstableCacheRevalidation: "background",
+    });
+
+    await runWithRequestContext(backgroundContext, () => cached());
+    await waitUntil(() => refreshCount === 1);
+
+    const registered: Promise<unknown>[] = [];
+    await runWithRequestContext(
+      createRequestContext({
+        unstableCacheRevalidation: "background",
+        executionContext: {
+          waitUntil(promise) {
+            registered.push(promise);
+          },
+        },
+      }),
+      async () => {
+        await cached();
+        expect(registered).toHaveLength(1);
+      },
+    );
+
+    releaseLookup();
+    releaseRefresh();
+    await Promise.all(registered);
+  });
+
   it('suppresses the write from a "use cache" execution that started before revalidateTag completed', async () => {
     let callCount = 0;
     let started!: () => void;
@@ -671,6 +835,27 @@ describe("cache invalidation race guards", () => {
 
     releaseRender1();
     await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
+  it("uses explicit Pages path tags when deciding whether to replace stale regeneration", async () => {
+    let renderCount = 0;
+    let releaseRender!: () => void;
+    const renderGate = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    const renderFn = async () => {
+      renderCount++;
+      await renderGate;
+    };
+
+    triggerBackgroundRegeneration("pages-tagged-regen", renderFn, undefined, ["_N_T_/posts"]);
+    await waitUntil(() => renderCount === 1);
+    await Promise.resolve(revalidateTag("_N_T_/posts"));
+    triggerBackgroundRegeneration("pages-tagged-regen", renderFn, undefined, ["_N_T_/posts"]);
+    await waitUntil(() => renderCount === 2);
+
+    releaseRender();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it("replaces a pre-invalidation on-demand regeneration from a post-invalidation call", async () => {
@@ -871,12 +1056,56 @@ describe("cache invalidation race guards", () => {
     await firstPutStarted;
     const second = handler.revalidateTag("comments");
     await Promise.resolve();
-    expect(putCount).toBe(1);
+    expect(putCount).toBe(2);
 
     releaseFirstPut();
     await Promise.all([first, second]);
-    expect(putCount).toBe(4);
+    expect(putCount).toBe(10);
     await expect(handler.getInvalidationVersion(["posts", "comments"])).resolves.toBeGreaterThan(0);
+    expect([...store.keys()].some((key) => key.startsWith("__tag-op:"))).toBe(false);
+  });
+
+  it("preserves KV invalidation order across handler instances", async () => {
+    const store = new Map<string, string>();
+    const baseKv = createSharedMockKV(store);
+    let markOlderCompletionStarted!: () => void;
+    const olderCompletionStarted = new Promise<void>((resolve) => {
+      markOlderCompletionStarted = resolve;
+    });
+    let releaseOlderCompletion!: () => void;
+    const olderCompletionGate = new Promise<void>((resolve) => {
+      releaseOlderCompletion = resolve;
+    });
+    const olderKv = {
+      ...baseKv,
+      async put(key: string, value: string) {
+        if (key === "__tag:posts" && !Number.isNaN(Number(value))) {
+          markOlderCompletionStarted();
+          await olderCompletionGate;
+        }
+        await baseKv.put(key, value);
+      },
+    };
+    const older = new KVCacheHandler(olderKv as never);
+    const newer = new KVCacheHandler(baseKv as never);
+
+    const olderInvalidation = older.revalidateTag("posts");
+    await olderCompletionStarted;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await newer.revalidateTag("posts");
+    const newerVersion = Math.max(
+      ...[...store.entries()]
+        .filter(([key, value]) => key.startsWith("__tag-op:") && Number.isFinite(Number(value)))
+        .map(([, value]) => Number(value)),
+    );
+
+    releaseOlderCompletion();
+    await olderInvalidation;
+
+    await expect(
+      new KVCacheHandler(baseKv as never).getInvalidationVersion(["posts"]),
+    ).resolves.toBeGreaterThanOrEqual(newerVersion);
+    expect([...store.keys()].some((key) => key.startsWith("__tag-op:"))).toBe(false);
   });
 
   it("preserves a same-isolate invalidation that lands during a KV marker read", async () => {
@@ -896,6 +1125,7 @@ describe("cache invalidation race guards", () => {
       }),
     );
     const baseKv = createSharedMockKV(store);
+    let markerReadSettled = false;
     let markMarkerRead!: () => void;
     const markerRead = new Promise<void>((resolve) => (markMarkerRead = resolve));
     let releaseMarkerRead!: () => void;
@@ -904,7 +1134,8 @@ describe("cache invalidation race guards", () => {
       ...baseKv,
       async get(key: string) {
         const value = await baseKv.get(key);
-        if (key === "__tag:posts") {
+        if (key === "__tag:posts" && !markerReadSettled) {
+          markerReadSettled = true;
           markMarkerRead();
           await markerReadGate;
         }

@@ -43,6 +43,7 @@ export { ENTRY_PREFIX } from "./kv-key.js";
 /** Default KV namespace binding name read from the Worker `env`. */
 const DEFAULT_BINDING = "VINEXT_KV_CACHE";
 const PENDING_INVALIDATION_MARKER = "vinext:pending";
+const INVALIDATION_OPERATION_TTL_SECONDS = 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Serialized cache value types — ArrayBuffer fields replaced with base64 strings
@@ -219,6 +220,81 @@ export class KVCacheHandler implements CacheHandler {
     return this.keySpace.tagKey(tag);
   }
 
+  private _tagOperationKey(tag: string): string {
+    return `${this.keySpace.tagOperationPrefix(tag)}${crypto.randomUUID()}`;
+  }
+
+  /**
+   * Read both the durable per-tag marker and transient per-operation records.
+   * Operation records prevent a delayed older writer in another isolate from
+   * hiding a newer invalidation by overwriting the durable marker.
+   */
+  private async _readSharedInvalidationState(
+    tag: string,
+    ignoredPendingKey?: string,
+  ): Promise<{ version: number; pending: boolean; operationKeys: string[] }> {
+    const operationKeys: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.kv.list({
+        prefix: this.keySpace.tagOperationPrefix(tag),
+        cursor,
+      });
+      for (const key of page.keys) operationKeys.push(key.name);
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+
+    const [durableMarker, ...operationMarkers] = await Promise.all([
+      this.kv.get(this._tagKey(tag)),
+      ...operationKeys.map((key) => this.kv.get(key)),
+    ]);
+
+    let version = 0;
+    let pending = false;
+    // A durable pending marker without operation records comes from the older
+    // protocol and must still fail closed. When operation records exist, they
+    // are authoritative because the durable marker may be a delayed write.
+    if (operationKeys.length === 0 && durableMarker !== null) {
+      const durableVersion = Number(durableMarker);
+      if (Number.isNaN(durableVersion)) pending = true;
+      else version = durableVersion;
+    } else if (durableMarker !== null) {
+      const durableVersion = Number(durableMarker);
+      if (!Number.isNaN(durableVersion)) version = durableVersion;
+    }
+
+    for (let index = 0; index < operationMarkers.length; index++) {
+      const marker = operationMarkers[index];
+      if (marker === null) {
+        pending = true;
+        continue;
+      }
+      const operationVersion = Number(marker);
+      if (Number.isNaN(operationVersion)) {
+        if (operationKeys[index] !== ignoredPendingKey) pending = true;
+        continue;
+      }
+      version = Math.max(version, operationVersion);
+    }
+    return { version, pending, operationKeys };
+  }
+
+  private async _readSharedInvalidationVersion(tag: string): Promise<number> {
+    const state = await this._readSharedInvalidationState(tag);
+    if (state.pending) return Number.POSITIVE_INFINITY;
+
+    // Completed operation records normally disappear in the publisher that
+    // observes no remaining pending writer. If a publisher crashed, the next
+    // reader repairs the durable marker before cleaning those records up.
+    if (state.operationKeys.length > 0) {
+      await this.kv.put(this._tagKey(tag), String(state.version), {
+        expirationTtl: 30 * 24 * 3600,
+      });
+      await Promise.all(state.operationKeys.map((key) => this.kv.delete(key)));
+    }
+    return state.version;
+  }
+
   async get(key: string, _ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null> {
     const kvKey = this._entryKey(key);
     const raw = await this.kv.get(kvKey);
@@ -330,12 +406,11 @@ export class KVCacheHandler implements CacheHandler {
     // so subsequent get() calls benefit from the already-fetched results.
     if (uncachedTags.length > 0) {
       const tagResults = await Promise.all(
-        uncachedTags.map((tag) => this.kv.get(this._tagKey(tag))),
+        uncachedTags.map((tag) => this._readSharedInvalidationVersion(tag)),
       );
 
       for (let i = 0; i < uncachedTags.length; i++) {
-        const tagTime = tagResults[i];
-        const tagTimestamp = tagTime ? Number(tagTime) : 0;
+        const tagTimestamp = tagResults[i];
         const current = this._tagCache.get(uncachedTags[i]);
         if (current === uncachedTagSnapshots.get(uncachedTags[i])) {
           this._tagCache.set(uncachedTags[i], { timestamp: tagTimestamp, fetchedAt: now });
@@ -468,51 +543,94 @@ export class KVCacheHandler implements CacheHandler {
    */
   private async _guardRefusesWrite(tags: string[], guardSince: number): Promise<boolean> {
     if (tags.length === 0) return false;
-    const markers = await Promise.all(tags.map((tag) => this.kv.get(this._tagKey(tag))));
-    for (const marker of markers) {
-      if (marker === null) continue;
-      const timestamp = Number(marker);
-      if (Number.isNaN(timestamp) || timestamp >= guardSince) return true;
+    const versions = await Promise.all(tags.map((tag) => this._readSharedInvalidationVersion(tag)));
+    for (const version of versions) {
+      if (!Number.isFinite(version) || version >= guardSince) return true;
     }
     return false;
   }
 
   revalidateTag(tags: string | string[], _durations?: { expire?: number }): Promise<void> {
     const tagList = Array.isArray(tags) ? tags : [tags];
-    const validTags = tagList.filter((t) => validateTag(t) !== null);
+    const validTags = validUniqueTags(tagList);
     const operation = this._invalidationQueue.then(() => this._publishInvalidation(validTags));
     this._invalidationQueue = operation.catch(() => {});
     return operation;
   }
 
   private async _publishInvalidation(validTags: string[]): Promise<void> {
-    // Publish an in-progress marker before assigning the completion version.
-    // A producer that starts while the first put is pending either observes
-    // the pending marker and fails closed, or is older than `completedAt` once
-    // the second put lands. This makes invalidation completion the ordering
-    // boundary rather than the time revalidateTag() was invoked.
+    // Publish a unique per-operation marker as well as the durable per-tag
+    // marker. Separate isolates cannot serialize writes to the durable key;
+    // retaining each completion record lets readers take the maximum even if
+    // a delayed older operation overwrites that key afterwards.
     const pendingAt = Date.now();
-    for (const tag of validTags) {
+    const operations = validTags.map((tag) => ({
+      tag,
+      key: this._tagOperationKey(tag),
+    }));
+    for (const { tag } of operations) {
       this._tagCache.set(tag, { timestamp: Number.NaN, fetchedAt: pendingAt });
     }
     await Promise.all(
-      validTags.map((tag) =>
+      operations.flatMap(({ tag, key }) => [
+        this.kv.put(key, PENDING_INVALIDATION_MARKER, {
+          expirationTtl: INVALIDATION_OPERATION_TTL_SECONDS,
+        }),
         this.kv.put(this._tagKey(tag), PENDING_INVALIDATION_MARKER, {
+          expirationTtl: INVALIDATION_OPERATION_TTL_SECONDS,
+        }),
+      ]),
+    );
+
+    const preCommitStates = await Promise.all(
+      operations.map(({ tag, key }) => this._readSharedInvalidationState(tag, key)),
+    );
+    await Promise.all(
+      operations.map(({ tag }, index) => {
+        const state = preCommitStates[index];
+        return this.kv.put(
+          this._tagKey(tag),
+          state.pending ? PENDING_INVALIDATION_MARKER : String(Math.max(state.version, pendingAt)),
+          {
+            expirationTtl: state.pending ? INVALIDATION_OPERATION_TTL_SECONDS : 30 * 24 * 3600,
+          },
+        );
+      }),
+    );
+
+    // The operation remains pending until its durable write has completed.
+    // This makes a pending record proof that another publisher may still
+    // overwrite the durable key, even when its completion timestamp is older.
+    const completedAt = Date.now();
+    await Promise.all(
+      operations.map(({ key }) =>
+        this.kv.put(key, String(completedAt), {
           expirationTtl: 30 * 24 * 3600,
         }),
       ),
     );
 
-    const completedAt = Date.now();
-    await Promise.all(
-      validTags.map((tag) =>
-        this.kv.put(this._tagKey(tag), String(completedAt), {
-          expirationTtl: 30 * 24 * 3600,
-        }),
-      ),
+    const postCommitStates = await Promise.all(
+      operations.map(({ tag }) => this._readSharedInvalidationState(tag)),
     );
-    for (const tag of validTags) {
-      this._tagCache.set(tag, { timestamp: completedAt, fetchedAt: completedAt });
+    await Promise.all(
+      operations.map(async ({ tag }, index) => {
+        const state = postCommitStates[index];
+        if (state.pending) return;
+        const version = Math.max(state.version, completedAt);
+        await this.kv.put(this._tagKey(tag), String(version), {
+          expirationTtl: 30 * 24 * 3600,
+        });
+        await Promise.all(state.operationKeys.map((key) => this.kv.delete(key)));
+      }),
+    );
+    for (let index = 0; index < operations.length; index++) {
+      const state = postCommitStates[index];
+      const version = Math.max(state.version, completedAt);
+      this._tagCache.set(operations[index].tag, {
+        timestamp: state.pending ? Number.NaN : version,
+        fetchedAt: completedAt,
+      });
     }
   }
 
@@ -524,12 +642,13 @@ export class KVCacheHandler implements CacheHandler {
    */
   async getInvalidationVersion(tags: readonly string[]): Promise<number> {
     const validTags = validUniqueTags([...tags]);
-    const markers = await Promise.all(validTags.map((tag) => this.kv.get(this._tagKey(tag))));
+    const markers = await Promise.all(
+      validTags.map((tag) => this._readSharedInvalidationVersion(tag)),
+    );
     let version = 0;
     for (let i = 0; i < validTags.length; i++) {
-      const marker = markers[i];
-      const timestamp = marker === null ? 0 : Number(marker);
-      if (Number.isNaN(timestamp)) return Number.POSITIVE_INFINITY;
+      const timestamp = markers[i];
+      if (!Number.isFinite(timestamp)) return Number.POSITIVE_INFINITY;
       const current = this._tagCache.get(validTags[i]);
       if (Number.isNaN(current?.timestamp)) {
         return Number.POSITIVE_INFINITY;

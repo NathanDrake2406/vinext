@@ -334,6 +334,7 @@ export type ResolvePagesPageDataOptions = {
     key: string,
     renderFn: () => Promise<void>,
     errorContext?: { routerKind: "Pages Router"; routePath: string; routeType: "render" },
+    tags?: readonly string[],
   ) => void;
   renderIsrPassToStringAsync: (element: ReactNode) => Promise<string>;
   vinext?: VinextNextData["__vinext"];
@@ -1374,6 +1375,7 @@ export async function resolvePagesPageData(
           routePath: options.routePattern,
           routeType: "render",
         },
+        cacheTags,
       );
     };
 

@@ -542,9 +542,12 @@ function scheduleUnstableCacheBackgroundRevalidation(
   tags: string[],
   refresh: () => Promise<unknown>,
 ): void {
-  // Runs synchronously until the first marker read, so the no-producer path
-  // still registers the revalidation in the calling tick.
-  void scheduleUnstableCacheBackgroundRevalidationAsync(cacheKey, tags, refresh);
+  // Keep the scheduler alive before it can yield to a shared invalidation
+  // lookup. When an older producer is disqualified, the scheduler owns both
+  // selecting and completing its replacement.
+  const scheduler = scheduleUnstableCacheBackgroundRevalidationAsync(cacheKey, tags, refresh);
+  waitUntilUnstableCacheRevalidation(scheduler);
+  void scheduler;
 }
 
 async function scheduleUnstableCacheBackgroundRevalidationAsync(
@@ -573,7 +576,7 @@ async function scheduleUnstableCacheBackgroundRevalidationAsync(
 
   producer = { startTime, tags, promise: trackedRevalidation };
   pending.set(cacheKey, producer);
-  waitUntilUnstableCacheRevalidation(trackedRevalidation);
+  await trackedRevalidation;
 }
 
 async function refreshUnstableCacheResult<Args extends unknown[], Result>(

@@ -426,7 +426,7 @@ const globalHandlers = globalThis as unknown as Record<PropertyKey, VersionedCac
  * can source versions from shared storage when their backend supports it.
  */
 class LegacyFencedCacheHandler implements VersionedCacheHandler {
-  private readonly tagInvalidations = new Map<string, { version: number; token: symbol }>();
+  private readonly tagInvalidations = new Map<string, { version: number; pending: Set<symbol> }>();
   /**
    * Highest marker evicted from the bounded per-tag map. Treating this floor
    * as relevant to every tag can cause an extra regeneration, but never lets
@@ -456,7 +456,12 @@ class LegacyFencedCacheHandler implements VersionedCacheHandler {
       }
       for (const tag of guardedTags) {
         const invalidation = this.tagInvalidations.get(tag);
-        if (invalidation !== undefined && invalidation.version >= guardSince) return;
+        if (
+          invalidation !== undefined &&
+          (invalidation.pending.size > 0 || invalidation.version >= guardSince)
+        ) {
+          return;
+        }
       }
     }
     await this.delegate.set(key, data, ctx);
@@ -470,7 +475,10 @@ class LegacyFencedCacheHandler implements VersionedCacheHandler {
           ? [...guardedTags]
           : [...guardedTags].filter((tag) => {
               const invalidation = this.tagInvalidations.get(tag);
-              return invalidation !== undefined && invalidation.version >= guardSince;
+              return (
+                invalidation !== undefined &&
+                (invalidation.pending.size > 0 || invalidation.version >= guardSince)
+              );
             });
       if (invalidatedDuringWrite.length > 0) {
         await this.delegate.revalidateTag(invalidatedDuringWrite);
@@ -479,19 +487,33 @@ class LegacyFencedCacheHandler implements VersionedCacheHandler {
   }
 
   async revalidateTag(tags: string | string[], durations?: { expire?: number }): Promise<void> {
-    const tagList = Array.isArray(tags) ? tags : [tags];
-    const startedAt = Date.now();
+    const tagList = [...new Set(Array.isArray(tags) ? tags : [tags])];
     const token = Symbol();
-    const previousInvalidations = new Map<string, { version: number; token: symbol } | undefined>();
     for (const tag of tagList) {
-      previousInvalidations.set(tag, this.tagInvalidations.get(tag));
-      this.tagInvalidations.set(tag, { version: startedAt, token });
+      const invalidation = this.tagInvalidations.get(tag) ?? {
+        version: 0,
+        pending: new Set<symbol>(),
+      };
+      invalidation.pending.add(token);
+      this.tagInvalidations.set(tag, invalidation);
     }
 
     try {
       await this.delegate.revalidateTag(tags, durations);
+      const completedAt = Date.now();
+      for (const tag of tagList) {
+        const invalidation = this.tagInvalidations.get(tag);
+        if (invalidation === undefined) continue;
+        invalidation.pending.delete(token);
+        invalidation.version = Math.max(invalidation.version, completedAt);
+      }
       while (this.tagInvalidations.size > MAX_REVALIDATED_TAG_ENTRIES) {
-        const oldestTag = this.tagInvalidations.keys().next().value;
+        let oldestTag: string | undefined;
+        for (const [tag, invalidation] of this.tagInvalidations) {
+          if (invalidation.pending.size > 0) continue;
+          oldestTag = tag;
+          break;
+        }
         if (oldestTag === undefined) break;
         const evicted = this.tagInvalidations.get(oldestTag);
         if (evicted !== undefined) {
@@ -500,11 +522,13 @@ class LegacyFencedCacheHandler implements VersionedCacheHandler {
         this.tagInvalidations.delete(oldestTag);
       }
     } catch (error) {
-      for (const [tag, previousInvalidation] of previousInvalidations) {
-        // Do not roll back a newer invalidation that completed concurrently.
-        if (this.tagInvalidations.get(tag)?.token !== token) continue;
-        if (previousInvalidation === undefined) this.tagInvalidations.delete(tag);
-        else this.tagInvalidations.set(tag, previousInvalidation);
+      for (const tag of tagList) {
+        const invalidation = this.tagInvalidations.get(tag);
+        if (invalidation === undefined) continue;
+        invalidation.pending.delete(token);
+        if (invalidation.pending.size === 0 && invalidation.version === 0) {
+          this.tagInvalidations.delete(tag);
+        }
       }
       throw error;
     }
@@ -518,6 +542,7 @@ class LegacyFencedCacheHandler implements VersionedCacheHandler {
     let version = this.evictedInvalidationFloor;
     for (const tag of tags) {
       const invalidation = this.tagInvalidations.get(tag);
+      if (invalidation?.pending.size) return Number.POSITIVE_INFINITY;
       if (invalidation !== undefined && invalidation.version > version) {
         version = invalidation.version;
       }
