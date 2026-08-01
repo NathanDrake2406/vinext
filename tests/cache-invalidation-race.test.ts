@@ -185,6 +185,10 @@ describe("cache invalidation race guards", () => {
 
     await Promise.resolve(revalidateTag("users"));
     await Promise.resolve(revalidateTag("posts"));
+    const postsInvalidatedAt = await getCacheHandler().getInvalidationVersion?.(["posts"]);
+    if (postsInvalidatedAt !== undefined) {
+      await waitUntil(() => Date.now() > postsInvalidatedAt);
+    }
 
     resolveFetch(new Response(JSON.stringify({ count: 42 }), { status: 200 }));
     await inFlight;
@@ -574,5 +578,56 @@ describe("cache invalidation race guards", () => {
     );
     const entry = await handlerB.get("race-posts-value");
     expect(entry?.value?.kind).toBe("FETCH");
+  });
+
+  it("rejects a late KV put at read time when invalidation races the marker check", async () => {
+    const store = new Map<string, string>();
+    const baseKv = createSharedMockKV(store);
+    let markerRead!: () => void;
+    const markerReadPromise = new Promise<void>((resolve) => (markerRead = resolve));
+    let releaseMarkerRead!: () => void;
+    const markerReadGate = new Promise<void>((resolve) => (releaseMarkerRead = resolve));
+    let blockMarkerRead = true;
+
+    const kv = {
+      ...baseKv,
+      get: async (key: string) => {
+        const value = await baseKv.get(key);
+        if (key === "__tag:posts" && blockMarkerRead) {
+          blockMarkerRead = false;
+          markerRead();
+          await markerReadGate;
+        }
+        return value;
+      },
+    };
+    const writer = new KVCacheHandler(kv as never);
+    const reader = new KVCacheHandler(kv as never);
+    const guardSince = Date.now() - 1_000;
+
+    const write = writer.set(
+      "race-check-to-put",
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: "stale", url: "https://api.example.com/posts" },
+        tags: ["posts"],
+        revalidate: 60,
+      },
+      { tags: ["posts"], guardSince },
+    );
+
+    // The handler has observed no marker. Invalidate before releasing its
+    // marker read so the entry put lands after the invalidation.
+    await markerReadPromise;
+    await writer.revalidateTag("posts");
+    releaseMarkerRead();
+    await write;
+
+    const stored = JSON.parse(store.get("cache:race-check-to-put")!);
+    expect(stored.lastModified).toBe(guardSince);
+
+    // A fresh handler must reject the late entry through ordinary read-time
+    // validation against the persisted invalidation marker.
+    await expect(reader.get("race-check-to-put")).resolves.toBeNull();
   });
 });

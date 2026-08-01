@@ -371,6 +371,7 @@ export class KVCacheHandler implements CacheHandler {
     }
     if (effectiveRevalidate === 0) return Promise.resolve();
 
+    const guardSince = readPositiveNumberField(ctx, "guardSince");
     const now = Date.now();
     const revalidateAt =
       typeof effectiveRevalidate === "number" && effectiveRevalidate > 0
@@ -393,7 +394,7 @@ export class KVCacheHandler implements CacheHandler {
     const entry: KVCacheEntry = {
       value: serializable,
       tags,
-      lastModified: now,
+      lastModified: guardSince ?? now,
       revalidateAt,
       expireAt,
       cacheControl,
@@ -426,11 +427,10 @@ export class KVCacheHandler implements CacheHandler {
     // entry's tags (context tags plus guard-only soft tags) is newer than the
     // producer's start. Markers are read fresh from KV, bypassing the local
     // `_tagCache`, so invalidations that landed in another isolate are seen.
-    // KV has no compare-and-set, so the check-then-put is not atomic across
-    // isolates; the window is bounded by marker propagation latency, and the
-    // same-isolate window is closed because marker writes and this read
-    // serialise through the same KV namespace.
-    const guardSince = readPositiveNumberField(ctx, "guardSince");
+    // Guarded entries retain the producer's start in `lastModified`, so the
+    // normal read-time marker check also rejects invalidations racing this
+    // optimisation and the subsequent put. KV has no compare-and-set, so the
+    // pre-write check must not be the correctness mechanism.
     if (guardSince !== undefined) {
       const softTags = validUniqueTags(readStringArrayField(ctx, "softTags"));
       if (await this._guardRefusesWrite(validUniqueTags([...tags, ...softTags]), guardSince)) {
