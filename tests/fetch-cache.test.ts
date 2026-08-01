@@ -120,21 +120,50 @@ describe("fetch cache shim", () => {
     };
 
     try {
+      const fetchInRequest = async (draftModeEnabled: boolean) => {
+        enterRequest(draftModeEnabled);
+        return runWithFetchCache(() => fetch(url, fetchOptions));
+      };
+
       // Seed the shared entry with published content.
-      enterRequest(false);
-      const published = await fetch(url, fetchOptions);
+      const published = await fetchInRequest(false);
       expect((await published.json()).count).toBe(1);
 
       // Draft mode must bypass both the shared read and the shared write.
-      enterRequest(true);
-      const draft = await fetch(url, fetchOptions);
+      const draft = await fetchInRequest(true);
       expect((await draft.json()).count).toBe(2);
 
       // The draft response must not replace the published shared entry.
-      enterRequest(false);
-      const cachedPublished = await fetch(url, fetchOptions);
+      const cachedPublished = await fetchInRequest(false);
       expect((await cachedPublished.json()).count).toBe(1);
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      setHeadersContext(null);
+    }
+  });
+
+  it("dedupes draft fetches within a render scope without persisting them", async () => {
+    const url = "https://api.example.com/draft-mode-dedupe";
+    setHeadersContext({
+      headers: new Headers(),
+      cookies: new Map(),
+      draftModeEnabled: true,
+    });
+
+    try {
+      const results = await runWithFetchCache(async () => {
+        const [first, second] = await Promise.all([
+          fetch(url, { next: { revalidate: 3600 } }),
+          fetch(url, { next: { revalidate: 3600 } }),
+        ]);
+        return Promise.all([first.json(), second.json()]);
+      });
+
+      expect(results).toEqual([
+        { url, count: 1 },
+        { url, count: 1 },
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       setHeadersContext(null);
     }

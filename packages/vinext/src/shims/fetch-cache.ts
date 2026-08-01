@@ -1029,7 +1029,10 @@ function createPatchedFetch(): typeof globalThis.fetch {
     // Draft renders are not static generations. Bypass both shared fetch-cache
     // reads and writes, matching Next.js's `workStore.isDraftMode` guard.
     if (isDraftModeEnabled()) {
-      return originalFetch(input, init);
+      // Keep request-scoped fetch memoization active while skipping the
+      // persistent cache. This is the same path used by other uncached
+      // fetches in this shim.
+      return dedupeFetch(input, init);
     }
 
     const nextOpts = (init as ExtendedRequestInit | undefined)?.next as
