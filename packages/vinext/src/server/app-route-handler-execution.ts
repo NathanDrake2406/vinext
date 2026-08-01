@@ -35,7 +35,6 @@ import {
   createTrackedAppRouteRequest,
   markKnownDynamicAppRoute,
 } from "./app-route-handler-runtime.js";
-import { ensureMutableResponse } from "./response-headers.js";
 
 export type AppRouteParams = Record<string, string | string[]>;
 export type AppRouteDynamicUsageFn = () => boolean;
@@ -208,10 +207,14 @@ export async function executeAppRouteHandler(
     }
     const { dynamicUsedInHandler } = handlerResult;
     assertSupportedAppRouteHandlerResponse(handlerResult.response);
-    // The handler owns the Response it returned, and `return fetch(upstream)`
-    // hands back one with immutable headers. Take a framework-owned copy before
-    // stamping ISR, cache-state, and cookie headers onto it.
-    const response = ensureMutableResponse(handlerResult.response);
+    // Ownership transfers here: the handler's Response becomes a framework one
+    // that later stages may stamp headers onto. Without the copy, `return
+    // fetch(upstream)` hands back immutable headers and every stamp throws.
+    const response = new Response(handlerResult.response.body, {
+      status: handlerResult.response.status,
+      statusText: handlerResult.response.statusText,
+      headers: new Headers(handlerResult.response.headers),
+    });
     const handlerSetCacheControl = response.headers.has("cache-control");
 
     if (dynamicUsedInHandler) {

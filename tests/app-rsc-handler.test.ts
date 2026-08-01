@@ -9,6 +9,8 @@ import {
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { createAppRscHandler } from "../packages/vinext/src/server/app-rsc-handler.js";
+import type { NextHeader } from "../packages/vinext/src/config/next-config.js";
+import { dispatchAppRouteHandler } from "../packages/vinext/src/server/app-route-handler-dispatch.js";
 import { createAppRscRouteMatcher } from "../packages/vinext/src/server/app-rsc-route-matching.js";
 import type { AppRouteTreePrefetchRoute } from "../packages/vinext/src/server/app-route-tree-prefetch.js";
 import { createArtifactCompatibilityEnvelope } from "../packages/vinext/src/server/artifact-compatibility.js";
@@ -41,7 +43,7 @@ type TestRoute = {
   page?: { default?: unknown } | null;
   pattern: string;
   rootParamNames?: readonly string[];
-  routeHandler?: { GET?: () => Response; runtime?: string } | null;
+  routeHandler?: { GET?: () => Response | Promise<Response>; runtime?: string } | null;
   routeSegments: readonly string[];
   slots?: AppRouteTreePrefetchRoute["slots"];
 };
@@ -3749,19 +3751,15 @@ describe("createAppRscHandler", () => {
   });
 });
 
-describe("createAppRscHandler — userland responses with immutable headers", () => {
-  // A Response produced by fetch() has an "immutable" headers guard, so every
-  // set/append/delete throws TypeError. Response finalization must not mutate a
-  // Response it does not own, or the canonical proxy handler
-  // `export async function GET() { return fetch(upstream) }` 500s on every request.
-  async function withUpstream(
-    run: (upstreamBase: string) => Promise<void>,
-    respond: (res: import("node:http").ServerResponse) => void = (res) => {
+describe("createAppRscHandler — proxying an upstream fetch() response", () => {
+  // `export async function GET() { return fetch(upstream) }` returned 500 on
+  // every request: fetch() responses have immutable headers, and finalization
+  // stamped Vary / Cache-Control / config headers straight onto them.
+  async function withUpstream(run: (upstreamBase: string) => Promise<void>): Promise<void> {
+    const server = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "text/plain", "x-upstream": "yes" });
       res.end("upstream payload");
-    },
-  ): Promise<void> {
-    const server = createServer((_req, res) => respond(res));
+    });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     try {
@@ -3771,44 +3769,68 @@ describe("createAppRscHandler — userland responses with immutable headers", ()
     }
   }
 
-  function createProxyRoute() {
-    return createPageRoute({
+  // Drives the real dispatcher rather than the injectable stub, so the response
+  // reaches finalization the same way it does in production.
+  function createProxyHandler(upstreamBase: string, configHeaders: NextHeader[] = []) {
+    const route = createPageRoute({
       __loadPage: undefined,
       __loadRouteHandler() {},
       page: null,
       pattern: "/api/proxy",
-      routeHandler: { GET: () => new Response("route") },
+      routeHandler: { GET: () => fetch(upstreamBase) },
       routeSegments: ["api", "proxy"],
+    });
+
+    return createHandler({
+      configHeaders,
+      dispatchMatchedRouteHandler: (dispatch) =>
+        dispatchAppRouteHandler({
+          cleanPathname: dispatch.cleanPathname,
+          clearRequestContext() {},
+          draftModeSecret: "test-draft-secret",
+          i18n: null,
+          isDevelopment: false,
+          isProduction: true,
+          async isrGet() {
+            return null;
+          },
+          isrRouteKey: (pathname) => `route:${pathname}`,
+          async isrSet() {},
+          middlewareContext: dispatch.middlewareContext,
+          middlewareRequestHeaders: null,
+          params: dispatch.params,
+          request: dispatch.request,
+          route: {
+            pattern: "/api/proxy",
+            routeHandler: { GET: () => fetch(upstreamBase) },
+            routeSegments: ["api", "proxy"],
+          },
+          scheduleBackgroundRegeneration() {},
+          searchParams: dispatch.searchParams,
+        }),
+      matchRoute: (pathname) => (pathname === "/api/proxy" ? { params: {}, route } : null),
     });
   }
 
-  it("returns an upstream fetch() response from a route handler unchanged", async () => {
+  it("serves the upstream body and headers instead of a 500", async () => {
     await withUpstream(async (upstreamBase) => {
-      const route = createProxyRoute();
-      const handler = createHandler({
-        configHeaders: [],
-        dispatchMatchedRouteHandler: async () => fetch(upstreamBase),
-        matchRoute: (pathname) => (pathname === "/api/proxy" ? { params: {}, route } : null),
-      });
+      const handler = createProxyHandler(upstreamBase);
 
       const response = await handler(new Request("https://example.test/docs/api/proxy"), null);
 
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("upstream payload");
       expect(response.headers.get("x-upstream")).toBe("yes");
-      // Finalization still applies: the framework's own headers land on the copy.
+      // Finalization still runs; it just writes to the framework-owned copy.
       expect(response.headers.get("Vary")).toBe(VINEXT_RSC_VARY_HEADER);
     });
   });
 
-  it("applies config headers to an upstream fetch() response from a route handler", async () => {
+  it("applies config headers to the proxied response", async () => {
     await withUpstream(async (upstreamBase) => {
-      const route = createProxyRoute();
-      const handler = createHandler({
-        configHeaders: [{ source: "/api/proxy", headers: [{ key: "x-config", value: "applied" }] }],
-        dispatchMatchedRouteHandler: async () => fetch(upstreamBase),
-        matchRoute: (pathname) => (pathname === "/api/proxy" ? { params: {}, route } : null),
-      });
+      const handler = createProxyHandler(upstreamBase, [
+        { source: "/api/proxy", headers: [{ key: "x-config", value: "applied" }] },
+      ]);
 
       const response = await handler(new Request("https://example.test/docs/api/proxy"), null);
 
@@ -3818,7 +3840,7 @@ describe("createAppRscHandler — userland responses with immutable headers", ()
     });
   });
 
-  it("returns an upstream fetch() response from middleware unchanged", async () => {
+  it("proxies from middleware, which reconstructs its own response", async () => {
     await withUpstream(async (upstreamBase) => {
       const handler = createHandler({
         configHeaders: [],
