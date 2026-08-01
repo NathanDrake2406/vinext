@@ -205,15 +205,14 @@ export async function executeAppRouteHandler(
       // finalization clears the request context.
       await _drainPendingRevalidations();
     }
-    const { dynamicUsedInHandler } = handlerResult;
-    assertSupportedAppRouteHandlerResponse(handlerResult.response);
-    // Ownership transfers here: the handler's Response becomes a framework one
-    // that later stages may stamp headers onto. Without the copy, `return
-    // fetch(upstream)` hands back immutable headers and every stamp throws.
-    const response = new Response(handlerResult.response.body, {
-      status: handlerResult.response.status,
-      statusText: handlerResult.response.statusText,
-      headers: new Headers(handlerResult.response.headers),
+    const { dynamicUsedInHandler, response: handlerResponse } = handlerResult;
+    assertSupportedAppRouteHandlerResponse(handlerResponse);
+    // Ownership transfers here. fetch() responses have immutable headers, so
+    // copy before the ISR, cache-state, and cookie stamping below.
+    const response = new Response(handlerResponse.body, {
+      status: handlerResponse.status,
+      statusText: handlerResponse.statusText,
+      headers: new Headers(handlerResponse.headers),
     });
     const handlerSetCacheControl = response.headers.has("cache-control");
 

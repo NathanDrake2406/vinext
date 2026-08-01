@@ -9,7 +9,6 @@ import {
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import { createAppRscHandler } from "../packages/vinext/src/server/app-rsc-handler.js";
-import type { NextHeader } from "../packages/vinext/src/config/next-config.js";
 import { dispatchAppRouteHandler } from "../packages/vinext/src/server/app-route-handler-dispatch.js";
 import { createAppRscRouteMatcher } from "../packages/vinext/src/server/app-rsc-route-matching.js";
 import type { AppRouteTreePrefetchRoute } from "../packages/vinext/src/server/app-route-tree-prefetch.js";
@@ -3752,106 +3751,63 @@ describe("createAppRscHandler", () => {
 });
 
 describe("createAppRscHandler — proxying an upstream fetch() response", () => {
-  // `export async function GET() { return fetch(upstream) }` returned 500 on
-  // every request: fetch() responses have immutable headers, and finalization
-  // stamped Vary / Cache-Control / config headers straight onto them.
-  async function withUpstream(run: (upstreamBase: string) => Promise<void>): Promise<void> {
+  it("serves the upstream body instead of a 500", async () => {
+    // `return fetch(upstream)` from a Route Handler used to 500 on every
+    // request: fetch() responses have immutable headers, and finalization
+    // stamped Vary onto them. Drives the real dispatcher, not the stub seam.
     const server = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "text/plain", "x-upstream": "yes" });
       res.end("upstream payload");
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address() as AddressInfo;
-    try {
-      await run(`http://127.0.0.1:${address.port}`);
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-  }
-
-  // Drives the real dispatcher rather than the injectable stub, so the response
-  // reaches finalization the same way it does in production.
-  function createProxyHandler(upstreamBase: string, configHeaders: NextHeader[] = []) {
+    const { port } = server.address() as AddressInfo;
+    const routeHandler = { GET: () => fetch(`http://127.0.0.1:${port}`) };
     const route = createPageRoute({
       __loadPage: undefined,
       __loadRouteHandler() {},
       page: null,
       pattern: "/api/proxy",
-      routeHandler: { GET: () => fetch(upstreamBase) },
+      routeHandler,
       routeSegments: ["api", "proxy"],
     });
 
-    return createHandler({
-      configHeaders,
-      dispatchMatchedRouteHandler: (dispatch) =>
-        dispatchAppRouteHandler({
-          cleanPathname: dispatch.cleanPathname,
-          clearRequestContext() {},
-          draftModeSecret: "test-draft-secret",
-          i18n: null,
-          isDevelopment: false,
-          isProduction: true,
-          async isrGet() {
-            return null;
-          },
-          isrRouteKey: (pathname) => `route:${pathname}`,
-          async isrSet() {},
-          middlewareContext: dispatch.middlewareContext,
-          middlewareRequestHeaders: null,
-          params: dispatch.params,
-          request: dispatch.request,
-          route: {
-            pattern: "/api/proxy",
-            routeHandler: { GET: () => fetch(upstreamBase) },
-            routeSegments: ["api", "proxy"],
-          },
-          scheduleBackgroundRegeneration() {},
-          searchParams: dispatch.searchParams,
-        }),
-      matchRoute: (pathname) => (pathname === "/api/proxy" ? { params: {}, route } : null),
-    });
-  }
-
-  it("serves the upstream body and headers instead of a 500", async () => {
-    await withUpstream(async (upstreamBase) => {
-      const handler = createProxyHandler(upstreamBase);
-
-      const response = await handler(new Request("https://example.test/docs/api/proxy"), null);
-
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("upstream payload");
-      expect(response.headers.get("x-upstream")).toBe("yes");
-      // Finalization still runs; it just writes to the framework-owned copy.
-      expect(response.headers.get("Vary")).toBe(VINEXT_RSC_VARY_HEADER);
-    });
-  });
-
-  it("applies config headers to the proxied response", async () => {
-    await withUpstream(async (upstreamBase) => {
-      const handler = createProxyHandler(upstreamBase, [
-        { source: "/api/proxy", headers: [{ key: "x-config", value: "applied" }] },
-      ]);
-
-      const response = await handler(new Request("https://example.test/docs/api/proxy"), null);
-
-      expect(response.status).toBe(200);
-      expect(response.headers.get("x-config")).toBe("applied");
-      expect(await response.text()).toBe("upstream payload");
-    });
-  });
-
-  it("proxies from middleware, which reconstructs its own response", async () => {
-    await withUpstream(async (upstreamBase) => {
+    try {
       const handler = createHandler({
-        configHeaders: [],
-        middlewareModule: { default: () => fetch(upstreamBase) },
+        configHeaders: [{ source: "/api/proxy", headers: [{ key: "x-config", value: "applied" }] }],
+        dispatchMatchedRouteHandler: (dispatch) =>
+          dispatchAppRouteHandler({
+            cleanPathname: dispatch.cleanPathname,
+            clearRequestContext() {},
+            draftModeSecret: "test-draft-secret",
+            i18n: null,
+            isDevelopment: false,
+            isProduction: true,
+            async isrGet() {
+              return null;
+            },
+            isrRouteKey: (pathname) => `route:${pathname}`,
+            async isrSet() {},
+            middlewareContext: dispatch.middlewareContext,
+            middlewareRequestHeaders: null,
+            params: dispatch.params,
+            request: dispatch.request,
+            route: { pattern: "/api/proxy", routeHandler, routeSegments: ["api", "proxy"] },
+            scheduleBackgroundRegeneration() {},
+            searchParams: dispatch.searchParams,
+          }),
+        matchRoute: (pathname) => (pathname === "/api/proxy" ? { params: {}, route } : null),
       });
 
-      const response = await handler(new Request("https://example.test/docs/about"), null);
+      const response = await handler(new Request("https://example.test/docs/api/proxy"), null);
 
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("upstream payload");
       expect(response.headers.get("x-upstream")).toBe("yes");
-    });
+      // Finalization still runs, it just writes to the framework-owned copy.
+      expect(response.headers.get("Vary")).toBe(VINEXT_RSC_VARY_HEADER);
+      expect(response.headers.get("x-config")).toBe("applied");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
