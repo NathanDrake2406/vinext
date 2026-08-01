@@ -709,3 +709,41 @@ describe("app route handler dispatch — upstream fetch() responses", () => {
     }
   });
 });
+
+describe("app route handler dispatch — responses the Response constructor rejects", () => {
+  // A Workers WebSocket upgrade is `new Response(null, {status: 101, webSocket})`,
+  // which no runtime lets us reconstruct — rebuilding it would drop the
+  // `webSocket` state and 500 the upgrade. 101 is not constructible in Node, so
+  // this exercises the same sub-200 branch with the status Node can produce.
+  it("passes a sub-200 response through instead of rebuilding it", async () => {
+    const response = await dispatchAppRouteHandler({
+      cleanPathname: "/api/upgrade",
+      clearRequestContext() {},
+      draftModeSecret: "test-draft-secret",
+      i18n: null,
+      isDevelopment: false,
+      isProduction: true,
+      async isrGet() {
+        return null;
+      },
+      isrRouteKey(pathname) {
+        return "route:" + pathname;
+      },
+      async isrSet() {},
+      middlewareContext: { headers: null, status: null },
+      middlewareRequestHeaders: null,
+      params: null,
+      request: new Request("https://example.com/api/upgrade"),
+      route: {
+        pattern: "/api/upgrade",
+        routeHandler: { GET: () => Response.error() },
+        routeSegments: ["api", "upgrade"],
+      },
+      scheduleBackgroundRegeneration() {},
+      searchParams: new URLSearchParams(),
+    });
+
+    // A rebuild attempt would throw RangeError and surface as 500.
+    expect(response.status).toBe(0);
+  });
+});

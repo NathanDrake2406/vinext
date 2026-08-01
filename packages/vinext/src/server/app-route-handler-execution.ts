@@ -208,12 +208,17 @@ export async function executeAppRouteHandler(
     const { dynamicUsedInHandler, response: handlerResponse } = handlerResult;
     assertSupportedAppRouteHandlerResponse(handlerResponse);
     // Ownership transfers here. fetch() responses have immutable headers, so
-    // copy before the ISR, cache-state, and cookie stamping below.
-    const response = new Response(handlerResponse.body, {
-      status: handlerResponse.status,
-      statusText: handlerResponse.statusText,
-      headers: new Headers(handlerResponse.headers),
-    });
+    // copy before the ISR, cache-state, and cookie stamping below. Statuses the
+    // Response constructor rejects are exempt: a Workers 101 upgrade carries
+    // `webSocket` state no copy reproduces, and none of that stamping applies.
+    const canCopy = handlerResponse.status >= 200 && handlerResponse.status <= 599;
+    const response = canCopy
+      ? new Response(handlerResponse.body, {
+          status: handlerResponse.status,
+          statusText: handlerResponse.statusText,
+          headers: new Headers(handlerResponse.headers),
+        })
+      : handlerResponse;
     const handlerSetCacheControl = response.headers.has("cache-control");
 
     if (dynamicUsedInHandler) {
