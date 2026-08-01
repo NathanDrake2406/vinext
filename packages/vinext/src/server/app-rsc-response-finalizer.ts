@@ -4,6 +4,7 @@ import { VINEXT_STATIC_FILE_HEADER } from "./headers.js";
 import { applyCdnResponseHeaders } from "./cache-control.js";
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { mergeVaryHeader } from "./middleware-response-headers.js";
+import { ensureMutableResponse } from "./response-headers.js";
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
 import { sanitizeMethodNotAllowedHeaders } from "./http-error-responses.js";
@@ -46,18 +47,22 @@ export async function finalizeAppRscResponse(
   request: Request,
   options: FinalizeAppRscResponseOptions,
 ): Promise<Response> {
-  // 3xx responses: Response.redirect() headers are immutable (throws on write),
-  // and Next.js deliberately excludes config headers from redirect responses.
+  // Next.js deliberately excludes config headers from redirect responses.
   if (response.status >= 300 && response.status < 400) {
     return response;
   }
 
-  if (!response.headers.has(VINEXT_STATIC_FILE_HEADER)) {
-    const varyHeader = response.headers.get("Vary");
+  // Every App Router response lands here, including ones userland returned
+  // verbatim (`return fetch(upstream)` from a Route Handler). Those have
+  // immutable headers, so take a framework-owned copy before writing to them.
+  const finalized = ensureMutableResponse(response);
+
+  if (!finalized.headers.has(VINEXT_STATIC_FILE_HEADER)) {
+    const varyHeader = finalized.headers.get("Vary");
     if (varyHeader === null) {
-      response.headers.set("Vary", VINEXT_RSC_VARY_HEADER);
+      finalized.headers.set("Vary", VINEXT_RSC_VARY_HEADER);
     } else if (varyHeader !== VINEXT_RSC_VARY_HEADER) {
-      mergeVaryHeader(response.headers, VINEXT_RSC_VARY_HEADER);
+      mergeVaryHeader(finalized.headers, VINEXT_RSC_VARY_HEADER);
     }
   }
 
@@ -69,12 +74,12 @@ export async function finalizeAppRscResponse(
   // when Cache-Control is absent, so it never clobbers a policy a renderer
   // already applied — including a real `CDN-Cache-Control`. Redirects are
   // already skipped above.
-  if (!response.headers.has("Cache-Control")) {
-    applyCdnResponseHeaders(response.headers, { cacheControl: "" });
+  if (!finalized.headers.has("Cache-Control")) {
+    applyCdnResponseHeaders(finalized.headers, { cacheControl: "" });
   }
 
   if (!HAS_CONFIG_HEADERS || !options.configHeaders.length) {
-    return response;
+    return finalized;
   }
 
   const url = new URL(request.url);
@@ -96,7 +101,7 @@ export async function finalizeAppRscResponse(
     : pathname;
 
   const { applyConfigHeadersToResponse } = await import("./config-headers.js");
-  applyConfigHeadersToResponse(response.headers, {
+  applyConfigHeadersToResponse(finalized.headers, {
     configHeaders: options.configHeaders,
     pathname: matchPathname,
     requestContext: options.requestContext,
@@ -106,9 +111,9 @@ export async function finalizeAppRscResponse(
   // Static-file 405 responses are synthesized before config headers run.
   // Reassert their body metadata afterward so a matching headers() rule cannot
   // describe a different body or replace the canonical Allow value.
-  if (response.status === 405 && response.headers.get("Allow") === "GET, HEAD") {
-    sanitizeMethodNotAllowedHeaders(response.headers, "GET, HEAD");
+  if (finalized.status === 405 && finalized.headers.get("Allow") === "GET, HEAD") {
+    sanitizeMethodNotAllowedHeaders(finalized.headers, "GET, HEAD");
   }
 
-  return response;
+  return finalized;
 }

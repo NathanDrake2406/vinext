@@ -35,6 +35,7 @@ import {
   createTrackedAppRouteRequest,
   markKnownDynamicAppRoute,
 } from "./app-route-handler-runtime.js";
+import { ensureMutableResponse } from "./response-headers.js";
 
 export type AppRouteParams = Record<string, string | string[]>;
 export type AppRouteDynamicUsageFn = () => boolean;
@@ -205,8 +206,12 @@ export async function executeAppRouteHandler(
       // finalization clears the request context.
       await _drainPendingRevalidations();
     }
-    const { dynamicUsedInHandler, response } = handlerResult;
-    assertSupportedAppRouteHandlerResponse(response);
+    const { dynamicUsedInHandler } = handlerResult;
+    assertSupportedAppRouteHandlerResponse(handlerResult.response);
+    // The handler owns the Response it returned, and `return fetch(upstream)`
+    // hands back one with immutable headers. Take a framework-owned copy before
+    // stamping ISR, cache-state, and cookie headers onto it.
+    const response = ensureMutableResponse(handlerResult.response);
     const handlerSetCacheControl = response.headers.has("cache-control");
 
     if (dynamicUsedInHandler) {

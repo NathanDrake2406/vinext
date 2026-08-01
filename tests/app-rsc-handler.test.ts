@@ -3748,3 +3748,88 @@ describe("createAppRscHandler", () => {
     });
   });
 });
+
+describe("createAppRscHandler — userland responses with immutable headers", () => {
+  // A Response produced by fetch() has an "immutable" headers guard, so every
+  // set/append/delete throws TypeError. Response finalization must not mutate a
+  // Response it does not own, or the canonical proxy handler
+  // `export async function GET() { return fetch(upstream) }` 500s on every request.
+  async function withUpstream(
+    run: (upstreamBase: string) => Promise<void>,
+    respond: (res: import("node:http").ServerResponse) => void = (res) => {
+      res.writeHead(200, { "content-type": "text/plain", "x-upstream": "yes" });
+      res.end("upstream payload");
+    },
+  ): Promise<void> {
+    const server = createServer((_req, res) => respond(res));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    try {
+      await run(`http://127.0.0.1:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+
+  function createProxyRoute() {
+    return createPageRoute({
+      __loadPage: undefined,
+      __loadRouteHandler() {},
+      page: null,
+      pattern: "/api/proxy",
+      routeHandler: { GET: () => new Response("route") },
+      routeSegments: ["api", "proxy"],
+    });
+  }
+
+  it("returns an upstream fetch() response from a route handler unchanged", async () => {
+    await withUpstream(async (upstreamBase) => {
+      const route = createProxyRoute();
+      const handler = createHandler({
+        configHeaders: [],
+        dispatchMatchedRouteHandler: async () => fetch(upstreamBase),
+        matchRoute: (pathname) => (pathname === "/api/proxy" ? { params: {}, route } : null),
+      });
+
+      const response = await handler(new Request("https://example.test/docs/api/proxy"), null);
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("upstream payload");
+      expect(response.headers.get("x-upstream")).toBe("yes");
+      // Finalization still applies: the framework's own headers land on the copy.
+      expect(response.headers.get("Vary")).toBe(VINEXT_RSC_VARY_HEADER);
+    });
+  });
+
+  it("applies config headers to an upstream fetch() response from a route handler", async () => {
+    await withUpstream(async (upstreamBase) => {
+      const route = createProxyRoute();
+      const handler = createHandler({
+        configHeaders: [{ source: "/api/proxy", headers: [{ key: "x-config", value: "applied" }] }],
+        dispatchMatchedRouteHandler: async () => fetch(upstreamBase),
+        matchRoute: (pathname) => (pathname === "/api/proxy" ? { params: {}, route } : null),
+      });
+
+      const response = await handler(new Request("https://example.test/docs/api/proxy"), null);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-config")).toBe("applied");
+      expect(await response.text()).toBe("upstream payload");
+    });
+  });
+
+  it("returns an upstream fetch() response from middleware unchanged", async () => {
+    await withUpstream(async (upstreamBase) => {
+      const handler = createHandler({
+        configHeaders: [],
+        middlewareModule: { default: () => fetch(upstreamBase) },
+      });
+
+      const response = await handler(new Request("https://example.test/docs/about"), null);
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("upstream payload");
+      expect(response.headers.get("x-upstream")).toBe("yes");
+    });
+  });
+});

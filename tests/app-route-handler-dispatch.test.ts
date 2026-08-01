@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { dispatchAppRouteHandler } from "../packages/vinext/src/server/app-route-handler-dispatch.js";
 import type { CachedRouteValue } from "../packages/vinext/src/shims/cache.js";
@@ -649,6 +651,61 @@ describe("app route handler dispatch", () => {
     } finally {
       releaseInvalidation();
       setDataCacheHandler(previousHandler);
+    }
+  });
+});
+
+describe("app route handler dispatch — upstream fetch() responses", () => {
+  // fetch() responses carry an "immutable" headers guard. The ISR/revalidate
+  // header stamping runs before finalization, so it must not mutate the
+  // Response the handler returned either.
+  it("stamps ISR headers on a proxied fetch() response without mutating it", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain", "x-upstream": "yes" });
+      res.end("upstream payload");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isrSet = vi.fn();
+
+    try {
+      const response = await dispatchAppRouteHandler({
+        cleanPathname: "/api/proxy",
+        clearRequestContext() {},
+        draftModeSecret: "test-draft-secret",
+        i18n: null,
+        isDevelopment: false,
+        isProduction: true,
+        async isrGet() {
+          return null;
+        },
+        isrRouteKey(pathname) {
+          return "route:" + pathname;
+        },
+        isrSet,
+        middlewareContext: { headers: null, status: null },
+        middlewareRequestHeaders: null,
+        params: null,
+        request: new Request("https://example.com/api/proxy"),
+        route: {
+          pattern: "/api/proxy",
+          routeHandler: {
+            GET: () => fetch(`http://127.0.0.1:${address.port}`),
+            revalidate: 60,
+          },
+          routeSegments: ["api", "proxy"],
+        },
+        scheduleBackgroundRegeneration() {},
+        searchParams: new URLSearchParams(),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("upstream payload");
+      expect(response.headers.get("x-upstream")).toBe("yes");
+      expect(response.headers.get("cache-control")).toContain("s-maxage=60");
+      expect(response.headers.get("x-vinext-cache")).toBe("MISS");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });
