@@ -58,7 +58,7 @@ import {
   stripRscSuffix,
   VINEXT_RSC_CACHE_BUSTING_SEARCH_PARAM,
 } from "./app-rsc-cache-busting.js";
-import { finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
+import { applyAppRscConfigHeaders, finalizeAppRscResponse } from "./app-rsc-response-finalizer.js";
 import { normalizeRscRequest } from "./app-rsc-request-normalization.js";
 import { buildNextDataNotFoundResponse, normalizePagesDataRequest } from "./pages-data-route.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
@@ -153,6 +153,7 @@ type RunAppMiddlewareOptions = {
   context: AppRscMiddlewareContext;
   hadBasePath: boolean;
   isDataRequest: boolean;
+  middlewareRequest?: Request;
   request: Request;
 };
 
@@ -296,6 +297,8 @@ type HandleServerActionRequestOptions<TRoute> = {
   scriptNonce?: string;
   routeMatch: AppRscRouteMatch<TRoute> | null;
   routePathname: string;
+  dispatchRedirectTargetRequest: (request: Request) => Promise<Response>;
+  sourceConfigHeaders: Headers | null;
   searchParams: URLSearchParams;
 };
 
@@ -530,12 +533,11 @@ function requestWithoutRscCacheBustingSearchParam(request: Request): Request {
   if (!hasRscCacheBustingSearchParam(url)) return request;
 
   stripRscCacheBustingSearchParam(url);
-  // Clone when a body is present so the original request stays usable, then
-  // reconstruct via `cloneRequestWithUrl` rather than a bare `new Request` so
-  // the Workers `cf` metadata is preserved (user middleware reads it directly)
-  // and `duplex: "half"` is set for streaming bodies.
-  const source = request.body ? request.clone() : request;
-  return cloneRequestWithUrl(source, url.toString());
+  // URL normalization does not create a second body consumer. Reconstructing
+  // from the request shares/transfers its stream into the replacement request;
+  // App middleware creates the one explicit tee when it genuinely needs an
+  // isolated branch.
+  return cloneRequestWithUrl(request, url.toString());
 }
 
 function requestWithoutRscSuffix(request: Request): Request {
@@ -544,8 +546,7 @@ function requestWithoutRscSuffix(request: Request): Request {
   if (pathname === url.pathname) return request;
 
   url.pathname = pathname;
-  const source = request.body ? request.clone() : request;
-  return cloneRequestWithUrl(source, url.toString());
+  return cloneRequestWithUrl(request, url.toString());
 }
 
 async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
@@ -555,6 +556,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   isDataRequest: boolean,
   isMiddlewareDataRequest: boolean,
   pagesDataRequest: Request | null,
+  dispatchInternalRequest: (request: Request) => Promise<Response>,
+  allowInternalRscDocumentFallback: boolean,
 ): Promise<Response> {
   const handlerStart = process.env.NODE_ENV !== "production" ? performance.now() : 0;
 
@@ -682,11 +685,25 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     : null;
   if (rscCacheBustingRedirect) return rscCacheBustingRedirect;
 
+  const runMiddleware = isOnDemandRevalidateRequest(
+    request.headers.get(PRERENDER_REVALIDATE_HEADER),
+  )
+    ? undefined
+    : options.runMiddleware;
+  // Branch the exact downstream body owner before creating URL aliases. URL
+  // reconstruction shares a stream; cloning an alias would lock the body still
+  // referenced by `request` and break the subsequent action/route-handler read.
+  const isolatedMiddlewareSource =
+    runMiddleware && request.body && !request.bodyUsed ? request.clone() : null;
+
   // Keep cache-busting validation on the real request above, then hide the
   // internal `_rsc` transport query from userland middleware and post-middleware
   // has/missing matching. This mirrors Next.js' navigation middleware fixture.
   const normalizedUserlandRequest = requestWithoutRscSuffix(request);
   const userlandRequest = requestWithoutRscCacheBustingSearchParam(normalizedUserlandRequest);
+  const isolatedMiddlewareRequest = isolatedMiddlewareSource
+    ? requestWithoutRscCacheBustingSearchParam(requestWithoutRscSuffix(isolatedMiddlewareSource))
+    : undefined;
   const middlewareContext: AppRscMiddlewareContext = {
     headers: null,
     requestHeaders: null,
@@ -694,11 +711,6 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   };
   let didMiddlewareRewrite = false;
   let didMiddlewareRewritePathname = false;
-  const runMiddleware = isOnDemandRevalidateRequest(
-    request.headers.get(PRERENDER_REVALIDATE_HEADER),
-  )
-    ? undefined
-    : options.runMiddleware;
 
   if (runMiddleware) {
     const middlewareResult = await runMiddleware({
@@ -706,9 +718,13 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       context: middlewareContext,
       hadBasePath,
       isDataRequest: isMiddlewareDataRequest,
+      middlewareRequest: isolatedMiddlewareRequest,
       request: userlandRequest,
     });
     if (middlewareResult.kind === "response") {
+      if (request.body && !request.body.locked) {
+        void request.body.cancel().catch(() => {});
+      }
       return applyConfigHeadersToMiddlewareRedirect(middlewareResult.response, {
         basePathState,
         configHeaders: options.configHeaders,
@@ -1166,6 +1182,24 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     middlewareContext.status = 500;
   }
 
+  let sourceConfigHeaders: Headers | null = null;
+  if (filesystemRouteEligible && isPostRequest && actionId && options.handleServerActionRequest) {
+    sourceConfigHeaders = new Headers();
+    const sourceConfigUrl = new URL(request.url);
+    sourceConfigUrl.pathname = hadBasePath
+      ? addBasePathToPathname(requestCleanPathname, options.basePath)
+      : requestCleanPathname;
+    await applyAppRscConfigHeaders(
+      sourceConfigHeaders,
+      cloneRequestWithUrl(request, sourceConfigUrl.toString()),
+      {
+        basePath: options.basePath,
+        configHeaders: options.configHeaders,
+        i18nConfig: options.i18nConfig,
+        requestContext: preMiddlewareRequestContext,
+      },
+    );
+  }
   const serverActionResponse =
     filesystemRouteEligible && isPostRequest && actionId && options.handleServerActionRequest
       ? await options.handleServerActionRequest({
@@ -1180,6 +1214,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           scriptNonce,
           routeMatch: preActionMatch,
           routePathname: preActionRoutePathname,
+          dispatchRedirectTargetRequest: dispatchInternalRequest,
+          sourceConfigHeaders,
           searchParams: getResolvedSearchParams(),
         })
       : null;
@@ -1197,7 +1233,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       !isInterceptionMatch && (match === null || match.route.isDynamic)
         ? ((await options.renderPagesFallback?.({
             appRouteMatch: match ?? null,
-            allowRscDocumentFallback: didMiddlewareRewritePathname,
+            allowRscDocumentFallback:
+              didMiddlewareRewritePathname || allowInternalRscDocumentFallback,
             isDataRequest,
             isRscRequest,
             matchKind,
@@ -1548,7 +1585,7 @@ function applyProgressiveActionSideEffects(
 export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
   options: CreateAppRscHandlerOptions<TRoute>,
 ): (request: Request, ctx: unknown) => Promise<Response> {
-  return async function appRscHandler(rawRequest, ctx) {
+  return async function appRscHandler(rawRequest, ctx, allowInternalRscDocumentFallback = false) {
     // Register config-driven cache adapters before anything touches the cache.
     // On the Cloudflare worker the entry already registered them with `env` (this
     // guarded call is a no-op); on Node/dev this is where they get wired, with no
@@ -1658,6 +1695,8 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
               isPagesDataRequest,
               isPagesDataRequest,
               pagesDataRequest,
+              (internalRequest) => appRscHandler(internalRequest, ctx, true),
+              allowInternalRscDocumentFallback,
             );
           } catch (error) {
             if (process.env.NODE_ENV !== "production") {
