@@ -833,13 +833,19 @@ describe("cache invalidation race guards", () => {
 
       // A disjoint invalidation does not suppress the write.
       await Promise.resolve(revalidateTag("unrelated"));
-      await isrSet("pages:/race-isr", buildPagesCacheValue("html1", {}), 60, ["race-page"]);
+      await isrSet("pages:/race-isr", buildPagesCacheValue("html1", {}), {
+        cacheControl: { revalidate: 60 },
+        tags: ["race-page"],
+      });
       expect(memoryStoreSize()).toBe(1);
 
       // An intersecting invalidation after the render start suppresses the
       // write: the request's render-start timestamp predates it.
       await Promise.resolve(revalidateTag("race-page"));
-      await isrSet("pages:/race-isr2", buildPagesCacheValue("html2", {}), 60, ["race-page"]);
+      await isrSet("pages:/race-isr2", buildPagesCacheValue("html2", {}), {
+        cacheControl: { revalidate: 60 },
+        tags: ["race-page"],
+      });
       expect(memoryStoreSize()).toBe(1);
     });
   });

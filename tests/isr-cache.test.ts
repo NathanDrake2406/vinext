@@ -395,7 +395,9 @@ describe("ISR expire ceiling", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(1_000);
 
-    await isrSet("expire-test", buildPagesCacheValue("<html>cached</html>", {}), 1, [], 3);
+    await isrSet("expire-test", buildPagesCacheValue("<html>cached</html>", {}), {
+      cacheControl: { revalidate: 1, expire: 3 },
+    });
 
     vi.setSystemTime(2_500);
     const stale = await isrGet("expire-test");
@@ -430,7 +432,10 @@ describe("ISR expire ceiling", () => {
       },
     });
 
-    await isrSet("compat-test", buildPagesCacheValue("<html>cached</html>", {}), 60, ["tag"], 300);
+    await isrSet("compat-test", buildPagesCacheValue("<html>cached</html>", {}), {
+      cacheControl: { revalidate: 60, expire: 300 },
+      tags: ["tag"],
+    });
 
     expect(setContext).toEqual({
       cacheControl: { revalidate: 60, expire: 300 },
@@ -445,7 +450,9 @@ describe("ISR expire ceiling", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(1_000);
 
-    await isrSet("static-test", buildPagesCacheValue("<html>static</html>", {}), false);
+    await isrSet("static-test", buildPagesCacheValue("<html>static</html>", {}), {
+      cacheControl: { revalidate: false },
+    });
 
     vi.setSystemTime(1_000 + 10 * 31_536_000 * 1000);
     const cached = await isrGet("static-test");

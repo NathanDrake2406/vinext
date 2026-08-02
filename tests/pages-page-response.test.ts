@@ -151,6 +151,20 @@ describe("isPagesStreamingBot", () => {
     ).toBe(true);
   });
 
+  it("detects Google crawlers with the -Google suffix", () => {
+    expect(isPagesStreamingBot("Mediapartners-Google/2.1")).toBe(true);
+    expect(isPagesStreamingBot("AdsBot-Google (+http://www.google.com/adsbot.html)")).toBe(true);
+    expect(isPagesStreamingBot("Mozilla/5.0 Storebot-Google/1.0")).toBe(true);
+  });
+
+  it(
+    "handles long non-matching User-Agents without quadratic backtracking",
+    { timeout: 500 },
+    () => {
+      expect(isPagesStreamingBot("a".repeat(64_000))).toBe(false);
+    },
+  );
+
   it("detects other known HTML-limited bots", () => {
     expect(isPagesStreamingBot("Bingbot/2.0")).toBe(true);
     expect(isPagesStreamingBot("facebookexternalhit/1.1")).toBe(true);
@@ -269,9 +283,7 @@ describe("pages page response", () => {
         html: expect.stringContaining("<div>live-body</div>"),
         pageData: { pageProps: { title: "hello" } },
       }),
-      60,
-      ["_N_T_/posts/post"],
-      300,
+      { cacheControl: { revalidate: 60, expire: 300 }, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -293,9 +305,7 @@ describe("pages page response", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "pages:/posts/post",
       expect.objectContaining({ kind: "PAGES" }),
-      false,
-      ["_N_T_/posts/post"],
-      undefined,
+      { cacheControl: { revalidate: false }, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -322,9 +332,7 @@ describe("pages page response", () => {
       expect.objectContaining({
         html: expect.stringContaining("\u20ac<div>live-body</div>"),
       }),
-      60,
-      ["_N_T_/posts/post"],
-      undefined,
+      { cacheControl: { revalidate: 60 }, tags: ["_N_T_/posts/post"] },
     );
   });
 
