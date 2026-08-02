@@ -104,7 +104,15 @@ export type CacheHandlerContext = {
  */
 export type CacheWriteContext = CacheHandlerContext & {
   fetchCache?: boolean;
-  /** Producer start timestamp used to fence writes against later invalidations. */
+  /**
+   * Producer start timestamp used to fence writes against later invalidations.
+   *
+   * Both fences compare this against a marker stamped by the *invalidating*
+   * isolate, so they assume the two wall clocks agree. If the invalidator's
+   * clock trails the producer's, `marker >= guardSince` is false at both the
+   * write guard and the read guard and the stale entry survives to expiry.
+   * Backends that can offer a monotonic shared counter should prefer it.
+   */
   guardSince?: number;
   revalidate?: number | false;
   expire?: number;
@@ -274,7 +282,14 @@ export class MemoryCacheHandler implements VersionedCacheHandler {
     if (!entry) return null;
 
     const invalidationBaseline = entry.invalidationGuardSince ?? entry.lastModified;
-    if (this.evictedInvalidationFloor >= invalidationBaseline) {
+    const softTags = readStringArrayField(ctx, "softTags");
+    // The floor stands in for markers we can no longer name, so it only speaks
+    // for entries a tag could have invalidated. An entry with no tags is
+    // unreachable by `revalidateTag` and must survive an evicted marker.
+    if (
+      (entry.tags.length > 0 || softTags.length > 0) &&
+      this.evictedInvalidationFloor >= invalidationBaseline
+    ) {
       this.deleteEntry(key);
       return null;
     }
@@ -287,7 +302,7 @@ export class MemoryCacheHandler implements VersionedCacheHandler {
       }
     }
 
-    for (const tag of readStringArrayField(ctx, "softTags")) {
+    for (const tag of softTags) {
       const revalidatedAt = this.tagRevalidatedAt.get(tag);
       if (revalidatedAt && revalidatedAt >= invalidationBaseline) {
         return null;
@@ -384,8 +399,9 @@ export class MemoryCacheHandler implements VersionedCacheHandler {
     // synchronous block, so the decision is atomic within this isolate.
     const guardSince = readPositiveNumberField(ctx, "guardSince");
     if (guardSince !== undefined) {
-      if (this.evictedInvalidationFloor >= guardSince) return;
-      for (const tag of [...tags, ...readStringArrayField(ctx, "softTags")]) {
+      const guardTags = [...tags, ...readStringArrayField(ctx, "softTags")];
+      if (guardTags.length > 0 && this.evictedInvalidationFloor >= guardSince) return;
+      for (const tag of guardTags) {
         const revalidatedAt = this.tagRevalidatedAt.get(tag);
         if (revalidatedAt !== undefined && revalidatedAt >= guardSince) return;
       }
@@ -416,6 +432,10 @@ export class MemoryCacheHandler implements VersionedCacheHandler {
     const tagList = Array.isArray(tags) ? tags : [tags];
     const now = Date.now();
     for (const tag of tagList) {
+      // Re-insert so map order tracks marker age: `Map.set` on an existing key
+      // keeps its original position, which would let eviction discard the
+      // newest marker and jump the floor forward over live entries.
+      this.tagRevalidatedAt.delete(tag);
       this.tagRevalidatedAt.set(tag, now);
       while (this.tagRevalidatedAt.size > MAX_REVALIDATED_TAG_ENTRIES) {
         const oldest = this.tagRevalidatedAt.keys().next().value;
@@ -473,12 +493,14 @@ class LegacyFencedCacheHandler implements VersionedCacheHandler {
     const guardSince = readPositiveNumberField(ctx, "guardSince");
     const guardedTags = new Set<string>();
     if (guardSince !== undefined) {
-      if (this.evictedInvalidationFloor >= guardSince) return;
       for (const tag of readStringArrayField(ctx, "tags")) guardedTags.add(tag);
       for (const tag of readStringArrayField(ctx, "softTags")) guardedTags.add(tag);
       if (data && "tags" in data && Array.isArray(data.tags)) {
         for (const tag of data.tags) guardedTags.add(tag);
       }
+      // The floor only summarises tag markers, so it cannot refuse a write that
+      // no tag names. Checked after `guardedTags` is populated.
+      if (guardedTags.size > 0 && this.evictedInvalidationFloor >= guardSince) return;
       for (const tag of guardedTags) {
         const invalidation = this.tagInvalidations.get(tag);
         if (
@@ -494,6 +516,13 @@ class LegacyFencedCacheHandler implements VersionedCacheHandler {
     // A legacy delegate may yield between accepting the write and committing
     // it. If an invalidation completed in that window, repeat it after the
     // write so the late entry cannot restore stale data.
+    //
+    // This over-evicts: `revalidateTag` is the only eviction lever the legacy
+    // CacheHandler contract exposes, so entries another producer wrote
+    // correctly after the invalidation are dropped too. Chosen deliberately —
+    // the cost is an extra regeneration, whereas skipping it serves stale data.
+    // Handlers implementing `getInvalidationVersion` fence in place and never
+    // reach this path.
     if (guardSince !== undefined) {
       const invalidatedDuringWrite =
         this.evictedInvalidationFloor >= guardSince
@@ -531,6 +560,10 @@ class LegacyFencedCacheHandler implements VersionedCacheHandler {
         if (invalidation === undefined) continue;
         invalidation.pending.delete(token);
         invalidation.version = Math.max(invalidation.version, completedAt);
+        // Re-insert so map order tracks version age; eviction below takes the
+        // first non-pending entry and must not discard the newest marker.
+        this.tagInvalidations.delete(tag);
+        this.tagInvalidations.set(tag, invalidation);
       }
       while (this.tagInvalidations.size > MAX_REVALIDATED_TAG_ENTRIES) {
         let oldestTag: string | undefined;

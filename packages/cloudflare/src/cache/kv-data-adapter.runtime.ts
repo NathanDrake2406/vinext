@@ -343,13 +343,15 @@ export class KVCacheHandler implements CacheHandler {
    * leave that marker pointing at an older completion, so deleting its record
    * would turn a settled marker back into a permanently pending one.
    */
-  private async _compactInvalidationOperations(state: SharedInvalidationState): Promise<void> {
+  private _compactInvalidationOperations(state: SharedInvalidationState): void {
     if (state.pending) return;
-    await Promise.all(
-      state.operationKeys
-        .filter((key) => key !== state.orderingAnchorKey && key !== state.durablePendingKey)
-        .map((key) => this.kv.delete(key)),
-    );
+    // Housekeeping only: the version this reader returns does not depend on it,
+    // so the deletes run under waitUntil rather than on the response path.
+    for (const key of state.operationKeys) {
+      if (key !== state.orderingAnchorKey && key !== state.durablePendingKey) {
+        this._deleteInBackground(key);
+      }
+    }
   }
 
   private async _readSharedInvalidationVersion(tag: string): Promise<number> {
@@ -367,11 +369,13 @@ export class KVCacheHandler implements CacheHandler {
       state.durablePendingKey === undefined &&
       (state.durableVersion === undefined || state.durableVersion < state.version)
     ) {
-      await this.kv.put(this._tagKey(tag), String(state.version), {
+      // Not awaited: the repaired marker only saves a future reader the list,
+      // and `_put` registers the write with waitUntil so it still completes.
+      void this._put(this._tagKey(tag), String(state.version), {
         expirationTtl: 30 * 24 * 3600,
       });
     }
-    await this._compactInvalidationOperations(state);
+    this._compactInvalidationOperations(state);
     return state.version;
   }
 
@@ -694,28 +698,19 @@ export class KVCacheHandler implements CacheHandler {
       await Promise.all(currentWrites);
       currentWrites = [];
 
-      const postCommitStates = await Promise.all(
-        operations.map(({ tag }) => this._readSharedInvalidationState(tag)),
-      );
-      currentWrites = operations.map(async (_operation, index) => {
-        const state = postCommitStates[index];
-        if (state.pending) return;
-        // The completed operation record is the durable completion evidence.
-        // Keep the tokenized pending marker in place rather than immediately
-        // rewriting the same tag key, which is rate-limited by KV. Readers
-        // treat a token as settled once its operation record is numeric and
-        // repair an absent marker later when necessary.
-        await this._compactInvalidationOperations(state);
-      });
-      await Promise.all(currentWrites);
-      currentWrites = [];
-      // Re-read after publication before warming local state. This observes an
-      // immutable anchor left by a newer publisher that raced our final durable
-      // write, instead of caching the older pre-write snapshot for the local TTL.
+      // Read back once after publication before warming local state. This
+      // observes an immutable anchor left by a newer publisher that raced our
+      // final durable write, instead of caching the older pre-write snapshot
+      // for the local TTL.
+      //
+      // The completed operation record is the durable completion evidence, so
+      // the tokenized pending marker stays in place rather than rewriting the
+      // same tag key, which KV rate-limits. Readers treat a token as settled
+      // once its operation record is numeric and repair the marker later.
       const publishedStates = await Promise.all(
         operations.map(({ tag }) => this._readSharedInvalidationState(tag)),
       );
-      await Promise.all(publishedStates.map((state) => this._compactInvalidationOperations(state)));
+      for (const state of publishedStates) this._compactInvalidationOperations(state);
       for (let index = 0; index < operations.length; index++) {
         this._tagCache.set(operations[index].tag, {
           timestamp: publishedStates[index].pending ? Number.NaN : publishedStates[index].version,

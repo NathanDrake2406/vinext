@@ -308,6 +308,52 @@ describe("cache invalidation race guards", () => {
     await expect(handler.get("evicted-memory-late-write")).resolves.toBeNull();
   });
 
+  it("keeps untagged entries readable and writable after the marker floor rises", async () => {
+    const handler = getCacheHandler();
+    const untagged = {
+      kind: "FETCH" as const,
+      data: { headers: {}, body: "untagged", url: "https://api.example.com/untagged" },
+      revalidate: 60,
+    };
+
+    await handler.set("untagged-entry", untagged);
+    const guardSince = Date.now();
+    // Overflow the bounded marker map so the evicted floor rises above both the
+    // stored entry and the pending write. No tag names either of them.
+    await handler.revalidateTag(Array.from({ length: 10_001 }, (_, index) => `floor-tag-${index}`));
+
+    await expect(handler.get("untagged-entry")).resolves.toMatchObject({ value: untagged });
+
+    await handler.set("untagged-late-write", untagged, { guardSince });
+    await expect(handler.get("untagged-late-write")).resolves.toMatchObject({ value: untagged });
+  });
+
+  it("evicts the oldest tag marker by timestamp rather than by insertion order", async () => {
+    const handler = getCacheHandler();
+    const value = {
+      kind: "FETCH" as const,
+      data: { headers: {}, body: "fresh", url: "https://api.example.com/lru" },
+      tags: ["unrelated-tag"],
+      revalidate: 60,
+    };
+
+    // `hot-tag` is inserted first, so it sits at the head of the marker map.
+    await handler.revalidateTag("hot-tag");
+    await handler.revalidateTag(Array.from({ length: 9_999 }, (_, index) => `filler-tag-${index}`));
+
+    // An entry written now is newer than every marker recorded so far.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await handler.set("post-invalidation-entry", value);
+
+    // Re-invalidating `hot-tag` refreshes its timestamp but not its position, so
+    // the next overflow evicts a marker that is in fact the newest.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await handler.revalidateTag("hot-tag");
+    await handler.revalidateTag("overflow-tag");
+
+    await expect(handler.get("post-invalidation-entry")).resolves.toMatchObject({ value });
+  });
+
   it("keeps memory entry age at commit time while retaining the producer guard", async () => {
     const guardSince = Date.now() - 1_000;
     await getCacheHandler().set(
