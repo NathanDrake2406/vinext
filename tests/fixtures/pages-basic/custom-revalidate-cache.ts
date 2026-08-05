@@ -3,6 +3,7 @@ import {
   setCacheHandler,
   type CacheHandler,
   type CacheHandlerValue,
+  type CacheWriteContext,
 } from "vinext/shims/cache-handler";
 import { isrCacheKey } from "vinext/internal/server/isr-cache";
 
@@ -20,12 +21,16 @@ class FixtureCacheHandler implements CacheHandler {
     return this.entries.get(key) ?? this.delegate.get(key, ctx);
   }
 
-  async set(key: string, value: CacheHandlerValue["value"], ctx?: Record<string, unknown>) {
+  async set(key: string, value: CacheHandlerValue["value"], ctx?: CacheWriteContext) {
     return this.delegate.set(key, value, ctx);
   }
 
   async revalidateTag(tags: string | string[], durations?: { expire?: number }) {
     return this.delegate.revalidateTag(tags, durations);
+  }
+
+  async getInvalidationVersion(tags: readonly string[]) {
+    return this.delegate.getInvalidationVersion(tags);
   }
 
   resetRequestCache() {

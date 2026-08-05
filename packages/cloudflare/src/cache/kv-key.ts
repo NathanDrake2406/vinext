@@ -3,6 +3,9 @@ import { fnv1a64 } from "vinext/internal/utils/hash";
 /** Key prefix for tag invalidation timestamps. */
 const TAG_PREFIX = "__tag:";
 
+/** Key prefix for transient per-operation invalidation ordering records. */
+const TAG_OPERATION_PREFIX = "__tag-op:";
+
 /** Key prefix for cache entries. */
 export const ENTRY_PREFIX = "cache:";
 
@@ -12,6 +15,9 @@ const KV_KEY_MAX_BYTES = 512;
 /** Marker for logical keys that must be hashed to fit in KV. */
 const HASHED_KEY_PREFIX = "__hash:";
 
+/** Canonical UUID text appended to invalidation operation keys. */
+const OPERATION_ID_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
+
 const KV_KEY_ENCODER = new TextEncoder();
 
 export type KvKeySpace = {
@@ -19,6 +25,7 @@ export type KvKeySpace = {
   entryPrefix: string;
   entryKey(logicalKey: string): string;
   tagKey(tag: string): string;
+  tagOperationPrefix(tag: string): string;
 };
 
 function kvKeyByteLength(key: string): number {
@@ -33,10 +40,8 @@ function normalizeAppPrefix(appPrefix: string | undefined): string {
   if (!appPrefix) return "";
 
   const prefix = `${appPrefix}:`;
-  const longestCategoryPrefix =
-    ENTRY_PREFIX.length >= TAG_PREFIX.length ? ENTRY_PREFIX : TAG_PREFIX;
-  const shortestHashedKey = `${prefix}${longestCategoryPrefix}${HASHED_KEY_PREFIX}${fnv1a64("")}`;
-  if (kvKeyByteLength(shortestHashedKey) <= KV_KEY_MAX_BYTES) return prefix;
+  const longestGeneratedKey = `${prefix}${TAG_OPERATION_PREFIX}${fnv1a64("")}:${OPERATION_ID_PLACEHOLDER}`;
+  if (kvKeyByteLength(longestGeneratedKey) <= KV_KEY_MAX_BYTES) return prefix;
 
   return `__app:${fnv1a64(appPrefix)}:`;
 }
@@ -58,5 +63,8 @@ export function createKvKeySpace(appPrefix: string | undefined): KvKeySpace {
     entryPrefix: `${prefix}${ENTRY_PREFIX}`,
     entryKey: (logicalKey) => buildStorageKey(prefix, ENTRY_PREFIX, logicalKey),
     tagKey: (tag) => buildStorageKey(prefix, TAG_PREFIX, tag),
+    // Operation records always use a bounded tag hash so callers can append a
+    // unique operation id without exceeding KV's 512-byte key limit.
+    tagOperationPrefix: (tag) => `${prefix}${TAG_OPERATION_PREFIX}${fnv1a64(tag)}:`,
   };
 }

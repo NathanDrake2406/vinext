@@ -386,7 +386,7 @@ describe("pages page data", () => {
           pageProps: { fromApp: true, fromStatic: true },
         },
       }),
-      { cacheControl: { revalidate: 10, expire: 300 } },
+      { cacheControl: { revalidate: 10, expire: 300 }, tags: ["_N_T_/posts/post"] },
     );
   });
 
@@ -1380,7 +1380,7 @@ describe("pages page data", () => {
         html: expect.stringContaining("<div>fresh-body</div>"),
         pageData: { pageProps: { title: "fresh" } },
       }),
-      { cacheControl: { revalidate: false } },
+      { cacheControl: { revalidate: false }, tags: ["_N_T_/posts/post"] },
     );
     expect(isrSet).toHaveBeenCalledWith(
       "pages:/posts/post",
@@ -1389,7 +1389,7 @@ describe("pages page data", () => {
         html: expect.stringContaining('"__vinext":{"hasMiddleware":true}'),
         pageData: { pageProps: { title: "fresh" } },
       }),
-      { cacheControl: { revalidate: false } },
+      { cacheControl: { revalidate: false }, tags: ["_N_T_/posts/post"] },
     );
   });
 

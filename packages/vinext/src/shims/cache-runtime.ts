@@ -546,6 +546,10 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
 
       // Shared cache ("use cache" / "use cache: remote")
       const handler = getDataCacheHandler();
+      // Capture the start timestamp before any read or producing work: the
+      // guarded write below must not restore an entry invalidated while this
+      // function executed.
+      const startTime = Date.now();
 
       // Check cache — deserialize via RSC stream when available, JSON otherwise.
       // Pass soft tags so that revalidatePath() / revalidateTag() invalidation
@@ -642,9 +646,14 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           revalidate: revalidateSeconds,
         } satisfies CachedFetchValue;
 
+        // The handler's set refuses the write when any invalidation marker
+        // for the entry's tags (or the request's soft tags) is newer than the
+        // start timestamp — see cache-handler.ts.
         await handler.set(cacheKey, cacheValue, {
           fetchCache: true,
           tags: ctx.tags,
+          softTags,
+          guardSince: startTime,
           cacheControl: {
             revalidate: revalidateSeconds,
             expire: effectiveLife.expire,

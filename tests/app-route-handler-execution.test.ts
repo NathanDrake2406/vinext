@@ -12,10 +12,6 @@ import {
   setHeadersContext,
 } from "../packages/vinext/src/shims/headers.js";
 import { isKnownDynamicAppRoute } from "../packages/vinext/src/server/app-route-handler-runtime.js";
-import {
-  executeAppRouteHandler,
-  runAppRouteHandler,
-} from "../packages/vinext/src/server/app-route-handler-execution.js";
 import { getRootParam, runWithRootParamsScope } from "../packages/vinext/src/shims/root-params.js";
 import {
   getDataCacheHandler,
@@ -28,16 +24,18 @@ import {
 
 // The fetch-cache shim captures `originalFetch` from globalThis at import
 // time, so stub fetch BEFORE importing it (same pattern as
-// tests/fetch-cache.test.ts). None of the static imports above pull
-// fetch-cache.js into the runtime module graph — its only reference there is
-// the type-only `FetchCacheState` re-export — so the stub is in place before
-// the capture happens.
+// tests/fetch-cache.test.ts). None of the static imports above reach
+// fetch-cache.js, so the stub is in place before the capture happens. The
+// modules below are imported dynamically because they do reach it:
+// app-route-handler-execution -> isr-cache -> fetch-cache.
 const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
   Response.json({ ok: true }),
 );
 vi.stubGlobal("fetch", fetchMock);
 const { withFetchCache } = await import("../packages/vinext/src/shims/fetch-cache.js");
 const { revalidateTag } = await import("../packages/vinext/src/shims/cache.js");
+const { executeAppRouteHandler, runAppRouteHandler } =
+  await import("../packages/vinext/src/server/app-route-handler-execution.js");
 
 function createDynamicUsageState(): {
   consumeDynamicUsage: () => boolean;
@@ -601,6 +599,7 @@ describe("app route handler execution helpers", () => {
     setDataCacheHandler({
       get: previousHandler.get.bind(previousHandler),
       set: previousHandler.set.bind(previousHandler),
+      getInvalidationVersion: previousHandler.getInvalidationVersion.bind(previousHandler),
       async revalidateTag() {
         markInvalidationStarted();
         await invalidationGate;

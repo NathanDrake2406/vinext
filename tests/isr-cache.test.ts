@@ -36,10 +36,12 @@ import {
 } from "../packages/vinext/src/shims/unified-request-context.js";
 import {
   MemoryCacheHandler,
+  getCacheHandler,
   setCacheHandler,
   revalidatePath,
   type CachedFetchValue,
 } from "../packages/vinext/src/shims/cache.js";
+import { setCurrentFetchSoftTags } from "../packages/vinext/src/shims/fetch-cache.js";
 
 // ─── isrCacheKey ────────────────────────────────────────────────────────
 
@@ -425,6 +427,9 @@ describe("ISR expire ceiling", () => {
         setContext = ctx;
       },
       async revalidateTag() {},
+      async getInvalidationVersion() {
+        return 0;
+      },
     });
 
     await isrSet("compat-test", buildPagesCacheValue("<html>cached</html>", {}), {
@@ -436,6 +441,8 @@ describe("ISR expire ceiling", () => {
       cacheControl: { revalidate: 60, expire: 300 },
       revalidate: 60,
       tags: ["tag"],
+      softTags: [],
+      guardSince: expect.any(Number),
     });
   });
 
@@ -464,6 +471,9 @@ describe("ISR expire ceiling", () => {
       },
       async set() {},
       async revalidateTag() {},
+      async getInvalidationVersion() {
+        return 0;
+      },
     });
 
     await expect(isrGet("expired-handler-entry")).resolves.toMatchObject({
@@ -644,6 +654,47 @@ describe("triggerBackgroundRegeneration", () => {
 
     resolveRender!();
     await renderPromise;
+  });
+
+  it("registers waitUntil before an in-flight producer version lookup settles", async () => {
+    const previousHandler = getCacheHandler();
+    let releaseLookup!: () => void;
+    const lookupGate = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    let releaseRender!: () => void;
+    const renderGate = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    const waitUntil = vi.fn();
+
+    setCacheHandler({
+      get: previousHandler.get.bind(previousHandler),
+      set: previousHandler.set.bind(previousHandler),
+      revalidateTag: previousHandler.revalidateTag.bind(previousHandler),
+      async getInvalidationVersion() {
+        await lookupGate;
+        return 0;
+      },
+    });
+    setCurrentFetchSoftTags(["wait-until-tag"]);
+
+    try {
+      triggerBackgroundRegeneration("regen-version-lookup", async () => {
+        await renderGate;
+      });
+
+      await runWithExecutionContext({ waitUntil }, async () => {
+        triggerBackgroundRegeneration("regen-version-lookup", async () => {});
+        expect(waitUntil).toHaveBeenCalledOnce();
+      });
+    } finally {
+      releaseLookup();
+      releaseRender();
+      await Promise.resolve();
+      setCurrentFetchSoftTags([]);
+      setCacheHandler(previousHandler);
+    }
   });
 
   it("preserves unified request context for async work started by regeneration", async () => {

@@ -70,7 +70,7 @@ import {
   VINEXT_CACHE_HEADER,
 } from "./headers.js";
 import { buildMissIsrCacheControl, ISR_NEVER_CACHE_CONTROL } from "./isr-decision.js";
-import { encodeCacheTag } from "../utils/encode-cache-tag.js";
+import { pathCacheTag } from "../utils/encode-cache-tag.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
 import {
   hasPagesGetInitialProps,
@@ -158,10 +158,9 @@ function applyPagesErrorCachePolicy(
   if (revalidateSeconds === undefined) {
     applyCdnResponseHeaders(headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
   } else {
-    const stem = cacheTagPathname.endsWith("/") ? cacheTagPathname.slice(0, -1) : cacheTagPathname;
     applyCdnResponseHeaders(headers, {
       cacheControl: buildMissIsrCacheControl(revalidateSeconds, expireSeconds),
-      tags: [encodeCacheTag(`_N_T_${stem || "/"}`)],
+      tags: [pathCacheTag(cacheTagPathname)],
     });
   }
   return new Response(response.body, {
@@ -577,7 +576,8 @@ export function createPagesPageHandler(
       isStaticPropsRoute &&
       isOnDemandRevalidateRequest(request.headers.get(PRERENDER_REVALIDATE_HEADER));
     if (shouldCoalesceOnDemand) {
-      const cacheKey = pageIsrCacheKey("pages", routeUrl.split("?")[0]);
+      const cachePathname = routeUrl.split("?")[0];
+      const cacheKey = pageIsrCacheKey("pages", cachePathname);
       const snapshot = await coalesceOnDemandRevalidation(cacheKey, async () => {
         const response = await renderPage(request, url, manifest, middlewareHeaders, {
           ...options,
@@ -592,7 +592,7 @@ export function createPagesPageHandler(
           status: response.status,
           statusText: response.statusText,
         };
-      });
+      }, [pathCacheTag(cachePathname)]);
       return new Response(snapshot.body?.slice() ?? null, {
         headers: snapshot.headers,
         status: snapshot.status,

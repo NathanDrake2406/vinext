@@ -5,9 +5,10 @@
  * unstable_cache. Backed by a pluggable CacheHandler that defaults to
  * in-memory but can be swapped for Cloudflare KV, Redis, DynamoDB, etc.
  *
- * The CacheHandler interface matches Next.js 16's CacheHandler class, so
- * existing community adapters (@neshca/cache-handler, @opennextjs/aws, etc.)
- * can be used directly.
+ * The CacheHandler interface follows Next.js 16's CacheHandler shape. Vinext
+ * also passes an optional `CacheWriteContext` and uses
+ * `getInvalidationVersion()` when a handler provides it; legacy handlers are
+ * wrapped with a same-process fencing fallback for compatibility.
  *
  * Recommended configuration is declarative, via the `cache` option on the
  * `vinext()` plugin in vite.config.ts:
@@ -32,6 +33,11 @@ import { makeHangingPromise } from "./internal/make-hanging-promise.js";
 import { encodeCacheTag, encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getCdnCacheAdapter } from "./cdn-cache.js";
 import { getDataCacheHandler, type CachedFetchValue } from "./cache-handler.js";
+import {
+  deletePendingProducerIfOwned,
+  getOrCreateJoinableProducer,
+  type PendingProducer,
+} from "./pending-producer.js";
 import { getRequestExecutionContext } from "./request-context.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
 import {
@@ -517,11 +523,11 @@ const _UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY = Symbol.for(
   "vinext.unstableCache.pendingRevalidations",
 );
 
-function getPendingUnstableCacheRevalidations(): Map<string, Promise<void>> {
+function getPendingUnstableCacheRevalidations(): Map<string, PendingProducer<void>> {
   const existing = _g[_UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY];
   if (existing instanceof Map) return existing;
 
-  const pending = new Map<string, Promise<void>>();
+  const pending = new Map<string, PendingProducer<void>>();
   _g[_UNSTABLE_CACHE_PENDING_REVALIDATIONS_KEY] = pending;
   return pending;
 }
@@ -533,24 +539,42 @@ function waitUntilUnstableCacheRevalidation(promise: Promise<void>): void {
 
 function scheduleUnstableCacheBackgroundRevalidation(
   cacheKey: string,
+  tags: string[],
   refresh: () => Promise<unknown>,
 ): void {
+  // Keep the scheduler alive before it can yield to a shared invalidation
+  // lookup. When an older producer is disqualified, the scheduler owns both
+  // selecting and completing its replacement.
+  const scheduler = scheduleUnstableCacheBackgroundRevalidationAsync(cacheKey, tags, refresh);
+  waitUntilUnstableCacheRevalidation(scheduler);
+  void scheduler;
+}
+
+async function scheduleUnstableCacheBackgroundRevalidationAsync(
+  cacheKey: string,
+  tags: string[],
+  refresh: () => Promise<unknown>,
+): Promise<void> {
   const pending = getPendingUnstableCacheRevalidations();
-  if (pending.has(cacheKey)) return;
-
-  const revalidation = refresh()
-    .then(() => undefined)
-    .catch((err) => {
-      console.error(`[vinext] unstable_cache background revalidation failed for ${cacheKey}:`, err);
+  const selection = await getOrCreateJoinableProducer(pending, cacheKey, () => {
+    const startTime = Date.now();
+    const revalidation = refresh()
+      .then(() => undefined)
+      .catch((err) => {
+        console.error(
+          `[vinext] unstable_cache background revalidation failed for ${cacheKey}:`,
+          err,
+        );
+      });
+    let producer!: PendingProducer<void>;
+    const trackedRevalidation = revalidation.finally(() => {
+      deletePendingProducerIfOwned(pending, cacheKey, producer);
     });
-  const trackedRevalidation = revalidation.finally(() => {
-    if (pending.get(cacheKey) === trackedRevalidation) {
-      pending.delete(cacheKey);
-    }
-  });
 
-  pending.set(cacheKey, trackedRevalidation);
-  waitUntilUnstableCacheRevalidation(trackedRevalidation);
+    producer = { startTime, tags, promise: trackedRevalidation };
+    return producer;
+  });
+  if (selection.created) await selection.producer.promise;
 }
 
 async function refreshUnstableCacheResult<Args extends unknown[], Result>(
@@ -560,6 +584,10 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
   tags: string[],
   revalidateSeconds: number | false | undefined,
 ): Promise<Result> {
+  // Capture the start timestamp and soft tags before the producing work runs,
+  // so the guarded write below cannot restore an entry invalidated meanwhile.
+  const startTime = Date.now();
+  const softTags = getCurrentFetchSoftTags();
   const result = await _unstableCacheAls.run(true, () => fn(...args));
 
   const cacheValue: CachedFetchValue = {
@@ -577,9 +605,14 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
     revalidate: typeof revalidateSeconds === "number" ? revalidateSeconds : false,
   };
 
+  // The handler's set refuses the write when any invalidation marker for the
+  // entry's tags (or the request's soft tags) is newer than the start — the
+  // ordering decision lives in the cache-handler boundary.
   await getDataCacheHandler().set(cacheKey, cacheValue, {
     fetchCache: true,
     tags,
+    softTags,
+    guardSince: startTime,
     revalidate: revalidateSeconds,
   });
 
@@ -642,7 +675,8 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
         if (cached.ok) {
           if (existing.cacheState === "stale") {
             if (shouldServeStaleUnstableCacheEntry()) {
-              scheduleUnstableCacheBackgroundRevalidation(cacheKey, () =>
+              const producerTags = [...new Set([...tags, ...softTags])];
+              scheduleUnstableCacheBackgroundRevalidation(cacheKey, producerTags, () =>
                 refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
               );
               return cached.value;

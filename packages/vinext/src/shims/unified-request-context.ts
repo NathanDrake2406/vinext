@@ -114,6 +114,7 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     requestScopedCacheLife: null,
     unstableCacheObservations: new Map(),
     unstableCacheRevalidation: "foreground",
+    isrRenderStartTimestamp: undefined,
     _privateCache: null,
     cacheableFetchUrls: new Set<string>(),
     currentRequestTags: [],

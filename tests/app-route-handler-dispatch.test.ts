@@ -9,6 +9,7 @@ import {
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
 import { draftMode, setHeadersContext } from "../packages/vinext/src/shims/headers.js";
 import { after } from "../packages/vinext/src/shims/server.js";
+import { _getIsrRenderStartTimestamp } from "../packages/vinext/src/shims/cache-request-state.js";
 
 function buildCachedRouteValue(body: string): CachedRouteValue {
   return {
@@ -514,6 +515,7 @@ describe("app route handler dispatch", () => {
     let scheduledRender: (() => Promise<void>) | undefined;
     let forceDynamicDefaultAtRegenTime: boolean | undefined;
     let fetchCacheModeAtRegenTime: unknown = "unset";
+    let isrRenderStartAtRegenTime: number | undefined;
     let afterRan = false;
 
     const response = await dispatchAppRouteHandler({
@@ -542,6 +544,7 @@ describe("app route handler dispatch", () => {
           GET() {
             forceDynamicDefaultAtRegenTime = forceDynamicSpy.mock.calls.at(-1)?.[0];
             fetchCacheModeAtRegenTime = modeSpy.mock.calls.at(-1)?.[0];
+            isrRenderStartAtRegenTime = _getIsrRenderStartTimestamp();
             after(() => {
               afterRan = true;
             });
@@ -566,6 +569,7 @@ describe("app route handler dispatch", () => {
 
     expect(forceDynamicDefaultAtRegenTime).toBe(false);
     expect(fetchCacheModeAtRegenTime).toBe("force-cache");
+    expect(isrRenderStartAtRegenTime).toEqual(expect.any(Number));
     expect(afterRan).toBe(true);
 
     modeSpy.mockRestore();
@@ -589,6 +593,7 @@ describe("app route handler dispatch", () => {
     setDataCacheHandler({
       get: previousHandler.get.bind(previousHandler),
       set: previousHandler.set.bind(previousHandler),
+      getInvalidationVersion: previousHandler.getInvalidationVersion.bind(previousHandler),
       async revalidateTag() {
         markInvalidationStarted();
         await invalidationGate;

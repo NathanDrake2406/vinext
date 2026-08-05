@@ -14,7 +14,7 @@ import {
   ISR_NO_STORE_CACHE_CONTROL,
 } from "./isr-decision.js";
 import { isrCacheControl, type IsrWritePolicy } from "./isr-cache.js";
-import { encodeCacheTag } from "../utils/encode-cache-tag.js";
+import { pathCacheTag } from "../utils/encode-cache-tag.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
 import { createNonceAttribute, escapeHtmlAttr } from "./html.js";
 import { getClientTraceMetadataHTML } from "./client-trace-metadata.js";
@@ -432,6 +432,7 @@ async function writePagesIsrCache(options: {
   status: number;
   stream: ReadableStream<Uint8Array>;
   setCache: RenderPagesPageResponseOptions["isrSet"];
+  tags: string[];
 }): Promise<void> {
   const bodyHtml = await readStreamAsText(options.stream);
   await options.setCache(
@@ -447,6 +448,7 @@ async function writePagesIsrCache(options: {
       cacheControl: isrCacheControl(options.revalidateSeconds, {
         expireSeconds: options.expireSeconds,
       }),
+      tags: options.tags,
     },
   );
 }
@@ -657,6 +659,7 @@ export async function renderPagesPageResponse(
       shellSuffix,
       status: finalStatus,
       stream: cacheBodyStream,
+      tags: [pathCacheTag(isrPathname)],
     };
     if (options.isOnDemandRevalidate) {
       // Next.js's internal revalidate path waits for `mocked.res.hasStreamed`.
@@ -690,10 +693,9 @@ export async function renderPagesPageResponse(
     // emit CDN-Cache-Control + a path-based Cache-Tag (matching revalidatePath,
     // which Pages Router invalidation uses) while the default emits Cache-Control.
     const isrPathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
-    const stem = isrPathname.endsWith("/") ? isrPathname.slice(0, -1) : isrPathname;
     applyCdnResponseHeaders(responseHeaders, {
       cacheControl: buildMissIsrCacheControl(options.isrRevalidateSeconds, options.expireSeconds),
-      tags: [encodeCacheTag(`_N_T_${stem || "/"}`)],
+      tags: [pathCacheTag(isrPathname)],
     });
     if (options.isOnDemandRevalidate) {
       responseHeaders.set(NEXTJS_CACHE_HEADER, "REVALIDATED");

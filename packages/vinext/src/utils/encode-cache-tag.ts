@@ -36,3 +36,13 @@ export function encodeCacheTag(tag: string): string {
 export function encodeCacheTags(tags: readonly string[]): string[] {
   return tags.map(encodeCacheTag);
 }
+
+/**
+ * Implicit `_N_T_` path tag for a route, so `revalidatePath` reaches entries
+ * that carry no explicit tags. Mirrors Next.js's normalisation: the trailing
+ * slash is dropped, and the root stays `/`.
+ */
+export function pathCacheTag(pathname: string): string {
+  const stem = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  return encodeCacheTag(`_N_T_${stem || "/"}`);
+}

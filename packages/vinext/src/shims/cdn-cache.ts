@@ -28,6 +28,7 @@
 import {
   getDataCacheHandler,
   type CacheHandlerValue,
+  type CacheWriteContext,
   type IncrementalCacheValue,
 } from "./cache-handler.js";
 
@@ -85,11 +86,7 @@ export type CdnCacheAdapter = {
    * Default: writes to the data cache. Edge adapters that rely entirely on the
    * CDN may make this a no-op.
    */
-  set(
-    key: string,
-    data: IncrementalCacheValue | null,
-    ctx?: Record<string, unknown>,
-  ): Promise<void>;
+  set(key: string, data: IncrementalCacheValue | null, ctx?: CacheWriteContext): Promise<void>;
 
   /**
    * Build the response cache headers for a given policy. Returns a map so an
@@ -135,7 +132,7 @@ export class DefaultCdnCacheAdapter implements CdnCacheAdapter {
   async set(
     key: string,
     data: IncrementalCacheValue | null,
-    ctx?: Record<string, unknown>,
+    ctx?: CacheWriteContext,
   ): Promise<void> {
     await getDataCacheHandler().set(key, data, ctx);
   }

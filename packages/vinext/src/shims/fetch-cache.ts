@@ -20,6 +20,11 @@
  */
 
 import { getDataCacheHandler, type CachedFetchValue, type CacheHandler } from "./cache-handler.js";
+import {
+  deletePendingProducerIfOwned,
+  getOrCreateJoinableProducer,
+  type PendingProducer,
+} from "./pending-producer.js";
 import { encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import { markDynamicUsage } from "./headers.js";
@@ -497,8 +502,14 @@ type NextFetchOptions = {
 
 type FetchDedupeEntry = {
   key: string;
+  startTime: number;
   promise: Promise<Response>;
   response: Response | null;
+};
+
+type FetchProducerResult = {
+  response: Response;
+  startTime: number;
 };
 
 // Extend the standard RequestInit to include `next`
@@ -517,10 +528,10 @@ declare global {
 
 const _PENDING_KEY = Symbol.for("vinext.fetchCache.pendingRefetches");
 const _gPending = globalThis as unknown as Record<PropertyKey, unknown>;
-const pendingRefetches = (_gPending[_PENDING_KEY] ??= new Map<string, Promise<void>>()) as Map<
+const pendingRefetches = (_gPending[_PENDING_KEY] ??= new Map<
   string,
-  Promise<void>
->;
+  PendingProducer<void>
+>()) as Map<string, PendingProducer<void>>;
 
 // Maximum time a dedup entry can live before being force-cleaned.
 // Guards against hung upstream fetches that never settle, which would
@@ -682,14 +693,20 @@ async function writeFetchCacheResponse(
   response: Response,
   tags: string[],
   revalidateSeconds: number,
-  options?: { cloneForReturn?: boolean },
+  options?: { cloneForReturn?: boolean; guardSince?: number; softTags?: string[] },
 ): Promise<void> {
   const cacheValue = await buildFetchCacheValue(response, tags, revalidateSeconds, options);
   if (!cacheValue) return;
 
+  // The handler's set refuses the write when any invalidation marker for the
+  // entry's tags (or the request's soft tags) is newer than the producer's
+  // start — see cache-handler.ts. This drops writes from producers that began
+  // before an invalidation affecting this entry completed.
   await handler.set(cacheKey, cacheValue, {
     fetchCache: true,
     tags,
+    softTags: options?.softTags ?? [],
+    ...(options?.guardSince !== undefined ? { guardSince: options.guardSince } : {}),
     revalidate: revalidateSeconds,
   });
 }
@@ -700,6 +717,8 @@ async function lowerFetchCacheRevalidateIfNeeded(
   cachedValue: CachedFetchValue,
   tags: string[],
   revalidateSeconds: number,
+  guardSince: number,
+  softTags: string[],
 ): Promise<void> {
   if (
     !Number.isFinite(revalidateSeconds) ||
@@ -719,6 +738,8 @@ async function lowerFetchCacheRevalidateIfNeeded(
   await handler.set(cacheKey, updatedValue, {
     fetchCache: true,
     tags: mergedTags,
+    softTags,
+    guardSince,
     revalidate: revalidateSeconds,
   });
 }
@@ -1019,18 +1040,26 @@ function buildCachedFetchResponse(
   return response;
 }
 
-function dedupeFetch(
+function fetchWithStart(
   input: string | URL | Request,
   init: RequestInit | undefined,
-): Promise<Response> {
+): Promise<FetchProducerResult> {
+  const startTime = Date.now();
+  return originalFetch(input, init).then((response) => ({ response, startTime }));
+}
+
+function dedupeFetchWithStart(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+): Promise<FetchProducerResult> {
   const state = _getState();
   if (!state.isFetchDedupeActive) {
-    return originalFetch(input, init);
+    return fetchWithStart(input, init);
   }
 
   const candidate = createFetchDedupeCandidate(input, init);
   if (!candidate) {
-    return originalFetch(input, init);
+    return fetchWithStart(input, init);
   }
 
   const entriesByUrl = state.currentFetchDedupeEntries;
@@ -1049,13 +1078,15 @@ function dedupeFetch(
       }
       const [responseForCaller, responseForFutureCaller] = cloneDedupeResponse(entry.response);
       entry.response = responseForFutureCaller;
-      return responseForCaller;
+      return { response: responseForCaller, startTime: entry.startTime };
     });
   }
 
+  const startTime = Date.now();
   const promise = originalFetch(input, init);
   const entry: FetchDedupeEntry = {
     key: candidate.key,
+    startTime,
     promise,
     response: null,
   };
@@ -1069,7 +1100,7 @@ function dedupeFetch(
       // FinalizationRegistry cancels any still-unconsumed branch.
       const [responseForCaller, responseForFutureCaller] = cloneDedupeResponse(response);
       entry.response = responseForFutureCaller;
-      return responseForCaller;
+      return { response: responseForCaller, startTime };
     },
     (err) => {
       // Drop the failed entry so a later fetch to the same URL within this
@@ -1081,6 +1112,13 @@ function dedupeFetch(
       throw err;
     },
   );
+}
+
+function dedupeFetch(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+): Promise<Response> {
+  return dedupeFetchWithStart(input, init).then(({ response }) => response);
 }
 
 /**
@@ -1234,6 +1272,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
     }
     const handler = getDataCacheHandler();
     let mustBypassPendingRevalidation = _hasPendingRevalidatedTag([...tags, ...softTags]);
+    const guardSince = Date.now();
 
     // Try cache first
     try {
@@ -1259,6 +1298,8 @@ function createPatchedFetch(): typeof globalThis.fetch {
           cached.value,
           tags,
           revalidateSeconds,
+          guardSince,
+          softTags,
         );
         const cachedData = cached.value.data;
         return buildCachedFetchResponse(cachedData, input);
@@ -1269,8 +1310,12 @@ function createPatchedFetch(): typeof globalThis.fetch {
       // However, if we have a stale entry, return it and trigger background refetch.
       if (cached?.value && cached.value.kind === "FETCH" && cached.cacheState === "stale") {
         if (shouldRefreshStaleFetchInForeground()) {
-          const freshResponse = await dedupeFetch(input, fetchInit);
-          await writeFetchCacheResponse(handler, cacheKey, freshResponse, tags, revalidateSeconds);
+          const { response: freshResponse, startTime: refetchGuardSince } =
+            await dedupeFetchWithStart(input, fetchInit);
+          await writeFetchCacheResponse(handler, cacheKey, freshResponse, tags, revalidateSeconds, {
+            guardSince: refetchGuardSince,
+            softTags,
+          });
           return freshResponse;
         }
 
@@ -1278,11 +1323,16 @@ function createPatchedFetch(): typeof globalThis.fetch {
 
         // Background refetch — deduped so only one in-flight refetch runs
         // per cache key, preventing thundering herd on popular endpoints.
-        if (!pendingRefetches.has(cacheKey)) {
+        const selection = await getOrCreateJoinableProducer(pendingRefetches, cacheKey, () => {
+          const refetchGuardSince = Date.now();
+          let producer!: PendingProducer<void>;
+          let timeoutId: ReturnType<typeof setTimeout>;
           const refetchPromise = originalFetch(input, fetchInit)
             .then(async (freshResp) => {
               await writeFetchCacheResponse(handler, cacheKey, freshResp, tags, revalidateSeconds, {
                 cloneForReturn: false,
+                guardSince: refetchGuardSince,
+                softTags,
               });
             })
             .catch((err) => {
@@ -1298,26 +1348,28 @@ function createPatchedFetch(): typeof globalThis.fetch {
               );
             })
             .finally(() => {
-              // Only clear if we still own the slot — the timeout may have
-              // already replaced it with a newer refetch promise.
-              if (pendingRefetches.get(cacheKey) === refetchPromise) {
-                pendingRefetches.delete(cacheKey);
-              }
+              deletePendingProducerIfOwned(pendingRefetches, cacheKey, producer);
               clearTimeout(timeoutId);
             });
 
-          pendingRefetches.set(cacheKey, refetchPromise);
+          producer = {
+            startTime: refetchGuardSince,
+            tags: [...tags, ...softTags],
+            promise: refetchPromise,
+          };
 
           // Safety net: if the upstream fetch hangs forever, force-clean the
           // dedup entry so future stale hits can retry instead of being
           // permanently suppressed.
-          const timeoutId = setTimeout(() => {
-            if (pendingRefetches.get(cacheKey) === refetchPromise) {
-              pendingRefetches.delete(cacheKey);
-            }
-          }, DEDUP_TIMEOUT_MS);
+          timeoutId = setTimeout(
+            () => deletePendingProducerIfOwned(pendingRefetches, cacheKey, producer),
+            DEDUP_TIMEOUT_MS,
+          );
+          return producer;
+        });
 
-          getRequestExecutionContext()?.waitUntil(refetchPromise);
+        if (selection.created) {
+          getRequestExecutionContext()?.waitUntil(selection.producer.promise);
         }
 
         // Return stale data immediately
@@ -1328,22 +1380,31 @@ function createPatchedFetch(): typeof globalThis.fetch {
       console.error("[vinext] fetch cache read error:", cacheErr);
     }
 
-    // Cache miss — fetch from network
-    const response = await (mustBypassPendingRevalidation
-      ? originalFetch(input, fetchInit)
-      : dedupeFetch(input, fetchInit));
+    // Cache miss — fetch from network. This producer begins now, so capture a
+    // fresh guard timestamp: an invalidation that happened earlier in this
+    // render does not disqualify it, only one that completes while it is in
+    // flight.
+    const { response, startTime: missGuardSince } = await (mustBypassPendingRevalidation
+      ? fetchWithStart(input, fetchInit)
+      : dedupeFetchWithStart(input, fetchInit));
 
     const cacheValue = await buildFetchCacheValue(response, tags, revalidateSeconds);
     if (cacheValue) {
-      handler
+      const write = handler
         .set(cacheKey, cacheValue, {
           fetchCache: true,
           tags,
+          softTags,
+          guardSince: missGuardSince,
           revalidate: revalidateSeconds,
         })
         .catch((err) => {
           console.error("[vinext] fetch cache write error:", err);
         });
+      // A guarded handler may need asynchronous marker reads before its own
+      // backend write is registered. Keep the full decision-and-write promise
+      // alive when the response returns from a Worker request.
+      getRequestExecutionContext()?.waitUntil(write);
     }
 
     return response;

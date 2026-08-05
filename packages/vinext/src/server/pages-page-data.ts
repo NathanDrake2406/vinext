@@ -42,7 +42,8 @@ import { isSerializableProps } from "./pages-serializable-props.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { isUnknownRecord } from "../utils/record.js";
 import { isDangerousScheme } from "vinext/shims/url-safety";
-import { encodeCacheTag } from "../utils/encode-cache-tag.js";
+import { pathCacheTag } from "../utils/encode-cache-tag.js";
+import { _markIsrRenderStart } from "vinext/shims/cache-request-state";
 
 export type PagesRedirectResult = {
   destination: string;
@@ -340,6 +341,7 @@ export type ResolvePagesPageDataOptions = {
     key: string,
     renderFn: () => Promise<void>,
     errorContext?: { routerKind: "Pages Router"; routePath: string; routeType: "render" },
+    tags?: readonly string[],
   ) => void;
   renderIsrPassToStringAsync: (
     element: ReactNode,
@@ -488,10 +490,9 @@ function applyPagesTerminalMissHeaders(
   isrCachePathname: string,
   expireSeconds?: number,
 ): Response {
-  const stem = isrCachePathname.endsWith("/") ? isrCachePathname.slice(0, -1) : isrCachePathname;
   applyCdnResponseHeaders(response.headers, {
     cacheControl: buildMissIsrCacheControl(revalidateSeconds, expireSeconds),
-    tags: [encodeCacheTag(`_N_T_${stem || "/"}`)],
+    tags: [pathCacheTag(isrCachePathname)],
   });
   for (const [name, value] of Object.entries(buildCacheStateHeaders("MISS"))) {
     response.headers.set(name, value);
@@ -1405,6 +1406,7 @@ export async function resolvePagesPageData(
   if (typeof options.pageModule.getStaticProps === "function") {
     const pathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
     const cacheKey = options.isrCacheKey("pages", pathname);
+    const cacheTags = [pathCacheTag(pathname)];
     const cached =
       onDemandPreviousCacheEntry !== undefined
         ? onDemandPreviousCacheEntry
@@ -1423,6 +1425,7 @@ export async function resolvePagesPageData(
         async function () {
           return options.runInFreshUnifiedContext(async () => {
             options.applyRequestContexts();
+            _markIsrRenderStart();
             const freshAppResult = await loadPagesAppInitialRenderProps(options, () =>
               options.createGsspReqRes(),
             );
@@ -1455,7 +1458,10 @@ export async function resolvePagesPageData(
                   kind: "REDIRECT",
                   props: buildPagesRedirectProps(redirect, freshRenderProps),
                 },
-                { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }) },
+                {
+                  cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
+                  tags: cacheTags,
+                },
               );
               return;
             }
@@ -1463,6 +1469,7 @@ export async function resolvePagesPageData(
             if (freshResult.notFound) {
               await options.isrSet(cacheKey, null, {
                 cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
+                tags: cacheTags,
               });
               return;
             }
@@ -1494,7 +1501,10 @@ export async function resolvePagesPageData(
               await options.isrSet(
                 cacheKey,
                 buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
-                { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }) },
+                {
+                  cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
+                  tags: cacheTags,
+                },
               );
               return;
             }
@@ -1512,7 +1522,10 @@ export async function resolvePagesPageData(
                 headers: undefined,
                 status: undefined,
               },
-              { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }) },
+              {
+                cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
+                tags: cacheTags,
+              },
             );
           });
         },
@@ -1521,6 +1534,7 @@ export async function resolvePagesPageData(
           routePath: options.routePattern,
           routeType: "render",
         },
+        cacheTags,
       );
     };
 
@@ -1736,7 +1750,7 @@ export async function resolvePagesPageData(
             kind: "REDIRECT",
             props: buildPagesRedirectProps(redirect, renderProps),
           },
-          { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }) },
+          { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }), tags: cacheTags },
         );
         applyPagesTerminalMissHeaders(response, revalidateSeconds, pathname, expireSeconds);
       }
@@ -1752,6 +1766,7 @@ export async function resolvePagesPageData(
       if (previewData === false) {
         await options.isrSet(cacheKey, null, {
           cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
+          tags: cacheTags,
         });
       }
       const notFoundResult = buildPagesNotFoundResult(
@@ -1812,7 +1827,10 @@ export async function resolvePagesPageData(
           headers: undefined,
           status: undefined,
         },
-        { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds: isrExpireSeconds }) },
+        {
+          cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds: isrExpireSeconds }),
+          tags: cacheTags,
+        },
       );
     }
   }

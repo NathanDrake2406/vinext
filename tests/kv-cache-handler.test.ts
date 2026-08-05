@@ -205,11 +205,27 @@ describe("KVCacheHandler", () => {
       );
     });
 
+    it("budgets the operation UUID when normalizing a long app prefix", async () => {
+      const prefixedHandler = new KVCacheHandler(kv as any, {
+        appPrefix: "p".repeat(460),
+      });
+
+      await prefixedHandler.revalidateTag("posts");
+
+      const storedKeys = kv.put.mock.calls.map(([key]) => key as string);
+      expect(storedKeys.some((key) => key.includes("__tag-op:"))).toBe(true);
+      expect(storedKeys.every((key) => new TextEncoder().encode(key).length <= 512)).toBe(true);
+      expect(storedKeys.some((key) => key.startsWith("__app:"))).toBe(true);
+    });
+
     it("uses the same bounded storage key for multibyte tag writes and reads", async () => {
       const tag = "é".repeat(256);
       await handler.revalidateTag(tag);
 
-      const tagKey = kv.put.mock.calls.at(-1)![0] as string;
+      const tagKey = kv.put.mock.calls
+        .map(([key]) => key as string)
+        .find((key) => key.startsWith("__tag:"));
+      if (!tagKey) throw new Error("missing durable tag key");
       expect(new TextEncoder().encode(tagKey).length).toBeLessThanOrEqual(512);
       expect(tagKey).toMatch(/^__tag:__hash:[0-9a-f]{16}$/);
 
@@ -603,8 +619,12 @@ describe("KVCacheHandler", () => {
     it("revalidateTag persists slash-based path invalidation markers", async () => {
       await handler.revalidateTag(["/revalidate-tag-test", "_N_T_/revalidate-tag-test"]);
 
-      expect(store.get("__tag:/revalidate-tag-test")).toMatch(/^\d+$/);
-      expect(store.get("__tag:_N_T_/revalidate-tag-test")).toMatch(/^\d+$/);
+      for (const tag of ["/revalidate-tag-test", "_N_T_/revalidate-tag-test"]) {
+        const marker = store.get(`__tag:${tag}`);
+        expect(marker).toMatch(/^vinext:pending:__tag-op:/);
+        const operationKey = marker!.slice("vinext:pending:".length);
+        expect(store.get(operationKey)).toMatch(/^\d+$/);
+      }
     });
 
     it("slash-based path tags invalidate persisted APP_PAGE entries", async () => {

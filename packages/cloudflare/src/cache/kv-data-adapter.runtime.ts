@@ -23,6 +23,7 @@ import { Buffer } from "node:buffer";
 import type {
   CacheHandler,
   CacheHandlerValue,
+  CacheWriteContext,
   CacheControlMetadata,
   CachedAppPageValue,
   CachedRouteValue,
@@ -41,6 +42,9 @@ export { ENTRY_PREFIX } from "./kv-key.js";
 
 /** Default KV namespace binding name read from the Worker `env`. */
 const DEFAULT_BINDING = "VINEXT_KV_CACHE";
+const PENDING_INVALIDATION_MARKER = "vinext:pending";
+const PENDING_INVALIDATION_MARKER_PREFIX = `${PENDING_INVALIDATION_MARKER}:`;
+const INVALIDATION_OPERATION_TTL_SECONDS = 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Serialized cache value types — ArrayBuffer fields replaced with base64 strings
@@ -86,12 +90,23 @@ type KVCacheEntry = {
   value: SerializedIncrementalCacheValue | null;
   tags: string[];
   lastModified: number;
+  /** Producer start used only for invalidation ordering. */
+  invalidationGuardSince?: number;
   /** Absolute timestamp (ms) after which the entry is "stale" (but still served). */
   revalidateAt: number | null;
   /** Absolute timestamp (ms) after which the entry must block on fresh render. */
   expireAt?: number | null;
   /** Effective cache-control policy used for response headers. */
   cacheControl?: CacheControlMetadata;
+};
+
+type SharedInvalidationState = {
+  version: number;
+  pending: boolean;
+  durableVersion: number | undefined;
+  durablePendingKey: string | undefined;
+  operationKeys: string[];
+  orderingAnchorKey: string | undefined;
 };
 
 /** Prefix used by revalidatePath for path-based tags. */
@@ -144,6 +159,20 @@ function validUniqueTags(tags: string[]): string[] {
   return result;
 }
 
+function pendingInvalidationMarker(operationKey: string): string {
+  return `${PENDING_INVALIDATION_MARKER_PREFIX}${operationKey}`;
+}
+
+function pendingOperationKey(marker: string): string | undefined {
+  if (!marker.startsWith(PENDING_INVALIDATION_MARKER_PREFIX)) return undefined;
+  const operationKey = marker.slice(PENDING_INVALIDATION_MARKER_PREFIX.length);
+  return operationKey.length > 0 ? operationKey : undefined;
+}
+
+function isPendingInvalidationMarker(marker: string): boolean {
+  return marker === PENDING_INVALIDATION_MARKER || pendingOperationKey(marker) !== undefined;
+}
+
 /**
  * Segment-aware path prefix check. Returns true if `path` is equal to
  * `prefix` or is a child route (next char after prefix is `/`).
@@ -187,6 +216,8 @@ export class KVCacheHandler implements CacheHandler {
   private _tagCache = new Map<string, { timestamp: number; fetchedAt: number }>();
   /** TTL (ms) for local tag cache entries. After this, re-fetch from KV. */
   private _tagCacheTtl: number;
+  /** Serialize marker publication only among operations sharing a tag. */
+  private _invalidationQueues = new Map<string, Promise<void>>();
 
   constructor(
     kvNamespace: KVNamespace,
@@ -211,6 +242,141 @@ export class KVCacheHandler implements CacheHandler {
 
   private _tagKey(tag: string): string {
     return this.keySpace.tagKey(tag);
+  }
+
+  private _tagOperationKey(tag: string): string {
+    return `${this.keySpace.tagOperationPrefix(tag)}${crypto.randomUUID()}`;
+  }
+
+  /**
+   * Read both the durable per-tag marker and transient per-operation records.
+   * Operation records prevent a delayed older writer in another isolate from
+   * hiding a newer invalidation by overwriting the durable marker.
+   */
+  private async _readSharedInvalidationState(tag: string): Promise<SharedInvalidationState> {
+    const operationKeys: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.kv.list({
+        prefix: this.keySpace.tagOperationPrefix(tag),
+        cursor,
+      });
+      for (const key of page.keys) operationKeys.push(key.name);
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+
+    const [durableMarker, ...operationMarkers] = await Promise.all([
+      this.kv.get(this._tagKey(tag)),
+      ...operationKeys.map((key) => this.kv.get(key)),
+    ]);
+
+    let version = 0;
+    let durableVersion: number | undefined;
+    let pending = false;
+    let durablePendingKey: string | undefined;
+    let orderingAnchorKey: string | undefined;
+    let orderingAnchorVersion = 0;
+    // A pending durable marker is a fail-closed signal even when the list
+    // snapshot already contains completed operation records. The marker can
+    // belong to an operation whose record was published after that snapshot.
+    // Tokenizing the marker lets us distinguish a completed operation whose
+    // durable marker still needs repair from a genuinely in-flight operation.
+    if (durableMarker !== null) {
+      const parsedDurableVersion = Number(durableMarker);
+      if (Number.isFinite(parsedDurableVersion)) {
+        durableVersion = parsedDurableVersion;
+        version = parsedDurableVersion;
+      } else if (!isPendingInvalidationMarker(durableMarker)) {
+        pending = true;
+      } else {
+        durablePendingKey = pendingOperationKey(durableMarker);
+        if (durablePendingKey === undefined) pending = true;
+      }
+    }
+
+    // A malformed operation marker or a missing value for a key returned by
+    // list() is treated as pending. The latter can happen when a record
+    // expires between the list and get calls and is safer than admitting a
+    // producer while invalidation evidence is incomplete.
+    for (let index = 0; index < operationMarkers.length; index++) {
+      const marker = operationMarkers[index];
+      if (marker === null) {
+        pending = true;
+        continue;
+      }
+      const operationVersion = Number(marker);
+      if (Number.isFinite(operationVersion)) {
+        version = Math.max(version, operationVersion);
+        if (
+          orderingAnchorKey === undefined ||
+          operationVersion > orderingAnchorVersion ||
+          (operationVersion === orderingAnchorVersion && operationKeys[index] > orderingAnchorKey)
+        ) {
+          orderingAnchorKey = operationKeys[index];
+          orderingAnchorVersion = operationVersion;
+        }
+        continue;
+      }
+      pending = true;
+    }
+
+    if (durablePendingKey !== undefined) {
+      const pendingIndex = operationKeys.indexOf(durablePendingKey);
+      const pendingMarker = pendingIndex < 0 ? null : operationMarkers[pendingIndex];
+      if (pendingIndex < 0 || pendingMarker === null || !Number.isFinite(Number(pendingMarker))) {
+        pending = true;
+      }
+    }
+    return {
+      version,
+      pending,
+      durableVersion,
+      durablePendingKey,
+      operationKeys,
+      orderingAnchorKey,
+    };
+  }
+
+  /**
+   * Delete completed records except the immutable maximum-version anchor and
+   * any operation still named by the durable marker. A delayed publisher can
+   * leave that marker pointing at an older completion, so deleting its record
+   * would turn a settled marker back into a permanently pending one.
+   */
+  private _compactInvalidationOperations(state: SharedInvalidationState): void {
+    if (state.pending) return;
+    // Housekeeping only: the version this reader returns does not depend on it,
+    // so the deletes run under waitUntil rather than on the response path.
+    for (const key of state.operationKeys) {
+      if (key !== state.orderingAnchorKey && key !== state.durablePendingKey) {
+        this._deleteInBackground(key);
+      }
+    }
+  }
+
+  private async _readSharedInvalidationVersion(tag: string): Promise<number> {
+    const state = await this._readSharedInvalidationState(tag);
+    if (state.pending) return Number.POSITIVE_INFINITY;
+
+    // Keep one immutable maximum-version record as an ordering anchor. A
+    // publisher that captured older state can still overwrite the durable key
+    // after this repair, but it cannot delete an anchor it never observed, so
+    // the next reader can recover the newer version. Normal operation remains
+    // bounded to the latest completion plus the completion named by a stale
+    // durable marker, plus in-flight publishers.
+    if (
+      state.version > 0 &&
+      state.durablePendingKey === undefined &&
+      (state.durableVersion === undefined || state.durableVersion < state.version)
+    ) {
+      // Not awaited: the repaired marker only saves a future reader the list,
+      // and `_put` registers the write with waitUntil so it still completes.
+      void this._put(this._tagKey(tag), String(state.version), {
+        expirationTtl: 30 * 24 * 3600,
+      });
+    }
+    this._compactInvalidationOperations(state);
+    return state.version;
   }
 
   async get(key: string, _ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null> {
@@ -247,13 +413,14 @@ export class KVCacheHandler implements CacheHandler {
       }
     }
 
-    if (await this._hasRevalidatedTag(validUniqueTags(entry.tags), entry.lastModified)) {
+    const invalidationBaseline = entry.invalidationGuardSince ?? entry.lastModified;
+    if (await this._hasRevalidatedTag(validUniqueTags(entry.tags), invalidationBaseline)) {
       this._deleteInBackground(kvKey);
       return null;
     }
 
     const softTags = validUniqueTags(readStringArrayField(_ctx, "softTags"));
-    if (await this._hasRevalidatedTag(softTags, entry.lastModified)) {
+    if (await this._hasRevalidatedTag(softTags, invalidationBaseline)) {
       return null;
     }
 
@@ -296,6 +463,10 @@ export class KVCacheHandler implements CacheHandler {
 
     const now = Date.now();
     const uncachedTags: string[] = [];
+    const uncachedTagSnapshots = new Map<
+      string,
+      { timestamp: number; fetchedAt: number } | undefined
+    >();
 
     // First pass: check local cache for each tag.
     // Delete expired entries to prevent unbounded Map growth in long-lived isolates.
@@ -310,6 +481,7 @@ export class KVCacheHandler implements CacheHandler {
         // Expired or absent — evict stale entry and re-fetch from KV
         if (cached) this._tagCache.delete(tag);
         uncachedTags.push(tag);
+        uncachedTagSnapshots.set(tag, this._tagCache.get(tag));
       }
     }
 
@@ -318,13 +490,15 @@ export class KVCacheHandler implements CacheHandler {
     // so subsequent get() calls benefit from the already-fetched results.
     if (uncachedTags.length > 0) {
       const tagResults = await Promise.all(
-        uncachedTags.map((tag) => this.kv.get(this._tagKey(tag))),
+        uncachedTags.map((tag) => this._readSharedInvalidationVersion(tag)),
       );
 
       for (let i = 0; i < uncachedTags.length; i++) {
-        const tagTime = tagResults[i];
-        const tagTimestamp = tagTime ? Number(tagTime) : 0;
-        this._tagCache.set(uncachedTags[i], { timestamp: tagTimestamp, fetchedAt: now });
+        const tagTimestamp = tagResults[i];
+        const current = this._tagCache.get(uncachedTags[i]);
+        if (current === uncachedTagSnapshots.get(uncachedTags[i])) {
+          this._tagCache.set(uncachedTags[i], { timestamp: tagTimestamp, fetchedAt: now });
+        }
       }
 
       for (const tag of uncachedTags) {
@@ -339,10 +513,10 @@ export class KVCacheHandler implements CacheHandler {
     return false;
   }
 
-  set(
+  async set(
     key: string,
     data: IncrementalCacheValue | null,
-    ctx?: Record<string, unknown>,
+    ctx?: CacheWriteContext,
   ): Promise<void> {
     // Collect, validate, and dedupe tags from data and context
     const tagSet = new Set<string>();
@@ -372,6 +546,7 @@ export class KVCacheHandler implements CacheHandler {
     }
     if (effectiveRevalidate === 0) return Promise.resolve();
 
+    const guardSince = readPositiveNumberField(ctx, "guardSince");
     const now = Date.now();
     const revalidateAt =
       typeof effectiveRevalidate === "number" && effectiveRevalidate > 0
@@ -399,6 +574,7 @@ export class KVCacheHandler implements CacheHandler {
       value: serializable,
       tags,
       lastModified: now,
+      invalidationGuardSince: guardSince,
       revalidateAt,
       expireAt,
       cacheControl,
@@ -427,30 +603,187 @@ export class KVCacheHandler implements CacheHandler {
     const metadataJson = JSON.stringify({ tags });
     const metadata = metadataJson.length <= 1024 ? { tags } : undefined;
 
+    // Stale-write guard: refuse the write when an invalidation marker for the
+    // entry's tags (context tags plus guard-only soft tags) is newer than the
+    // producer's start. Markers are read fresh from KV, bypassing the local
+    // `_tagCache`, so invalidations that landed in another isolate are seen.
+    // Guarded entries retain the producer's start separately from commit-time
+    // `lastModified`, so normal read-time marker checks reject invalidations
+    // racing this optimisation and the subsequent put without making a slow
+    // producer immediately stale by age. KV has no compare-and-set, so the
+    // pre-write check must not be the correctness mechanism.
+    if (guardSince !== undefined) {
+      const softTags = validUniqueTags(readStringArrayField(ctx, "softTags"));
+      if (await this._guardRefusesWrite(validUniqueTags([...tags, ...softTags]), guardSince)) {
+        return Promise.resolve();
+      }
+    }
+
     return this._put(this._entryKey(key), JSON.stringify(entry), {
       expirationTtl,
       metadata,
     });
   }
 
-  async revalidateTag(tags: string | string[], _durations?: { expire?: number }): Promise<void> {
+  /**
+   * Whether a write started at `guardSince` must be refused because an
+   * invalidation marker for one of `tags` landed since the producer began.
+   * A corrupt marker refuses the write rather than risking a stale restore.
+   */
+  private async _guardRefusesWrite(tags: string[], guardSince: number): Promise<boolean> {
+    if (tags.length === 0) return false;
+    const versions = await Promise.all(tags.map((tag) => this._readSharedInvalidationVersion(tag)));
+    for (const version of versions) {
+      if (!Number.isFinite(version) || version >= guardSince) return true;
+    }
+    return false;
+  }
+
+  revalidateTag(tags: string | string[], _durations?: { expire?: number }): Promise<void> {
     const tagList = Array.isArray(tags) ? tags : [tags];
-    const now = Date.now();
-    const validTags = tagList.filter((t) => validateTag(t) !== null);
-    // Store invalidation timestamp for each tag
-    // Use a long TTL (30 days) so recent invalidations are always found
-    await Promise.all(
-      validTags.map((tag) =>
-        this.kv.put(this._tagKey(tag), String(now), {
+    const validTags = validUniqueTags(tagList);
+    if (validTags.length === 0) return Promise.resolve();
+
+    // A multi-tag invalidation waits for the latest operation touching each of
+    // its tags, then becomes the latest operation for all of them. Disjoint
+    // tag sets therefore proceed independently while overlapping operations
+    // retain the ordering needed by their shared durable markers.
+    const predecessors = validTags.map(
+      (tag) => this._invalidationQueues.get(tag) ?? Promise.resolve(),
+    );
+    const operation = Promise.all(predecessors).then(() => this._publishInvalidation(validTags));
+    const settled = operation.catch(() => {});
+    for (const tag of validTags) this._invalidationQueues.set(tag, settled);
+    void settled.then(() => {
+      for (const tag of validTags) {
+        if (this._invalidationQueues.get(tag) === settled) this._invalidationQueues.delete(tag);
+      }
+    });
+    return operation;
+  }
+
+  private async _publishInvalidation(validTags: string[]): Promise<void> {
+    // Publish one pending durable per-tag marker that names a unique
+    // completion record. Separate isolates cannot serialize writes to the
+    // durable key; retaining each completion record lets readers take the
+    // maximum even if a delayed older operation overwrites that key afterwards.
+    const pendingAt = Date.now();
+    const operations = validTags.map((tag) => ({
+      tag,
+      key: this._tagOperationKey(tag),
+    }));
+    for (const { tag } of operations) {
+      this._tagCache.set(tag, { timestamp: Number.NaN, fetchedAt: pendingAt });
+    }
+    let currentWrites: Promise<void>[] = [];
+    try {
+      // The tag marker is the pending fence. The operation record is written
+      // only once, after the fence exists, so a successful invalidation never
+      // performs two immediate writes to either key.
+      currentWrites = operations.map(({ tag, key }) => {
+        const marker = pendingInvalidationMarker(key);
+        return this.kv.put(this._tagKey(tag), marker, {
+          expirationTtl: INVALIDATION_OPERATION_TTL_SECONDS,
+        });
+      });
+      await Promise.all(currentWrites);
+      currentWrites = [];
+
+      const completedAt = Date.now();
+      currentWrites = operations.map(({ key }) =>
+        this.kv.put(key, String(completedAt), {
           expirationTtl: 30 * 24 * 3600,
         }),
-      ),
-    );
-    // Update local tag cache immediately so invalidations are reflected
-    // without waiting for the TTL to expire
-    for (const tag of validTags) {
-      this._tagCache.set(tag, { timestamp: now, fetchedAt: now });
+      );
+      await Promise.all(currentWrites);
+      currentWrites = [];
+
+      // Read back once after publication before warming local state. This
+      // observes an immutable anchor left by a newer publisher that raced our
+      // final durable write, instead of caching the older pre-write snapshot
+      // for the local TTL.
+      //
+      // The completed operation record is the durable completion evidence, so
+      // the tokenized pending marker stays in place rather than rewriting the
+      // same tag key, which KV rate-limits. Readers treat a token as settled
+      // once its operation record is numeric and repair the marker later.
+      const publishedStates = await Promise.all(
+        operations.map(({ tag }) => this._readSharedInvalidationState(tag)),
+      );
+      for (const state of publishedStates) this._compactInvalidationOperations(state);
+      for (let index = 0; index < operations.length; index++) {
+        this._tagCache.set(operations[index].tag, {
+          timestamp: publishedStates[index].pending ? Number.NaN : publishedStates[index].version,
+          fetchedAt: Date.now(),
+        });
+      }
+    } catch (error) {
+      await Promise.allSettled(currentWrites);
+      await this._recoverFailedInvalidation(operations);
+      throw error;
     }
+  }
+
+  /**
+   * Do not leave an operation record pending after a partial KV failure. A
+   * completed recovery marker is conservative (the invalidation may have
+   * reached only part of the namespace), but it lets a retry make progress
+   * instead of blocking the tag until the pending-record TTL expires.
+   */
+  private async _recoverFailedInvalidation(
+    operations: Array<{ tag: string; key: string }>,
+  ): Promise<void> {
+    const recoveryVersion = Date.now();
+    const repairs = operations.map(async ({ tag, key }) => {
+      const operationMarker = await this.kv.get(key);
+      if (operationMarker === null || !Number.isFinite(Number(operationMarker))) {
+        await this.kv.put(key, String(recoveryVersion), { expirationTtl: 30 * 24 * 3600 });
+      }
+      await this._repairPendingMarker(tag, key, recoveryVersion);
+    });
+    const results = await Promise.allSettled(repairs);
+    const recovered = results.every((result) => result.status === "fulfilled");
+    for (const { tag } of operations) {
+      this._tagCache.set(tag, {
+        timestamp: recovered ? recoveryVersion : Number.NaN,
+        fetchedAt: Date.now(),
+      });
+    }
+  }
+
+  private async _repairPendingMarker(
+    tag: string,
+    operationKey: string,
+    version: number,
+  ): Promise<void> {
+    const tagKey = this._tagKey(tag);
+    const marker = await this.kv.get(tagKey);
+    if (marker !== pendingInvalidationMarker(operationKey)) return;
+    await this.kv.put(tagKey, String(version), { expirationTtl: 30 * 24 * 3600 });
+  }
+
+  /**
+   * Newest invalidation marker timestamp for any of `tags`. Producer joins
+   * must observe shared KV rather than the isolate-local marker cache: joining
+   * a pre-invalidation producer can strand synchronous on-demand callers even
+   * though the write-side guard correctly refuses that producer's late write.
+   */
+  async getInvalidationVersion(tags: readonly string[]): Promise<number> {
+    const validTags = validUniqueTags([...tags]);
+    const markers = await Promise.all(
+      validTags.map((tag) => this._readSharedInvalidationVersion(tag)),
+    );
+    let version = 0;
+    for (let i = 0; i < validTags.length; i++) {
+      const timestamp = markers[i];
+      if (!Number.isFinite(timestamp)) return Number.POSITIVE_INFINITY;
+      const current = this._tagCache.get(validTags[i]);
+      if (Number.isNaN(current?.timestamp)) {
+        return Number.POSITIVE_INFINITY;
+      }
+      version = Math.max(version, timestamp, current?.timestamp ?? 0);
+    }
+    return version;
   }
 
   /**
@@ -569,6 +902,9 @@ function validateCacheEntry(raw: unknown): KVCacheEntry | null {
 
   // Required fields
   if (typeof obj.lastModified !== "number") return null;
+  if (obj.invalidationGuardSince !== undefined && typeof obj.invalidationGuardSince !== "number") {
+    return null;
+  }
   if (!Array.isArray(obj.tags)) return null;
   if (obj.revalidateAt !== null && typeof obj.revalidateAt !== "number") return null;
   if (obj.expireAt !== undefined && obj.expireAt !== null && typeof obj.expireAt !== "number") {

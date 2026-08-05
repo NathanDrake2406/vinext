@@ -2,7 +2,10 @@ import { type ReactNode } from "react";
 import type { ReactFormState } from "react-dom/client";
 import type { NavigationContext } from "vinext/shims/navigation";
 import type { ClassificationReason } from "../build/layout-classification-types.js";
-import { _captureRequestScopedCacheLifeAccessors } from "vinext/shims/cache-request-state";
+import {
+  _captureRequestScopedCacheLifeAccessors,
+  _markIsrRenderStart,
+} from "vinext/shims/cache-request-state";
 import type { RootParams } from "vinext/shims/root-params";
 import type { PprFallbackShellState } from "vinext/shims/ppr-fallback-shell";
 import {
@@ -567,6 +570,7 @@ async function runAppPageRevalidationContext<
     ensureFetchPatch();
     setRefreshStaleFetchesInForeground(process.env.VINEXT_PRERENDER === "1");
     setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], options.routeSegments));
+    _markIsrRenderStart();
     options.setNavigationContext({
       pathname: options.displayPathname ?? options.cleanPathname,
       searchParams: new URLSearchParams(),

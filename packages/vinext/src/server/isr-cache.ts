@@ -9,8 +9,9 @@
  * Background regeneration is deduped — only one regeneration per cache key
  * runs at a time, preventing thundering herd on popular pages.
  *
- * This layer works with any CacheHandler backend (memory, Redis, KV, etc.)
- * because it only uses the standard get/set interface.
+ * This layer works with any backend that implements vinext's CacheHandler
+ * contract (memory, Redis, KV, etc.), including its invalidation-version
+ * capability for safe producer joining.
  */
 
 import {
@@ -23,6 +24,13 @@ import {
 import { getCdnCacheAdapter } from "vinext/shims/cdn-cache";
 import { fnv1a64 } from "../utils/hash.js";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
+import {
+  deletePendingProducerIfOwned,
+  getOrCreateJoinableProducer,
+  type PendingProducer,
+} from "vinext/shims/pending-producer";
+import { getCurrentFetchSoftTags } from "vinext/shims/fetch-cache";
+import { _getIsrRenderStartTimestamp, _markIsrRenderStart } from "vinext/shims/cache-request-state";
 import { reportRequestError, type OnRequestErrorContext } from "./instrumentation.js";
 import { normalizeMountedSlotsHeader } from "./app-mounted-slots-header.js";
 import {
@@ -168,6 +176,9 @@ export type ISRCacheEntry = {
 export async function isrGet(key: string): Promise<ISRCacheEntry | null> {
   // Page-level reads go through the CDN cache adapter. The default adapter
   // reads the data cache; an edge adapter may return null so the CDN serves.
+  // Capture the render start before the read: ISR writes in this request
+  // guard against restoring entries invalidated after this point.
+  _markIsrRenderStart();
   const result = await getCdnCacheAdapter().get(key);
   if (!result) return null;
   const isExpired = result.cacheState === "expired";
@@ -214,6 +225,14 @@ export async function isrSet(
   data: IncrementalCacheValue | null,
   policy: IsrWritePolicy,
 ): Promise<void> {
+  // A render that began before an invalidation of its tags completed must not
+  // restore the invalidated entry — its `lastModified` stamp would defeat the
+  // read-time tag-timestamp eviction. The handler's set refuses the write when
+  // any invalidation marker for the entry's tags (or the request's soft tags)
+  // is newer than the render start captured at the request's first isrGet (or
+  // at regeneration start). Outside a request scope, fall back to capturing
+  // now, which still guards the write itself.
+  const guardSince = _getIsrRenderStartTimestamp() ?? Date.now();
   await getCdnCacheAdapter().set(key, data, {
     cacheControl: policy.cacheControl,
     // `revalidate` is the legacy vinext CacheHandler context field. `expire`
@@ -221,6 +240,8 @@ export async function isrSet(
     // cacheControl.
     revalidate: policy.cacheControl.revalidate,
     tags: policy.tags ?? [],
+    softTags: getCurrentFetchSoftTags(),
+    guardSince,
   });
 }
 
@@ -265,6 +286,8 @@ export async function isrSetPrerenderedAppPage(
   if (tags && tags.length > 0) {
     ctx.tags = tags;
   }
+  // Prerender seeding happens at build time; there is no concurrent
+  // invalidation to race, so no write guard applies.
   await getCdnCacheAdapter().set(key, data, ctx);
 
   if (revalidateSeconds !== undefined) {
@@ -280,10 +303,10 @@ export async function isrSetPrerenderedAppPage(
 
 const _PENDING_REGEN_KEY = Symbol.for("vinext.isrCache.pendingRegenerations");
 const _g = globalThis as unknown as Record<PropertyKey, unknown>;
-const pendingRegenerations = (_g[_PENDING_REGEN_KEY] ??= new Map<string, Promise<void>>()) as Map<
+const pendingRegenerations = (_g[_PENDING_REGEN_KEY] ??= new Map<
   string,
-  Promise<void>
->;
+  PendingProducer<void>
+>()) as Map<string, PendingProducer<void>>;
 
 // Keep on-demand work in a distinct batch from ordinary/stale regeneration.
 // This mirrors Next.js ResponseCache's `{ key, isOnDemandRevalidate }` batch
@@ -292,35 +315,43 @@ const pendingRegenerations = (_g[_PENDING_REGEN_KEY] ??= new Map<string, Promise
 const _PENDING_ON_DEMAND_REGEN_KEY = Symbol.for("vinext.isrCache.pendingOnDemandRegenerations");
 const pendingOnDemandRegenerations = (_g[_PENDING_ON_DEMAND_REGEN_KEY] ??= new Map<
   string,
-  Promise<unknown>
->()) as Map<string, Promise<unknown>>;
+  PendingProducer<unknown>
+>()) as Map<string, PendingProducer<unknown>>;
 
 /** Coalesce same-key synchronous on-demand revalidations. */
-export function coalesceOnDemandRevalidation<T>(
+export async function coalesceOnDemandRevalidation<T>(
   key: string,
   renderFn: () => Promise<T>,
+  tags: readonly string[] = getCurrentFetchSoftTags(),
 ): Promise<T> {
-  const pending = pendingOnDemandRegenerations.get(key) as Promise<T> | undefined;
-  if (pending) return pending;
+  const selection = await getOrCreateJoinableProducer(pendingOnDemandRegenerations, key, () => {
+    const startTime = Date.now();
 
-  // Defer invocation until after the promise is registered, matching Next.js's
-  // response-cache scheduler and closing the same-tick stampede window.
-  const promise = Promise.resolve()
-    .then(renderFn)
-    .finally(() => {
-      if (pendingOnDemandRegenerations.get(key) === promise) {
-        pendingOnDemandRegenerations.delete(key);
-      }
-    });
-  pendingOnDemandRegenerations.set(key, promise);
-  return promise;
+    // Defer invocation until after replacement ownership is reserved,
+    // matching Next.js's response-cache scheduler and closing same-tick and
+    // post-invalidation stampede windows.
+    let producer!: PendingProducer<T>;
+    const promise = Promise.resolve()
+      .then(() => {
+        _markIsrRenderStart();
+        return renderFn();
+      })
+      .finally(() => {
+        deletePendingProducerIfOwned(pendingOnDemandRegenerations, key, producer);
+      });
+    producer = { startTime, tags: [...tags], promise };
+    return producer;
+  });
+  return selection.producer.promise as Promise<T>;
 }
 
 /**
  * Trigger a background regeneration for a cache key.
  *
  * If a regeneration for this key is already in progress, this is a no-op.
- * The renderFn should produce the new cache value and call isrSet internally.
+ * A regeneration that an invalidation of its own tags disqualified is
+ * replaced with fresh work instead. The renderFn should produce the new
+ * cache value and call isrSet internally.
  *
  * On Cloudflare Workers the regeneration promise is registered with
  * `ctx.waitUntil()` via the ALS-backed ExecutionContext, keeping the isolate
@@ -338,38 +369,68 @@ export function triggerBackgroundRegeneration(
     routePath: string;
     routeType: OnRequestErrorContext["routeType"];
   },
+  tags: readonly string[] = getCurrentFetchSoftTags(),
 ): void {
   // Edge-managed CDN adapters revalidate by re-requesting the origin, so the
   // origin must not also run in-process regeneration.
   if (!getCdnCacheAdapter().ownsBackgroundRevalidation) return;
-  if (pendingRegenerations.has(key)) return;
+  // Register the scheduler itself before it can yield to an invalidation
+  // version lookup. A stale producer may only be replaced after that shared
+  // lookup completes, and Workers must keep the continuation alive until the
+  // replacement render and its cache write finish.
+  const scheduler = scheduleBackgroundRegeneration(key, renderFn, errorContext, [...tags]);
+  getRequestExecutionContext()?.waitUntil(scheduler);
+  void scheduler;
+}
 
-  const promise = renderFn()
-    .catch((err) => {
-      console.error(`[vinext] ISR background regeneration failed for ${key}:`, err);
-      if (errorContext) {
-        void reportRequestError(
-          err instanceof Error ? err : new Error(String(err)),
-          { path: key, method: "GET", headers: {} },
-          {
-            routerKind: errorContext.routerKind,
-            routePath: errorContext.routePath,
-            routeType: errorContext.routeType,
-            revalidateReason: "stale",
-          },
-        );
+async function scheduleBackgroundRegeneration(
+  key: string,
+  renderFn: () => Promise<void>,
+  errorContext:
+    | {
+        routerKind: OnRequestErrorContext["routerKind"];
+        routePath: string;
+        routeType: OnRequestErrorContext["routeType"];
       }
-    })
-    .finally(() => {
-      pendingRegenerations.delete(key);
-    });
+    | undefined,
+  tags: string[],
+): Promise<void> {
+  const selection = await getOrCreateJoinableProducer(pendingRegenerations, key, () => {
+    const startTime = Date.now();
 
-  pendingRegenerations.set(key, promise);
+    // Mark the render start inside the renderFn's execution context (which may
+    // be a fresh context for the regeneration) so its isrSet writes are guarded
+    // from the beginning of the producing work. For the Pages Router the page
+    // rendering path additionally marks the start inside its fresh context (see
+    // pages-page-data).
+    let producer!: PendingProducer<void>;
+    const promise = (async () => {
+      _markIsrRenderStart();
+      await renderFn();
+    })()
+      .catch((err) => {
+        console.error(`[vinext] ISR background regeneration failed for ${key}:`, err);
+        if (errorContext) {
+          void reportRequestError(
+            err instanceof Error ? err : new Error(String(err)),
+            { path: key, method: "GET", headers: {} },
+            {
+              routerKind: errorContext.routerKind,
+              routePath: errorContext.routePath,
+              routeType: errorContext.routeType,
+              revalidateReason: "stale",
+            },
+          );
+        }
+      })
+      .finally(() => {
+        deletePendingProducerIfOwned(pendingRegenerations, key, producer);
+      });
 
-  // Register with the Workers ExecutionContext (retrieved from ALS) so the
-  // runtime keeps the isolate alive until the regeneration completes, even
-  // after the Response has already been sent to the client.
-  getRequestExecutionContext()?.waitUntil(promise);
+    producer = { startTime, tags, promise };
+    return producer;
+  });
+  if (selection.created) await selection.producer.promise;
 }
 
 // ---------------------------------------------------------------------------

@@ -58,6 +58,13 @@ export type CacheState = {
   requestScopedCacheLife: CacheLifeConfig | null;
   unstableCacheObservations: Map<string, UnstableCacheObservation>;
   unstableCacheRevalidation: UnstableCacheRevalidationMode;
+  /**
+   * Wall-clock timestamp captured when the current request's first ISR cache
+   * read (or regeneration render) began. ISR writes guard against restoring
+   * entries invalidated mid-render by refusing writes whose tags carry a newer
+   * invalidation marker (see `guardSince` in cache-handler.ts).
+   */
+  isrRenderStartTimestamp: number | undefined;
 };
 
 const FALLBACK_KEY = Symbol.for("vinext.cache.fallback");
@@ -75,6 +82,7 @@ const fallbackState = (globalState[FALLBACK_KEY] ??= {
   requestScopedCacheLife: null,
   unstableCacheObservations: new Map<string, UnstableCacheObservation>(),
   unstableCacheRevalidation: "foreground",
+  isrRenderStartTimestamp: undefined,
 } satisfies CacheState) as CacheState;
 
 function getCacheState(): CacheState {
@@ -102,6 +110,7 @@ export function _runWithCacheState<T>(fn: () => T | Promise<T>): T | Promise<T> 
     requestScopedCacheLife: null,
     unstableCacheObservations: new Map<string, UnstableCacheObservation>(),
     unstableCacheRevalidation: "foreground",
+    isrRenderStartTimestamp: undefined,
   };
   return cacheAls.run(state, fn);
 }
@@ -272,4 +281,32 @@ export function _peekUnstableCacheObservations(): UnstableCacheObservation[] {
 
 export function shouldServeStaleUnstableCacheEntry(): boolean {
   return getCacheState().unstableCacheRevalidation === "background";
+}
+
+/**
+ * Capture the current request's ISR render start, if not already captured.
+ * Called at the first ISR cache read of a request and at the start of
+ * background/on-demand regeneration renders. The first (earliest) capture
+ * wins: a later regen start guarding with an earlier stamp only over-suppresses
+ * (a refetch on the next request), never restores stale data.
+ *
+ * @internal
+ */
+export function _markIsrRenderStart(): void {
+  const state = getCacheState();
+  if (state.isrRenderStartTimestamp === undefined) {
+    state.isrRenderStartTimestamp = Date.now();
+  }
+}
+
+/**
+ * The request's ISR render start timestamp, or undefined when the current
+ * scope has no request-scoped cache state (e.g. build-time prerendering) —
+ * callers then fall back to capturing at their write.
+ *
+ * @internal
+ */
+export function _getIsrRenderStartTimestamp(): number | undefined {
+  if (!hasRequestScopedCacheState()) return undefined;
+  return getCacheState().isrRenderStartTimestamp;
 }

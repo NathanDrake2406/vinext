@@ -25,6 +25,11 @@ import {
   PRERENDER_REVALIDATE_HEADER,
 } from "../packages/vinext/src/server/isr-cache.js";
 import { after } from "../packages/vinext/src/shims/server.js";
+import {
+  getDataCacheHandler,
+  MemoryCacheHandler,
+  setDataCacheHandler,
+} from "../packages/vinext/src/shims/cache-handler.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -334,6 +339,62 @@ describe("createPagesPageHandler — on-demand terminal responses", () => {
 
     expect(response.headers.get("x-nextjs-cache")).toBe("REVALIDATED");
     expect(response.headers.get("x-vinext-cache")).toBeNull();
+  });
+
+  it("does not join a Pages producer invalidated after it started", async () => {
+    const previousHandler = getDataCacheHandler();
+    setDataCacheHandler(new MemoryCacheHandler());
+    let renderCount = 0;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => (markFirstStarted = resolve));
+    let markSecondStarted!: () => void;
+    const secondStarted = new Promise<void>((resolve) => (markSecondStarted = resolve));
+    let releaseFirstRender!: () => void;
+    const firstRenderGate = new Promise<void>((resolve) => (releaseFirstRender = resolve));
+    const route = makeRoute(
+      "/coalesce",
+      makePageModule({
+        async getStaticProps() {
+          renderCount++;
+          if (renderCount === 1) markFirstStarted();
+          if (renderCount === 2) markSecondStarted();
+          if (renderCount === 1) await firstRenderGate;
+          return { props: { renderCount }, revalidate: 60 };
+        },
+      }),
+    );
+    const handler = createPagesPageHandler(makeOpts({ pageRoutes: [route] }));
+    const makeOnDemandRequest = () =>
+      new Request("http://localhost/coalesce", {
+        headers: { [PRERENDER_REVALIDATE_HEADER]: getRevalidateSecret() },
+      });
+
+    try {
+      const first = handler(makeOnDemandRequest(), "/coalesce", null, null, null);
+      await firstStarted;
+      await getDataCacheHandler().revalidateTag("_N_T_/coalesce");
+      const invalidatedAt = await getDataCacheHandler().getInvalidationVersion(["_N_T_/coalesce"]);
+      while (Date.now() <= invalidatedAt) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      const second = handler(makeOnDemandRequest(), "/coalesce", null, null, null);
+      await secondStarted;
+      expect(renderCount).toBe(2);
+      await second;
+
+      releaseFirstRender();
+      await first;
+
+      const cached = await getDataCacheHandler().get("pages:test-build-id:/coalesce");
+      expect(cached?.value).toMatchObject({
+        kind: "PAGES",
+        pageData: { pageProps: { renderCount: 2 } },
+      });
+    } finally {
+      releaseFirstRender();
+      setDataCacheHandler(previousHandler);
+    }
   });
 });
 

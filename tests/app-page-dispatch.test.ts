@@ -37,6 +37,7 @@ import { after, connection } from "../packages/vinext/src/shims/server.js";
 import type { AppPageMiddlewareContext } from "../packages/vinext/src/server/app-page-response.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
+import { _getIsrRenderStartTimestamp } from "../packages/vinext/src/shims/cache-request-state.js";
 import { markAppPprDynamicFallbackShellHtml } from "../packages/vinext/src/server/app-ppr-fallback-shell.js";
 import { appPagePprRuntime } from "../packages/vinext/src/server/app-page-ppr-runtime.js";
 import {
@@ -2750,11 +2751,13 @@ describe("app page dispatch", () => {
     let capturedWaitForAllReady: boolean | undefined;
     let capturedFallbackToErrorDocument: boolean | undefined;
     let capturedServeStreamingMetadata: boolean | undefined;
+    let isrRenderStartAtRegenTime: number | undefined;
     let afterRan = false;
     const isrSet = vi.fn(async () => {});
     const { options } = createDispatchOptions({
       buildPageElement: async (_route, _params, _opts, _searchParams, _layout, buildOptions) => {
         capturedServeStreamingMetadata = buildOptions?.serveStreamingMetadata;
+        isrRenderStartAtRegenTime = _getIsrRenderStartTimestamp();
         after(() => {
           afterRan = true;
         });
@@ -2801,6 +2804,7 @@ describe("app page dispatch", () => {
 
     expect(capturedWaitForAllReady).toBe(true);
     expect(capturedServeStreamingMetadata).toBe(false);
+    expect(isrRenderStartAtRegenTime).toEqual(expect.any(Number));
     expect(capturedFallbackToErrorDocument).toBeUndefined();
     expect(isrSet).toHaveBeenCalled();
     expect(afterRan).toBe(true);
