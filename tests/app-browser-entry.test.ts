@@ -7465,6 +7465,7 @@ describe("hasMissedInitialTraversal", () => {
   it("reports a traversal that moved off the activation entry", () => {
     expect(
       hasMissedInitialTraversal({
+        externalHistoryWriteObserved: false,
         historyState: vinextEntryState,
         navigation: navigationWithKeys("activation", "traversed"),
       }),
@@ -7474,6 +7475,7 @@ describe("hasMissedInitialTraversal", () => {
   it("reports nothing while the document sits on its activation entry", () => {
     expect(
       hasMissedInitialTraversal({
+        externalHistoryWriteObserved: false,
         historyState: vinextEntryState,
         navigation: navigationWithKeys("activation", "activation"),
       }),
@@ -7485,7 +7487,20 @@ describe("hasMissedInitialTraversal", () => {
     // entry carries no vinext traversal index, so there is nothing to replay.
     expect(
       hasMissedInitialTraversal({
+        externalHistoryWriteObserved: false,
         historyState: { thirdParty: true },
+        navigation: navigationWithKeys("activation", "third-party"),
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves an entry whose traversal index was merely inherited unhandled", () => {
+    // The patched history.pushState copies vinext's navigation metadata onto a
+    // raw caller's state, so a traversal index on a new entry proves nothing.
+    expect(
+      hasMissedInitialTraversal({
+        externalHistoryWriteObserved: true,
+        historyState: { ...vinextEntryState, thirdParty: true },
         navigation: navigationWithKeys("activation", "third-party"),
       }),
     ).toBe(false);
@@ -7493,10 +7508,15 @@ describe("hasMissedInitialTraversal", () => {
 
   it("no-ops without the Navigation API", () => {
     expect(
-      hasMissedInitialTraversal({ historyState: vinextEntryState, navigation: undefined }),
+      hasMissedInitialTraversal({
+        externalHistoryWriteObserved: false,
+        historyState: vinextEntryState,
+        navigation: undefined,
+      }),
     ).toBe(false);
     expect(
       hasMissedInitialTraversal({
+        externalHistoryWriteObserved: false,
         historyState: vinextEntryState,
         navigation: { activation: null, currentEntry: { key: "current" } },
       }),

@@ -34,6 +34,7 @@ import {
   getBfcacheIdMapContext,
   getMountedSlotsHeader,
   getPrefetchCache,
+  hasObservedExternalHistoryWrite,
   hasPrefetchCacheEntryForNavigation,
   invalidatePrefetchCache,
   preloadHybridClientRouteOwner,
@@ -1520,6 +1521,7 @@ function bootstrapHydration(
   // traversed-to entry's metadata. The traversal is replayed once the listener
   // is installed below.
   const missedInitialTraversal = hasMissedInitialTraversal({
+    externalHistoryWriteObserved: hasObservedExternalHistoryWrite(),
     historyState: window.history.state,
     navigation: readBrowserNavigationEntryKeySource(),
   });
@@ -2521,6 +2523,7 @@ function bootstrapHydration(
   if (
     missedInitialTraversal &&
     hasMissedInitialTraversal({
+      externalHistoryWriteObserved: hasObservedExternalHistoryWrite(),
       historyState: window.history.state,
       navigation: readBrowserNavigationEntryKeySource(),
     })

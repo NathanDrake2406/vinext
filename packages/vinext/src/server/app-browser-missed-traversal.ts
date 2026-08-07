@@ -19,13 +19,19 @@ export function readBrowserNavigationEntryKeySource(): NavigationEntryKeySource 
  * True when Back/Forward landed before the App Router's popstate listener
  * existed. The activation entry is fixed for the document's lifetime and entry
  * keys survive `replaceState`, so a key mismatch means a traversal fired with
- * nobody listening. Only vinext-written entries (they carry a traversal index)
- * can be replayed; on any other entry the traversal is left unhandled.
+ * nobody listening.
+ *
+ * Only an entry the App Router owns can be replayed. A traversal index alone
+ * does not prove ownership: vinext's patched `history.pushState` copies that
+ * metadata onto entries raw callers create, so any external history write in
+ * this document disqualifies the check and the traversal is left unhandled.
  */
 export function hasMissedInitialTraversal(options: {
+  externalHistoryWriteObserved: boolean;
   historyState: unknown;
   navigation: NavigationEntryKeySource | undefined;
 }): boolean {
+  if (options.externalHistoryWriteObserved) return false;
   const activationKey = options.navigation?.activation?.entry?.key;
   const currentKey = options.navigation?.currentEntry?.key;
   if (typeof activationKey !== "string" || typeof currentKey !== "string") return false;
