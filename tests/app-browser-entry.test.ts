@@ -43,6 +43,7 @@ import {
   createPopstateRestoreHandler,
   restoreSynchronousPopstateScrollPosition,
 } from "../packages/vinext/src/server/app-browser-popstate.js";
+import { hasMissedInitialTraversal } from "../packages/vinext/src/server/app-browser-missed-traversal.js";
 import {
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   resolveRscCompatibilityNavigationDecision,
@@ -7454,6 +7455,55 @@ describe("app browser entry bfcacheId helpers", () => {
   });
 });
 
+describe("hasMissedInitialTraversal", () => {
+  const vinextEntryState = { __vinext_historyIndex: 0 };
+  const navigationWithKeys = (activationKey: string, currentKey: string) => ({
+    activation: { entry: { key: activationKey } },
+    currentEntry: { key: currentKey },
+  });
+
+  it("reports a traversal that moved off the activation entry", () => {
+    expect(
+      hasMissedInitialTraversal({
+        historyState: vinextEntryState,
+        navigation: navigationWithKeys("activation", "traversed"),
+      }),
+    ).toBe(true);
+  });
+
+  it("reports nothing while the document sits on its activation entry", () => {
+    expect(
+      hasMissedInitialTraversal({
+        historyState: vinextEntryState,
+        navigation: navigationWithKeys("activation", "activation"),
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves a third-party history entry unhandled", () => {
+    // e.g. analytics tooling calling pushState before the framework boots: the
+    // entry carries no vinext traversal index, so there is nothing to replay.
+    expect(
+      hasMissedInitialTraversal({
+        historyState: { thirdParty: true },
+        navigation: navigationWithKeys("activation", "third-party"),
+      }),
+    ).toBe(false);
+  });
+
+  it("no-ops without the Navigation API", () => {
+    expect(
+      hasMissedInitialTraversal({ historyState: vinextEntryState, navigation: undefined }),
+    ).toBe(false);
+    expect(
+      hasMissedInitialTraversal({
+        historyState: vinextEntryState,
+        navigation: { activation: null, currentEntry: { key: "current" } },
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("createPopstateRestoreHandler", () => {
   it("guards synchronous popstate scroll retry to the active navigation", () => {
     const scrollState = { __vinext_scrollY: 10 };
@@ -7518,8 +7568,8 @@ describe("createPopstateRestoreHandler", () => {
       shouldSkipScrollRestore: () => false,
     });
 
-    handler({ state: { __vinext_scrollY: 10 } } as PopStateEvent);
-    handler({ state: { __vinext_scrollY: 20 } } as PopStateEvent);
+    handler({ __vinext_scrollY: 10 });
+    handler({ __vinext_scrollY: 20 });
 
     expect(window.__VINEXT_RSC_PENDING__).toBe(secondNavigation.promise);
 
@@ -7564,7 +7614,7 @@ describe("createPopstateRestoreHandler", () => {
       shouldSkipScrollRestore: () => false,
     });
 
-    handler({ state: { __vinext_scrollY: 10 } } as PopStateEvent);
+    handler({ __vinext_scrollY: 10 });
     expect(window.__VINEXT_RSC_PENDING__).toBe(navigation.promise);
 
     activeNavigationId = 2;
@@ -7603,7 +7653,7 @@ describe("createPopstateRestoreHandler", () => {
       shouldSkipScrollRestore: (navId) => synchronouslyRestoredNavigationId === navId,
     });
 
-    handler({ state: { __vinext_scrollY: 10 } } as PopStateEvent);
+    handler({ __vinext_scrollY: 10 });
     synchronouslyRestoredNavigationId = activeNavigationId;
     restoreCalls.push({ __vinext_scrollY: 10, source: "sync" });
 
