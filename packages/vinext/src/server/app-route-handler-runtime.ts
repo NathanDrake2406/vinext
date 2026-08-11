@@ -449,6 +449,14 @@ export function createTrackedAppRouteRequest(
           ? accessCf(() => Reflect.has(target, prop), false)
           : Reflect.has(target, prop);
       },
+      preventExtensions(target) {
+        // Once the target is non-extensible, Proxy invariants forbid hiding any
+        // own key. Remove configurable Workers metadata before locking it down.
+        if (requestMode === "force-static" && !Reflect.deleteProperty(target, "cf")) {
+          return false;
+        }
+        return Reflect.preventExtensions(target);
+      },
       ownKeys(target) {
         const keys = Reflect.ownKeys(target);
         return keys.includes("cf")

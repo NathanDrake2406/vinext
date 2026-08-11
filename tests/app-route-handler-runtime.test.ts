@@ -394,6 +394,25 @@ describe("app route handler runtime helpers", () => {
     }
   });
 
+  it("hides request.cf when force-static requests become non-extensible", () => {
+    for (const lock of [Object.preventExtensions, Object.seal, Object.freeze]) {
+      const request = new Request("https://example.com/demo");
+      Object.defineProperty(request, "cf", {
+        value: { country: "AU" },
+        enumerable: true,
+        configurable: true,
+      });
+      const tracked = createTrackedAppRouteRequest(request, { requestMode: "force-static" });
+
+      expect(() => lock(tracked.request)).not.toThrow();
+      expect(Object.isExtensible(tracked.request)).toBe(false);
+      expect(Reflect.ownKeys(tracked.request)).not.toContain("cf");
+      expect("cf" in tracked.request).toBe(false);
+      expect(Object.getOwnPropertyDescriptor(tracked.request, "cf")).toBeUndefined();
+      expect(tracked.didAccessDynamicRequest()).toBe(false);
+    }
+  });
+
   it("tracks dynamic nextUrl fields but not pathname", () => {
     const accesses: string[] = [];
     const tracked = createTrackedAppRouteRequest(
