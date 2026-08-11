@@ -6,10 +6,9 @@ import {
   sealRequestHeaders,
   type NextURL,
 } from "vinext/shims/server";
-import { attachRequestCfMetadata, cloneRequestWithUrl } from "./request-pipeline.js";
+import { cloneRequestWithHeaders, cloneRequestWithUrl } from "./request-pipeline.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
 import { addBasePathToPathname } from "../utils/base-path.js";
-import { BUILT_IN_REQUEST_PROPERTY_NAMES } from "./app-route-request-built-ins.js";
 
 const ROUTE_HANDLER_HTTP_METHODS = [
   "GET",
@@ -119,47 +118,6 @@ function bindMethodIfNeeded<T>(value: T, target: object): T {
   return typeof value === "function" ? (value.bind(target) as T) : value;
 }
 
-function hasSamePropertyImplementation(
-  current: PropertyDescriptor,
-  original: PropertyDescriptor,
-): boolean {
-  return (
-    Object.is(current.value, original.value) &&
-    current.get === original.get &&
-    current.set === original.set
-  );
-}
-
-function getResolvedPropertyDescriptor(
-  target: object,
-  prop: PropertyKey,
-): PropertyDescriptor | undefined {
-  let current: object | null = target;
-  while (current !== null) {
-    const descriptor = Reflect.getOwnPropertyDescriptor(current, prop);
-    if (descriptor !== undefined) return descriptor;
-    current = Reflect.getPrototypeOf(current);
-  }
-  return undefined;
-}
-
-function getRequestProperty(
-  target: NextRequest,
-  prop: PropertyKey,
-  receiver: object,
-  builtInProperties: ReadonlyMap<PropertyKey, PropertyDescriptor>,
-): unknown {
-  const originalProperty = builtInProperties.get(prop);
-  const currentProperty =
-    originalProperty === undefined ? undefined : getResolvedPropertyDescriptor(target, prop);
-  const isBuiltIn =
-    currentProperty !== undefined &&
-    originalProperty !== undefined &&
-    hasSamePropertyImplementation(currentProperty, originalProperty);
-  const bindingTarget = isBuiltIn ? target : receiver;
-  return bindMethodIfNeeded(Reflect.get(target, prop, bindingTarget), bindingTarget);
-}
-
 function buildNextConfig(options: TrackedAppRouteRequestOptions): {
   basePath?: string;
   i18n?: NextI18nConfig;
@@ -174,31 +132,6 @@ function buildNextConfig(options: TrackedAppRouteRequestOptions): {
     i18n: options.i18n ?? undefined,
     trailingSlash: options.trailingSlash,
   };
-}
-
-function rebuildRequestWithHeaders(input: Request, headers: Headers): Request {
-  const method = input.method;
-  const hasBody = method !== "GET" && method !== "HEAD";
-  const init: RequestInit & { duplex?: "half" } = {
-    method,
-    headers,
-    cache: input.cache,
-    credentials: input.credentials,
-    integrity: input.integrity,
-    keepalive: input.keepalive,
-    mode: input.mode,
-    redirect: input.redirect,
-    referrer: input.referrer,
-    referrerPolicy: input.referrerPolicy,
-    signal: input.signal,
-  };
-
-  if (hasBody && input.body) {
-    init.body = input.body;
-    init.duplex = "half";
-  }
-
-  return attachRequestCfMetadata(new Request(input.url, init), input);
 }
 
 function cleanStaticUrl(url: string): string {
@@ -355,50 +288,34 @@ export function createTrackedAppRouteRequest(
       ? buildRequestHeadersFromMiddlewareResponse(input.headers, options.middlewareHeaders)
       : null;
     const requestWithOverrides = requestHeaders
-      ? rebuildRequestWithHeaders(input, requestHeaders)
+      ? cloneRequestWithHeaders(input, requestHeaders)
       : input;
     const nextRequest =
       requestWithOverrides instanceof NextRequest
         ? requestWithOverrides
         : new NextRequest(requestWithOverrides, { nextConfig: nextConfig ?? undefined });
     const rawCfMetadata = Reflect.get(nextRequest, "cf", nextRequest);
-    const hasCfMetadata = rawCfMetadata !== undefined;
     const originalCfDescriptor = Reflect.getOwnPropertyDescriptor(nextRequest, "cf");
-    const accessCf = <T>(read: () => T, forceStaticValue: T): T => {
-      if (requestMode === "force-static") return forceStaticValue;
+    const readCfMetadata = (): unknown => {
+      if (requestMode === "force-static") return undefined;
       if (requestMode === "error") return throwStaticGenerationError("request.cf");
       markDynamicAccess("request.cf");
-      return read();
+      return rawCfMetadata;
     };
-    // Pre-wrap instrumentation can replace a standard Request method with a
-    // wrapper that delegates through `original.call(this)`. Those wrappers need
-    // the branded target, while their own `this.cf` reads must still follow the
-    // route's dynamic policy. The copied Workers property is configurable, so
-    // route the raw target read through the same policy before exposing it.
-    const targetTracksCf = originalCfDescriptor?.configurable === true;
-    if (targetTracksCf) {
-      Object.defineProperty(nextRequest, "cf", {
-        configurable: true,
-        enumerable: originalCfDescriptor.enumerable,
-        get() {
-          return accessCf(() => rawCfMetadata, undefined);
-        },
-      });
-    }
-    // Workerd can place branded Web IDL members directly on the instance. Keep
-    // each resolved implementation distinguishable from own or prototype
-    // shadows added after the tracked request is exposed to route code.
-    const builtInProperties = new Map<PropertyKey, PropertyDescriptor>();
-    for (const prop of BUILT_IN_REQUEST_PROPERTY_NAMES) {
-      const descriptor = getResolvedPropertyDescriptor(nextRequest, prop);
-      if (descriptor !== undefined) builtInProperties.set(prop, descriptor);
-    }
+    // Keep request-specific Workers metadata behind one target-owned policy
+    // boundary. Request methods stay bound to this branded target, so indirect
+    // reads such as `request.valueOf().cf` still reach the controlled accessor.
+    Object.defineProperty(nextRequest, "cf", {
+      configurable: true,
+      enumerable: originalCfDescriptor?.enumerable ?? false,
+      get: readCfMetadata,
+    });
     const cloneTrackedRequest = (): NextRequest => {
       const cloned = nextRequest.clone();
-      if (hasCfMetadata) {
+      if (rawCfMetadata !== undefined) {
         Object.defineProperty(cloned, "cf", {
           value: rawCfMetadata,
-          enumerable: originalCfDescriptor?.enumerable ?? true,
+          enumerable: originalCfDescriptor?.enumerable ?? false,
           configurable: true,
         });
       }
@@ -411,15 +328,7 @@ export function createTrackedAppRouteRequest(
     let forceStaticCookies: RequestCookies | null = null;
 
     const requestHandler: ProxyHandler<NextRequest> = {
-      get(target, prop, receiver): unknown {
-        if (prop === "cf") {
-          return targetTracksCf
-            ? accessCf(() => rawCfMetadata, undefined)
-            : accessCf(
-                () => getRequestProperty(target, prop, receiver, builtInProperties),
-                undefined,
-              );
-        }
+      get(target, prop): unknown {
         if (requestMode === "force-static") {
           switch (prop) {
             case "nextUrl":
@@ -433,6 +342,8 @@ export function createTrackedAppRouteRequest(
               return forceStaticCookies;
             case "url":
               return cleanStaticUrl(target.nextUrl.href);
+            case "cf":
+              return Reflect.get(target, prop, target);
             case "ip":
             case "geo":
               return undefined;
@@ -451,7 +362,7 @@ export function createTrackedAppRouteRequest(
             case "clone":
               return cloneTrackedRequest;
             default:
-              return getRequestProperty(target, prop, receiver, builtInProperties);
+              return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
           }
         }
 
@@ -460,10 +371,12 @@ export function createTrackedAppRouteRequest(
             case "nextUrl":
               requireStaticNextUrl ??= wrapRequireStaticNextUrl(target.nextUrl);
               return requireStaticNextUrl;
+            case "cf":
+              return Reflect.get(target, prop, target);
             case "headers":
             case "cookies":
             case "url":
-            // Deliberate vinext divergence from Next.js: ip/geo/cf are exposed
+            // Deliberate vinext divergence from Next.js: ip/geo are exposed
             // on NextRequest for Cloudflare compatibility, so require-static
             // treats them as dynamic request APIs instead of falling through.
             case "ip":
@@ -478,7 +391,7 @@ export function createTrackedAppRouteRequest(
             case "clone":
               return cloneTrackedRequest;
             default:
-              return getRequestProperty(target, prop, receiver, builtInProperties);
+              return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
           }
         }
 
@@ -486,8 +399,12 @@ export function createTrackedAppRouteRequest(
           case "nextUrl":
             proxiedNextUrl ??= wrapNextUrl(target.nextUrl);
             return proxiedNextUrl;
+          case "cf":
+            return Reflect.get(target, prop, target);
           case "headers":
           case "cookies":
+          case "ip":
+          case "geo":
           case "url":
           case "body":
           case "blob":
@@ -496,66 +413,12 @@ export function createTrackedAppRouteRequest(
           case "arrayBuffer":
           case "formData":
             markDynamicAccess(`request.${String(prop)}` as RequestDynamicAccess);
-            return getRequestProperty(target, prop, receiver, builtInProperties);
-          case "ip":
-          case "geo":
-            markDynamicAccess(`request.${prop}`);
-            return Reflect.get(target, prop, target);
+            return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
           case "clone":
             return cloneTrackedRequest;
           default:
-            return getRequestProperty(target, prop, receiver, builtInProperties);
+            return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
         }
-      },
-      getOwnPropertyDescriptor(target, prop) {
-        if (prop !== "cf") return Reflect.getOwnPropertyDescriptor(target, prop);
-        if (!targetTracksCf) {
-          return accessCf(() => Reflect.getOwnPropertyDescriptor(target, prop), undefined);
-        }
-        const targetDescriptor = Reflect.getOwnPropertyDescriptor(target, prop);
-        return accessCf(
-          () =>
-            targetDescriptor?.configurable === false || !Reflect.isExtensible(target)
-              ? targetDescriptor
-              : {
-                  configurable: true,
-                  enumerable: originalCfDescriptor?.enumerable ?? true,
-                  value: rawCfMetadata,
-                  writable: false,
-                },
-          undefined,
-        );
-      },
-      has(target, prop) {
-        return prop === "cf"
-          ? accessCf(() => Reflect.has(target, prop), false)
-          : Reflect.has(target, prop);
-      },
-      preventExtensions(target) {
-        // Once the target is non-extensible, Proxy invariants forbid hiding any
-        // own key or changing a non-configurable descriptor's shape. Remove
-        // force-static metadata, or restore the automatic-mode data descriptor
-        // before the integrity operation locks the target descriptor in place.
-        if (requestMode === "force-static") {
-          if (!Reflect.deleteProperty(target, "cf")) return false;
-        } else if (targetTracksCf) {
-          Object.defineProperty(target, "cf", {
-            configurable: true,
-            enumerable: originalCfDescriptor?.enumerable ?? true,
-            value: rawCfMetadata,
-            writable: false,
-          });
-        }
-        return Reflect.preventExtensions(target);
-      },
-      ownKeys(target) {
-        const keys = Reflect.ownKeys(target);
-        return keys.includes("cf")
-          ? accessCf(
-              () => keys,
-              keys.filter((key) => key !== "cf"),
-            )
-          : keys;
       },
     };
 
