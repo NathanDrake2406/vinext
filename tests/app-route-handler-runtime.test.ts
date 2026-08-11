@@ -285,6 +285,37 @@ describe("app route handler runtime helpers", () => {
     expect(accesses).toEqual(["request.ip", "request.geo"]);
   });
 
+  it("treats request.cf as dynamic request state", () => {
+    const cf = { country: "AU" };
+    const createRequest = () => {
+      const request = new Request("https://example.com/demo");
+      Object.defineProperty(request, "cf", { value: cf, enumerable: true });
+      return request;
+    };
+    const accesses: string[] = [];
+    const tracked = createTrackedAppRouteRequest(createRequest(), {
+      onDynamicAccess(access) {
+        accesses.push(access);
+      },
+    });
+
+    expect(Reflect.get(tracked.request, "cf")).toBe(cf);
+    expect(tracked.didAccessDynamicRequest()).toBe(true);
+    expect(accesses).toEqual(["request.cf"]);
+
+    const forceStatic = createTrackedAppRouteRequest(createRequest(), {
+      requestMode: "force-static",
+    });
+    expect(Reflect.get(forceStatic.request, "cf")).toBeUndefined();
+    expect(forceStatic.didAccessDynamicRequest()).toBe(false);
+
+    const dynamicError = createTrackedAppRouteRequest(createRequest(), {
+      requestMode: "error",
+      staticGenerationErrorMessage: (expression) => `dynamic access: ${expression}`,
+    });
+    expect(() => Reflect.get(dynamicError.request, "cf")).toThrow("dynamic access: request.cf");
+  });
+
   it("tracks dynamic nextUrl fields but not pathname", () => {
     const accesses: string[] = [];
     const tracked = createTrackedAppRouteRequest(

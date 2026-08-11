@@ -76,6 +76,7 @@ export function markKnownDynamicAppRoute(pattern: string): void {
 type RequestDynamicAccess =
   | "request.headers"
   | "request.cookies"
+  | "request.cf"
   | "request.ip"
   | "request.geo"
   | "request.url"
@@ -341,6 +342,7 @@ export function createTrackedAppRouteRequest(
               return cleanStaticUrl(target.nextUrl.href);
             case "ip":
             case "geo":
+            case "cf":
               return undefined;
             case "body":
               return null;
@@ -369,11 +371,12 @@ export function createTrackedAppRouteRequest(
             case "headers":
             case "cookies":
             case "url":
-            // Deliberate vinext divergence from Next.js: ip/geo are exposed
+            // Deliberate vinext divergence from Next.js: ip/geo/cf are exposed
             // on NextRequest for Cloudflare compatibility, so require-static
             // treats them as dynamic request APIs instead of falling through.
             case "ip":
             case "geo":
+            case "cf":
             case "body":
             case "blob":
             case "json":
@@ -396,6 +399,7 @@ export function createTrackedAppRouteRequest(
           case "cookies":
           case "ip":
           case "geo":
+          case "cf":
           case "url":
           case "body":
           case "blob":
