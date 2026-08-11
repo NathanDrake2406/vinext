@@ -346,6 +346,8 @@ describe("app route handler runtime helpers", () => {
       (request: NextRequest) => "cf" in request,
       (request: NextRequest) => Reflect.ownKeys(request).includes("cf"),
       (request: NextRequest) => Reflect.get(request.valueOf(), "cf"),
+      (request: NextRequest) => request.hasOwnProperty("cf"),
+      (request: NextRequest) => request.propertyIsEnumerable("cf"),
     ];
 
     for (const read of reflectiveReads) {

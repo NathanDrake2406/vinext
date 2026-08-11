@@ -335,8 +335,17 @@ export function createTrackedAppRouteRequest(
 
     const requestHandler: ProxyHandler<NextRequest> = {
       get(target, prop, receiver): unknown {
-        if (prop === "valueOf") {
-          return bindMethodIfNeeded(Reflect.get(target, prop, receiver), receiver);
+        const objectPrototypeMethod = Reflect.getOwnPropertyDescriptor(
+          Object.prototype,
+          prop,
+        )?.value;
+        if (
+          typeof objectPrototypeMethod === "function" &&
+          Reflect.get(target, prop, receiver) === objectPrototypeMethod
+        ) {
+          // Web Request methods need the branded target, but inherited reflection
+          // helpers must retain the proxy so their reads pass through its traps.
+          return objectPrototypeMethod.bind(receiver);
         }
         if (prop === "cf") {
           return accessCf(
