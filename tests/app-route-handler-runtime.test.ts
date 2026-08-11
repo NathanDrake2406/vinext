@@ -460,6 +460,21 @@ describe("app route handler runtime helpers", () => {
     expect(accesses).toEqual(["request.headers", "request.json"]);
   });
 
+  it("binds own runtime Request members to the branded target", () => {
+    const tracked = createTrackedAppRouteRequest(new Request("https://example.com/demo"));
+    Object.defineProperty(tracked.request, "method", {
+      configurable: true,
+      get() {
+        if (this === tracked.request) {
+          throw new TypeError("illegal invocation");
+        }
+        return "GET";
+      },
+    });
+
+    expect(tracked.request.method).toBe("GET");
+  });
+
   it("remembers known dynamic app routes for the process lifetime", () => {
     const pattern = "/tests/app-route-handler-runtime/" + Date.now();
 

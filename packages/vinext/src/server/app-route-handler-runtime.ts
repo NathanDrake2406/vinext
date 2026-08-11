@@ -119,17 +119,16 @@ function bindMethodIfNeeded<T>(value: T, target: object): T {
 }
 
 // Built-in Web Request accessors and methods need the raw target for Web IDL
-// brand checks. Own and otherwise unknown extensions must retain the proxy so
-// their `this` reads still pass through dynamic request policy.
+// brand checks, even in runtimes that expose them as own properties. Names
+// outside that built-in surface retain the proxy so extension reads still pass
+// through dynamic request policy.
 const BUILT_IN_REQUEST_PROPERTIES = new Set<PropertyKey>([
   ...Reflect.ownKeys(Request.prototype),
   ...Reflect.ownKeys(NextRequest.prototype),
 ]);
 
 function getRequestProperty(target: NextRequest, prop: PropertyKey, receiver: object): unknown {
-  const isBuiltIn =
-    Reflect.getOwnPropertyDescriptor(target, prop) === undefined &&
-    BUILT_IN_REQUEST_PROPERTIES.has(prop);
+  const isBuiltIn = BUILT_IN_REQUEST_PROPERTIES.has(prop);
   const bindingTarget = isBuiltIn ? target : receiver;
   return bindMethodIfNeeded(Reflect.get(target, prop, bindingTarget), bindingTarget);
 }
