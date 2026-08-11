@@ -414,6 +414,60 @@ describe("app route handler runtime helpers", () => {
     }
   });
 
+  it.each(["cfFromPrototype", "method"])(
+    "tracks the %s Request prototype extension installed before wrapping",
+    (propertyName) => {
+      const cf = { country: "AU" };
+      const originalDescriptor = Reflect.getOwnPropertyDescriptor(
+        NextRequest.prototype,
+        propertyName,
+      );
+      Object.defineProperty(NextRequest.prototype, propertyName, {
+        configurable: true,
+        get() {
+          return Reflect.get(this, "cf");
+        },
+      });
+
+      const createRequest = () => {
+        const request = new Request("https://example.com/demo");
+        Object.defineProperty(request, "cf", { value: cf, enumerable: true, configurable: true });
+        return request;
+      };
+
+      try {
+        const accesses: string[] = [];
+        const tracked = createTrackedAppRouteRequest(createRequest(), {
+          onDynamicAccess(access) {
+            accesses.push(access);
+          },
+        });
+        expect(Reflect.get(tracked.request, propertyName)).toBe(cf);
+        expect(tracked.didAccessDynamicRequest()).toBe(true);
+        expect(accesses).toEqual(["request.cf"]);
+
+        const forceStatic = createTrackedAppRouteRequest(createRequest(), {
+          requestMode: "force-static",
+        });
+        expect(Reflect.get(forceStatic.request, propertyName)).toBeUndefined();
+
+        const dynamicError = createTrackedAppRouteRequest(createRequest(), {
+          requestMode: "error",
+          staticGenerationErrorMessage: (expression) => `dynamic access: ${expression}`,
+        });
+        expect(() => Reflect.get(dynamicError.request, propertyName)).toThrow(
+          "dynamic access: request.cf",
+        );
+      } finally {
+        if (originalDescriptor === undefined) {
+          Reflect.deleteProperty(NextRequest.prototype, propertyName);
+        } else {
+          Object.defineProperty(NextRequest.prototype, propertyName, originalDescriptor);
+        }
+      }
+    },
+  );
+
   it("hides request.cf when force-static requests become non-extensible", () => {
     for (const lock of [Object.preventExtensions, Object.seal, Object.freeze]) {
       const request = new Request("https://example.com/demo");

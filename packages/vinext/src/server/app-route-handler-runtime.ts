@@ -9,6 +9,7 @@ import {
 import { attachRequestCfMetadata, cloneRequestWithUrl } from "./request-pipeline.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
 import { addBasePathToPathname } from "../utils/base-path.js";
+import { BUILT_IN_REQUEST_PROPERTIES } from "./app-route-request-built-ins.js";
 
 const ROUTE_HANDLER_HTTP_METHODS = [
   "GET",
@@ -117,15 +118,6 @@ type TrackedAppRouteRequest = {
 function bindMethodIfNeeded<T>(value: T, target: object): T {
   return typeof value === "function" ? (value.bind(target) as T) : value;
 }
-
-// Built-in Web Request accessors and methods need the raw target for Web IDL
-// brand checks, even in runtimes that expose them as own properties. Names
-// outside that built-in surface retain the proxy so extension reads still pass
-// through dynamic request policy.
-const BUILT_IN_REQUEST_PROPERTIES = new Set<PropertyKey>([
-  ...Reflect.ownKeys(Request.prototype),
-  ...Reflect.ownKeys(NextRequest.prototype),
-]);
 
 function hasSamePropertyImplementation(
   current: PropertyDescriptor,
@@ -373,9 +365,15 @@ export function createTrackedAppRouteRequest(
     // each resolved implementation distinguishable from own or prototype
     // shadows added after the tracked request is exposed to route code.
     const builtInProperties = new Map<PropertyKey, PropertyDescriptor>();
-    for (const prop of BUILT_IN_REQUEST_PROPERTIES) {
+    for (const [prop, canonicalDescriptor] of BUILT_IN_REQUEST_PROPERTIES) {
       const descriptor = getResolvedPropertyDescriptor(nextRequest, prop);
-      if (descriptor !== undefined) builtInProperties.set(prop, descriptor);
+      if (
+        descriptor !== undefined &&
+        (Reflect.getOwnPropertyDescriptor(nextRequest, prop) !== undefined ||
+          hasSamePropertyImplementation(descriptor, canonicalDescriptor))
+      ) {
+        builtInProperties.set(prop, descriptor);
+      }
     }
     const accessCf = <T>(read: () => T, forceStaticValue: T): T => {
       if (requestMode === "force-static") return forceStaticValue;

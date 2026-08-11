@@ -40,6 +40,10 @@ const appRouteHandlerDispatchPath = resolveEntryPath(
   "../server/app-route-handler-dispatch.js",
   import.meta.url,
 );
+const appRouteRequestBuiltInsPath = resolveEntryPath(
+  "../server/app-route-request-built-ins.js",
+  import.meta.url,
+);
 const appRouteHandlerResponsePath = resolveEntryPath(
   "../server/app-route-handler-response.js",
   import.meta.url,
@@ -277,6 +281,9 @@ async function __loadPrerenderPagesRoutes() {
     : "";
 
   return `
+// Capture the canonical Request surface before any user module can extend it.
+// The global-backed snapshot remains available to the lazy dispatch chunk.
+import ${JSON.stringify(appRouteRequestBuiltInsPath)};
 import ${JSON.stringify(serverGlobalsPath)};
 import {
   renderToReadableStream as _renderToReadableStream,
