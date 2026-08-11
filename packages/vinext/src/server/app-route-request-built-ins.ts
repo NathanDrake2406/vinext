@@ -1,37 +1,43 @@
-import { NextRequest } from "vinext/shims/server";
-
-const BUILT_IN_REQUEST_PROPERTIES_KEY = Symbol.for(
-  "vinext.appRouteHandlerRuntime.builtInRequestProperties",
+const BUILT_IN_REQUEST_PROPERTY_NAMES_KEY = Symbol.for(
+  "vinext.appRouteHandlerRuntime.builtInRequestPropertyNames",
 );
 const globalState = globalThis as unknown as Record<PropertyKey, unknown>;
 
-type BuiltInRequestProperty = readonly [PropertyKey, Readonly<PropertyDescriptor>];
+export function captureBuiltInRequestPropertyNames(
+  requestInstance: Request = new Request("http://vinext.invalid/"),
+): readonly PropertyKey[] {
+  const properties = new Set<PropertyKey>();
+  const prototypeChain: object[] = [];
+  let prototype: object | null = Reflect.getPrototypeOf(requestInstance);
+  while (prototype !== null && prototype !== Object.prototype) {
+    prototypeChain.push(prototype);
+    prototype = Reflect.getPrototypeOf(prototype);
+  }
 
-function captureBuiltInRequestProperties(): readonly BuiltInRequestProperty[] {
-  const properties = new Map<PropertyKey, PropertyDescriptor>();
-  for (const prototype of [Request.prototype, NextRequest.prototype]) {
-    for (const prop of Reflect.ownKeys(prototype)) {
-      const descriptor = Reflect.getOwnPropertyDescriptor(prototype, prop);
-      if (descriptor !== undefined) properties.set(prop, descriptor);
+  // Object.prototype stays excluded because its reflection helpers must keep
+  // the tracked proxy as their receiver.
+  for (const source of [...prototypeChain, requestInstance]) {
+    for (const prop of Reflect.ownKeys(source)) {
+      // Node stores internal Request state in own symbol keys. Worker Web IDL
+      // members that are absent from the prototype surface are string-named.
+      if (source === requestInstance && typeof prop !== "string") continue;
+      properties.add(prop);
     }
   }
 
-  return Object.freeze(
-    Array.from(properties, ([prop, descriptor]) =>
-      Object.freeze([prop, Object.freeze({ ...descriptor })] as const),
-    ),
-  );
+  return Object.freeze([...properties]);
 }
 
 /**
- * Capture the standard Request prototype implementations before route modules
- * can extend or shadow them. The production RSC entry imports this module ahead of userland;
+ * Capture the standard Request surface before route modules can extend or
+ * shadow it. Workerd can place Web IDL members on intermediate prototypes or
+ * directly on Request instances, so both runtime-specific layouts are included.
+ * The production RSC entry imports this module ahead of userland;
  * the global symbol also preserves that first snapshot if a bundler duplicates
  * this module across the eager entry and lazy dispatch chunks.
  *
- * Workerd may implement these names as branded own properties. Callers should
- * still resolve each descriptor from the concrete request instance rather than
- * retaining these prototype descriptors.
+ * Callers resolve each implementation from the concrete request rather than
+ * retaining or invoking anything from the pristine instance.
  */
-export const BUILT_IN_REQUEST_PROPERTIES = (globalState[BUILT_IN_REQUEST_PROPERTIES_KEY] ??=
-  captureBuiltInRequestProperties()) as readonly BuiltInRequestProperty[];
+export const BUILT_IN_REQUEST_PROPERTY_NAMES = (globalState[BUILT_IN_REQUEST_PROPERTY_NAMES_KEY] ??=
+  captureBuiltInRequestPropertyNames()) as readonly PropertyKey[];

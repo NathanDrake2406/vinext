@@ -9,7 +9,7 @@ import {
 import { attachRequestCfMetadata, cloneRequestWithUrl } from "./request-pipeline.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
 import { addBasePathToPathname } from "../utils/base-path.js";
-import { BUILT_IN_REQUEST_PROPERTIES } from "./app-route-request-built-ins.js";
+import { BUILT_IN_REQUEST_PROPERTY_NAMES } from "./app-route-request-built-ins.js";
 
 const ROUTE_HANDLER_HTTP_METHODS = [
   "GET",
@@ -361,28 +361,49 @@ export function createTrackedAppRouteRequest(
       requestWithOverrides instanceof NextRequest
         ? requestWithOverrides
         : new NextRequest(requestWithOverrides, { nextConfig: nextConfig ?? undefined });
-    // Workerd can place branded Web IDL members directly on the instance. Keep
-    // each resolved implementation distinguishable from own or prototype
-    // shadows added after the tracked request is exposed to route code.
-    const builtInProperties = new Map<PropertyKey, PropertyDescriptor>();
-    for (const [prop, canonicalDescriptor] of BUILT_IN_REQUEST_PROPERTIES) {
-      const descriptor = getResolvedPropertyDescriptor(nextRequest, prop);
-      if (
-        descriptor !== undefined &&
-        (Reflect.getOwnPropertyDescriptor(nextRequest, prop) !== undefined ||
-          hasSamePropertyImplementation(descriptor, canonicalDescriptor))
-      ) {
-        builtInProperties.set(prop, descriptor);
-      }
-    }
+    const rawCfMetadata = Reflect.get(nextRequest, "cf", nextRequest);
+    const hasCfMetadata = rawCfMetadata !== undefined;
+    const originalCfDescriptor = Reflect.getOwnPropertyDescriptor(nextRequest, "cf");
     const accessCf = <T>(read: () => T, forceStaticValue: T): T => {
       if (requestMode === "force-static") return forceStaticValue;
       if (requestMode === "error") return throwStaticGenerationError("request.cf");
       markDynamicAccess("request.cf");
       return read();
     };
-    const cloneTrackedRequest = (): NextRequest =>
-      wrapRequest(attachRequestCfMetadata(nextRequest.clone(), nextRequest));
+    // Pre-wrap instrumentation can replace a standard Request method with a
+    // wrapper that delegates through `original.call(this)`. Those wrappers need
+    // the branded target, while their own `this.cf` reads must still follow the
+    // route's dynamic policy. The copied Workers property is configurable, so
+    // route the raw target read through the same policy before exposing it.
+    const targetTracksCf = originalCfDescriptor?.configurable === true;
+    if (targetTracksCf) {
+      Object.defineProperty(nextRequest, "cf", {
+        configurable: true,
+        enumerable: originalCfDescriptor.enumerable,
+        get() {
+          return accessCf(() => rawCfMetadata, undefined);
+        },
+      });
+    }
+    // Workerd can place branded Web IDL members directly on the instance. Keep
+    // each resolved implementation distinguishable from own or prototype
+    // shadows added after the tracked request is exposed to route code.
+    const builtInProperties = new Map<PropertyKey, PropertyDescriptor>();
+    for (const prop of BUILT_IN_REQUEST_PROPERTY_NAMES) {
+      const descriptor = getResolvedPropertyDescriptor(nextRequest, prop);
+      if (descriptor !== undefined) builtInProperties.set(prop, descriptor);
+    }
+    const cloneTrackedRequest = (): NextRequest => {
+      const cloned = nextRequest.clone();
+      if (hasCfMetadata) {
+        Object.defineProperty(cloned, "cf", {
+          value: rawCfMetadata,
+          enumerable: originalCfDescriptor?.enumerable ?? true,
+          configurable: true,
+        });
+      }
+      return wrapRequest(cloned);
+    };
     let proxiedNextUrl: NextURL | null = null;
     let forceStaticNextUrl: NextURL | null = null;
     let requireStaticNextUrl: NextURL | null = null;
@@ -392,10 +413,12 @@ export function createTrackedAppRouteRequest(
     const requestHandler: ProxyHandler<NextRequest> = {
       get(target, prop, receiver): unknown {
         if (prop === "cf") {
-          return accessCf(
-            () => getRequestProperty(target, prop, receiver, builtInProperties),
-            undefined,
-          );
+          return targetTracksCf
+            ? Reflect.get(target, prop, target)
+            : accessCf(
+                () => getRequestProperty(target, prop, receiver, builtInProperties),
+                undefined,
+              );
         }
         if (requestMode === "force-static") {
           switch (prop) {
@@ -465,8 +488,6 @@ export function createTrackedAppRouteRequest(
             return proxiedNextUrl;
           case "headers":
           case "cookies":
-          case "ip":
-          case "geo":
           case "url":
           case "body":
           case "blob":
@@ -476,6 +497,10 @@ export function createTrackedAppRouteRequest(
           case "formData":
             markDynamicAccess(`request.${String(prop)}` as RequestDynamicAccess);
             return getRequestProperty(target, prop, receiver, builtInProperties);
+          case "ip":
+          case "geo":
+            markDynamicAccess(`request.${prop}`);
+            return Reflect.get(target, prop, target);
           case "clone":
             return cloneTrackedRequest;
           default:
@@ -483,9 +508,23 @@ export function createTrackedAppRouteRequest(
         }
       },
       getOwnPropertyDescriptor(target, prop) {
-        return prop === "cf"
-          ? accessCf(() => Reflect.getOwnPropertyDescriptor(target, prop), undefined)
-          : Reflect.getOwnPropertyDescriptor(target, prop);
+        if (prop !== "cf") return Reflect.getOwnPropertyDescriptor(target, prop);
+        if (!targetTracksCf) {
+          return accessCf(() => Reflect.getOwnPropertyDescriptor(target, prop), undefined);
+        }
+        const targetDescriptor = Reflect.getOwnPropertyDescriptor(target, prop);
+        return accessCf(
+          () =>
+            targetDescriptor?.configurable === false || !Reflect.isExtensible(target)
+              ? targetDescriptor
+              : {
+                  configurable: true,
+                  enumerable: originalCfDescriptor?.enumerable ?? true,
+                  value: rawCfMetadata,
+                  writable: false,
+                },
+          undefined,
+        );
       },
       has(target, prop) {
         return prop === "cf"

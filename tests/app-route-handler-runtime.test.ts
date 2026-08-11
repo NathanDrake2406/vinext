@@ -6,6 +6,7 @@ import {
   isKnownDynamicAppRoute,
   markKnownDynamicAppRoute,
 } from "../packages/vinext/src/server/app-route-handler-runtime.js";
+import { captureBuiltInRequestPropertyNames } from "../packages/vinext/src/server/app-route-request-built-ins.js";
 import { NextRequest, NextURL } from "../packages/vinext/src/shims/server.js";
 
 describe("app route handler runtime helpers", () => {
@@ -487,6 +488,24 @@ describe("app route handler runtime helpers", () => {
     }
   });
 
+  it("preserves request.cf proxy invariants when automatic requests become non-extensible", () => {
+    for (const lock of [Object.preventExtensions, Object.seal, Object.freeze]) {
+      const request = new Request("https://example.com/demo");
+      const cf = { country: "AU" };
+      Object.defineProperty(request, "cf", {
+        value: cf,
+        enumerable: true,
+        configurable: true,
+      });
+      const tracked = createTrackedAppRouteRequest(request);
+
+      expect(() => lock(tracked.request)).not.toThrow();
+      expect(() => Object.getOwnPropertyDescriptor(tracked.request, "cf")).not.toThrow();
+      expect(Reflect.get(tracked.request, "cf")).toBe(cf);
+      expect(tracked.didAccessDynamicRequest()).toBe(true);
+    }
+  });
+
   it("tracks dynamic nextUrl fields but not pathname", () => {
     const accesses: string[] = [];
     const tracked = createTrackedAppRouteRequest(
@@ -534,6 +553,45 @@ describe("app route handler runtime helpers", () => {
     expect(accesses).toEqual(["request.headers", "request.json"]);
   });
 
+  it("keeps pre-wrap built-in wrappers branded while tracking their cf reads", async () => {
+    const originalText = Reflect.get(Request.prototype, "text") as Request["text"];
+    const originalDescriptor = Reflect.getOwnPropertyDescriptor(NextRequest.prototype, "text");
+    Object.defineProperty(NextRequest.prototype, "text", {
+      configurable: true,
+      value: function wrappedText(this: NextRequest) {
+        Reflect.get(this, "cf");
+        return Reflect.apply(originalText, this, []);
+      },
+    });
+
+    try {
+      const request = new Request("https://example.com/demo", {
+        method: "POST",
+        body: "payload",
+      });
+      Object.defineProperty(request, "cf", {
+        value: { country: "AU" },
+        enumerable: true,
+        configurable: true,
+      });
+      const accesses: string[] = [];
+      const tracked = createTrackedAppRouteRequest(request, {
+        onDynamicAccess(access) {
+          accesses.push(access);
+        },
+      });
+
+      await expect(tracked.request.text()).resolves.toBe("payload");
+      expect(accesses).toEqual(["request.text", "request.cf"]);
+    } finally {
+      if (originalDescriptor === undefined) {
+        Reflect.deleteProperty(NextRequest.prototype, "text");
+      } else {
+        Object.defineProperty(NextRequest.prototype, "text", originalDescriptor);
+      }
+    }
+  });
+
   it("binds own runtime Request members to the branded target", () => {
     const request = new NextRequest("https://example.com/demo");
     let trackedRequest: NextRequest | undefined;
@@ -550,6 +608,18 @@ describe("app route handler runtime helpers", () => {
     trackedRequest = tracked.request;
 
     expect(tracked.request.method).toBe("GET");
+  });
+
+  it("captures runtime Request members that exist only on instances", () => {
+    const request = new Request("https://example.com/demo");
+    Object.defineProperty(request, "workerdOnlyMember", {
+      configurable: true,
+      get() {
+        return "value";
+      },
+    });
+
+    expect(captureBuiltInRequestPropertyNames(request)).toContain("workerdOnlyMember");
   });
 
   it("remembers known dynamic app routes for the process lifetime", () => {
