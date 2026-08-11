@@ -334,6 +334,44 @@ describe("app route handler runtime helpers", () => {
     expect(accesses).toEqual(["request.cf"]);
   });
 
+  it("applies request.cf policy to reflective access", () => {
+    const cf = { country: "AU" };
+    const createRequest = () => {
+      const request = new Request("https://example.com/demo");
+      Object.defineProperty(request, "cf", { value: cf, enumerable: true, configurable: true });
+      return request;
+    };
+    const reflectiveReads = [
+      (request: NextRequest) => Object.getOwnPropertyDescriptor(request, "cf")?.value,
+      (request: NextRequest) => "cf" in request,
+      (request: NextRequest) => Reflect.ownKeys(request).includes("cf"),
+    ];
+
+    for (const read of reflectiveReads) {
+      const accesses: string[] = [];
+      const tracked = createTrackedAppRouteRequest(createRequest(), {
+        onDynamicAccess(access) {
+          accesses.push(access);
+        },
+      });
+      expect(read(tracked.request)).toBeTruthy();
+      expect(tracked.didAccessDynamicRequest()).toBe(true);
+      expect(accesses).toEqual(["request.cf"]);
+
+      const forceStatic = createTrackedAppRouteRequest(createRequest(), {
+        requestMode: "force-static",
+      });
+      expect(read(forceStatic.request)).toBeFalsy();
+      expect(forceStatic.didAccessDynamicRequest()).toBe(false);
+
+      const dynamicError = createTrackedAppRouteRequest(createRequest(), {
+        requestMode: "error",
+        staticGenerationErrorMessage: (expression) => `dynamic access: ${expression}`,
+      });
+      expect(() => read(dynamicError.request)).toThrow("dynamic access: request.cf");
+    }
+  });
+
   it("tracks dynamic nextUrl fields but not pathname", () => {
     const accesses: string[] = [];
     const tracked = createTrackedAppRouteRequest(

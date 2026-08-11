@@ -319,6 +319,12 @@ export function createTrackedAppRouteRequest(
       requestWithOverrides instanceof NextRequest
         ? requestWithOverrides
         : new NextRequest(requestWithOverrides, { nextConfig: nextConfig ?? undefined });
+    const accessCf = <T>(read: () => T, forceStaticValue: T): T => {
+      if (requestMode === "force-static") return forceStaticValue;
+      if (requestMode === "error") return throwStaticGenerationError("request.cf");
+      markDynamicAccess("request.cf");
+      return read();
+    };
     const cloneTrackedRequest = (): NextRequest =>
       wrapRequest(attachRequestCfMetadata(nextRequest.clone(), nextRequest));
     let proxiedNextUrl: NextURL | null = null;
@@ -329,6 +335,12 @@ export function createTrackedAppRouteRequest(
 
     const requestHandler: ProxyHandler<NextRequest> = {
       get(target, prop): unknown {
+        if (prop === "cf") {
+          return accessCf(
+            () => bindMethodIfNeeded(Reflect.get(target, prop, target), target),
+            undefined,
+          );
+        }
         if (requestMode === "force-static") {
           switch (prop) {
             case "nextUrl":
@@ -344,7 +356,6 @@ export function createTrackedAppRouteRequest(
               return cleanStaticUrl(target.nextUrl.href);
             case "ip":
             case "geo":
-            case "cf":
               return undefined;
             case "body":
               return null;
@@ -378,7 +389,6 @@ export function createTrackedAppRouteRequest(
             // treats them as dynamic request APIs instead of falling through.
             case "ip":
             case "geo":
-            case "cf":
             case "body":
             case "blob":
             case "json":
@@ -401,7 +411,6 @@ export function createTrackedAppRouteRequest(
           case "cookies":
           case "ip":
           case "geo":
-          case "cf":
           case "url":
           case "body":
           case "blob":
@@ -416,6 +425,25 @@ export function createTrackedAppRouteRequest(
           default:
             return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
         }
+      },
+      getOwnPropertyDescriptor(target, prop) {
+        return prop === "cf"
+          ? accessCf(() => Reflect.getOwnPropertyDescriptor(target, prop), undefined)
+          : Reflect.getOwnPropertyDescriptor(target, prop);
+      },
+      has(target, prop) {
+        return prop === "cf"
+          ? accessCf(() => Reflect.has(target, prop), false)
+          : Reflect.has(target, prop);
+      },
+      ownKeys(target) {
+        const keys = Reflect.ownKeys(target);
+        return keys.includes("cf")
+          ? accessCf(
+              () => keys,
+              keys.filter((key) => key !== "cf"),
+            )
+          : keys;
       },
     };
 
