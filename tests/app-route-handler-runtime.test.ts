@@ -236,6 +236,33 @@ describe("app route handler runtime helpers", () => {
     expect(request.bodyUsed).toBe(true);
   });
 
+  it("preserves Workers cf metadata when re-adding basePath", () => {
+    const request = new Request("https://example.com/demo");
+    const cf = { country: "AU" };
+    Object.defineProperty(request, "cf", { value: cf, enumerable: true });
+
+    const tracked = createTrackedAppRouteRequest(request, { basePath: "/base" });
+
+    expect(tracked.request.url).toBe("https://example.com/base/demo");
+    expect(Reflect.get(tracked.request, "cf")).toBe(cf);
+  });
+
+  it("preserves Workers cf metadata when applying middleware request headers", () => {
+    const request = new Request("https://example.com/demo");
+    const cf = { country: "AU" };
+    Object.defineProperty(request, "cf", { value: cf, enumerable: true });
+
+    const tracked = createTrackedAppRouteRequest(request, {
+      middlewareHeaders: new Headers({
+        "x-middleware-override-headers": "x-added",
+        "x-middleware-request-x-added": "from-middleware",
+      }),
+    });
+
+    expect(tracked.request.headers.get("x-added")).toBe("from-middleware");
+    expect(Reflect.get(tracked.request, "cf")).toBe(cf);
+  });
+
   it("tracks request.ip and request.geo access", () => {
     const accesses: string[] = [];
     const tracked = createTrackedAppRouteRequest(

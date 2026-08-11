@@ -6,6 +6,7 @@ import {
   sealRequestHeaders,
   type NextURL,
 } from "vinext/shims/server";
+import { attachRequestCfMetadata, cloneRequestWithUrl } from "./request-pipeline.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
 import { addBasePathToPathname } from "../utils/base-path.js";
 
@@ -154,7 +155,7 @@ function rebuildRequestWithHeaders(input: Request, headers: Headers): Request {
     init.duplex = "half";
   }
 
-  return new Request(input.url, init);
+  return attachRequestCfMetadata(new Request(input.url, init), input);
 }
 
 function cleanStaticUrl(url: string): string {
@@ -304,7 +305,7 @@ export function createTrackedAppRouteRequest(
         // Transfer the body instead of cloning: `rawInput` is replaced here and
         // its body is never read again, so a tee would just leave an unread
         // branch buffering the whole request in memory.
-        input = new Request(inputUrl, rawInput);
+        input = cloneRequestWithUrl(rawInput, inputUrl.toString());
       }
     }
     const requestHeaders = options.middlewareHeaders
