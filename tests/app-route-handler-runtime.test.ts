@@ -303,6 +303,16 @@ describe("app route handler runtime helpers", () => {
     expect(tracked.didAccessDynamicRequest()).toBe(true);
     expect(accesses).toEqual(["request.cf"]);
 
+    const absentAccesses: string[] = [];
+    const withoutCf = createTrackedAppRouteRequest(new Request("https://example.com/demo"), {
+      onDynamicAccess(access) {
+        absentAccesses.push(access);
+      },
+    });
+    expect(Reflect.get(withoutCf.request, "cf")).toBeUndefined();
+    expect(withoutCf.didAccessDynamicRequest()).toBe(true);
+    expect(absentAccesses).toEqual(["request.cf"]);
+
     const forceStatic = createTrackedAppRouteRequest(createRequest(), {
       requestMode: "force-static",
     });

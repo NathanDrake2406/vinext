@@ -305,11 +305,13 @@ export function createTrackedAppRouteRequest(
     // Keep request-specific Workers metadata behind one target-owned policy
     // boundary. Request methods stay bound to this branded target, so indirect
     // reads such as `request.valueOf().cf` still reach the controlled accessor.
-    Object.defineProperty(nextRequest, "cf", {
-      configurable: true,
-      enumerable: originalCfDescriptor?.enumerable ?? false,
-      get: readCfMetadata,
-    });
+    if (rawCfMetadata !== undefined) {
+      Object.defineProperty(nextRequest, "cf", {
+        configurable: true,
+        enumerable: originalCfDescriptor?.enumerable ?? false,
+        get: readCfMetadata,
+      });
+    }
     const cloneTrackedRequest = (): NextRequest => {
       const cloned = nextRequest.clone();
       if (rawCfMetadata !== undefined) {
@@ -343,7 +345,7 @@ export function createTrackedAppRouteRequest(
             case "url":
               return cleanStaticUrl(target.nextUrl.href);
             case "cf":
-              return Reflect.get(target, prop, target);
+              return readCfMetadata();
             case "ip":
             case "geo":
               return undefined;
@@ -372,7 +374,7 @@ export function createTrackedAppRouteRequest(
               requireStaticNextUrl ??= wrapRequireStaticNextUrl(target.nextUrl);
               return requireStaticNextUrl;
             case "cf":
-              return Reflect.get(target, prop, target);
+              return readCfMetadata();
             case "headers":
             case "cookies":
             case "url":
@@ -400,7 +402,7 @@ export function createTrackedAppRouteRequest(
             proxiedNextUrl ??= wrapNextUrl(target.nextUrl);
             return proxiedNextUrl;
           case "cf":
-            return Reflect.get(target, prop, target);
+            return readCfMetadata();
           case "headers":
           case "cookies":
           case "ip":
