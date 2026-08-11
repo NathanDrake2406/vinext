@@ -319,6 +319,8 @@ export function createTrackedAppRouteRequest(
       requestWithOverrides instanceof NextRequest
         ? requestWithOverrides
         : new NextRequest(requestWithOverrides, { nextConfig: nextConfig ?? undefined });
+    const cloneTrackedRequest = (): NextRequest =>
+      wrapRequest(attachRequestCfMetadata(nextRequest.clone(), nextRequest));
     let proxiedNextUrl: NextURL | null = null;
     let forceStaticNextUrl: NextURL | null = null;
     let requireStaticNextUrl: NextURL | null = null;
@@ -357,7 +359,7 @@ export function createTrackedAppRouteRequest(
             case "text":
               return readEmptyBodyAsText;
             case "clone":
-              return () => wrapRequest(target.clone());
+              return cloneTrackedRequest;
             default:
               return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
           }
@@ -385,7 +387,7 @@ export function createTrackedAppRouteRequest(
             case "formData":
               return throwStaticGenerationError(`request.${String(prop)}`);
             case "clone":
-              return () => wrapRequest(target.clone());
+              return cloneTrackedRequest;
             default:
               return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
           }
@@ -410,7 +412,7 @@ export function createTrackedAppRouteRequest(
             markDynamicAccess(`request.${String(prop)}` as RequestDynamicAccess);
             return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
           case "clone":
-            return () => wrapRequest(target.clone());
+            return cloneTrackedRequest;
           default:
             return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
         }

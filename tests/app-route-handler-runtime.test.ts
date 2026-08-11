@@ -316,6 +316,24 @@ describe("app route handler runtime helpers", () => {
     expect(() => Reflect.get(dynamicError.request, "cf")).toThrow("dynamic access: request.cf");
   });
 
+  it("preserves Workers cf metadata when cloning tracked requests", () => {
+    const request = new Request("https://example.com/demo");
+    const cf = { country: "AU" };
+    Object.defineProperty(request, "cf", { value: cf, enumerable: true });
+    const accesses: string[] = [];
+    const tracked = createTrackedAppRouteRequest(request, {
+      onDynamicAccess(access) {
+        accesses.push(access);
+      },
+    });
+
+    const cloned = tracked.request.clone();
+
+    expect(Reflect.get(cloned, "cf")).toBe(cf);
+    expect(tracked.didAccessDynamicRequest()).toBe(true);
+    expect(accesses).toEqual(["request.cf"]);
+  });
+
   it("tracks dynamic nextUrl fields but not pathname", () => {
     const accesses: string[] = [];
     const tracked = createTrackedAppRouteRequest(
