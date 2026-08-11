@@ -334,7 +334,10 @@ export function createTrackedAppRouteRequest(
     let forceStaticCookies: RequestCookies | null = null;
 
     const requestHandler: ProxyHandler<NextRequest> = {
-      get(target, prop): unknown {
+      get(target, prop, receiver): unknown {
+        if (prop === "valueOf") {
+          return bindMethodIfNeeded(Reflect.get(target, prop, receiver), receiver);
+        }
         if (prop === "cf") {
           return accessCf(
             () => bindMethodIfNeeded(Reflect.get(target, prop, target), target),

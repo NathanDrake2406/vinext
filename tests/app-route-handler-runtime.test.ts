@@ -345,6 +345,7 @@ describe("app route handler runtime helpers", () => {
       (request: NextRequest) => Object.getOwnPropertyDescriptor(request, "cf")?.value,
       (request: NextRequest) => "cf" in request,
       (request: NextRequest) => Reflect.ownKeys(request).includes("cf"),
+      (request: NextRequest) => Reflect.get(request.valueOf(), "cf"),
     ];
 
     for (const read of reflectiveReads) {
