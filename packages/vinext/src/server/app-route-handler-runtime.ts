@@ -414,7 +414,7 @@ export function createTrackedAppRouteRequest(
       get(target, prop, receiver): unknown {
         if (prop === "cf") {
           return targetTracksCf
-            ? Reflect.get(target, prop, target)
+            ? accessCf(() => rawCfMetadata, undefined)
             : accessCf(
                 () => getRequestProperty(target, prop, receiver, builtInProperties),
                 undefined,
@@ -533,9 +533,18 @@ export function createTrackedAppRouteRequest(
       },
       preventExtensions(target) {
         // Once the target is non-extensible, Proxy invariants forbid hiding any
-        // own key. Remove configurable Workers metadata before locking it down.
-        if (requestMode === "force-static" && !Reflect.deleteProperty(target, "cf")) {
-          return false;
+        // own key or changing a non-configurable descriptor's shape. Remove
+        // force-static metadata, or restore the automatic-mode data descriptor
+        // before the integrity operation locks the target descriptor in place.
+        if (requestMode === "force-static") {
+          if (!Reflect.deleteProperty(target, "cf")) return false;
+        } else if (targetTracksCf) {
+          Object.defineProperty(target, "cf", {
+            configurable: true,
+            enumerable: originalCfDescriptor?.enumerable ?? true,
+            value: rawCfMetadata,
+            writable: false,
+          });
         }
         return Reflect.preventExtensions(target);
       },

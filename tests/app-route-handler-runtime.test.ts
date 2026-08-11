@@ -500,7 +500,7 @@ describe("app route handler runtime helpers", () => {
       const tracked = createTrackedAppRouteRequest(request);
 
       expect(() => lock(tracked.request)).not.toThrow();
-      expect(() => Object.getOwnPropertyDescriptor(tracked.request, "cf")).not.toThrow();
+      expect(Object.getOwnPropertyDescriptor(tracked.request, "cf")?.value).toBe(cf);
       expect(Reflect.get(tracked.request, "cf")).toBe(cf);
       expect(tracked.didAccessDynamicRequest()).toBe(true);
     }
