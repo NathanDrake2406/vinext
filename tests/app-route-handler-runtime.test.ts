@@ -376,6 +376,17 @@ describe("app route handler runtime helpers", () => {
         });
         return request.method;
       },
+      (request: NextRequest) => {
+        const shadowPrototype = Object.create(Object.getPrototypeOf(request)) as object;
+        Object.defineProperty(shadowPrototype, "method", {
+          configurable: true,
+          get() {
+            return Reflect.get(this, "cf");
+          },
+        });
+        Object.setPrototypeOf(request, shadowPrototype);
+        return request.method;
+      },
     ];
 
     for (const read of reflectiveReads) {

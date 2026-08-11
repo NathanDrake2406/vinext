@@ -138,19 +138,32 @@ function hasSamePropertyImplementation(
   );
 }
 
+function getResolvedPropertyDescriptor(
+  target: object,
+  prop: PropertyKey,
+): PropertyDescriptor | undefined {
+  let current: object | null = target;
+  while (current !== null) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(current, prop);
+    if (descriptor !== undefined) return descriptor;
+    current = Reflect.getPrototypeOf(current);
+  }
+  return undefined;
+}
+
 function getRequestProperty(
   target: NextRequest,
   prop: PropertyKey,
   receiver: object,
-  builtInOwnProperties: ReadonlyMap<PropertyKey, PropertyDescriptor>,
+  builtInProperties: ReadonlyMap<PropertyKey, PropertyDescriptor>,
 ): unknown {
-  const currentOwnProperty = Reflect.getOwnPropertyDescriptor(target, prop);
-  const originalOwnProperty = builtInOwnProperties.get(prop);
+  const originalProperty = builtInProperties.get(prop);
+  const currentProperty =
+    originalProperty === undefined ? undefined : getResolvedPropertyDescriptor(target, prop);
   const isBuiltIn =
-    BUILT_IN_REQUEST_PROPERTIES.has(prop) &&
-    (currentOwnProperty === undefined ||
-      (originalOwnProperty !== undefined &&
-        hasSamePropertyImplementation(currentOwnProperty, originalOwnProperty)));
+    currentProperty !== undefined &&
+    originalProperty !== undefined &&
+    hasSamePropertyImplementation(currentProperty, originalProperty);
   const bindingTarget = isBuiltIn ? target : receiver;
   return bindMethodIfNeeded(Reflect.get(target, prop, bindingTarget), bindingTarget);
 }
@@ -357,13 +370,12 @@ export function createTrackedAppRouteRequest(
         ? requestWithOverrides
         : new NextRequest(requestWithOverrides, { nextConfig: nextConfig ?? undefined });
     // Workerd can place branded Web IDL members directly on the instance. Keep
-    // their original implementations distinguishable from user shadows added
-    // after the tracked request is exposed to route code.
-    const builtInOwnProperties = new Map<PropertyKey, PropertyDescriptor>();
-    for (const prop of Reflect.ownKeys(nextRequest)) {
-      if (!BUILT_IN_REQUEST_PROPERTIES.has(prop)) continue;
-      const descriptor = Reflect.getOwnPropertyDescriptor(nextRequest, prop);
-      if (descriptor !== undefined) builtInOwnProperties.set(prop, descriptor);
+    // each resolved implementation distinguishable from own or prototype
+    // shadows added after the tracked request is exposed to route code.
+    const builtInProperties = new Map<PropertyKey, PropertyDescriptor>();
+    for (const prop of BUILT_IN_REQUEST_PROPERTIES) {
+      const descriptor = getResolvedPropertyDescriptor(nextRequest, prop);
+      if (descriptor !== undefined) builtInProperties.set(prop, descriptor);
     }
     const accessCf = <T>(read: () => T, forceStaticValue: T): T => {
       if (requestMode === "force-static") return forceStaticValue;
@@ -383,7 +395,7 @@ export function createTrackedAppRouteRequest(
       get(target, prop, receiver): unknown {
         if (prop === "cf") {
           return accessCf(
-            () => getRequestProperty(target, prop, receiver, builtInOwnProperties),
+            () => getRequestProperty(target, prop, receiver, builtInProperties),
             undefined,
           );
         }
@@ -418,7 +430,7 @@ export function createTrackedAppRouteRequest(
             case "clone":
               return cloneTrackedRequest;
             default:
-              return getRequestProperty(target, prop, receiver, builtInOwnProperties);
+              return getRequestProperty(target, prop, receiver, builtInProperties);
           }
         }
 
@@ -445,7 +457,7 @@ export function createTrackedAppRouteRequest(
             case "clone":
               return cloneTrackedRequest;
             default:
-              return getRequestProperty(target, prop, receiver, builtInOwnProperties);
+              return getRequestProperty(target, prop, receiver, builtInProperties);
           }
         }
 
@@ -465,11 +477,11 @@ export function createTrackedAppRouteRequest(
           case "arrayBuffer":
           case "formData":
             markDynamicAccess(`request.${String(prop)}` as RequestDynamicAccess);
-            return getRequestProperty(target, prop, receiver, builtInOwnProperties);
+            return getRequestProperty(target, prop, receiver, builtInProperties);
           case "clone":
             return cloneTrackedRequest;
           default:
-            return getRequestProperty(target, prop, receiver, builtInOwnProperties);
+            return getRequestProperty(target, prop, receiver, builtInProperties);
         }
       },
       getOwnPropertyDescriptor(target, prop) {
