@@ -9,7 +9,7 @@ export type BuiltInRequestProperty = {
   key: PropertyKey;
 };
 
-export function captureBuiltInRequestProperties(
+function captureBuiltInRequestProperties(
   requestInstance: Request = new Request("http://vinext.invalid/"),
 ): readonly BuiltInRequestProperty[] {
   const properties = new Map<PropertyKey, BuiltInRequestProperty>();
