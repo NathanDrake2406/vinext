@@ -348,6 +348,25 @@ describe("app route handler runtime helpers", () => {
       (request: NextRequest) => Reflect.get(request.valueOf(), "cf"),
       (request: NextRequest) => request.hasOwnProperty("cf"),
       (request: NextRequest) => request.propertyIsEnumerable("cf"),
+      (request: NextRequest) => {
+        const extended = request as NextRequest & { unwrap(): NextRequest };
+        Object.defineProperty(extended, "unwrap", {
+          configurable: true,
+          value() {
+            return this;
+          },
+        });
+        return Reflect.get(extended.unwrap(), "cf");
+      },
+      (request: NextRequest) => {
+        Object.defineProperty(request, "cfFromGetter", {
+          configurable: true,
+          get() {
+            return Reflect.get(this, "cf");
+          },
+        });
+        return Reflect.get(request, "cfFromGetter");
+      },
     ];
 
     for (const read of reflectiveReads) {

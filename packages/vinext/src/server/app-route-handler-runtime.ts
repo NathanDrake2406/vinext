@@ -118,6 +118,22 @@ function bindMethodIfNeeded<T>(value: T, target: object): T {
   return typeof value === "function" ? (value.bind(target) as T) : value;
 }
 
+// Built-in Web Request accessors and methods need the raw target for Web IDL
+// brand checks. Own and otherwise unknown extensions must retain the proxy so
+// their `this` reads still pass through dynamic request policy.
+const BUILT_IN_REQUEST_PROPERTIES = new Set<PropertyKey>([
+  ...Reflect.ownKeys(Request.prototype),
+  ...Reflect.ownKeys(NextRequest.prototype),
+]);
+
+function getRequestProperty(target: NextRequest, prop: PropertyKey, receiver: object): unknown {
+  const isBuiltIn =
+    Reflect.getOwnPropertyDescriptor(target, prop) === undefined &&
+    BUILT_IN_REQUEST_PROPERTIES.has(prop);
+  const bindingTarget = isBuiltIn ? target : receiver;
+  return bindMethodIfNeeded(Reflect.get(target, prop, bindingTarget), bindingTarget);
+}
+
 function buildNextConfig(options: TrackedAppRouteRequestOptions): {
   basePath?: string;
   i18n?: NextI18nConfig;
@@ -335,23 +351,8 @@ export function createTrackedAppRouteRequest(
 
     const requestHandler: ProxyHandler<NextRequest> = {
       get(target, prop, receiver): unknown {
-        const objectPrototypeMethod = Reflect.getOwnPropertyDescriptor(
-          Object.prototype,
-          prop,
-        )?.value;
-        if (
-          typeof objectPrototypeMethod === "function" &&
-          Reflect.get(target, prop, receiver) === objectPrototypeMethod
-        ) {
-          // Web Request methods need the branded target, but inherited reflection
-          // helpers must retain the proxy so their reads pass through its traps.
-          return objectPrototypeMethod.bind(receiver);
-        }
         if (prop === "cf") {
-          return accessCf(
-            () => bindMethodIfNeeded(Reflect.get(target, prop, target), target),
-            undefined,
-          );
+          return accessCf(() => getRequestProperty(target, prop, receiver), undefined);
         }
         if (requestMode === "force-static") {
           switch (prop) {
@@ -384,7 +385,7 @@ export function createTrackedAppRouteRequest(
             case "clone":
               return cloneTrackedRequest;
             default:
-              return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
+              return getRequestProperty(target, prop, receiver);
           }
         }
 
@@ -411,7 +412,7 @@ export function createTrackedAppRouteRequest(
             case "clone":
               return cloneTrackedRequest;
             default:
-              return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
+              return getRequestProperty(target, prop, receiver);
           }
         }
 
@@ -431,11 +432,11 @@ export function createTrackedAppRouteRequest(
           case "arrayBuffer":
           case "formData":
             markDynamicAccess(`request.${String(prop)}` as RequestDynamicAccess);
-            return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
+            return getRequestProperty(target, prop, receiver);
           case "clone":
             return cloneTrackedRequest;
           default:
-            return bindMethodIfNeeded(Reflect.get(target, prop, target), target);
+            return getRequestProperty(target, prop, receiver);
         }
       },
       getOwnPropertyDescriptor(target, prop) {
