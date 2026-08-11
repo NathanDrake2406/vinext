@@ -127,8 +127,30 @@ const BUILT_IN_REQUEST_PROPERTIES = new Set<PropertyKey>([
   ...Reflect.ownKeys(NextRequest.prototype),
 ]);
 
-function getRequestProperty(target: NextRequest, prop: PropertyKey, receiver: object): unknown {
-  const isBuiltIn = BUILT_IN_REQUEST_PROPERTIES.has(prop);
+function hasSamePropertyImplementation(
+  current: PropertyDescriptor,
+  original: PropertyDescriptor,
+): boolean {
+  return (
+    Object.is(current.value, original.value) &&
+    current.get === original.get &&
+    current.set === original.set
+  );
+}
+
+function getRequestProperty(
+  target: NextRequest,
+  prop: PropertyKey,
+  receiver: object,
+  builtInOwnProperties: ReadonlyMap<PropertyKey, PropertyDescriptor>,
+): unknown {
+  const currentOwnProperty = Reflect.getOwnPropertyDescriptor(target, prop);
+  const originalOwnProperty = builtInOwnProperties.get(prop);
+  const isBuiltIn =
+    BUILT_IN_REQUEST_PROPERTIES.has(prop) &&
+    (currentOwnProperty === undefined ||
+      (originalOwnProperty !== undefined &&
+        hasSamePropertyImplementation(currentOwnProperty, originalOwnProperty)));
   const bindingTarget = isBuiltIn ? target : receiver;
   return bindMethodIfNeeded(Reflect.get(target, prop, bindingTarget), bindingTarget);
 }
@@ -334,6 +356,15 @@ export function createTrackedAppRouteRequest(
       requestWithOverrides instanceof NextRequest
         ? requestWithOverrides
         : new NextRequest(requestWithOverrides, { nextConfig: nextConfig ?? undefined });
+    // Workerd can place branded Web IDL members directly on the instance. Keep
+    // their original implementations distinguishable from user shadows added
+    // after the tracked request is exposed to route code.
+    const builtInOwnProperties = new Map<PropertyKey, PropertyDescriptor>();
+    for (const prop of Reflect.ownKeys(nextRequest)) {
+      if (!BUILT_IN_REQUEST_PROPERTIES.has(prop)) continue;
+      const descriptor = Reflect.getOwnPropertyDescriptor(nextRequest, prop);
+      if (descriptor !== undefined) builtInOwnProperties.set(prop, descriptor);
+    }
     const accessCf = <T>(read: () => T, forceStaticValue: T): T => {
       if (requestMode === "force-static") return forceStaticValue;
       if (requestMode === "error") return throwStaticGenerationError("request.cf");
@@ -351,7 +382,10 @@ export function createTrackedAppRouteRequest(
     const requestHandler: ProxyHandler<NextRequest> = {
       get(target, prop, receiver): unknown {
         if (prop === "cf") {
-          return accessCf(() => getRequestProperty(target, prop, receiver), undefined);
+          return accessCf(
+            () => getRequestProperty(target, prop, receiver, builtInOwnProperties),
+            undefined,
+          );
         }
         if (requestMode === "force-static") {
           switch (prop) {
@@ -384,7 +418,7 @@ export function createTrackedAppRouteRequest(
             case "clone":
               return cloneTrackedRequest;
             default:
-              return getRequestProperty(target, prop, receiver);
+              return getRequestProperty(target, prop, receiver, builtInOwnProperties);
           }
         }
 
@@ -411,7 +445,7 @@ export function createTrackedAppRouteRequest(
             case "clone":
               return cloneTrackedRequest;
             default:
-              return getRequestProperty(target, prop, receiver);
+              return getRequestProperty(target, prop, receiver, builtInOwnProperties);
           }
         }
 
@@ -431,11 +465,11 @@ export function createTrackedAppRouteRequest(
           case "arrayBuffer":
           case "formData":
             markDynamicAccess(`request.${String(prop)}` as RequestDynamicAccess);
-            return getRequestProperty(target, prop, receiver);
+            return getRequestProperty(target, prop, receiver, builtInOwnProperties);
           case "clone":
             return cloneTrackedRequest;
           default:
-            return getRequestProperty(target, prop, receiver);
+            return getRequestProperty(target, prop, receiver, builtInOwnProperties);
         }
       },
       getOwnPropertyDescriptor(target, prop) {

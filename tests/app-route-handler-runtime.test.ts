@@ -367,6 +367,15 @@ describe("app route handler runtime helpers", () => {
         });
         return Reflect.get(request, "cfFromGetter");
       },
+      (request: NextRequest) => {
+        Object.defineProperty(request, "method", {
+          configurable: true,
+          get() {
+            return Reflect.get(this, "cf");
+          },
+        });
+        return request.method;
+      },
     ];
 
     for (const read of reflectiveReads) {
@@ -461,16 +470,19 @@ describe("app route handler runtime helpers", () => {
   });
 
   it("binds own runtime Request members to the branded target", () => {
-    const tracked = createTrackedAppRouteRequest(new Request("https://example.com/demo"));
-    Object.defineProperty(tracked.request, "method", {
+    const request = new NextRequest("https://example.com/demo");
+    let trackedRequest: NextRequest | undefined;
+    Object.defineProperty(request, "method", {
       configurable: true,
       get() {
-        if (this === tracked.request) {
+        if (this === trackedRequest) {
           throw new TypeError("illegal invocation");
         }
         return "GET";
       },
     });
+    const tracked = createTrackedAppRouteRequest(request);
+    trackedRequest = tracked.request;
 
     expect(tracked.request.method).toBe("GET");
   });
