@@ -373,12 +373,10 @@ export function createTrackedAppRouteRequest(
       : input;
     const sourceCfMetadata = Reflect.get(requestWithOverrides, "cf", requestWithOverrides);
     const sourceCfDescriptor = Reflect.getOwnPropertyDescriptor(requestWithOverrides, "cf");
-    const existingCfDescriptor = Reflect.getOwnPropertyDescriptor(requestWithOverrides, "cf");
     const nextRequest =
       requestMode === "force-static"
         ? createForceStaticNextRequest(requestWithOverrides, nextConfig)
-        : requestWithOverrides instanceof NextRequest &&
-            existingCfDescriptor?.configurable !== false
+        : requestWithOverrides instanceof NextRequest && sourceCfDescriptor?.configurable !== false
           ? requestWithOverrides
           : new NextRequest(requestWithOverrides, { nextConfig: nextConfig ?? undefined });
     const rawCfMetadata =
