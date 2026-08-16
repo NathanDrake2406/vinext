@@ -74,7 +74,6 @@ import {
   createAppPageHtmlOutputScope,
   createAppPageRenderObservation,
   createAppPageRscOutputScope,
-  createEmptyAppPageRenderObservationState,
   type AppPageRenderObservationState,
 } from "./app-page-render-observation.js";
 import type {
@@ -703,19 +702,6 @@ export async function renderAppPageLifecycle(
     rootBoundaryId,
     routePattern: options.routePattern,
   });
-  // Partial payload metadata is a pre-stream snapshot. Fetch tags may still
-  // accumulate while the RSC/HTML streams are consumed; complete cache artifact
-  // observations below rebuild this field after the stream drains.
-  const payloadRenderObservation = createAppPageRenderObservation({
-    boundaryOutcome: { kind: "unknown" },
-    cacheability: "unknown",
-    cacheTags: options.getPageTags(),
-    cleanPathname: options.cleanPathname,
-    completeness: "partial",
-    output: rscOutputScope,
-    params: options.navigationParams,
-    state: options.peekRenderObservationState?.() ?? createEmptyAppPageRenderObservationState(),
-  });
   const skipDisposition =
     options.skipDisposition ??
     createRenderLifecycleSkipDisposition({
@@ -740,7 +726,6 @@ export async function renderAppPageLifecycle(
       ? { dynamicStaleTimeSeconds }
       : {}),
     ...(artifactCompatibility ? { artifactCompatibility } : {}),
-    renderObservation: payloadRenderObservation,
     skipDisposition: options.isRscRequest ? skipDisposition : undefined,
   });
 
@@ -903,7 +888,6 @@ export async function renderAppPageLifecycle(
     const completionHeaders = new Headers(rscResponse.headers);
     completionHeaders.set(VINEXT_RSC_COMPLETION_METADATA_HEADER, "1");
     const completionResponse =
-      !shouldEmitDynamicStaleTime &&
       dynamicStaleTimeSeconds !== undefined &&
       options.isPrerender !== true &&
       !options.isForceStatic &&
@@ -914,6 +898,12 @@ export async function renderAppPageLifecycle(
               const completedServerStaleTimeSeconds = resolveClientStaleTimeSeconds(
                 options.peekRequestCacheLife?.(),
               );
+              // A known-dynamic response already carries its BFCache bound in
+              // the header. Add a footer only when it has a distinct completed
+              // cacheLife claim for runtime-prefetch expiry.
+              if (shouldEmitDynamicStaleTime && completedServerStaleTimeSeconds === undefined) {
+                return undefined;
+              }
               return {
                 dynamicStaleTimeSeconds,
                 serverStaleTimeSeconds:
@@ -1074,6 +1064,8 @@ export async function renderAppPageLifecycle(
             ? false
             : undefined,
         waitForAllReady: shouldWaitForAllReady,
+        isStaticGeneration: options.isPrerender === true,
+        isForceStatic: options.isForceStatic,
       });
     },
     renderSpecialErrorResponse(specialError) {
@@ -1287,6 +1279,7 @@ export async function renderAppPageLifecycle(
         isForceStatic: options.isForceStatic,
         revalidateSeconds,
       }),
+      linkHeader: linkHeader ?? null,
       waitUntil(cachePromise) {
         options.waitUntil?.(cachePromise);
       },
