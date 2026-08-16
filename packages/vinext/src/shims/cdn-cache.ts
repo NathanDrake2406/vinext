@@ -37,6 +37,11 @@ export type CdnCacheableHeaderInput = {
    */
   cacheControl: string;
   /**
+   * State of the stored page artifact being considered for promotion. A stale
+   * artifact can be served privately while origin regeneration replaces it.
+   */
+  cacheState?: "HIT" | "STALE";
+  /**
    * True when this is a freshly-rendered **streaming** response whose
    * dynamic-ness is not yet proven (late Server Component request-API usage can
    * only be detected after the stream drains).

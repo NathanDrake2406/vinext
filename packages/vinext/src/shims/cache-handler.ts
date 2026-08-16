@@ -4,17 +4,29 @@ import {
   readCacheControlRevalidateField,
 } from "../utils/cache-control-metadata.js";
 
-export type CacheHandlerValue = {
+type CacheHandlerValueMetadata = {
   lastModified: number;
   age?: number;
   cacheState?: string;
   cacheControl?: CacheControlMetadata;
-  value: IncrementalCacheValue | null;
 };
 
-// Internal metadata for the built-in stores. This stays outside the public
-// CacheHandlerValue contract so custom cache handlers do not need a new API.
-const CACHE_HANDLER_TAGS = Symbol.for("vinext.cacheHandlerValue.tags");
+export type CacheHandlerValue = CacheHandlerValueMetadata &
+  (
+    | {
+        /**
+         * Cache tags persisted with this page artifact. Page-level CDN adapters
+         * use these tags when promoting the artifact to a shared cache.
+         */
+        tags: string[];
+        value: CachedAppPageValue;
+      }
+    | {
+        /** Tags are optional for cache values that cannot be page-promoted. */
+        tags?: string[];
+        value: Exclude<IncrementalCacheValue, CachedAppPageValue> | null;
+      }
+  );
 
 export type CacheControlMetadata = {
   revalidate: number | false;
@@ -90,16 +102,14 @@ export type CacheHandlerContext = {
   dev?: boolean;
   maxMemoryCacheSize?: number;
   revalidatedTags?: string[];
+  /** Cache tags that the handler must persist and return with the artifact. */
+  tags?: string[];
   [key: string]: unknown;
 };
 
 export type CacheHandler = {
-  get(key: string, ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null>;
-  set(
-    key: string,
-    data: IncrementalCacheValue | null,
-    ctx?: Record<string, unknown>,
-  ): Promise<void>;
+  get(key: string, ctx?: CacheHandlerContext): Promise<CacheHandlerValue | null>;
+  set(key: string, data: IncrementalCacheValue | null, ctx?: CacheHandlerContext): Promise<void>;
   revalidateTag(tags: string | string[], durations?: { expire?: number }): Promise<void>;
   resetRequestCache?(): void;
 };
@@ -126,6 +136,19 @@ type MemoryEntry = {
   expireAt: number | null;
   cacheControl?: CacheControlMetadata;
 };
+
+function buildMemoryCacheHandlerValue(entry: MemoryEntry, cacheState?: string): CacheHandlerValue {
+  const metadata = {
+    lastModified: entry.lastModified,
+    cacheControl: entry.cacheControl,
+    tags: [...entry.tags],
+    ...(cacheState ? { cacheState } : {}),
+  };
+  if (entry.value?.kind === "APP_PAGE") {
+    return { ...metadata, value: entry.value };
+  }
+  return { ...metadata, value: entry.value };
+}
 
 const DEFAULT_MEMORY_CACHE_MAX_SIZE = 50 * 1024 * 1024;
 const MAX_REVALIDATED_TAG_ENTRIES = 10_000;
@@ -260,13 +283,7 @@ export class MemoryCacheHandler implements CacheHandler {
 
     const now = Date.now();
     if (entry.expireAt !== null && now > entry.expireAt) {
-      return {
-        lastModified: entry.lastModified,
-        value: entry.value,
-        cacheState: "expired",
-        cacheControl: entry.cacheControl,
-        ...(entry.tags.length > 0 ? { [CACHE_HANDLER_TAGS]: [...entry.tags] } : {}),
-      };
+      return buildMemoryCacheHandlerValue(entry, "expired");
     }
 
     const requestedRevalidate = readPositiveNumberField(ctx, "revalidate");
@@ -277,21 +294,10 @@ export class MemoryCacheHandler implements CacheHandler {
       (requestedRevalidateAt !== null && now > requestedRevalidateAt);
 
     if (isStale) {
-      return {
-        lastModified: entry.lastModified,
-        value: entry.value,
-        cacheState: "stale",
-        cacheControl: entry.cacheControl,
-        ...(entry.tags.length > 0 ? { [CACHE_HANDLER_TAGS]: [...entry.tags] } : {}),
-      };
+      return buildMemoryCacheHandlerValue(entry, "stale");
     }
 
-    return {
-      lastModified: entry.lastModified,
-      value: entry.value,
-      cacheControl: entry.cacheControl,
-      ...(entry.tags.length > 0 ? { [CACHE_HANDLER_TAGS]: [...entry.tags] } : {}),
-    };
+    return buildMemoryCacheHandlerValue(entry);
   }
 
   async set(

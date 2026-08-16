@@ -45,7 +45,6 @@ import { getRequestExecutionContext } from "vinext/shims/request-context";
 const NON_CACHEABLE_DIRECTIVE_RE = /\b(?:private|no-store|no-cache)\b/i;
 const CACHEABLE_EDGE_DIRECTIVE_RE = /(?:^|,)\s*(?:s-maxage|max-age)\s*=/i;
 const EDGE_POLICY_HEADERS = ["CDN-Cache-Control", "Cloudflare-CDN-Cache-Control"] as const;
-const CDN_CACHE_STATE = Symbol.for("vinext.cdnCacheResponse.cacheState");
 
 /** Remove every response header whose cache semantics are owned by Cloudflare. */
 function clearCloudflareCdnResponseHeaders(cacheControl: string): CdnResponseHeaders {
@@ -190,10 +189,7 @@ export class CloudflareCdnCacheAdapter implements CdnCacheAdapter {
       return clearCloudflareCdnResponseHeaders(NO_STORE);
     }
 
-    const cacheState = (input as CdnCacheableHeaderInput & { [CDN_CACHE_STATE]?: unknown })[
-      CDN_CACHE_STATE
-    ];
-    if (cacheState === "STALE") {
+    if (input.cacheState === "STALE") {
       return clearCloudflareCdnResponseHeaders(NO_STORE);
     }
 

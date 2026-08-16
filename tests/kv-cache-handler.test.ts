@@ -19,16 +19,6 @@ import {
 } from "../packages/vinext/src/shims/cache.js";
 import { buildAppPageCacheTags } from "../packages/vinext/src/server/app-page-cache.js";
 
-const CACHE_HANDLER_TAGS = Symbol.for("vinext.cacheHandlerValue.tags");
-
-function getInternalCacheHandlerTags(value: unknown): readonly string[] | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const tags = (value as { [CACHE_HANDLER_TAGS]?: unknown })[CACHE_HANDLER_TAGS];
-  return Array.isArray(tags) && tags.every((tag): tag is string => typeof tag === "string")
-    ? tags
-    : undefined;
-}
-
 // ---------------------------------------------------------------------------
 // Mock KV namespace
 // ---------------------------------------------------------------------------
@@ -330,10 +320,7 @@ describe("KVCacheHandler", () => {
         ),
       );
 
-      expect(getInternalCacheHandlerTags(await handler.get("mixed-tags"))).toEqual([
-        "valid",
-        "post:valid",
-      ]);
+      expect((await handler.get("mixed-tags"))?.tags).toEqual(["valid", "post:valid"]);
     });
 
     it("rejects entry with invalid revalidateAt type", async () => {
@@ -569,7 +556,7 @@ describe("KVCacheHandler", () => {
         "_N_T_/revalidate-tag-test",
         "test-data",
       ]);
-      expect(getInternalCacheHandlerTags(await handler.get("rt-path-tags"))).toEqual([
+      expect((await handler.get("rt-path-tags"))?.tags).toEqual([
         "/revalidate-tag-test",
         "_N_T_/revalidate-tag-test",
         "test-data",
@@ -690,9 +677,7 @@ describe("KVCacheHandler", () => {
         },
       );
 
-      expect(getInternalCacheHandlerTags(await handler.get("colon-tagged"))).toEqual([
-        "post:hello",
-      ]);
+      expect((await handler.get("colon-tagged"))?.tags).toEqual(["post:hello"]);
 
       await handler.revalidateTag("post:hello");
 

@@ -17,29 +17,32 @@ import {
   DefaultCdnCacheAdapter,
 } from "../packages/vinext/src/shims/cdn-cache.js";
 import { runWithExecutionContext } from "../packages/vinext/src/shims/request-context.js";
+import { revalidatePath, revalidateTag } from "../packages/vinext/src/shims/cache.js";
 import {
   MemoryCacheHandler,
   NoOpCacheHandler,
   setDataCacheHandler,
+  type CacheControlMetadata,
+  type CacheHandler,
+  type CacheHandlerContext,
+  type CacheHandlerValue,
 } from "../packages/vinext/src/shims/cache-handler.js";
-import type { AppPageCacheSetter } from "../packages/vinext/src/server/isr-cache.js";
+import {
+  isrGet,
+  isrSet,
+  type AppPageCacheSetter,
+} from "../packages/vinext/src/server/isr-cache.js";
 import {
   finalizeAppPageHtmlCacheResponse,
   finalizeAppPageRscCacheResponse,
 } from "../packages/vinext/src/server/app-page-cache-finalizer.js";
-import { buildAppPageCachedResponse } from "../packages/vinext/src/server/app-page-cache.js";
+import {
+  buildAppPageCachedResponse,
+  buildAppPageCacheTags,
+  readAppPageCacheResponse,
+} from "../packages/vinext/src/server/app-page-cache.js";
 
 const CDN_KEY = Symbol.for("vinext.cdnCacheAdapter");
-const CACHE_HANDLER_TAGS = Symbol.for("vinext.cacheHandlerValue.tags");
-
-function getInternalCacheHandlerTags(value: unknown): readonly string[] | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const tags = (value as { [CACHE_HANDLER_TAGS]?: unknown })[CACHE_HANDLER_TAGS];
-  return Array.isArray(tags) && tags.every((tag): tag is string => typeof tag === "string")
-    ? tags
-    : undefined;
-}
-
 function resetActiveAdapter(): void {
   delete (globalThis as Record<PropertyKey, unknown>)[CDN_KEY];
 }
@@ -50,6 +53,40 @@ function createDeferred() {
     resolve = promiseResolve;
   });
   return { promise, resolve };
+}
+
+function createContractCacheHandler(): {
+  handler: CacheHandler;
+  invalidatedTags: string[];
+} {
+  const entries = new Map<string, CacheHandlerValue>();
+  const invalidatedTags: string[] = [];
+  const handler: CacheHandler = {
+    async get(key) {
+      return entries.get(key) ?? null;
+    },
+    async set(key, value, ctx?: CacheHandlerContext) {
+      const metadata = {
+        lastModified: Date.now(),
+        cacheControl: ctx?.cacheControl as CacheControlMetadata | undefined,
+        tags: [...(ctx?.tags ?? [])],
+      };
+      entries.set(
+        key,
+        value?.kind === "APP_PAGE" ? { ...metadata, value } : { ...metadata, value },
+      );
+    },
+    async revalidateTag(tags) {
+      const requestedTags = Array.isArray(tags) ? tags : [tags];
+      invalidatedTags.push(...requestedTags);
+      for (const [key, entry] of entries) {
+        if (requestedTags.some((tag) => entry.tags?.includes(tag))) {
+          entries.delete(key);
+        }
+      }
+    },
+  };
+  return { handler, invalidatedTags };
 }
 
 async function finalizePendingDynamicRscResponse(): Promise<Response> {
@@ -128,7 +165,7 @@ describe("CloudflareCdnCacheAdapter", () => {
         value,
       }),
     );
-    expect(getInternalCacheHandlerTags(admitted)).toEqual(["/admitted"]);
+    expect(admitted?.tags).toEqual(["/admitted"]);
     expect(admitted?.value?.kind).toBe("APP_PAGE");
     if (admitted?.value?.kind !== "APP_PAGE") throw new Error("Expected admitted App page");
 
@@ -137,7 +174,7 @@ describe("CloudflareCdnCacheAdapter", () => {
       cacheState: "HIT",
       isRscRequest: false,
       revalidateSeconds: 60,
-      [CACHE_HANDLER_TAGS]: getInternalCacheHandlerTags(admitted),
+      tags: admitted.tags,
     } as const;
     const promoted = buildAppPageCachedResponse(admitted.value, promotedOptions);
     expect(await promoted?.text()).toBe("<h1>admitted</h1>");
@@ -145,6 +182,73 @@ describe("CloudflareCdnCacheAdapter", () => {
       "public, max-age=60, stale-while-revalidate=31536000",
     );
     expect(promoted?.headers.get("Cache-Tag")).toBe("/admitted");
+  });
+
+  it("promotes and invalidates artifacts from a conforming custom cache handler", async () => {
+    const { handler, invalidatedTags } = createContractCacheHandler();
+    const purge = vi.fn(async () => {});
+    const pendingInvalidations: Promise<unknown>[] = [];
+    setDataCacheHandler(handler);
+    setCdnCacheAdapter(adapter);
+    const cacheKey = "html:/custom";
+    const cacheTags = buildAppPageCacheTags("/custom", ["post:custom"]);
+    const value = {
+      kind: "APP_PAGE" as const,
+      headers: undefined,
+      html: "<h1>custom adapter</h1>",
+      postponed: undefined,
+      rscData: undefined,
+      status: 200,
+    };
+
+    const seed = () =>
+      isrSet(cacheKey, value, {
+        cacheControl: { revalidate: 60 },
+        tags: cacheTags,
+      });
+    await seed();
+
+    const promoted = await readAppPageCacheResponse({
+      cleanPathname: "/custom",
+      clearRequestContext: vi.fn(),
+      isRscRequest: false,
+      isrGet,
+      isrHtmlKey: () => cacheKey,
+      isrRscKey: (pathname) => `rsc:${pathname}`,
+      isrSet,
+      revalidateSeconds: 60,
+      renderFreshPageForCache: vi.fn(),
+      scheduleBackgroundRegeneration: vi.fn(),
+    });
+
+    expect(await promoted?.text()).toBe("<h1>custom adapter</h1>");
+    expect(promoted?.headers.get("CDN-Cache-Control")).toBe(
+      "public, max-age=60, stale-while-revalidate=31536000",
+    );
+    expect(promoted?.headers.get("Cache-Tag")?.split(",")).toEqual(cacheTags);
+
+    await runWithExecutionContext(
+      {
+        waitUntil(promise) {
+          pendingInvalidations.push(promise);
+        },
+        cache: { purge },
+      },
+      async () => {
+        revalidateTag("post:custom");
+        await Promise.all(pendingInvalidations.splice(0));
+        await expect(adapter.get(cacheKey)).resolves.toBeNull();
+
+        await seed();
+        revalidatePath("/custom");
+        await Promise.all(pendingInvalidations.splice(0));
+        await expect(adapter.get(cacheKey)).resolves.toBeNull();
+      },
+    );
+
+    expect(invalidatedTags).toEqual(["post:custom", "_N_T_/custom"]);
+    expect(purge).toHaveBeenNthCalledWith(1, { tags: ["post:custom"] });
+    expect(purge).toHaveBeenNthCalledWith(2, { tags: ["_N_T_/custom"] });
   });
 
   it("cannot promote when the configured admission store is non-durable", async () => {
@@ -204,7 +308,7 @@ describe("CloudflareCdnCacheAdapter", () => {
       isRscRequest: false,
       middlewareHeaders: new Headers({ "Cache-Control": "private, no-store" }),
       revalidateSeconds: 60,
-      [CACHE_HANDLER_TAGS]: ["/private"],
+      tags: ["/private"],
     } as const;
     const response = buildAppPageCachedResponse(
       {
@@ -233,7 +337,7 @@ describe("CloudflareCdnCacheAdapter", () => {
         "Cache-Control": "s-maxage=5, stale-while-revalidate=55",
       }),
       revalidateSeconds: 60,
-      [CACHE_HANDLER_TAGS]: ["/overridden"],
+      tags: ["/overridden"],
     } as const;
     const response = buildAppPageCachedResponse(
       {
@@ -251,6 +355,65 @@ describe("CloudflareCdnCacheAdapter", () => {
       "public, max-age=5, stale-while-revalidate=55",
     );
     expect(response?.headers.get("Cache-Tag")).toBe("/overridden");
+  });
+
+  it("preserves cacheable middleware provider-header overrides during promotion", () => {
+    setCdnCacheAdapter(adapter);
+    const response = buildAppPageCachedResponse(
+      {
+        kind: "APP_PAGE",
+        headers: undefined,
+        html: "<h1>provider override</h1>",
+        postponed: undefined,
+        rscData: undefined,
+        status: 200,
+      },
+      {
+        cacheControl: { revalidate: 60 },
+        cacheState: "HIT",
+        isRscRequest: false,
+        middlewareHeaders: new Headers({
+          "Cache-Tag": "middleware-tag",
+          "CDN-Cache-Control": "public, max-age=7",
+          "Cloudflare-CDN-Cache-Control": "public, max-age=9",
+        }),
+        revalidateSeconds: 60,
+        tags: ["/stored-tag"],
+      },
+    );
+
+    expect(response?.headers.get("CDN-Cache-Control")).toBe("public, max-age=7");
+    expect(response?.headers.get("Cloudflare-CDN-Cache-Control")).toBe("public, max-age=9");
+    expect(response?.headers.get("Cache-Tag")).toBe("middleware-tag");
+  });
+
+  it("does not restore cacheable middleware provider headers on stale artifacts", () => {
+    setCdnCacheAdapter(adapter);
+    const response = buildAppPageCachedResponse(
+      {
+        kind: "APP_PAGE",
+        headers: undefined,
+        html: "<h1>stale provider override</h1>",
+        postponed: undefined,
+        rscData: undefined,
+        status: 200,
+      },
+      {
+        cacheControl: { revalidate: 60 },
+        cacheState: "STALE",
+        isRscRequest: false,
+        middlewareHeaders: new Headers({
+          "Cache-Tag": "middleware-tag",
+          "CDN-Cache-Control": "public, max-age=7",
+        }),
+        revalidateSeconds: 60,
+        tags: ["/stored-tag"],
+      },
+    );
+
+    expect(response?.headers.get("Cache-Control")).toBe("no-store");
+    expect(response?.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response?.headers.get("Cache-Tag")).toBeNull();
   });
 
   it("keeps pending streams private and clears every owned edge header", () => {

@@ -95,7 +95,6 @@ type KVCacheEntry = {
 };
 
 const INFINITE_CACHE_CONTROL_VALUE = "infinity";
-const CACHE_HANDLER_TAGS = Symbol.for("vinext.cacheHandlerValue.tags");
 type SerializedCacheControlMetadata = {
   revalidate: number | false | typeof INFINITE_CACHE_CONTROL_VALUE;
   expire?: number | typeof INFINITE_CACHE_CONTROL_VALUE;
@@ -104,6 +103,24 @@ type SerializedCacheControlMetadata = {
 type SerializedKVCacheEntry = Omit<KVCacheEntry, "cacheControl"> & {
   cacheControl?: SerializedCacheControlMetadata;
 };
+
+function buildCacheHandlerValue(
+  value: IncrementalCacheValue | null,
+  entry: KVCacheEntry,
+  tags: string[],
+  cacheState?: string,
+): CacheHandlerValue {
+  const metadata = {
+    lastModified: entry.lastModified,
+    cacheControl: entry.cacheControl,
+    tags,
+    ...(cacheState ? { cacheState } : {}),
+  };
+  if (value?.kind === "APP_PAGE") {
+    return { ...metadata, value };
+  }
+  return { ...metadata, value };
+}
 
 /** Prefix used by revalidatePath for path-based tags. */
 const PATH_TAG_PREFIX = "_N_T_";
@@ -289,21 +306,10 @@ export class KVCacheHandler implements CacheHandler {
       (requestedRevalidateAt !== null && now > requestedRevalidateAt);
 
     if (isStale) {
-      return {
-        lastModified: entry.lastModified,
-        value: restoredValue,
-        cacheState: "stale",
-        cacheControl: entry.cacheControl,
-        ...(tags.length > 0 ? { [CACHE_HANDLER_TAGS]: tags } : {}),
-      };
+      return buildCacheHandlerValue(restoredValue, entry, tags, "stale");
     }
 
-    return {
-      lastModified: entry.lastModified,
-      value: restoredValue,
-      cacheControl: entry.cacheControl,
-      ...(tags.length > 0 ? { [CACHE_HANDLER_TAGS]: tags } : {}),
-    };
+    return buildCacheHandlerValue(restoredValue, entry, tags);
   }
 
   /**
