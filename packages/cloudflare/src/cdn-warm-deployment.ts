@@ -5,16 +5,15 @@
  * takes production traffic:
  *
  *   validate → upload → inspect and re-verify deployment →
- *   stage new version at 0% → attach desired triggers →
- *   warm through a version override →
+ *   stage new version at 0% → warm through existing triggers with a version override →
  *   verify the producing version → re-verify the staged split is still active →
- *   promote
+ *   promote → apply desired triggers
  *
- * If warming fails, this transaction does not promote the new version or
- * issue another remote mutation to undo the staged split. Another deploy may
- * have changed that split during warming, so failure directs the operator to
- * inspect the current deployment rather than asserting stale remote state. A
- * promotion whose CLI process fails ambiguously is reported the same way. It
+ * If strict warming fails, this transaction does not promote the new version
+ * or issue another remote mutation to undo the staged split. Another deploy
+ * may have changed that split during warming, so failure directs the operator
+ * to inspect the current deployment rather than asserting stale remote state.
+ * A promotion whose CLI process fails ambiguously is reported the same way. It
  * lives apart from `deploy.ts` so the CLI module stays a thin caller and the
  * sequencing can be tested directly. Worker-name/host/binding resolution
  * lives in `wrangler-deployment-target.ts`, not here — this module only
@@ -132,8 +131,8 @@ function finishAlreadyCurrentVersion(
     root,
     options,
     `Worker version ${upload.versionId} is already serving 100% traffic, but applying triggers ` +
-      "(routes/schedules) failed. Production still serves that version on the previously " +
-      "deployed routes. Re-run `wrangler triggers deploy` to apply the route changes.",
+      "(routes/domains/schedules) could not be confirmed. Trigger state may be partially changed. " +
+      "Inspect the current triggers, then re-run `wrangler triggers deploy` if needed.",
   );
   return {
     url: pickDeployedUrl(
@@ -163,12 +162,7 @@ function promoteWithoutWarmup(
     throw new Error(`${message} ${strictUploadState}`);
   }
   console.warn(`  ${message} Promoting without pre-warming.`);
-  runWranglerVersionDeploy(
-    root,
-    [{ versionId: upload.versionId, percentage: 100 }],
-    options,
-    "promote-uploaded",
-  );
+  promoteUploadedVersion(root, upload.versionId, false, options);
   const triggers = applyTriggersAfterPromotion(root, options);
   return {
     url: pickDeployedUrl(
@@ -181,15 +175,14 @@ function promoteWithoutWarmup(
 }
 
 /**
- * Stage the uploaded version at 0%, attach the desired routes, attempt a
- * verified warm-up through a version override, then promote to 100%.
+ * Stage the uploaded version at 0%, attempt a verified warm-up through the
+ * currently active routes, promote to 100%, then apply the desired triggers.
  *
- * Desired routes must be attached before warming: a newly added or moved
- * hostname cannot honor the uploaded-version override until it targets this
- * Worker. The uploaded version remains at 0% while triggers are applied, so
- * normal requests on both existing and newly attached routes continue to hit
- * the previous version. If warming fails, the new version remains staged and
- * never receives production traffic.
+ * A newly added or moved hostname cannot honor the uploaded-version override
+ * until it targets this Worker. Strict mode therefore fails without changing
+ * production triggers. Non-strict mode promotes, applies the desired triggers,
+ * and retries failed origin/path pairs afterward without calling that result
+ * pre-warmed.
  */
 async function warmAndPromote(
   root: string,
@@ -232,9 +225,8 @@ async function warmAndPromote(
     );
   }
 
-  const triggers = applyTriggersBeforeWarmup(root, options, upload.versionId, previousVersionId);
-
   let warmed = false;
+  const failedWarmPathsByTarget = new Map<string, string[]>();
   try {
     // A workers.dev URL is a production cache key when Wrangler enables that
     // origin: by default for route-less deployments, or explicitly alongside
@@ -286,7 +278,13 @@ async function warmAndPromote(
         });
         confirmedPaths += result.warmed;
         totalPaths += result.total;
-        if (result.failed !== 0) allPathsConfirmed = false;
+        if (result.failed !== 0) {
+          allPathsConfirmed = false;
+          failedWarmPathsByTarget.set(
+            targetUrl,
+            result.failures.map((failure) => failure.path),
+          );
+        }
       }
       if (!allPathsConfirmed) {
         const originSuffix = targetUrls.length > 1 ? ` across ${targetUrls.length} origins` : "";
@@ -304,25 +302,55 @@ async function warmAndPromote(
 
   verifyStagedSplitBeforePromotion(root, options, previousVersionId, upload.versionId);
 
+  promoteUploadedVersion(root, upload.versionId, warmed, options);
+  const triggers = applyTriggersAfterPromotion(root, options);
+
+  if (!options.warmCdnStrict && failedWarmPathsByTarget.size > 0 && headers) {
+    console.warn(
+      "  Some origin/path pairs were not confirmed before promotion. Retrying those cache " +
+        "fills after applying triggers; this deployment remains not pre-warmed.",
+    );
+    for (const [targetUrl, failedPaths] of failedWarmPathsByTarget) {
+      await warmCdnCache({
+        targetUrl,
+        paths: failedPaths,
+        headers,
+        expectedVersionId: upload.versionId,
+        confirmCache: true,
+        concurrency: options.warmCdnConcurrency,
+        timeoutMs: options.warmCdnTimeout,
+        retries: options.warmCdnRetries,
+        strict: false,
+      });
+    }
+  }
+  return {
+    url: pickDeployedUrl(triggers.deployedUrl, workersDevUrl, upload.previewUrl),
+    warmed,
+  };
+}
+
+function promoteUploadedVersion(
+  root: string,
+  uploadedVersionId: string,
+  warmed: boolean,
+  options: WranglerTargetOptions,
+): void {
   try {
     runWranglerVersionDeploy(
       root,
-      [{ versionId: upload.versionId, percentage: 100 }],
+      [{ versionId: uploadedVersionId, percentage: 100 }],
       options,
       promotionPhaseFor(warmed),
     );
   } catch (error) {
     throw new Error(
       `${formatUnknownError(error)}\n\n` +
-        `Could not confirm the promotion of Worker version ${upload.versionId} succeeded. ` +
-        "Run `wrangler deployments status` to check the current traffic split, then " +
-        "re-promote or retry as needed.",
+        `Could not confirm the promotion of Worker version ${uploadedVersionId} succeeded. ` +
+        "Triggers were not applied. Run `wrangler deployments status` to check the current " +
+        "traffic split, then re-promote or retry as needed.",
     );
   }
-  return {
-    url: pickDeployedUrl(triggers.deployedUrl, workersDevUrl, upload.previewUrl),
-    warmed,
-  };
 }
 
 function buildWarmupFailure(
@@ -339,39 +367,17 @@ function buildWarmupFailure(
   );
 }
 
-function applyTriggersBeforeWarmup(
-  root: string,
-  options: WranglerTargetOptions,
-  uploadedVersionId: string,
-  previousVersionId: string,
-): WranglerTriggersDeployResult {
-  try {
-    return runWranglerTriggersDeploy(root, options);
-  } catch (error) {
-    throw new Error(
-      `${formatUnknownError(error)}\n\n` +
-        `Could not attach the configured Worker routes before CDN warmup. ` +
-        `Worker version ${uploadedVersionId} was staged at 0% and was not promoted; ` +
-        `the previous version (${previousVersionId}) was at 100% when staging began. ` +
-        "Another deploy or a partial trigger update may have changed remote state. " +
-        "Inspect the current triggers and deployment status before retrying.",
-    );
-  }
-}
-
 /**
- * Apply triggers after a successful promotion. A failure here is far less severe
- * than the pre-promotion case: the new version is already live on the previously
- * deployed routes, only the route/schedule changes did not apply. Surface that
- * plainly so the operator re-runs triggers instead of assuming the whole deploy
- * failed and re-uploading.
+ * Apply triggers after a successful promotion. The command can fail after a
+ * partial remote update, so the error must distinguish the confirmed promotion
+ * from the unknown route/domain/schedule state.
  */
 function applyTriggersAfterPromotion(
   root: string,
   options: WranglerTargetOptions,
   failureMessage = "The uploaded Worker version was promoted to 100%, but applying triggers " +
-    "(routes/schedules) failed. Production serves the new version on the previously " +
-    "deployed routes. Re-run `wrangler triggers deploy` to apply the route changes.",
+    "(routes/domains/schedules) could not be confirmed. Trigger state may be partially changed. " +
+    "Inspect the current triggers, then re-run `wrangler triggers deploy` if needed.",
 ): WranglerTriggersDeployResult {
   try {
     return runWranglerTriggersDeploy(root, options);

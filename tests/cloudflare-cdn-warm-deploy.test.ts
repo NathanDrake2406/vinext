@@ -283,19 +283,18 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
-      "triggers",
       `fetch:https://app.example.com/:my-worker="${UPLOADED_VERSION_ID}"`,
       `fetch:https://app.example.com/about:my-worker="${UPLOADED_VERSION_ID}"`,
       "status",
       "promote",
+      "triggers",
     ]);
   });
 
   it("prefers the trigger-reported production URL over the version preview URL", async () => {
-    // Upload prints a version-scoped preview host and promotion prints no URL
-    // at all, so the only report of the live target is the pre-warm
-    // triggers deploy. The final "Deployed to:" line must name that target
-    // rather than a workers.dev host derived from the upload.
+    // The trigger command is the only Wrangler call that reports this custom
+    // domain. The final "Deployed to:" line must use it instead of a
+    // workers.dev host derived from the upload.
     writeFile(
       "wrangler.jsonc",
       warmupWranglerConfig({
@@ -625,10 +624,10 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
-      "triggers",
       "fetch:https://workers-cache.vinext.workers.dev/cached/intro",
       "status",
       "promote",
+      "triggers",
     ]);
   });
 
@@ -689,7 +688,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       warmed: false,
     });
     expect(fetch).not.toHaveBeenCalled();
-    expect(events).toEqual(["stage", "triggers", "promote"]);
+    expect(events).toEqual(["stage", "promote", "triggers"]);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("path-scoped Worker routes"));
   });
 
@@ -738,11 +737,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
-      "triggers",
       "fetch:old-version",
       "fetch:new-version",
       "status",
       "promote",
+      "triggers",
     ]);
   });
 
@@ -802,14 +801,22 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     expect(events).toEqual(["fetch:miss", "fetch:hit", "promote"]);
   });
 
-  it("promotes without a confirmed warm-up in non-strict mode, and says so instead of a plain success", async () => {
+  it("warms a newly attached route after promotion without reporting it pre-warmed", async () => {
     const events: string[] = [];
     const warnSpy = vi.spyOn(console, "warn");
-    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
-    vi.mocked(fetch).mockImplementation(async () => {
-      events.push("fetch:old-version");
-      return versionedResponse(PREVIOUS_VERSION_ID);
-    });
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({ name: "workers-cache", route: "new.example.com/*" }),
+    );
+    vi.mocked(fetch)
+      .mockImplementationOnce(async (url) => {
+        events.push(`fetch:old-version:${formatFetchUrl(url)}`);
+        return versionedResponse(PREVIOUS_VERSION_ID);
+      })
+      .mockImplementationOnce(async (url) => {
+        events.push(`fetch:new-version-after-triggers:${formatFetchUrl(url)}`);
+        return versionedResponse(UPLOADED_VERSION_ID);
+      });
     execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
       if (args.includes("upload")) {
         events.push("upload");
@@ -825,7 +832,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       }
       if (args.includes("triggers")) {
         events.push("triggers");
-        return "Triggers deployed\n";
+        return "Triggers deployed\nnew.example.com (custom domain)\n";
       }
       if (isPromotion(args)) {
         events.push("promote-uploaded");
@@ -838,12 +845,11 @@ describe("Cloudflare CDN warmup deploy flow", () => {
 
     const result = await deployWithCdnWarmup(tmpDir, ["/cached/intro"], { warmCdnRetries: 0 });
 
-    // Every override request kept hitting the previous version, so the retries
-    // exhaust without ever confirming the uploaded version served a response —
-    // non-strict mode still promotes, but must report warmed: false rather than
-    // silently treating the deploy as a confirmed warm success.
+    // The desired route did not reach this Worker until triggers were applied.
+    // Non-strict mode can fill it after promotion, but must not call that fill
+    // a confirmed pre-warm.
     expect(result).toEqual({
-      url: "https://workers-cache.vinext.workers.dev",
+      url: "https://new.example.com",
       warmed: false,
     });
     expect(events).toEqual([
@@ -851,17 +857,18 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
-      "triggers",
-      "fetch:old-version",
+      "fetch:old-version:https://new.example.com/cached/intro",
       "status",
       "promote-uploaded",
+      "triggers",
+      "fetch:new-version-after-triggers:https://new.example.com/cached/intro",
     ]);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("confirmed 0/1 path(s) served the uploaded version"),
     );
   });
 
-  it("does not claim the staged split is still active when strict warmup fails", async () => {
+  it("leaves triggers unchanged when a strict route is not already active", async () => {
     const events: string[] = [];
     writeFile(
       "wrangler.jsonc",
@@ -905,16 +912,8 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     ).rejects.toThrow(
       /CDN warmup failed for 1\/1 path\(s\); verified 0\/1\.[\s\S]*This deploy did not promote[\s\S]*another deploy may have changed the current traffic split/,
     );
-    // Triggers were attached while the previous version still held 100%;
-    // no restore or promotion overwrites whatever deployment state now exists.
-    expect(events).toEqual([
-      "upload",
-      "status",
-      "status",
-      "stage",
-      "triggers",
-      "fetch:old-version",
-    ]);
+    // Strict failure leaves production triggers unchanged and does not promote.
+    expect(events).toEqual(["upload", "status", "status", "stage", "fetch:old-version"]);
   });
 
   it("stages and promotes a fresh attempt after a prior warmup left a version staged", async () => {
@@ -1006,16 +1005,15 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       "status",
       "status",
       "stage",
-      "triggers",
       "fetch:old-version",
       "upload:retry",
       "status",
       "status",
       "stage",
-      "triggers",
       "fetch:new-version",
       "status",
       "promote",
+      "triggers",
     ]);
     expect(stagingSplits[1]).not.toContain(`${failedVersionId}@0%`);
   });
@@ -1050,11 +1048,10 @@ describe("Cloudflare CDN warmup deploy flow", () => {
     await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
       `Could not confirm the promotion of Worker version ${UPLOADED_VERSION_ID} succeeded`,
     );
-    // One status read to classify the deployment, one immediately before
-    // staging, and one ownership re-check before the promotion attempt — but
-    // no reconciling re-read after promotion fails. Triggers run before warmup
-    // while the previous version still holds 100% traffic.
-    expect(events).toEqual(["status", "status", "triggers", "status", "promote-attempt"]);
+    // One status read classifies the deployment, one runs immediately before
+    // staging, and one re-checks ownership before promotion. An ambiguous
+    // promotion failure must not apply triggers.
+    expect(events).toEqual(["status", "status", "status", "promote-attempt"]);
   });
 
   it("aborts promotion when another deploy replaces the staged split during warmup", async () => {
@@ -1095,7 +1092,7 @@ describe("Cloudflare CDN warmup deploy flow", () => {
         `no longer matches the staged traffic split[\\s\\S]*observed ${otherDeployVersionId}@100%[\\s\\S]*was not promoted`,
       ),
     );
-    expect(commands).toEqual(["triggers"]);
+    expect(commands).toEqual([]);
   });
 
   it("does not overwrite a deployment that changes before staging", async () => {
@@ -1244,6 +1241,87 @@ describe("Cloudflare CDN warmup deploy flow", () => {
       ),
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not apply triggers when a direct promotion result is ambiguous", async () => {
+    const events: string[] = [];
+    writeFile("wrangler.jsonc", warmupWranglerConfig({ name: "workers-cache" }));
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return uploadOutput("workers-cache");
+      if (args.includes("status")) {
+        return JSON.stringify({
+          versions: [
+            { version_id: PREVIOUS_VERSION_ID, percentage: 50 },
+            { version_id: "33333333-3333-4333-8333-333333333333", percentage: 50 },
+          ],
+        });
+      }
+      if (isPromotion(args)) {
+        events.push("promote-attempt");
+        throw new Error("network blip during promote");
+      }
+      if (args.includes("triggers")) {
+        events.push("triggers");
+        return "Triggers deployed\n";
+      }
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], {})).rejects.toThrow(
+      /Could not confirm the promotion[\s\S]*Triggers were not applied/,
+    );
+    expect(events).toEqual(["promote-attempt"]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not retry failed warmups when trigger deployment fails after promotion", async () => {
+    const events: string[] = [];
+    writeFile(
+      "wrangler.jsonc",
+      warmupWranglerConfig({ name: "my-worker", route: "new.example.com/*" }),
+    );
+    vi.mocked(fetch).mockImplementation(async () => {
+      events.push("fetch:old-version");
+      return versionedResponse(PREVIOUS_VERSION_ID);
+    });
+    execFileSyncMock.mockImplementation((_file: string, args: string[]) => {
+      if (args.includes("upload")) return uploadOutput("my-worker");
+      if (args.includes("status")) {
+        events.push("status");
+        return deploymentStatusOutput();
+      }
+      if (isStage(args)) {
+        events.push("stage");
+        return "Staged version\n";
+      }
+      if (isPromotion(args)) {
+        events.push("promote");
+        return "Promoted version\n";
+      }
+      if (args.includes("triggers")) {
+        events.push("triggers");
+        throw new Error("trigger update failed");
+      }
+      throw new Error(`Unexpected Wrangler args: ${args.join(" ")}`);
+    });
+    const { deployWithCdnWarmup } =
+      await import("../packages/cloudflare/src/cdn-warm-deployment.js");
+
+    await expect(deployWithCdnWarmup(tmpDir, ["/"], { warmCdnRetries: 0 })).rejects.toThrow(
+      "Trigger state may be partially changed",
+    );
+    expect(events).toEqual([
+      "status",
+      "status",
+      "stage",
+      "fetch:old-version",
+      "status",
+      "promote",
+      "triggers",
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("reports trigger recovery after a non-strict direct promotion", async () => {
