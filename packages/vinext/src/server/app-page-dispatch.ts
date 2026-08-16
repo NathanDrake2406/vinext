@@ -334,7 +334,7 @@ export type DispatchAppPageOptions<TRoute extends AppPageDispatchRoute> = {
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
   isrGet: AppPageCacheGetter;
-  isrHtmlKey: (pathname: string, canonicalPathname?: string) => string;
+  isrHtmlKey: (pathname: string) => string;
   isrRscKey: (
     pathname: string,
     mountedSlotsHeader?: string | null,
@@ -709,7 +709,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   ) {
     const { readAppPageCacheResponse } = await import("./app-page-cache.js");
     const cachedPageResponse = await readAppPageCacheResponse({
-      canonicalPathname: options.displayPathname,
       cleanPathname: options.cleanPathname,
       clearRequestContext: options.clearRequestContext,
       hasRequestSearchParams,
@@ -724,6 +723,8 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
       middlewareHeaders: options.middlewareContext.headers,
       middlewareStatus: options.middlewareContext.status,
       mountedSlotsHeader: options.mountedSlotsHeader,
+      navigationPathname: options.displayPathname ?? options.cleanPathname,
+      navigationSearchParams: pageSearchParams,
       renderMode: options.renderMode,
       expireSeconds: options.expireSeconds,
       revalidateSeconds: resolveAppPageCacheReadRevalidateSeconds({
@@ -1091,7 +1092,6 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     basePath: options.basePath,
     clientTraceMetadata: options.clientTraceMetadata,
     reactMaxHeadersLength: options.reactMaxHeadersLength,
-    canonicalPathname: options.displayPathname,
     cleanPathname: options.cleanPathname,
     clearRequestContext: options.clearRequestContext,
     consumeDynamicUsage,

@@ -457,18 +457,14 @@ export function appIsrCacheKey(
 /**
  * Build the ISR cache key for an App page's HTML artifact.
  *
- * `pathname` is the rewrite destination, which decides what was rendered.
- * A rewritten render additionally bakes its canonical (pre-rewrite) pathname
- * into the navigation bootstrap script, so entries carrying one external path
- * must not be served to a request that arrived on a different one. Requests
- * that were not rewritten keep the plain `html` suffix.
+ * HTML entries use a versioned suffix because the current format strips
+ * request-specific navigation metadata before persistence. The version keeps
+ * unscoped development caches from replaying legacy, request-bound entries.
  */
-export function appIsrHtmlKey(pathname: string, canonicalPathname?: string): string {
-  const suffix =
-    canonicalPathname === undefined || canonicalPathname === pathname
-      ? "html"
-      : `html:canonical:${fnv1a64(canonicalPathname)}`;
-  return appIsrCacheKey(pathname, suffix);
+export function appIsrHtmlKey(pathname: string): string {
+  // Version the request-agnostic format so a deployment without a build id can
+  // never read legacy entries that still contain another request's navigation.
+  return appIsrCacheKey(pathname, "html:request-neutral-v1");
 }
 
 function normalizeInterceptionContextForCacheKey(interceptionContext: string): string | null {

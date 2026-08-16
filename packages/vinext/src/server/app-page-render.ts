@@ -129,8 +129,6 @@ type RenderAppPageLifecycleOptions = {
   peekRequestCacheLife?: () => AppPageRequestCacheLife | null;
   getDraftModeCookieHeader: () => string | null | undefined;
   handlerStart: number;
-  /** Pre-rewrite pathname baked into this render's navigation bootstrap. */
-  canonicalPathname?: string;
   hasCustomGlobalError?: boolean;
   hasLoadingBoundary: boolean;
   dynamicStaleTimeSeconds?: number;
@@ -147,7 +145,7 @@ type RenderAppPageLifecycleOptions = {
   omitPendingDynamicCacheState?: boolean;
   isRscRequest: boolean;
   isrDebug?: AppPageDebugLogger;
-  isrHtmlKey: (pathname: string, canonicalPathname?: string) => string;
+  isrHtmlKey: (pathname: string) => string;
   isrRscKey: (
     pathname: string,
     mountedSlotsHeader?: string | null,
@@ -1265,7 +1263,6 @@ export async function renderAppPageLifecycle(
       getRequestCacheLife() {
         return readRequestCacheLifeForCachePolicy(options);
       },
-      canonicalPathname: options.canonicalPathname,
       isrDebug: options.isrDebug,
       isrHtmlKey: options.isrHtmlKey,
       isrRscKey: options.isrRscKey,

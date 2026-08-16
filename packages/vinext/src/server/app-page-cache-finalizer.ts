@@ -12,6 +12,7 @@ import type { RenderObservation } from "./cache-proof.js";
 import { resolveClientStaleTimeSeconds } from "../utils/cache-control-metadata.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { markFrameworkLinkHeaders } from "./app-response-header-provenance.js";
+import { prepareAppPageHtmlForCache } from "./app-page-cache-navigation.js";
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
 type AppPageRscCacheKeyBuilder = (
@@ -33,8 +34,6 @@ type BuildAppPageCacheRenderObservation = (input: {
 type FinalizeAppPageHtmlCacheResponseOptions = {
   capturedDynamicUsageBeforeContextCleanup?: () => boolean;
   capturedRscDataPromise: Promise<ArrayBuffer> | null;
-  /** Pre-rewrite pathname baked into this render's navigation bootstrap. */
-  canonicalPathname?: string;
   cleanPathname: string;
   consumeDynamicUsage: () => boolean;
   consumeRenderObservationState?: () => AppPageRenderObservationState;
@@ -43,7 +42,7 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   getPageTags: () => string[];
   getRequestCacheLife?: () => AppPageRequestCacheLife | null;
   isrDebug?: AppPageDebugLogger;
-  isrHtmlKey: (pathname: string, canonicalPathname?: string) => string;
+  isrHtmlKey: (pathname: string) => string;
   isrRscKey: AppPageRscCacheKeyBuilder;
   isrSet: AppPageCacheSetter;
   interceptionContext?: string | null;
@@ -165,7 +164,7 @@ export function finalizeAppPageHtmlCacheResponse(
   }
 
   const [streamForClient, streamForCache] = response.body.tee();
-  const htmlKey = options.isrHtmlKey(options.cleanPathname, options.canonicalPathname);
+  const htmlKey = options.isrHtmlKey(options.cleanPathname);
   const rscKey = options.isrRscKey(
     options.cleanPathname,
     null,
@@ -213,19 +212,25 @@ export function finalizeAppPageHtmlCacheResponse(
         state: observationState,
       });
       const linkHeader = options.linkHeader;
-      const writes = [
-        options.isrSet(
-          htmlKey,
-          buildAppPageCacheValue(
-            cachedHtml,
-            undefined,
-            200,
-            htmlRenderObservation,
-            linkHeader ? { link: linkHeader } : undefined,
+      const writes: Promise<void>[] = [];
+      const requestNeutralHtml = prepareAppPageHtmlForCache(cachedHtml);
+      if (requestNeutralHtml === null) {
+        options.isrDebug?.("HTML cache write skipped (navigation metadata invalid)", htmlKey);
+      } else {
+        writes.push(
+          options.isrSet(
+            htmlKey,
+            buildAppPageCacheValue(
+              requestNeutralHtml,
+              undefined,
+              200,
+              htmlRenderObservation,
+              linkHeader ? { link: linkHeader } : undefined,
+            ),
+            { cacheControl, tags: pageTags },
           ),
-          { cacheControl, tags: pageTags },
-        ),
-      ];
+        );
+      }
 
       if (options.capturedRscDataPromise) {
         writes.push(
@@ -239,7 +244,9 @@ export function finalizeAppPageHtmlCacheResponse(
       }
 
       await Promise.all(writes);
-      options.isrDebug?.("HTML cache written", htmlKey);
+      if (requestNeutralHtml !== null) {
+        options.isrDebug?.("HTML cache written", htmlKey);
+      }
     } catch (cacheError) {
       console.error("[vinext] ISR cache write error:", cacheError);
     }
