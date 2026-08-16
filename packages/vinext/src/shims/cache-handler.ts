@@ -12,6 +12,10 @@ export type CacheHandlerValue = {
   value: IncrementalCacheValue | null;
 };
 
+// Internal metadata for the built-in stores. This stays outside the public
+// CacheHandlerValue contract so custom cache handlers do not need a new API.
+const CACHE_HANDLER_TAGS = Symbol.for("vinext.cacheHandlerValue.tags");
+
 export type CacheControlMetadata = {
   revalidate: number | false;
   expire?: number;
@@ -261,6 +265,7 @@ export class MemoryCacheHandler implements CacheHandler {
         value: entry.value,
         cacheState: "expired",
         cacheControl: entry.cacheControl,
+        ...(entry.tags.length > 0 ? { [CACHE_HANDLER_TAGS]: [...entry.tags] } : {}),
       };
     }
 
@@ -277,6 +282,7 @@ export class MemoryCacheHandler implements CacheHandler {
         value: entry.value,
         cacheState: "stale",
         cacheControl: entry.cacheControl,
+        ...(entry.tags.length > 0 ? { [CACHE_HANDLER_TAGS]: [...entry.tags] } : {}),
       };
     }
 
@@ -284,6 +290,7 @@ export class MemoryCacheHandler implements CacheHandler {
       lastModified: entry.lastModified,
       value: entry.value,
       cacheControl: entry.cacheControl,
+      ...(entry.tags.length > 0 ? { [CACHE_HANDLER_TAGS]: [...entry.tags] } : {}),
     };
   }
 

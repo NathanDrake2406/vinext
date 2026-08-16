@@ -1131,7 +1131,7 @@ describe("app page cache helpers", () => {
     const debugCalls: Array<[string, string]> = [];
     const rscData = new TextEncoder().encode("flight").buffer;
 
-    const response = await finalizeAppPageHtmlCacheResponse(
+    const response = finalizeAppPageHtmlCacheResponse(
       new Response("<h1>fresh</h1>", {
         status: 201,
         headers: {
@@ -1242,7 +1242,7 @@ describe("app page cache helpers", () => {
       },
     };
 
-    const response = await finalizeAppPageHtmlCacheResponse(
+    const response = finalizeAppPageHtmlCacheResponse(
       new Response("<h1>personalized</h1>", {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -1278,7 +1278,7 @@ describe("app page cache helpers", () => {
     const debugCalls: Array<[string, string]> = [];
     const isrSet = vi.fn();
 
-    const response = await finalizeAppPageHtmlCacheResponse(
+    const response = finalizeAppPageHtmlCacheResponse(
       new Response("<h1>personalized</h1>", {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -1426,7 +1426,7 @@ describe("app page cache helpers", () => {
     const isrRscKey = vi.fn();
     const isrSet = vi.fn();
 
-    const response = await finalizeAppPageRscCacheResponse(
+    const response = finalizeAppPageRscCacheResponse(
       new Response("flight", {
         headers: {
           "Content-Type": "text/x-component",
@@ -1470,7 +1470,7 @@ describe("app page cache helpers", () => {
   });
 
   it("preserves adapter-unowned headers on mounted dynamic RSC responses", async () => {
-    const response = await finalizeAppPageRscCacheResponse(
+    const response = finalizeAppPageRscCacheResponse(
       new Response("dynamic flight", {
         headers: {
           "Cache-Control": "no-store, must-revalidate",
@@ -1508,7 +1508,7 @@ describe("app page cache helpers", () => {
     const pendingCacheWrites: Promise<void>[] = [];
     const isrSetCalls: string[] = [];
 
-    const response = await finalizeAppPageRscCacheResponse(
+    const response = finalizeAppPageRscCacheResponse(
       new Response("flight", {
         headers: {
           "Content-Type": "text/x-component",
@@ -1557,7 +1557,7 @@ describe("app page cache helpers", () => {
     const pendingCacheWrites: Promise<void>[] = [];
     const isrSetCalls: string[] = [];
 
-    const response = await finalizeAppPageRscCacheResponse(
+    const response = finalizeAppPageRscCacheResponse(
       new Response("flight", {
         headers: {
           "Content-Type": "text/x-component",

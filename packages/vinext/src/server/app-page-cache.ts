@@ -5,7 +5,11 @@ import {
   applyRscCompatibilityIdHeader,
   applyRscDeploymentIdHeader,
 } from "./app-rsc-cache-busting.js";
-import { applyCdnResponseHeaders } from "./cache-control.js";
+import {
+  applyCdnResponseHeaders,
+  hasExplicitNonCacheableResponsePolicy,
+  NO_STORE_CACHE_CONTROL,
+} from "./cache-control.js";
 import { decideIsr } from "./isr-decision.js";
 import { VINEXT_MOUNTED_SLOTS_HEADER } from "./headers.js";
 import { applyClientStaleTimeHeader, applyEdgeRuntimeHeader } from "./app-page-response.js";
@@ -58,6 +62,25 @@ export type AppPageCacheOutcomeMetric = Readonly<{
     | "stale-empty-entry";
 }>;
 type AppPageCacheOutcomeRecorder = (metric: AppPageCacheOutcomeMetric) => void;
+
+const CACHE_HANDLER_TAGS = Symbol.for("vinext.cacheHandlerValue.tags");
+const CDN_CACHE_STATE = Symbol.for("vinext.cdnCacheResponse.cacheState");
+type InternalCacheHandlerTags = { [CACHE_HANDLER_TAGS]?: readonly string[] };
+
+function getInternalCacheHandlerTags(value: object | undefined): readonly string[] | undefined {
+  if (!value) return undefined;
+  const tags = (value as { [CACHE_HANDLER_TAGS]?: unknown })[CACHE_HANDLER_TAGS];
+  return Array.isArray(tags) && tags.every((tag): tag is string => typeof tag === "string")
+    ? tags
+    : undefined;
+}
+
+function withInternalCacheHandlerTags<T extends object>(
+  value: T,
+  tags: readonly string[] | undefined,
+): T & InternalCacheHandlerTags {
+  return tags ? { ...value, [CACHE_HANDLER_TAGS]: tags } : value;
+}
 
 type AppPageCacheRenderResult = {
   cacheControl?: CacheControlMetadata;
@@ -164,23 +187,39 @@ export function buildAppRouteCacheTags(
   return buildPageCacheTags(pathname, [...extraTags], [...routeSegments], "route");
 }
 
-function buildAppPageCachedHeaders(options: {
-  cacheControl: string;
-  cacheState: BuildAppPageCachedResponseOptions["cacheState"];
-  contentType: string;
-  linkHeader?: string | string[];
-  isEdgeRuntime?: boolean;
-  middlewareHeaders?: Headers | null;
-  mountedSlotsHeader?: string | null;
-  staleTimeSeconds?: number;
-}): Headers {
+function buildAppPageCachedHeaders(
+  options: {
+    cacheControl: string;
+    cacheState: BuildAppPageCachedResponseOptions["cacheState"];
+    contentType: string;
+    linkHeader?: string | string[];
+    isEdgeRuntime?: boolean;
+    middlewareHeaders?: Headers | null;
+    mountedSlotsHeader?: string | null;
+    staleTimeSeconds?: number;
+  },
+  tags?: readonly string[],
+): Headers {
   const headers = new Headers({
     "Content-Type": options.contentType,
     Vary: VINEXT_RSC_VARY_HEADER,
   });
-  // Page artifacts served from the origin store get their cache headers from the
-  // CDN adapter (default: a single Cache-Control identical to the prior behavior).
-  applyCdnResponseHeaders(headers, { cacheControl: options.cacheControl });
+  // Middleware policy is part of the response contract and must participate in
+  // the promotion decision. A private/no-store middleware response vetoes edge
+  // caching; a cacheable override replaces the render's stored lifetime.
+  mergeMiddlewareResponseHeaders(headers, options.middlewareHeaders ?? null);
+  const middlewareCacheControl = headers.get("Cache-Control");
+  const cacheControl = hasExplicitNonCacheableResponsePolicy(headers)
+    ? (middlewareCacheControl ?? NO_STORE_CACHE_CONTROL)
+    : middlewareCacheControl && !/\b(?:private|no-store|no-cache)\b/i.test(middlewareCacheControl)
+      ? middlewareCacheControl
+      : options.cacheControl;
+  const cdnHeaderInput = {
+    cacheControl,
+    tags,
+    [CDN_CACHE_STATE]: options.cacheState,
+  };
+  applyCdnResponseHeaders(headers, cdnHeaderInput);
   setCacheStateHeaders(headers, options.cacheState);
   applyEdgeRuntimeHeader(headers, options.isEdgeRuntime);
 
@@ -190,7 +229,6 @@ function buildAppPageCachedHeaders(options: {
 
   applyClientStaleTimeHeader(headers, options.staleTimeSeconds);
 
-  mergeMiddlewareResponseHeaders(headers, options.middlewareHeaders ?? null);
   if (options.linkHeader) {
     if (Array.isArray(options.linkHeader)) {
       for (const value of options.linkHeader) headers.append("Link", value);
@@ -259,15 +297,18 @@ export function buildAppPageCachedResponse(
       return null;
     }
 
-    const rscHeaders = buildAppPageCachedHeaders({
-      cacheControl,
-      cacheState: options.cacheState,
-      contentType: VINEXT_RSC_CONTENT_TYPE,
-      isEdgeRuntime: options.isEdgeRuntime,
-      middlewareHeaders: options.middlewareHeaders,
-      mountedSlotsHeader: options.mountedSlotsHeader,
-      staleTimeSeconds,
-    });
+    const rscHeaders = buildAppPageCachedHeaders(
+      {
+        cacheControl,
+        cacheState: options.cacheState,
+        contentType: VINEXT_RSC_CONTENT_TYPE,
+        isEdgeRuntime: options.isEdgeRuntime,
+        middlewareHeaders: options.middlewareHeaders,
+        mountedSlotsHeader: options.mountedSlotsHeader,
+        staleTimeSeconds,
+      },
+      getInternalCacheHandlerTags(options),
+    );
     applyRscCompatibilityIdHeader(rscHeaders);
     applyRscDeploymentIdHeader(rscHeaders);
 
@@ -281,15 +322,18 @@ export function buildAppPageCachedResponse(
     return null;
   }
 
-  const htmlHeaders = buildAppPageCachedHeaders({
-    cacheControl,
-    cacheState: options.cacheState,
-    contentType: "text/html; charset=utf-8",
-    isEdgeRuntime: options.isEdgeRuntime,
-    linkHeader: cachedValue.headers?.link,
-    middlewareHeaders: options.middlewareHeaders,
-    staleTimeSeconds,
-  });
+  const htmlHeaders = buildAppPageCachedHeaders(
+    {
+      cacheControl,
+      cacheState: options.cacheState,
+      contentType: "text/html; charset=utf-8",
+      isEdgeRuntime: options.isEdgeRuntime,
+      linkHeader: cachedValue.headers?.link,
+      middlewareHeaders: options.middlewareHeaders,
+      staleTimeSeconds,
+    },
+    getInternalCacheHandlerTags(options),
+  );
 
   const response = new Response(cachedValue.html, {
     status,
@@ -338,16 +382,22 @@ async function serveAppPageCachedHtml(
   }
 
   const responseValue = transformValue ? transformValue(options.cachedValue) : options.cachedValue;
-  const response = buildAppPageCachedResponse(responseValue, {
-    cacheState,
-    cacheControl: options.cached?.value.cacheControl,
-    expireSeconds: options.expireSeconds,
-    isEdgeRuntime: options.isEdgeRuntime,
-    isRscRequest: false,
-    middlewareHeaders: options.middlewareHeaders,
-    middlewareStatus: options.middlewareStatus,
-    revalidateSeconds: options.revalidateSeconds,
-  });
+  const response = buildAppPageCachedResponse(
+    responseValue,
+    withInternalCacheHandlerTags(
+      {
+        cacheState,
+        cacheControl: options.cached?.value.cacheControl,
+        expireSeconds: options.expireSeconds,
+        isEdgeRuntime: options.isEdgeRuntime,
+        isRscRequest: false,
+        middlewareHeaders: options.middlewareHeaders,
+        middlewareStatus: options.middlewareStatus,
+        revalidateSeconds: options.revalidateSeconds,
+      },
+      getInternalCacheHandlerTags(options.cached?.value),
+    ),
+  );
 
   if (!response) return null;
 
@@ -416,17 +466,23 @@ export async function readAppPageCacheResponse(
     }
 
     if (cachedValue && !cached?.isStale) {
-      const hitResponse = buildAppPageCachedResponse(cachedValue, {
-        cacheState: "HIT",
-        cacheControl: cached?.value.cacheControl,
-        expireSeconds: options.expireSeconds,
-        isEdgeRuntime: options.isEdgeRuntime,
-        isRscRequest: options.isRscRequest,
-        middlewareHeaders: options.middlewareHeaders,
-        middlewareStatus: options.middlewareStatus,
-        mountedSlotsHeader: options.mountedSlotsHeader,
-        revalidateSeconds: options.revalidateSeconds,
-      });
+      const hitResponse = buildAppPageCachedResponse(
+        cachedValue,
+        withInternalCacheHandlerTags(
+          {
+            cacheState: "HIT",
+            cacheControl: cached?.value.cacheControl,
+            expireSeconds: options.expireSeconds,
+            isEdgeRuntime: options.isEdgeRuntime,
+            isRscRequest: options.isRscRequest,
+            middlewareHeaders: options.middlewareHeaders,
+            middlewareStatus: options.middlewareStatus,
+            mountedSlotsHeader: options.mountedSlotsHeader,
+            revalidateSeconds: options.revalidateSeconds,
+          },
+          getInternalCacheHandlerTags(cached?.value),
+        ),
+      );
 
       if (hitResponse) {
         recordAppPageCacheOutcome(options.recordCacheOutcome, {
@@ -514,17 +570,23 @@ export async function readAppPageCacheResponse(
         options.isrDebug?.("regen complete", options.cleanPathname);
       });
 
-      const staleResponse = buildAppPageCachedResponse(cachedValue, {
-        cacheState: "STALE",
-        cacheControl: cached.value.cacheControl,
-        expireSeconds: options.expireSeconds,
-        isEdgeRuntime: options.isEdgeRuntime,
-        isRscRequest: options.isRscRequest,
-        middlewareHeaders: options.middlewareHeaders,
-        middlewareStatus: options.middlewareStatus,
-        mountedSlotsHeader: options.mountedSlotsHeader,
-        revalidateSeconds: options.revalidateSeconds,
-      });
+      const staleResponse = buildAppPageCachedResponse(
+        cachedValue,
+        withInternalCacheHandlerTags(
+          {
+            cacheState: "STALE",
+            cacheControl: cached.value.cacheControl,
+            expireSeconds: options.expireSeconds,
+            isEdgeRuntime: options.isEdgeRuntime,
+            isRscRequest: options.isRscRequest,
+            middlewareHeaders: options.middlewareHeaders,
+            middlewareStatus: options.middlewareStatus,
+            mountedSlotsHeader: options.mountedSlotsHeader,
+            revalidateSeconds: options.revalidateSeconds,
+          },
+          getInternalCacheHandlerTags(cached.value),
+        ),
+      );
 
       if (staleResponse) {
         recordAppPageCacheOutcome(options.recordCacheOutcome, {

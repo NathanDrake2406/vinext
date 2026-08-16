@@ -36,15 +36,6 @@ export function hasExplicitNonCacheableResponsePolicy(headers: Headers): boolean
 }
 
 /**
- * Whether the active CDN cache adapter must be handed a *final* cache policy
- * rather than a `pendingDynamicCheck` one. See `requiresProvenCachePolicy` on
- * {@link CdnCacheAdapter}.
- */
-export function cdnRequiresProvenCachePolicy(): boolean {
-  return getCdnCacheAdapter().requiresProvenCachePolicy === true;
-}
-
-/**
  * Route a cacheable response's headers through the active CDN cache adapter and
  * apply the result to `headers`. The default adapter yields a single
  * `Cache-Control` identical to `input.cacheControl` (no behavior change); edge
@@ -57,7 +48,9 @@ export function cdnRequiresProvenCachePolicy(): boolean {
 export function applyCdnResponseHeaders(headers: Headers, input: CdnCacheableHeaderInput): void {
   headers.delete("Cache-Control");
   const useNextDeployPolicy =
-    shouldUseNextDeployCacheControl() && isSharedCacheControl(input.cacheControl);
+    shouldUseNextDeployCacheControl() &&
+    !input.pendingDynamicCheck &&
+    isSharedCacheControl(input.cacheControl);
   // An empty policy tells the adapter to remove any provider-specific cache
   // metadata it owns before core applies the deployment-specific browser policy.
   const map = getCdnCacheAdapter().buildResponseHeaders(

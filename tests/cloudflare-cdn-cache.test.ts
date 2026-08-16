@@ -1,8 +1,9 @@
 /**
  * CloudflareCdnCacheAdapter tests.
  *
- * Covers the edge-managed adapter backed by the Workers Cache (ctx.cache):
- *  - get null / set no-op / ownsBackgroundRevalidation false
+ * Covers two-stage admission through the data cache and Workers Cache:
+ *  - get/set delegate to the durable admission store
+ *  - fresh streams remain private until a later admitted cache hit
  *  - buildResponseHeaders emits a cacheable Cache-Control + Cache-Tag
  *  - revalidateTag purges via ctx.cache.purge({ tags })
  *  - getCdnCacheAdapter() only selects the Cloudflare adapter when it is
@@ -16,20 +17,43 @@ import {
   DefaultCdnCacheAdapter,
 } from "../packages/vinext/src/shims/cdn-cache.js";
 import { runWithExecutionContext } from "../packages/vinext/src/shims/request-context.js";
+import {
+  MemoryCacheHandler,
+  NoOpCacheHandler,
+  setDataCacheHandler,
+} from "../packages/vinext/src/shims/cache-handler.js";
 import type { AppPageCacheSetter } from "../packages/vinext/src/server/isr-cache.js";
 import {
   finalizeAppPageHtmlCacheResponse,
   finalizeAppPageRscCacheResponse,
 } from "../packages/vinext/src/server/app-page-cache-finalizer.js";
+import { buildAppPageCachedResponse } from "../packages/vinext/src/server/app-page-cache.js";
 
 const CDN_KEY = Symbol.for("vinext.cdnCacheAdapter");
+const CACHE_HANDLER_TAGS = Symbol.for("vinext.cacheHandlerValue.tags");
+
+function getInternalCacheHandlerTags(value: unknown): readonly string[] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const tags = (value as { [CACHE_HANDLER_TAGS]?: unknown })[CACHE_HANDLER_TAGS];
+  return Array.isArray(tags) && tags.every((tag): tag is string => typeof tag === "string")
+    ? tags
+    : undefined;
+}
 
 function resetActiveAdapter(): void {
   delete (globalThis as Record<PropertyKey, unknown>)[CDN_KEY];
 }
 
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 async function finalizePendingDynamicRscResponse(): Promise<Response> {
-  return await finalizeAppPageRscCacheResponse(
+  return finalizeAppPageRscCacheResponse(
     new Response("pending-dynamic-flight", {
       headers: {
         "Cache-Control": "s-maxage=60",
@@ -57,7 +81,10 @@ async function finalizePendingDynamicRscResponse(): Promise<Response> {
   );
 }
 
-beforeEach(resetActiveAdapter);
+beforeEach(() => {
+  resetActiveAdapter();
+  setDataCacheHandler(new MemoryCacheHandler());
+});
 afterEach(() => {
   resetActiveAdapter();
   vi.restoreAllMocks();
@@ -68,16 +95,200 @@ afterEach(() => {
 describe("CloudflareCdnCacheAdapter", () => {
   const adapter = new CloudflareCdnCacheAdapter();
 
-  it("does not own background revalidation (the edge re-requests origin)", () => {
-    expect(adapter.ownsBackgroundRevalidation).toBe(false);
+  it("owns admission-store regeneration", () => {
+    expect(adapter.ownsBackgroundRevalidation).toBe(true);
   });
 
-  it("get returns null so the origin always renders fresh", async () => {
-    expect(await adapter.get()).toBeNull();
+  it("persists and reads completed admission artifacts", async () => {
+    setCdnCacheAdapter(adapter);
+    const durableStore = new MemoryCacheHandler();
+    setDataCacheHandler({
+      get: durableStore.get.bind(durableStore),
+      set: durableStore.set.bind(durableStore),
+      revalidateTag: durableStore.revalidateTag.bind(durableStore),
+    });
+    const value = {
+      kind: "APP_PAGE" as const,
+      headers: undefined,
+      html: "<h1>admitted</h1>",
+      postponed: undefined,
+      rscData: undefined,
+      status: 200,
+    };
+    await adapter.set("k", value, {
+      cacheControl: { revalidate: 60 },
+      revalidate: 60,
+      tags: ["/admitted"],
+    });
+
+    const admitted = await adapter.get("k");
+    expect(admitted).toEqual(
+      expect.objectContaining({
+        cacheControl: { revalidate: 60 },
+        value,
+      }),
+    );
+    expect(getInternalCacheHandlerTags(admitted)).toEqual(["/admitted"]);
+    expect(admitted?.value?.kind).toBe("APP_PAGE");
+    if (admitted?.value?.kind !== "APP_PAGE") throw new Error("Expected admitted App page");
+
+    const promotedOptions = {
+      cacheControl: admitted.cacheControl,
+      cacheState: "HIT",
+      isRscRequest: false,
+      revalidateSeconds: 60,
+      [CACHE_HANDLER_TAGS]: getInternalCacheHandlerTags(admitted),
+    } as const;
+    const promoted = buildAppPageCachedResponse(admitted.value, promotedOptions);
+    expect(await promoted?.text()).toBe("<h1>admitted</h1>");
+    expect(promoted?.headers.get("CDN-Cache-Control")).toBe(
+      "public, max-age=60, stale-while-revalidate=31536000",
+    );
+    expect(promoted?.headers.get("Cache-Tag")).toBe("/admitted");
   });
 
-  it("set is a no-op (platform caches the response, not an origin store)", async () => {
-    await expect(adapter.set("k", null)).resolves.toBeUndefined();
+  it("cannot promote when the configured admission store is non-durable", async () => {
+    setDataCacheHandler(new NoOpCacheHandler());
+    const value = {
+      kind: "APP_PAGE" as const,
+      headers: undefined,
+      html: "<h1>not admitted</h1>",
+      postponed: undefined,
+      rscData: undefined,
+      status: 200,
+    };
+
+    await adapter.set("missing", value, {
+      cacheControl: { revalidate: 60 },
+      tags: ["/missing"],
+    });
+
+    await expect(adapter.get("missing")).resolves.toBeNull();
+    expect(
+      adapter.buildResponseHeaders({
+        cacheControl: "s-maxage=60",
+        pendingDynamicCheck: true,
+        tags: ["/missing"],
+      }),
+    ).toEqual({
+      "Cache-Control": "no-store",
+      "CDN-Cache-Control": null,
+      "Cloudflare-CDN-Cache-Control": null,
+      "Cache-Tag": null,
+    });
+  });
+
+  it("does not treat the process-local fallback as durable admission", async () => {
+    setDataCacheHandler(new MemoryCacheHandler());
+    await adapter.set(
+      "memory-only",
+      {
+        kind: "APP_PAGE",
+        headers: undefined,
+        html: "<h1>ephemeral</h1>",
+        postponed: undefined,
+        rscData: undefined,
+        status: 200,
+      },
+      { cacheControl: { revalidate: 60 } },
+    );
+
+    await expect(adapter.get("memory-only")).resolves.toBeNull();
+  });
+
+  it("lets middleware veto promotion of an admitted artifact", () => {
+    setCdnCacheAdapter(adapter);
+    const responseOptions = {
+      cacheControl: { revalidate: 60 },
+      cacheState: "HIT",
+      isRscRequest: false,
+      middlewareHeaders: new Headers({ "Cache-Control": "private, no-store" }),
+      revalidateSeconds: 60,
+      [CACHE_HANDLER_TAGS]: ["/private"],
+    } as const;
+    const response = buildAppPageCachedResponse(
+      {
+        kind: "APP_PAGE",
+        headers: undefined,
+        html: "<h1>private</h1>",
+        postponed: undefined,
+        rscData: undefined,
+        status: 200,
+      },
+      responseOptions,
+    );
+
+    expect(response?.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response?.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response?.headers.get("Cache-Tag")).toBeNull();
+  });
+
+  it("applies a cacheable middleware override only during later promotion", () => {
+    setCdnCacheAdapter(adapter);
+    const responseOptions = {
+      cacheControl: { revalidate: 60 },
+      cacheState: "HIT",
+      isRscRequest: false,
+      middlewareHeaders: new Headers({
+        "Cache-Control": "s-maxage=5, stale-while-revalidate=55",
+      }),
+      revalidateSeconds: 60,
+      [CACHE_HANDLER_TAGS]: ["/overridden"],
+    } as const;
+    const response = buildAppPageCachedResponse(
+      {
+        kind: "APP_PAGE",
+        headers: undefined,
+        html: "<h1>overridden</h1>",
+        postponed: undefined,
+        rscData: undefined,
+        status: 200,
+      },
+      responseOptions,
+    );
+
+    expect(response?.headers.get("CDN-Cache-Control")).toBe(
+      "public, max-age=5, stale-while-revalidate=55",
+    );
+    expect(response?.headers.get("Cache-Tag")).toBe("/overridden");
+  });
+
+  it("keeps pending streams private and clears every owned edge header", () => {
+    expect(
+      adapter.buildResponseHeaders({
+        cacheControl: "s-maxage=60",
+        pendingDynamicCheck: true,
+        tags: ["/private-first"],
+      }),
+    ).toEqual({
+      "Cache-Control": "no-store",
+      "CDN-Cache-Control": null,
+      "Cloudflare-CDN-Cache-Control": null,
+      "Cache-Tag": null,
+    });
+  });
+
+  it("keeps stale admission artifacts out of the edge until regeneration", () => {
+    setCdnCacheAdapter(adapter);
+    const response = buildAppPageCachedResponse(
+      {
+        kind: "APP_PAGE",
+        headers: undefined,
+        html: "<h1>stale</h1>",
+        postponed: undefined,
+        rscData: undefined,
+        status: 200,
+      },
+      {
+        cacheControl: { revalidate: 60, expire: 600 },
+        cacheState: "STALE",
+        isRscRequest: false,
+        revalidateSeconds: 60,
+      },
+    );
+
+    expect(response?.headers.get("Cache-Control")).toBe("no-store");
+    expect(response?.headers.get("CDN-Cache-Control")).toBeNull();
   });
 
   it("carries SWR on CDN-Cache-Control (public + max-age) and revalidates the browser", () => {
@@ -106,7 +317,7 @@ describe("CloudflareCdnCacheAdapter", () => {
   it("skips tags containing the comma separator or that are too long", () => {
     const headers = adapter.buildResponseHeaders({
       cacheControl: "s-maxage=60",
-      tags: ["a,b", "x".repeat(2000), "ok"],
+      tags: ["a,b", "line\nbreak", "😀".repeat(300), "x".repeat(2000), "ok"],
     });
     expect(headers["Cache-Tag"]).toBe("ok");
   });
@@ -137,6 +348,15 @@ describe("CloudflareCdnCacheAdapter", () => {
     }
   });
 
+  it("treats mixed-case non-cacheable directives as an edge-cache veto", () => {
+    expect(adapter.buildResponseHeaders({ cacheControl: "Private, No-Store" })).toEqual({
+      "Cache-Control": "Private, No-Store",
+      "CDN-Cache-Control": null,
+      "Cloudflare-CDN-Cache-Control": null,
+      "Cache-Tag": null,
+    });
+  });
+
   it("interprets its own edge policy when checking whether a response opted out", () => {
     expect(
       adapter.hasExplicitNonCacheableResponsePolicy(
@@ -158,7 +378,7 @@ describe("CloudflareCdnCacheAdapter", () => {
     const pendingCacheWrites: Promise<void>[] = [];
     const isrSet = vi.fn();
 
-    const response = await finalizeAppPageHtmlCacheResponse(
+    const response = finalizeAppPageHtmlCacheResponse(
       new Response("<h1>personalized</h1>", {
         headers: {
           "Cache-Control": "s-maxage=60, stale-while-revalidate",
@@ -192,7 +412,7 @@ describe("CloudflareCdnCacheAdapter", () => {
       },
     );
 
-    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cache-Tag")).toBeNull();
@@ -207,7 +427,7 @@ describe("CloudflareCdnCacheAdapter", () => {
       setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
       const isrSet = vi.fn();
 
-      const response = await finalizeAppPageRscCacheResponse(
+      const response = finalizeAppPageRscCacheResponse(
         new Response("slot-specific-flight", {
           headers: {
             "Cache-Control": "s-maxage=60, stale-while-revalidate",
@@ -249,7 +469,7 @@ describe("CloudflareCdnCacheAdapter", () => {
   it("clears Cloudflare cache overrides for mounted slots", async () => {
     setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
 
-    const response = await finalizeAppPageRscCacheResponse(
+    const response = finalizeAppPageRscCacheResponse(
       new Response("slot-specific-flight", {
         headers: {
           "Cache-Control": "s-maxage=60",
@@ -290,7 +510,7 @@ describe("CloudflareCdnCacheAdapter", () => {
   it("keeps mounted dynamic responses headerless while clearing CDN overrides", async () => {
     setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
 
-    const response = await finalizeAppPageRscCacheResponse(
+    const response = finalizeAppPageRscCacheResponse(
       new Response("dynamic-slot-flight", {
         headers: {
           "Cache-Control": "no-store, must-revalidate",
@@ -330,7 +550,7 @@ describe("CloudflareCdnCacheAdapter", () => {
     setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
     const response = await finalizePendingDynamicRscResponse();
 
-    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cache-Tag")).toBeNull();
@@ -404,9 +624,8 @@ describe("CDN cache adapter selection", () => {
 /**
  * An App Router page can only be proven non-dynamic after its stream drains: a
  * Suspended server component may read cookies()/headers() long after the shell
- * has flushed. The Cloudflare adapter has no origin store, so its response
- * headers alone decide whether the *shared* edge cache stores the page — and a
- * header already sent cannot be taken back.
+ * has flushed. A header already sent cannot be taken back, so the first stream
+ * remains private while its cache branch attempts durable admission.
  *
  * The behaviour under test is therefore the response contract: a render that
  * turns out dynamic must never leave the origin advertising itself as
@@ -414,6 +633,8 @@ describe("CDN cache adapter selection", () => {
  * personalized HTML to the next.
  */
 describe("streamed App Router responses under the Cloudflare CDN adapter", () => {
+  let pendingCacheWrites: Promise<void>[] = [];
+
   function finalize(options: {
     dynamicUsed: boolean;
     /** A `cacheLife()` resolved while the stream was still draining. */
@@ -445,10 +666,12 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
           isrHtmlKey: (pathname) => `html:${pathname}`,
           isrRscKey: (pathname) => `rsc:${pathname}`,
           async isrSet() {},
-          middlewareCacheControl: options.middlewareCacheControl ?? null,
           revalidateSeconds: 60,
           expireSeconds: 600,
           linkHeader: null,
+          waitUntil(promise) {
+            pendingCacheWrites.push(promise);
+          },
         },
       ),
     );
@@ -480,12 +703,120 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
           isrRscKey: (pathname) => `rsc:${pathname}`,
           isrSet: options.isrSet ?? (async () => {}),
           revalidateSeconds: 60,
+          waitUntil(promise) {
+            pendingCacheWrites.push(promise);
+          },
         },
       ),
     );
   }
 
-  beforeEach(() => setCdnCacheAdapter(new CloudflareCdnCacheAdapter()));
+  beforeEach(() => {
+    pendingCacheWrites = [];
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+  });
+
+  it("delivers the first HTML bytes before admission completes", async () => {
+    const releaseCompletion = createDeferred();
+    let sentTail = false;
+    const response = finalizeAppPageHtmlCacheResponse(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("<html><shell>"));
+          },
+          async pull(controller) {
+            if (sentTail) return;
+            sentTail = true;
+            await releaseCompletion.promise;
+            controller.enqueue(new TextEncoder().encode("<page></html>"));
+            controller.close();
+          },
+        }),
+        { headers: { "Cache-Control": "s-maxage=60" } },
+      ),
+      {
+        capturedRscDataPromise: null,
+        cleanPathname: "/slow-static",
+        consumeDynamicUsage: () => false,
+        getPageTags: () => ["/slow-static"],
+        isrHtmlKey: (pathname) => `html:${pathname}`,
+        isrRscKey: (pathname) => `rsc:${pathname}`,
+        async isrSet() {},
+        linkHeader: null,
+        revalidateSeconds: 60,
+        waitUntil(promise) {
+          pendingCacheWrites.push(promise);
+        },
+      },
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const first = await reader!.read();
+    expect(new TextDecoder().decode(first.value)).toBe("<html><shell>");
+    expect(first.done).toBe(false);
+
+    releaseCompletion.resolve();
+    const tail = await reader!.read();
+    expect(new TextDecoder().decode(tail.value)).toBe("<page></html>");
+    expect((await reader!.read()).done).toBe(true);
+    await Promise.all(pendingCacheWrites);
+  });
+
+  it("delivers the first RSC bytes before admission completes", async () => {
+    const releaseCompletion = createDeferred();
+    let sentTail = false;
+    const response = finalizeAppPageRscCacheResponse(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("shell"));
+          },
+          async pull(controller) {
+            if (sentTail) return;
+            sentTail = true;
+            await releaseCompletion.promise;
+            controller.enqueue(new TextEncoder().encode("-flight"));
+            controller.close();
+          },
+        }),
+        { headers: { "Cache-Control": "s-maxage=60" } },
+      ),
+      {
+        capturedRscDataPromise: releaseCompletion.promise.then(
+          () => new TextEncoder().encode("shell-flight").buffer,
+        ),
+        cleanPathname: "/slow-static",
+        consumeDynamicUsage: () => false,
+        dynamicUsedDuringBuild: false,
+        getPageTags: () => ["/slow-static"],
+        isrRscKey: (pathname) => `rsc:${pathname}`,
+        async isrSet() {},
+        preserveClientResponseHeaders: false,
+        revalidateSeconds: 60,
+        waitUntil(promise) {
+          pendingCacheWrites.push(promise);
+        },
+      },
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const first = await reader!.read();
+    expect(new TextDecoder().decode(first.value)).toBe("shell");
+    expect(first.done).toBe(false);
+
+    releaseCompletion.resolve();
+    const tail = await reader!.read();
+    expect(new TextDecoder().decode(tail.value)).toBe("-flight");
+    expect((await reader!.read()).done).toBe(true);
+    await Promise.all(pendingCacheWrites);
+  });
 
   it("does not advertise a late-dynamic render as edge-cacheable", async () => {
     const response = await finalize({ dynamicUsed: true });
@@ -493,22 +824,21 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
     // Nothing shared may store this: it contains one user's session data.
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBeNull();
-    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     // The body is still delivered to the user who requested it.
     await expect(response.text()).resolves.toBe("<h1>user=alice</h1>");
   });
 
-  it("still lets a proven-static render be cached by the edge", async () => {
+  it("keeps the first static render private while admitting its artifact", async () => {
     const response = await finalize({ dynamicUsed: false });
 
-    expect(response.headers.get("CDN-Cache-Control")).toBe(
-      "public, max-age=60, stale-while-revalidate=540",
-    );
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     await expect(response.text()).resolves.toBe("<h1>user=alice</h1>");
+    await Promise.all(pendingCacheWrites);
   });
 
-  it("advertises the lifetime the render resolved to, not the one it started with", async () => {
+  it("does not advertise a late-resolved lifetime on the first response", async () => {
     // The route declared 60s, but a cacheLife() during the stream tightened it
     // to 10s. Advertising 60s would let the edge serve stale bytes 50s longer
     // than the page asked for.
@@ -517,9 +847,10 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
       lateCacheLife: { revalidate: 10, expire: 100 },
     });
 
-    expect(response.headers.get("CDN-Cache-Control")).toBe(
-      "public, max-age=10, stale-while-revalidate=90",
-    );
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    await response.text();
+    await Promise.all(pendingCacheWrites);
   });
 
   it("keeps a middleware no-store even when the render proves static", async () => {
@@ -534,30 +865,24 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
     await expect(response.text()).resolves.toBe("<h1>user=alice</h1>");
   });
 
-  it("retains a middleware private policy verbatim for a dynamic render", async () => {
-    // Both authorities forbid shared caching; middleware's header wins verbatim
-    // rather than being rewritten to the framework's no-store.
+  it("demotes a middleware private policy to the private-first admission policy", async () => {
     const response = await finalize({
       dynamicUsed: true,
       middlewareCacheControl: "private, max-age=30",
     });
 
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
-    expect(response.headers.get("Cache-Control")).toBe("private, max-age=30");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it("advertises a cacheable middleware override, not the route lifetime", async () => {
-    // Middleware tightened the policy to 5s. Rebuilding from the route's 60s
-    // would serve content 55s staler than middleware asked for.
+  it("does not advertise a cacheable middleware override on the first response", async () => {
     const response = await finalize({
       dynamicUsed: false,
       middlewareCacheControl: "s-maxage=5, stale-while-revalidate=55",
     });
 
-    expect(response.headers.get("CDN-Cache-Control")).toBe(
-      "public, max-age=5, stale-while-revalidate=55",
-    );
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("does not advertise a policy the render dropped mid-stream", async () => {
@@ -566,19 +891,18 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
     const response = await finalize({ dynamicUsed: false, lateCacheLife: { revalidate: 0 } });
 
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
-    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it("publishes RSC cache headers only after static usage is proven", async () => {
+  it("keeps the first RSC response private while admitting it", async () => {
     const getPageTags = vi.fn(() => ["/account"]);
     const response = await finalizeRsc({ getPageTags });
 
-    expect(response.headers.get("CDN-Cache-Control")).toBe(
-      "public, max-age=60, stale-while-revalidate=540",
-    );
-    expect(response.headers.get("Cache-Tag")).toBe("/account");
+    expect(response.headers.get("CDN-Cache-Control")).toBeNull();
+    expect(response.headers.get("Cache-Tag")).toBeNull();
     expect(getPageTags).toHaveBeenCalledTimes(1);
     await expect(response.text()).resolves.toBe("user=alice");
+    await Promise.all(pendingCacheWrites);
   });
 
   it("isolates proven RSC tags from cache-writer mutation", async () => {
@@ -588,18 +912,21 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
       },
     });
 
-    expect(response.headers.get("Cache-Tag")).toBe("/account");
+    expect(response.headers.get("Cache-Tag")).toBeNull();
+    await response.text();
+    await Promise.all(pendingCacheWrites);
   });
 
   it("removes provisional RSC cache headers after late dynamic usage", async () => {
     const isrSet = vi.fn(async () => {});
     const response = await finalizeRsc({ dynamicUsed: true, isrSet });
 
-    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cache-Tag")).toBeNull();
     expect(isrSet).not.toHaveBeenCalled();
     await expect(response.text()).resolves.toBe("user=alice");
+    await Promise.all(pendingCacheWrites);
   });
 
   it("fails closed when the RSC cache write rejects", async () => {
@@ -611,9 +938,11 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
       },
     });
 
-    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cache-Tag")).toBeNull();
+    await response.text();
+    await Promise.all(pendingCacheWrites);
     expect(consoleError).toHaveBeenCalledWith("[vinext] ISR RSC cache write error:", cacheError);
   });
 
@@ -637,13 +966,51 @@ describe("streamed App Router responses under the Cloudflare CDN adapter", () =>
           },
           linkHeader: null,
           revalidateSeconds: 60,
+          waitUntil(promise) {
+            pendingCacheWrites.push(promise);
+          },
         },
       ),
     );
 
-    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.get("CDN-Cache-Control")).toBeNull();
     expect(response.headers.get("Cache-Tag")).toBeNull();
+    await response.text();
+    await Promise.all(pendingCacheWrites);
     expect(consoleError).toHaveBeenCalledWith("[vinext] ISR cache write error:", cacheError);
+  });
+
+  it("contains a background HTML stream failure after the private response leaves", async () => {
+    const streamError = new Error("render stream failed");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = finalizeAppPageHtmlCacheResponse(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(streamError);
+          },
+        }),
+        { headers: { "Cache-Control": "s-maxage=60" } },
+      ),
+      {
+        capturedRscDataPromise: null,
+        cleanPathname: "/broken-stream",
+        consumeDynamicUsage: () => false,
+        getPageTags: () => ["/broken-stream"],
+        isrHtmlKey: (pathname) => `html:${pathname}`,
+        isrRscKey: (pathname) => `rsc:${pathname}`,
+        isrSet: vi.fn(),
+        linkHeader: null,
+        revalidateSeconds: 60,
+        waitUntil(promise) {
+          pendingCacheWrites.push(promise);
+        },
+      },
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    await expect(Promise.all(pendingCacheWrites)).resolves.toEqual([undefined]);
+    expect(consoleError).toHaveBeenCalledWith("[vinext] ISR cache stream error:", streamError);
   });
 });
