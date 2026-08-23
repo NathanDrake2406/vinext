@@ -1210,6 +1210,10 @@ export async function resolvePagesPageData(
   let shouldPersistFallbackData = false;
   let onDemandPreviousCacheEntry: ISRCacheEntry | null | undefined;
   const previewData = options.isOnDemandRevalidate ? false : (options.previewData ?? false);
+  // App.getInitialProps receives the live request. Its result can therefore
+  // contain cookies, headers, or other per-user data and must never enter (or
+  // be read from) the shared ISR cache used by getStaticProps pages.
+  const hasRequestAwareAppProps = hasPagesGetInitialProps(options.AppComponent);
 
   if (typeof options.pageModule.getStaticPaths === "function" && options.route.isDynamic) {
     const pathsResult = await options.pageModule.getStaticPaths({
@@ -1257,7 +1261,8 @@ export async function resolvePagesPageData(
   if (
     typeof options.pageModule.getStaticProps === "function" &&
     options.isOnDemandRevalidate &&
-    options.revalidateOnlyGenerated
+    options.revalidateOnlyGenerated &&
+    !hasRequestAwareAppProps
   ) {
     const pathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
     onDemandPreviousCacheEntry = await options.isrGet(options.isrCacheKey("pages", pathname));
@@ -1405,8 +1410,9 @@ export async function resolvePagesPageData(
   if (typeof options.pageModule.getStaticProps === "function") {
     const pathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
     const cacheKey = options.isrCacheKey("pages", pathname);
-    const cached =
-      onDemandPreviousCacheEntry !== undefined
+    const cached = hasRequestAwareAppProps
+      ? null
+      : onDemandPreviousCacheEntry !== undefined
         ? onDemandPreviousCacheEntry
         : await options.isrGet(cacheKey);
     const cachedValue = cached?.value.value;
@@ -1722,7 +1728,7 @@ export async function resolvePagesPageData(
 
     if (result?.redirect) {
       const response = buildPagesRedirectResponse(result.redirect, options, renderProps);
-      if (previewData === false) {
+      if (previewData === false && !hasRequestAwareAppProps) {
         const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
         const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
         const redirect = resolvePagesRedirect(result.redirect, {
@@ -1749,7 +1755,7 @@ export async function resolvePagesPageData(
     if (result?.notFound) {
       const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
       const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
-      if (previewData === false) {
+      if (previewData === false && !hasRequestAwareAppProps) {
         await options.isrSet(cacheKey, null, {
           cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
         });
@@ -1783,10 +1789,10 @@ export async function resolvePagesPageData(
       isSerializableProps(options.routePattern, "getStaticProps", pageProps);
     }
 
-    if (previewData === false && result) {
+    if (previewData === false && result && !hasRequestAwareAppProps) {
       isrRevalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
       isrExpireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
-    } else if (previewData === false && options.isOnDemandRevalidate) {
+    } else if (previewData === false && options.isOnDemandRevalidate && !hasRequestAwareAppProps) {
       // `revalidate: false` (and an omitted `revalidate`) still participates in
       // on-demand regeneration. Persist the current invocation's normalized
       // lifetime instead of inheriting stale metadata from the previous entry.
@@ -1800,7 +1806,7 @@ export async function resolvePagesPageData(
       isrExpireSeconds = cached?.value.cacheControl?.expire;
     }
 
-    if (shouldPersistFallbackData && previewData === false) {
+    if (shouldPersistFallbackData && previewData === false && !hasRequestAwareAppProps) {
       const revalidateSeconds = isrRevalidateSeconds ?? false;
       await options.isrSet(
         cacheKey,
