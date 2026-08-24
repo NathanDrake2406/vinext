@@ -1726,6 +1726,7 @@ describe("pages page data", () => {
 
     expect(result).toEqual({
       kind: "notFound",
+      bypassSharedCache: true,
       revalidateSeconds: undefined,
       expireSeconds: undefined,
       cacheState: undefined,

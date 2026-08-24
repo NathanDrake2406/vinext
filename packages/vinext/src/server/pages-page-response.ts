@@ -563,7 +563,11 @@ export async function renderPagesPageResponse(
     },
   });
   if (options.documentReqRes?.res.headersSent && options.documentReqRes.responsePromise) {
-    return options.documentReqRes.responsePromise;
+    const response = await options.documentReqRes.responsePromise;
+    if (options.bypassSharedCache) {
+      applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+    }
+    return response;
   }
 
   let bodyStream: ReadableStream<Uint8Array>;

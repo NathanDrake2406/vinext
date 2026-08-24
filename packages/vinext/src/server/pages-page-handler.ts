@@ -903,6 +903,11 @@ export function createPagesPageHandler(
             );
           }
           notFoundResponse = stripPagesNotFoundFramingHeaders(notFoundResponse);
+          if (pageDataResult.bypassSharedCache) {
+            applyCdnResponseHeaders(notFoundResponse.headers, {
+              cacheControl: ISR_NEVER_CACHE_CONTROL,
+            });
+          }
 
           if (isOnDemandRevalidate) {
             notFoundResponse = withPagesCacheState(notFoundResponse, "REVALIDATED");

@@ -50,6 +50,7 @@ import { buildDefaultPagesNotFoundResponse } from "./pages-default-404.js";
 import { buildPagesReadinessNextData } from "./pages-readiness.js";
 import { resolvePagesPageMethodResponse } from "./pages-page-method.js";
 import {
+  assertPagesDataExportCompatibility,
   assertPages404DoesNotReturnNotFound,
   buildPagesRedirectProps,
   getPagesRouteParams,
@@ -1215,6 +1216,8 @@ export function createSSRHandler(
         const scriptNonce = getScriptNonceFromNodeHeaderSources(req.headers, responseHeaders);
 
         if (typeof pageModule.getStaticProps === "function" && !isFallbackRender) {
+          const routePattern = patternToNextFormat(route.pattern);
+          assertPagesDataExportCompatibility(pageModule, routePattern);
           // An authenticated res.revalidate() request executes GSP once with the
           // on-demand reason, but Pages response entries are never read or
           // written in development. Ordinary requests independently rerun GSP
@@ -1258,7 +1261,6 @@ export function createSSRHandler(
           }
 
           const result = await pageModule.getStaticProps(context);
-          const routePattern = patternToNextFormat(route.pattern);
           assertPages404DoesNotReturnNotFound(routePattern, result);
           if (result) {
             staticPropsRevalidateSeconds = resolvePagesRevalidateSeconds(result, routePattern);

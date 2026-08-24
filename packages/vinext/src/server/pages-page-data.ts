@@ -61,6 +61,19 @@ const ALLOWED_PAGES_REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 const SSG_GET_INITIAL_PROPS_CONFLICT =
   "You can not use getInitialProps with getStaticProps. To use SSG, please remove your getInitialProps";
 
+/** Reject Pages data-export combinations that Next.js does not allow. */
+export function assertPagesDataExportCompatibility(
+  pageModule: PagesPageModule,
+  routePattern: string,
+): void {
+  if (
+    typeof pageModule.getStaticProps === "function" &&
+    hasPagesGetInitialProps(pageModule.default)
+  ) {
+    throw new Error(`${SSG_GET_INITIAL_PROPS_CONFLICT} ${routePattern}`);
+  }
+}
+
 /** Headers that are part of a cached Pages representation, never request state. */
 function isCachedPagesRepresentationHeader(name: string): boolean {
   const lowerName = name.toLowerCase();
@@ -409,6 +422,8 @@ type ResolvePagesPageDataResponseResult = {
 
 type ResolvePagesPageDataNotFoundResult = {
   kind: "notFound";
+  /** The source getStaticProps route carried request-derived App props. */
+  bypassSharedCache?: boolean;
   /** Headers set by getServerSideProps before it returned notFound. */
   responseHeaders?: Record<string, string | number | boolean | string[]>;
   /** Current getStaticProps cache lifetime, when this is an SSG result. */
@@ -1209,12 +1224,7 @@ export async function resolvePagesPageData(
 ): Promise<ResolvePagesPageDataResult> {
   // Next.js rejects this combination before it can mix request-derived page
   // props with a shared static representation.
-  if (
-    typeof options.pageModule.getStaticProps === "function" &&
-    hasPagesGetInitialProps(options.pageModule.default)
-  ) {
-    throw new Error(`${SSG_GET_INITIAL_PROPS_CONFLICT} ${options.routePattern}`);
-  }
+  assertPagesDataExportCompatibility(options.pageModule, options.routePattern);
 
   // Next.js passes `params: null` (effectively) to gSSP/gSP context for
   // non-dynamic routes — see render.tsx's `...(pageIsDynamic ? { params } : undefined)`.
@@ -1797,7 +1807,14 @@ export async function resolvePagesPageData(
       // The recursive custom 404 render also runs App.getInitialProps, so
       // request-aware App props must not receive a shared cache lifetime either.
       if (hasRequestAwareAppProps) {
-        return buildPagesNotFoundResult(options);
+        const notFoundResult = buildPagesNotFoundResult(options);
+        if (notFoundResult.kind === "response") {
+          applyCdnResponseHeaders(notFoundResult.response.headers, {
+            cacheControl: ISR_NEVER_CACHE_CONTROL,
+          });
+          return notFoundResult;
+        }
+        return { ...notFoundResult, bypassSharedCache: true };
       }
       if (previewData === false) {
         await options.isrSet(cacheKey, null, {

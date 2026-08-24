@@ -539,6 +539,44 @@ describe("createPagesPageHandler — request-aware App props", () => {
     );
   });
 
+  it("clears edge cache headers when Document.getInitialProps ends the response", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    const EdgeDocument = Object.assign(() => null, {
+      getInitialProps: async ({
+        res,
+      }: {
+        res: {
+          end(body: string): void;
+          setHeader(name: string, value: string): void;
+        };
+      }) => {
+        res.setHeader("CDN-Cache-Control", "s-maxage=600");
+        res.end("request-aware document short circuit");
+        return { html: "ignored after res.end" };
+      },
+    });
+    const handler = createPagesPageHandler(
+      makeOpts({
+        AppComponent,
+        DocumentComponent: EdgeDocument,
+        pageRoutes: [
+          makeRoute(
+            "/about",
+            makePageModule({ getStaticProps: async () => ({ props: {}, revalidate: 60 }) }),
+          ),
+        ],
+      }),
+    );
+
+    const response = await handler(makeRequest("/about"), "/about", null, null, null);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("request-aware document short circuit");
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
+  });
+
   it("still rejects an invalid revalidate value", async () => {
     const handler = makeHandler(
       makePageModule({ getStaticProps: async () => ({ props: {}, revalidate: 0 }) }),
@@ -940,6 +978,39 @@ describe("createPagesPageHandler — preview responses", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
     expect(response.headers.get("cache-control")).not.toContain("s-maxage");
+  });
+
+  it("propagates request-aware cache bypass through a nonce-bearing custom 404", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    const AppComponent = Object.assign(() => null, {
+      getInitialProps: async ({
+        ctx,
+      }: {
+        ctx: { res: { setHeader(name: string, value: string): void } };
+      }) => {
+        ctx.res.setHeader("CDN-Cache-Control", "s-maxage=600");
+        return { viewer: "per-request", pageProps: {} };
+      },
+    });
+    const sourceRoute = makeRoute(
+      "/missing",
+      makePageModule({ getStaticProps: async () => ({ notFound: true, revalidate: 7 }) }),
+    );
+    const notFoundRoute = makeRoute("/404");
+    const handler = createPagesPageHandler(
+      makeOpts({ AppComponent, pageRoutes: [sourceRoute, notFoundRoute] }),
+    );
+    const request = new Request("http://localhost/missing", {
+      headers: { "content-security-policy": "script-src 'nonce-test-nonce'" },
+    });
+
+    const response = await handler(request, "/missing", null, null, null);
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
   });
 });
 
