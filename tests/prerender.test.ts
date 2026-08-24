@@ -669,77 +669,84 @@ describe("prerenderApp — RSC extraction", () => {
 // ─── Pages Router ─────────────────────────────────────────────────────────────
 
 describe("prerenderPages — response cache policy", () => {
-  it("skips non-cacheable Pages responses instead of writing request-aware HTML", async () => {
-    const root = tmpDir("vinext-prerender-pages-no-store-");
-    const pagesDir = path.join(root, "pages");
-    const outDir = path.join(root, "out");
-    fs.mkdirSync(pagesDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pagesDir, "index.tsx"),
-      `export default function Page() { return null; }
+  it.each(["default", "export"] as const)(
+    "handles non-cacheable Pages responses safely in %s mode",
+    async (mode) => {
+      const root = tmpDir("vinext-prerender-pages-no-store-");
+      const pagesDir = path.join(root, "pages");
+      const outDir = path.join(root, "out");
+      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pagesDir, "index.tsx"),
+        `export default function Page() { return null; }
 export function getStaticProps() { return { props: {}, revalidate: 60 }; }
 `,
-    );
-    fs.writeFileSync(
-      path.join(pagesDir, "404.tsx"),
-      `export default function NotFound() { return null; }
+      );
+      fs.writeFileSync(
+        path.join(pagesDir, "404.tsx"),
+        `export default function NotFound() { return null; }
 `,
-    );
-    fs.writeFileSync(
-      path.join(pagesDir, "failure.tsx"),
-      `export default function Failure() { return null; }
+      );
+      fs.writeFileSync(
+        path.join(pagesDir, "failure.tsx"),
+        `export default function Failure() { return null; }
 `,
-    );
+      );
 
-    const server = createServer((req, res) => {
-      res.setHeader("content-type", "text/html");
-      res.setHeader("cache-control", "private, no-cache, no-store, max-age=0");
-      if (req.url === "/404") res.statusCode = 404;
-      if (req.url === "/failure") res.statusCode = 500;
-      res.end("<html><body>request-aware build props</body></html>");
-    });
-    const port = await listen(server);
+      const server = createServer((req, res) => {
+        res.setHeader("content-type", "text/html");
+        res.setHeader("cache-control", "private, no-cache, no-store, max-age=0");
+        if (req.url === "/404") res.statusCode = 404;
+        if (req.url === "/failure") res.statusCode = 500;
+        res.end("<html><body>request-aware build props</body></html>");
+      });
+      const port = await listen(server);
 
-    try {
-      const { prerenderPages } = await import("../packages/vinext/src/build/prerender.js");
-      const { pagesRouter, apiRouter } =
-        await import("../packages/vinext/src/routing/pages-router.js");
-      const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
-      const routes = await pagesRouter(pagesDir);
-      const apiRoutes = await apiRouter(pagesDir);
-      const config = await resolveNextConfig({});
+      try {
+        const { prerenderPages } = await import("../packages/vinext/src/build/prerender.js");
+        const { pagesRouter, apiRouter } =
+          await import("../packages/vinext/src/routing/pages-router.js");
+        const { resolveNextConfig } = await import("../packages/vinext/src/config/next-config.js");
+        const routes = await pagesRouter(pagesDir);
+        const apiRoutes = await apiRouter(pagesDir);
+        const config = await resolveNextConfig({});
 
-      const result = await prerenderPages({
-        mode: "default",
-        routes,
-        apiRoutes,
-        pagesDir,
-        outDir,
-        config,
-        _prodServer: { server, port },
-      });
+        const result = await prerenderPages({
+          mode,
+          routes,
+          apiRoutes,
+          pagesDir,
+          outDir,
+          config,
+          _prodServer: { server, port },
+        });
 
-      expect(findRoute(result.routes, "/")).toMatchObject({
-        route: "/",
-        status: "skipped",
-        reason: "dynamic",
-      });
-      expect(findRoute(result.routes, "/404")).toMatchObject({
-        route: "/404",
-        status: "skipped",
-        reason: "dynamic",
-      });
-      expect(findRoute(result.routes, "/failure")).toMatchObject({
-        route: "/failure",
-        status: "error",
-      });
-      expect(fs.existsSync(path.join(outDir, "index.html"))).toBe(false);
-      expect(fs.existsSync(path.join(outDir, "404.html"))).toBe(false);
-    } finally {
-      await closeServer(server);
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
+        const nonCacheableResults = result.routes.filter(
+          (route) => route.route === "/" || route.route === "/404",
+        );
+        expect(nonCacheableResults.length).toBeGreaterThanOrEqual(2);
+        for (const route of nonCacheableResults) {
+          if (mode === "export") {
+            expect(route).toMatchObject({
+              status: "error",
+              error: expect.stringContaining("not supported with output: 'export'"),
+            });
+          } else {
+            expect(route).toMatchObject({ status: "skipped", reason: "dynamic" });
+          }
+        }
+        expect(findRoute(result.routes, "/failure")).toMatchObject({
+          route: "/failure",
+          status: "error",
+        });
+        expect(fs.existsSync(path.join(outDir, "index.html"))).toBe(false);
+        expect(fs.existsSync(path.join(outDir, "404.html"))).toBe(false);
+      } finally {
+        await closeServer(server);
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("prerenderPages — default mode (pages-basic)", () => {

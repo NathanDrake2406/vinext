@@ -208,6 +208,28 @@ type PrerenderProgressCallback = (update: {
   status: PrerenderRouteResult["status"];
 }) => void;
 
+function nonCacheablePagesResult(
+  mode: PrerenderOptions["mode"],
+  route: string,
+  path = route,
+): PrerenderRouteResult {
+  if (mode === "export") {
+    return {
+      route,
+      status: "error",
+      error:
+        "Page returned an explicitly non-cacheable response which is not supported with output: 'export'",
+    };
+  }
+
+  return {
+    route,
+    status: "skipped",
+    reason: "dynamic",
+    ...(path !== route ? { path } : {}),
+  };
+}
+
 type PrerenderOptions = {
   /**
    * 'default' — prerender static/ISR routes; skip SSR routes
@@ -913,12 +935,7 @@ export async function prerenderPages({
             isExplicitNonCacheableCacheControl(response.headers.get("cache-control"));
           if (isDynamicResponse) {
             await response.body?.cancel();
-            result = {
-              route: route.pattern,
-              status: "skipped",
-              reason: "dynamic",
-              ...(urlPath !== route.pattern ? { path: urlPath } : {}),
-            };
+            result = nonCacheablePagesResult(mode, route.pattern, urlPath);
           } else {
             if (isRedirectResponse) {
               // getStaticProps returned a redirect — emit a meta-refresh HTML page
@@ -989,7 +1006,7 @@ export async function prerenderPages({
         if (notFoundRes.status === 404 && contentType.includes("text/html")) {
           if (isExplicitNonCacheableCacheControl(notFoundRes.headers.get("cache-control"))) {
             await notFoundRes.body?.cancel();
-            results.push({ route: "/404", status: "skipped", reason: "dynamic" });
+            results.push(nonCacheablePagesResult(mode, "/404"));
           } else {
             const html404 = await notFoundRes.text();
             const fullPath = path.join(outDir, "404.html");
