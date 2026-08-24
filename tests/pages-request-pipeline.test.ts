@@ -88,6 +88,35 @@ describe("final cache header merge", () => {
       setCdnCacheAdapter(new DefaultCdnCacheAdapter());
     }
   });
+
+  it("does not promote a provider no-store policy from a cacheable browser header", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    try {
+      const result = await runPagesRequest(
+        makeRequest("/private"),
+        baseDeps({
+          renderPage: vi.fn(
+            async () =>
+              new Response("private", {
+                headers: {
+                  "Cache-Control": "public, max-age=3600",
+                  "CDN-Cache-Control": "no-store",
+                },
+              }),
+          ),
+        }),
+      );
+
+      expect(result.type).toBe("response");
+      if (result.type !== "response") return;
+      expect(result.response.headers.get("cdn-cache-control")).toBeNull();
+      expect(result.response.headers.get("cache-control")).toBe(
+        "private, no-cache, no-store, max-age=0, must-revalidate",
+      );
+    } finally {
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    }
+  });
 });
 
 describe("on-demand revalidation middleware bypass", () => {
