@@ -24,7 +24,11 @@ import {
   type PagesPreviewState,
 } from "./pages-preview.js";
 import { hasUserDocumentGetInitialProps } from "./document-initial-head.js";
-import { mergePagesNotFoundSourceHeaders, resolvePagesPageData } from "./pages-page-data.js";
+import {
+  hasCustomAppGetInitialProps,
+  mergePagesNotFoundSourceHeaders,
+  resolvePagesPageData,
+} from "./pages-page-data.js";
 import type { PagesPageModule } from "./pages-page-data.js";
 import { resolvePagesPageMethodResponse } from "./pages-page-method.js";
 import { renderPagesPageResponse } from "./pages-page-response.js";
@@ -310,6 +314,8 @@ type RenderPageOptions = {
   originalUrl?: string;
   renderErrorPageOnMiss?: boolean;
   __isInternalErrorRender?: boolean;
+  /** Force adapter-backed no-store while recursively rendering an error page. */
+  __bypassSharedCache?: boolean;
   __forcedRoute?: PageRoute;
   /** Source-page cache lifetime forwarded while rendering a notFound error page. */
   __notFoundRevalidateSeconds?: number | false;
@@ -554,6 +560,8 @@ export function createPagesPageHandler(
     const { route, params } = match;
     const pageModule = route.module;
     const isStaticPropsRoute = typeof pageModule.getStaticProps === "function";
+    const requestAwareStaticPropsRoute =
+      isStaticPropsRoute && hasCustomAppGetInitialProps(AppComponent);
     const isStaticPropsRender =
       isStaticPropsRoute && typeof pageModule.getServerSideProps !== "function";
     const shouldCoalesceOnDemand =
@@ -929,6 +937,9 @@ export function createPagesPageHandler(
               errorResponseCachePathname,
             );
           }
+          if (options?.__bypassSharedCache) {
+            applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+          }
           return finalizePagesPreviewResponse(response, preview);
         }
 
@@ -953,7 +964,8 @@ export function createPagesPageHandler(
         // response and must not shorten `/404`'s internal cache lifetime.
         const isrRevalidateSeconds = pageDataResult.isrRevalidateSeconds;
         const isrExpireSeconds = pageDataResult.isrExpireSeconds;
-        const bypassSharedCache = pageDataResult.bypassSharedCache;
+        const bypassSharedCache =
+          pageDataResult.bypassSharedCache || options?.__bypassSharedCache === true;
         const isFallbackRender = pageDataResult.isFallback === true;
 
         // Republish SSR context with isFallback flipped on so `useRouter().isFallback`
@@ -1121,6 +1133,9 @@ export function createPagesPageHandler(
             errorResponseCachePathname,
           );
         }
+        if (options?.__bypassSharedCache) {
+          applyCdnResponseHeaders(pageResponse.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+        }
         return finalizePagesPreviewResponse(pageResponse, preview);
       } catch (e) {
         console.error("[vinext] SSR error:", e);
@@ -1161,6 +1176,8 @@ export function createPagesPageHandler(
                 asPath: url,
                 renderErrorPageOnMiss: false,
                 __isInternalErrorRender: true,
+                __bypassSharedCache:
+                  requestAwareStaticPropsRoute || options?.__bypassSharedCache === true,
                 __forcedRoute: errorRoute,
                 err: e instanceof Error ? e : new Error(String(e)),
               });
@@ -1169,7 +1186,11 @@ export function createPagesPageHandler(
             }
           }
         }
-        return new Response("Internal Server Error", { status: 500 });
+        const response = new Response("Internal Server Error", { status: 500 });
+        if (requestAwareStaticPropsRoute || options?.__bypassSharedCache) {
+          applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+        }
+        return response;
       }
     });
     return closeAfterResponseWithBody(response, uCtx);

@@ -521,7 +521,7 @@ export function mergePagesNotFoundSourceHeaders(
  * True only when userland overrode App.getInitialProps. The shim's inherited
  * default (`class MyApp extends App {}`) is request-agnostic and keeps ISR.
  */
-function hasCustomAppGetInitialProps(appComponent: unknown): boolean {
+export function hasCustomAppGetInitialProps(appComponent: unknown): boolean {
   if (!hasPagesGetInitialProps(appComponent)) return false;
   const component = appComponent as { getInitialProps?: unknown; origGetInitialProps?: unknown };
   return component.getInitialProps !== component.origGetInitialProps;

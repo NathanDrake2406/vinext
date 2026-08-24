@@ -584,6 +584,56 @@ describe("createPagesPageHandler — request-aware App props", () => {
     const res = await handler(makeRequest("/about"), "/about", null, null, null);
     expect(res.status).toBe(500);
   });
+
+  it("carries request-aware cache bypass into a recursive 500 render", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    const EdgeApp = Object.assign(() => null, {
+      getInitialProps: async ({
+        ctx,
+      }: {
+        ctx: { res: { setHeader(name: string, value: string): void } };
+      }) => {
+        ctx.res.setHeader("CDN-Cache-Control", "s-maxage=600");
+        return { viewer: "per-request", pageProps: {} };
+      },
+    });
+    const handler = createPagesPageHandler(
+      makeOpts({
+        AppComponent: EdgeApp,
+        pageRoutes: [
+          makeRoute(
+            "/about",
+            makePageModule({
+              getStaticProps: async () => {
+                throw new Error("request-aware data failed");
+              },
+            }),
+          ),
+          makeRoute("/500"),
+        ],
+      }),
+    );
+
+    for (const contentSecurityPolicy of [undefined, "script-src 'nonce-test-nonce'"]) {
+      const response = await handler(
+        new Request("http://localhost/about", {
+          headers: contentSecurityPolicy
+            ? { "content-security-policy": contentSecurityPolicy }
+            : undefined,
+        }),
+        "/about",
+        null,
+        null,
+        null,
+      );
+
+      expect(response.status).toBe(500);
+      expect(response.headers.get("cdn-cache-control")).toBeNull();
+      expect(response.headers.get("cache-control")).toBe(
+        "private, no-cache, no-store, max-age=0, must-revalidate",
+      );
+    }
+  });
 });
 
 describe("createPagesPageHandler — _next/data", () => {
