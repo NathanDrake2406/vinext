@@ -8,6 +8,11 @@ import {
 } from "../packages/vinext/src/server/pages-request-pipeline.js";
 import { MIDDLEWARE_SKIP_HEADER } from "../packages/vinext/src/server/headers.js";
 import { PRERENDER_REVALIDATE_HEADER } from "../packages/vinext/src/utils/protocol-headers.js";
+import {
+  DefaultCdnCacheAdapter,
+  setCdnCacheAdapter,
+} from "../packages/vinext/src/shims/cdn-cache.js";
+import { CloudflareCdnCacheAdapter } from "../packages/cloudflare/src/cache/cdn-adapter.runtime.js";
 
 // Helpers
 
@@ -44,6 +49,46 @@ function makeRenderPage(status = 200, body = "ok") {
       new Response(body, { status }),
   );
 }
+
+describe("final cache header merge", () => {
+  it("keeps a rendered no-store policy authoritative over staged CDN headers", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    try {
+      const result = await runPagesRequest(
+        makeRequest("/private"),
+        baseDeps({
+          hasMiddleware: true,
+          runMiddleware: makeMiddleware({
+            responseHeaders: [
+              ["CDN-Cache-Control", "s-maxage=600"],
+              ["Cloudflare-CDN-Cache-Control", "s-maxage=600"],
+              ["Cache-Tag", "private-page"],
+            ],
+          }),
+          renderPage: vi.fn(
+            async () =>
+              new Response("private", {
+                headers: {
+                  "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate",
+                },
+              }),
+          ),
+        }),
+      );
+
+      expect(result.type).toBe("response");
+      if (result.type !== "response") return;
+      expect(result.response.headers.get("cdn-cache-control")).toBeNull();
+      expect(result.response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
+      expect(result.response.headers.get("cache-tag")).toBeNull();
+      expect(result.response.headers.get("cache-control")).toBe(
+        "private, no-cache, no-store, max-age=0, must-revalidate",
+      );
+    } finally {
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    }
+  });
+});
 
 describe("on-demand revalidation middleware bypass", () => {
   it("uses the runtime adapter's authoritative credential verifier", async () => {

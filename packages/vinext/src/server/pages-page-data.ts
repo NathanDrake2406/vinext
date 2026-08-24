@@ -478,6 +478,19 @@ function buildPagesNotFoundResult(
   };
 }
 
+function buildRequestAwarePagesNotFoundResult(
+  options: Pick<ResolvePagesPageDataOptions, "isDataReq" | "deploymentId">,
+): ResolvePagesPageDataResponseResult | ResolvePagesPageDataNotFoundResult {
+  const result = buildPagesNotFoundResult(options);
+  if (result.kind === "response") {
+    applyCdnResponseHeaders(result.response.headers, {
+      cacheControl: ISR_NEVER_CACHE_CONTROL,
+    });
+    return result;
+  }
+  return { ...result, bypassSharedCache: true };
+}
+
 export function mergePagesNotFoundSourceHeaders(
   response: Response,
   sourceHeaders: Record<string, string | number | boolean | string[]> | undefined,
@@ -1274,7 +1287,9 @@ export async function resolvePagesPageData(
       // For data requests (`/_next/data/...json`), return a JSON-shaped 404
       // so the client router can `res.json()` without blowing up — matches
       // Next.js' behavior. HTML navigations still get the configured 404 page.
-      return buildPagesNotFoundResult(options);
+      return hasRequestAwareAppProps
+        ? buildRequestAwarePagesNotFoundResult(options)
+        : buildPagesNotFoundResult(options);
     }
 
     // Render the fallback shell for unlisted paths under `fallback: true`.
@@ -1807,14 +1822,7 @@ export async function resolvePagesPageData(
       // The recursive custom 404 render also runs App.getInitialProps, so
       // request-aware App props must not receive a shared cache lifetime either.
       if (hasRequestAwareAppProps) {
-        const notFoundResult = buildPagesNotFoundResult(options);
-        if (notFoundResult.kind === "response") {
-          applyCdnResponseHeaders(notFoundResult.response.headers, {
-            cacheControl: ISR_NEVER_CACHE_CONTROL,
-          });
-          return notFoundResult;
-        }
-        return { ...notFoundResult, bypassSharedCache: true };
+        return buildRequestAwarePagesNotFoundResult(options);
       }
       if (previewData === false) {
         await options.isrSet(cacheKey, null, {

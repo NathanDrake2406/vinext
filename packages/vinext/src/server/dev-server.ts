@@ -1215,9 +1215,11 @@ export function createSSRHandler(
         const responseHeaders = typeof res.getHeaders === "function" ? res.getHeaders() : undefined;
         const scriptNonce = getScriptNonceFromNodeHeaderSources(req.headers, responseHeaders);
 
+        if (typeof pageModule.getStaticProps === "function") {
+          assertPagesDataExportCompatibility(pageModule, patternToNextFormat(route.pattern));
+        }
         if (typeof pageModule.getStaticProps === "function" && !isFallbackRender) {
           const routePattern = patternToNextFormat(route.pattern);
-          assertPagesDataExportCompatibility(pageModule, routePattern);
           // An authenticated res.revalidate() request executes GSP once with the
           // on-demand reason, but Pages response entries are never read or
           // written in development. Ordinary requests independently rerun GSP

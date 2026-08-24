@@ -1735,6 +1735,39 @@ describe("pages page data", () => {
     expect(isrSet).not.toHaveBeenCalled();
   });
 
+  it("marks request-aware fallback false path misses as bypassing shared cache", async () => {
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(
+          function App() {
+            return null;
+          },
+          { getInitialProps: vi.fn().mockResolvedValue({ pageProps: {} }) },
+        ),
+        pageModule: {
+          getStaticPaths() {
+            return { paths: [], fallback: false };
+          },
+          async getStaticProps() {
+            return { props: {}, revalidate: 60 };
+          },
+        },
+        route: { isDynamic: true },
+        routePattern: "/posts/[slug]",
+        routeUrl: "/posts/unlisted",
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "notFound",
+      bypassSharedCache: true,
+      revalidateSeconds: undefined,
+      expireSeconds: undefined,
+      cacheState: undefined,
+      responseHeaders: undefined,
+    });
+  });
+
   it("treats only-generated revalidation as a no-op when a custom App supplies request-aware props", async () => {
     const isrGet = vi.fn().mockResolvedValue(null);
     const getStaticProps = vi.fn(async () => ({ props: { pageProp: "fresh" }, revalidate: 60 }));
