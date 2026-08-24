@@ -2031,13 +2031,13 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       const route = pageRoutes?.find((r) => r.pattern === pattern);
       const pageModule = route?.module;
       const fn = pageModule?.getStaticPaths;
-      if (typeof fn !== "function") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end("null");
-        return;
-      }
       try {
         assertPagesDataExportCompatibility(pageModule ?? {}, pattern);
+        if (typeof fn !== "function") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end("null");
+          return;
+        }
         const result = await fn({ locales, defaultLocale });
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(result));
