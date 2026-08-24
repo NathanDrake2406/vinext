@@ -21,7 +21,10 @@ import {
   type PrerenderRouteResult,
   type StaticParamsMap,
 } from "../packages/vinext/src/build/prerender.js";
-import { VINEXT_PRERENDER_SPECULATIVE_HEADER } from "../packages/vinext/src/server/headers.js";
+import {
+  VINEXT_PRERENDER_RENDER_ERROR_HEADER,
+  VINEXT_PRERENDER_SPECULATIVE_HEADER,
+} from "../packages/vinext/src/server/headers.js";
 import { safeJsonStringify } from "../packages/vinext/src/server/html.js";
 import type { AppRoute } from "../packages/vinext/src/routing/app-router.js";
 import { getAppRouteOutputPath } from "../packages/vinext/src/utils/prerender-output-paths.js";
@@ -692,12 +695,21 @@ export function getStaticProps() { return { props: {}, revalidate: 60 }; }
         `export default function Failure() { return null; }
 `,
       );
+      fs.writeFileSync(
+        path.join(pagesDir, "fatal.tsx"),
+        `export default function Fatal() { return null; }
+`,
+      );
 
       const server = createServer((req, res) => {
         res.setHeader("content-type", "text/html");
         res.setHeader("cache-control", "private, no-cache, no-store, max-age=0");
         if (req.url === "/404") res.statusCode = 404;
         if (req.url === "/failure") res.statusCode = 500;
+        if (req.url === "/fatal") {
+          res.statusCode = 500;
+          res.setHeader(VINEXT_PRERENDER_RENDER_ERROR_HEADER, "1");
+        }
         res.end("<html><body>request-aware build props</body></html>");
       });
       const port = await listen(server);
@@ -738,6 +750,11 @@ export function getStaticProps() { return { props: {}, revalidate: 60 }; }
         expect(findRoute(result.routes, "/failure")).toMatchObject({
           route: "/failure",
           status: "error",
+        });
+        expect(findRoute(result.routes, "/fatal")).toMatchObject({
+          route: "/fatal",
+          status: "error",
+          fatal: true,
         });
         expect(fs.existsSync(path.join(outDir, "index.html"))).toBe(false);
         expect(fs.existsSync(path.join(outDir, "404.html"))).toBe(false);

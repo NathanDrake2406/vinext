@@ -27,6 +27,7 @@ import { hasUserDocumentGetInitialProps } from "./document-initial-head.js";
 import {
   hasCustomAppGetInitialProps,
   mergePagesNotFoundSourceHeaders,
+  PagesDataExportCompatibilityError,
   resolvePagesPageData,
 } from "./pages-page-data.js";
 import type { PagesPageModule } from "./pages-page-data.js";
@@ -73,6 +74,7 @@ import {
   NEXTJS_CACHE_HEADER,
   NEXTJS_DEPLOYMENT_ID_HEADER,
   VINEXT_CACHE_HEADER,
+  VINEXT_PRERENDER_RENDER_ERROR_HEADER,
 } from "./headers.js";
 import { buildMissIsrCacheControl, ISR_NEVER_CACHE_CONTROL } from "./isr-decision.js";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
@@ -1139,6 +1141,10 @@ export function createPagesPageHandler(
         return finalizePagesPreviewResponse(pageResponse, preview);
       } catch (e) {
         console.error("[vinext] SSR error:", e);
+        const isFatalPrerenderError =
+          e instanceof PagesDataExportCompatibilityError &&
+          typeof process !== "undefined" &&
+          process.env?.VINEXT_PRERENDER === "1";
         reportRequestError(
           e instanceof Error ? e : new Error(String(e)),
           {
@@ -1171,7 +1177,7 @@ export function createPagesPageHandler(
           }
           if (errorRoute) {
             try {
-              return await renderPage(request, url, manifest, middlewareHeaders, {
+              const errorResponse = await renderPage(request, url, manifest, middlewareHeaders, {
                 statusCode: 500,
                 asPath: url,
                 renderErrorPageOnMiss: false,
@@ -1181,6 +1187,10 @@ export function createPagesPageHandler(
                 __forcedRoute: errorRoute,
                 err: e instanceof Error ? e : new Error(String(e)),
               });
+              if (isFatalPrerenderError) {
+                errorResponse.headers.set(VINEXT_PRERENDER_RENDER_ERROR_HEADER, "1");
+              }
+              return errorResponse;
             } catch (errorPageErr) {
               console.error("[vinext] Error page render failed:", errorPageErr);
             }
@@ -1189,6 +1199,9 @@ export function createPagesPageHandler(
         const response = new Response("Internal Server Error", { status: 500 });
         if (requestAwareStaticPropsRoute || options?.__bypassSharedCache) {
           applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+        }
+        if (isFatalPrerenderError) {
+          response.headers.set(VINEXT_PRERENDER_RENDER_ERROR_HEADER, "1");
         }
         return response;
       }

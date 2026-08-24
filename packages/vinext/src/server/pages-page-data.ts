@@ -61,6 +61,10 @@ const ALLOWED_PAGES_REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 const SSG_GET_INITIAL_PROPS_CONFLICT =
   "You can not use getInitialProps with getStaticProps. To use SSG, please remove your getInitialProps";
 
+export class PagesDataExportCompatibilityError extends Error {
+  override name = "PagesDataExportCompatibilityError";
+}
+
 /** Reject Pages data-export combinations that Next.js does not allow. */
 export function assertPagesDataExportCompatibility(
   pageModule: PagesPageModule,
@@ -70,7 +74,9 @@ export function assertPagesDataExportCompatibility(
     typeof pageModule.getStaticProps === "function" &&
     hasPagesGetInitialProps(pageModule.default)
   ) {
-    throw new Error(`${SSG_GET_INITIAL_PROPS_CONFLICT} ${routePattern}`);
+    throw new PagesDataExportCompatibilityError(
+      `${SSG_GET_INITIAL_PROPS_CONFLICT} ${routePattern}`,
+    );
   }
 }
 

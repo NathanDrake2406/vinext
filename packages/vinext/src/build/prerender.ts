@@ -936,6 +936,18 @@ export async function prerenderPages({
           if (isDynamicResponse) {
             await response.body?.cancel();
             result = nonCacheablePagesResult(mode, route.pattern, urlPath);
+          } else if (!isRedirectResponse && !response.ok) {
+            const fatal = response.headers.get(VINEXT_PRERENDER_RENDER_ERROR_HEADER) === "1";
+            await response.body?.cancel();
+            const renderError = new Error(`renderPage returned ${response.status} for ${urlPath}`);
+            result = {
+              route: route.pattern,
+              status: "error",
+              error: config.enablePrerenderSourceMaps
+                ? getErrorMessageWithStack(renderError)
+                : renderError.message,
+              ...(fatal ? { fatal: true as const } : {}),
+            };
           } else {
             if (isRedirectResponse) {
               // getStaticProps returned a redirect — emit a meta-refresh HTML page
@@ -951,9 +963,6 @@ export async function prerenderPages({
               fs.writeFileSync(htmlFullPath, html, "utf-8");
               outputFiles.push(htmlOutputPath);
             } else {
-              if (!response.ok) {
-                throw new Error(`renderPage returned ${response.status} for ${urlPath}`);
-              }
               const html = await response.text();
               fs.mkdirSync(path.dirname(htmlFullPath), { recursive: true });
               fs.writeFileSync(htmlFullPath, html, "utf-8");
@@ -1003,7 +1012,19 @@ export async function prerenderPages({
       try {
         const notFoundRes = await renderPage(hasCustom404 ? "/404" : NOT_FOUND_SENTINEL_PATH);
         const contentType = notFoundRes.headers.get("content-type") ?? "";
-        if (notFoundRes.status === 404 && contentType.includes("text/html")) {
+        if (!notFoundRes.ok && notFoundRes.status !== 404) {
+          const fatal = notFoundRes.headers.get(VINEXT_PRERENDER_RENDER_ERROR_HEADER) === "1";
+          await notFoundRes.body?.cancel();
+          const renderError = new Error(`renderPage returned ${notFoundRes.status} for /404`);
+          results.push({
+            route: "/404",
+            status: "error",
+            error: config.enablePrerenderSourceMaps
+              ? getErrorMessageWithStack(renderError)
+              : renderError.message,
+            ...(fatal ? { fatal: true as const } : {}),
+          });
+        } else if (notFoundRes.status === 404 && contentType.includes("text/html")) {
           if (isExplicitNonCacheableCacheControl(notFoundRes.headers.get("cache-control"))) {
             await notFoundRes.body?.cancel();
             results.push(nonCacheablePagesResult(mode, "/404"));

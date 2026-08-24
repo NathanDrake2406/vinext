@@ -27,6 +27,7 @@ import {
   PRERENDER_REVALIDATE_HEADER,
 } from "../packages/vinext/src/server/isr-cache.js";
 import { after } from "../packages/vinext/src/shims/server.js";
+import { VINEXT_PRERENDER_RENDER_ERROR_HEADER } from "../packages/vinext/src/server/headers.js";
 
 afterEach(() => setCdnCacheAdapter(new DefaultCdnCacheAdapter()));
 
@@ -632,6 +633,43 @@ describe("createPagesPageHandler — request-aware App props", () => {
       expect(response.headers.get("cache-control")).toBe(
         "private, no-cache, no-store, max-age=0, must-revalidate",
       );
+    }
+  });
+});
+
+describe("createPagesPageHandler — data export compatibility", () => {
+  it("marks the invalid getInitialProps and getStaticProps combination fatal only during prerender", async () => {
+    const Page = Object.assign(() => null, {
+      getInitialProps: async () => ({ pageProps: {} }),
+    });
+    const handler = createPagesPageHandler(
+      makeOpts({
+        pageRoutes: [
+          makeRoute(
+            "/about",
+            makePageModule({
+              default: Page,
+              getStaticProps: async () => ({ props: {} }),
+            }),
+          ),
+        ],
+      }),
+    );
+    const savedPrerender = process.env.VINEXT_PRERENDER;
+
+    try {
+      delete process.env.VINEXT_PRERENDER;
+      const runtimeResponse = await handler(makeRequest("/about"), "/about", null, null, null);
+      expect(runtimeResponse.status).toBe(500);
+      expect(runtimeResponse.headers.get(VINEXT_PRERENDER_RENDER_ERROR_HEADER)).toBeNull();
+
+      process.env.VINEXT_PRERENDER = "1";
+      const prerenderResponse = await handler(makeRequest("/about"), "/about", null, null, null);
+      expect(prerenderResponse.status).toBe(500);
+      expect(prerenderResponse.headers.get(VINEXT_PRERENDER_RENDER_ERROR_HEADER)).toBe("1");
+    } finally {
+      if (savedPrerender === undefined) delete process.env.VINEXT_PRERENDER;
+      else process.env.VINEXT_PRERENDER = savedPrerender;
     }
   });
 });
