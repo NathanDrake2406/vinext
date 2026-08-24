@@ -76,7 +76,7 @@ import {
 import { enterPrerenderPhase } from "./prerender-phase.js";
 import { buildAppRouteCacheValue } from "../server/app-route-handler-response.js";
 import { isMetadataResponseCacheable } from "../server/metadata-route-cache-policy.js";
-import { isExplicitNonCacheableCacheControl } from "../server/cache-control.js";
+import { isExplicitNonShareableCacheControl } from "../server/cache-control.js";
 export { readPrerenderSecret } from "./server-manifest.js";
 
 const EXPERIMENTAL_PPR_FALLBACK_SHELLS_ENV = "__VINEXT_EXPERIMENTAL_PPR_FALLBACK_SHELLS";
@@ -932,7 +932,7 @@ export async function prerenderPages({
           const isRedirectResponse = response.status >= 300 && response.status < 400;
           const isDynamicResponse =
             (response.ok || isRedirectResponse) &&
-            isExplicitNonCacheableCacheControl(response.headers.get("cache-control"));
+            isExplicitNonShareableCacheControl(response.headers.get("cache-control"));
           if (isDynamicResponse) {
             await response.body?.cancel();
             result = nonCacheablePagesResult(mode, route.pattern, urlPath);
@@ -1025,7 +1025,7 @@ export async function prerenderPages({
             ...(fatal ? { fatal: true as const } : {}),
           });
         } else if (notFoundRes.status === 404 && contentType.includes("text/html")) {
-          if (isExplicitNonCacheableCacheControl(notFoundRes.headers.get("cache-control"))) {
+          if (isExplicitNonShareableCacheControl(notFoundRes.headers.get("cache-control"))) {
             await notFoundRes.body?.cancel();
             results.push(nonCacheablePagesResult(mode, "/404"));
           } else {

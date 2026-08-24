@@ -27,9 +27,9 @@ import { hasUserDocumentGetInitialProps } from "./document-initial-head.js";
 import {
   hasCustomAppGetInitialProps,
   mergePagesNotFoundSourceHeaders,
-  PagesDataExportCompatibilityError,
   resolvePagesPageData,
 } from "./pages-page-data.js";
+import { PagesDataExportCompatibilityError } from "./pages-data-export-compatibility.js";
 import type { PagesPageModule } from "./pages-page-data.js";
 import { resolvePagesPageMethodResponse } from "./pages-page-method.js";
 import { renderPagesPageResponse } from "./pages-page-response.js";

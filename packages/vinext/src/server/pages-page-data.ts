@@ -43,6 +43,7 @@ import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { isUnknownRecord } from "../utils/record.js";
 import { isDangerousScheme } from "vinext/shims/url-safety";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
+import { assertPagesDataExportCompatibility } from "./pages-data-export-compatibility.js";
 
 export type PagesRedirectResult = {
   destination: string;
@@ -58,28 +59,6 @@ export type ResolvedPagesRedirect = {
 };
 
 const ALLOWED_PAGES_REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
-const SSG_GET_INITIAL_PROPS_CONFLICT =
-  "You can not use getInitialProps with getStaticProps. To use SSG, please remove your getInitialProps";
-
-export class PagesDataExportCompatibilityError extends Error {
-  override name = "PagesDataExportCompatibilityError";
-}
-
-/** Reject Pages data-export combinations that Next.js does not allow. */
-export function assertPagesDataExportCompatibility(
-  pageModule: PagesPageModule,
-  routePattern: string,
-): void {
-  if (
-    typeof pageModule.getStaticProps === "function" &&
-    hasPagesGetInitialProps(pageModule.default)
-  ) {
-    throw new PagesDataExportCompatibilityError(
-      `${SSG_GET_INITIAL_PROPS_CONFLICT} ${routePattern}`,
-    );
-  }
-}
-
 /** Headers that are part of a cached Pages representation, never request state. */
 function isCachedPagesRepresentationHeader(name: string): boolean {
   const lowerName = name.toLowerCase();

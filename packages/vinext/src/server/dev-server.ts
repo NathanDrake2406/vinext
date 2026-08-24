@@ -50,7 +50,6 @@ import { buildDefaultPagesNotFoundResponse } from "./pages-default-404.js";
 import { buildPagesReadinessNextData } from "./pages-readiness.js";
 import { resolvePagesPageMethodResponse } from "./pages-page-method.js";
 import {
-  assertPagesDataExportCompatibility,
   assertPages404DoesNotReturnNotFound,
   buildPagesRedirectProps,
   getPagesRouteParams,
@@ -62,6 +61,7 @@ import {
   type PagesRedirectResult,
   type PagesStaticPathsEntry,
 } from "./pages-page-data.js";
+import { assertPagesDataExportCompatibility } from "./pages-data-export-compatibility.js";
 import { sanitizeDestination } from "../config/config-matchers.js";
 import { collectPagesDevInitialStylesheetHeadHTML } from "./pages-dev-stylesheets.js";
 import { createPagesDevModuleUrl } from "./pages-dev-module-url.js";

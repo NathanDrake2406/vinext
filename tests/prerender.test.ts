@@ -700,6 +700,11 @@ export function getStaticProps() { return { props: {}, revalidate: 60 }; }
         `export default function Fatal() { return null; }
 `,
       );
+      fs.writeFileSync(
+        path.join(pagesDir, "cacheable.tsx"),
+        `export default function Cacheable() { return null; }
+`,
+      );
 
       const server = createServer((req, res) => {
         res.setHeader("content-type", "text/html");
@@ -710,6 +715,7 @@ export function getStaticProps() { return { props: {}, revalidate: 60 }; }
           res.statusCode = 500;
           res.setHeader(VINEXT_PRERENDER_RENDER_ERROR_HEADER, "1");
         }
+        if (req.url === "/cacheable") res.setHeader("cache-control", "no-cache");
         res.end("<html><body>request-aware build props</body></html>");
       });
       const port = await listen(server);
@@ -756,8 +762,13 @@ export function getStaticProps() { return { props: {}, revalidate: 60 }; }
           status: "error",
           fatal: true,
         });
+        expect(findRoute(result.routes, "/cacheable")).toMatchObject({
+          route: "/cacheable",
+          status: "rendered",
+        });
         expect(fs.existsSync(path.join(outDir, "index.html"))).toBe(false);
         expect(fs.existsSync(path.join(outDir, "404.html"))).toBe(false);
+        expect(fs.existsSync(path.join(outDir, "cacheable.html"))).toBe(true);
       } finally {
         await closeServer(server);
         fs.rmSync(root, { recursive: true, force: true });

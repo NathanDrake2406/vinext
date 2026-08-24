@@ -19,6 +19,17 @@ export function isExplicitNonCacheableCacheControl(
   return Boolean(cacheControl && NON_CACHEABLE_DIRECTIVE_RE.test(cacheControl));
 }
 
+/** Whether a response policy prevents a representation from being shared. */
+export function isExplicitNonShareableCacheControl(
+  cacheControl: string | null,
+): cacheControl is string {
+  if (!cacheControl) return false;
+  return cacheControl.split(",").some((directive) => {
+    const [name] = directive.trim().split("=", 1);
+    return name.toLowerCase() === "private" || name.toLowerCase() === "no-store";
+  });
+}
+
 export function shouldUseNextDeployCacheControl(): boolean {
   return process.env.VINEXT_NEXT_DEPLOY_CACHE_CONTROL === "1";
 }
