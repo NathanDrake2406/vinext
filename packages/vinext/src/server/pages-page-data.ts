@@ -1341,7 +1341,7 @@ export async function resolvePagesPageData(
         documentReqRes: sharedReqRes,
         gsspRes: null,
         isrRevalidateSeconds: null,
-        bypassSharedCache: false,
+        bypassSharedCache: hasRequestAwareAppProps,
         pageProps,
         props: renderProps,
         isFallback: true,
@@ -1751,7 +1751,7 @@ export async function resolvePagesPageData(
       const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
       const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
       if (hasRequestAwareAppProps) {
-        response.headers.set("Cache-Control", ISR_NEVER_CACHE_CONTROL);
+        applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
       } else if (previewData === false) {
         const redirect = resolvePagesRedirect(result.redirect, {
           method: "getStaticProps",

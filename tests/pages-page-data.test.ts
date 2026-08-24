@@ -1639,6 +1639,37 @@ describe("pages page data", () => {
     expect(isrGet).toHaveBeenCalledWith("pages:/posts/post");
   });
 
+  it("marks request-aware fallback shells as bypassing the shared cache", async () => {
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(
+          function App() {
+            return null;
+          },
+          { getInitialProps: vi.fn().mockResolvedValue({ viewer: "me", pageProps: {} }) },
+        ),
+        pageModule: {
+          getStaticPaths() {
+            return { paths: [], fallback: true };
+          },
+          async getStaticProps() {
+            return { props: { pageProp: "fresh" }, revalidate: 60 };
+          },
+        },
+        route: { isDynamic: true },
+        routePattern: "/posts/[slug]",
+        routeUrl: "/posts/unseen",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "render",
+      isFallback: true,
+      bypassSharedCache: true,
+      props: { viewer: "me" },
+    });
+  });
+
   it("returns an uncacheable notFound when a custom App supplies request-aware props", async () => {
     const isrSet = vi.fn(async () => {});
     const result = await resolvePagesPageData(
