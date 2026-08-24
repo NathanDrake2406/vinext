@@ -384,6 +384,52 @@ describe("createPagesPageHandler — no default export", () => {
 // _next/data JSON envelope
 // ---------------------------------------------------------------------------
 
+describe("createPagesPageHandler — request-aware App props", () => {
+  const AppComponent = Object.assign(() => null, {
+    getInitialProps: async () => ({ viewer: "per-request", pageProps: {} }),
+  });
+  function makeHandler(pageModule: Record<string, unknown>) {
+    return createPagesPageHandler(
+      makeOpts({
+        AppComponent,
+        pageRoutes: [makeRoute("/about", pageModule)],
+        matchRoute: (url, r) => {
+          const route = r.find((rt) => rt.pattern === url.split("?")[0]);
+          return route ? { route, params: {} } : null;
+        },
+      }),
+    );
+  }
+
+  it("marks getStaticProps HTML and data responses as private no-store", async () => {
+    const handler = makeHandler(
+      makePageModule({ getStaticProps: async () => ({ props: { a: 1 }, revalidate: 60 }) }),
+    );
+
+    const html = await handler(makeRequest("/about"), "/about", null, null, null);
+    expect(html.status).toBe(200);
+    expect(html.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
+    expect(html.headers.get("x-nextjs-cache")).toBeNull();
+
+    const dataUrl = "/_next/data/test-build-id/about.json";
+    const data = await handler(makeRequest(dataUrl), dataUrl, null, null, null);
+    expect(data.status).toBe(200);
+    expect(data.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
+  });
+
+  it("still rejects an invalid revalidate value", async () => {
+    const handler = makeHandler(
+      makePageModule({ getStaticProps: async () => ({ props: {}, revalidate: 0 }) }),
+    );
+    const res = await handler(makeRequest("/about"), "/about", null, null, null);
+    expect(res.status).toBe(500);
+  });
+});
+
 describe("createPagesPageHandler — _next/data", () => {
   it("detects /_next/data URL and returns JSON envelope", async () => {
     const routes = [makeRoute("/about")];

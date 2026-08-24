@@ -1895,6 +1895,7 @@ describe("pages page data", () => {
       gsspRes: null,
       isrExpireSeconds: 300,
       isrRevalidateSeconds: 30,
+      bypassSharedCache: false,
       pageProps: { title: "hello" },
       props: { pageProps: { title: "hello" } },
       isFallback: false,

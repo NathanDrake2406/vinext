@@ -159,6 +159,8 @@ type RenderPagesPageResponseOptions = {
   isrCachePathname?: string;
   expireSeconds?: number;
   isrRevalidateSeconds: number | false | null;
+  /** Request-derived App props: emit a private, no-store policy instead of ISR headers. */
+  bypassSharedCache?: boolean;
   /** Synchronous `res.revalidate()` render; cache persistence must finish before returning. */
   isOnDemandRevalidate?: boolean;
   isStaticPropsRoute?: boolean;
@@ -699,6 +701,8 @@ export async function renderPagesPageResponse(
 
   if (options.scriptNonce) {
     responseHeaders.set("Cache-Control", ISR_NO_STORE_CACHE_CONTROL);
+  } else if (options.bypassSharedCache) {
+    responseHeaders.set("Cache-Control", ISR_NEVER_CACHE_CONTROL);
   } else if (options.isrRevalidateSeconds !== null) {
     // Fresh ISR (MISS) response: route through the CDN adapter with the path tag
     // used by Pages Router invalidation while the default emits Cache-Control.

@@ -948,6 +948,7 @@ export function createPagesPageHandler(
         // response and must not shorten `/404`'s internal cache lifetime.
         const isrRevalidateSeconds = pageDataResult.isrRevalidateSeconds;
         const isrExpireSeconds = pageDataResult.isrExpireSeconds;
+        const bypassSharedCache = pageDataResult.bypassSharedCache;
         const isFallbackRender = pageDataResult.isFallback === true;
 
         // Republish SSR context with isFallback flipped on so `useRouter().isFallback`
@@ -991,6 +992,8 @@ export function createPagesPageHandler(
             if (!hasUserCacheControl) {
               init.headers["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
             }
+          } else if (bypassSharedCache) {
+            init.headers["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
           } else if (isStaticPropsRoute) {
             if (isrRevalidateSeconds !== null) {
               const headers = new Headers(init.headers);
@@ -1074,6 +1077,7 @@ export function createPagesPageHandler(
           isrCachePathname,
           expireSeconds: isrExpireSeconds,
           isrRevalidateSeconds,
+          bypassSharedCache,
           isOnDemandRevalidate,
           isStaticPropsRoute,
           isrSet,

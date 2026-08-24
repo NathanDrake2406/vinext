@@ -10,7 +10,7 @@ import type {
   CacheControlMetadata,
 } from "vinext/shims/cache-handler";
 import { applyCdnResponseHeaders } from "./cache-control.js";
-import { buildMissIsrCacheControl, decideIsr } from "./isr-decision.js";
+import { buildMissIsrCacheControl, decideIsr, ISR_NEVER_CACHE_CONTROL } from "./isr-decision.js";
 import { buildCacheStateHeaders } from "./cache-headers.js";
 import {
   buildPagesCacheValue,
@@ -382,6 +382,11 @@ type ResolvePagesPageDataRenderResult = {
   gsspRes: PagesGsspResponse | null;
   isrRevalidateSeconds: number | false | null;
   isrExpireSeconds?: number;
+  /**
+   * True when a getStaticProps render carries request-derived App props. The
+   * caller must emit a private, no-store policy so no shared cache stores it.
+   */
+  bypassSharedCache: boolean;
   pageProps: Record<string, unknown>;
   props: PagesRenderProps;
   /**
@@ -1336,6 +1341,7 @@ export async function resolvePagesPageData(
         documentReqRes: sharedReqRes,
         gsspRes: null,
         isrRevalidateSeconds: null,
+        bypassSharedCache: false,
         pageProps,
         props: renderProps,
         isFallback: true,
@@ -1741,9 +1747,12 @@ export async function resolvePagesPageData(
 
     if (result?.redirect) {
       const response = buildPagesRedirectResponse(result.redirect, options, renderProps);
-      if (previewData === false && !hasRequestAwareAppProps) {
-        const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
-        const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
+      // Validate `revalidate` even when the result never enters the cache.
+      const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
+      const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
+      if (hasRequestAwareAppProps) {
+        response.headers.set("Cache-Control", ISR_NEVER_CACHE_CONTROL);
+      } else if (previewData === false) {
         const redirect = resolvePagesRedirect(result.redirect, {
           method: "getStaticProps",
           routeUrl: options.routeUrl,
@@ -1766,13 +1775,13 @@ export async function resolvePagesPageData(
     }
 
     if (result?.notFound) {
+      const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
+      const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
       // The recursive custom 404 render also runs App.getInitialProps, so
       // request-aware App props must not receive a shared cache lifetime either.
       if (hasRequestAwareAppProps) {
         return buildPagesNotFoundResult(options);
       }
-      const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
-      const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
       if (previewData === false) {
         await options.isrSet(cacheKey, null, {
           cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
@@ -1810,6 +1819,9 @@ export async function resolvePagesPageData(
     if (previewData === false && result && !hasRequestAwareAppProps) {
       isrRevalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
       isrExpireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
+    } else if (result && hasRequestAwareAppProps) {
+      // Still validate `revalidate`; only cache participation is skipped.
+      resolvePagesRevalidateSeconds(result, options.routeUrl);
     } else if (previewData === false && options.isOnDemandRevalidate && !hasRequestAwareAppProps) {
       // `revalidate: false` (and an omitted `revalidate`) still participates in
       // on-demand regeneration. Persist the current invocation's normalized
@@ -1890,6 +1902,8 @@ export async function resolvePagesPageData(
     gsspRes,
     isrRevalidateSeconds,
     isrExpireSeconds,
+    bypassSharedCache:
+      hasRequestAwareAppProps && typeof options.pageModule.getStaticProps === "function",
     pageProps,
     props: renderProps,
     isFallback: false,
