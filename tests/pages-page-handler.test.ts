@@ -496,6 +496,49 @@ describe("createPagesPageHandler — request-aware App props", () => {
     );
   });
 
+  it("clears edge cache headers when App.getInitialProps ends the response", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    const EdgeApp = Object.assign(() => null, {
+      getInitialProps: async ({
+        ctx,
+      }: {
+        ctx: {
+          res: {
+            end(body: string): void;
+            setHeader(name: string, value: string): void;
+          };
+        };
+      }) => {
+        ctx.res.setHeader("CDN-Cache-Control", "s-maxage=600");
+        ctx.res.end("request-aware short circuit");
+        return { viewer: "per-request", pageProps: {} };
+      },
+    });
+    const handler = createPagesPageHandler(
+      makeOpts({
+        AppComponent: EdgeApp,
+        pageRoutes: [
+          makeRoute(
+            "/about",
+            makePageModule({ getStaticProps: async () => ({ props: {}, revalidate: 60 }) }),
+          ),
+        ],
+        matchRoute: (url, routes) => {
+          const route = routes.find((candidate) => candidate.pattern === url.split("?")[0]);
+          return route ? { route, params: {} } : null;
+        },
+      }),
+    );
+
+    const response = await handler(makeRequest("/about"), "/about", null, null, null);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("request-aware short circuit");
+    expect(response.headers.get("cdn-cache-control")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
+  });
+
   it("still rejects an invalid revalidate value", async () => {
     const handler = makeHandler(
       makePageModule({ getStaticProps: async () => ({ props: {}, revalidate: 0 }) }),

@@ -1639,7 +1639,40 @@ describe("pages page data", () => {
     expect(isrGet).toHaveBeenCalledWith("pages:/posts/post");
   });
 
-  it("marks request-aware fallback shells as bypassing the shared cache", async () => {
+  it("rejects page getInitialProps combined with getStaticProps", async () => {
+    const Page = Object.assign(
+      function Page() {
+        return null;
+      },
+      { getInitialProps: vi.fn().mockResolvedValue({ viewer: "me" }) },
+    );
+
+    await expect(
+      resolvePagesPageData(
+        createOptions({
+          pageModule: {
+            default: Page,
+            getStaticProps: vi.fn().mockResolvedValue({ props: {} }),
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      "You can not use getInitialProps with getStaticProps. To use SSG, please remove your getInitialProps /posts/[slug]",
+    );
+  });
+
+  it("skips the shared cache probe for request-aware fallback shells", async () => {
+    const isrGet = vi.fn().mockResolvedValue({
+      isStale: false,
+      value: {
+        cacheControl: { revalidate: 60 },
+        value: {
+          kind: "PAGES",
+          html: "legacy cached page",
+          pageData: { pageProps: { cached: true } },
+        },
+      },
+    });
     const result = await resolvePagesPageData(
       createOptions({
         AppComponent: Object.assign(
@@ -1656,6 +1689,7 @@ describe("pages page data", () => {
             return { props: { pageProp: "fresh" }, revalidate: 60 };
           },
         },
+        isrGet,
         route: { isDynamic: true },
         routePattern: "/posts/[slug]",
         routeUrl: "/posts/unseen",
@@ -1668,6 +1702,7 @@ describe("pages page data", () => {
       bypassSharedCache: true,
       props: { viewer: "me" },
     });
+    expect(isrGet).not.toHaveBeenCalled();
   });
 
   it("returns an uncacheable notFound when a custom App supplies request-aware props", async () => {

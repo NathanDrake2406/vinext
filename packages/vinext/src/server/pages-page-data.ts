@@ -58,6 +58,8 @@ export type ResolvedPagesRedirect = {
 };
 
 const ALLOWED_PAGES_REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const SSG_GET_INITIAL_PROPS_CONFLICT =
+  "You can not use getInitialProps with getStaticProps. To use SSG, please remove your getInitialProps";
 
 /** Headers that are part of a cached Pages representation, never request state. */
 function isCachedPagesRepresentationHeader(name: string): boolean {
@@ -1205,6 +1207,15 @@ export async function renderPagesIsrHtml(options: RenderPagesIsrHtmlOptions): Pr
 export async function resolvePagesPageData(
   options: ResolvePagesPageDataOptions,
 ): Promise<ResolvePagesPageDataResult> {
+  // Next.js rejects this combination before it can mix request-derived page
+  // props with a shared static representation.
+  if (
+    typeof options.pageModule.getStaticProps === "function" &&
+    hasPagesGetInitialProps(options.pageModule.default)
+  ) {
+    throw new Error(`${SSG_GET_INITIAL_PROPS_CONFLICT} ${options.routePattern}`);
+  }
+
   // Next.js passes `params: null` (effectively) to gSSP/gSP context for
   // non-dynamic routes — see render.tsx's `...(pageIsDynamic ? { params } : undefined)`.
   // Internal bookkeeping (route param hydration, ISR HTML, getStaticPaths
@@ -1318,9 +1329,13 @@ export async function resolvePagesPageData(
   async function loadForegroundAppInitialRenderProps(): Promise<ResolvePagesPageDataResult | null> {
     const result = await loadPagesAppInitialRenderProps(options, getSharedReqRes);
     if (result.kind === "response") {
+      const response = await result.response;
+      if (hasRequestAwareAppProps && typeof options.pageModule.getStaticProps === "function") {
+        applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+      }
       return {
         kind: "response",
-        response: await result.response,
+        response,
       };
     }
     renderProps = result.renderProps;
@@ -1330,7 +1345,9 @@ export async function resolvePagesPageData(
 
   if (isFallback) {
     const pathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
-    const cached = await options.isrGet(options.isrCacheKey("pages", pathname));
+    const cached = hasRequestAwareAppProps
+      ? null
+      : await options.isrGet(options.isrCacheKey("pages", pathname));
     if (cached?.value.value?.kind !== "PAGES") {
       const appShortCircuit = await loadForegroundAppInitialRenderProps();
       if (appShortCircuit) return appShortCircuit;
