@@ -457,6 +457,45 @@ describe("createPagesPageHandler — request-aware App props", () => {
     );
   });
 
+  it("clears edge cache headers even for nonce-bearing renders", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    const EdgeApp = Object.assign(() => null, {
+      getInitialProps: async ({
+        ctx,
+      }: {
+        ctx: { res: { setHeader(n: string, v: string): void } };
+      }) => {
+        ctx.res.setHeader("CDN-Cache-Control", "s-maxage=600");
+        return { viewer: "per-request", pageProps: {} };
+      },
+    });
+    const handler = createPagesPageHandler(
+      makeOpts({
+        AppComponent: EdgeApp,
+        pageRoutes: [
+          makeRoute(
+            "/about",
+            makePageModule({ getStaticProps: async () => ({ props: {}, revalidate: 60 }) }),
+          ),
+        ],
+        matchRoute: (url, r) => {
+          const route = r.find((rt) => rt.pattern === url.split("?")[0]);
+          return route ? { route, params: {} } : null;
+        },
+      }),
+    );
+
+    const request = new Request("http://localhost/about", {
+      headers: { "content-security-policy": "script-src 'nonce-abc123'" },
+    });
+    const html = await handler(request, "/about", null, null, null);
+    expect(html.status).toBe(200);
+    expect(html.headers.get("cdn-cache-control")).toBeNull();
+    expect(html.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
+  });
+
   it("still rejects an invalid revalidate value", async () => {
     const handler = makeHandler(
       makePageModule({ getStaticProps: async () => ({ props: {}, revalidate: 0 }) }),

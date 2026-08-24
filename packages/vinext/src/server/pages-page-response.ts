@@ -699,12 +699,12 @@ export async function renderPagesPageResponse(
   // this point, so the captured value matches main's original capture site.
   const userSetCacheControl = responseHeaders.has("Cache-Control");
 
-  if (options.scriptNonce) {
-    responseHeaders.set("Cache-Control", ISR_NO_STORE_CACHE_CONTROL);
-  } else if (options.bypassSharedCache) {
-    // Route through the adapter so provider-owned edge headers set by
-    // App.getInitialProps are cleared as well.
+  if (options.bypassSharedCache) {
+    // Checked before the nonce branch: request-derived props need the adapter
+    // so provider-owned edge headers set by App.getInitialProps are cleared.
     applyCdnResponseHeaders(responseHeaders, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+  } else if (options.scriptNonce) {
+    responseHeaders.set("Cache-Control", ISR_NO_STORE_CACHE_CONTROL);
   } else if (options.isrRevalidateSeconds !== null) {
     // Fresh ISR (MISS) response: route through the CDN adapter with the path tag
     // used by Pages Router invalidation while the default emits Cache-Control.
