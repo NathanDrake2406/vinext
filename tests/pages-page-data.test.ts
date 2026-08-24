@@ -1613,6 +1613,87 @@ describe("pages page data", () => {
     expect(appGip).toHaveBeenCalledOnce();
   });
 
+  it("keeps ISR for an App that inherits the shim's default getInitialProps", async () => {
+    const isrGet = vi.fn().mockResolvedValue(null);
+    const defaultGip = vi.fn().mockResolvedValue({ pageProps: {} });
+    const result = await resolvePagesPageData(
+      createOptions({
+        // Mirrors `class MyApp extends App {}`: the static getInitialProps is
+        // the shim default, not a userland override.
+        AppComponent: Object.assign(
+          function App() {
+            return null;
+          },
+          { getInitialProps: defaultGip, origGetInitialProps: defaultGip },
+        ),
+        isrGet,
+        pageModule: {
+          async getStaticProps() {
+            return { props: { pageProp: "fresh" }, revalidate: 60 };
+          },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ kind: "render", isrRevalidateSeconds: 60 });
+    expect(isrGet).toHaveBeenCalledWith("pages:/posts/post");
+  });
+
+  it("returns an uncacheable notFound when a custom App supplies request-aware props", async () => {
+    const isrSet = vi.fn(async () => {});
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(
+          function App() {
+            return null;
+          },
+          { getInitialProps: vi.fn().mockResolvedValue({ pageProps: {} }) },
+        ),
+        isrSet,
+        pageModule: {
+          async getStaticProps() {
+            return { notFound: true, revalidate: 60 };
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "notFound",
+      revalidateSeconds: undefined,
+      expireSeconds: undefined,
+      cacheState: undefined,
+      responseHeaders: undefined,
+    });
+    expect(isrSet).not.toHaveBeenCalled();
+  });
+
+  it("treats only-generated revalidation as a no-op when a custom App supplies request-aware props", async () => {
+    const isrGet = vi.fn().mockResolvedValue(null);
+    const getStaticProps = vi.fn(async () => ({ props: { pageProp: "fresh" }, revalidate: 60 }));
+    const result = await resolvePagesPageData(
+      createOptions({
+        AppComponent: Object.assign(
+          function App() {
+            return null;
+          },
+          { getInitialProps: vi.fn().mockResolvedValue({ pageProps: {} }) },
+        ),
+        isOnDemandRevalidate: true,
+        revalidateOnlyGenerated: true,
+        isrGet,
+        pageModule: { getStaticProps },
+      }),
+    );
+
+    expect(result.kind).toBe("response");
+    if (result.kind !== "response") throw new Error("expected response result");
+    expect(result.response.status).toBe(404);
+    expect(result.response.headers.get("x-nextjs-cache")).toBe("REVALIDATED");
+    expect(isrGet).not.toHaveBeenCalled();
+    expect(getStaticProps).not.toHaveBeenCalled();
+  });
+
   it("renders request-aware app props in the foreground instead of serving stale ISR HTML", async () => {
     let regenPromise: Promise<void> | null = null;
     const isrSet = vi.fn<ResolvePagesPageDataOptions["isrSet"]>(async () => {});

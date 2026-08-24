@@ -482,6 +482,16 @@ export function mergePagesNotFoundSourceHeaders(
   });
 }
 
+/**
+ * True only when userland overrode App.getInitialProps. The shim's inherited
+ * default (`class MyApp extends App {}`) is request-agnostic and keeps ISR.
+ */
+function hasCustomAppGetInitialProps(appComponent: unknown): boolean {
+  if (!hasPagesGetInitialProps(appComponent)) return false;
+  const component = appComponent as { getInitialProps?: unknown; origGetInitialProps?: unknown };
+  return component.getInitialProps !== component.origGetInitialProps;
+}
+
 function applyPagesTerminalMissHeaders(
   response: Response,
   revalidateSeconds: number | false,
@@ -1210,10 +1220,10 @@ export async function resolvePagesPageData(
   let shouldPersistFallbackData = false;
   let onDemandPreviousCacheEntry: ISRCacheEntry | null | undefined;
   const previewData = options.isOnDemandRevalidate ? false : (options.previewData ?? false);
-  // App.getInitialProps receives the live request. Its result can therefore
-  // contain cookies, headers, or other per-user data and must never enter (or
-  // be read from) the shared ISR cache used by getStaticProps pages.
-  const hasRequestAwareAppProps = hasPagesGetInitialProps(options.AppComponent);
+  // A user-defined App.getInitialProps receives the live request. Its result
+  // can contain cookies, headers, or other per-user data and must never enter
+  // (or be read from) the shared ISR cache used by getStaticProps pages.
+  const hasRequestAwareAppProps = hasCustomAppGetInitialProps(options.AppComponent);
 
   if (typeof options.pageModule.getStaticPaths === "function" && options.route.isDynamic) {
     const pathsResult = await options.pageModule.getStaticPaths({
@@ -1261,11 +1271,14 @@ export async function resolvePagesPageData(
   if (
     typeof options.pageModule.getStaticProps === "function" &&
     options.isOnDemandRevalidate &&
-    options.revalidateOnlyGenerated &&
-    !hasRequestAwareAppProps
+    options.revalidateOnlyGenerated
   ) {
     const pathname = options.isrCachePathname ?? options.routeUrl.split("?")[0];
-    onDemandPreviousCacheEntry = await options.isrGet(options.isrCacheKey("pages", pathname));
+    // Request-aware App props never produce a shared entry, so there is
+    // nothing generated to revalidate.
+    onDemandPreviousCacheEntry = hasRequestAwareAppProps
+      ? null
+      : await options.isrGet(options.isrCacheKey("pages", pathname));
     if (!onDemandPreviousCacheEntry) {
       return {
         kind: "response",
@@ -1753,9 +1766,14 @@ export async function resolvePagesPageData(
     }
 
     if (result?.notFound) {
+      // The recursive custom 404 render also runs App.getInitialProps, so
+      // request-aware App props must not receive a shared cache lifetime either.
+      if (hasRequestAwareAppProps) {
+        return buildPagesNotFoundResult(options);
+      }
       const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
       const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
-      if (previewData === false && !hasRequestAwareAppProps) {
+      if (previewData === false) {
         await options.isrSet(cacheKey, null, {
           cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
         });
