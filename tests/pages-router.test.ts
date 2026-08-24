@@ -2776,33 +2776,36 @@ export default class CustomDocument extends Document {
     expect(nextData.props).toEqual({ pageProps: {} });
   });
 
-  it("rejects getInitialProps with getStaticProps before a dev fallback render", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-invalid-fallback-exports-"));
-    fs.mkdirSync(path.join(tmpDir, "pages", "products"), { recursive: true });
-    fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(tmpDir, "node_modules"));
-    fs.writeFileSync(path.join(tmpDir, "pages", "_app.tsx"), PAGES_APP_COMPONENT);
-    fs.writeFileSync(
-      path.join(tmpDir, "pages", "products", "[id].tsx"),
-      `export default function Product() { return <p>fallback product</p>; }
+  it.each([true, false])(
+    "rejects getInitialProps with getStaticProps before a dev fallback: %s exit",
+    async (fallback) => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-invalid-fallback-exports-"));
+      fs.mkdirSync(path.join(tmpDir, "pages", "products"), { recursive: true });
+      fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(tmpDir, "node_modules"));
+      fs.writeFileSync(path.join(tmpDir, "pages", "_app.tsx"), PAGES_APP_COMPONENT);
+      fs.writeFileSync(
+        path.join(tmpDir, "pages", "products", "[id].tsx"),
+        `export default function Product() { return <p>fallback product</p>; }
 Product.getInitialProps = async () => ({ fromInitialProps: true });
-export function getStaticPaths() { return { paths: [], fallback: true }; }
+export function getStaticPaths() { return { paths: [], fallback: ${fallback} }; }
 export function getStaticProps() { return { props: { fromStaticProps: true } }; }
 `,
-    );
+      );
 
-    let tempServer: ViteDevServer | undefined;
-    try {
-      const started = await startFixtureServer(tmpDir);
-      tempServer = started.server;
+      let tempServer: ViteDevServer | undefined;
+      try {
+        const started = await startFixtureServer(tmpDir);
+        tempServer = started.server;
 
-      const response = await fetch(`${started.baseUrl}/products/unlisted`);
-      expect(response.status).toBe(500);
-      expect(await response.text()).not.toContain("fallback product");
-    } finally {
-      await tempServer?.close();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
+        const response = await fetch(`${started.baseUrl}/products/unlisted`);
+        expect(response.status).toBe(500);
+        expect(await response.text()).not.toContain("fallback product");
+      } finally {
+        await tempServer?.close();
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("resolves real props for the data URL of an unlisted fallback: true path", async () => {
     // Counterpart to the fallback-shell test: the page HTML ships empty props,

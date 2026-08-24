@@ -938,6 +938,10 @@ export function createSSRHandler(
         // and `useRouter().isFallback === true`, matching Next.js render.tsx.
         let isFallbackRender = false;
 
+        if (typeof pageModule.getStaticProps === "function") {
+          assertPagesDataExportCompatibility(pageModule, patternToNextFormat(route.pattern));
+        }
+
         // Handle getStaticPaths for dynamic routes: validate the path,
         // respect `fallback: false` (return 404 for unlisted paths), and
         // render the loading shell for unlisted paths under `fallback: true`.
@@ -1215,9 +1219,6 @@ export function createSSRHandler(
         const responseHeaders = typeof res.getHeaders === "function" ? res.getHeaders() : undefined;
         const scriptNonce = getScriptNonceFromNodeHeaderSources(req.headers, responseHeaders);
 
-        if (typeof pageModule.getStaticProps === "function") {
-          assertPagesDataExportCompatibility(pageModule, patternToNextFormat(route.pattern));
-        }
         if (typeof pageModule.getStaticProps === "function" && !isFallbackRender) {
           const routePattern = patternToNextFormat(route.pattern);
           // An authenticated res.revalidate() request executes GSP once with the

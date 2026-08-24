@@ -117,6 +117,34 @@ describe("final cache header merge", () => {
       setCdnCacheAdapter(new DefaultCdnCacheAdapter());
     }
   });
+
+  it("preserves a rendered private browser policy while clearing staged CDN headers", async () => {
+    setCdnCacheAdapter(new CloudflareCdnCacheAdapter());
+    try {
+      const result = await runPagesRequest(
+        makeRequest("/private"),
+        baseDeps({
+          hasMiddleware: true,
+          runMiddleware: makeMiddleware({
+            responseHeaders: [["CDN-Cache-Control", "s-maxage=600"]],
+          }),
+          renderPage: vi.fn(
+            async () =>
+              new Response("private", {
+                headers: { "Cache-Control": "private, max-age=300" },
+              }),
+          ),
+        }),
+      );
+
+      expect(result.type).toBe("response");
+      if (result.type !== "response") return;
+      expect(result.response.headers.get("cdn-cache-control")).toBeNull();
+      expect(result.response.headers.get("cache-control")).toBe("private, max-age=300");
+    } finally {
+      setCdnCacheAdapter(new DefaultCdnCacheAdapter());
+    }
+  });
 });
 
 describe("on-demand revalidation middleware bypass", () => {

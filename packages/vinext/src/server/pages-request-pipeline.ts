@@ -37,6 +37,7 @@ import { mergeHeaders } from "./worker-utils.js";
 import {
   applyCdnResponseHeaders,
   hasExplicitNonCacheableResponsePolicy,
+  isExplicitNonCacheableCacheControl,
   NEVER_CACHE_CONTROL,
 } from "./cache-control.js";
 import { normalizeDefaultLocalePathname, stripI18nLocaleForApiRoute } from "./pages-i18n.js";
@@ -867,12 +868,17 @@ export async function runPagesRequest(
     const responseIsExplicitlyNonCacheable = hasExplicitNonCacheableResponsePolicy(
       response.headers,
     );
+    const responseCacheControl = response.headers.get("cache-control");
     const merged = mergeHeaders(response, matchedPathHeaders, middlewareStatus);
     if (responseIsExplicitlyNonCacheable) {
-      // A rendered no-store policy is final. Reapply it after staged headers
-      // merge so adapter-owned cache metadata cannot reappear from middleware
-      // or next.config headers.
-      applyCdnResponseHeaders(merged.headers, { cacheControl: NEVER_CACHE_CONTROL });
+      // A rendered non-cacheable policy is final. Reapply it after staged
+      // headers merge so adapter-owned cache metadata cannot reappear from
+      // middleware or next.config headers.
+      applyCdnResponseHeaders(merged.headers, {
+        cacheControl: isExplicitNonCacheableCacheControl(responseCacheControl)
+          ? responseCacheControl
+          : NEVER_CACHE_CONTROL,
+      });
     }
     // Preserve the streaming marker so the adapter can decide stream-vs-buffer.
     // mergeHeaders may create a new Response object (losing non-standard properties),
