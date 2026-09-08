@@ -113,6 +113,43 @@ describe("function cache revalidation", () => {
     },
   );
 
+  it.each(["fresh", "stale"])(
+    "disables a persisted %s unstable_cache entry when revalidate becomes zero",
+    async (state) => {
+      const handler = new MemoryCacheHandler();
+      setCacheHandler(handler);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      const keyParts = [`disabled-unstable:${state}`];
+      const pending: Promise<unknown>[] = [];
+      const read = (fn: () => Promise<number>) =>
+        runWithRequestContext(
+          createRequestContext({
+            functionCacheRevalidationMode: "background",
+            executionContext: {
+              waitUntil(promise) {
+                pending.push(promise);
+              },
+            },
+          }),
+          fn,
+        );
+      const old = unstable_cache(async () => 1, keyParts, { revalidate: 1 });
+      expect(await read(old)).toBe(1);
+      if (state === "stale") clock.mockReturnValue(102_000);
+      let value = 1;
+      const uncached = unstable_cache(async () => ++value, keyParts, { revalidate: 0 });
+      try {
+        expect(await read(uncached)).toBe(2);
+        const writes = vi.spyOn(handler, "set");
+        expect(await read(uncached)).toBe(3);
+        expect(writes).not.toHaveBeenCalled();
+        expect(pending).toHaveLength(0);
+      } finally {
+        await Promise.allSettled(pending);
+      }
+    },
+  );
+
   it.each(["use-cache", "unstable-cache", "new-tag", "soft-tag"])(
     "does not resurrect a tag invalidated during a %s refresh",
     async (api) => {

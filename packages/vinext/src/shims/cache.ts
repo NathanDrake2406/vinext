@@ -616,6 +616,14 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
             tags,
             softTags,
           });
+      if (revalidateSeconds === 0) {
+        // A stable key can outlive the configuration that originally cached it.
+        // Clear the old value and execute without caching, including fresh hits.
+        if (existing?.value) {
+          await getDataCacheHandler().set(cacheKey, null, { fetchCache: true });
+        }
+        return _unstableCacheAls.run(true, () => fn(...args));
+      }
       if (existing?.value && existing.value.kind === "FETCH") {
         const cacheReadAction = decideCacheRead(
           existing.cacheState,
