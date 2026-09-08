@@ -107,6 +107,37 @@ describe("KVCacheHandler", () => {
     handler = new KVCacheHandler(kv as any);
   });
 
+  it.each(["hard", "soft"])(
+    "preserves an in-flight %s tag invalidation across handler instances",
+    async (tagKind) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(103_000);
+      try {
+        await handler.revalidateTag("refresh-tag");
+        clock.mockReturnValue(104_000);
+        const value = {
+          kind: "FETCH" as const,
+          data: { headers: {}, body: "old", url: "/data" },
+          revalidate: 60,
+        };
+        const context = { lastModified: 102_000, tags: tagKind === "hard" ? ["refresh-tag"] : [] };
+        await handler.set("refresh", value, context);
+        const reader = new KVCacheHandler(kv as any);
+        expect(
+          await reader.get("refresh", { softTags: tagKind === "soft" ? ["refresh-tag"] : [] }),
+        ).toBeNull();
+        clock.mockReturnValue(105_000);
+        await handler.set(
+          "refresh",
+          { ...value, data: { ...value.data, body: "current" } },
+          { ...context, lastModified: 104_000 },
+        );
+        expect((await reader.get("refresh"))?.value).toMatchObject({ data: { body: "current" } });
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   // -------------------------------------------------------------------------
   // Basic round-trip
   // -------------------------------------------------------------------------

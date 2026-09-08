@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   cacheLife,
+  cacheTag,
+  revalidateTag,
   MemoryCacheHandler,
   setCacheHandler,
   unstable_cache,
 } from "../packages/vinext/src/shims/cache.js";
 import { registerCachedFunction } from "../packages/vinext/src/shims/cache-runtime.js";
-import { setFunctionCacheRevalidationMode } from "../packages/vinext/src/shims/cache-request-state.js";
+import {
+  setFunctionCacheRevalidationMode,
+  _drainPendingRevalidations,
+} from "../packages/vinext/src/shims/cache-request-state.js";
 import { cookies } from "../packages/vinext/src/shims/headers.js";
 import { getRootParam } from "../packages/vinext/src/shims/root-params.js";
 import {
@@ -103,6 +108,74 @@ describe("function cache revalidation", () => {
         if (initialMode === "background") expect(errorLog).toHaveBeenCalledTimes(2);
         else expect(errorLog).not.toHaveBeenCalled();
       } finally {
+        await Promise.allSettled(pending);
+      }
+    },
+  );
+
+  it.each(["use-cache", "unstable-cache", "new-tag", "soft-tag"])(
+    "does not resurrect a tag invalidated during a %s refresh",
+    async (api) => {
+      setCacheHandler(new MemoryCacheHandler());
+      const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      const tag = `inflight-invalidation:${api}`;
+      let source = "initial";
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let started = () => {};
+      const refreshStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const fn = async () => {
+        const value = source;
+        if (api !== "unstable-cache") {
+          cacheLife({ revalidate: 1, expire: 60 });
+          if (api !== "soft-tag" && (api !== "new-tag" || value !== "initial")) cacheTag(tag);
+        }
+        if (value === "obsolete") {
+          started();
+          await gate;
+        }
+        return value;
+      };
+      const cached =
+        api !== "unstable-cache"
+          ? registerCachedFunction(fn, tag)
+          : unstable_cache(fn, [tag], { revalidate: 1, tags: [tag] });
+      const pending: Promise<unknown>[] = [];
+      const read = () =>
+        runWithRequestContext(
+          createRequestContext({
+            functionCacheRevalidationMode: "background",
+            currentFetchSoftTags: api === "soft-tag" ? [tag] : [],
+            executionContext: {
+              waitUntil(promise) {
+                pending.push(promise);
+              },
+            },
+          }),
+          cached,
+        );
+      expect(await read()).toBe("initial");
+      clock.mockReturnValue(102_000);
+      source = "obsolete";
+      expect(await read()).toBe("initial");
+      await refreshStarted;
+      try {
+        source = "current";
+        clock.mockReturnValue(103_000);
+        await runWithRequestContext(createRequestContext(), async () => {
+          revalidateTag(tag);
+          await _drainPendingRevalidations();
+        });
+        clock.mockReturnValue(104_000);
+        release();
+        await Promise.all(pending);
+        expect(await read()).toBe("current");
+      } finally {
+        release();
         await Promise.allSettled(pending);
       }
     },

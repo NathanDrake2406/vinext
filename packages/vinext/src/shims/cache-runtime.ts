@@ -738,6 +738,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
       // Both misses and stale refreshes use the same serialization and key-selection
       // path, including root params read by lazy Server Components.
       const refreshSharedCacheEntry = async (background = false): Promise<TResult> => {
+        const lastModified = Date.now();
         const { result, ctx, effectiveLife, collectedResult } = await runCachedFunctionWithContext(
           fn,
           callArgs,
@@ -791,6 +792,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
             } satisfies CachedFetchValue;
             const cacheContext = {
               fetchCache: true,
+              lastModified,
               tags: ctx.tags,
               cacheControl: {
                 revalidate: revalidateSeconds,

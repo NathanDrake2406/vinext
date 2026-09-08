@@ -537,6 +537,7 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
   tags: string[],
   revalidateSeconds: number | false | undefined,
 ): Promise<Result> {
+  const lastModified = Date.now();
   const result = await _unstableCacheAls.run(true, () => fn(...args));
 
   const cacheValue: CachedFetchValue = {
@@ -556,6 +557,7 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
 
   await getDataCacheHandler().set(cacheKey, cacheValue, {
     fetchCache: true,
+    lastModified,
     tags,
     revalidate: revalidateSeconds,
   });
