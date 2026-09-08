@@ -35,7 +35,6 @@ import {
   hasNonStaticAppRouteHandlerMethods,
   resolveAppRouteHandlerMethod,
   shouldReadAppRouteHandlerCache,
-  shouldCompleteAppRouteHandlerResponse,
   type AppRouteHandlerModule,
 } from "./app-route-handler-policy.js";
 import { readAppRouteHandlerCacheResponse } from "./app-route-handler-cache.js";
@@ -330,21 +329,19 @@ export async function dispatchAppRouteHandler(
     }
   }
 
-  // Public responses need fresh dependencies even when their indefinite
-  // policy uses CDN caching instead of the finite ISR storage path.
+  // A GET handler can return its own public cache policy without exporting
+  // revalidate. Prepare fresh dependencies before that policy is known; auto
+  // mode still permits stale reads after a dynamic API makes the result private.
   if (
+    isProduction &&
+    (method === "GET" || isAutoHead) &&
+    !hasNonStaticAppRouteHandlerMethods(handler) &&
+    revalidateSeconds !== 0 &&
+    handler.dynamic !== "force-dynamic" &&
+    !isDraftMode &&
+    !hasDraftModeTransition &&
     !getRouteCacheabilityDynamicReason() &&
-    !isKnownDynamicAppRoute(route.pattern) &&
-    shouldCompleteAppRouteHandlerResponse({
-      dynamicConfig: handler.dynamic,
-      dynamicUsedInHandler: false,
-      handlerSetCachePolicy: false,
-      isAutoHead,
-      isDraftMode: isDraftMode || hasDraftModeTransition,
-      isProduction,
-      method,
-      revalidateSeconds,
-    })
+    !isKnownDynamicAppRoute(route.pattern)
   ) {
     setFunctionCacheRevalidationMode("auto");
   }
