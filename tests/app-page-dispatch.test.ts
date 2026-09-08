@@ -590,7 +590,7 @@ function createLayoutParamProbe(
 }
 
 describe("app page dispatch", () => {
-  it.each(["cold", "expired", "cache-life", "dynamic", "no-store", "auto-dynamic"])(
+  it.each(["cold", "expired", "cache-life", "dynamic", "no-store", "auto-dynamic", "slots"])(
     "uses fresh function data for an ISR page render (%s)",
     async (state) => {
       const { registerCachedFunction } =
@@ -630,6 +630,8 @@ describe("app page dispatch", () => {
       let rendered = "";
       const { options } = createDispatchOptions({
         isProduction: true,
+        isRscRequest: state === "slots",
+        mountedSlotsHeader: state === "slots" ? "slot:modal:/feed" : null,
         revalidateSeconds: state === "no-store" ? 0 : state === "cache-life" ? null : 60,
         dynamicConfig: state === "dynamic" ? "force-dynamic" : undefined,
         isrGet: async () =>
@@ -660,7 +662,10 @@ describe("app page dispatch", () => {
       try {
         const response = await runWithRequestContext(ctx, () => dispatchAppPage(options));
         const expected =
-          state === "dynamic" || state === "no-store" || state === "auto-dynamic"
+          state === "dynamic" ||
+          state === "no-store" ||
+          state === "auto-dynamic" ||
+          state === "slots"
             ? "stale-data"
             : "fresh-data";
         expect(await response.text()).toContain(expected);

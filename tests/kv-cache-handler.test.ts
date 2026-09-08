@@ -1259,6 +1259,23 @@ describe("KVCacheHandler", () => {
   });
 
   describe("revalidate: 0 skips storage", () => {
+    it("deletes an existing entry when set to null", async () => {
+      await handler.set("deleted", {
+        kind: "FETCH",
+        data: { headers: {}, body: "test", url: "" },
+        tags: [],
+        revalidate: 60,
+      });
+
+      await handler.set("deleted", null, { fetchCache: true });
+
+      expect(store.has("cache:deleted")).toBe(false);
+      expect(kv.delete).toHaveBeenCalledWith("cache:deleted");
+
+      await handler.set("response-null", null);
+      expect(await handler.get("response-null")).toMatchObject({ value: null });
+    });
+
     it("skips KV write when ctx.revalidate is 0", async () => {
       await handler.set(
         "no-cache-ctx",

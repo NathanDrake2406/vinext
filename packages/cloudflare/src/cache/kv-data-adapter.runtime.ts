@@ -344,6 +344,10 @@ export class KVCacheHandler implements CacheHandler {
     data: IncrementalCacheValue | null,
     ctx?: Record<string, unknown>,
   ): Promise<void> {
+    if (data === null && ctx?.fetchCache === true) {
+      return this.kv.delete(this._entryKey(key));
+    }
+
     // Collect, validate, and dedupe tags from data and context
     const tagSet = new Set<string>();
     if (data && "tags" in data && Array.isArray(data.tags)) {

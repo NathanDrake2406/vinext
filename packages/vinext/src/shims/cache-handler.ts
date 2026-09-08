@@ -293,6 +293,11 @@ export class MemoryCacheHandler implements CacheHandler {
     data: IncrementalCacheValue | null,
     ctx?: Record<string, unknown>,
   ): Promise<void> {
+    if (data === null && ctx?.fetchCache === true) {
+      this.deleteEntry(key);
+      return;
+    }
+
     const tagSet = new Set<string>();
     if (data && "tags" in data && Array.isArray(data.tags)) {
       for (const tag of data.tags) tagSet.add(tag);

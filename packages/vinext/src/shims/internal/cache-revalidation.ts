@@ -5,13 +5,44 @@ const PENDING_BACKGROUND_CACHE_REVALIDATIONS = Symbol.for(
 );
 const globalState = globalThis as unknown as Record<PropertyKey, unknown>;
 
-function getPendingBackgroundCacheRevalidations(): Map<string, Promise<void>> {
+function getPendingCacheRevalidations(): Map<string, Promise<unknown>> {
   const existing = globalState[PENDING_BACKGROUND_CACHE_REVALIDATIONS];
   if (existing instanceof Map) return existing;
 
-  const pending = new Map<string, Promise<void>>();
+  const pending = new Map<string, Promise<unknown>>();
   globalState[PENDING_BACKGROUND_CACHE_REVALIDATIONS] = pending;
   return pending;
+}
+
+export function hasPendingCacheRevalidation(cacheKey: string): boolean {
+  return getPendingCacheRevalidations().has(cacheKey);
+}
+
+/** Run a foreground fill after any older refresh for the same key settles. */
+export function runForegroundCacheRevalidation<T>(
+  cacheKey: string,
+  refresh: () => Promise<T>,
+): Promise<T> {
+  const pending = getPendingCacheRevalidations();
+  const previous = pending.get(cacheKey);
+  const revalidation = Promise.resolve().then(async () => {
+    if (previous) {
+      try {
+        await previous;
+      } catch {
+        // A foreground fill still gets its own attempt after an older failure.
+      }
+    }
+    return refresh();
+  });
+  const trackedRevalidation = revalidation.finally(() => {
+    if (pending.get(cacheKey) === trackedRevalidation) {
+      pending.delete(cacheKey);
+    }
+  });
+
+  pending.set(cacheKey, trackedRevalidation);
+  return trackedRevalidation;
 }
 
 /**
@@ -26,7 +57,7 @@ export function scheduleBackgroundCacheRevalidation(
   refresh: () => Promise<unknown>,
   reportError: (error: unknown) => void,
 ): void {
-  const pending = getPendingBackgroundCacheRevalidations();
+  const pending = getPendingCacheRevalidations();
   if (pending.has(cacheKey)) return;
 
   const revalidation = Promise.resolve()

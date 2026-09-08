@@ -45,7 +45,11 @@ import {
 } from "./cache-request-state.js";
 import { VINEXT_RSC_MARKER_HEADER } from "../server/headers.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
-import { scheduleBackgroundCacheRevalidation } from "./internal/cache-revalidation.js";
+import {
+  hasPendingCacheRevalidation,
+  runForegroundCacheRevalidation,
+  scheduleBackgroundCacheRevalidation,
+} from "./internal/cache-revalidation.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import {
   createCacheRevalidationContext,
@@ -890,6 +894,10 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           ? "foreground"
           : getFunctionCacheRevalidationMode(),
       );
+      const refreshSharedCacheEntryInForeground = (): Promise<TResult> =>
+        existing || hasPendingCacheRevalidation(cacheKey)
+          ? runForegroundCacheRevalidation(cacheKey, () => refreshSharedCacheEntry())
+          : refreshSharedCacheEntry();
       if (
         existing?.value?.kind === "FETCH" &&
         !isRootParamRedirect(existing) &&
@@ -910,7 +918,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           }
         } catch {
           // Corrupted entries must regenerate without contributing metadata.
-          return refreshSharedCacheEntry();
+          return refreshSharedCacheEntryInForeground();
         }
         // Corrupt entries must not contribute tags or lifetime to the render.
         propagateRootParamNamesToParent(knownRootParamsByFunctionId.get(id));
@@ -934,7 +942,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
         return result;
       }
 
-      return refreshSharedCacheEntry();
+      return refreshSharedCacheEntryInForeground();
     }, cacheVariant);
   };
 

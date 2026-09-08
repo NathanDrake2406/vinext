@@ -24,7 +24,10 @@ import {
   markDynamicUsage as _markDynamic,
 } from "./headers.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
-import { scheduleBackgroundCacheRevalidation } from "./internal/cache-revalidation.js";
+import {
+  runForegroundCacheRevalidation,
+  scheduleBackgroundCacheRevalidation,
+} from "./internal/cache-revalidation.js";
 import { fnv1a64 } from "../utils/hash.js";
 import { workUnitAsyncStorage } from "./internal/work-unit-async-storage.js";
 import { makeHangingPromise } from "./internal/make-hanging-promise.js";
@@ -670,7 +673,9 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
     if (isDraftMode) {
       return await _unstableCacheAls.run(true, () => fn(...args));
     }
-    return await refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds);
+    return await runForegroundCacheRevalidation(cacheKey, () =>
+      refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
+    );
   };
 
   return cachedFn as T;

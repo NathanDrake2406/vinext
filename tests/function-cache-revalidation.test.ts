@@ -218,6 +218,68 @@ describe("function cache revalidation", () => {
     },
   );
 
+  it.each(["use-cache", "unstable-cache"])(
+    "orders a foreground %s refresh after older background work",
+    async (api) => {
+      const handler = new MemoryCacheHandler();
+      setCacheHandler(handler);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      let value = "initial";
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let started = () => {};
+      const backgroundStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const source = async () => {
+        const captured = value;
+        if (captured === "background") {
+          started();
+          await gate;
+        }
+        if (api === "use-cache") cacheLife({ revalidate: 1, expire: 60 });
+        return captured;
+      };
+      const cached =
+        api === "use-cache"
+          ? registerCachedFunction(source, `ordered-refresh:${api}`)
+          : unstable_cache(source, [`ordered-refresh:${api}`], { revalidate: 1 });
+      const pending: Promise<unknown>[] = [];
+      const read = (mode: "foreground" | "background") =>
+        runWithRequestContext(
+          createRequestContext({
+            functionCacheRevalidationMode: mode,
+            executionContext: {
+              waitUntil(promise) {
+                pending.push(promise);
+              },
+            },
+          }),
+          cached,
+        );
+
+      expect(await read("background")).toBe("initial");
+      clock.mockReturnValue(102_000);
+      value = "background";
+      expect(await read("background")).toBe("initial");
+      await backgroundStarted;
+      value = "foreground";
+      clock.mockReturnValue(103_000);
+      const foreground = read("foreground");
+      try {
+        release();
+        expect(await foreground).toBe("foreground");
+        await Promise.all(pending);
+        expect(await read("background")).toBe("foreground");
+      } finally {
+        release();
+        await Promise.allSettled([...pending, foreground]);
+      }
+    },
+  );
+
   it("follows a persisted stale root-param redirect and deduplicates refreshes", async () => {
     const handler = new MemoryCacheHandler();
     setCacheHandler(handler);

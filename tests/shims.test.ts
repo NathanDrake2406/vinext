@@ -6279,6 +6279,24 @@ describe("next/cache shim", () => {
     }
   });
 
+  it("MemoryCacheHandler deletes entries set to null", async () => {
+    const { MemoryCacheHandler } = await import("../packages/vinext/src/shims/cache.js");
+    const handler = new MemoryCacheHandler();
+    await handler.set("deleted", {
+      kind: "FETCH",
+      data: { headers: {}, body: '"cached"', url: "test" },
+      tags: [],
+      revalidate: 3600,
+    });
+
+    await handler.set("deleted", null, { fetchCache: true });
+
+    expect(await handler.get("deleted")).toBeNull();
+
+    await handler.set("response-null", null);
+    expect(await handler.get("response-null")).toMatchObject({ value: null });
+  });
+
   it("MemoryCacheHandler evicts least-recently-used entries when max size is exceeded", async () => {
     const { MemoryCacheHandler } = await import("../packages/vinext/src/shims/cache.js");
 
