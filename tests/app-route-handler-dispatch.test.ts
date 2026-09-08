@@ -41,6 +41,7 @@ describe("app route handler dispatch", () => {
     "force-static",
     "auto-dynamic",
     "response-policy",
+    "sibling-method",
   ])("uses fresh function data for an ISR route render (%s)", async (state) => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
@@ -100,12 +101,15 @@ describe("app route handler dispatch", () => {
             pattern: `/api/refresh-${state}`,
             routeSegments: ["api", "refresh"],
             routeHandler: {
+              ...(state === "sibling-method" ? { POST: async () => new Response("created") } : {}),
               revalidate:
                 state === "no-store"
                   ? 0
                   : state === "indefinite"
                     ? false
-                    : state === "force-static" || state === "response-policy"
+                    : state === "force-static" ||
+                        state === "response-policy" ||
+                        state === "sibling-method"
                       ? undefined
                       : 60,
               dynamic:
@@ -119,7 +123,7 @@ describe("app route handler dispatch", () => {
                   await (await import("../packages/vinext/src/shims/headers.js")).cookies();
                 return new Response(
                   await cached(),
-                  state === "response-policy"
+                  state === "response-policy" || state === "sibling-method"
                     ? { headers: { "Cache-Control": "public, s-maxage=3600" } }
                     : undefined,
                 );
@@ -140,7 +144,7 @@ describe("app route handler dispatch", () => {
       }
       if (state === "auto-dynamic")
         expect(response.headers.get("cache-control")).toContain("no-store");
-      if (state === "response-policy")
+      if (state === "response-policy" || state === "sibling-method")
         expect(response.headers.get("cache-control")).toContain("s-maxage=3600");
       await Promise.all(pending);
       if (state === "cold" || state === "expired") {

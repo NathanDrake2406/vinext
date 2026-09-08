@@ -335,8 +335,7 @@ export async function dispatchAppRouteHandler(
   if (
     isProduction &&
     (method === "GET" || isAutoHead) &&
-    !hasNonStaticAppRouteHandlerMethods(handler) &&
-    revalidateSeconds !== 0 &&
+    configuredRevalidateSeconds !== 0 &&
     handler.dynamic !== "force-dynamic" &&
     !isDraftMode &&
     !hasDraftModeTransition &&
