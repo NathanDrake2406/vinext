@@ -292,6 +292,11 @@ export function _peekUnstableCacheObservations(): UnstableCacheObservation[] {
   );
 }
 
+/** Select freshness before executing a render that can produce a cache entry. */
+export function setFunctionCacheRevalidationMode(mode: FunctionCacheRevalidationMode): void {
+  getCacheState().functionCacheRevalidationMode = mode;
+}
+
 export function getFunctionCacheRevalidationMode(): FunctionCacheRevalidationMode {
   return getCacheState().functionCacheRevalidationMode;
 }

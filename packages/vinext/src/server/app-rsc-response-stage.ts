@@ -229,7 +229,10 @@ export async function renderAppWorkerResponseStage<TRoute extends AppRscHandlerR
   const requestContext = createRequestContext({
     headersContext,
     executionContext,
-    functionCacheRevalidationMode: "background",
+    // The response stage owns a new context and must derive build-time
+    // freshness independently of the request stage's context.
+    functionCacheRevalidationMode:
+      process.env.VINEXT_PRERENDER === "1" ? "foreground" : "background",
   });
   const middlewareContext: AppMiddlewareContext = {
     headers: null,

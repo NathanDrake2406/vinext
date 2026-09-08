@@ -2,7 +2,10 @@ import { type ReactNode } from "react";
 import type { ReactFormState } from "react-dom/client";
 import type { NavigationContext } from "vinext/shims/navigation";
 import type { ClassificationReason } from "../build/layout-classification-types.js";
-import { _captureRequestScopedCacheLifeAccessors } from "vinext/shims/cache-request-state";
+import {
+  _captureRequestScopedCacheLifeAccessors,
+  setFunctionCacheRevalidationMode,
+} from "vinext/shims/cache-request-state";
 import type { RootParams } from "vinext/shims/root-params";
 import type { PprFallbackShellState } from "vinext/shims/ppr-fallback-shell";
 import {
@@ -888,6 +891,9 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     if (cachedPageResponse) {
       return cachedPageResponse;
     }
+    // A miss or expired artifact falls through to a cache-producing render.
+    // This includes pages whose cacheLife is discovered during rendering.
+    setFunctionCacheRevalidationMode("foreground");
   }
 
   // Next.js' production force-dynamic routes are absent from the prerender

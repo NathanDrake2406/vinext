@@ -4263,6 +4263,64 @@ describe("createAppRscHandler", () => {
     }
   });
 
+  it.each([false, true])(
+    "preserves prerender cache policy through the response stage (%s)",
+    async (prerender) => {
+      const { registerCachedFunction } =
+        await import("../packages/vinext/src/shims/cache-runtime.js");
+      const { getCacheHandler, setCacheHandler } =
+        await import("../packages/vinext/src/shims/cache.js");
+      const previousHandler = getCacheHandler();
+      setCacheHandler({
+        async get(key) {
+          return {
+            lastModified: Date.now(),
+            cacheState: "stale",
+            value: {
+              kind: "FETCH",
+              data: { headers: {}, body: '"stale-data"', url: key },
+              revalidate: 60,
+            },
+          };
+        },
+        async set() {},
+        async revalidateTag() {},
+      });
+      const cached = registerCachedFunction(
+        async () => "fresh-data",
+        `staged-prerender-${prerender}`,
+      );
+      const pending: Promise<unknown>[] = [];
+      const ctx = {
+        waitUntil: (promise: Promise<unknown>) => {
+          pending.push(promise);
+        },
+      };
+      const stageHandler = createHandler({
+        configHeaders: [],
+        dispatchMatchedPage: async () => new Response(await cached()),
+      });
+      const handler = createHandler({ configHeaders: [] });
+      const previous = process.env.VINEXT_PRERENDER;
+      try {
+        if (prerender) process.env.VINEXT_PRERENDER = "1";
+        else delete process.env.VINEXT_PRERENDER;
+        const response = await handler(
+          new Request("https://example.test/docs/about"),
+          ctx,
+          false,
+          (request, props) => stageHandler.handleResponseStage(request, ctx, props),
+        );
+        expect(await response.text()).toBe(prerender ? "fresh-data" : "stale-data");
+      } finally {
+        await Promise.allSettled(pending);
+        setCacheHandler(previousHandler);
+        if (previous === undefined) delete process.env.VINEXT_PRERENDER;
+        else process.env.VINEXT_PRERENDER = previous;
+      }
+    },
+  );
+
   it("seeds foreground function-cache revalidation only while prerendering", async () => {
     // Ordinary runtime requests serve stale "use cache"/unstable_cache data and
     // refresh in the background. A build/prerender request (VINEXT_PRERENDER=1)

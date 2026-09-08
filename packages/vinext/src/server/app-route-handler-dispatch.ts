@@ -8,7 +8,10 @@ import {
   setCurrentForceDynamicFetchDefault,
   type FetchCacheMode,
 } from "vinext/shims/fetch-cache";
-import { _drainPendingRevalidations } from "vinext/shims/cache-request-state";
+import {
+  _drainPendingRevalidations,
+  setFunctionCacheRevalidationMode,
+} from "vinext/shims/cache-request-state";
 import {
   consumeDynamicUsage,
   getActiveDraftModeState,
@@ -324,6 +327,9 @@ export async function dispatchAppRouteHandler(
     if (cachedRouteResponse) {
       return applyCdnResponseBuildIdentityHeaders(cachedRouteResponse);
     }
+    // The normal handler now produces the missing/expired ISR artifact, so
+    // it needs fresh function-cache dependencies just like regeneration.
+    setFunctionCacheRevalidationMode("foreground");
   }
 
   if (resolvedHandlerFn) {

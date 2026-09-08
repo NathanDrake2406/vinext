@@ -590,6 +590,95 @@ function createLayoutParamProbe(
 }
 
 describe("app page dispatch", () => {
+  it.each(["cold", "expired", "cache-life", "dynamic", "no-store"])(
+    "uses fresh function data for an ISR page render (%s)",
+    async (state) => {
+      const { registerCachedFunction } =
+        await import("../packages/vinext/src/shims/cache-runtime.js");
+      const { getCacheHandler, setCacheHandler } =
+        await import("../packages/vinext/src/shims/cache.js");
+      const { createRequestContext, runWithRequestContext } =
+        await import("../packages/vinext/src/shims/unified-request-context.js");
+      const previous = getCacheHandler();
+      setCacheHandler({
+        async get(key) {
+          return {
+            lastModified: Date.now(),
+            cacheState: "stale",
+            value: {
+              kind: "FETCH",
+              data: { headers: {}, body: '"stale-data"', url: key },
+              revalidate: 60,
+            },
+          };
+        },
+        async set() {},
+        async revalidateTag() {},
+      });
+      const cached = registerCachedFunction(async () => "fresh-data", `page-isr-${state}`);
+      const pending: Promise<unknown>[] = [];
+      const ctx = createRequestContext({
+        functionCacheRevalidationMode: "background",
+        executionContext: {
+          waitUntil: (promise) => {
+            pending.push(promise);
+          },
+        },
+      });
+      const isrSet = vi.fn<DispatchOptions["isrSet"]>(async () => {});
+      let rendered = "";
+      const { options } = createDispatchOptions({
+        isProduction: true,
+        revalidateSeconds: state === "no-store" ? 0 : state === "cache-life" ? null : 60,
+        dynamicConfig: state === "dynamic" ? "force-dynamic" : undefined,
+        isrGet: async () =>
+          state === "expired"
+            ? {
+                ...buildISRCacheEntry(buildCachedAppPageValue("expired-artifact"), true),
+                isExpired: true,
+              }
+            : null,
+        isrSet,
+        buildPageElement: async () => {
+          rendered = await cached();
+          return React.createElement("main", null, rendered);
+        },
+        renderToReadableStream: () => createStream([rendered]),
+        loadSsrHandler: async () => ({
+          handleSsr: async (_stream, _ctx, _fontData, capture) => {
+            if (capture?.capturedRscDataRef)
+              capture.capturedRscDataRef.value = Promise.resolve(
+                new TextEncoder().encode(rendered).buffer,
+              );
+            return createStream([`<html>${rendered}</html>`]);
+          },
+        }),
+      });
+      try {
+        const response = await runWithRequestContext(ctx, () => dispatchAppPage(options));
+        const expected = state === "dynamic" || state === "no-store" ? "stale-data" : "fresh-data";
+        expect(await response.text()).toContain(expected);
+        await Promise.all(pending);
+        if (state === "cold" || state === "expired" || state === "cache-life") {
+          expect(isrSet).toHaveBeenCalled();
+          const htmlWrite = isrSet.mock.calls.find(([key]) => key.startsWith("html:"));
+          expect(htmlWrite?.[1]).toMatchObject({
+            kind: "APP_PAGE",
+            html: "<html>fresh-data</html>",
+          });
+          const rscWrite = isrSet.mock.calls.find(([key]) => key.startsWith("rsc:"));
+          expect(rscWrite?.[1]).toMatchObject({
+            kind: "APP_PAGE",
+            rscData: new TextEncoder().encode("fresh-data").buffer,
+          });
+        } else expect(isrSet).not.toHaveBeenCalled();
+      } finally {
+        await Promise.allSettled(pending);
+        setCacheHandler(previous);
+      }
+    },
+  );
+
   it("does not probe layouts below an active ancestor loading boundary", async () => {
     const probeLayoutAt = vi.fn((_layoutIndex: number) => null);
     const probePage = vi.fn(() => null);

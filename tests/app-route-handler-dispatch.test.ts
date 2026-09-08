@@ -32,6 +32,89 @@ function buildISRCacheEntry(value: CachedRouteValue, isStale = false): ISRCacheE
 }
 
 describe("app route handler dispatch", () => {
+  it.each(["cold", "expired", "dynamic", "no-store"])(
+    "uses fresh function data for an ISR route render (%s)",
+    async (state) => {
+      const { registerCachedFunction } =
+        await import("../packages/vinext/src/shims/cache-runtime.js");
+      const { createRequestContext, runWithRequestContext } =
+        await import("../packages/vinext/src/shims/unified-request-context.js");
+      const previous = getDataCacheHandler();
+      setDataCacheHandler({
+        async get(key) {
+          return {
+            lastModified: Date.now(),
+            cacheState: "stale",
+            value: {
+              kind: "FETCH",
+              data: { headers: {}, body: '"stale-data"', url: key },
+              revalidate: 60,
+            },
+          };
+        },
+        async set() {},
+        async revalidateTag() {},
+      });
+      const cached = registerCachedFunction(async () => "fresh-data", `route-isr-${state}`);
+      const pending: Promise<unknown>[] = [];
+      const ctx = createRequestContext({
+        functionCacheRevalidationMode: "background",
+        executionContext: {
+          waitUntil: (promise) => {
+            pending.push(promise);
+          },
+        },
+      });
+      const isrSet = vi.fn();
+      try {
+        const response = await runWithRequestContext(ctx, () =>
+          dispatchAppRouteHandler({
+            cleanPathname: "/api/refresh",
+            clearRequestContext() {},
+            draftModeSecret: "secret",
+            i18n: null,
+            isDevelopment: false,
+            isProduction: true,
+            isrGet: async () =>
+              state === "expired"
+                ? {
+                    ...buildISRCacheEntry(buildCachedRouteValue("expired-artifact"), true),
+                    isExpired: true,
+                  }
+                : null,
+            isrRouteKey: (pathname) => pathname,
+            isrSet,
+            middlewareContext: { headers: null, status: null },
+            middlewareRequestHeaders: null,
+            params: {},
+            request: new Request("https://example.com/api/refresh"),
+            route: {
+              pattern: `/api/refresh-${state}`,
+              routeSegments: ["api", "refresh"],
+              routeHandler: {
+                revalidate: state === "no-store" ? 0 : 60,
+                dynamic: state === "dynamic" ? "force-dynamic" : undefined,
+                GET: async () => new Response(await cached()),
+              },
+            },
+            scheduleBackgroundRegeneration() {},
+            searchParams: new URLSearchParams(),
+          }),
+        );
+        const expected = state === "dynamic" || state === "no-store" ? "stale-data" : "fresh-data";
+        expect(await response.text()).toBe(expected);
+        await Promise.all(pending);
+        if (state === "cold" || state === "expired") {
+          expect(isrSet).toHaveBeenCalledOnce();
+          expect(new TextDecoder().decode(isrSet.mock.calls[0][1].body)).toBe("fresh-data");
+        } else expect(isrSet).not.toHaveBeenCalled();
+      } finally {
+        await Promise.allSettled(pending);
+        setDataCacheHandler(previous);
+      }
+    },
+  );
+
   it.each([
     {
       enabled: true,

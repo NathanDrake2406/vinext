@@ -179,6 +179,7 @@ export function createCacheRevalidationContext(
     pendingRevalidatedTags: new Set(outer?.pendingRevalidatedTags ?? []),
     currentFetchSoftTags: [...(outer?.currentFetchSoftTags ?? fallbackSoftTags)],
     currentFetchCacheMode: outer?.currentFetchCacheMode ?? null,
+    currentFetchRevalidate: outer?.currentFetchRevalidate ?? null,
     currentForceDynamicFetchDefault: outer?.currentForceDynamicFetchDefault ?? false,
     isFetchDedupeActive: outer?.isFetchDedupeActive ?? false,
     currentFetchDedupeEntries: new Map(),
