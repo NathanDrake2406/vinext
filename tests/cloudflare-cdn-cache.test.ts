@@ -27,7 +27,7 @@ import { finalizeAppRscResponse } from "../packages/vinext/src/server/app-rsc-re
 import {
   applyCdnResponseHeaders,
   applyCdnResponseIdentityHeaders,
-  getCdnResponsePolicyHeaderNames,
+  isCdnResponsePolicyHeader,
 } from "../packages/vinext/src/server/cache-control.js";
 import { withResponseStageCacheability } from "../packages/vinext/src/server/response-stage-cacheability.js";
 import {
@@ -100,11 +100,10 @@ describe("CloudflareCdnCacheAdapter", () => {
   it("declares every provider policy header to the generic admission layer", () => {
     setCdnCacheAdapter(adapter);
 
-    expect([...getCdnResponsePolicyHeaderNames()]).toEqual([
-      "cache-control",
-      "cdn-cache-control",
-      "cloudflare-cdn-cache-control",
-    ]);
+    expect(isCdnResponsePolicyHeader("Cache-Control")).toBe(true);
+    expect(isCdnResponsePolicyHeader("CDN-Cache-Control")).toBe(true);
+    expect(isCdnResponsePolicyHeader("Cloudflare-CDN-Cache-Control")).toBe(true);
+    expect(isCdnResponsePolicyHeader("X-Unrelated")).toBe(false);
   });
 
   it("accepts a staged warmup only in its expected Worker version", async () => {
@@ -390,7 +389,7 @@ describe("CloudflareCdnCacheAdapter", () => {
 
   it("interprets its own edge policy when checking whether a response opted out", () => {
     expect(
-      adapter.hasExplicitNonCacheableResponsePolicy(
+      adapter.responsePolicy.hasExplicitNonCacheablePolicy(
         new Headers({
           "Cache-Control": "no-store",
           "CDN-Cache-Control": "public, max-age=60",
@@ -398,8 +397,17 @@ describe("CloudflareCdnCacheAdapter", () => {
       ),
     ).toBe(false);
     expect(
-      adapter.hasExplicitNonCacheableResponsePolicy(
+      adapter.responsePolicy.hasExplicitNonCacheablePolicy(
         new Headers({ "Cloudflare-CDN-Cache-Control": "private, no-store" }),
+      ),
+    ).toBe(true);
+    expect(
+      adapter.responsePolicy.hasExplicitNonCacheablePolicy(
+        new Headers({
+          "Cache-Control": "private, no-store",
+          "Cloudflare-CDN-Cache-Control": "public, max-age=60",
+        }),
+        new Headers({ "Cache-Control": "no-store" }),
       ),
     ).toBe(true);
   });
