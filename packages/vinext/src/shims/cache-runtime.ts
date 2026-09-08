@@ -763,6 +763,21 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
         // Component work is reflected in `ctx` before selecting the final key.
         if (collectedResult?.cacheEntry) {
           try {
+            if (revalidateSeconds === 0) {
+              // Handlers skip no-store writes, which would leave an older stale
+              // value reusable. Replace it with a cache miss instead.
+              const finalKey =
+                rootParamNames && rootParams
+                  ? coarseCacheKey + computeRootParamsCacheKeySuffix(rootParams, rootParamNames)
+                  : cacheKey;
+              if (existing?.value) {
+                await handler.set(finalKey, null, { fetchCache: true });
+                if (finalKey !== cacheKey) {
+                  await handler.set(cacheKey, null, { fetchCache: true });
+                }
+              }
+              return collectedResult.result;
+            }
             const serialized = collectedResult.cacheEntry;
             const cacheValue = {
               kind: "FETCH",
@@ -850,7 +865,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
       const redirectValue = existing?.value;
       if (
         isRootParamRedirect(existing) &&
-        existing?.cacheState === undefined &&
+        existing?.cacheState !== "expired" &&
         rootParams &&
         redirectValue?.kind === "FETCH" &&
         !_hasPendingRevalidatedTag([...(redirectValue.tags ?? []), ...softTags])

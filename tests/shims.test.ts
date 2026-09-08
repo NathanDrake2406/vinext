@@ -6564,7 +6564,8 @@ describe("next/cache shim", () => {
     expect(decideCacheRead("stale", "background")).toBe("serve-and-revalidate");
     expect(decideCacheRead("stale", "foreground")).toBe("revalidate");
     expect(decideCacheRead("expired", "background")).toBe("revalidate");
-    expect(decideCacheRead("unknown", "background")).toBe("revalidate");
+    expect(decideCacheRead("fresh", "background")).toBe("serve");
+    expect(decideCacheRead("unknown", "background")).toBe("serve");
   });
 
   it("unstable_cache serves stale entries and refreshes them in the background during App Router requests", async () => {
@@ -7554,7 +7555,6 @@ describe('"use cache" runtime', () => {
 
   it.each([
     ["expired", JSON.stringify({ version: "expired" })],
-    ["unknown", JSON.stringify({ version: "unknown" })],
     ["stale", "not-json"],
     [undefined, "not-json"],
   ])(

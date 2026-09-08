@@ -893,7 +893,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     }
     // A miss or expired artifact falls through to a cache-producing render.
     // This includes pages whose cacheLife is discovered during rendering.
-    setFunctionCacheRevalidationMode("foreground");
+    setFunctionCacheRevalidationMode("auto");
   }
 
   // Next.js' production force-dynamic routes are absent from the prerender

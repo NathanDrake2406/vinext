@@ -698,7 +698,7 @@ function prepareMetadataRouteMiss(
   ) {
     // Both request and response stages use this render boundary. An outer
     // artifact must not give a stale function value a new lifetime.
-    setFunctionCacheRevalidationMode("foreground");
+    setFunctionCacheRevalidationMode("auto");
   }
 }
 

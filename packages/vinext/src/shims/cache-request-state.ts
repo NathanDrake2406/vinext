@@ -1,4 +1,4 @@
-import { getHeadersAccessPhase } from "./headers.js";
+import { getHeadersAccessPhase, peekDynamicUsage } from "./headers.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import {
   getRequestContext,
@@ -62,7 +62,10 @@ export function _recordUseCacheRootParamRead(name: string): void {
  * intentionally named narrowly so it does not read as the authoritative
  * policy for all persistent caches.
  */
-export type FunctionCacheRevalidationMode = "foreground" | "background";
+// Auto mode requires fresh data only while a request can produce a public
+// cache entry. Forced foreground scopes (prerendering and regeneration) do
+// not relax freshness when user code reads a dynamic API.
+export type FunctionCacheRevalidationMode = "foreground" | "background" | "auto";
 export type CacheReadAction = "serve" | "serve-and-revalidate" | "revalidate";
 export type ActionRevalidationKind = 0 | 1 | 2;
 export type UnstableCacheObservation = Readonly<{
@@ -294,25 +297,28 @@ export function _peekUnstableCacheObservations(): UnstableCacheObservation[] {
 
 /** Select freshness before executing a render that can produce a cache entry. */
 export function setFunctionCacheRevalidationMode(mode: FunctionCacheRevalidationMode): void {
-  getCacheState().functionCacheRevalidationMode = mode;
+  const state = getCacheState();
+  if (mode === "auto" && state.functionCacheRevalidationMode === "foreground") return;
+  state.functionCacheRevalidationMode = mode;
 }
 
-export function getFunctionCacheRevalidationMode(): FunctionCacheRevalidationMode {
-  return getCacheState().functionCacheRevalidationMode;
+export function getFunctionCacheRevalidationMode(): "foreground" | "background" {
+  const mode = getCacheState().functionCacheRevalidationMode;
+  return mode === "auto" ? (peekDynamicUsage() ? "background" : "foreground") : mode;
 }
 
 /**
  * Decide whether a function/data-cache value can satisfy the current read.
- * An absent state is a fresh value. Stale values are policy-dependent, while
- * expired or unrecognized states must be regenerated before use.
+ * Only stale and expired states require regeneration. Custom handlers may
+ * report fresh hits with their own string markers.
  */
 export function decideCacheRead(
   cacheState: string | undefined,
-  mode: FunctionCacheRevalidationMode,
+  mode: ReturnType<typeof getFunctionCacheRevalidationMode>,
 ): CacheReadAction {
-  if (cacheState === undefined) return "serve";
+  if (cacheState === "expired") return "revalidate";
   if (cacheState === "stale") {
     return mode === "background" ? "serve-and-revalidate" : "revalidate";
   }
-  return "revalidate";
+  return "serve";
 }

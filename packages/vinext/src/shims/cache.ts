@@ -649,7 +649,7 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
             return cached.value;
           }
         }
-        // Expired, unrecognized, and corrupted entries fall through to a
+        // Expired and corrupted entries fall through to a
         // foreground refresh.
       }
     }

@@ -35,6 +35,7 @@ import {
   hasNonStaticAppRouteHandlerMethods,
   resolveAppRouteHandlerMethod,
   shouldReadAppRouteHandlerCache,
+  shouldCompleteAppRouteHandlerResponse,
   type AppRouteHandlerModule,
 } from "./app-route-handler-policy.js";
 import { readAppRouteHandlerCacheResponse } from "./app-route-handler-cache.js";
@@ -327,9 +328,25 @@ export async function dispatchAppRouteHandler(
     if (cachedRouteResponse) {
       return applyCdnResponseBuildIdentityHeaders(cachedRouteResponse);
     }
-    // The normal handler now produces the missing/expired ISR artifact, so
-    // it needs fresh function-cache dependencies just like regeneration.
-    setFunctionCacheRevalidationMode("foreground");
+  }
+
+  // Public responses need fresh dependencies even when their indefinite
+  // policy uses CDN caching instead of the finite ISR storage path.
+  if (
+    !getRouteCacheabilityDynamicReason() &&
+    !isKnownDynamicAppRoute(route.pattern) &&
+    shouldCompleteAppRouteHandlerResponse({
+      dynamicConfig: handler.dynamic,
+      dynamicUsedInHandler: false,
+      handlerSetCachePolicy: false,
+      isAutoHead,
+      isDraftMode: isDraftMode || hasDraftModeTransition,
+      isProduction,
+      method,
+      revalidateSeconds,
+    })
+  ) {
+    setFunctionCacheRevalidationMode("auto");
   }
 
   if (resolvedHandlerFn) {

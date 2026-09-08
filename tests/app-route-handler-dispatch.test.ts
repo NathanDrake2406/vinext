@@ -32,7 +32,7 @@ function buildISRCacheEntry(value: CachedRouteValue, isStale = false): ISRCacheE
 }
 
 describe("app route handler dispatch", () => {
-  it.each(["cold", "expired", "dynamic", "no-store"])(
+  it.each(["cold", "expired", "dynamic", "no-store", "indefinite", "force-static", "auto-dynamic"])(
     "uses fresh function data for an ISR route render (%s)",
     async (state) => {
       const { registerCachedFunction } =
@@ -59,6 +59,7 @@ describe("app route handler dispatch", () => {
       const pending: Promise<unknown>[] = [];
       const ctx = createRequestContext({
         functionCacheRevalidationMode: "background",
+        headersContext: { headers: new Headers(), cookies: new Map() },
         executionContext: {
           waitUntil: (promise) => {
             pending.push(promise);
@@ -92,17 +93,41 @@ describe("app route handler dispatch", () => {
               pattern: `/api/refresh-${state}`,
               routeSegments: ["api", "refresh"],
               routeHandler: {
-                revalidate: state === "no-store" ? 0 : 60,
-                dynamic: state === "dynamic" ? "force-dynamic" : undefined,
-                GET: async () => new Response(await cached()),
+                revalidate:
+                  state === "no-store"
+                    ? 0
+                    : state === "indefinite"
+                      ? false
+                      : state === "force-static"
+                        ? undefined
+                        : 60,
+                dynamic:
+                  state === "dynamic"
+                    ? "force-dynamic"
+                    : state === "force-static"
+                      ? "force-static"
+                      : undefined,
+                GET: async () => {
+                  if (state === "auto-dynamic")
+                    await (await import("../packages/vinext/src/shims/headers.js")).cookies();
+                  return new Response(await cached());
+                },
               },
             },
             scheduleBackgroundRegeneration() {},
             searchParams: new URLSearchParams(),
           }),
         );
-        const expected = state === "dynamic" || state === "no-store" ? "stale-data" : "fresh-data";
+        const expected =
+          state === "dynamic" || state === "no-store" || state === "auto-dynamic"
+            ? "stale-data"
+            : "fresh-data";
         expect(await response.text()).toBe(expected);
+        if (state === "indefinite" || state === "force-static") {
+          expect(response.headers.get("cache-control")).toContain("s-maxage=31536000");
+        }
+        if (state === "auto-dynamic")
+          expect(response.headers.get("cache-control")).toContain("no-store");
         await Promise.all(pending);
         if (state === "cold" || state === "expired") {
           expect(isrSet).toHaveBeenCalledOnce();

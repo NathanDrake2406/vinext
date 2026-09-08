@@ -590,7 +590,7 @@ function createLayoutParamProbe(
 }
 
 describe("app page dispatch", () => {
-  it.each(["cold", "expired", "cache-life", "dynamic", "no-store"])(
+  it.each(["cold", "expired", "cache-life", "dynamic", "no-store", "auto-dynamic"])(
     "uses fresh function data for an ISR page render (%s)",
     async (state) => {
       const { registerCachedFunction } =
@@ -619,6 +619,7 @@ describe("app page dispatch", () => {
       const pending: Promise<unknown>[] = [];
       const ctx = createRequestContext({
         functionCacheRevalidationMode: "background",
+        headersContext: { headers: new Headers(), cookies: new Map() },
         executionContext: {
           waitUntil: (promise) => {
             pending.push(promise);
@@ -640,6 +641,8 @@ describe("app page dispatch", () => {
             : null,
         isrSet,
         buildPageElement: async () => {
+          if (state === "auto-dynamic")
+            await (await import("../packages/vinext/src/shims/headers.js")).cookies();
           rendered = await cached();
           return React.createElement("main", null, rendered);
         },
@@ -656,7 +659,10 @@ describe("app page dispatch", () => {
       });
       try {
         const response = await runWithRequestContext(ctx, () => dispatchAppPage(options));
-        const expected = state === "dynamic" || state === "no-store" ? "stale-data" : "fresh-data";
+        const expected =
+          state === "dynamic" || state === "no-store" || state === "auto-dynamic"
+            ? "stale-data"
+            : "fresh-data";
         expect(await response.text()).toContain(expected);
         await Promise.all(pending);
         if (state === "cold" || state === "expired" || state === "cache-life") {
